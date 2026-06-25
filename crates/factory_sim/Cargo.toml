@@ -1,0 +1,7 @@
+[package]
+name = "factory_sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+factory_data.workspace = true

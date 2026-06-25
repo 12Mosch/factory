@@ -1,0 +1,8 @@
+[package]
+name = "factory_app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy.workspace = true
+factory_sim.workspace = true

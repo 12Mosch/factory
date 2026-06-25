@@ -1,0 +1,6 @@
+[package]
+name = "factory_data"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
