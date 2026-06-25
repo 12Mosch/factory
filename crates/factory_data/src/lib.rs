@@ -515,6 +515,8 @@ mod tests {
         "transport_belt",
     ];
 
+    const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
+
     #[test]
     fn base_catalog_loads_from_ron() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
@@ -522,7 +524,7 @@ mod tests {
         assert_eq!(catalog.items.len(), 14);
         assert_eq!(catalog.recipes.len(), 10);
         assert_eq!(catalog.entities.len(), 8);
-        assert_eq!(catalog.tiles.len(), 1);
+        assert_eq!(catalog.tiles.len(), 3);
     }
 
     #[test]
@@ -553,6 +555,13 @@ mod tests {
                     .iter()
                     .any(|prototype| prototype.name == name),
                 "missing entity {name}"
+            );
+        }
+
+        for name in TILE_NAMES {
+            assert!(
+                catalog.tiles.iter().any(|prototype| prototype.name == name),
+                "missing tile {name}"
             );
         }
     }

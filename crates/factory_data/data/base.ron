@@ -175,5 +175,15 @@
             name: "grass",
             collision_mask: (layers: ["ground"]),
         ),
+        (
+            id: 1,
+            name: "dirt",
+            collision_mask: (layers: ["ground"]),
+        ),
+        (
+            id: 2,
+            name: "water",
+            collision_mask: (layers: ["water"]),
+        ),
     ],
 )
