@@ -1,8 +1,10 @@
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
+use bevy::sprite::{Anchor, Text2dShadow};
 use bevy::time::Fixed;
 use factory_data::{ItemId, PrototypeCatalog, TileId};
 use factory_sim::{CHUNK_SIZE, ResourceCell, Simulation};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const SIM_TICKS_PER_SECOND: f64 = 60.0;
 const TILE_SIZE: f32 = 8.0;
@@ -29,6 +31,18 @@ pub struct UpsStats {
 #[derive(Component)]
 struct DebugOverlayText;
 
+#[derive(Component)]
+struct ResourceSprite {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Component)]
+struct ResourceAmountLabel {
+    x: i32,
+    y: i32,
+}
+
 impl Plugin for FactoryAppPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Time::<Fixed>::from_hz(SIM_TICKS_PER_SECOND))
@@ -53,6 +67,7 @@ impl Plugin for FactoryAppPlugin {
                     zoom_camera,
                     update_ups_stats,
                     update_debug_overlay,
+                    sync_resource_debug_rendering,
                 ),
             );
     }
@@ -94,13 +109,6 @@ fn spawn_world_tiles(mut commands: Commands, sim: Res<SimResource>) {
                 Sprite::from_color(tile_color(tile.tile_id, ids), Vec2::splat(TILE_SIZE)),
                 Transform::from_translation(translation),
             ));
-
-            if let Some(resource) = tile.resource {
-                commands.spawn((
-                    Sprite::from_color(resource_color(resource, ids), Vec2::splat(RESOURCE_SIZE)),
-                    Transform::from_translation(tile_translation(world_x, world_y, 1.0)),
-                ));
-            }
         }
     }
 }
@@ -214,6 +222,87 @@ fn update_debug_overlay(
     }
 }
 
+fn sync_resource_debug_rendering(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    mut sprites: Query<(Entity, &ResourceSprite, &mut Sprite)>,
+    mut labels: Query<(Entity, &ResourceAmountLabel, &mut Text2d)>,
+) {
+    let ids = RenderPrototypeIds::from_catalog(&sim.sim.world.prototypes);
+    let resources = collect_resource_tiles(&sim.sim);
+    let mut seen_sprites = BTreeSet::new();
+    let mut seen_labels = BTreeSet::new();
+
+    for (entity, marker, mut sprite) in &mut sprites {
+        let coord = (marker.x, marker.y);
+        if let Some(resource) = resources.get(&coord) {
+            seen_sprites.insert(coord);
+            sprite.color = resource_color(*resource, ids);
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for (entity, marker, mut text) in &mut labels {
+        let coord = (marker.x, marker.y);
+        if let Some(resource) = resources.get(&coord) {
+            seen_labels.insert(coord);
+            text.0 = format_resource_amount(resource.amount);
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for ((x, y), resource) in resources {
+        if !seen_sprites.contains(&(x, y)) {
+            commands.spawn((
+                Sprite::from_color(resource_color(resource, ids), Vec2::splat(RESOURCE_SIZE)),
+                Transform::from_translation(tile_translation(x, y, 1.0)),
+                ResourceSprite { x, y },
+            ));
+        }
+
+        if !seen_labels.contains(&(x, y)) {
+            commands.spawn((
+                Text2d::new(format_resource_amount(resource.amount)),
+                TextFont::from_font_size(4.0),
+                TextColor(Color::WHITE),
+                TextLayout::justify(Justify::Center),
+                Transform::from_translation(tile_translation(x, y, 2.0)),
+                Anchor::CENTER,
+                Text2dShadow::default(),
+                ResourceAmountLabel { x, y },
+            ));
+        }
+    }
+}
+
+fn collect_resource_tiles(sim: &Simulation) -> BTreeMap<(i32, i32), ResourceCell> {
+    let mut resources = BTreeMap::new();
+
+    for chunk in sim.world.chunks.values() {
+        for (index, tile) in chunk.tiles.iter().enumerate() {
+            if let Some(resource) = tile.resource {
+                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                resources.insert(
+                    (
+                        chunk.coord.x * CHUNK_SIZE + local_x,
+                        chunk.coord.y * CHUNK_SIZE + local_y,
+                    ),
+                    resource,
+                );
+            }
+        }
+    }
+
+    resources
+}
+
+fn format_resource_amount(amount: u32) -> String {
+    amount.to_string()
+}
+
 fn tile_translation(x: i32, y: i32, z: f32) -> Vec3 {
     Vec3::new(
         x as f32 * TILE_SIZE + TILE_SIZE * 0.5,
@@ -233,14 +322,16 @@ fn tile_color(tile_id: TileId, ids: RenderPrototypeIds) -> Color {
 }
 
 fn resource_color(resource: ResourceCell, ids: RenderPrototypeIds) -> Color {
-    if resource.item_id == ids.iron_ore {
+    if resource.resource_item == ids.iron_ore {
         Color::srgb(0.62, 0.56, 0.50)
-    } else if resource.item_id == ids.copper_ore {
+    } else if resource.resource_item == ids.copper_ore {
         Color::srgb(0.76, 0.36, 0.18)
-    } else if resource.item_id == ids.coal {
+    } else if resource.resource_item == ids.coal {
         Color::srgb(0.08, 0.08, 0.08)
-    } else {
+    } else if resource.resource_item == ids.stone {
         Color::srgb(0.46, 0.43, 0.39)
+    } else {
+        Color::srgb(0.82, 0.78, 0.68)
     }
 }
 
@@ -258,6 +349,7 @@ struct RenderPrototypeIds {
     iron_ore: ItemId,
     copper_ore: ItemId,
     coal: ItemId,
+    stone: ItemId,
 }
 
 impl RenderPrototypeIds {
@@ -268,6 +360,7 @@ impl RenderPrototypeIds {
             iron_ore: find_item_id(catalog, "iron_ore"),
             copper_ore: find_item_id(catalog, "copper_ore"),
             coal: find_item_id(catalog, "coal"),
+            stone: find_item_id(catalog, "stone"),
         }
     }
 }
