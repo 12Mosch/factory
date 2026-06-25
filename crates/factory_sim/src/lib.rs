@@ -39,7 +39,10 @@ impl Simulation {
     }
 
     pub fn new_test_world(seed: u64) -> Self {
-        Self::new(seed, PrototypeCatalog::test_catalog())
+        Self::new(
+            seed,
+            PrototypeCatalog::load_base().expect("base prototype catalog should load"),
+        )
     }
 
     pub fn tick(&mut self) {

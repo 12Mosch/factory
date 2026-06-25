@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::time::Fixed;
+use factory_data::PrototypeCatalog;
 use factory_sim::Simulation;
 
 pub const SIM_TICKS_PER_SECOND: f64 = 60.0;
@@ -25,7 +26,10 @@ impl Plugin for FactoryAppPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Time::<Fixed>::from_hz(SIM_TICKS_PER_SECOND))
             .insert_resource(SimResource {
-                sim: Simulation::new_test_world(123),
+                sim: Simulation::new(
+                    123,
+                    PrototypeCatalog::load_base().expect("base prototype catalog should load"),
+                ),
             })
             .init_resource::<UpsStats>()
             .add_systems(Startup, (setup_camera, setup_debug_overlay))

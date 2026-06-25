@@ -2444,12 +2444,18 @@ name = "factory_app"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "factory_data",
  "factory_sim",
 ]
 
 [[package]]
 name = "factory_data"
 version = "0.1.0"
+dependencies = [
+ "glam",
+ "ron",
+ "serde",
+]
 
 [[package]]
 name = "factory_sim"

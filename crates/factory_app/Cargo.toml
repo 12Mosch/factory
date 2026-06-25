@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 bevy.workspace = true
+factory_data.workspace = true
 factory_sim.workspace = true
