@@ -4,7 +4,13 @@ use std::hash::{Hash, Hasher};
 
 pub const CHUNK_SIZE: i32 = 32;
 pub const PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND: f32 = 5.0;
+pub const PLAYER_MINING_SPEED: f32 = 0.5;
+pub const ORE_MINING_TIME_SECONDS: f32 = 1.0;
+pub const MANUAL_MINING_REACH_TILES: f32 = 2.5;
+pub const MANUAL_MINING_TICKS_PER_ITEM: u32 =
+    (ORE_MINING_TIME_SECONDS / PLAYER_MINING_SPEED * FIXED_SIM_TICKS_PER_SECOND) as u32;
 pub const PLAYER_INVENTORY_SLOT_COUNT: usize = 80;
+const FIXED_SIM_TICKS_PER_SECOND: f32 = 60.0;
 const PLAYER_POSITION_SCALE: i64 = 1024;
 const TEST_WORLD_MIN_CHUNK: i32 = -2;
 const TEST_WORLD_MAX_CHUNK: i32 = 1;
@@ -40,12 +46,26 @@ pub struct Simulation {
     pub entities: EntityStore,
     pub player: PlayerState,
     pub player_inventory: Inventory,
+    pub manual_mining_progress: Option<ManualMiningProgress>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlayerState {
     x: i64,
     y: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ManualMiningTarget {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ManualMiningProgress {
+    pub target: ManualMiningTarget,
+    pub progress_ticks: u32,
+    pub required_ticks: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -310,6 +330,7 @@ impl Simulation {
             entities,
             player,
             player_inventory,
+            manual_mining_progress: None,
         }
     }
 
@@ -374,6 +395,89 @@ impl Simulation {
 
     pub fn can_player_occupy_tile(&self, x: i32, y: i32) -> bool {
         player_can_occupy_tile(&self.world, &self.entities.occupancy, x, y)
+    }
+
+    pub fn update_manual_mining(&mut self, target: Option<ManualMiningTarget>) {
+        let Some(target) = target else {
+            self.manual_mining_progress = None;
+            return;
+        };
+
+        if !self.is_valid_manual_mining_target(target) {
+            self.manual_mining_progress = None;
+            return;
+        }
+
+        let mut progress = match self.manual_mining_progress {
+            Some(progress) if progress.target == target => progress,
+            _ => ManualMiningProgress {
+                target,
+                progress_ticks: 0,
+                required_ticks: MANUAL_MINING_TICKS_PER_ITEM,
+            },
+        };
+
+        if progress.progress_ticks < progress.required_ticks {
+            progress.progress_ticks += 1;
+        }
+
+        if progress.progress_ticks < progress.required_ticks {
+            self.manual_mining_progress = Some(progress);
+            return;
+        }
+
+        let resource_item = self
+            .world
+            .tile_at(target.x, target.y)
+            .and_then(|tile| tile.resource.map(|resource| resource.resource_item));
+        let Some(resource_item) = resource_item else {
+            self.manual_mining_progress = None;
+            return;
+        };
+
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, resource_item, 1)
+        {
+            self.manual_mining_progress = Some(progress);
+            return;
+        }
+
+        let mined = self
+            .world
+            .mine_resource_at(target.x, target.y, 1)
+            .expect("validated manual mining target should still contain a resource");
+        debug_assert_eq!(mined.resource_item, resource_item);
+        debug_assert_eq!(mined.amount, 1);
+        self.player_inventory
+            .insert(&self.world.prototypes, mined.resource_item, 1)
+            .expect("manual mining checked inventory capacity before inserting");
+
+        self.manual_mining_progress = if self.is_valid_manual_mining_target(target) {
+            Some(ManualMiningProgress {
+                target,
+                progress_ticks: 0,
+                required_ticks: MANUAL_MINING_TICKS_PER_ITEM,
+            })
+        } else {
+            None
+        };
+    }
+
+    fn is_valid_manual_mining_target(&self, target: ManualMiningTarget) -> bool {
+        self.world
+            .tile_at(target.x, target.y)
+            .and_then(|tile| tile.resource)
+            .is_some()
+            && self.is_manual_mining_target_in_reach(target)
+    }
+
+    fn is_manual_mining_target_in_reach(&self, target: ManualMiningTarget) -> bool {
+        let reach = tiles_to_fixed(MANUAL_MINING_REACH_TILES);
+        let dx = self.player.x - tile_center_fixed(target.x);
+        let dy = self.player.y - tile_center_fixed(target.y);
+
+        dx * dx + dy * dy <= reach * reach
     }
 
     fn try_move_player_axis(&mut self, delta_x: i64, delta_y: i64) {
@@ -1350,6 +1454,149 @@ mod tests {
     }
 
     #[test]
+    fn manual_mining_one_ore_decreases_resource_by_one() {
+        let mut sim = Simulation::new_test_world(123);
+        let (x, y, resource) = first_resource_tile(&sim.world);
+        let target = ManualMiningTarget { x, y };
+        sim.player = PlayerState::centered_on_tile(x, y);
+        let before_count = sim.player_inventory.count(resource.resource_item);
+
+        for _ in 0..MANUAL_MINING_TICKS_PER_ITEM {
+            sim.update_manual_mining(Some(target));
+        }
+
+        let after_resource = resource_amount_at(&sim.world, x, y).expect("resource should remain");
+        assert_eq!(
+            sim.player_inventory.count(resource.resource_item),
+            before_count + 1
+        );
+        assert_eq!(after_resource, resource.amount - 1);
+    }
+
+    #[test]
+    fn manual_mining_can_mine_each_generated_resource_type() {
+        let mut sim = Simulation::new_test_world(123);
+        let resource_names = ["iron_ore", "copper_ore", "coal", "stone"];
+
+        for resource_name in resource_names {
+            let resource_item = item_id(&sim.world.prototypes, resource_name);
+            let (x, y, before_amount) = first_resource_tile_for_item(&sim.world, resource_item);
+            let before_count = sim.player_inventory.count(resource_item);
+            sim.player = PlayerState::centered_on_tile(x, y);
+
+            for _ in 0..MANUAL_MINING_TICKS_PER_ITEM {
+                sim.update_manual_mining(Some(ManualMiningTarget { x, y }));
+            }
+
+            assert_eq!(
+                sim.player_inventory.count(resource_item),
+                before_count + 1,
+                "{resource_name} should be inserted into inventory"
+            );
+            assert_eq!(
+                resource_amount_at(&sim.world, x, y),
+                Some(before_amount - 1),
+                "{resource_name} resource amount should decrease by one"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_mining_does_not_decrement_resource_before_full_duration() {
+        let mut sim = Simulation::new_test_world(123);
+        let (x, y, resource) = first_resource_tile(&sim.world);
+        let target = ManualMiningTarget { x, y };
+        sim.player = PlayerState::centered_on_tile(x, y);
+        let before_count = sim.player_inventory.count(resource.resource_item);
+
+        for _ in 0..MANUAL_MINING_TICKS_PER_ITEM - 1 {
+            sim.update_manual_mining(Some(target));
+        }
+
+        assert_eq!(
+            sim.player_inventory.count(resource.resource_item),
+            before_count
+        );
+        assert_eq!(resource_amount_at(&sim.world, x, y), Some(resource.amount));
+        assert_eq!(
+            sim.manual_mining_progress
+                .expect("manual mining should be in progress")
+                .progress_ticks,
+            MANUAL_MINING_TICKS_PER_ITEM - 1
+        );
+    }
+
+    #[test]
+    fn manual_mining_target_change_cancels_previous_progress() {
+        let mut sim = Simulation::new_test_world(123);
+        let ((first_x, first_y), (second_x, second_y)) = nearby_resource_pair(&sim.world);
+        let first = ManualMiningTarget {
+            x: first_x,
+            y: first_y,
+        };
+        let second = ManualMiningTarget {
+            x: second_x,
+            y: second_y,
+        };
+        sim.player = PlayerState::centered_on_tile(first_x, first_y);
+
+        for _ in 0..10 {
+            sim.update_manual_mining(Some(first));
+        }
+        sim.update_manual_mining(Some(second));
+
+        assert_eq!(
+            sim.manual_mining_progress,
+            Some(ManualMiningProgress {
+                target: second,
+                progress_ticks: 1,
+                required_ticks: MANUAL_MINING_TICKS_PER_ITEM,
+            })
+        );
+    }
+
+    #[test]
+    fn manual_mining_moving_beyond_reach_cancels_progress() {
+        let mut sim = Simulation::new_test_world(123);
+        let (x, y, _) = first_resource_tile(&sim.world);
+        let target = ManualMiningTarget { x, y };
+        sim.player = PlayerState::centered_on_tile(x, y);
+
+        for _ in 0..10 {
+            sim.update_manual_mining(Some(target));
+        }
+        sim.player = PlayerState::centered_on_tile(x + 3, y);
+        sim.update_manual_mining(Some(target));
+
+        assert_eq!(sim.manual_mining_progress, None);
+    }
+
+    #[test]
+    fn manual_mining_full_inventory_prevents_completion_without_decrementing_resource() {
+        let mut sim = Simulation::new_test_world(123);
+        let (x, y, resource) = first_resource_tile(&sim.world);
+        let burner_mining_drill = item_id(&sim.world.prototypes, "burner_mining_drill");
+        sim.player = PlayerState::centered_on_tile(x, y);
+        sim.player_inventory = Inventory::with_slot_count(1);
+        sim.player_inventory
+            .insert(&sim.world.prototypes, burner_mining_drill, 1)
+            .expect("test inventory should accept one blocking item");
+
+        for _ in 0..MANUAL_MINING_TICKS_PER_ITEM {
+            sim.update_manual_mining(Some(ManualMiningTarget { x, y }));
+        }
+
+        assert_eq!(sim.player_inventory.count(resource.resource_item), 0);
+        assert_eq!(resource_amount_at(&sim.world, x, y), Some(resource.amount));
+        assert_eq!(
+            sim.manual_mining_progress
+                .expect("full inventory should keep completed progress")
+                .progress_ticks,
+            MANUAL_MINING_TICKS_PER_ITEM
+        );
+    }
+
+    #[test]
     fn two_by_two_entity_cannot_overlap_another_entity() {
         let mut sim = Simulation::new_test_world(123);
         let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
@@ -1636,6 +1883,59 @@ mod tests {
         }
 
         panic!("expected at least one resource tile");
+    }
+
+    fn first_resource_tile_for_item(world: &WorldSim, resource_item: ItemId) -> (i32, i32, u32) {
+        for chunk in world.chunks.values() {
+            for (index, tile) in chunk.tiles.iter().enumerate() {
+                let Some(resource) = tile.resource else {
+                    continue;
+                };
+
+                if resource.resource_item != resource_item {
+                    continue;
+                }
+
+                let (x, y) = tile_coord(chunk, index);
+                return (x, y, resource.amount);
+            }
+        }
+
+        panic!("expected at least one resource tile for {resource_item:?}");
+    }
+
+    fn resource_amount_at(world: &WorldSim, x: i32, y: i32) -> Option<u32> {
+        world
+            .tile_at(x, y)
+            .and_then(|tile| tile.resource.map(|resource| resource.amount))
+    }
+
+    fn nearby_resource_pair(world: &WorldSim) -> ((i32, i32), (i32, i32)) {
+        let resources = all_tile_coords(world)
+            .into_iter()
+            .filter(|(x, y)| {
+                world
+                    .tile_at(*x, *y)
+                    .and_then(|tile| tile.resource)
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+
+        for first in &resources {
+            for second in &resources {
+                if first == second {
+                    continue;
+                }
+
+                let dx = first.0 - second.0;
+                let dy = first.1 - second.1;
+                if dx * dx + dy * dy <= 6 {
+                    return (*first, *second);
+                }
+            }
+        }
+
+        panic!("expected two resource tiles close enough to mine from one position");
     }
 
     fn first_water_tile(world: &WorldSim) -> (i32, i32) {

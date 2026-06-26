@@ -4,13 +4,16 @@ use bevy::sprite::{Anchor, Text2dShadow};
 use bevy::time::Fixed;
 use bevy::window::PrimaryWindow;
 use factory_data::{ItemId, PrototypeCatalog, TileId};
-use factory_sim::{CHUNK_SIZE, PlayerState, ResourceCell, Simulation};
+use factory_sim::{CHUNK_SIZE, ManualMiningTarget, PlayerState, ResourceCell, Simulation};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SIM_TICKS_PER_SECOND: f64 = 60.0;
 const TILE_SIZE: f32 = 8.0;
 const RESOURCE_SIZE: f32 = 4.0;
 const PLAYER_SPRITE_SIZE: f32 = 6.0;
+const MANUAL_MINING_BAR_WIDTH: f32 = TILE_SIZE * 0.8;
+const MANUAL_MINING_BAR_HEIGHT: f32 = 1.0;
+const MANUAL_MINING_BAR_Y_OFFSET: f32 = TILE_SIZE * 0.68;
 const MIN_CAMERA_SCALE: f32 = 0.35;
 const MAX_CAMERA_SCALE: f32 = 8.0;
 const INITIAL_CAMERA_SCALE: f32 = 2.0;
@@ -55,6 +58,12 @@ struct PlayerSprite;
 #[derive(Component)]
 struct CursorTileHighlight;
 
+#[derive(Component)]
+struct ManualMiningProgressBarBackground;
+
+#[derive(Component)]
+struct ManualMiningProgressBarFill;
+
 type CursorCameraFilter = (With<Camera2d>, Without<CursorTileHighlight>);
 
 impl Plugin for FactoryAppPlugin {
@@ -67,6 +76,7 @@ impl Plugin for FactoryAppPlugin {
                 ),
             })
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<UpsStats>()
             .init_resource::<DebugInventorySelection>()
@@ -77,10 +87,19 @@ impl Plugin for FactoryAppPlugin {
                     spawn_world_tiles,
                     spawn_player,
                     spawn_cursor_tile_highlight,
+                    spawn_manual_mining_progress_bar,
                     setup_debug_overlay,
                 ),
             )
-            .add_systems(FixedUpdate, (move_player_from_input, tick_sim).chain())
+            .add_systems(
+                FixedUpdate,
+                (
+                    move_player_from_input,
+                    update_manual_mining_from_input,
+                    tick_sim,
+                )
+                    .chain(),
+            )
             .add_systems(
                 Update,
                 (
@@ -88,6 +107,7 @@ impl Plugin for FactoryAppPlugin {
                     sync_player_sprite,
                     follow_player_camera,
                     update_cursor_tile_highlight,
+                    update_manual_mining_progress_bar,
                     update_ups_stats,
                     handle_debug_inventory_input,
                     update_debug_overlay,
@@ -157,6 +177,27 @@ fn spawn_cursor_tile_highlight(mut commands: Commands) {
     ));
 }
 
+fn spawn_manual_mining_progress_bar(mut commands: Commands) {
+    commands.spawn((
+        Sprite::from_color(
+            Color::srgba(0.02, 0.02, 0.02, 0.82),
+            Vec2::new(MANUAL_MINING_BAR_WIDTH, MANUAL_MINING_BAR_HEIGHT),
+        ),
+        Transform::from_translation(Vec3::new(0.0, 0.0, 5.0)),
+        Visibility::Hidden,
+        ManualMiningProgressBarBackground,
+    ));
+    commands.spawn((
+        Sprite::from_color(
+            Color::srgb(0.34, 0.82, 0.38),
+            Vec2::new(0.0, MANUAL_MINING_BAR_HEIGHT),
+        ),
+        Transform::from_translation(Vec3::new(0.0, 0.0, 5.1)),
+        Visibility::Hidden,
+        ManualMiningProgressBarFill,
+    ));
+}
+
 fn setup_debug_overlay(mut commands: Commands) {
     commands
         .spawn((
@@ -197,6 +238,20 @@ fn move_player_from_input(
         sim.sim
             .move_player(direction.x, direction.y, time.delta_secs());
     }
+}
+
+fn update_manual_mining_from_input(
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
+    mut sim: ResMut<SimResource>,
+) {
+    let target = mouse
+        .filter(|mouse| mouse.pressed(MouseButton::Right))
+        .and_then(|_| cursor_tile_from_window(&windows, &cameras))
+        .map(|(x, y)| ManualMiningTarget { x, y });
+
+    sim.sim.update_manual_mining(target);
 }
 
 fn zoom_camera(
@@ -249,22 +304,54 @@ fn update_cursor_tile_highlight(
     cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
     mut highlights: Query<(&mut Transform, &mut Visibility), With<CursorTileHighlight>>,
 ) {
-    let cursor_tile = windows
-        .single()
-        .ok()
-        .and_then(Window::cursor_position)
-        .and_then(|cursor_position| {
-            let (camera, camera_transform) = cameras.single().ok()?;
-            let camera_global = GlobalTransform::from(*camera_transform);
-            camera
-                .viewport_to_world_2d(&camera_global, cursor_position)
-                .ok()
-        })
-        .map(world_position_to_tile_coord);
+    let cursor_tile = cursor_tile_from_window(&windows, &cameras);
 
     for (mut transform, mut visibility) in &mut highlights {
         if let Some((x, y)) = cursor_tile {
             transform.translation = tile_translation(x, y, transform.translation.z);
+            *visibility = Visibility::Visible;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
+fn update_manual_mining_progress_bar(
+    sim: Res<SimResource>,
+    mut backgrounds: Query<
+        (&mut Transform, &mut Visibility),
+        (
+            With<ManualMiningProgressBarBackground>,
+            Without<ManualMiningProgressBarFill>,
+        ),
+    >,
+    mut fills: Query<
+        (&mut Transform, &mut Visibility, &mut Sprite),
+        With<ManualMiningProgressBarFill>,
+    >,
+) {
+    let progress = sim.sim.manual_mining_progress;
+
+    for (mut transform, mut visibility) in &mut backgrounds {
+        if let Some(progress) = progress {
+            transform.translation =
+                manual_mining_bar_translation(progress.target.x, progress.target.y, 5.0);
+            *visibility = Visibility::Visible;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
+    }
+
+    for (mut transform, mut visibility, mut sprite) in &mut fills {
+        if let Some(progress) = progress {
+            let fill_ratio =
+                (progress.progress_ticks as f32 / progress.required_ticks as f32).clamp(0.0, 1.0);
+            let fill_width = MANUAL_MINING_BAR_WIDTH * fill_ratio;
+            let mut translation =
+                manual_mining_bar_translation(progress.target.x, progress.target.y, 5.1);
+            translation.x += (fill_width - MANUAL_MINING_BAR_WIDTH) * 0.5;
+            transform.translation = translation;
+            sprite.custom_size = Some(Vec2::new(fill_width, MANUAL_MINING_BAR_HEIGHT));
             *visibility = Visibility::Visible;
         } else {
             *visibility = Visibility::Hidden;
@@ -448,9 +535,33 @@ fn tile_translation(x: i32, y: i32, z: f32) -> Vec3 {
     )
 }
 
+fn manual_mining_bar_translation(x: i32, y: i32, z: f32) -> Vec3 {
+    let mut translation = tile_translation(x, y, z);
+    translation.y += MANUAL_MINING_BAR_Y_OFFSET;
+    translation
+}
+
 fn player_translation(player: PlayerState, z: f32) -> Vec3 {
     let (x, y) = player.position_tiles();
     Vec3::new(x * TILE_SIZE, y * TILE_SIZE, z)
+}
+
+fn cursor_tile_from_window(
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    cameras: &Query<(&Camera, &Transform), CursorCameraFilter>,
+) -> Option<(i32, i32)> {
+    windows
+        .single()
+        .ok()
+        .and_then(Window::cursor_position)
+        .and_then(|cursor_position| {
+            let (camera, camera_transform) = cameras.single().ok()?;
+            let camera_global = GlobalTransform::from(*camera_transform);
+            camera
+                .viewport_to_world_2d(&camera_global, cursor_position)
+                .ok()
+        })
+        .map(world_position_to_tile_coord)
 }
 
 fn movement_direction_from_keyboard(keyboard: &ButtonInput<KeyCode>) -> Vec2 {
