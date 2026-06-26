@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::{
     DebugBuildDirection, FactoryAppPlugin, InventoryPanel, SimResource,
-    handle_debug_build_action_at_tile, opened_container_after_world_click,
-    transfer_open_container_slot, world_position_to_tile_coord,
+    handle_debug_belt_item_insertion_at_tile, handle_debug_build_action_at_tile,
+    opened_container_after_world_click, transfer_open_container_slot, world_position_to_tile_coord,
 };
 use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
@@ -401,6 +401,29 @@ fn debug_placement_key_places_transport_belt_with_current_direction() {
     assert_eq!(
         sim.entities.placed_entity(second_id).unwrap().direction,
         Direction::East
+    );
+}
+
+#[test]
+fn debug_belt_insert_key_adds_selected_item_to_clicked_belt() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let iron_ore = item_id_by_name(&sim.world.prototypes, "iron_ore");
+    let (x, y) = first_buildable_rect(&sim, belt);
+    let belt_id = sim
+        .place_entity(belt, x, y, Direction::East)
+        .expect("belt should be placeable");
+    let inventory_selection = factory_app::DebugInventorySelection { selected_index: 0 };
+
+    handle_debug_belt_item_insertion_at_tile(&mut sim, &inventory_selection, x, y)
+        .expect("clicked belt should accept selected debug item");
+
+    assert!(
+        sim.belt_segment(belt_id)
+            .expect("belt should expose segment state")
+            .lanes
+            .iter()
+            .any(|lane| lane.items.iter().any(|item| item.item_id == iron_ore))
     );
 }
 

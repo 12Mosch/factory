@@ -25,7 +25,11 @@ const INITIAL_CAMERA_SCALE: f32 = 2.0;
 const CHEST_SPRITE_SIZE: f32 = TILE_SIZE * 0.9;
 const BURNER_DRILL_SPRITE_PADDING: f32 = TILE_SIZE * 0.12;
 const TRANSPORT_BELT_SPRITE_SIZE: f32 = TILE_SIZE * 0.92;
+const BELT_DIRECTION_SHAFT_LENGTH: f32 = TILE_SIZE * 0.46;
+const BELT_DIRECTION_SHAFT_WIDTH: f32 = TILE_SIZE * 0.12;
+const BELT_DIRECTION_HEAD_SIZE: f32 = TILE_SIZE * 0.22;
 const BELT_ITEM_SPRITE_SIZE: f32 = TILE_SIZE * 0.28;
+const BELT_ITEM_LABEL_FONT_SIZE: f32 = 3.0;
 const SLOT_BUTTON_WIDTH: f32 = 58.0;
 const SLOT_BUTTON_HEIGHT: f32 = 38.0;
 const MACHINE_BAR_WIDTH: f32 = 180.0;
@@ -109,8 +113,27 @@ struct PlacedEntitySprite {
     entity_id: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum BeltDirectionPart {
+    Shaft,
+    Head,
+}
+
+#[derive(Component)]
+struct BeltDirectionSprite {
+    entity_id: u64,
+    part: BeltDirectionPart,
+}
+
 #[derive(Component)]
 struct BeltItemSprite {
+    entity_id: u64,
+    lane_index: usize,
+    item_index: usize,
+}
+
+#[derive(Component)]
+struct BeltItemLabel {
     entity_id: u64,
     lane_index: usize,
     item_index: usize,
@@ -224,11 +247,13 @@ impl Plugin for FactoryAppPlugin {
                     update_ups_stats,
                     handle_debug_inventory_input,
                     handle_debug_entity_placement,
+                    handle_debug_belt_item_insertion_input,
                     handle_container_open_input,
                     handle_container_close_input,
                     update_debug_overlay,
                     sync_resource_debug_rendering,
                     sync_placed_entity_rendering,
+                    sync_belt_direction_rendering,
                     sync_belt_item_rendering,
                     sync_container_window,
                     handle_container_slot_clicks,
@@ -564,6 +589,27 @@ fn handle_debug_entity_placement(
     let _ = handle_debug_build_action_at_tile(&mut sim.sim, &keyboard, &mut build_direction, x, y);
 }
 
+fn handle_debug_belt_item_insertion_input(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
+    inventory_selection: Res<DebugInventorySelection>,
+    mut sim: ResMut<SimResource>,
+) {
+    let Some(keyboard) = keyboard else {
+        return;
+    };
+    if !keyboard.just_pressed(KeyCode::KeyV) {
+        return;
+    }
+
+    let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
+        return;
+    };
+
+    let _ = handle_debug_belt_item_insertion_at_tile(&mut sim.sim, &inventory_selection, x, y);
+}
+
 pub fn handle_debug_build_action_at_tile(
     sim: &mut Simulation,
     keyboard: &ButtonInput<KeyCode>,
@@ -579,6 +625,35 @@ pub fn handle_debug_build_action_at_tile(
     let prototype = find_entity_prototype_id(&sim.world.prototypes, prototype_name);
     sim.place_entity(prototype, x, y, build_direction.direction)
         .ok()
+}
+
+pub fn handle_debug_belt_item_insertion_at_tile(
+    sim: &mut Simulation,
+    inventory_selection: &DebugInventorySelection,
+    x: i32,
+    y: i32,
+) -> Option<()> {
+    let item_id = sim
+        .world
+        .prototypes
+        .items
+        .get(inventory_selection.selected_index % sim.world.prototypes.items.len().max(1))?
+        .id;
+    let entity_id = sim.entities.occupancy().entity_at(x, y)?;
+    if sim.belt_segment(entity_id).is_err() {
+        return None;
+    }
+
+    for lane_index in 0..2 {
+        if sim
+            .insert_item_onto_belt(entity_id, lane_index, item_id)
+            .is_ok()
+        {
+            return Some(());
+        }
+    }
+
+    None
 }
 
 fn debug_build_prototype_name(keyboard: &ButtonInput<KeyCode>) -> Option<&'static str> {
@@ -693,12 +768,70 @@ fn sync_placed_entity_rendering(
     }
 }
 
+fn sync_belt_direction_rendering(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    mut sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
+) {
+    let mut seen = BTreeSet::new();
+
+    for (entity, marker, mut transform, mut sprite) in &mut sprites {
+        let key = (marker.entity_id, marker.part);
+        if let Some((translation, size, color)) =
+            belt_direction_render_state(&sim.sim, marker.entity_id, marker.part)
+        {
+            seen.insert(key);
+            transform.translation = translation;
+            sprite.color = color;
+            sprite.custom_size = Some(size);
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for placed in sim.sim.entities.placed_entities() {
+        if sim.sim.belt_segment(placed.id).is_err() {
+            continue;
+        }
+
+        for part in [BeltDirectionPart::Shaft, BeltDirectionPart::Head] {
+            let key = (placed.id, part);
+            if seen.contains(&key) {
+                continue;
+            }
+
+            let Some((translation, size, color)) =
+                belt_direction_render_state(&sim.sim, placed.id, part)
+            else {
+                continue;
+            };
+
+            commands.spawn((
+                Sprite::from_color(color, size),
+                Transform::from_translation(translation),
+                BeltDirectionSprite {
+                    entity_id: placed.id,
+                    part,
+                },
+            ));
+        }
+    }
+}
+
 fn sync_belt_item_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
-    mut sprites: Query<(Entity, &BeltItemSprite, &mut Transform, &mut Sprite)>,
+    mut sprites: Query<
+        (Entity, &BeltItemSprite, &mut Transform, &mut Sprite),
+        Without<BeltItemLabel>,
+    >,
+    mut labels: Query<
+        (Entity, &BeltItemLabel, &mut Transform, &mut Text2d),
+        Without<BeltItemSprite>,
+    >,
 ) {
-    let mut seen = BTreeSet::new();
+    let mut seen_sprites = BTreeSet::new();
+    let mut seen_labels = BTreeSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
         let key = (marker.entity_id, marker.lane_index, marker.item_index);
@@ -708,10 +841,26 @@ fn sync_belt_item_rendering(
             marker.lane_index,
             marker.item_index,
         ) {
-            seen.insert(key);
+            seen_sprites.insert(key);
             transform.translation = translation;
             sprite.color = color;
             sprite.custom_size = Some(Vec2::splat(BELT_ITEM_SPRITE_SIZE));
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for (entity, marker, mut transform, mut text) in &mut labels {
+        let key = (marker.entity_id, marker.lane_index, marker.item_index);
+        if let Some((translation, label)) = belt_item_label_render_state(
+            &sim.sim,
+            marker.entity_id,
+            marker.lane_index,
+            marker.item_index,
+        ) {
+            seen_labels.insert(key);
+            transform.translation = translation;
+            text.0 = label;
         } else {
             commands.entity(entity).despawn();
         }
@@ -725,24 +874,44 @@ fn sync_belt_item_rendering(
         for (lane_index, lane) in segment.lanes.iter().enumerate() {
             for item_index in 0..lane.items.len() {
                 let key = (placed.id, lane_index, item_index);
-                if seen.contains(&key) {
-                    continue;
+                if !seen_sprites.contains(&key) {
+                    let Some((translation, color)) =
+                        belt_item_render_state(&sim.sim, placed.id, lane_index, item_index)
+                    else {
+                        continue;
+                    };
+                    commands.spawn((
+                        Sprite::from_color(color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
+                        Transform::from_translation(translation),
+                        BeltItemSprite {
+                            entity_id: placed.id,
+                            lane_index,
+                            item_index,
+                        },
+                    ));
                 }
 
-                let Some((translation, color)) =
-                    belt_item_render_state(&sim.sim, placed.id, lane_index, item_index)
-                else {
-                    continue;
-                };
-                commands.spawn((
-                    Sprite::from_color(color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
-                    Transform::from_translation(translation),
-                    BeltItemSprite {
-                        entity_id: placed.id,
-                        lane_index,
-                        item_index,
-                    },
-                ));
+                if !seen_labels.contains(&key) {
+                    let Some((translation, label)) =
+                        belt_item_label_render_state(&sim.sim, placed.id, lane_index, item_index)
+                    else {
+                        continue;
+                    };
+                    commands.spawn((
+                        Text2d::new(label),
+                        TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),
+                        TextColor(Color::WHITE),
+                        TextLayout::justify(Justify::Center),
+                        Transform::from_translation(translation),
+                        Anchor::CENTER,
+                        Text2dShadow::default(),
+                        BeltItemLabel {
+                            entity_id: placed.id,
+                            lane_index,
+                            item_index,
+                        },
+                    ));
+                }
             }
         }
     }
@@ -1514,6 +1683,38 @@ fn renderable_entity_style(sim: &Simulation, entity_id: u64) -> Option<(Color, V
     }
 }
 
+fn belt_direction_render_state(
+    sim: &Simulation,
+    entity_id: u64,
+    part: BeltDirectionPart,
+) -> Option<(Vec3, Vec2, Color)> {
+    let placed = sim.entities.placed_entity(entity_id)?;
+    let segment = sim.belt_segment(entity_id).ok()?;
+    let center = tile_translation(placed.x, placed.y, 3.2);
+    let along = direction_render_vector(segment.dir);
+    let translation = match part {
+        BeltDirectionPart::Shaft => {
+            let offset = along * TILE_SIZE * -0.06;
+            Vec3::new(center.x + offset.x, center.y + offset.y, center.z)
+        }
+        BeltDirectionPart::Head => {
+            let offset = along * TILE_SIZE * 0.24;
+            Vec3::new(center.x + offset.x, center.y + offset.y, center.z + 0.1)
+        }
+    };
+    let size = match part {
+        BeltDirectionPart::Shaft if along.x.abs() > 0.0 => {
+            Vec2::new(BELT_DIRECTION_SHAFT_LENGTH, BELT_DIRECTION_SHAFT_WIDTH)
+        }
+        BeltDirectionPart::Shaft => {
+            Vec2::new(BELT_DIRECTION_SHAFT_WIDTH, BELT_DIRECTION_SHAFT_LENGTH)
+        }
+        BeltDirectionPart::Head => Vec2::splat(BELT_DIRECTION_HEAD_SIZE),
+    };
+
+    Some((translation, size, belt_direction_color()))
+}
+
 fn belt_item_render_state(
     sim: &Simulation,
     entity_id: u64,
@@ -1537,6 +1738,27 @@ fn belt_item_render_state(
     ))
 }
 
+fn belt_item_label_render_state(
+    sim: &Simulation,
+    entity_id: u64,
+    lane_index: usize,
+    item_index: usize,
+) -> Option<(Vec3, String)> {
+    let (mut translation, _) = belt_item_render_state(sim, entity_id, lane_index, item_index)?;
+    let segment = sim.belt_segment(entity_id).ok()?;
+    let item = segment.lanes.get(lane_index)?.items.get(item_index)?;
+    let name = sim
+        .world
+        .prototypes
+        .items
+        .get(item.item_id.index())
+        .map(|item| item.name.as_str())
+        .unwrap_or("?");
+
+    translation.z += 0.2;
+    Some((translation, compact_item_name(name)))
+}
+
 fn direction_render_vector(direction: Direction) -> Vec2 {
     match direction {
         Direction::North => Vec2::Y,
@@ -1544,6 +1766,10 @@ fn direction_render_vector(direction: Direction) -> Vec2 {
         Direction::South => Vec2::NEG_Y,
         Direction::West => Vec2::NEG_X,
     }
+}
+
+fn belt_direction_color() -> Color {
+    Color::srgb(0.30, 0.22, 0.07)
 }
 
 fn belt_item_color(item_id: ItemId, catalog: &PrototypeCatalog) -> Color {
@@ -1649,4 +1875,100 @@ fn find_entity_prototype_id(catalog: &PrototypeCatalog, name: &str) -> EntityPro
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required entity prototype {name:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn belt_item_render_state_changes_only_when_sim_position_changes() {
+        let mut sim = Simulation::new_test_world(123);
+        let belt = find_entity_prototype_id(&sim.world.prototypes, "transport_belt");
+        let iron_ore = find_item_id(&sim.world.prototypes, "iron_ore");
+        let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
+        let belt_id = sim
+            .place_entity(belt, x, y, Direction::East)
+            .expect("belt should be placeable");
+
+        sim.insert_item_onto_belt(belt_id, 0, iron_ore)
+            .expect("empty belt should accept item");
+
+        let (before, _) = belt_item_render_state(&sim, belt_id, 0, 0)
+            .expect("inserted belt item should have render state");
+        let (same_tick, _) = belt_item_render_state(&sim, belt_id, 0, 0)
+            .expect("inserted belt item should keep render state");
+        assert_eq!(same_tick, before);
+
+        sim.tick();
+
+        let (after_tick, _) = belt_item_render_state(&sim, belt_id, 0, 0)
+            .expect("ticked belt item should have render state");
+        assert!(after_tick.x > before.x);
+        assert_eq!(after_tick.y, before.y);
+
+        let (without_tick, _) = belt_item_render_state(&sim, belt_id, 0, 0)
+            .expect("unticked belt item should keep render state");
+        assert_eq!(without_tick, after_tick);
+    }
+
+    #[test]
+    fn belt_direction_render_state_marks_downstream_direction() {
+        let mut sim = Simulation::new_test_world(123);
+        let belt = find_entity_prototype_id(&sim.world.prototypes, "transport_belt");
+        let (x, y) = first_placeable_tile(&sim, belt, Direction::North);
+        let belt_id = sim
+            .place_entity(belt, x, y, Direction::North)
+            .expect("belt should be placeable");
+
+        let (shaft_translation, shaft_size, _) =
+            belt_direction_render_state(&sim, belt_id, BeltDirectionPart::Shaft)
+                .expect("belt shaft should have render state");
+        let (head_translation, head_size, _) =
+            belt_direction_render_state(&sim, belt_id, BeltDirectionPart::Head)
+                .expect("belt head should have render state");
+
+        assert!(head_translation.y > shaft_translation.y);
+        assert!(shaft_size.y > shaft_size.x);
+        assert_eq!(head_size, Vec2::splat(BELT_DIRECTION_HEAD_SIZE));
+    }
+
+    #[test]
+    fn belt_item_label_uses_item_prototype_initials() {
+        let mut sim = Simulation::new_test_world(123);
+        let belt = find_entity_prototype_id(&sim.world.prototypes, "transport_belt");
+        let copper_ore = find_item_id(&sim.world.prototypes, "copper_ore");
+        let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
+        let belt_id = sim
+            .place_entity(belt, x, y, Direction::East)
+            .expect("belt should be placeable");
+
+        sim.insert_item_onto_belt(belt_id, 0, copper_ore)
+            .expect("empty belt should accept item");
+
+        let (_, label) = belt_item_label_render_state(&sim, belt_id, 0, 0)
+            .expect("inserted belt item should have label render state");
+        assert_eq!(label, "CO");
+    }
+
+    fn first_placeable_tile(
+        sim: &Simulation,
+        prototype_id: EntityPrototypeId,
+        direction: Direction,
+    ) -> (i32, i32) {
+        for chunk in sim.world.chunks.values() {
+            for (index, _) in chunk.tiles.iter().enumerate() {
+                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                let x = chunk.coord.x * CHUNK_SIZE + local_x;
+                let y = chunk.coord.y * CHUNK_SIZE + local_y;
+
+                if sim.can_place_entity(prototype_id, x, y, direction).is_ok() {
+                    return (x, y);
+                }
+            }
+        }
+
+        panic!("expected at least one placeable tile");
+    }
 }
