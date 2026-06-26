@@ -169,6 +169,21 @@ fn opening_clicked_burner_drill_selects_correct_entity() {
 }
 
 #[test]
+fn opening_clicked_furnace_selects_correct_entity() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let (x, y) = first_buildable_rect(&sim, furnace);
+    let entity_id = sim
+        .place_entity(furnace, x, y, Direction::North)
+        .expect("furnace should be placeable");
+
+    assert_eq!(
+        opened_container_after_world_click(&sim, Some((x, y))),
+        Some(entity_id)
+    );
+}
+
+#[test]
 fn slot_click_transfer_delegates_to_sim_transfer_api() {
     let mut sim = Simulation::new_test_world(123);
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
@@ -192,6 +207,103 @@ fn slot_click_transfer_delegates_to_sim_transfer_api() {
             .expect("chest should have inventory")
             .count(iron_plate),
         9
+    );
+}
+
+#[test]
+fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let iron_ore = item_id_by_name(&sim.world.prototypes, "iron_ore");
+    let coal = item_id_by_name(&sim.world.prototypes, "coal");
+    let iron_plate = item_id_by_name(&sim.world.prototypes, "iron_plate");
+    let (x, y) = first_buildable_rect(&sim, furnace);
+    let entity_id = sim
+        .place_entity(furnace, x, y, Direction::North)
+        .expect("furnace should be placeable");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[2] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+    sim.player_inventory.slots[3] = Some(ItemStack {
+        item_id: coal,
+        count: 1,
+    });
+
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+        .expect("player ore should transfer to furnace input");
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 3)
+        .expect("player coal should transfer to furnace fuel");
+
+    assert_eq!(sim.player_inventory.slots[2], None);
+    assert_eq!(sim.player_inventory.slots[3], None);
+    assert_eq!(
+        sim.furnace_state(entity_id)
+            .expect("furnace should expose state")
+            .input_slot,
+        Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        })
+    );
+    assert_eq!(
+        sim.furnace_state(entity_id)
+            .expect("furnace should expose state")
+            .energy
+            .fuel_slot,
+        Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        })
+    );
+
+    for _ in 0..210 {
+        sim.tick();
+    }
+
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::FurnaceOutput, 0)
+        .expect("furnace output should transfer to player");
+
+    assert_eq!(sim.player_inventory.count(iron_plate), 1);
+    assert_eq!(
+        sim.furnace_state(entity_id)
+            .expect("furnace should expose state")
+            .output_slot,
+        None
+    );
+}
+
+#[test]
+fn slot_click_rejects_invalid_furnace_input_without_mutation() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let inserter = item_id_by_name(&sim.world.prototypes, "inserter");
+    let (x, y) = first_buildable_rect(&sim, furnace);
+    let entity_id = sim
+        .place_entity(furnace, x, y, Direction::North)
+        .expect("furnace should be placeable");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[2] = Some(ItemStack {
+        item_id: inserter,
+        count: 1,
+    });
+
+    assert!(
+        transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2).is_err()
+    );
+    assert_eq!(
+        sim.player_inventory.slots[2],
+        Some(ItemStack {
+            item_id: inserter,
+            count: 1,
+        })
+    );
+    assert_eq!(
+        sim.furnace_state(entity_id)
+            .expect("furnace should expose state")
+            .input_slot,
+        None
     );
 }
 

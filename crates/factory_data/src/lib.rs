@@ -514,7 +514,7 @@ impl RawPrototype for RawTilePrototype {
 mod tests {
     use super::*;
 
-    const ITEM_NAMES: [&str; 18] = [
+    const ITEM_NAMES: [&str; 19] = [
         "iron_ore",
         "copper_ore",
         "coal",
@@ -533,9 +533,10 @@ mod tests {
         "lab",
         "automation_science_pack",
         "chest",
+        "stone_brick",
     ];
 
-    const RECIPE_NAMES: [&str; 14] = [
+    const RECIPE_NAMES: [&str; 15] = [
         "iron_plate",
         "copper_plate",
         "steel_plate",
@@ -550,6 +551,7 @@ mod tests {
         "lab",
         "automation_science_pack",
         "chest",
+        "stone_brick",
     ];
 
     const ENTITY_NAMES: [&str; 11] = [
@@ -572,8 +574,8 @@ mod tests {
     fn base_catalog_loads_from_ron() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-        assert_eq!(catalog.items.len(), 18);
-        assert_eq!(catalog.recipes.len(), 14);
+        assert_eq!(catalog.items.len(), 19);
+        assert_eq!(catalog.recipes.len(), 15);
         assert_eq!(catalog.entities.len(), 11);
         assert_eq!(catalog.tiles.len(), 3);
     }
@@ -705,6 +707,63 @@ mod tests {
                 .as_ref()
                 .map(|mining| mining.ticks_per_item),
             Some(240)
+        );
+    }
+
+    #[test]
+    fn stone_furnace_loads_burner_metadata() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let furnace = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == "stone_furnace")
+            .expect("base catalog should contain stone furnace");
+
+        assert_eq!(
+            furnace
+                .burner
+                .as_ref()
+                .map(|burner| burner.energy_usage_watts),
+            Some(90_000)
+        );
+    }
+
+    #[test]
+    fn stone_brick_smelting_recipe_loads() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let stone = catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == "stone")
+            .expect("base catalog should contain stone")
+            .id;
+        let stone_brick = catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == "stone_brick")
+            .expect("base catalog should contain stone brick")
+            .id;
+        let recipe = catalog
+            .recipes
+            .iter()
+            .find(|prototype| prototype.name == "stone_brick")
+            .expect("base catalog should contain stone brick recipe");
+
+        assert_eq!(recipe.category, CraftingCategory::Smelting);
+        assert_eq!(recipe.crafting_time_ticks, 210);
+        assert_eq!(
+            recipe.ingredients,
+            vec![ItemAmount {
+                item: stone,
+                amount: 1
+            }]
+        );
+        assert_eq!(
+            recipe.products,
+            vec![ItemAmount {
+                item: stone_brick,
+                amount: 1
+            }]
         );
     }
 

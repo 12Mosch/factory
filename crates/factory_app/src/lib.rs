@@ -6,8 +6,9 @@ use bevy::window::PrimaryWindow;
 use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, TileId};
 use factory_sim::{
     BURNER_MINING_DRILL_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BurnerDrillError,
-    CHUNK_SIZE, ContainerError, Direction, EntityFootprint, ItemStack, ManualMiningTarget,
-    PlayerState, ResourceCell, Simulation,
+    CHUNK_SIZE, ContainerError, Direction, EntityFootprint, FURNACE_FUEL_SLOT_INDEX,
+    FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX, FurnaceError, ItemStack,
+    ManualMiningTarget, PlayerState, ResourceCell, Simulation,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -58,6 +59,9 @@ pub enum InventoryPanel {
     Container,
     BurnerFuel,
     BurnerOutput,
+    FurnaceInput,
+    FurnaceFuel,
+    FurnaceOutput,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,12 +69,14 @@ pub enum ContainerSlotClickError {
     NoOpenContainer,
     Transfer(ContainerError),
     BurnerDrill(BurnerDrillError),
+    Furnace(FurnaceError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OpenMachineKind {
     Chest,
     BurnerDrill,
+    Furnace,
 }
 
 #[derive(Component)]
@@ -535,6 +541,8 @@ fn handle_debug_chest_placement(
         "chest"
     } else if keyboard.just_pressed(KeyCode::KeyB) {
         "burner_mining_drill"
+    } else if keyboard.just_pressed(KeyCode::KeyF) {
+        "stone_furnace"
     } else {
         return;
     };
@@ -693,6 +701,7 @@ fn sync_container_window(
             match kind {
                 OpenMachineKind::Chest => spawn_chest_panel(root),
                 OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
+                OpenMachineKind::Furnace => spawn_furnace_panel(root),
             }
         });
 }
@@ -830,6 +839,77 @@ fn spawn_burner_drill_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommand
     });
 }
 
+fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(220.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Stone Furnace"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel.spawn((
+            Text::new("Energy: 0 J"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            BurnerEnergyText,
+        ));
+        panel
+            .spawn((
+                Node {
+                    width: Val::Px(MACHINE_BAR_WIDTH),
+                    height: Val::Px(MACHINE_BAR_HEIGHT),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.10, 0.10, 0.11, 0.96)),
+            ))
+            .with_child((
+                Node {
+                    width: Val::Px(0.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.82, 0.48, 0.24)),
+                BurnerProgressFill,
+            ));
+        panel
+            .spawn((
+                Node {
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|slots| {
+                spawn_labeled_slot(
+                    slots,
+                    "Input",
+                    InventoryPanel::FurnaceInput,
+                    FURNACE_INPUT_SLOT_INDEX,
+                );
+                spawn_labeled_slot(
+                    slots,
+                    "Fuel",
+                    InventoryPanel::FurnaceFuel,
+                    FURNACE_FUEL_SLOT_INDEX,
+                );
+                spawn_labeled_slot(
+                    slots,
+                    "Output",
+                    InventoryPanel::FurnaceOutput,
+                    FURNACE_OUTPUT_SLOT_INDEX,
+                );
+            });
+    });
+}
+
 fn spawn_labeled_slot(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     label: &str,
@@ -912,6 +992,9 @@ fn update_container_slot_text(
     let burner_drill_state = open_container
         .entity_id
         .and_then(|entity_id| sim.sim.burner_drill_state(entity_id).ok());
+    let furnace_state = open_container
+        .entity_id
+        .and_then(|entity_id| sim.sim.furnace_state(entity_id).ok());
 
     for (marker, mut text) in &mut texts {
         let stack = match marker.panel {
@@ -934,6 +1017,21 @@ fn update_container_slot_text(
                     .then_some(state.output_slot)
                     .flatten()
             }),
+            InventoryPanel::FurnaceInput => furnace_state.and_then(|state| {
+                (marker.slot_index == FURNACE_INPUT_SLOT_INDEX)
+                    .then_some(state.input_slot)
+                    .flatten()
+            }),
+            InventoryPanel::FurnaceFuel => furnace_state.and_then(|state| {
+                (marker.slot_index == FURNACE_FUEL_SLOT_INDEX)
+                    .then_some(state.energy.fuel_slot)
+                    .flatten()
+            }),
+            InventoryPanel::FurnaceOutput => furnace_state.and_then(|state| {
+                (marker.slot_index == FURNACE_OUTPUT_SLOT_INDEX)
+                    .then_some(state.output_slot)
+                    .flatten()
+            }),
         };
         text.0 = stack
             .map(|stack| format_item_stack(stack, &sim.sim.world.prototypes))
@@ -947,25 +1045,43 @@ fn update_burner_drill_indicators(
     mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
     mut progress_fills: Query<&mut Node, With<BurnerProgressFill>>,
 ) {
-    let state = open_container
-        .entity_id
-        .and_then(|entity_id| sim.sim.burner_drill_state(entity_id).ok());
+    let indicator = open_container.entity_id.and_then(|entity_id| {
+        match open_machine_kind(&sim.sim, entity_id)? {
+            OpenMachineKind::BurnerDrill => {
+                let state = sim.sim.burner_drill_state(entity_id).ok()?;
+                Some((
+                    state.energy.energy_remaining_joules,
+                    state.mining_progress_ticks,
+                    state.mining_required_ticks,
+                ))
+            }
+            OpenMachineKind::Furnace => {
+                let state = sim.sim.furnace_state(entity_id).ok()?;
+                Some((
+                    state.energy.energy_remaining_joules,
+                    state.crafting_progress_ticks,
+                    state.crafting_required_ticks,
+                ))
+            }
+            OpenMachineKind::Chest => None,
+        }
+    });
 
     for mut text in &mut energy_texts {
-        text.0 = state
-            .map(|state| {
+        text.0 = indicator
+            .map(|(energy_remaining_joules, _, _)| {
                 format!(
                     "Energy: {} J",
-                    state.energy.energy_remaining_joules.max(0.0).round() as u64
+                    energy_remaining_joules.max(0.0).round() as u64
                 )
             })
             .unwrap_or_else(|| "Energy: 0 J".to_string());
     }
 
     for mut node in &mut progress_fills {
-        let progress = state
-            .map(|state| {
-                state.mining_progress_ticks as f32 / state.mining_required_ticks.max(1) as f32
+        let progress = indicator
+            .map(|(_, progress_ticks, required_ticks)| {
+                progress_ticks as f32 / required_ticks.max(1) as f32
             })
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
@@ -1078,6 +1194,10 @@ fn burner_drill_color() -> Color {
     Color::srgb(0.40, 0.43, 0.40)
 }
 
+fn furnace_color() -> Color {
+    Color::srgb(0.54, 0.45, 0.36)
+}
+
 fn manual_mining_bar_translation(x: i32, y: i32, z: f32) -> Vec3 {
     let mut translation = tile_translation(x, y, z);
     translation.y += MANUAL_MINING_BAR_Y_OFFSET;
@@ -1159,6 +1279,10 @@ pub fn transfer_open_container_slot(
                     .transfer_player_slot_to_burner_drill_fuel(entity_id, slot_index)
                     .map_err(ContainerSlotClickError::BurnerDrill);
             }
+            if is_furnace_entity(sim, entity_id) {
+                return transfer_player_slot_to_furnace(sim, entity_id, slot_index)
+                    .map_err(ContainerSlotClickError::Furnace);
+            }
             sim.transfer_player_slot_to_entity(entity_id, slot_index)
         }
         InventoryPanel::Container => sim.transfer_entity_slot_to_player(entity_id, slot_index),
@@ -1172,12 +1296,58 @@ pub fn transfer_open_container_slot(
                 .transfer_burner_drill_output_to_player(entity_id)
                 .map_err(ContainerSlotClickError::BurnerDrill);
         }
+        InventoryPanel::FurnaceInput => {
+            return sim
+                .transfer_furnace_input_to_player(entity_id)
+                .map_err(ContainerSlotClickError::Furnace);
+        }
+        InventoryPanel::FurnaceFuel => {
+            return sim
+                .transfer_furnace_fuel_to_player(entity_id)
+                .map_err(ContainerSlotClickError::Furnace);
+        }
+        InventoryPanel::FurnaceOutput => {
+            return sim
+                .transfer_furnace_output_to_player(entity_id)
+                .map_err(ContainerSlotClickError::Furnace);
+        }
     }
     .map_err(ContainerSlotClickError::Transfer)
 }
 
 fn is_burner_drill_entity(sim: &Simulation, entity_id: u64) -> bool {
     open_machine_kind(sim, entity_id) == Some(OpenMachineKind::BurnerDrill)
+}
+
+fn is_furnace_entity(sim: &Simulation, entity_id: u64) -> bool {
+    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Furnace)
+}
+
+fn transfer_player_slot_to_furnace(
+    sim: &mut Simulation,
+    entity_id: u64,
+    slot_index: usize,
+) -> Result<(), FurnaceError> {
+    let stack = sim
+        .player_inventory
+        .slots
+        .get(slot_index)
+        .ok_or(FurnaceError::InvalidSlot { slot_index })?
+        .ok_or(FurnaceError::EmptySlot { slot_index })?;
+    let is_fuel = sim
+        .world
+        .prototypes
+        .items
+        .get(stack.item_id.index())
+        .filter(|prototype| prototype.id == stack.item_id)
+        .and_then(|prototype| prototype.fuel_value_joules)
+        .is_some();
+
+    if is_fuel {
+        sim.transfer_player_slot_to_furnace_fuel(entity_id, slot_index)
+    } else {
+        sim.transfer_player_slot_to_furnace_input(entity_id, slot_index)
+    }
 }
 
 fn open_machine_kind(sim: &Simulation, entity_id: u64) -> Option<OpenMachineKind> {
@@ -1194,6 +1364,8 @@ fn open_machine_kind(sim: &Simulation, entity_id: u64) -> Option<OpenMachineKind
         && sim.burner_drill_state(entity_id).is_ok()
     {
         Some(OpenMachineKind::BurnerDrill)
+    } else if prototype.entity_kind == EntityKind::Furnace && sim.furnace_state(entity_id).is_ok() {
+        Some(OpenMachineKind::Furnace)
     } else {
         None
     }
@@ -1205,6 +1377,13 @@ fn renderable_entity_style(sim: &Simulation, entity_id: u64) -> Option<(Color, V
         Some(OpenMachineKind::Chest) => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
         Some(OpenMachineKind::BurnerDrill) => Some((
             burner_drill_color(),
+            Vec2::new(
+                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            ),
+        )),
+        Some(OpenMachineKind::Furnace) => Some((
+            furnace_color(),
             Vec2::new(
                 placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
                 placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,

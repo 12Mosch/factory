@@ -21,6 +21,9 @@ const RESOURCE_PATCH_GRID_JITTER: i32 = 16;
 const RESOURCE_PATCH_EDGE_NOISE: i32 = 3;
 pub const BURNER_MINING_DRILL_FUEL_SLOT_INDEX: usize = 0;
 pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
+pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
+pub const FURNACE_FUEL_SLOT_INDEX: usize = 0;
+pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -146,6 +149,16 @@ pub struct BurnerMiningDrillState {
     pub output_slot: Option<ItemStack>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FurnaceState {
+    pub input_slot: Option<ItemStack>,
+    pub energy: BurnerEnergy,
+    pub output_slot: Option<ItemStack>,
+    pub active_recipe: Option<RecipeId>,
+    pub crafting_progress_ticks: u32,
+    pub crafting_required_ticks: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct BurnerEnergy {
     pub fuel_slot: Option<ItemStack>,
@@ -182,12 +195,25 @@ pub enum BurnerDrillError {
     UnknownItem,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FurnaceError {
+    MissingEntity(u64),
+    NotFurnace(u64),
+    InvalidInput(ItemId),
+    InvalidFuel(ItemId),
+    InvalidSlot { slot_index: usize },
+    EmptySlot { slot_index: usize },
+    InsufficientSpace,
+    UnknownItem,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EntityStore {
     entities: Vec<SimEntity>,
     placed_entities: BTreeMap<u64, PlacedEntity>,
     entity_inventories: BTreeMap<u64, Inventory>,
     burner_mining_drills: BTreeMap<u64, BurnerMiningDrillState>,
+    furnaces: BTreeMap<u64, FurnaceState>,
     occupancy: OccupancyGrid,
     next_entity_id: u64,
 }
@@ -224,6 +250,7 @@ struct EntityReservation {
     footprint: EntityFootprint,
     inventory_slot_count: Option<usize>,
     burner_mining_drill: Option<BurnerMiningDrillState>,
+    furnace: Option<FurnaceState>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -430,6 +457,18 @@ impl From<InventoryError> for BurnerDrillError {
     }
 }
 
+impl From<InventoryError> for FurnaceError {
+    fn from(error: InventoryError) -> Self {
+        match error {
+            InventoryError::UnknownItem => Self::UnknownItem,
+            InventoryError::InsufficientSpace => Self::InsufficientSpace,
+            InventoryError::InsufficientItems => {
+                unreachable!("furnace transfers remove a known slot stack")
+            }
+        }
+    }
+}
+
 fn stack_in_slot(inventory: &Inventory, slot_index: usize) -> Result<ItemStack, ContainerError> {
     inventory
         .slots
@@ -488,6 +527,7 @@ impl Simulation {
         self.tick += 1;
         self.entities.advance(Tick(self.tick), self.world.seed);
         self.advance_burner_mining_drills();
+        self.advance_furnaces();
         self.advance_manual_crafting();
     }
 
@@ -754,6 +794,7 @@ impl Simulation {
         let prototype = &self.world.prototypes.entities[prototype_id.index()];
         let inventory_slot_count = prototype.inventory_slot_count;
         let burner_mining_drill = burner_mining_drill_state_for_prototype(prototype);
+        let furnace = furnace_state_for_prototype(prototype);
         Ok(self.entities.reserve_entity(EntityReservation {
             prototype_id,
             x,
@@ -762,6 +803,7 @@ impl Simulation {
             footprint,
             inventory_slot_count,
             burner_mining_drill,
+            furnace,
         }))
     }
 
@@ -934,6 +976,141 @@ impl Simulation {
             .map_err(BurnerDrillError::from)
     }
 
+    pub fn furnace_state(&self, entity_id: u64) -> Result<&FurnaceState, FurnaceError> {
+        self.entities.furnace_state(entity_id)
+    }
+
+    pub fn transfer_player_slot_to_furnace_input(
+        &mut self,
+        entity_id: u64,
+        player_slot_index: usize,
+    ) -> Result<(), FurnaceError> {
+        let stack = self
+            .player_inventory
+            .slots
+            .get(player_slot_index)
+            .ok_or(FurnaceError::InvalidSlot {
+                slot_index: player_slot_index,
+            })?
+            .ok_or(FurnaceError::EmptySlot {
+                slot_index: player_slot_index,
+            })?;
+
+        if first_matching_smelting_recipe(&self.world.prototypes, stack.item_id).is_none() {
+            return Err(FurnaceError::InvalidInput(stack.item_id));
+        }
+
+        let state = self.entities.furnace_state(entity_id)?;
+        if !input_slot_can_accept(&self.world.prototypes, state.input_slot, stack) {
+            return Err(FurnaceError::InsufficientSpace);
+        }
+
+        self.player_inventory.slots[player_slot_index] = None;
+        let state = self.entities.furnace_state_mut(entity_id)?;
+        insert_into_single_slot(&mut state.input_slot, stack);
+
+        Ok(())
+    }
+
+    pub fn transfer_player_slot_to_furnace_fuel(
+        &mut self,
+        entity_id: u64,
+        player_slot_index: usize,
+    ) -> Result<(), FurnaceError> {
+        let stack = self
+            .player_inventory
+            .slots
+            .get(player_slot_index)
+            .ok_or(FurnaceError::InvalidSlot {
+                slot_index: player_slot_index,
+            })?
+            .ok_or(FurnaceError::EmptySlot {
+                slot_index: player_slot_index,
+            })?;
+
+        if fuel_value_joules(&self.world.prototypes, stack.item_id).is_none() {
+            return Err(FurnaceError::InvalidFuel(stack.item_id));
+        }
+
+        let state = self.entities.furnace_state(entity_id)?;
+        if !burner_fuel_slot_can_accept(&self.world.prototypes, state.energy.fuel_slot, stack) {
+            return Err(FurnaceError::InsufficientSpace);
+        }
+
+        self.player_inventory.slots[player_slot_index] = None;
+        let state = self.entities.furnace_state_mut(entity_id)?;
+        insert_into_single_slot(&mut state.energy.fuel_slot, stack);
+
+        Ok(())
+    }
+
+    pub fn transfer_furnace_input_to_player(&mut self, entity_id: u64) -> Result<(), FurnaceError> {
+        let stack =
+            self.entities
+                .furnace_state(entity_id)?
+                .input_slot
+                .ok_or(FurnaceError::EmptySlot {
+                    slot_index: FURNACE_INPUT_SLOT_INDEX,
+                })?;
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(FurnaceError::InsufficientSpace);
+        }
+
+        self.entities.furnace_state_mut(entity_id)?.input_slot = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(FurnaceError::from)
+    }
+
+    pub fn transfer_furnace_fuel_to_player(&mut self, entity_id: u64) -> Result<(), FurnaceError> {
+        let stack = self
+            .entities
+            .furnace_state(entity_id)?
+            .energy
+            .fuel_slot
+            .ok_or(FurnaceError::EmptySlot {
+                slot_index: FURNACE_FUEL_SLOT_INDEX,
+            })?;
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(FurnaceError::InsufficientSpace);
+        }
+
+        self.entities.furnace_state_mut(entity_id)?.energy.fuel_slot = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(FurnaceError::from)
+    }
+
+    pub fn transfer_furnace_output_to_player(
+        &mut self,
+        entity_id: u64,
+    ) -> Result<(), FurnaceError> {
+        let stack =
+            self.entities
+                .furnace_state(entity_id)?
+                .output_slot
+                .ok_or(FurnaceError::EmptySlot {
+                    slot_index: FURNACE_OUTPUT_SLOT_INDEX,
+                })?;
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(FurnaceError::InsufficientSpace);
+        }
+
+        self.entities.furnace_state_mut(entity_id)?.output_slot = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(FurnaceError::from)
+    }
+
     fn advance_burner_mining_drills(&mut self) {
         let drill_ids = self
             .entities
@@ -1028,6 +1205,92 @@ impl Simulation {
                 mined.amount as u16,
                 &self.world.prototypes,
             );
+        }
+    }
+
+    fn advance_furnaces(&mut self) {
+        let furnace_ids = self.entities.furnaces.keys().copied().collect::<Vec<_>>();
+
+        for entity_id in furnace_ids {
+            if self.entities.placed_entity(entity_id).is_none() {
+                continue;
+            }
+
+            let Some((recipe_id, required_ticks, ingredient, product)) = self
+                .entities
+                .furnace_state(entity_id)
+                .ok()
+                .and_then(|state| furnace_work_selection(&self.world.prototypes, state.input_slot))
+            else {
+                if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
+                    state.active_recipe = None;
+                    state.crafting_progress_ticks = 0;
+                    state.crafting_required_ticks = 0;
+                }
+                continue;
+            };
+
+            let output_can_accept = self.entities.furnace_state(entity_id).is_ok_and(|state| {
+                output_slot_can_accept(
+                    &self.world.prototypes,
+                    state.output_slot,
+                    product.item,
+                    product.amount,
+                )
+            });
+            if !output_can_accept {
+                if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
+                    state.active_recipe = Some(recipe_id);
+                    state.crafting_required_ticks = required_ticks;
+                }
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .furnace_state_mut(entity_id)
+                    .expect("furnace id came from furnace state map");
+                if state.active_recipe != Some(recipe_id) {
+                    state.active_recipe = Some(recipe_id);
+                    state.crafting_progress_ticks = 0;
+                    state.crafting_required_ticks = required_ticks;
+                }
+
+                let joules_per_tick =
+                    state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
+                    && !try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                {
+                    continue;
+                }
+
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    continue;
+                }
+
+                state.energy.energy_remaining_joules -= joules_per_tick;
+                state.crafting_progress_ticks += 1;
+
+                if state.crafting_progress_ticks < required_ticks {
+                    false
+                } else {
+                    state.crafting_progress_ticks = 0;
+                    true
+                }
+            };
+
+            if !completed {
+                continue;
+            }
+
+            let state = self
+                .entities
+                .furnace_state_mut(entity_id)
+                .expect("furnace id came from furnace state map");
+            remove_from_single_slot(&mut state.input_slot, ingredient.item, ingredient.amount)
+                .expect("selected furnace input should still contain ingredient");
+            insert_output_item(&mut state.output_slot, product.item, product.amount);
         }
     }
 }
@@ -1306,6 +1569,7 @@ impl EntityStore {
             placed_entities: BTreeMap::new(),
             entity_inventories: BTreeMap::new(),
             burner_mining_drills: BTreeMap::new(),
+            furnaces: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
             next_entity_id: 2,
         }
@@ -1357,6 +1621,26 @@ impl EntityStore {
             .ok_or(BurnerDrillError::NotBurnerDrill(entity_id))
     }
 
+    fn furnace_state(&self, entity_id: u64) -> Result<&FurnaceState, FurnaceError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(FurnaceError::MissingEntity(entity_id));
+        }
+
+        self.furnaces
+            .get(&entity_id)
+            .ok_or(FurnaceError::NotFurnace(entity_id))
+    }
+
+    fn furnace_state_mut(&mut self, entity_id: u64) -> Result<&mut FurnaceState, FurnaceError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(FurnaceError::MissingEntity(entity_id));
+        }
+
+        self.furnaces
+            .get_mut(&entity_id)
+            .ok_or(FurnaceError::NotFurnace(entity_id))
+    }
+
     fn reserve_entity(&mut self, reservation: EntityReservation) -> u64 {
         let id = self.next_entity_id;
         self.next_entity_id += 1;
@@ -1380,6 +1664,9 @@ impl EntityStore {
         }
         if let Some(state) = reservation.burner_mining_drill {
             self.burner_mining_drills.insert(id, state);
+        }
+        if let Some(state) = reservation.furnace {
+            self.furnaces.insert(id, state);
         }
         id
     }
@@ -1409,6 +1696,7 @@ impl EntityStore {
         let entity = self.placed_entities.remove(&entity_id)?;
         self.entity_inventories.remove(&entity_id);
         self.burner_mining_drills.remove(&entity_id);
+        self.furnaces.remove(&entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);
         Some(entity)
@@ -1948,6 +2236,27 @@ fn burner_mining_drill_state_for_prototype(
     })
 }
 
+fn furnace_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<FurnaceState> {
+    if prototype.entity_kind != EntityKind::Furnace {
+        return None;
+    }
+
+    let burner = prototype.burner.as_ref()?;
+
+    Some(FurnaceState {
+        input_slot: None,
+        energy: BurnerEnergy {
+            fuel_slot: None,
+            energy_remaining_joules: 0.0,
+            energy_usage_watts: burner.energy_usage_watts as f64,
+        },
+        output_slot: None,
+        active_recipe: None,
+        crafting_progress_ticks: 0,
+        crafting_required_ticks: 0,
+    })
+}
+
 fn first_resource_in_mining_area(
     world: &WorldSim,
     footprint: &EntityFootprint,
@@ -1966,6 +2275,50 @@ fn first_resource_in_mining_area(
     }
 
     None
+}
+
+fn first_matching_smelting_recipe(
+    catalog: &PrototypeCatalog,
+    input_item: ItemId,
+) -> Option<&factory_data::RecipePrototype> {
+    catalog.recipes.iter().find(|recipe| {
+        recipe.category == CraftingCategory::Smelting
+            && recipe.ingredients.len() == 1
+            && recipe.products.len() == 1
+            && recipe.ingredients[0].item == input_item
+    })
+}
+
+fn furnace_work_selection(
+    catalog: &PrototypeCatalog,
+    input_slot: Option<ItemStack>,
+) -> Option<(
+    RecipeId,
+    u32,
+    factory_data::ItemAmount,
+    factory_data::ItemAmount,
+)> {
+    let input_stack = input_slot?;
+    let recipe = first_matching_smelting_recipe(catalog, input_stack.item_id)?;
+    let ingredient = recipe.ingredients[0].clone();
+    if input_stack.count < ingredient.amount {
+        return None;
+    }
+    let product = recipe.products[0].clone();
+
+    Some((recipe.id, recipe.crafting_time_ticks, ingredient, product))
+}
+
+fn input_slot_can_accept(
+    catalog: &PrototypeCatalog,
+    input_slot: Option<ItemStack>,
+    stack: ItemStack,
+) -> bool {
+    if first_matching_smelting_recipe(catalog, stack.item_id).is_none() {
+        return false;
+    }
+
+    output_slot_can_accept(catalog, input_slot, stack.item_id, stack.count)
 }
 
 fn burner_fuel_slot_can_accept(
@@ -2100,6 +2453,23 @@ fn insert_into_single_slot(slot: &mut Option<ItemStack>, stack: ItemStack) {
 
 fn insert_output_item(slot: &mut Option<ItemStack>, item_id: ItemId, count: u16) {
     insert_into_single_slot(slot, ItemStack { item_id, count });
+}
+
+fn remove_from_single_slot(
+    slot: &mut Option<ItemStack>,
+    item_id: ItemId,
+    count: u16,
+) -> Result<(), InventoryError> {
+    let Some(mut stack) = *slot else {
+        return Err(InventoryError::InsufficientItems);
+    };
+    if stack.item_id != item_id || stack.count < count {
+        return Err(InventoryError::InsufficientItems);
+    }
+
+    stack.count -= count;
+    *slot = (stack.count > 0).then_some(stack);
+    Ok(())
 }
 
 fn try_consume_fuel(catalog: &PrototypeCatalog, energy: &mut BurnerEnergy) -> bool {
@@ -2924,6 +3294,198 @@ mod tests {
     }
 
     #[test]
+    fn furnace_smelts_iron_ore_to_iron_plate() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let entity_id = place_stone_furnace(&mut sim);
+        add_furnace_input_and_fuel(&mut sim, entity_id, iron_ore, coal);
+
+        for _ in 0..210 {
+            sim.tick();
+        }
+
+        let state = sim
+            .furnace_state(entity_id)
+            .expect("furnace should expose state");
+        assert_eq!(state.input_slot, None);
+        assert_eq!(
+            state.output_slot,
+            Some(ItemStack {
+                item_id: iron_plate,
+                count: 1,
+            })
+        );
+        assert_eq!(state.crafting_progress_ticks, 0);
+        assert_eq!(state.energy.energy_remaining_joules, 3_685_000.0);
+    }
+
+    #[test]
+    fn furnace_does_not_smelts_without_fuel() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let entity_id = place_stone_furnace(&mut sim);
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        });
+        sim.transfer_player_slot_to_furnace_input(entity_id, 0)
+            .expect("ore should transfer to furnace input");
+
+        for _ in 0..210 {
+            sim.tick();
+        }
+
+        let state = sim
+            .furnace_state(entity_id)
+            .expect("furnace should expose state");
+        assert_eq!(
+            state.input_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1,
+            })
+        );
+        assert_eq!(state.output_slot, None);
+        assert_eq!(state.energy.energy_remaining_joules, 0.0);
+        assert_eq!(state.crafting_progress_ticks, 0);
+    }
+
+    #[test]
+    fn furnace_blocks_when_output_full() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let copper_plate = item_id(&sim.world.prototypes, "copper_plate");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let entity_id = place_stone_furnace(&mut sim);
+        add_furnace_input_and_fuel(&mut sim, entity_id, iron_ore, coal);
+        let state = sim
+            .entities
+            .furnace_state_mut(entity_id)
+            .expect("furnace should expose state");
+        state.output_slot = Some(ItemStack {
+            item_id: copper_plate,
+            count: 1,
+        });
+
+        for _ in 0..210 {
+            sim.tick();
+        }
+
+        let state = sim
+            .furnace_state(entity_id)
+            .expect("furnace should expose state");
+        assert_eq!(
+            state.input_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1,
+            })
+        );
+        assert_eq!(
+            state.energy.fuel_slot,
+            Some(ItemStack {
+                item_id: coal,
+                count: 1,
+            })
+        );
+        assert_eq!(state.energy.energy_remaining_joules, 0.0);
+        assert_eq!(state.crafting_progress_ticks, 0);
+        assert_eq!(
+            state.output_slot.map(|stack| stack.item_id),
+            Some(copper_plate)
+        );
+        assert_eq!(
+            state.output_slot.map(|stack| stack.item_id == iron_plate),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn furnace_smelts_copper_ore_to_copper_plate() {
+        let mut sim = Simulation::new_test_world(123);
+        let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+        let copper_plate = item_id(&sim.world.prototypes, "copper_plate");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let entity_id = place_stone_furnace(&mut sim);
+        add_furnace_input_and_fuel(&mut sim, entity_id, copper_ore, coal);
+
+        for _ in 0..210 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            sim.furnace_state(entity_id)
+                .expect("furnace should expose state")
+                .output_slot,
+            Some(ItemStack {
+                item_id: copper_plate,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn furnace_smelts_stone_to_stone_brick() {
+        let mut sim = Simulation::new_test_world(123);
+        let stone = item_id(&sim.world.prototypes, "stone");
+        let stone_brick = item_id(&sim.world.prototypes, "stone_brick");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let recipe = recipe_id(&sim.world.prototypes, "stone_brick");
+        let entity_id = place_stone_furnace(&mut sim);
+        add_furnace_input_and_fuel(&mut sim, entity_id, stone, coal);
+
+        for _ in 0..210 {
+            sim.tick();
+        }
+
+        let state = sim
+            .furnace_state(entity_id)
+            .expect("furnace should expose state");
+        assert_eq!(state.active_recipe, Some(recipe));
+        assert_eq!(
+            state.output_slot,
+            Some(ItemStack {
+                item_id: stone_brick,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_furnace_input_is_rejected() {
+        let mut sim = Simulation::new_test_world(123);
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let entity_id = place_stone_furnace(&mut sim);
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        });
+
+        assert_eq!(
+            sim.transfer_player_slot_to_furnace_input(entity_id, 0),
+            Err(FurnaceError::InvalidInput(coal))
+        );
+        assert_eq!(
+            sim.furnace_state(entity_id)
+                .expect("furnace should expose state")
+                .input_slot,
+            None
+        );
+        assert_eq!(
+            sim.player_inventory.slots[0],
+            Some(ItemStack {
+                item_id: coal,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
     fn non_container_entities_reject_inventory_access() {
         let mut sim = Simulation::new_test_world(123);
         let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
@@ -3430,6 +3992,34 @@ mod tests {
         });
         sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
             .expect("fuel should transfer to burner drill");
+    }
+
+    fn place_stone_furnace(sim: &mut Simulation) -> u64 {
+        let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+        let (x, y) = first_buildable_rect(&sim.world, 2, 2);
+        sim.place_entity(furnace, x, y, Direction::North)
+            .expect("stone furnace should be placeable")
+    }
+
+    fn add_furnace_input_and_fuel(
+        sim: &mut Simulation,
+        entity_id: u64,
+        input_item: ItemId,
+        fuel_item: ItemId,
+    ) {
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: input_item,
+            count: 1,
+        });
+        sim.player_inventory.slots[1] = Some(ItemStack {
+            item_id: fuel_item,
+            count: 1,
+        });
+        sim.transfer_player_slot_to_furnace_input(entity_id, 0)
+            .expect("input should transfer to furnace");
+        sim.transfer_player_slot_to_furnace_fuel(entity_id, 1)
+            .expect("fuel should transfer to furnace");
     }
 
     fn fill_inventory_with(sim: &mut Simulation, entity_id: u64, item_id: ItemId) {

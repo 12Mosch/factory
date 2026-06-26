@@ -18,6 +18,7 @@
         (id: 15, name: "lab", stack_size: 10),
         (id: 16, name: "automation_science_pack", stack_size: 200),
         (id: 17, name: "chest", stack_size: 50),
+        (id: 18, name: "stone_brick", stack_size: 100),
     ],
     recipes: [
         (
@@ -157,6 +158,14 @@
             ingredients: [(item: "iron_plate", amount: 2)],
             products: [(item: "chest", amount: 1)],
         ),
+        (
+            id: 14,
+            name: "stone_brick",
+            category: Smelting,
+            crafting_time_ticks: 210,
+            ingredients: [(item: "stone", amount: 1)],
+            products: [(item: "stone_brick", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -193,6 +202,7 @@
             entity_kind: Furnace,
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),
+            burner: Some((energy_usage_watts: 90000)),
         ),
         (
             id: 5,
