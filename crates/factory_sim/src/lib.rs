@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 
 pub const CHUNK_SIZE: i32 = 32;
 pub const PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND: f32 = 5.0;
+pub const PLAYER_INVENTORY_SLOT_COUNT: usize = 80;
 const PLAYER_POSITION_SCALE: i64 = 1024;
 const TEST_WORLD_MIN_CHUNK: i32 = -2;
 const TEST_WORLD_MAX_CHUNK: i32 = 1;
@@ -15,11 +16,30 @@ const RESOURCE_PATCH_EDGE_NOISE: i32 = 3;
 pub struct Tick(pub u64);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Inventory {
+    pub slots: Vec<Option<ItemStack>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ItemStack {
+    pub item_id: ItemId,
+    pub count: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InventoryError {
+    UnknownItem,
+    InsufficientSpace,
+    InsufficientItems,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Simulation {
     pub tick: u64,
     pub world: WorldSim,
     pub entities: EntityStore,
     pub player: PlayerState,
+    pub player_inventory: Inventory,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -131,18 +151,165 @@ pub enum BuildError {
     MissingEntity(u64),
 }
 
+impl Inventory {
+    pub fn with_slot_count(slot_count: usize) -> Self {
+        Self {
+            slots: vec![None; slot_count],
+        }
+    }
+
+    pub fn player() -> Self {
+        Self::with_slot_count(PLAYER_INVENTORY_SLOT_COUNT)
+    }
+
+    pub fn can_insert(&self, catalog: &PrototypeCatalog, item_id: ItemId, count: u16) -> bool {
+        if count == 0 {
+            return true;
+        }
+
+        let Some(stack_size) = item_stack_size(catalog, item_id) else {
+            return false;
+        };
+
+        self.insert_capacity(item_id, stack_size) >= u32::from(count)
+    }
+
+    pub fn insert(
+        &mut self,
+        catalog: &PrototypeCatalog,
+        item_id: ItemId,
+        count: u16,
+    ) -> Result<(), InventoryError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        let stack_size = item_stack_size(catalog, item_id).ok_or(InventoryError::UnknownItem)?;
+        if self.insert_capacity(item_id, stack_size) < u32::from(count) {
+            return Err(InventoryError::InsufficientSpace);
+        }
+
+        let mut remaining = u32::from(count);
+
+        for stack in self.slots.iter_mut().flatten() {
+            if stack.item_id != item_id || stack.count >= stack_size {
+                continue;
+            }
+
+            let available = u32::from(stack_size - stack.count);
+            let inserted = remaining.min(available) as u16;
+            stack.count += inserted;
+            remaining -= u32::from(inserted);
+
+            if remaining == 0 {
+                return Ok(());
+            }
+        }
+
+        for slot in &mut self.slots {
+            if slot.is_some() {
+                continue;
+            }
+
+            let inserted = remaining.min(u32::from(stack_size)) as u16;
+            *slot = Some(ItemStack {
+                item_id,
+                count: inserted,
+            });
+            remaining -= u32::from(inserted);
+
+            if remaining == 0 {
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn can_remove(&self, item_id: ItemId, count: u16) -> bool {
+        count == 0 || self.count(item_id) >= u32::from(count)
+    }
+
+    pub fn remove(&mut self, item_id: ItemId, count: u16) -> Result<(), InventoryError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        if !self.can_remove(item_id, count) {
+            return Err(InventoryError::InsufficientItems);
+        }
+
+        let mut remaining = count;
+        for slot in &mut self.slots {
+            let Some(stack) = slot else {
+                continue;
+            };
+
+            if stack.item_id != item_id {
+                continue;
+            }
+
+            let removed = remaining.min(stack.count);
+            stack.count -= removed;
+            remaining -= removed;
+
+            if stack.count == 0 {
+                *slot = None;
+            }
+
+            if remaining == 0 {
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn count(&self, item_id: ItemId) -> u32 {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.as_ref())
+            .filter(|stack| stack.item_id == item_id)
+            .map(|stack| u32::from(stack.count))
+            .sum()
+    }
+
+    fn insert_capacity(&self, item_id: ItemId, stack_size: u16) -> u32 {
+        self.slots
+            .iter()
+            .map(|slot| match slot {
+                Some(stack) if stack.item_id == item_id && stack.count < stack_size => {
+                    u32::from(stack_size - stack.count)
+                }
+                Some(_) => 0,
+                None => u32::from(stack_size),
+            })
+            .sum()
+    }
+}
+
 impl Simulation {
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
         let world = WorldSim::new(seed, prototypes);
         let entities = EntityStore::new_test_entities(seed);
         let player = find_player_start(&world, &entities.occupancy)
             .expect("test world should contain a walkable player start");
+        let mut player_inventory = Inventory::player();
+        let burner_mining_drill = item_id(&world.prototypes, "burner_mining_drill");
+        let stone_furnace = item_id(&world.prototypes, "stone_furnace");
+        player_inventory
+            .insert(&world.prototypes, burner_mining_drill, 1)
+            .expect("player starting inventory should accept burner mining drill");
+        player_inventory
+            .insert(&world.prototypes, stone_furnace, 1)
+            .expect("player starting inventory should accept stone furnace");
 
         Self {
             tick: 0,
             world,
             entities,
             player,
+            player_inventory,
         }
     }
 
@@ -1061,6 +1228,14 @@ fn item_id(prototypes: &PrototypeCatalog, name: &str) -> ItemId {
         .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
 }
 
+fn item_stack_size(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u16> {
+    prototypes
+        .items
+        .get(item_id.index())
+        .filter(|prototype| prototype.id == item_id)
+        .map(|prototype| prototype.stack_size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1320,6 +1495,129 @@ mod tests {
         sim.move_player_by_tiles(1.0, 1.0);
 
         assert_eq!(sim.player.tile_position(), expected);
+    }
+
+    #[test]
+    fn inventory_merges_stacks_until_stack_size() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let iron_plate = item_id(&catalog, "iron_plate");
+        let mut inventory = Inventory::with_slot_count(2);
+
+        inventory
+            .insert(&catalog, iron_plate, 99)
+            .expect("first insert should fit");
+        inventory
+            .insert(&catalog, iron_plate, 2)
+            .expect("second insert should fill existing stack first");
+
+        assert_eq!(
+            inventory.slots,
+            vec![
+                Some(ItemStack {
+                    item_id: iron_plate,
+                    count: 100,
+                }),
+                Some(ItemStack {
+                    item_id: iron_plate,
+                    count: 1,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn inventory_rejects_insert_when_full() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let iron_plate = item_id(&catalog, "iron_plate");
+        let coal = item_id(&catalog, "coal");
+        let mut inventory = Inventory::with_slot_count(1);
+
+        inventory
+            .insert(&catalog, iron_plate, 100)
+            .expect("initial stack should fit");
+        let before = inventory.clone();
+
+        assert_eq!(
+            inventory.insert(&catalog, coal, 1),
+            Err(InventoryError::InsufficientSpace)
+        );
+        assert_eq!(inventory, before);
+    }
+
+    #[test]
+    fn inventory_remove_is_atomic() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let iron_plate = item_id(&catalog, "iron_plate");
+        let mut inventory = Inventory::with_slot_count(1);
+
+        inventory
+            .insert(&catalog, iron_plate, 3)
+            .expect("initial stack should fit");
+        let before = inventory.clone();
+
+        assert_eq!(
+            inventory.remove(iron_plate, 4),
+            Err(InventoryError::InsufficientItems)
+        );
+        assert_eq!(inventory, before);
+        assert_eq!(inventory.count(iron_plate), 3);
+    }
+
+    #[test]
+    fn player_starts_with_drill_and_furnace_only() {
+        let sim = Simulation::new_test_world(123);
+        let burner_mining_drill = item_id(&sim.world.prototypes, "burner_mining_drill");
+        let stone_furnace = item_id(&sim.world.prototypes, "stone_furnace");
+        let occupied_slots = sim
+            .player_inventory
+            .slots
+            .iter()
+            .filter_map(|slot| *slot)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sim.player_inventory.slots.len(),
+            PLAYER_INVENTORY_SLOT_COUNT
+        );
+        assert_eq!(sim.player_inventory.count(burner_mining_drill), 1);
+        assert_eq!(sim.player_inventory.count(stone_furnace), 1);
+        assert_eq!(occupied_slots.len(), 2);
+        assert_eq!(
+            occupied_slots.iter().map(|stack| stack.count).sum::<u16>(),
+            2
+        );
+    }
+
+    #[test]
+    fn inventory_insert_never_exceeds_item_stack_size() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let copper_cable = item_id(&catalog, "copper_cable");
+        let mut inventory = Inventory::with_slot_count(2);
+
+        inventory
+            .insert(&catalog, copper_cable, 201)
+            .expect("two cable stacks should fit");
+
+        assert_eq!(inventory.count(copper_cable), 201);
+        for stack in inventory.slots.iter().flatten() {
+            assert!(stack.count <= 200);
+        }
+    }
+
+    #[test]
+    fn zero_count_insert_and_remove_are_no_ops() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let unknown_item = ItemId::new(u16::MAX);
+        let mut inventory = Inventory::with_slot_count(1);
+
+        inventory
+            .insert(&catalog, unknown_item, 0)
+            .expect("zero-count insert should be a no-op");
+        inventory
+            .remove(unknown_item, 0)
+            .expect("zero-count remove should be a no-op");
+
+        assert_eq!(inventory.slots, vec![None]);
     }
 
     fn first_resource_tile(world: &WorldSim) -> (i32, i32, ResourceCell) {

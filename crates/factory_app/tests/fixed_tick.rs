@@ -83,6 +83,56 @@ fn input_movement_changes_player_position_under_fixed_ticks() {
     assert_eq!(after.y_fixed(), before.y_fixed());
 }
 
+#[test]
+fn debug_inventory_keys_insert_and_remove_selected_item() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    let selected_item = app
+        .world()
+        .resource::<SimResource>()
+        .sim
+        .world
+        .prototypes
+        .items[0]
+        .id;
+    let before = app
+        .world()
+        .resource::<SimResource>()
+        .sim
+        .player_inventory
+        .count(selected_item);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyI);
+    app.update();
+
+    let after_insert = app
+        .world()
+        .resource::<SimResource>()
+        .sim
+        .player_inventory
+        .count(selected_item);
+    assert_eq!(after_insert, before + 1);
+
+    {
+        let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keyboard.release(KeyCode::KeyI);
+        keyboard.clear();
+        keyboard.press(KeyCode::KeyO);
+    }
+    app.update();
+
+    let after_remove = app
+        .world()
+        .resource::<SimResource>()
+        .sim
+        .player_inventory
+        .count(selected_item);
+    assert_eq!(after_remove, before);
+}
+
 fn run_to_tick_with_frame_rate(frame_rate: f64, target_tick: u64) -> (u64, u64) {
     let mut app = test_app(Duration::from_secs_f64(1.0 / frame_rate));
     run_until_tick(&mut app, target_tick);

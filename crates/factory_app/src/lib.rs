@@ -29,6 +29,11 @@ pub struct UpsStats {
     pub ups: f64,
 }
 
+#[derive(Resource, Default)]
+pub struct DebugInventorySelection {
+    pub selected_index: usize,
+}
+
 #[derive(Component)]
 struct DebugOverlayText;
 
@@ -64,6 +69,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<UpsStats>()
+            .init_resource::<DebugInventorySelection>()
             .add_systems(
                 Startup,
                 (
@@ -83,6 +89,7 @@ impl Plugin for FactoryAppPlugin {
                     follow_player_camera,
                     update_cursor_tile_highlight,
                     update_ups_stats,
+                    handle_debug_inventory_input,
                     update_debug_overlay,
                     sync_resource_debug_rendering,
                 ),
@@ -282,11 +289,74 @@ fn update_ups_stats(time: Res<Time<Real>>, mut stats: ResMut<UpsStats>) {
 fn update_debug_overlay(
     sim: Res<SimResource>,
     stats: Res<UpsStats>,
+    inventory_selection: Res<DebugInventorySelection>,
     mut overlay: Query<&mut Text, With<DebugOverlayText>>,
 ) {
+    let catalog = &sim.sim.world.prototypes;
+    let (selected_name, selected_count) =
+        selected_inventory_item_state(&sim.sim, &inventory_selection, catalog);
+
     for mut text in &mut overlay {
-        text.0 = format!("Tick: {}\nUPS: {:.1}", sim.sim.tick_count(), stats.ups);
+        text.0 = format!(
+            "Tick: {}\nUPS: {:.1}\nItem: {}\nCount: {}",
+            sim.sim.tick_count(),
+            stats.ups,
+            selected_name,
+            selected_count
+        );
     }
+}
+
+fn handle_debug_inventory_input(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut inventory_selection: ResMut<DebugInventorySelection>,
+    mut sim: ResMut<SimResource>,
+) {
+    let Some(keyboard) = keyboard else {
+        return;
+    };
+
+    let item_count = sim.sim.world.prototypes.items.len();
+    if item_count == 0 {
+        inventory_selection.selected_index = 0;
+        return;
+    }
+
+    inventory_selection.selected_index %= item_count;
+
+    if keyboard.just_pressed(KeyCode::BracketLeft) {
+        inventory_selection.selected_index =
+            (inventory_selection.selected_index + item_count - 1) % item_count;
+    }
+    if keyboard.just_pressed(KeyCode::BracketRight) {
+        inventory_selection.selected_index = (inventory_selection.selected_index + 1) % item_count;
+    }
+
+    let selected_item = sim.sim.world.prototypes.items[inventory_selection.selected_index].id;
+    if keyboard.just_pressed(KeyCode::KeyI) {
+        let sim = &mut sim.sim;
+        let catalog = &sim.world.prototypes;
+        let inventory = &mut sim.player_inventory;
+        let _ = inventory.insert(catalog, selected_item, 1);
+    }
+    if keyboard.just_pressed(KeyCode::KeyO) {
+        let _ = sim.sim.player_inventory.remove(selected_item, 1);
+    }
+}
+
+fn selected_inventory_item_state(
+    sim: &Simulation,
+    inventory_selection: &DebugInventorySelection,
+    catalog: &PrototypeCatalog,
+) -> (String, u32) {
+    let Some(item) = catalog
+        .items
+        .get(inventory_selection.selected_index % catalog.items.len().max(1))
+    else {
+        return ("<none>".to_string(), 0);
+    };
+
+    (item.name.clone(), sim.player_inventory.count(item.id))
 }
 
 fn sync_resource_debug_rendering(

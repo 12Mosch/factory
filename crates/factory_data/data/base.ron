@@ -14,6 +14,7 @@
         (id: 11, name: "transport_belt", stack_size: 100),
         (id: 12, name: "assembling_machine", stack_size: 50),
         (id: 13, name: "stone_furnace", stack_size: 50),
+        (id: 14, name: "burner_mining_drill", stack_size: 50),
     ],
     recipes: [
         (
@@ -110,6 +111,18 @@
             ingredients: [(item: "stone", amount: 5)],
             products: [(item: "stone_furnace", amount: 1)],
         ),
+        (
+            id: 10,
+            name: "burner_mining_drill",
+            category: Crafting,
+            crafting_time_ticks: 120,
+            ingredients: [
+                (item: "iron_plate", amount: 3),
+                (item: "iron_gear_wheel", amount: 3),
+                (item: "stone_furnace", amount: 1),
+            ],
+            products: [(item: "burner_mining_drill", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -167,6 +180,13 @@
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
+        ),
+        (
+            id: 8,
+            name: "burner_mining_drill",
+            entity_kind: MiningDrill,
+            size: (x: 2, y: 2),
+            collision_mask: (layers: ["ground", "building"]),
         ),
     ],
     tiles: [
