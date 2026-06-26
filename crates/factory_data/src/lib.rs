@@ -62,6 +62,7 @@ pub struct EntityPrototype {
     pub entity_kind: EntityKind,
     pub size: IVec2,
     pub collision_mask: CollisionMask,
+    pub inventory_slot_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -93,6 +94,7 @@ pub enum EntityKind {
     Inserter,
     TransportBelt,
     Lab,
+    Chest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -205,6 +207,7 @@ impl PrototypeCatalog {
                     entity_kind: entity.entity_kind,
                     size: IVec2::new(entity.size.x, entity.size.y),
                     collision_mask: resolve_collision_mask(name, entity.collision_mask)?,
+                    inventory_slot_count: entity.inventory_slot_count,
                 })
             })
             .collect::<Result<_, PrototypeLoadError>>()?;
@@ -406,6 +409,7 @@ struct RawEntityPrototype {
     entity_kind: EntityKind,
     size: RawIVec2,
     collision_mask: RawCollisionMask,
+    inventory_slot_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -476,7 +480,7 @@ impl RawPrototype for RawTilePrototype {
 mod tests {
     use super::*;
 
-    const ITEM_NAMES: [&str; 17] = [
+    const ITEM_NAMES: [&str; 18] = [
         "iron_ore",
         "copper_ore",
         "coal",
@@ -494,9 +498,10 @@ mod tests {
         "burner_mining_drill",
         "lab",
         "automation_science_pack",
+        "chest",
     ];
 
-    const RECIPE_NAMES: [&str; 13] = [
+    const RECIPE_NAMES: [&str; 14] = [
         "iron_plate",
         "copper_plate",
         "steel_plate",
@@ -510,9 +515,10 @@ mod tests {
         "burner_mining_drill",
         "lab",
         "automation_science_pack",
+        "chest",
     ];
 
-    const ENTITY_NAMES: [&str; 10] = [
+    const ENTITY_NAMES: [&str; 11] = [
         "iron_ore_patch",
         "copper_ore_patch",
         "coal_patch",
@@ -523,6 +529,7 @@ mod tests {
         "transport_belt",
         "burner_mining_drill",
         "lab",
+        "chest",
     ];
 
     const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -531,9 +538,9 @@ mod tests {
     fn base_catalog_loads_from_ron() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-        assert_eq!(catalog.items.len(), 17);
-        assert_eq!(catalog.recipes.len(), 13);
-        assert_eq!(catalog.entities.len(), 10);
+        assert_eq!(catalog.items.len(), 18);
+        assert_eq!(catalog.recipes.len(), 14);
+        assert_eq!(catalog.entities.len(), 11);
         assert_eq!(catalog.tiles.len(), 3);
     }
 
@@ -606,6 +613,18 @@ mod tests {
                 assert!(amount.item.index() < catalog.items.len());
             }
         }
+    }
+
+    #[test]
+    fn chest_entity_loads_inventory_slot_count() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let chest = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == "chest")
+            .expect("base catalog should contain chest entity");
+
+        assert_eq!(chest.inventory_slot_count, Some(16));
     }
 
     #[test]

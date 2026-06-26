@@ -138,6 +138,7 @@ pub struct MinedResource {
 pub struct EntityStore {
     entities: Vec<SimEntity>,
     placed_entities: BTreeMap<u64, PlacedEntity>,
+    entity_inventories: BTreeMap<u64, Inventory>,
     occupancy: OccupancyGrid,
     next_entity_id: u64,
 }
@@ -190,6 +191,16 @@ pub enum BuildError {
     TileBlocked { x: i32, y: i32 },
     EntityOccupied { x: i32, y: i32, entity_id: u64 },
     MissingEntity(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContainerError {
+    MissingEntity(u64),
+    NotContainer(u64),
+    InvalidSlot { slot_index: usize },
+    EmptySlot { slot_index: usize },
+    InsufficientSpace,
+    UnknownItem,
 }
 
 impl Inventory {
@@ -326,6 +337,38 @@ impl Inventory {
                 None => u32::from(stack_size),
             })
             .sum()
+    }
+}
+
+impl From<InventoryError> for ContainerError {
+    fn from(error: InventoryError) -> Self {
+        match error {
+            InventoryError::UnknownItem => Self::UnknownItem,
+            InventoryError::InsufficientSpace => Self::InsufficientSpace,
+            InventoryError::InsufficientItems => {
+                unreachable!("container transfers remove a known slot stack")
+            }
+        }
+    }
+}
+
+fn stack_in_slot(inventory: &Inventory, slot_index: usize) -> Result<ItemStack, ContainerError> {
+    inventory
+        .slots
+        .get(slot_index)
+        .ok_or(ContainerError::InvalidSlot { slot_index })?
+        .ok_or(ContainerError::EmptySlot { slot_index })
+}
+
+fn ensure_inventory_can_accept(
+    catalog: &PrototypeCatalog,
+    inventory: &Inventory,
+    stack: ItemStack,
+) -> Result<(), ContainerError> {
+    if inventory.can_insert(catalog, stack.item_id, stack.count) {
+        Ok(())
+    } else {
+        Err(ContainerError::InsufficientSpace)
     }
 }
 
@@ -621,9 +664,16 @@ impl Simulation {
         direction: Direction,
     ) -> Result<u64, BuildError> {
         let footprint = self.can_place_entity(prototype_id, x, y, direction)?;
-        Ok(self
-            .entities
-            .reserve_entity(prototype_id, x, y, direction, footprint))
+        let inventory_slot_count =
+            self.world.prototypes.entities[prototype_id.index()].inventory_slot_count;
+        Ok(self.entities.reserve_entity(
+            prototype_id,
+            x,
+            y,
+            direction,
+            footprint,
+            inventory_slot_count,
+        ))
     }
 
     pub fn rotate_entity(
@@ -650,6 +700,50 @@ impl Simulation {
 
     pub fn remove_entity(&mut self, entity_id: u64) -> Option<PlacedEntity> {
         self.entities.remove_placed_entity(entity_id)
+    }
+
+    pub fn entity_inventory(&self, entity_id: u64) -> Result<&Inventory, ContainerError> {
+        self.entities.entity_inventory(entity_id)
+    }
+
+    pub fn entity_inventory_mut(
+        &mut self,
+        entity_id: u64,
+    ) -> Result<&mut Inventory, ContainerError> {
+        self.entities.entity_inventory_mut(entity_id)
+    }
+
+    pub fn transfer_player_slot_to_entity(
+        &mut self,
+        entity_id: u64,
+        player_slot_index: usize,
+    ) -> Result<(), ContainerError> {
+        let stack = stack_in_slot(&self.player_inventory, player_slot_index)?;
+        let entity_inventory = self.entities.entity_inventory(entity_id)?;
+        ensure_inventory_can_accept(&self.world.prototypes, entity_inventory, stack)?;
+
+        self.player_inventory.slots[player_slot_index] = None;
+        self.entities
+            .entity_inventory_mut(entity_id)?
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(ContainerError::from)
+    }
+
+    pub fn transfer_entity_slot_to_player(
+        &mut self,
+        entity_id: u64,
+        entity_slot_index: usize,
+    ) -> Result<(), ContainerError> {
+        let stack = {
+            let entity_inventory = self.entities.entity_inventory(entity_id)?;
+            stack_in_slot(entity_inventory, entity_slot_index)?
+        };
+        ensure_inventory_can_accept(&self.world.prototypes, &self.player_inventory, stack)?;
+
+        self.entities.entity_inventory_mut(entity_id)?.slots[entity_slot_index] = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(ContainerError::from)
     }
 }
 
@@ -880,6 +974,10 @@ impl EntityStore {
         self.placed_entities.get(&entity_id)
     }
 
+    pub fn placed_entities(&self) -> impl Iterator<Item = &PlacedEntity> {
+        self.placed_entities.values()
+    }
+
     fn new_test_entities(seed: u64) -> Self {
         Self {
             entities: vec![SimEntity {
@@ -888,9 +986,30 @@ impl EntityStore {
                 y: (seed % 53) as i64,
             }],
             placed_entities: BTreeMap::new(),
+            entity_inventories: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
             next_entity_id: 2,
         }
+    }
+
+    fn entity_inventory(&self, entity_id: u64) -> Result<&Inventory, ContainerError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(ContainerError::MissingEntity(entity_id));
+        }
+
+        self.entity_inventories
+            .get(&entity_id)
+            .ok_or(ContainerError::NotContainer(entity_id))
+    }
+
+    fn entity_inventory_mut(&mut self, entity_id: u64) -> Result<&mut Inventory, ContainerError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(ContainerError::MissingEntity(entity_id));
+        }
+
+        self.entity_inventories
+            .get_mut(&entity_id)
+            .ok_or(ContainerError::NotContainer(entity_id))
     }
 
     fn reserve_entity(
@@ -900,6 +1019,7 @@ impl EntityStore {
         y: i32,
         direction: Direction,
         footprint: EntityFootprint,
+        inventory_slot_count: Option<usize>,
     ) -> u64 {
         let id = self.next_entity_id;
         self.next_entity_id += 1;
@@ -917,6 +1037,10 @@ impl EntityStore {
                 footprint,
             },
         );
+        if let Some(slot_count) = inventory_slot_count {
+            self.entity_inventories
+                .insert(id, Inventory::with_slot_count(slot_count));
+        }
         id
     }
 
@@ -943,6 +1067,7 @@ impl EntityStore {
 
     fn remove_placed_entity(&mut self, entity_id: u64) -> Option<PlacedEntity> {
         let entity = self.placed_entities.remove(&entity_id)?;
+        self.entity_inventories.remove(&entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);
         Some(entity)
@@ -1793,6 +1918,168 @@ mod tests {
             Some(entity_id)
         );
         assert_eq!(sim.entities.occupancy().entity_at(x, y + 1), None);
+    }
+
+    #[test]
+    fn chest_placement_creates_sixteen_inventory_slots() {
+        let mut sim = Simulation::new_test_world(123);
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+
+        let entity_id = sim
+            .place_entity(chest, x, y, Direction::North)
+            .expect("chest should be placeable");
+
+        assert_eq!(
+            sim.entity_inventory(entity_id)
+                .expect("chest should have an inventory")
+                .slots
+                .len(),
+            16
+        );
+    }
+
+    #[test]
+    fn chest_inventory_accepts_items() {
+        let mut sim = Simulation::new_test_world(123);
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+        let entity_id = sim
+            .place_entity(chest, x, y, Direction::North)
+            .expect("chest should be placeable");
+        let catalog = sim.world.prototypes.clone();
+
+        sim.entity_inventory_mut(entity_id)
+            .expect("chest should expose mutable inventory")
+            .insert(&catalog, iron_plate, 25)
+            .expect("chest should accept iron plates");
+
+        assert_eq!(
+            sim.entity_inventory(entity_id)
+                .expect("chest should have inventory")
+                .count(iron_plate),
+            25
+        );
+    }
+
+    #[test]
+    fn player_can_transfer_stack_to_chest() {
+        let mut sim = Simulation::new_test_world(123);
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+        let entity_id = sim
+            .place_entity(chest, x, y, Direction::North)
+            .expect("chest should be placeable");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[5] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 42,
+        });
+
+        sim.transfer_player_slot_to_entity(entity_id, 5)
+            .expect("stack should transfer to chest");
+
+        assert_eq!(sim.player_inventory.slots[5], None);
+        assert_eq!(
+            sim.entity_inventory(entity_id)
+                .expect("chest should have inventory")
+                .count(iron_plate),
+            42
+        );
+    }
+
+    #[test]
+    fn transfer_to_full_chest_fails_without_changing_player_inventory() {
+        let mut sim = Simulation::new_test_world(123);
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+        let entity_id = sim
+            .place_entity(chest, x, y, Direction::North)
+            .expect("chest should be placeable");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[3] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 12,
+        });
+        {
+            let inventory = sim
+                .entity_inventory_mut(entity_id)
+                .expect("chest should expose inventory");
+            for slot in &mut inventory.slots {
+                *slot = Some(ItemStack {
+                    item_id: coal,
+                    count: 100,
+                });
+            }
+        }
+        assert!(
+            !sim.entity_inventory(entity_id)
+                .expect("chest should have inventory")
+                .can_insert(&sim.world.prototypes, iron_plate, 12)
+        );
+        let player_before = sim.player_inventory.clone();
+
+        assert_eq!(
+            sim.transfer_player_slot_to_entity(entity_id, 3),
+            Err(ContainerError::InsufficientSpace)
+        );
+        assert_eq!(sim.player_inventory, player_before);
+    }
+
+    #[test]
+    fn transfer_from_chest_to_full_player_fails_without_changing_chest_inventory() {
+        let mut sim = Simulation::new_test_world(123);
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+        let entity_id = sim
+            .place_entity(chest, x, y, Direction::North)
+            .expect("chest should be placeable");
+        sim.player_inventory = Inventory::with_slot_count(1);
+        sim.player_inventory
+            .insert(&sim.world.prototypes, coal, 100)
+            .expect("player inventory should accept blocking stack");
+        let inventory = sim
+            .entity_inventory_mut(entity_id)
+            .expect("chest should expose inventory");
+        inventory.slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 8,
+        });
+        let chest_before = sim
+            .entity_inventory(entity_id)
+            .expect("chest should have inventory")
+            .clone();
+
+        assert_eq!(
+            sim.transfer_entity_slot_to_player(entity_id, 0),
+            Err(ContainerError::InsufficientSpace)
+        );
+        assert_eq!(
+            sim.entity_inventory(entity_id)
+                .expect("chest should still have inventory"),
+            &chest_before
+        );
+    }
+
+    #[test]
+    fn non_container_entities_reject_inventory_access() {
+        let mut sim = Simulation::new_test_world(123);
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+        let entity_id = sim
+            .place_entity(inserter, x, y, Direction::North)
+            .expect("inserter should be placeable");
+
+        assert_eq!(
+            sim.entity_inventory(entity_id),
+            Err(ContainerError::NotContainer(entity_id))
+        );
     }
 
     #[test]

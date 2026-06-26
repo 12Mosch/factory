@@ -1,7 +1,11 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use factory_app::{FactoryAppPlugin, SimResource, world_position_to_tile_coord};
-use factory_sim::Simulation;
+use factory_app::{
+    FactoryAppPlugin, InventoryPanel, SimResource, opened_container_after_world_click,
+    transfer_open_container_slot, world_position_to_tile_coord,
+};
+use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog};
+use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
 use std::time::Duration;
 
 const TARGET_TICKS: u64 = 3_600;
@@ -133,6 +137,48 @@ fn debug_inventory_keys_insert_and_remove_selected_item() {
     assert_eq!(after_remove, before);
 }
 
+#[test]
+fn opening_clicked_chest_selects_correct_entity() {
+    let mut sim = Simulation::new_test_world(123);
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let (x, y) = first_buildable_rect(&sim, chest);
+    let entity_id = sim
+        .place_entity(chest, x, y, Direction::North)
+        .expect("chest should be placeable");
+
+    assert_eq!(
+        opened_container_after_world_click(&sim, Some((x, y))),
+        Some(entity_id)
+    );
+}
+
+#[test]
+fn slot_click_transfer_delegates_to_sim_transfer_api() {
+    let mut sim = Simulation::new_test_world(123);
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let iron_plate = item_id_by_name(&sim.world.prototypes, "iron_plate");
+    let (x, y) = first_buildable_rect(&sim, chest);
+    let entity_id = sim
+        .place_entity(chest, x, y, Direction::North)
+        .expect("chest should be placeable");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[2] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 9,
+    });
+
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+        .expect("slot click should transfer stack to chest");
+
+    assert_eq!(sim.player_inventory.slots[2], None);
+    assert_eq!(
+        sim.entity_inventory(entity_id)
+            .expect("chest should have inventory")
+            .count(iron_plate),
+        9
+    );
+}
+
 fn run_to_tick_with_frame_rate(frame_rate: f64, target_tick: u64) -> (u64, u64) {
     let mut app = test_app(Duration::from_secs_f64(1.0 / frame_rate));
     run_until_tick(&mut app, target_tick);
@@ -156,4 +202,53 @@ fn run_until_tick(app: &mut App, target_tick: u64) {
 fn sim_tick_and_hash(app: &App) -> (u64, u64) {
     let sim = &app.world().resource::<SimResource>().sim;
     (sim.tick_count(), sim.state_hash())
+}
+
+fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i32, i32) {
+    let prototype = &sim.world.prototypes.entities[prototype_id.index()];
+
+    for chunk in sim.world.chunks.values() {
+        for (index, _) in chunk.tiles.iter().enumerate() {
+            let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+            let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+            let x = chunk.coord.x * CHUNK_SIZE + local_x;
+            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let footprint = EntityFootprint {
+                x,
+                y,
+                width: prototype.size.x,
+                height: prototype.size.y,
+            };
+
+            if sim.world.validate_entity_footprint(&footprint).is_ok()
+                && sim
+                    .entities
+                    .occupancy()
+                    .validate_available(&footprint, None)
+                    .is_ok()
+            {
+                return (x, y);
+            }
+        }
+    }
+
+    panic!("expected at least one buildable area");
+}
+
+fn entity_id_by_name(catalog: &PrototypeCatalog, name: &str) -> EntityPrototypeId {
+    catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required entity prototype {name:?}"))
+}
+
+fn item_id_by_name(catalog: &PrototypeCatalog, name: &str) -> ItemId {
+    catalog
+        .items
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
 }
