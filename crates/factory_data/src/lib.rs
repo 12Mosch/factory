@@ -92,6 +92,7 @@ pub enum EntityKind {
     AssemblingMachine,
     Inserter,
     TransportBelt,
+    Lab,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -475,7 +476,7 @@ impl RawPrototype for RawTilePrototype {
 mod tests {
     use super::*;
 
-    const ITEM_NAMES: [&str; 15] = [
+    const ITEM_NAMES: [&str; 17] = [
         "iron_ore",
         "copper_ore",
         "coal",
@@ -491,9 +492,11 @@ mod tests {
         "assembling_machine",
         "stone_furnace",
         "burner_mining_drill",
+        "lab",
+        "automation_science_pack",
     ];
 
-    const RECIPE_NAMES: [&str; 11] = [
+    const RECIPE_NAMES: [&str; 13] = [
         "iron_plate",
         "copper_plate",
         "steel_plate",
@@ -505,9 +508,11 @@ mod tests {
         "assembling_machine",
         "stone_furnace",
         "burner_mining_drill",
+        "lab",
+        "automation_science_pack",
     ];
 
-    const ENTITY_NAMES: [&str; 9] = [
+    const ENTITY_NAMES: [&str; 10] = [
         "iron_ore_patch",
         "copper_ore_patch",
         "coal_patch",
@@ -517,6 +522,7 @@ mod tests {
         "inserter",
         "transport_belt",
         "burner_mining_drill",
+        "lab",
     ];
 
     const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -525,9 +531,9 @@ mod tests {
     fn base_catalog_loads_from_ron() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-        assert_eq!(catalog.items.len(), 15);
-        assert_eq!(catalog.recipes.len(), 11);
-        assert_eq!(catalog.entities.len(), 9);
+        assert_eq!(catalog.items.len(), 17);
+        assert_eq!(catalog.recipes.len(), 13);
+        assert_eq!(catalog.entities.len(), 10);
         assert_eq!(catalog.tiles.len(), 3);
     }
 

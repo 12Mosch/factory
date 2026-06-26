@@ -65,6 +65,26 @@ struct ManualMiningProgressBarBackground;
 struct ManualMiningProgressBarFill;
 
 type CursorCameraFilter = (With<Camera2d>, Without<CursorTileHighlight>);
+type ManualMiningProgressBarBackgroundFilter = (
+    With<ManualMiningProgressBarBackground>,
+    Without<ManualMiningProgressBarFill>,
+);
+type ManualMiningProgressBarBackgroundQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Transform, &'static mut Visibility),
+    ManualMiningProgressBarBackgroundFilter,
+>;
+type ManualMiningProgressBarFillQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Transform,
+        &'static mut Visibility,
+        &'static mut Sprite,
+    ),
+    With<ManualMiningProgressBarFill>,
+>;
 
 impl Plugin for FactoryAppPlugin {
     fn build(&self, app: &mut App) {
@@ -318,17 +338,8 @@ fn update_cursor_tile_highlight(
 
 fn update_manual_mining_progress_bar(
     sim: Res<SimResource>,
-    mut backgrounds: Query<
-        (&mut Transform, &mut Visibility),
-        (
-            With<ManualMiningProgressBarBackground>,
-            Without<ManualMiningProgressBarFill>,
-        ),
-    >,
-    mut fills: Query<
-        (&mut Transform, &mut Visibility, &mut Sprite),
-        With<ManualMiningProgressBarFill>,
-    >,
+    mut backgrounds: ManualMiningProgressBarBackgroundQuery,
+    mut fills: ManualMiningProgressBarFillQuery,
 ) {
     let progress = sim.sim.manual_mining_progress;
 

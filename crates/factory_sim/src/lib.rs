@@ -1,5 +1,7 @@
-use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog, TileId};
-use std::collections::BTreeMap;
+use factory_data::{
+    CraftingCategory, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId,
+};
+use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
 
 pub const CHUNK_SIZE: i32 = 32;
@@ -39,6 +41,24 @@ pub enum InventoryError {
     InsufficientItems,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct CraftingQueue {
+    pub entries: VecDeque<CraftingJob>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CraftingJob {
+    pub recipe_id: RecipeId,
+    pub remaining_ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraftingError {
+    MissingRecipe(RecipeId),
+    NotManualRecipe(RecipeId),
+    InsufficientIngredients,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Simulation {
     pub tick: u64,
@@ -47,6 +67,7 @@ pub struct Simulation {
     pub player: PlayerState,
     pub player_inventory: Inventory,
     pub manual_mining_progress: Option<ManualMiningProgress>,
+    pub crafting_queue: CraftingQueue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -331,6 +352,7 @@ impl Simulation {
             player,
             player_inventory,
             manual_mining_progress: None,
+            crafting_queue: CraftingQueue::default(),
         }
     }
 
@@ -344,6 +366,7 @@ impl Simulation {
     pub fn tick(&mut self) {
         self.tick += 1;
         self.entities.advance(Tick(self.tick), self.world.seed);
+        self.advance_manual_crafting();
     }
 
     pub fn tick_count(&self) -> u64 {
@@ -462,6 +485,84 @@ impl Simulation {
         } else {
             None
         };
+    }
+
+    pub fn start_manual_craft(&mut self, recipe_id: RecipeId) -> Result<(), CraftingError> {
+        let recipe = self
+            .world
+            .prototypes
+            .recipes
+            .get(recipe_id.index())
+            .filter(|recipe| recipe.id == recipe_id)
+            .ok_or(CraftingError::MissingRecipe(recipe_id))?;
+
+        if !matches!(
+            recipe.category,
+            CraftingCategory::Crafting | CraftingCategory::Manual
+        ) {
+            return Err(CraftingError::NotManualRecipe(recipe_id));
+        }
+
+        for ingredient in &recipe.ingredients {
+            let required = recipe
+                .ingredients
+                .iter()
+                .filter(|candidate| candidate.item == ingredient.item)
+                .map(|candidate| u32::from(candidate.amount))
+                .sum();
+            if self.player_inventory.count(ingredient.item) < required {
+                return Err(CraftingError::InsufficientIngredients);
+            }
+        }
+
+        for ingredient in &recipe.ingredients {
+            self.player_inventory
+                .remove(ingredient.item, ingredient.amount)
+                .expect("manual crafting checked ingredients before removing");
+        }
+
+        self.crafting_queue.entries.push_back(CraftingJob {
+            recipe_id,
+            remaining_ticks: recipe.crafting_time_ticks,
+        });
+
+        Ok(())
+    }
+
+    fn advance_manual_crafting(&mut self) {
+        let Some(job) = self.crafting_queue.entries.front_mut() else {
+            return;
+        };
+
+        if job.remaining_ticks > 0 {
+            job.remaining_ticks -= 1;
+        }
+
+        if job.remaining_ticks > 0 {
+            return;
+        }
+
+        let recipe_id = job.recipe_id;
+        let recipe = self
+            .world
+            .prototypes
+            .recipes
+            .get(recipe_id.index())
+            .filter(|recipe| recipe.id == recipe_id)
+            .expect("queued manual craft should reference an existing recipe");
+        let mut inventory = self.player_inventory.clone();
+
+        for product in &recipe.products {
+            if inventory
+                .insert(&self.world.prototypes, product.item, product.amount)
+                .is_err()
+            {
+                return;
+            }
+        }
+
+        self.player_inventory = inventory;
+        self.crafting_queue.entries.pop_front();
     }
 
     fn is_valid_manual_mining_target(&self, target: ManualMiningTarget) -> bool {
@@ -1332,6 +1433,16 @@ fn item_id(prototypes: &PrototypeCatalog, name: &str) -> ItemId {
         .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
 }
 
+#[cfg(test)]
+fn recipe_id(prototypes: &PrototypeCatalog, name: &str) -> RecipeId {
+    prototypes
+        .recipes
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
+}
+
 fn item_stack_size(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u16> {
     prototypes
         .items
@@ -1808,6 +1919,184 @@ mod tests {
         );
         assert_eq!(inventory, before);
         assert_eq!(inventory.count(iron_plate), 3);
+    }
+
+    #[test]
+    fn crafting_consumes_ingredients_and_outputs_product() {
+        let mut sim = Simulation::new_test_world(123);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_plate, 2)
+            .expect("test inventory should accept ingredients");
+
+        sim.start_manual_craft(recipe)
+            .expect("craft should start with enough ingredients");
+
+        assert_eq!(sim.player_inventory.count(iron_plate), 0);
+        assert_eq!(sim.player_inventory.count(iron_gear_wheel), 0);
+        assert_eq!(
+            sim.crafting_queue.entries.front(),
+            Some(&CraftingJob {
+                recipe_id: recipe,
+                remaining_ticks: 30,
+            })
+        );
+
+        for _ in 0..30 {
+            sim.tick();
+        }
+
+        assert_eq!(sim.player_inventory.count(iron_gear_wheel), 1);
+        assert!(sim.crafting_queue.entries.is_empty());
+    }
+
+    #[test]
+    fn crafting_does_not_start_without_ingredients() {
+        let mut sim = Simulation::new_test_world(123);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_plate, 1)
+            .expect("test inventory should accept partial ingredients");
+        let before = sim.player_inventory.clone();
+
+        assert_eq!(
+            sim.start_manual_craft(recipe),
+            Err(CraftingError::InsufficientIngredients)
+        );
+        assert_eq!(sim.player_inventory, before);
+        assert!(sim.crafting_queue.entries.is_empty());
+    }
+
+    #[test]
+    fn crafting_product_appears_only_after_configured_ticks() {
+        let mut sim = Simulation::new_test_world(123);
+        let recipe = recipe_id(&sim.world.prototypes, "transport_belt");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+        let transport_belt = item_id(&sim.world.prototypes, "transport_belt");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_plate, 1)
+            .expect("test inventory should accept iron plate");
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_gear_wheel, 1)
+            .expect("test inventory should accept gear");
+
+        sim.start_manual_craft(recipe)
+            .expect("craft should start with enough ingredients");
+        for _ in 0..29 {
+            sim.tick();
+        }
+
+        assert_eq!(sim.player_inventory.count(transport_belt), 0);
+        assert_eq!(
+            sim.crafting_queue
+                .entries
+                .front()
+                .map(|job| job.remaining_ticks),
+            Some(1)
+        );
+
+        sim.tick();
+
+        assert_eq!(sim.player_inventory.count(transport_belt), 2);
+        assert!(sim.crafting_queue.entries.is_empty());
+    }
+
+    #[test]
+    fn full_inventory_pauses_completed_craft_until_space_is_freed() {
+        let mut sim = Simulation::new_test_world(123);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        sim.player_inventory = Inventory::with_slot_count(1);
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_plate, 2)
+            .expect("single stack should fit ingredients");
+        sim.start_manual_craft(recipe)
+            .expect("craft should start with enough ingredients");
+        sim.player_inventory
+            .insert(&sim.world.prototypes, coal, 100)
+            .expect("blocking stack should fill inventory");
+
+        for _ in 0..30 {
+            sim.tick();
+        }
+
+        assert_eq!(sim.player_inventory.count(iron_gear_wheel), 0);
+        assert_eq!(sim.crafting_queue.entries.len(), 1);
+        assert_eq!(
+            sim.crafting_queue
+                .entries
+                .front()
+                .map(|job| job.remaining_ticks),
+            Some(0)
+        );
+
+        sim.tick();
+        assert_eq!(sim.player_inventory.count(iron_gear_wheel), 0);
+        assert_eq!(sim.crafting_queue.entries.len(), 1);
+
+        sim.player_inventory
+            .remove(coal, 100)
+            .expect("test should be able to free blocking stack");
+        sim.tick();
+
+        assert_eq!(sim.player_inventory.count(iron_gear_wheel), 1);
+        assert!(sim.crafting_queue.entries.is_empty());
+    }
+
+    #[test]
+    fn smelting_recipes_cannot_be_manually_crafted() {
+        let mut sim = Simulation::new_test_world(123);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_plate");
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_ore, 1)
+            .expect("test inventory should accept ore");
+
+        assert_eq!(
+            sim.start_manual_craft(recipe),
+            Err(CraftingError::NotManualRecipe(recipe))
+        );
+        assert_eq!(sim.player_inventory.count(iron_ore), 1);
+        assert!(sim.crafting_queue.entries.is_empty());
+    }
+
+    #[test]
+    fn base_catalog_contains_expected_manually_craftable_recipes() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let recipe_names = [
+            "stone_furnace",
+            "burner_mining_drill",
+            "transport_belt",
+            "inserter",
+            "assembling_machine",
+            "lab",
+            "automation_science_pack",
+        ];
+
+        for recipe_name in recipe_names {
+            let recipe = catalog
+                .recipes
+                .iter()
+                .find(|recipe| recipe.name == recipe_name)
+                .unwrap_or_else(|| panic!("missing recipe {recipe_name:?}"));
+            assert!(
+                matches!(
+                    recipe.category,
+                    CraftingCategory::Crafting | CraftingCategory::Manual
+                ),
+                "{recipe_name} should be manually craftable"
+            );
+        }
     }
 
     #[test]
