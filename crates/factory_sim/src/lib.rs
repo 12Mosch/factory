@@ -28,6 +28,8 @@ pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
 pub const BELT_SUBTILES_PER_TILE: u16 = 256;
 pub const BELT_ITEM_SPACING_SUBTILES: u16 = 64;
 pub const BASIC_BELT_SPEED_SUBTILES_PER_TICK: u16 = 8;
+pub const BASIC_INSERTER_PICKUP_TICKS: u32 = 35;
+pub const BASIC_INSERTER_DROP_TICKS: u32 = 35;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -42,6 +44,14 @@ pub struct Inventory {
 pub struct ItemStack {
     pub item_id: ItemId,
     pub count: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum InserterState {
+    WaitingForItem,
+    Picking { ticks_left: u32 },
+    Holding { item: ItemStack },
+    Dropping { ticks_left: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +261,12 @@ pub enum BeltError {
     Blocked,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InserterError {
+    MissingEntity(u64),
+    NotInserter(u64),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EntityStore {
     entities: Vec<SimEntity>,
@@ -259,6 +275,7 @@ pub struct EntityStore {
     burner_mining_drills: BTreeMap<u64, BurnerMiningDrillState>,
     furnaces: BTreeMap<u64, FurnaceState>,
     transport_belts: BTreeMap<u64, BeltSegment>,
+    inserters: BTreeMap<u64, InserterState>,
     occupancy: OccupancyGrid,
     next_entity_id: u64,
 }
@@ -298,6 +315,7 @@ struct EntityReservation {
     burner_mining_drill: Option<BurnerMiningDrillState>,
     furnace: Option<FurnaceState>,
     transport_belt: Option<BeltSegment>,
+    inserter: Option<InserterState>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -576,6 +594,7 @@ impl Simulation {
         self.advance_transport_belts();
         self.advance_burner_mining_drills();
         self.advance_furnaces();
+        self.advance_inserters();
         self.advance_manual_crafting();
     }
 
@@ -844,6 +863,7 @@ impl Simulation {
         let burner_mining_drill = burner_mining_drill_state_for_prototype(prototype);
         let furnace = furnace_state_for_prototype(prototype);
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
+        let inserter = inserter_state_for_prototype(prototype);
         Ok(self.entities.reserve_entity(EntityReservation {
             prototype_id,
             x,
@@ -854,6 +874,7 @@ impl Simulation {
             burner_mining_drill,
             furnace,
             transport_belt,
+            inserter,
         }))
     }
 
@@ -1032,6 +1053,10 @@ impl Simulation {
 
     pub fn belt_segment(&self, entity_id: u64) -> Result<&BeltSegment, BeltError> {
         self.entities.belt_segment(entity_id)
+    }
+
+    pub fn inserter_state(&self, entity_id: u64) -> Result<&InserterState, InserterError> {
+        self.entities.inserter_state(entity_id)
     }
 
     pub fn insert_item_onto_belt(
@@ -1381,6 +1406,102 @@ impl Simulation {
             remove_from_single_slot(&mut state.input_slot, ingredient.item, ingredient.amount)
                 .expect("selected furnace input should still contain ingredient");
             insert_output_item(&mut state.output_slot, product.item, product.amount);
+        }
+    }
+
+    fn advance_inserters(&mut self) {
+        let inserter_ids = self.entities.inserters.keys().copied().collect::<Vec<_>>();
+
+        for entity_id in inserter_ids {
+            let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
+                continue;
+            };
+            let Ok(state) = self.entities.inserter_state(entity_id).cloned() else {
+                continue;
+            };
+            let (pickup_tile, drop_tile) = inserter_transfer_tiles(&placed);
+
+            let next_state = match state {
+                InserterState::WaitingForItem => {
+                    let Some(item_id) = peek_inserter_source_item(&self.entities, pickup_tile)
+                    else {
+                        continue;
+                    };
+                    let item = ItemStack { item_id, count: 1 };
+                    if !inserter_target_can_accept(
+                        &self.world.prototypes,
+                        &self.entities,
+                        drop_tile,
+                        item,
+                    ) {
+                        continue;
+                    }
+
+                    InserterState::Picking {
+                        ticks_left: BASIC_INSERTER_PICKUP_TICKS,
+                    }
+                }
+                InserterState::Picking { ticks_left } => {
+                    if ticks_left > 1 {
+                        InserterState::Picking {
+                            ticks_left: ticks_left - 1,
+                        }
+                    } else if let Some(item_id) =
+                        peek_inserter_source_item(&self.entities, pickup_tile)
+                    {
+                        let item = ItemStack { item_id, count: 1 };
+                        if !inserter_target_can_accept(
+                            &self.world.prototypes,
+                            &self.entities,
+                            drop_tile,
+                            item,
+                        ) {
+                            InserterState::WaitingForItem
+                        } else {
+                            try_take_inserter_source_item(&mut self.entities, pickup_tile, item_id)
+                                .map_or(InserterState::WaitingForItem, |item| {
+                                    InserterState::Holding { item }
+                                })
+                        }
+                    } else {
+                        InserterState::WaitingForItem
+                    }
+                }
+                InserterState::Holding { item } => {
+                    if !inserter_target_can_accept(
+                        &self.world.prototypes,
+                        &self.entities,
+                        drop_tile,
+                        item,
+                    ) {
+                        InserterState::Holding { item }
+                    } else if try_drop_inserter_item(
+                        &self.world.prototypes,
+                        &mut self.entities,
+                        drop_tile,
+                        item,
+                    ) {
+                        InserterState::Dropping {
+                            ticks_left: BASIC_INSERTER_DROP_TICKS,
+                        }
+                    } else {
+                        InserterState::Holding { item }
+                    }
+                }
+                InserterState::Dropping { ticks_left } => {
+                    if ticks_left > 1 {
+                        InserterState::Dropping {
+                            ticks_left: ticks_left - 1,
+                        }
+                    } else {
+                        InserterState::WaitingForItem
+                    }
+                }
+            };
+
+            if let Ok(state) = self.entities.inserter_state_mut(entity_id) {
+                *state = next_state;
+            }
         }
     }
 }
@@ -1826,6 +1947,7 @@ impl EntityStore {
             burner_mining_drills: BTreeMap::new(),
             furnaces: BTreeMap::new(),
             transport_belts: BTreeMap::new(),
+            inserters: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
             next_entity_id: 2,
         }
@@ -1917,6 +2039,26 @@ impl EntityStore {
             .ok_or(BeltError::NotTransportBelt(entity_id))
     }
 
+    fn inserter_state(&self, entity_id: u64) -> Result<&InserterState, InserterError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(InserterError::MissingEntity(entity_id));
+        }
+
+        self.inserters
+            .get(&entity_id)
+            .ok_or(InserterError::NotInserter(entity_id))
+    }
+
+    fn inserter_state_mut(&mut self, entity_id: u64) -> Result<&mut InserterState, InserterError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(InserterError::MissingEntity(entity_id));
+        }
+
+        self.inserters
+            .get_mut(&entity_id)
+            .ok_or(InserterError::NotInserter(entity_id))
+    }
+
     fn insert_item_onto_belt(
         &mut self,
         entity_id: u64,
@@ -1972,6 +2114,9 @@ impl EntityStore {
         if let Some(segment) = reservation.transport_belt {
             self.transport_belts.insert(id, segment);
         }
+        if let Some(state) = reservation.inserter {
+            self.inserters.insert(id, state);
+        }
         id
     }
 
@@ -2005,6 +2150,7 @@ impl EntityStore {
         self.burner_mining_drills.remove(&entity_id);
         self.furnaces.remove(&entity_id);
         self.transport_belts.remove(&entity_id);
+        self.inserters.remove(&entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);
         Some(entity)
@@ -2570,6 +2716,172 @@ fn transport_belt_segment_for_prototype(
     direction: Direction,
 ) -> Option<BeltSegment> {
     (prototype.entity_kind == EntityKind::TransportBelt).then(|| BeltSegment::new(direction))
+}
+
+fn inserter_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<InserterState> {
+    (prototype.entity_kind == EntityKind::Inserter).then_some(InserterState::WaitingForItem)
+}
+
+fn inserter_transfer_tiles(placed: &PlacedEntity) -> ((i32, i32), (i32, i32)) {
+    let (dx, dy) = direction_tile_delta(placed.direction);
+
+    (
+        (placed.x - dx, placed.y - dy),
+        (placed.x + dx, placed.y + dy),
+    )
+}
+
+fn peek_inserter_source_item(entities: &EntityStore, pickup_tile: (i32, i32)) -> Option<ItemId> {
+    let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
+
+    if let Some(inventory) = entities.entity_inventories.get(&entity_id) {
+        return inventory
+            .slots
+            .iter()
+            .flatten()
+            .map(|stack| stack.item_id)
+            .next();
+    }
+
+    if let Some(furnace) = entities.furnaces.get(&entity_id) {
+        return furnace.output_slot.map(|stack| stack.item_id);
+    }
+
+    entities
+        .transport_belts
+        .get(&entity_id)
+        .and_then(belt_pickup_item)
+}
+
+fn inserter_target_can_accept(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    drop_tile: (i32, i32),
+    item: ItemStack,
+) -> bool {
+    let Some(entity_id) = entities.occupancy.entity_at(drop_tile.0, drop_tile.1) else {
+        return false;
+    };
+
+    if let Some(inventory) = entities.entity_inventories.get(&entity_id) {
+        return inventory.can_insert(catalog, item.item_id, item.count);
+    }
+
+    if let Some(furnace) = entities.furnaces.get(&entity_id) {
+        return input_slot_can_accept(catalog, furnace.input_slot, item);
+    }
+
+    entities
+        .transport_belts
+        .get(&entity_id)
+        .is_some_and(|segment| {
+            item.count == 1 && belt_output_lane_index(segment, item.item_id).is_some()
+        })
+}
+
+fn try_take_inserter_source_item(
+    entities: &mut EntityStore,
+    pickup_tile: (i32, i32),
+    item_id: ItemId,
+) -> Option<ItemStack> {
+    let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
+
+    if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
+        inventory.remove(item_id, 1).ok()?;
+        return Some(ItemStack { item_id, count: 1 });
+    }
+
+    if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
+        remove_from_single_slot(&mut furnace.output_slot, item_id, 1).ok()?;
+        return Some(ItemStack { item_id, count: 1 });
+    }
+
+    if let Some(segment) = entities.transport_belts.get_mut(&entity_id)
+        && remove_one_item_from_belt(segment, item_id)
+    {
+        return Some(ItemStack { item_id, count: 1 });
+    }
+
+    None
+}
+
+fn try_drop_inserter_item(
+    catalog: &PrototypeCatalog,
+    entities: &mut EntityStore,
+    drop_tile: (i32, i32),
+    item: ItemStack,
+) -> bool {
+    let Some(entity_id) = entities.occupancy.entity_at(drop_tile.0, drop_tile.1) else {
+        return false;
+    };
+
+    if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
+        return inventory.insert(catalog, item.item_id, item.count).is_ok();
+    }
+
+    if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
+        if !input_slot_can_accept(catalog, furnace.input_slot, item) {
+            return false;
+        }
+
+        insert_into_single_slot(&mut furnace.input_slot, item);
+        return true;
+    }
+
+    if let Some(segment) = entities.transport_belts.get_mut(&entity_id) {
+        if item.count != 1 {
+            return false;
+        }
+
+        let Some(lane_index) = belt_output_lane_index(segment, item.item_id) else {
+            return false;
+        };
+        segment.lanes[lane_index].items.insert(
+            0,
+            BeltItem {
+                item_id: item.item_id,
+                position_subtile: 0,
+            },
+        );
+        return true;
+    }
+
+    false
+}
+
+fn belt_pickup_item(segment: &BeltSegment) -> Option<ItemId> {
+    segment.lanes[0]
+        .items
+        .iter()
+        .max_by_key(|item| item.position_subtile)
+        .or_else(|| {
+            segment.lanes[1]
+                .items
+                .iter()
+                .max_by_key(|item| item.position_subtile)
+        })
+        .map(|item| item.item_id)
+}
+
+fn remove_one_item_from_belt(segment: &mut BeltSegment, item_id: ItemId) -> bool {
+    for lane in &mut segment.lanes {
+        let Some((item_index, _)) = lane
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.item_id == item_id)
+            .max_by_key(|(_, item)| item.position_subtile)
+        else {
+            continue;
+        };
+
+        lane.items.remove(item_index);
+        return true;
+    }
+
+    false
 }
 
 fn first_resource_in_mining_area(
@@ -4333,6 +4645,270 @@ mod tests {
         assert_eq!(inventory.slots, vec![None]);
     }
 
+    #[test]
+    fn inserter_moves_item_from_chest_to_furnace() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
+
+        sim.entity_inventory_mut(chest_id)
+            .expect("chest should have inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        });
+
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_ore),
+            0
+        );
+        assert_eq!(
+            sim.furnace_state(furnace_id)
+                .expect("furnace should have state")
+                .input_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1
+            })
+        );
+        assert!(matches!(
+            sim.inserter_state(inserter_id)
+                .expect("inserter should have state"),
+            InserterState::WaitingForItem | InserterState::Dropping { .. }
+        ));
+        assert!(!matches!(
+            sim.inserter_state(inserter_id)
+                .expect("inserter should have state"),
+            InserterState::Holding { .. }
+        ));
+        assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
+    }
+
+    #[test]
+    fn inserter_waits_when_target_full() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let stack_size = item_stack_size(&sim.world.prototypes, iron_ore)
+            .expect("iron ore should have stack size");
+        let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
+
+        sim.entity_inventory_mut(chest_id)
+            .expect("chest should have inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        });
+        sim.entities
+            .furnace_state_mut(furnace_id)
+            .expect("furnace should have state")
+            .input_slot = Some(ItemStack {
+            item_id: iron_ore,
+            count: stack_size,
+        });
+
+        for _ in 0..BASIC_INSERTER_PICKUP_TICKS + BASIC_INSERTER_DROP_TICKS + 10 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            sim.inserter_state(inserter_id)
+                .expect("inserter should have state"),
+            &InserterState::WaitingForItem
+        );
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_ore),
+            1
+        );
+        assert_eq!(
+            sim.furnace_state(furnace_id)
+                .expect("furnace should have state")
+                .input_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: stack_size
+            })
+        );
+        assert!(!matches!(
+            sim.inserter_state(inserter_id)
+                .expect("inserter should have state"),
+            InserterState::Holding { .. }
+        ));
+        assert_eq!(
+            total_item_count_in_sim(&sim, iron_ore),
+            u32::from(stack_size) + 1
+        );
+    }
+
+    #[test]
+    fn inserter_preserves_item_count() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let (chest_id, _inserter_id, _furnace_id) = place_chest_inserter_furnace_line(&mut sim);
+
+        sim.entity_inventory_mut(chest_id)
+            .expect("chest should have inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: iron_ore,
+            count: 3,
+        });
+
+        let ticks = (BASIC_INSERTER_PICKUP_TICKS + BASIC_INSERTER_DROP_TICKS + 5) * 3;
+        for _ in 0..ticks {
+            sim.tick();
+            assert_eq!(total_item_count_in_sim(&sim, iron_ore), 3);
+        }
+    }
+
+    #[test]
+    fn inserter_moves_item_from_belt_to_furnace() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let (belt_id, inserter_id, furnace_id) = place_belt_inserter_furnace_line(&mut sim);
+
+        sim.insert_item_onto_belt(belt_id, 0, iron_ore)
+            .expect("belt should accept ore");
+
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(total_belt_count_for_item(&sim, iron_ore), 0);
+        assert_eq!(
+            sim.furnace_state(furnace_id)
+                .expect("furnace should have state")
+                .input_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1
+            })
+        );
+        assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
+    }
+
+    #[test]
+    fn inserter_moves_furnace_output_to_chest() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let (furnace_id, inserter_id, chest_id) = place_furnace_inserter_chest_line(&mut sim);
+
+        sim.entities
+            .furnace_state_mut(furnace_id)
+            .expect("furnace should have state")
+            .output_slot = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(
+            sim.furnace_state(furnace_id)
+                .expect("furnace should have state")
+                .output_slot,
+            None
+        );
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_plate),
+            1
+        );
+        assert_eq!(total_item_count_in_sim(&sim, iron_plate), 1);
+    }
+
+    #[test]
+    fn inserter_moves_furnace_output_to_belt() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let (furnace_id, inserter_id, _belt_id) = place_furnace_inserter_belt_line(&mut sim);
+
+        sim.entities
+            .furnace_state_mut(furnace_id)
+            .expect("furnace should have state")
+            .output_slot = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(
+            sim.furnace_state(furnace_id)
+                .expect("furnace should have state")
+                .output_slot,
+            None
+        );
+        assert_eq!(total_belt_count_for_item(&sim, iron_plate), 1);
+        assert_eq!(total_item_count_in_sim(&sim, iron_plate), 1);
+    }
+
+    #[test]
+    fn inserter_uses_rotated_direction_for_pickup_and_drop() {
+        let mut sim = Simulation::new_test_world(123);
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+
+        let chest_id = sim
+            .place_entity(chest, x, y, Direction::North)
+            .expect("chest should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 1, y, Direction::North)
+            .expect("inserter should be placeable");
+        let furnace_id = sim
+            .place_entity(furnace, x + 2, y, Direction::North)
+            .expect("furnace should be placeable");
+        sim.entity_inventory_mut(chest_id)
+            .expect("chest should have inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        });
+
+        for _ in 0..BASIC_INSERTER_PICKUP_TICKS + 2 {
+            sim.tick();
+        }
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_ore),
+            1
+        );
+        assert_eq!(
+            sim.furnace_state(furnace_id)
+                .expect("furnace should have state")
+                .input_slot,
+            None
+        );
+
+        sim.rotate_entity(inserter_id, Direction::East)
+            .expect("inserter should rotate");
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_ore),
+            0
+        );
+        assert_eq!(
+            sim.furnace_state(furnace_id)
+                .expect("furnace should have state")
+                .input_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1
+            })
+        );
+        assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
+    }
+
     fn first_resource_tile(world: &WorldSim) -> (i32, i32, ResourceCell) {
         for chunk in world.chunks.values() {
             for (index, tile) in chunk.tiles.iter().enumerate() {
@@ -4642,6 +5218,156 @@ mod tests {
         }
 
         panic!("expected buildable area without resources");
+    }
+
+    fn place_chest_inserter_furnace_line(sim: &mut Simulation) -> (u64, u64, u64) {
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+        let chest_id = sim
+            .place_entity(chest, x, y, Direction::North)
+            .expect("chest should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 1, y, Direction::East)
+            .expect("inserter should be placeable");
+        let furnace_id = sim
+            .place_entity(furnace, x + 2, y, Direction::North)
+            .expect("furnace should be placeable");
+
+        (chest_id, inserter_id, furnace_id)
+    }
+
+    fn place_belt_inserter_furnace_line(sim: &mut Simulation) -> (u64, u64, u64) {
+        let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+        let belt_id = sim
+            .place_entity(belt, x, y, Direction::East)
+            .expect("belt should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 1, y, Direction::East)
+            .expect("inserter should be placeable");
+        let furnace_id = sim
+            .place_entity(furnace, x + 2, y, Direction::North)
+            .expect("furnace should be placeable");
+
+        (belt_id, inserter_id, furnace_id)
+    }
+
+    fn place_furnace_inserter_chest_line(sim: &mut Simulation) -> (u64, u64, u64) {
+        let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+        let furnace_id = sim
+            .place_entity(furnace, x, y, Direction::North)
+            .expect("furnace should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 2, y, Direction::East)
+            .expect("inserter should be placeable");
+        let chest_id = sim
+            .place_entity(chest, x + 3, y, Direction::North)
+            .expect("chest should be placeable");
+
+        (furnace_id, inserter_id, chest_id)
+    }
+
+    fn place_furnace_inserter_belt_line(sim: &mut Simulation) -> (u64, u64, u64) {
+        let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+        let furnace_id = sim
+            .place_entity(furnace, x, y, Direction::North)
+            .expect("furnace should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 2, y, Direction::East)
+            .expect("inserter should be placeable");
+        let belt_id = sim
+            .place_entity(belt, x + 3, y, Direction::East)
+            .expect("belt should be placeable");
+
+        (furnace_id, inserter_id, belt_id)
+    }
+
+    fn run_inserter_until_idle(sim: &mut Simulation, inserter_id: u64) {
+        for _ in 0..BASIC_INSERTER_PICKUP_TICKS + BASIC_INSERTER_DROP_TICKS + 20 {
+            sim.tick();
+            if matches!(
+                sim.inserter_state(inserter_id)
+                    .expect("inserter should have state"),
+                InserterState::WaitingForItem
+            ) {
+                return;
+            }
+        }
+
+        panic!("inserter did not return to idle");
+    }
+
+    fn total_item_count_in_sim(sim: &Simulation, item_id: ItemId) -> u32 {
+        sim.player_inventory.count(item_id)
+            + sim
+                .entities
+                .entity_inventories
+                .values()
+                .map(|inventory| inventory.count(item_id))
+                .sum::<u32>()
+            + sim
+                .entities
+                .furnaces
+                .values()
+                .map(|furnace| {
+                    count_slot_item(furnace.input_slot, item_id)
+                        + count_slot_item(furnace.energy.fuel_slot, item_id)
+                        + count_slot_item(furnace.output_slot, item_id)
+                })
+                .sum::<u32>()
+            + sim
+                .entities
+                .burner_mining_drills
+                .values()
+                .map(|drill| {
+                    count_slot_item(drill.energy.fuel_slot, item_id)
+                        + count_slot_item(drill.output_slot, item_id)
+                })
+                .sum::<u32>()
+            + total_belt_count_for_item(sim, item_id)
+            + sim
+                .entities
+                .inserters
+                .values()
+                .map(|state| match state {
+                    InserterState::Holding { item } if item.item_id == item_id => {
+                        u32::from(item.count)
+                    }
+                    _ => 0,
+                })
+                .sum::<u32>()
+    }
+
+    fn total_belt_count_for_item(sim: &Simulation, item_id: ItemId) -> u32 {
+        sim.entities
+            .transport_belts
+            .values()
+            .map(|segment| {
+                segment
+                    .lanes
+                    .iter()
+                    .flat_map(|lane| lane.items.iter())
+                    .filter(|item| item.item_id == item_id)
+                    .count() as u32
+            })
+            .sum()
+    }
+
+    fn count_slot_item(slot: Option<ItemStack>, item_id: ItemId) -> u32 {
+        match slot {
+            Some(stack) if stack.item_id == item_id => u32::from(stack.count),
+            _ => 0,
+        }
     }
 
     fn resource_amount_at(world: &WorldSim, x: i32, y: i32) -> Option<u32> {
