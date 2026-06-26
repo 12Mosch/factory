@@ -1,6 +1,7 @@
 use factory_data::{
     CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId,
 };
+use smallvec::SmallVec;
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
 
@@ -24,6 +25,9 @@ pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_FUEL_SLOT_INDEX: usize = 0;
 pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
+pub const BELT_SUBTILES_PER_TILE: u16 = 256;
+pub const BELT_ITEM_SPACING_SUBTILES: u16 = 64;
+pub const BASIC_BELT_SPEED_SUBTILES_PER_TICK: u16 = 8;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -159,6 +163,23 @@ pub struct FurnaceState {
     pub crafting_required_ticks: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BeltSegment {
+    pub dir: Direction,
+    pub lanes: [BeltLane; 2],
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct BeltLane {
+    pub items: SmallVec<[BeltItem; 8]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BeltItem {
+    pub item_id: ItemId,
+    pub position_subtile: u16,
+}
+
 #[derive(Clone, Debug)]
 pub struct BurnerEnergy {
     pub fuel_slot: Option<ItemStack>,
@@ -181,6 +202,21 @@ impl Hash for BurnerEnergy {
         self.fuel_slot.hash(state);
         self.energy_remaining_joules.to_bits().hash(state);
         self.energy_usage_watts.to_bits().hash(state);
+    }
+}
+
+impl BeltSegment {
+    pub fn new(dir: Direction) -> Self {
+        Self {
+            dir,
+            lanes: [BeltLane::default(), BeltLane::default()],
+        }
+    }
+}
+
+impl Default for BeltSegment {
+    fn default() -> Self {
+        Self::new(Direction::default())
     }
 }
 
@@ -207,6 +243,14 @@ pub enum FurnaceError {
     UnknownItem,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeltError {
+    MissingEntity(u64),
+    NotTransportBelt(u64),
+    InvalidLane { lane_index: usize },
+    Blocked,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EntityStore {
     entities: Vec<SimEntity>,
@@ -214,6 +258,7 @@ pub struct EntityStore {
     entity_inventories: BTreeMap<u64, Inventory>,
     burner_mining_drills: BTreeMap<u64, BurnerMiningDrillState>,
     furnaces: BTreeMap<u64, FurnaceState>,
+    transport_belts: BTreeMap<u64, BeltSegment>,
     occupancy: OccupancyGrid,
     next_entity_id: u64,
 }
@@ -239,6 +284,7 @@ pub struct PlacedEntity {
 enum DrillOutputTarget {
     InternalSlot,
     Inventory(u64),
+    Belt(u64),
     Blocked,
 }
 
@@ -251,6 +297,7 @@ struct EntityReservation {
     inventory_slot_count: Option<usize>,
     burner_mining_drill: Option<BurnerMiningDrillState>,
     furnace: Option<FurnaceState>,
+    transport_belt: Option<BeltSegment>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -526,6 +573,7 @@ impl Simulation {
     pub fn tick(&mut self) {
         self.tick += 1;
         self.entities.advance(Tick(self.tick), self.world.seed);
+        self.advance_transport_belts();
         self.advance_burner_mining_drills();
         self.advance_furnaces();
         self.advance_manual_crafting();
@@ -795,6 +843,7 @@ impl Simulation {
         let inventory_slot_count = prototype.inventory_slot_count;
         let burner_mining_drill = burner_mining_drill_state_for_prototype(prototype);
         let furnace = furnace_state_for_prototype(prototype);
+        let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
         Ok(self.entities.reserve_entity(EntityReservation {
             prototype_id,
             x,
@@ -804,6 +853,7 @@ impl Simulation {
             inventory_slot_count,
             burner_mining_drill,
             furnace,
+            transport_belt,
         }))
     }
 
@@ -980,6 +1030,20 @@ impl Simulation {
         self.entities.furnace_state(entity_id)
     }
 
+    pub fn belt_segment(&self, entity_id: u64) -> Result<&BeltSegment, BeltError> {
+        self.entities.belt_segment(entity_id)
+    }
+
+    pub fn insert_item_onto_belt(
+        &mut self,
+        entity_id: u64,
+        lane_index: usize,
+        item_id: ItemId,
+    ) -> Result<(), BeltError> {
+        self.entities
+            .insert_item_onto_belt(entity_id, lane_index, item_id)
+    }
+
     pub fn transfer_player_slot_to_furnace_input(
         &mut self,
         entity_id: u64,
@@ -1109,6 +1173,32 @@ impl Simulation {
         self.player_inventory
             .insert(&self.world.prototypes, stack.item_id, stack.count)
             .map_err(FurnaceError::from)
+    }
+
+    pub fn advance_transport_belts(&mut self) {
+        let tile_to_belt = transport_belt_tile_map(&self.entities);
+        let lane_keys = self
+            .entities
+            .transport_belts
+            .keys()
+            .flat_map(|entity_id| {
+                [
+                    BeltLaneKey {
+                        entity_id: *entity_id,
+                        lane_index: 0,
+                    },
+                    BeltLaneKey {
+                        entity_id: *entity_id,
+                        lane_index: 1,
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        let mut advancement = TransportBeltAdvancement::new(&mut self.entities, tile_to_belt);
+
+        for key in lane_keys {
+            advancement.process_lane(key);
+        }
     }
 
     fn advance_burner_mining_drills(&mut self) {
@@ -1534,6 +1624,171 @@ fn tile_center_fixed(tile: i32) -> i64 {
     i64::from(tile) * PLAYER_POSITION_SCALE + PLAYER_POSITION_SCALE / 2
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct BeltLaneKey {
+    entity_id: u64,
+    lane_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BeltLaneVisitState {
+    Processing,
+    Done,
+}
+
+struct TransportBeltAdvancement<'a> {
+    entities: &'a mut EntityStore,
+    tile_to_belt: BTreeMap<(i32, i32), u64>,
+    visit_states: BTreeMap<BeltLaneKey, BeltLaneVisitState>,
+}
+
+impl<'a> TransportBeltAdvancement<'a> {
+    fn new(entities: &'a mut EntityStore, tile_to_belt: BTreeMap<(i32, i32), u64>) -> Self {
+        Self {
+            entities,
+            tile_to_belt,
+            visit_states: BTreeMap::new(),
+        }
+    }
+
+    fn process_lane(&mut self, key: BeltLaneKey) {
+        match self.visit_states.get(&key).copied() {
+            Some(BeltLaneVisitState::Done | BeltLaneVisitState::Processing) => return,
+            None => {}
+        }
+
+        if !self.entities.transport_belts.contains_key(&key.entity_id) {
+            return;
+        }
+
+        self.visit_states
+            .insert(key, BeltLaneVisitState::Processing);
+
+        let downstream = self.downstream_lane_key(key);
+        if let Some(downstream) = downstream
+            && self.visit_states.get(&downstream) != Some(&BeltLaneVisitState::Processing)
+        {
+            self.process_lane(downstream);
+        }
+
+        self.advance_lane_items(key, downstream);
+        self.visit_states.insert(key, BeltLaneVisitState::Done);
+    }
+
+    fn downstream_lane_key(&self, key: BeltLaneKey) -> Option<BeltLaneKey> {
+        let placed = self.entities.placed_entities.get(&key.entity_id)?;
+        let segment = self.entities.transport_belts.get(&key.entity_id)?;
+        let (dx, dy) = direction_tile_delta(segment.dir);
+        let next_entity_id = self.tile_to_belt.get(&(placed.x + dx, placed.y + dy))?;
+
+        Some(BeltLaneKey {
+            entity_id: *next_entity_id,
+            lane_index: key.lane_index,
+        })
+    }
+
+    fn advance_lane_items(&mut self, key: BeltLaneKey, downstream: Option<BeltLaneKey>) {
+        let mut items = {
+            let segment = self
+                .entities
+                .transport_belts
+                .get_mut(&key.entity_id)
+                .expect("lane processing validated belt existence");
+            std::mem::take(&mut segment.lanes[key.lane_index].items)
+        };
+        let mut advanced_descending = Vec::with_capacity(items.len());
+        let mut downstream_item_position: Option<u16> = None;
+
+        while let Some(mut item) = items.pop() {
+            let mut next_position = item.position_subtile + BASIC_BELT_SPEED_SUBTILES_PER_TICK;
+            if let Some(ahead_position) = downstream_item_position {
+                next_position =
+                    next_position.min(ahead_position.saturating_sub(BELT_ITEM_SPACING_SUBTILES));
+            }
+
+            if next_position >= BELT_SUBTILES_PER_TILE {
+                let carried_position = next_position - BELT_SUBTILES_PER_TILE;
+                if let Some(downstream) = downstream
+                    && self.try_insert_carried_item(downstream, item.item_id, carried_position)
+                {
+                    continue;
+                }
+
+                item.position_subtile = BELT_SUBTILES_PER_TILE - 1;
+            } else {
+                item.position_subtile = next_position;
+            }
+
+            downstream_item_position = Some(item.position_subtile);
+            advanced_descending.push(item);
+        }
+
+        let segment = self
+            .entities
+            .transport_belts
+            .get_mut(&key.entity_id)
+            .expect("lane processing validated belt existence");
+        let lane = &mut segment.lanes[key.lane_index];
+        lane.items = advanced_descending.into_iter().rev().collect();
+    }
+
+    fn try_insert_carried_item(
+        &mut self,
+        key: BeltLaneKey,
+        item_id: ItemId,
+        position_subtile: u16,
+    ) -> bool {
+        if self.visit_states.get(&key) == Some(&BeltLaneVisitState::Processing) {
+            return false;
+        }
+
+        let Some(segment) = self.entities.transport_belts.get_mut(&key.entity_id) else {
+            return false;
+        };
+        let lane = &mut segment.lanes[key.lane_index];
+        if !belt_lane_can_accept_position(lane, position_subtile) {
+            return false;
+        }
+
+        lane.items.insert(
+            0,
+            BeltItem {
+                item_id,
+                position_subtile,
+            },
+        );
+        true
+    }
+}
+
+fn transport_belt_tile_map(entities: &EntityStore) -> BTreeMap<(i32, i32), u64> {
+    entities
+        .transport_belts
+        .keys()
+        .filter_map(|entity_id| {
+            entities
+                .placed_entities
+                .get(entity_id)
+                .map(|placed| ((placed.x, placed.y), *entity_id))
+        })
+        .collect()
+}
+
+fn belt_lane_can_accept_position(lane: &BeltLane, position_subtile: u16) -> bool {
+    lane.items
+        .first()
+        .is_none_or(|first| first.position_subtile >= position_subtile + BELT_ITEM_SPACING_SUBTILES)
+}
+
+fn direction_tile_delta(direction: Direction) -> (i32, i32) {
+    match direction {
+        Direction::North => (0, 1),
+        Direction::East => (1, 0),
+        Direction::South => (0, -1),
+        Direction::West => (-1, 0),
+    }
+}
+
 impl EntityStore {
     pub fn len(&self) -> usize {
         self.entities.len()
@@ -1570,6 +1825,7 @@ impl EntityStore {
             entity_inventories: BTreeMap::new(),
             burner_mining_drills: BTreeMap::new(),
             furnaces: BTreeMap::new(),
+            transport_belts: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
             next_entity_id: 2,
         }
@@ -1641,6 +1897,51 @@ impl EntityStore {
             .ok_or(FurnaceError::NotFurnace(entity_id))
     }
 
+    fn belt_segment(&self, entity_id: u64) -> Result<&BeltSegment, BeltError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(BeltError::MissingEntity(entity_id));
+        }
+
+        self.transport_belts
+            .get(&entity_id)
+            .ok_or(BeltError::NotTransportBelt(entity_id))
+    }
+
+    fn belt_segment_mut(&mut self, entity_id: u64) -> Result<&mut BeltSegment, BeltError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(BeltError::MissingEntity(entity_id));
+        }
+
+        self.transport_belts
+            .get_mut(&entity_id)
+            .ok_or(BeltError::NotTransportBelt(entity_id))
+    }
+
+    fn insert_item_onto_belt(
+        &mut self,
+        entity_id: u64,
+        lane_index: usize,
+        item_id: ItemId,
+    ) -> Result<(), BeltError> {
+        let segment = self.belt_segment_mut(entity_id)?;
+        let lane = segment
+            .lanes
+            .get_mut(lane_index)
+            .ok_or(BeltError::InvalidLane { lane_index })?;
+        if !belt_lane_can_accept_position(lane, 0) {
+            return Err(BeltError::Blocked);
+        }
+
+        lane.items.insert(
+            0,
+            BeltItem {
+                item_id,
+                position_subtile: 0,
+            },
+        );
+        Ok(())
+    }
+
     fn reserve_entity(&mut self, reservation: EntityReservation) -> u64 {
         let id = self.next_entity_id;
         self.next_entity_id += 1;
@@ -1668,6 +1969,9 @@ impl EntityStore {
         if let Some(state) = reservation.furnace {
             self.furnaces.insert(id, state);
         }
+        if let Some(segment) = reservation.transport_belt {
+            self.transport_belts.insert(id, segment);
+        }
         id
     }
 
@@ -1688,6 +1992,9 @@ impl EntityStore {
             .expect("validated footprint reservation should succeed");
         entity.direction = direction;
         entity.footprint = footprint;
+        if let Some(segment) = self.transport_belts.get_mut(&entity_id) {
+            segment.dir = direction;
+        }
 
         Ok(())
     }
@@ -1697,6 +2004,7 @@ impl EntityStore {
         self.entity_inventories.remove(&entity_id);
         self.burner_mining_drills.remove(&entity_id);
         self.furnaces.remove(&entity_id);
+        self.transport_belts.remove(&entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);
         Some(entity)
@@ -2257,6 +2565,13 @@ fn furnace_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Opt
     })
 }
 
+fn transport_belt_segment_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+    direction: Direction,
+) -> Option<BeltSegment> {
+    (prototype.entity_kind == EntityKind::TransportBelt).then(|| BeltSegment::new(direction))
+}
+
 fn first_resource_in_mining_area(
     world: &WorldSim,
     footprint: &EntityFootprint,
@@ -2367,6 +2682,9 @@ fn drill_output_target(entities: &EntityStore, placed: &PlacedEntity) -> DrillOu
     match entities.occupancy.entity_at(x, y) {
         None => DrillOutputTarget::InternalSlot,
         Some(entity_id) if entity_id == placed.id => DrillOutputTarget::InternalSlot,
+        Some(entity_id) if entities.transport_belts.contains_key(&entity_id) => {
+            DrillOutputTarget::Belt(entity_id)
+        }
         Some(entity_id) if entities.entity_inventories.contains_key(&entity_id) => {
             DrillOutputTarget::Inventory(entity_id)
         }
@@ -2411,6 +2729,10 @@ fn drill_output_target_can_accept(
             .entity_inventories
             .get(&entity_id)
             .is_some_and(|inventory| inventory.can_insert(catalog, item_id, count)),
+        DrillOutputTarget::Belt(entity_id) => entities
+            .transport_belts
+            .get(&entity_id)
+            .is_some_and(|segment| belt_output_lane_index(segment, item_id).is_some()),
         DrillOutputTarget::Blocked => false,
     }
 }
@@ -2438,9 +2760,34 @@ fn insert_drill_output(
                 .insert(catalog, item_id, count)
                 .expect("validated output inventory should accept drill product");
         }
+        DrillOutputTarget::Belt(entity_id) => {
+            let segment = entities
+                .transport_belts
+                .get_mut(&entity_id)
+                .expect("validated output belt should still exist");
+            let lane_index = belt_output_lane_index(segment, item_id)
+                .expect("validated belt lane should accept");
+            segment.lanes[lane_index].items.insert(
+                0,
+                BeltItem {
+                    item_id,
+                    position_subtile: 0,
+                },
+            );
+        }
         DrillOutputTarget::Blocked => {
             unreachable!("blocked drill output is checked before mining")
         }
+    }
+}
+
+fn belt_output_lane_index(segment: &BeltSegment, _item_id: ItemId) -> Option<usize> {
+    if belt_lane_can_accept_position(&segment.lanes[0], 0) {
+        Some(0)
+    } else if belt_lane_can_accept_position(&segment.lanes[1], 0) {
+        Some(1)
+    } else {
+        None
     }
 }
 
@@ -3172,6 +3519,131 @@ mod tests {
     }
 
     #[test]
+    fn belt_moves_item_to_next_segment() {
+        let mut sim = Simulation::new_test_world(123);
+        let belts = place_belt_line(&mut sim, 2);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        sim.insert_item_onto_belt(belts[0], 0, iron_ore)
+            .expect("empty belt entry should accept an item");
+
+        for _ in 0..32 {
+            sim.tick();
+        }
+
+        assert!(
+            sim.belt_segment(belts[0]).unwrap().lanes[0]
+                .items
+                .is_empty()
+        );
+        let second_lane = &sim.belt_segment(belts[1]).unwrap().lanes[0].items;
+        assert_eq!(second_lane.len(), 1);
+        assert_eq!(second_lane[0].item_id, iron_ore);
+    }
+
+    #[test]
+    fn belt_does_not_duplicate_items() {
+        let mut sim = Simulation::new_test_world(123);
+        let belts = place_belt_line(&mut sim, 20);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        feed_belt_items(&mut sim, belts[0], iron_ore, 100);
+
+        for _ in 0..2_000 {
+            sim.tick();
+        }
+
+        assert_eq!(total_belt_item_count(&sim), 100);
+    }
+
+    #[test]
+    fn blocked_belt_preserves_item_order() {
+        let mut sim = Simulation::new_test_world(123);
+        let belts = place_belt_line(&mut sim, 1);
+        let inserted = [
+            item_id(&sim.world.prototypes, "iron_ore"),
+            item_id(&sim.world.prototypes, "copper_ore"),
+            item_id(&sim.world.prototypes, "coal"),
+            item_id(&sim.world.prototypes, "stone"),
+        ];
+
+        for item_id in inserted {
+            loop {
+                if sim.insert_item_onto_belt(belts[0], 0, item_id).is_ok() {
+                    break;
+                }
+                sim.tick();
+            }
+            for _ in 0..8 {
+                sim.tick();
+            }
+        }
+        for _ in 0..200 {
+            sim.tick();
+        }
+
+        let lane = &sim.belt_segment(belts[0]).unwrap().lanes[0].items;
+        let downstream_to_upstream = lane
+            .iter()
+            .rev()
+            .map(|item| item.item_id)
+            .collect::<Vec<_>>();
+        assert_eq!(downstream_to_upstream, inserted);
+        for pair in lane.windows(2) {
+            assert!(
+                pair[1].position_subtile - pair[0].position_subtile >= BELT_ITEM_SPACING_SUBTILES
+            );
+        }
+    }
+
+    #[test]
+    fn burner_drill_outputs_ore_onto_belt() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (drill_id, belt_id, _, _, _) =
+            place_burner_drill_outputting_to_belt(&mut sim, iron_ore);
+        add_fuel_to_burner_drill(&mut sim, drill_id, coal, 1);
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            sim.burner_drill_state(drill_id)
+                .expect("drill should expose state")
+                .output_slot,
+            None
+        );
+        assert!(
+            sim.belt_segment(belt_id)
+                .expect("belt should expose state")
+                .lanes
+                .iter()
+                .any(|lane| lane.items.iter().any(|item| item.item_id == iron_ore))
+        );
+    }
+
+    #[test]
+    fn belt_line_moves_100_items_across_20_tiles() {
+        let mut sim = Simulation::new_test_world(123);
+        let belts = place_belt_line(&mut sim, 20);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        feed_belt_items(&mut sim, belts[0], iron_ore, 100);
+
+        for _ in 0..1_000 {
+            sim.tick();
+        }
+
+        assert_eq!(total_belt_item_count(&sim), 100);
+        assert!(
+            sim.belt_segment(*belts.last().unwrap())
+                .unwrap()
+                .lanes
+                .iter()
+                .any(|lane| !lane.items.is_empty())
+        );
+    }
+
+    #[test]
     fn burner_drill_blocks_when_output_inventory_full() {
         let mut sim = Simulation::new_test_world(123);
         let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
@@ -3898,6 +4370,55 @@ mod tests {
         panic!("expected at least one resource tile for {resource_item:?}");
     }
 
+    fn place_belt_line(sim: &mut Simulation, length: i32) -> Vec<u64> {
+        let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+        for (x, y) in all_tile_coords(&sim.world) {
+            if (0..length).all(|offset| {
+                sim.can_place_entity(belt, x + offset, y, Direction::East)
+                    .is_ok()
+            }) {
+                return (0..length)
+                    .map(|offset| {
+                        sim.place_entity(belt, x + offset, y, Direction::East)
+                            .expect("validated belt line tile should be placeable")
+                    })
+                    .collect();
+            }
+        }
+
+        panic!("expected placeable belt line of length {length}");
+    }
+
+    fn feed_belt_items(sim: &mut Simulation, belt_id: u64, item_id: ItemId, count: usize) {
+        let mut inserted = 0;
+        let mut lane_index = 0;
+
+        while inserted < count {
+            if sim
+                .insert_item_onto_belt(belt_id, lane_index, item_id)
+                .is_ok()
+            {
+                inserted += 1;
+                lane_index = 1 - lane_index;
+            }
+            sim.tick();
+        }
+    }
+
+    fn total_belt_item_count(sim: &Simulation) -> usize {
+        sim.entities
+            .placed_entities()
+            .filter_map(|placed| sim.belt_segment(placed.id).ok())
+            .map(|segment| {
+                segment
+                    .lanes
+                    .iter()
+                    .map(|lane| lane.items.len())
+                    .sum::<usize>()
+            })
+            .sum()
+    }
+
     fn place_burner_drill_on_resource(
         sim: &mut Simulation,
         resource_item: ItemId,
@@ -3977,6 +4498,62 @@ mod tests {
         }
 
         panic!("expected burner drill fixture with adjacent chest output");
+    }
+
+    fn place_burner_drill_outputting_to_belt(
+        sim: &mut Simulation,
+        resource_item: ItemId,
+    ) -> (u64, u64, i32, i32, u32) {
+        let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+        let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+        for direction in [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ] {
+            for (x, y) in all_tile_coords(&sim.world) {
+                let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
+                    continue;
+                };
+                if resource.resource_item != resource_item {
+                    continue;
+                }
+                if sim.can_place_entity(drill, x, y, direction).is_err() {
+                    continue;
+                }
+
+                let footprint = sim
+                    .world
+                    .entity_footprint(drill, x, y, direction)
+                    .expect("validated drill prototype should have a footprint");
+                let placed = PlacedEntity {
+                    id: 0,
+                    prototype_id: drill,
+                    x,
+                    y,
+                    direction,
+                    footprint,
+                };
+                let (output_x, output_y) = drill_output_tile(&placed);
+                if sim
+                    .can_place_entity(belt, output_x, output_y, direction)
+                    .is_err()
+                {
+                    continue;
+                }
+
+                let drill_id = sim
+                    .place_entity(drill, x, y, direction)
+                    .expect("validated drill target should be placeable");
+                let belt_id = sim
+                    .place_entity(belt, output_x, output_y, direction)
+                    .expect("validated belt output target should be placeable");
+                return (drill_id, belt_id, x, y, resource.amount);
+            }
+        }
+
+        panic!("expected burner drill fixture with adjacent belt output");
     }
 
     fn add_fuel_to_burner_drill(

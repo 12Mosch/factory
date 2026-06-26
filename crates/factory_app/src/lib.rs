@@ -5,10 +5,10 @@ use bevy::time::Fixed;
 use bevy::window::PrimaryWindow;
 use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, TileId};
 use factory_sim::{
-    BURNER_MINING_DRILL_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BurnerDrillError,
-    CHUNK_SIZE, ContainerError, Direction, EntityFootprint, FURNACE_FUEL_SLOT_INDEX,
-    FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX, FurnaceError, ItemStack,
-    ManualMiningTarget, PlayerState, ResourceCell, Simulation,
+    BELT_SUBTILES_PER_TILE, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
+    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BurnerDrillError, CHUNK_SIZE, ContainerError, Direction,
+    EntityFootprint, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX,
+    FurnaceError, ItemStack, ManualMiningTarget, PlayerState, ResourceCell, Simulation,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,6 +24,8 @@ const MAX_CAMERA_SCALE: f32 = 8.0;
 const INITIAL_CAMERA_SCALE: f32 = 2.0;
 const CHEST_SPRITE_SIZE: f32 = TILE_SIZE * 0.9;
 const BURNER_DRILL_SPRITE_PADDING: f32 = TILE_SIZE * 0.12;
+const TRANSPORT_BELT_SPRITE_SIZE: f32 = TILE_SIZE * 0.92;
+const BELT_ITEM_SPRITE_SIZE: f32 = TILE_SIZE * 0.28;
 const SLOT_BUTTON_WIDTH: f32 = 58.0;
 const SLOT_BUTTON_HEIGHT: f32 = 38.0;
 const MACHINE_BAR_WIDTH: f32 = 180.0;
@@ -51,6 +53,11 @@ pub struct DebugInventorySelection {
 #[derive(Resource, Default)]
 pub struct OpenContainer {
     pub entity_id: Option<u64>,
+}
+
+#[derive(Resource, Default)]
+pub struct DebugBuildDirection {
+    pub direction: Direction,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +107,13 @@ struct PlayerSprite;
 #[derive(Component)]
 struct PlacedEntitySprite {
     entity_id: u64,
+}
+
+#[derive(Component)]
+struct BeltItemSprite {
+    entity_id: u64,
+    lane_index: usize,
+    item_index: usize,
 }
 
 #[derive(Component)]
@@ -178,6 +192,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<UpsStats>()
             .init_resource::<DebugInventorySelection>()
             .init_resource::<OpenContainer>()
+            .init_resource::<DebugBuildDirection>()
             .add_systems(
                 Startup,
                 (
@@ -208,12 +223,13 @@ impl Plugin for FactoryAppPlugin {
                     update_manual_mining_progress_bar,
                     update_ups_stats,
                     handle_debug_inventory_input,
-                    handle_debug_chest_placement,
+                    handle_debug_entity_placement,
                     handle_container_open_input,
                     handle_container_close_input,
                     update_debug_overlay,
                     sync_resource_debug_rendering,
                     sync_placed_entity_rendering,
+                    sync_belt_item_rendering,
                     sync_container_window,
                     handle_container_slot_clicks,
                     update_container_slot_text,
@@ -528,30 +544,64 @@ fn handle_debug_inventory_input(
     }
 }
 
-fn handle_debug_chest_placement(
+fn handle_debug_entity_placement(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
     mut sim: ResMut<SimResource>,
+    mut build_direction: ResMut<DebugBuildDirection>,
 ) {
     let Some(keyboard) = keyboard else {
         return;
     };
-    let prototype_name = if keyboard.just_pressed(KeyCode::KeyC) {
-        "chest"
-    } else if keyboard.just_pressed(KeyCode::KeyB) {
-        "burner_mining_drill"
-    } else if keyboard.just_pressed(KeyCode::KeyF) {
-        "stone_furnace"
-    } else {
-        return;
-    };
 
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
+        if keyboard.just_pressed(KeyCode::KeyR) {
+            build_direction.direction = next_debug_build_direction(build_direction.direction);
+        }
         return;
     };
-    let prototype = find_entity_prototype_id(&sim.sim.world.prototypes, prototype_name);
-    let _ = sim.sim.place_entity(prototype, x, y, Direction::North);
+    let _ = handle_debug_build_action_at_tile(&mut sim.sim, &keyboard, &mut build_direction, x, y);
+}
+
+pub fn handle_debug_build_action_at_tile(
+    sim: &mut Simulation,
+    keyboard: &ButtonInput<KeyCode>,
+    build_direction: &mut DebugBuildDirection,
+    x: i32,
+    y: i32,
+) -> Option<u64> {
+    if keyboard.just_pressed(KeyCode::KeyR) {
+        build_direction.direction = next_debug_build_direction(build_direction.direction);
+    }
+
+    let prototype_name = debug_build_prototype_name(keyboard)?;
+    let prototype = find_entity_prototype_id(&sim.world.prototypes, prototype_name);
+    sim.place_entity(prototype, x, y, build_direction.direction)
+        .ok()
+}
+
+fn debug_build_prototype_name(keyboard: &ButtonInput<KeyCode>) -> Option<&'static str> {
+    if keyboard.just_pressed(KeyCode::KeyC) {
+        Some("chest")
+    } else if keyboard.just_pressed(KeyCode::KeyB) {
+        Some("burner_mining_drill")
+    } else if keyboard.just_pressed(KeyCode::KeyF) {
+        Some("stone_furnace")
+    } else if keyboard.just_pressed(KeyCode::KeyT) {
+        Some("transport_belt")
+    } else {
+        None
+    }
+}
+
+fn next_debug_build_direction(direction: Direction) -> Direction {
+    match direction {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+    }
 }
 
 fn handle_container_open_input(
@@ -640,6 +690,61 @@ fn sync_placed_entity_rendering(
                 entity_id: placed.id,
             },
         ));
+    }
+}
+
+fn sync_belt_item_rendering(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    mut sprites: Query<(Entity, &BeltItemSprite, &mut Transform, &mut Sprite)>,
+) {
+    let mut seen = BTreeSet::new();
+
+    for (entity, marker, mut transform, mut sprite) in &mut sprites {
+        let key = (marker.entity_id, marker.lane_index, marker.item_index);
+        if let Some((translation, color)) = belt_item_render_state(
+            &sim.sim,
+            marker.entity_id,
+            marker.lane_index,
+            marker.item_index,
+        ) {
+            seen.insert(key);
+            transform.translation = translation;
+            sprite.color = color;
+            sprite.custom_size = Some(Vec2::splat(BELT_ITEM_SPRITE_SIZE));
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for placed in sim.sim.entities.placed_entities() {
+        let Ok(segment) = sim.sim.belt_segment(placed.id) else {
+            continue;
+        };
+
+        for (lane_index, lane) in segment.lanes.iter().enumerate() {
+            for item_index in 0..lane.items.len() {
+                let key = (placed.id, lane_index, item_index);
+                if seen.contains(&key) {
+                    continue;
+                }
+
+                let Some((translation, color)) =
+                    belt_item_render_state(&sim.sim, placed.id, lane_index, item_index)
+                else {
+                    continue;
+                };
+                commands.spawn((
+                    Sprite::from_color(color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
+                    Transform::from_translation(translation),
+                    BeltItemSprite {
+                        entity_id: placed.id,
+                        lane_index,
+                        item_index,
+                    },
+                ));
+            }
+        }
     }
 }
 
@@ -1198,6 +1303,10 @@ fn furnace_color() -> Color {
     Color::srgb(0.54, 0.45, 0.36)
 }
 
+fn transport_belt_color() -> Color {
+    Color::srgb(0.93, 0.72, 0.18)
+}
+
 fn manual_mining_bar_translation(x: i32, y: i32, z: f32) -> Vec3 {
     let mut translation = tile_translation(x, y, z);
     translation.y += MANUAL_MINING_BAR_Y_OFFSET;
@@ -1373,6 +1482,18 @@ fn open_machine_kind(sim: &Simulation, entity_id: u64) -> Option<OpenMachineKind
 
 fn renderable_entity_style(sim: &Simulation, entity_id: u64) -> Option<(Color, Vec2)> {
     let placed = sim.entities.placed_entity(entity_id)?;
+    let prototype = sim
+        .world
+        .prototypes
+        .entities
+        .get(placed.prototype_id.index())?;
+    if prototype.entity_kind == EntityKind::TransportBelt {
+        return Some((
+            transport_belt_color(),
+            Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
+        ));
+    }
+
     match open_machine_kind(sim, entity_id) {
         Some(OpenMachineKind::Chest) => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
         Some(OpenMachineKind::BurnerDrill) => Some((
@@ -1391,6 +1512,53 @@ fn renderable_entity_style(sim: &Simulation, entity_id: u64) -> Option<(Color, V
         )),
         None => None,
     }
+}
+
+fn belt_item_render_state(
+    sim: &Simulation,
+    entity_id: u64,
+    lane_index: usize,
+    item_index: usize,
+) -> Option<(Vec3, Color)> {
+    let placed = sim.entities.placed_entity(entity_id)?;
+    let segment = sim.belt_segment(entity_id).ok()?;
+    let item = segment.lanes.get(lane_index)?.items.get(item_index)?;
+    let center = tile_translation(placed.x, placed.y, 4.0);
+    let along = direction_render_vector(segment.dir);
+    let perpendicular = Vec2::new(-along.y, along.x);
+    let progress = f32::from(item.position_subtile) / f32::from(BELT_SUBTILES_PER_TILE) - 0.5;
+    let lane_offset = if lane_index == 0 { -0.18 } else { 0.18 };
+    let offset = (along * progress + perpendicular * lane_offset) * TILE_SIZE;
+    let color = belt_item_color(item.item_id, &sim.world.prototypes);
+
+    Some((
+        Vec3::new(center.x + offset.x, center.y + offset.y, 4.0),
+        color,
+    ))
+}
+
+fn direction_render_vector(direction: Direction) -> Vec2 {
+    match direction {
+        Direction::North => Vec2::Y,
+        Direction::East => Vec2::X,
+        Direction::South => Vec2::NEG_Y,
+        Direction::West => Vec2::NEG_X,
+    }
+}
+
+fn belt_item_color(item_id: ItemId, catalog: &PrototypeCatalog) -> Color {
+    catalog
+        .items
+        .get(item_id.index())
+        .map(|item| item.name.as_str())
+        .map(|name| match name {
+            "iron_ore" => Color::srgb(0.70, 0.66, 0.58),
+            "copper_ore" => Color::srgb(0.86, 0.42, 0.20),
+            "coal" => Color::srgb(0.05, 0.05, 0.05),
+            "stone" => Color::srgb(0.54, 0.51, 0.47),
+            _ => Color::srgb(0.64, 0.82, 0.95),
+        })
+        .unwrap_or(Color::WHITE)
 }
 
 fn format_item_stack(stack: ItemStack, catalog: &PrototypeCatalog) -> String {

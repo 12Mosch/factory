@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::{
-    FactoryAppPlugin, InventoryPanel, SimResource, opened_container_after_world_click,
+    DebugBuildDirection, FactoryAppPlugin, InventoryPanel, SimResource,
+    handle_debug_build_action_at_tile, opened_container_after_world_click,
     transfer_open_container_slot, world_position_to_tile_coord,
 };
-use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog};
+use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
 use std::time::Duration;
 
@@ -350,6 +351,56 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
             .expect("burner drill should expose state")
             .output_slot,
         None
+    );
+}
+
+#[test]
+fn debug_placement_key_places_transport_belt_with_current_direction() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let mut build_direction = DebugBuildDirection::default();
+    let mut keyboard = ButtonInput::default();
+    let (first_x, first_y) = first_buildable_rect(&sim, belt);
+
+    keyboard.press(KeyCode::KeyT);
+    let first_id = handle_debug_build_action_at_tile(
+        &mut sim,
+        &keyboard,
+        &mut build_direction,
+        first_x,
+        first_y,
+    )
+    .expect("T should place a transport belt");
+
+    let first = sim.entities.placed_entity(first_id).unwrap();
+    assert_eq!(first.direction, Direction::North);
+    assert_eq!(
+        sim.world.prototypes.entities[first.prototype_id.index()].entity_kind,
+        EntityKind::TransportBelt
+    );
+
+    keyboard.release(KeyCode::KeyT);
+    keyboard.clear();
+    keyboard.press(KeyCode::KeyR);
+    handle_debug_build_action_at_tile(&mut sim, &keyboard, &mut build_direction, first_x, first_y);
+    assert_eq!(build_direction.direction, Direction::East);
+
+    keyboard.release(KeyCode::KeyR);
+    keyboard.clear();
+    keyboard.press(KeyCode::KeyT);
+    let (second_x, second_y) = first_buildable_rect(&sim, belt);
+    let second_id = handle_debug_build_action_at_tile(
+        &mut sim,
+        &keyboard,
+        &mut build_direction,
+        second_x,
+        second_y,
+    )
+    .expect("T should place another transport belt");
+
+    assert_eq!(
+        sim.entities.placed_entity(second_id).unwrap().direction,
+        Direction::East
     );
 }
 
