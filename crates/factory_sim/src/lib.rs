@@ -209,6 +209,13 @@ pub struct PlacedEntity {
     pub footprint: EntityFootprint,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrillOutputTarget {
+    InternalSlot,
+    Inventory(u64),
+    Blocked,
+}
+
 struct EntityReservation {
     prototype_id: EntityPrototypeId,
     x: i32,
@@ -953,12 +960,15 @@ impl Simulation {
                 continue;
             };
 
+            let output_target = drill_output_target(&self.entities, &placed);
             let output_can_accept =
                 self.entities
                     .burner_drill_state(entity_id)
                     .is_ok_and(|state| {
-                        output_slot_can_accept(
+                        drill_output_target_can_accept(
                             &self.world.prototypes,
+                            &self.entities,
+                            output_target,
                             state.output_slot,
                             resource_item,
                             1,
@@ -1010,14 +1020,13 @@ impl Simulation {
                 .expect("selected drill target should contain a resource");
             debug_assert_eq!(mined.resource_item, resource_item);
             debug_assert_eq!(mined.amount, 1);
-            let state = self
-                .entities
-                .burner_drill_state_mut(entity_id)
-                .expect("burner drill id came from burner drill state map");
-            insert_output_item(
-                &mut state.output_slot,
+            insert_drill_output(
+                &mut self.entities,
+                entity_id,
+                output_target,
                 mined.resource_item,
                 mined.amount as u16,
+                &self.world.prototypes,
             );
         }
     }
@@ -1185,6 +1194,17 @@ impl WorldSim {
             if !tile.collision.walkable {
                 return Err(BuildError::TileBlocked { x, y });
             }
+        }
+
+        let mining_drill = prototype
+            .mining_drill
+            .as_ref()
+            .expect("mining drill prototype should have mining metadata");
+        if first_resource_in_mining_area(self, footprint, mining_drill).is_none() {
+            return Err(BuildError::TileBlocked {
+                x: footprint.x,
+                y: footprint.y,
+            });
         }
 
         Ok(())
@@ -1989,6 +2009,88 @@ fn output_slot_can_accept(
     }
 }
 
+fn drill_output_target(entities: &EntityStore, placed: &PlacedEntity) -> DrillOutputTarget {
+    let (x, y) = drill_output_tile(placed);
+    match entities.occupancy.entity_at(x, y) {
+        None => DrillOutputTarget::InternalSlot,
+        Some(entity_id) if entity_id == placed.id => DrillOutputTarget::InternalSlot,
+        Some(entity_id) if entities.entity_inventories.contains_key(&entity_id) => {
+            DrillOutputTarget::Inventory(entity_id)
+        }
+        Some(_) => DrillOutputTarget::Blocked,
+    }
+}
+
+fn drill_output_tile(placed: &PlacedEntity) -> (i32, i32) {
+    match placed.direction {
+        Direction::North => (
+            placed.footprint.x + placed.footprint.width / 2,
+            placed.footprint.y + placed.footprint.height,
+        ),
+        Direction::East => (
+            placed.footprint.x + placed.footprint.width,
+            placed.footprint.y + placed.footprint.height / 2,
+        ),
+        Direction::South => (
+            placed.footprint.x + placed.footprint.width / 2,
+            placed.footprint.y - 1,
+        ),
+        Direction::West => (
+            placed.footprint.x - 1,
+            placed.footprint.y + placed.footprint.height / 2,
+        ),
+    }
+}
+
+fn drill_output_target_can_accept(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    output_target: DrillOutputTarget,
+    internal_output_slot: Option<ItemStack>,
+    item_id: ItemId,
+    count: u16,
+) -> bool {
+    match output_target {
+        DrillOutputTarget::InternalSlot => {
+            output_slot_can_accept(catalog, internal_output_slot, item_id, count)
+        }
+        DrillOutputTarget::Inventory(entity_id) => entities
+            .entity_inventories
+            .get(&entity_id)
+            .is_some_and(|inventory| inventory.can_insert(catalog, item_id, count)),
+        DrillOutputTarget::Blocked => false,
+    }
+}
+
+fn insert_drill_output(
+    entities: &mut EntityStore,
+    drill_entity_id: u64,
+    output_target: DrillOutputTarget,
+    item_id: ItemId,
+    count: u16,
+    catalog: &PrototypeCatalog,
+) {
+    match output_target {
+        DrillOutputTarget::InternalSlot => {
+            let state = entities
+                .burner_drill_state_mut(drill_entity_id)
+                .expect("burner drill id came from burner drill state map");
+            insert_output_item(&mut state.output_slot, item_id, count);
+        }
+        DrillOutputTarget::Inventory(entity_id) => {
+            entities
+                .entity_inventories
+                .get_mut(&entity_id)
+                .expect("validated output inventory should still exist")
+                .insert(catalog, item_id, count)
+                .expect("validated output inventory should accept drill product");
+        }
+        DrillOutputTarget::Blocked => {
+            unreachable!("blocked drill output is checked before mining")
+        }
+    }
+}
+
 fn insert_into_single_slot(slot: &mut Option<ItemStack>, stack: ItemStack) {
     match slot {
         Some(existing) => existing.count += stack.count,
@@ -2662,6 +2764,140 @@ mod tests {
     }
 
     #[test]
+    fn burner_drill_outputs_ore_after_required_ticks() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+        add_fuel_to_burner_drill(&mut sim, entity_id, coal, 1);
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            sim.burner_drill_state(entity_id)
+                .expect("burner drill should expose state")
+                .output_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn burner_drill_consumes_resource_tile() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, iron_ore);
+        add_fuel_to_burner_drill(&mut sim, entity_id, coal, 1);
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 1));
+    }
+
+    #[test]
+    fn burner_drill_blocks_when_output_inventory_full() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (drill_id, chest_id, x, y, before) =
+            place_burner_drill_outputting_to_chest(&mut sim, iron_ore);
+        add_fuel_to_burner_drill(&mut sim, drill_id, coal, 1);
+        fill_inventory_with(&mut sim, chest_id, coal);
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        let state = sim
+            .burner_drill_state(drill_id)
+            .expect("burner drill should expose state");
+        assert_eq!(state.energy.energy_remaining_joules, 0.0);
+        assert_eq!(
+            state.energy.fuel_slot,
+            Some(ItemStack {
+                item_id: coal,
+                count: 1,
+            })
+        );
+        assert_eq!(state.mining_progress_ticks, 0);
+        assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_ore),
+            0
+        );
+    }
+
+    #[test]
+    fn burner_drill_outputs_into_adjacent_chest() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (drill_id, chest_id, _, _, _) =
+            place_burner_drill_outputting_to_chest(&mut sim, iron_ore);
+        add_fuel_to_burner_drill(&mut sim, drill_id, coal, 1);
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_ore),
+            1
+        );
+        assert_eq!(
+            sim.burner_drill_state(drill_id)
+                .expect("burner drill should expose state")
+                .output_slot,
+            None
+        );
+    }
+
+    #[test]
+    fn burner_drill_placed_on_coal_produces_coal() {
+        let mut sim = Simulation::new_test_world(123);
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, coal);
+        add_fuel_to_burner_drill(&mut sim, entity_id, coal, 1);
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            sim.burner_drill_state(entity_id)
+                .expect("burner drill should expose state")
+                .output_slot,
+            Some(ItemStack {
+                item_id: coal,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn burner_drill_without_resource_in_mining_area_refuses_placement() {
+        let sim = Simulation::new_test_world(123);
+        let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 2, 2);
+
+        assert!(matches!(
+            sim.can_place_entity(drill, x, y, Direction::North),
+            Err(BuildError::TileBlocked { .. })
+        ));
+    }
+
+    #[test]
     fn burner_drill_hash_is_deterministic_for_same_seed_and_inputs() {
         let mut a = Simulation::new_test_world(123);
         let mut b = Simulation::new_test_world(123);
@@ -3123,6 +3359,122 @@ mod tests {
         }
 
         panic!("expected placeable resource tile for burner drill");
+    }
+
+    fn place_burner_drill_outputting_to_chest(
+        sim: &mut Simulation,
+        resource_item: ItemId,
+    ) -> (u64, u64, i32, i32, u32) {
+        let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        for direction in [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ] {
+            for (x, y) in all_tile_coords(&sim.world) {
+                let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
+                    continue;
+                };
+                if resource.resource_item != resource_item {
+                    continue;
+                }
+                if sim.can_place_entity(drill, x, y, direction).is_err() {
+                    continue;
+                }
+
+                let footprint = sim
+                    .world
+                    .entity_footprint(drill, x, y, direction)
+                    .expect("validated drill prototype should have a footprint");
+                let placed = PlacedEntity {
+                    id: 0,
+                    prototype_id: drill,
+                    x,
+                    y,
+                    direction,
+                    footprint,
+                };
+                let (output_x, output_y) = drill_output_tile(&placed);
+                if sim
+                    .can_place_entity(chest, output_x, output_y, Direction::North)
+                    .is_err()
+                {
+                    continue;
+                }
+
+                let drill_id = sim
+                    .place_entity(drill, x, y, direction)
+                    .expect("validated drill target should be placeable");
+                let chest_id = sim
+                    .place_entity(chest, output_x, output_y, Direction::North)
+                    .expect("validated chest output target should be placeable");
+                return (drill_id, chest_id, x, y, resource.amount);
+            }
+        }
+
+        panic!("expected burner drill fixture with adjacent chest output");
+    }
+
+    fn add_fuel_to_burner_drill(
+        sim: &mut Simulation,
+        entity_id: u64,
+        fuel_item: ItemId,
+        count: u16,
+    ) {
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: fuel_item,
+            count,
+        });
+        sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+            .expect("fuel should transfer to burner drill");
+    }
+
+    fn fill_inventory_with(sim: &mut Simulation, entity_id: u64, item_id: ItemId) {
+        let stack_size = item_stack_size(&sim.world.prototypes, item_id)
+            .expect("test item should have a stack size");
+        let inventory = sim
+            .entity_inventory_mut(entity_id)
+            .expect("test entity should have inventory");
+        for slot in &mut inventory.slots {
+            *slot = Some(ItemStack {
+                item_id,
+                count: stack_size,
+            });
+        }
+    }
+
+    fn first_buildable_rect_without_resource(
+        world: &WorldSim,
+        width: i32,
+        height: i32,
+    ) -> (i32, i32) {
+        for chunk in world.chunks.values() {
+            for (index, _) in chunk.tiles.iter().enumerate() {
+                let (x, y) = tile_coord(chunk, index);
+                let footprint = EntityFootprint {
+                    x,
+                    y,
+                    width,
+                    height,
+                };
+
+                if world.validate_entity_footprint(&footprint).is_ok()
+                    && footprint.tiles().iter().all(|(tile_x, tile_y)| {
+                        world
+                            .tile_at(*tile_x, *tile_y)
+                            .and_then(|tile| tile.resource)
+                            .is_none()
+                    })
+                {
+                    return (x, y);
+                }
+            }
+        }
+
+        panic!("expected buildable area without resources");
     }
 
     fn resource_amount_at(world: &WorldSim, x: i32, y: i32) -> Option<u32> {
