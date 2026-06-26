@@ -3,7 +3,7 @@
         (id: 7, name: "iron_gear_wheel", stack_size: 100),
         (id: 0, name: "iron_ore", stack_size: 100),
         (id: 1, name: "copper_ore", stack_size: 100),
-        (id: 2, name: "coal", stack_size: 100),
+        (id: 2, name: "coal", stack_size: 100, fuel_value_joules: Some(4000000)),
         (id: 3, name: "stone", stack_size: 100),
         (id: 4, name: "iron_plate", stack_size: 100),
         (id: 5, name: "copper_plate", stack_size: 100),
@@ -221,6 +221,8 @@
             entity_kind: MiningDrill,
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),
+            burner: Some((energy_usage_watts: 150000)),
+            mining_drill: Some((mining_area: (x: 2, y: 2), ticks_per_item: 240)),
         ),
         (
             id: 9,

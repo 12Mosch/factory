@@ -153,6 +153,22 @@ fn opening_clicked_chest_selects_correct_entity() {
 }
 
 #[test]
+fn opening_clicked_burner_drill_selects_correct_entity() {
+    let mut sim = Simulation::new_test_world(123);
+    let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+    let coal = item_id_by_name(&sim.world.prototypes, "coal");
+    let (x, y) = first_placeable_resource_rect(&sim, drill, coal);
+    let entity_id = sim
+        .place_entity(drill, x, y, Direction::North)
+        .expect("burner drill should be placeable over resources");
+
+    assert_eq!(
+        opened_container_after_world_click(&sim, Some((x, y))),
+        Some(entity_id)
+    );
+}
+
+#[test]
 fn slot_click_transfer_delegates_to_sim_transfer_api() {
     let mut sim = Simulation::new_test_world(123);
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
@@ -176,6 +192,52 @@ fn slot_click_transfer_delegates_to_sim_transfer_api() {
             .expect("chest should have inventory")
             .count(iron_plate),
         9
+    );
+}
+
+#[test]
+fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
+    let mut sim = Simulation::new_test_world(123);
+    let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+    let coal = item_id_by_name(&sim.world.prototypes, "coal");
+    let (x, y) = first_placeable_resource_rect(&sim, drill, coal);
+    let entity_id = sim
+        .place_entity(drill, x, y, Direction::North)
+        .expect("burner drill should be placeable over resources");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[2] = Some(ItemStack {
+        item_id: coal,
+        count: 1,
+    });
+
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+        .expect("player coal should transfer to burner drill fuel");
+
+    assert_eq!(sim.player_inventory.slots[2], None);
+    assert_eq!(
+        sim.burner_drill_state(entity_id)
+            .expect("burner drill should expose state")
+            .energy
+            .fuel_slot,
+        Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        })
+    );
+
+    for _ in 0..240 {
+        sim.tick();
+    }
+
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::BurnerOutput, 0)
+        .expect("drill output should transfer to player");
+
+    assert_eq!(sim.player_inventory.count(coal), 1);
+    assert_eq!(
+        sim.burner_drill_state(entity_id)
+            .expect("burner drill should expose state")
+            .output_slot,
+        None
     );
 }
 
@@ -233,6 +295,37 @@ fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i
     }
 
     panic!("expected at least one buildable area");
+}
+
+fn first_placeable_resource_rect(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+    resource_item: ItemId,
+) -> (i32, i32) {
+    for chunk in sim.world.chunks.values() {
+        for (index, tile) in chunk.tiles.iter().enumerate() {
+            let Some(resource) = tile.resource else {
+                continue;
+            };
+            if resource.resource_item != resource_item {
+                continue;
+            }
+
+            let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+            let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+            let x = chunk.coord.x * CHUNK_SIZE + local_x;
+            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+
+            if sim
+                .can_place_entity(prototype_id, x, y, Direction::North)
+                .is_ok()
+            {
+                return (x, y);
+            }
+        }
+    }
+
+    panic!("expected at least one placeable resource area");
 }
 
 fn entity_id_by_name(catalog: &PrototypeCatalog, name: &str) -> EntityPrototypeId {

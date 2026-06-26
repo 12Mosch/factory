@@ -1,5 +1,5 @@
 use factory_data::{
-    CraftingCategory, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId,
+    CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -19,6 +19,9 @@ const TEST_WORLD_MAX_CHUNK: i32 = 1;
 const RESOURCE_PATCH_GRID_SIZE: i32 = 40;
 const RESOURCE_PATCH_GRID_JITTER: i32 = 16;
 const RESOURCE_PATCH_EDGE_NOISE: i32 = 3;
+pub const BURNER_MINING_DRILL_FUEL_SLOT_INDEX: usize = 0;
+pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
+const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tick(pub u64);
@@ -135,10 +138,56 @@ pub struct MinedResource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BurnerMiningDrillState {
+    pub energy: BurnerEnergy,
+    pub mining_progress_ticks: u32,
+    pub mining_required_ticks: u32,
+    pub resource_target: Option<ManualMiningTarget>,
+    pub output_slot: Option<ItemStack>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BurnerEnergy {
+    pub fuel_slot: Option<ItemStack>,
+    pub energy_remaining_joules: f64,
+    pub energy_usage_watts: f64,
+}
+
+impl PartialEq for BurnerEnergy {
+    fn eq(&self, other: &Self) -> bool {
+        self.fuel_slot == other.fuel_slot
+            && self.energy_remaining_joules.to_bits() == other.energy_remaining_joules.to_bits()
+            && self.energy_usage_watts.to_bits() == other.energy_usage_watts.to_bits()
+    }
+}
+
+impl Eq for BurnerEnergy {}
+
+impl Hash for BurnerEnergy {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.fuel_slot.hash(state);
+        self.energy_remaining_joules.to_bits().hash(state);
+        self.energy_usage_watts.to_bits().hash(state);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BurnerDrillError {
+    MissingEntity(u64),
+    NotBurnerDrill(u64),
+    InvalidFuel(ItemId),
+    InvalidSlot { slot_index: usize },
+    EmptySlot { slot_index: usize },
+    InsufficientSpace,
+    UnknownItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EntityStore {
     entities: Vec<SimEntity>,
     placed_entities: BTreeMap<u64, PlacedEntity>,
     entity_inventories: BTreeMap<u64, Inventory>,
+    burner_mining_drills: BTreeMap<u64, BurnerMiningDrillState>,
     occupancy: OccupancyGrid,
     next_entity_id: u64,
 }
@@ -158,6 +207,16 @@ pub struct PlacedEntity {
     pub y: i32,
     pub direction: Direction,
     pub footprint: EntityFootprint,
+}
+
+struct EntityReservation {
+    prototype_id: EntityPrototypeId,
+    x: i32,
+    y: i32,
+    direction: Direction,
+    footprint: EntityFootprint,
+    inventory_slot_count: Option<usize>,
+    burner_mining_drill: Option<BurnerMiningDrillState>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -352,6 +411,18 @@ impl From<InventoryError> for ContainerError {
     }
 }
 
+impl From<InventoryError> for BurnerDrillError {
+    fn from(error: InventoryError) -> Self {
+        match error {
+            InventoryError::UnknownItem => Self::UnknownItem,
+            InventoryError::InsufficientSpace => Self::InsufficientSpace,
+            InventoryError::InsufficientItems => {
+                unreachable!("burner drill transfers remove a known slot stack")
+            }
+        }
+    }
+}
+
 fn stack_in_slot(inventory: &Inventory, slot_index: usize) -> Result<ItemStack, ContainerError> {
     inventory
         .slots
@@ -409,6 +480,7 @@ impl Simulation {
     pub fn tick(&mut self) {
         self.tick += 1;
         self.entities.advance(Tick(self.tick), self.world.seed);
+        self.advance_burner_mining_drills();
         self.advance_manual_crafting();
     }
 
@@ -648,7 +720,15 @@ impl Simulation {
         direction: Direction,
     ) -> Result<EntityFootprint, BuildError> {
         let footprint = self.world.entity_footprint(prototype_id, x, y, direction)?;
-        self.world.validate_entity_footprint(&footprint)?;
+        let prototype = self
+            .world
+            .prototypes
+            .entities
+            .get(prototype_id.index())
+            .filter(|prototype| prototype.id == prototype_id)
+            .ok_or(BuildError::MissingPrototype(prototype_id))?;
+        self.world
+            .validate_entity_footprint_for_prototype(prototype, &footprint)?;
         self.entities
             .occupancy
             .validate_available(&footprint, None)?;
@@ -664,16 +744,18 @@ impl Simulation {
         direction: Direction,
     ) -> Result<u64, BuildError> {
         let footprint = self.can_place_entity(prototype_id, x, y, direction)?;
-        let inventory_slot_count =
-            self.world.prototypes.entities[prototype_id.index()].inventory_slot_count;
-        Ok(self.entities.reserve_entity(
+        let prototype = &self.world.prototypes.entities[prototype_id.index()];
+        let inventory_slot_count = prototype.inventory_slot_count;
+        let burner_mining_drill = burner_mining_drill_state_for_prototype(prototype);
+        Ok(self.entities.reserve_entity(EntityReservation {
             prototype_id,
             x,
             y,
             direction,
             footprint,
             inventory_slot_count,
-        ))
+            burner_mining_drill,
+        }))
     }
 
     pub fn rotate_entity(
@@ -689,8 +771,16 @@ impl Simulation {
         let footprint =
             self.world
                 .entity_footprint(entity.prototype_id, entity.x, entity.y, direction)?;
+        let prototype = self
+            .world
+            .prototypes
+            .entities
+            .get(entity.prototype_id.index())
+            .filter(|prototype| prototype.id == entity.prototype_id)
+            .ok_or(BuildError::MissingPrototype(entity.prototype_id))?;
 
-        self.world.validate_entity_footprint(&footprint)?;
+        self.world
+            .validate_entity_footprint_for_prototype(prototype, &footprint)?;
         self.entities
             .occupancy
             .validate_available(&footprint, Some(entity_id))?;
@@ -744,6 +834,192 @@ impl Simulation {
         self.player_inventory
             .insert(&self.world.prototypes, stack.item_id, stack.count)
             .map_err(ContainerError::from)
+    }
+
+    pub fn burner_drill_state(
+        &self,
+        entity_id: u64,
+    ) -> Result<&BurnerMiningDrillState, BurnerDrillError> {
+        self.entities.burner_drill_state(entity_id)
+    }
+
+    pub fn transfer_player_slot_to_burner_drill_fuel(
+        &mut self,
+        entity_id: u64,
+        player_slot_index: usize,
+    ) -> Result<(), BurnerDrillError> {
+        let stack = self
+            .player_inventory
+            .slots
+            .get(player_slot_index)
+            .ok_or(BurnerDrillError::InvalidSlot {
+                slot_index: player_slot_index,
+            })?
+            .ok_or(BurnerDrillError::EmptySlot {
+                slot_index: player_slot_index,
+            })?;
+
+        if fuel_value_joules(&self.world.prototypes, stack.item_id).is_none() {
+            return Err(BurnerDrillError::InvalidFuel(stack.item_id));
+        }
+
+        let state = self.entities.burner_drill_state(entity_id)?;
+        if !burner_fuel_slot_can_accept(&self.world.prototypes, state.energy.fuel_slot, stack) {
+            return Err(BurnerDrillError::InsufficientSpace);
+        }
+
+        self.player_inventory.slots[player_slot_index] = None;
+        let state = self.entities.burner_drill_state_mut(entity_id)?;
+        insert_into_single_slot(&mut state.energy.fuel_slot, stack);
+
+        Ok(())
+    }
+
+    pub fn transfer_burner_drill_fuel_to_player(
+        &mut self,
+        entity_id: u64,
+    ) -> Result<(), BurnerDrillError> {
+        let stack = self
+            .entities
+            .burner_drill_state(entity_id)?
+            .energy
+            .fuel_slot
+            .ok_or(BurnerDrillError::EmptySlot {
+                slot_index: BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
+            })?;
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(BurnerDrillError::InsufficientSpace);
+        }
+
+        self.entities
+            .burner_drill_state_mut(entity_id)?
+            .energy
+            .fuel_slot = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(BurnerDrillError::from)
+    }
+
+    pub fn transfer_burner_drill_output_to_player(
+        &mut self,
+        entity_id: u64,
+    ) -> Result<(), BurnerDrillError> {
+        let stack = self
+            .entities
+            .burner_drill_state(entity_id)?
+            .output_slot
+            .ok_or(BurnerDrillError::EmptySlot {
+                slot_index: BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX,
+            })?;
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(BurnerDrillError::InsufficientSpace);
+        }
+
+        self.entities.burner_drill_state_mut(entity_id)?.output_slot = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(BurnerDrillError::from)
+    }
+
+    fn advance_burner_mining_drills(&mut self) {
+        let drill_ids = self
+            .entities
+            .burner_mining_drills
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        for entity_id in drill_ids {
+            let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
+                continue;
+            };
+            let prototype = &self.world.prototypes.entities[placed.prototype_id.index()];
+            let Some(mining_drill) = prototype.mining_drill.as_ref() else {
+                continue;
+            };
+            let target =
+                first_resource_in_mining_area(&self.world, &placed.footprint, mining_drill);
+            let Some((target, resource_item)) = target else {
+                if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
+                    state.resource_target = None;
+                    state.mining_progress_ticks = 0;
+                }
+                continue;
+            };
+
+            let output_can_accept =
+                self.entities
+                    .burner_drill_state(entity_id)
+                    .is_ok_and(|state| {
+                        output_slot_can_accept(
+                            &self.world.prototypes,
+                            state.output_slot,
+                            resource_item,
+                            1,
+                        )
+                    });
+            if !output_can_accept {
+                if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
+                    state.resource_target = Some(target);
+                }
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .burner_drill_state_mut(entity_id)
+                    .expect("burner drill id came from burner drill state map");
+                state.resource_target = Some(target);
+                let joules_per_tick =
+                    state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
+                    && !try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                {
+                    continue;
+                }
+
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    continue;
+                }
+
+                state.energy.energy_remaining_joules -= joules_per_tick;
+                state.mining_progress_ticks += 1;
+
+                if state.mining_progress_ticks < state.mining_required_ticks {
+                    false
+                } else {
+                    state.mining_progress_ticks = 0;
+                    true
+                }
+            };
+
+            if !completed {
+                continue;
+            }
+
+            let mined = self
+                .world
+                .mine_resource_at(target.x, target.y, 1)
+                .expect("selected drill target should contain a resource");
+            debug_assert_eq!(mined.resource_item, resource_item);
+            debug_assert_eq!(mined.amount, 1);
+            let state = self
+                .entities
+                .burner_drill_state_mut(entity_id)
+                .expect("burner drill id came from burner drill state map");
+            insert_output_item(
+                &mut state.output_slot,
+                mined.resource_item,
+                mined.amount as u16,
+            );
+        }
     }
 }
 
@@ -892,6 +1168,28 @@ impl WorldSim {
         Ok(())
     }
 
+    fn validate_entity_footprint_for_prototype(
+        &self,
+        prototype: &factory_data::EntityPrototype,
+        footprint: &EntityFootprint,
+    ) -> Result<(), BuildError> {
+        if prototype.entity_kind != EntityKind::MiningDrill || prototype.mining_drill.is_none() {
+            return self.validate_entity_footprint(footprint);
+        }
+
+        footprint.validate()?;
+        for (x, y) in footprint.tiles() {
+            let tile = self
+                .tile_at(x, y)
+                .ok_or(BuildError::OutsideGeneratedChunks { x, y })?;
+            if !tile.collision.walkable {
+                return Err(BuildError::TileBlocked { x, y });
+            }
+        }
+
+        Ok(())
+    }
+
     fn tile_at_mut(&mut self, x: i32, y: i32) -> Option<&mut TileCell> {
         let (coord, index) = chunk_coord_and_tile_index(x, y);
 
@@ -987,6 +1285,7 @@ impl EntityStore {
             }],
             placed_entities: BTreeMap::new(),
             entity_inventories: BTreeMap::new(),
+            burner_mining_drills: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
             next_entity_id: 2,
         }
@@ -1012,34 +1311,55 @@ impl EntityStore {
             .ok_or(ContainerError::NotContainer(entity_id))
     }
 
-    fn reserve_entity(
+    fn burner_drill_state(
+        &self,
+        entity_id: u64,
+    ) -> Result<&BurnerMiningDrillState, BurnerDrillError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(BurnerDrillError::MissingEntity(entity_id));
+        }
+
+        self.burner_mining_drills
+            .get(&entity_id)
+            .ok_or(BurnerDrillError::NotBurnerDrill(entity_id))
+    }
+
+    fn burner_drill_state_mut(
         &mut self,
-        prototype_id: EntityPrototypeId,
-        x: i32,
-        y: i32,
-        direction: Direction,
-        footprint: EntityFootprint,
-        inventory_slot_count: Option<usize>,
-    ) -> u64 {
+        entity_id: u64,
+    ) -> Result<&mut BurnerMiningDrillState, BurnerDrillError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(BurnerDrillError::MissingEntity(entity_id));
+        }
+
+        self.burner_mining_drills
+            .get_mut(&entity_id)
+            .ok_or(BurnerDrillError::NotBurnerDrill(entity_id))
+    }
+
+    fn reserve_entity(&mut self, reservation: EntityReservation) -> u64 {
         let id = self.next_entity_id;
         self.next_entity_id += 1;
         self.occupancy
-            .reserve_footprint(id, &footprint)
+            .reserve_footprint(id, &reservation.footprint)
             .expect("validated footprint reservation should succeed");
         self.placed_entities.insert(
             id,
             PlacedEntity {
                 id,
-                prototype_id,
-                x,
-                y,
-                direction,
-                footprint,
+                prototype_id: reservation.prototype_id,
+                x: reservation.x,
+                y: reservation.y,
+                direction: reservation.direction,
+                footprint: reservation.footprint,
             },
         );
-        if let Some(slot_count) = inventory_slot_count {
+        if let Some(slot_count) = reservation.inventory_slot_count {
             self.entity_inventories
                 .insert(id, Inventory::with_slot_count(slot_count));
+        }
+        if let Some(state) = reservation.burner_mining_drill {
+            self.burner_mining_drills.insert(id, state);
         }
         id
     }
@@ -1068,6 +1388,7 @@ impl EntityStore {
     fn remove_placed_entity(&mut self, entity_id: u64) -> Option<PlacedEntity> {
         let entity = self.placed_entities.remove(&entity_id)?;
         self.entity_inventories.remove(&entity_id);
+        self.burner_mining_drills.remove(&entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);
         Some(entity)
@@ -1576,6 +1897,124 @@ fn item_stack_size(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u16
         .map(|prototype| prototype.stack_size)
 }
 
+fn fuel_value_joules(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u64> {
+    prototypes
+        .items
+        .get(item_id.index())
+        .filter(|prototype| prototype.id == item_id)
+        .and_then(|prototype| prototype.fuel_value_joules)
+}
+
+fn burner_mining_drill_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<BurnerMiningDrillState> {
+    if prototype.entity_kind != EntityKind::MiningDrill {
+        return None;
+    }
+
+    let burner = prototype.burner.as_ref()?;
+    let mining_drill = prototype.mining_drill.as_ref()?;
+
+    Some(BurnerMiningDrillState {
+        energy: BurnerEnergy {
+            fuel_slot: None,
+            energy_remaining_joules: 0.0,
+            energy_usage_watts: burner.energy_usage_watts as f64,
+        },
+        mining_progress_ticks: 0,
+        mining_required_ticks: mining_drill.ticks_per_item,
+        resource_target: None,
+        output_slot: None,
+    })
+}
+
+fn first_resource_in_mining_area(
+    world: &WorldSim,
+    footprint: &EntityFootprint,
+    mining_drill: &factory_data::MiningDrillPrototype,
+) -> Option<(ManualMiningTarget, ItemId)> {
+    let width = mining_drill.mining_area.x.min(footprint.width).max(0);
+    let height = mining_drill.mining_area.y.min(footprint.height).max(0);
+
+    for y in footprint.y..footprint.y + height {
+        for x in footprint.x..footprint.x + width {
+            let Some(resource) = world.tile_at(x, y).and_then(|tile| tile.resource) else {
+                continue;
+            };
+            return Some((ManualMiningTarget { x, y }, resource.resource_item));
+        }
+    }
+
+    None
+}
+
+fn burner_fuel_slot_can_accept(
+    catalog: &PrototypeCatalog,
+    fuel_slot: Option<ItemStack>,
+    stack: ItemStack,
+) -> bool {
+    if fuel_value_joules(catalog, stack.item_id).is_none() {
+        return false;
+    }
+
+    let Some(stack_size) = item_stack_size(catalog, stack.item_id) else {
+        return false;
+    };
+
+    match fuel_slot {
+        None => stack.count <= stack_size,
+        Some(existing) if existing.item_id == stack.item_id => {
+            u32::from(existing.count) + u32::from(stack.count) <= u32::from(stack_size)
+        }
+        Some(_) => false,
+    }
+}
+
+fn output_slot_can_accept(
+    catalog: &PrototypeCatalog,
+    output_slot: Option<ItemStack>,
+    item_id: ItemId,
+    count: u16,
+) -> bool {
+    let Some(stack_size) = item_stack_size(catalog, item_id) else {
+        return false;
+    };
+
+    match output_slot {
+        None => count <= stack_size,
+        Some(existing) if existing.item_id == item_id => {
+            u32::from(existing.count) + u32::from(count) <= u32::from(stack_size)
+        }
+        Some(_) => false,
+    }
+}
+
+fn insert_into_single_slot(slot: &mut Option<ItemStack>, stack: ItemStack) {
+    match slot {
+        Some(existing) => existing.count += stack.count,
+        None => *slot = Some(stack),
+    }
+}
+
+fn insert_output_item(slot: &mut Option<ItemStack>, item_id: ItemId, count: u16) {
+    insert_into_single_slot(slot, ItemStack { item_id, count });
+}
+
+fn try_consume_fuel(catalog: &PrototypeCatalog, energy: &mut BurnerEnergy) -> bool {
+    let Some(mut fuel_stack) = energy.fuel_slot else {
+        return false;
+    };
+    let Some(fuel_value) = fuel_value_joules(catalog, fuel_stack.item_id) else {
+        return false;
+    };
+
+    fuel_stack.count -= 1;
+    energy.fuel_slot = (fuel_stack.count > 0).then_some(fuel_stack);
+    energy.energy_remaining_joules += fuel_value as f64;
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2068,6 +2507,187 @@ mod tests {
     }
 
     #[test]
+    fn burner_drill_without_fuel_remains_idle() {
+        let mut sim = Simulation::new_test_world(123);
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, coal);
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        let state = sim
+            .burner_drill_state(entity_id)
+            .expect("burner drill should expose state");
+        assert_eq!(state.energy.energy_remaining_joules, 0.0);
+        assert_eq!(state.mining_progress_ticks, 0);
+        assert_eq!(state.output_slot, None);
+        assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
+    }
+
+    #[test]
+    fn burner_drill_with_coal_mines_output() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, iron_ore);
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        });
+        sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+            .expect("coal should transfer to drill fuel");
+
+        for _ in 0..240 {
+            sim.tick();
+        }
+
+        let state = sim
+            .burner_drill_state(entity_id)
+            .expect("burner drill should expose state");
+        assert_eq!(
+            state.output_slot,
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1,
+            })
+        );
+        assert_eq!(state.mining_progress_ticks, 0);
+        assert_eq!(state.energy.energy_remaining_joules, 3_400_000.0);
+        assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 1));
+    }
+
+    #[test]
+    fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
+        let mut sim = Simulation::new_test_world(123);
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, coal);
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        });
+        sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+            .expect("coal should transfer to drill fuel");
+
+        for _ in 0..1600 {
+            sim.tick();
+        }
+
+        let state = sim
+            .burner_drill_state(entity_id)
+            .expect("burner drill should expose state");
+        assert_eq!(state.energy.fuel_slot, None);
+        assert_eq!(state.energy.energy_remaining_joules, 0.0);
+        assert_eq!(state.output_slot.map(|stack| stack.count), Some(6));
+        assert_eq!(state.mining_progress_ticks, 160);
+
+        sim.tick();
+
+        let state = sim
+            .burner_drill_state(entity_id)
+            .expect("burner drill should expose state");
+        assert_eq!(state.energy.energy_remaining_joules, 0.0);
+        assert_eq!(state.mining_progress_ticks, 160);
+    }
+
+    #[test]
+    fn blocked_burner_drill_output_pauses_without_consuming_fuel() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let coal = item_id(&sim.world.prototypes, "coal");
+        let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, iron_ore);
+        let state = sim
+            .entities
+            .burner_drill_state_mut(entity_id)
+            .expect("burner drill should expose state");
+        state.energy.fuel_slot = Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        });
+        state.output_slot = Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        });
+
+        for _ in 0..10 {
+            sim.tick();
+        }
+
+        let state = sim
+            .burner_drill_state(entity_id)
+            .expect("burner drill should expose state");
+        assert_eq!(
+            state.energy.fuel_slot,
+            Some(ItemStack {
+                item_id: coal,
+                count: 1,
+            })
+        );
+        assert_eq!(state.energy.energy_remaining_joules, 0.0);
+        assert_eq!(state.mining_progress_ticks, 0);
+        assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
+    }
+
+    #[test]
+    fn invalid_burner_drill_fuel_is_rejected() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+        let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        });
+
+        assert_eq!(
+            sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0),
+            Err(BurnerDrillError::InvalidFuel(iron_ore))
+        );
+        assert_eq!(
+            sim.burner_drill_state(entity_id)
+                .expect("burner drill should expose state")
+                .energy
+                .fuel_slot,
+            None
+        );
+        assert_eq!(
+            sim.player_inventory.slots[0],
+            Some(ItemStack {
+                item_id: iron_ore,
+                count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn burner_drill_hash_is_deterministic_for_same_seed_and_inputs() {
+        let mut a = Simulation::new_test_world(123);
+        let mut b = Simulation::new_test_world(123);
+        let coal = item_id(&a.world.prototypes, "coal");
+        let a_entity = place_burner_drill_on_resource(&mut a, coal).0;
+        let b_entity = place_burner_drill_on_resource(&mut b, coal).0;
+
+        for (sim, entity_id) in [(&mut a, a_entity), (&mut b, b_entity)] {
+            sim.player_inventory = Inventory::player();
+            sim.player_inventory.slots[0] = Some(ItemStack {
+                item_id: coal,
+                count: 2,
+            });
+            sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+                .expect("coal should transfer to drill fuel");
+        }
+
+        for _ in 0..1000 {
+            a.tick();
+            b.tick();
+        }
+
+        assert_eq!(a.state_hash(), b.state_hash());
+    }
+
+    #[test]
     fn non_container_entities_reject_inventory_access() {
         let mut sim = Simulation::new_test_world(123);
         let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
@@ -2478,6 +3098,31 @@ mod tests {
         }
 
         panic!("expected at least one resource tile for {resource_item:?}");
+    }
+
+    fn place_burner_drill_on_resource(
+        sim: &mut Simulation,
+        resource_item: ItemId,
+    ) -> (u64, i32, i32, u32) {
+        let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+        for (x, y) in all_tile_coords(&sim.world) {
+            let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
+                continue;
+            };
+            if resource.resource_item != resource_item {
+                continue;
+            }
+            if sim.can_place_entity(drill, x, y, Direction::North).is_err() {
+                continue;
+            }
+
+            let entity_id = sim
+                .place_entity(drill, x, y, Direction::North)
+                .expect("validated drill target should be placeable");
+            return (entity_id, x, y, resource.amount);
+        }
+
+        panic!("expected placeable resource tile for burner drill");
     }
 
     fn resource_amount_at(world: &WorldSim, x: i32, y: i32) -> Option<u32> {

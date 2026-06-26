@@ -43,6 +43,7 @@ pub struct ItemPrototype {
     pub id: ItemId,
     pub name: String,
     pub stack_size: u16,
+    pub fuel_value_joules: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -63,6 +64,19 @@ pub struct EntityPrototype {
     pub size: IVec2,
     pub collision_mask: CollisionMask,
     pub inventory_slot_count: Option<usize>,
+    pub burner: Option<BurnerPrototype>,
+    pub mining_drill: Option<MiningDrillPrototype>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+pub struct BurnerPrototype {
+    pub energy_usage_watts: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MiningDrillPrototype {
+    pub mining_area: IVec2,
+    pub ticks_per_item: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -170,6 +184,7 @@ impl PrototypeCatalog {
                     id,
                     name: item.name,
                     stack_size: item.stack_size,
+                    fuel_value_joules: item.fuel_value_joules,
                 }
             })
             .collect();
@@ -208,6 +223,16 @@ impl PrototypeCatalog {
                     size: IVec2::new(entity.size.x, entity.size.y),
                     collision_mask: resolve_collision_mask(name, entity.collision_mask)?,
                     inventory_slot_count: entity.inventory_slot_count,
+                    burner: entity.burner,
+                    mining_drill: entity
+                        .mining_drill
+                        .map(|mining_drill| MiningDrillPrototype {
+                            mining_area: IVec2::new(
+                                mining_drill.mining_area.x,
+                                mining_drill.mining_area.y,
+                            ),
+                            ticks_per_item: mining_drill.ticks_per_item,
+                        }),
                 })
             })
             .collect::<Result<_, PrototypeLoadError>>()?;
@@ -390,6 +415,7 @@ struct RawItemPrototype {
     id: u16,
     name: String,
     stack_size: u16,
+    fuel_value_joules: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -410,6 +436,14 @@ struct RawEntityPrototype {
     size: RawIVec2,
     collision_mask: RawCollisionMask,
     inventory_slot_count: Option<usize>,
+    burner: Option<BurnerPrototype>,
+    mining_drill: Option<RawMiningDrillPrototype>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawMiningDrillPrototype {
+    mining_area: RawIVec2,
+    ticks_per_item: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -625,6 +659,53 @@ mod tests {
             .expect("base catalog should contain chest entity");
 
         assert_eq!(chest.inventory_slot_count, Some(16));
+    }
+
+    #[test]
+    fn coal_loads_fuel_value() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let coal = catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == "coal")
+            .expect("base catalog should contain coal");
+        let iron_ore = catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == "iron_ore")
+            .expect("base catalog should contain iron ore");
+
+        assert_eq!(coal.fuel_value_joules, Some(4_000_000));
+        assert_eq!(iron_ore.fuel_value_joules, None);
+    }
+
+    #[test]
+    fn burner_mining_drill_loads_energy_and_mining_metadata() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let drill = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == "burner_mining_drill")
+            .expect("base catalog should contain burner mining drill");
+
+        assert_eq!(
+            drill
+                .burner
+                .as_ref()
+                .map(|burner| burner.energy_usage_watts),
+            Some(150_000)
+        );
+        assert_eq!(
+            drill.mining_drill.as_ref().map(|mining| mining.mining_area),
+            Some(IVec2::new(2, 2))
+        );
+        assert_eq!(
+            drill
+                .mining_drill
+                .as_ref()
+                .map(|mining| mining.ticks_per_item),
+            Some(240)
+        );
     }
 
     #[test]

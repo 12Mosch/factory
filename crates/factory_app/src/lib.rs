@@ -5,8 +5,9 @@ use bevy::time::Fixed;
 use bevy::window::PrimaryWindow;
 use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, TileId};
 use factory_sim::{
-    CHUNK_SIZE, ContainerError, Direction, ItemStack, ManualMiningTarget, PlayerState,
-    ResourceCell, Simulation,
+    BURNER_MINING_DRILL_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BurnerDrillError,
+    CHUNK_SIZE, ContainerError, Direction, EntityFootprint, ItemStack, ManualMiningTarget,
+    PlayerState, ResourceCell, Simulation,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,8 +22,11 @@ const MIN_CAMERA_SCALE: f32 = 0.35;
 const MAX_CAMERA_SCALE: f32 = 8.0;
 const INITIAL_CAMERA_SCALE: f32 = 2.0;
 const CHEST_SPRITE_SIZE: f32 = TILE_SIZE * 0.9;
+const BURNER_DRILL_SPRITE_PADDING: f32 = TILE_SIZE * 0.12;
 const SLOT_BUTTON_WIDTH: f32 = 58.0;
 const SLOT_BUTTON_HEIGHT: f32 = 38.0;
+const MACHINE_BAR_WIDTH: f32 = 180.0;
+const MACHINE_BAR_HEIGHT: f32 = 10.0;
 
 pub struct FactoryAppPlugin;
 
@@ -52,12 +56,21 @@ pub struct OpenContainer {
 pub enum InventoryPanel {
     Player,
     Container,
+    BurnerFuel,
+    BurnerOutput,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContainerSlotClickError {
     NoOpenContainer,
     Transfer(ContainerError),
+    BurnerDrill(BurnerDrillError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenMachineKind {
+    Chest,
+    BurnerDrill,
 }
 
 #[derive(Component)]
@@ -93,7 +106,10 @@ struct ManualMiningProgressBarBackground;
 struct ManualMiningProgressBarFill;
 
 #[derive(Component)]
-struct ContainerWindowRoot;
+struct ContainerWindowRoot {
+    entity_id: u64,
+    kind: OpenMachineKind,
+}
 
 #[derive(Component)]
 struct ContainerSlotButton {
@@ -106,6 +122,12 @@ struct ContainerSlotText {
     panel: InventoryPanel,
     slot_index: usize,
 }
+
+#[derive(Component)]
+struct BurnerEnergyText;
+
+#[derive(Component)]
+struct BurnerProgressFill;
 
 type CursorCameraFilter = (With<Camera2d>, Without<CursorTileHighlight>);
 type ManualMiningProgressBarBackgroundFilter = (
@@ -189,6 +211,7 @@ impl Plugin for FactoryAppPlugin {
                     sync_container_window,
                     handle_container_slot_clicks,
                     update_container_slot_text,
+                    update_burner_drill_indicators,
                 ),
             );
     }
@@ -508,15 +531,19 @@ fn handle_debug_chest_placement(
     let Some(keyboard) = keyboard else {
         return;
     };
-    if !keyboard.just_pressed(KeyCode::KeyC) {
+    let prototype_name = if keyboard.just_pressed(KeyCode::KeyC) {
+        "chest"
+    } else if keyboard.just_pressed(KeyCode::KeyB) {
+        "burner_mining_drill"
+    } else {
         return;
-    }
+    };
 
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
         return;
     };
-    let chest = find_entity_prototype_id(&sim.sim.world.prototypes, "chest");
-    let _ = sim.sim.place_entity(chest, x, y, Direction::North);
+    let prototype = find_entity_prototype_id(&sim.sim.world.prototypes, prototype_name);
+    let _ = sim.sim.place_entity(prototype, x, y, Direction::North);
 }
 
 fn handle_container_open_input(
@@ -575,28 +602,32 @@ fn sync_placed_entity_rendering(
     let mut seen = BTreeSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
-        if is_chest_entity(&sim.sim, marker.entity_id) {
+        if let Some((color, size)) = renderable_entity_style(&sim.sim, marker.entity_id) {
             let placed = sim
                 .sim
                 .entities
                 .placed_entity(marker.entity_id)
-                .expect("validated chest entity should still be placed");
+                .expect("validated renderable entity should still be placed");
             seen.insert(marker.entity_id);
-            transform.translation = tile_translation(placed.x, placed.y, transform.translation.z);
-            sprite.color = chest_color();
+            transform.translation = entity_translation(&placed.footprint, transform.translation.z);
+            sprite.color = color;
+            sprite.custom_size = Some(size);
         } else {
             commands.entity(entity).despawn();
         }
     }
 
     for placed in sim.sim.entities.placed_entities() {
-        if seen.contains(&placed.id) || !is_chest_entity(&sim.sim, placed.id) {
+        let Some((color, size)) = renderable_entity_style(&sim.sim, placed.id) else {
+            continue;
+        };
+        if seen.contains(&placed.id) {
             continue;
         }
 
         commands.spawn((
-            Sprite::from_color(chest_color(), Vec2::splat(CHEST_SPRITE_SIZE)),
-            Transform::from_translation(tile_translation(placed.x, placed.y, 3.0)),
+            Sprite::from_color(color, size),
+            Transform::from_translation(entity_translation(&placed.footprint, 3.0)),
             PlacedEntitySprite {
                 entity_id: placed.id,
             },
@@ -608,22 +639,37 @@ fn sync_container_window(
     mut commands: Commands,
     sim: Res<SimResource>,
     mut open_container: ResMut<OpenContainer>,
-    roots: Query<Entity, With<ContainerWindowRoot>>,
+    roots: Query<(Entity, &ContainerWindowRoot)>,
 ) {
-    if let Some(entity_id) = open_container.entity_id
-        && sim.sim.entity_inventory(entity_id).is_err()
-    {
+    let open_kind = open_container
+        .entity_id
+        .and_then(|entity_id| open_machine_kind(&sim.sim, entity_id));
+    if open_container.entity_id.is_some() && open_kind.is_none() {
         open_container.entity_id = None;
     }
 
     if open_container.entity_id.is_none() {
-        for entity in &roots {
+        for (entity, _) in &roots {
             commands.entity(entity).despawn();
         }
         return;
     }
 
-    if !roots.is_empty() {
+    let entity_id = open_container
+        .entity_id
+        .expect("open container should be set after validation");
+    let kind = open_kind.expect("open machine kind should be known after validation");
+
+    for (entity, root) in &roots {
+        if root.entity_id != entity_id || root.kind != kind {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    if roots
+        .iter()
+        .any(|(_, root)| root.entity_id == entity_id && root.kind == kind)
+    {
         return;
     }
 
@@ -640,72 +686,172 @@ fn sync_container_window(
             },
             BackgroundColor(Color::srgba(0.03, 0.03, 0.035, 0.88)),
             GlobalZIndex(1100),
-            ContainerWindowRoot,
+            ContainerWindowRoot { entity_id, kind },
         ))
         .with_children(|root| {
-            root.spawn((
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(6.0),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|panel| {
-                panel.spawn((
-                    Text::new("Player"),
-                    TextFont::from_font_size(14.0),
-                    TextColor(Color::WHITE),
-                ));
-                panel
-                    .spawn((
-                        Node {
-                            width: Val::Px(500.0),
-                            flex_wrap: FlexWrap::Wrap,
-                            row_gap: Val::Px(4.0),
-                            column_gap: Val::Px(4.0),
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|grid| {
-                        for slot_index in 0..factory_sim::PLAYER_INVENTORY_SLOT_COUNT {
-                            spawn_slot_button(grid, InventoryPanel::Player, slot_index);
-                        }
-                    });
-            });
+            spawn_player_inventory_panel(root);
+            match kind {
+                OpenMachineKind::Chest => spawn_chest_panel(root),
+                OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
+            }
+        });
+}
 
-            root.spawn((
+fn spawn_player_inventory_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Player"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel
+            .spawn((
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(6.0),
+                    width: Val::Px(500.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    row_gap: Val::Px(4.0),
+                    column_gap: Val::Px(4.0),
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
             ))
-            .with_children(|panel| {
-                panel.spawn((
-                    Text::new("Chest"),
-                    TextFont::from_font_size(14.0),
-                    TextColor(Color::WHITE),
-                ));
-                panel
-                    .spawn((
-                        Node {
-                            width: Val::Px(244.0),
-                            flex_wrap: FlexWrap::Wrap,
-                            row_gap: Val::Px(4.0),
-                            column_gap: Val::Px(4.0),
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|grid| {
-                        for slot_index in 0..16 {
-                            spawn_slot_button(grid, InventoryPanel::Container, slot_index);
-                        }
-                    });
+            .with_children(|grid| {
+                for slot_index in 0..factory_sim::PLAYER_INVENTORY_SLOT_COUNT {
+                    spawn_slot_button(grid, InventoryPanel::Player, slot_index);
+                }
             });
+    });
+}
+
+fn spawn_chest_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Chest"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel
+            .spawn((
+                Node {
+                    width: Val::Px(244.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    row_gap: Val::Px(4.0),
+                    column_gap: Val::Px(4.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|grid| {
+                for slot_index in 0..16 {
+                    spawn_slot_button(grid, InventoryPanel::Container, slot_index);
+                }
+            });
+    });
+}
+
+fn spawn_burner_drill_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(220.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Burner Drill"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel.spawn((
+            Text::new("Energy: 0 J"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            BurnerEnergyText,
+        ));
+        panel
+            .spawn((
+                Node {
+                    width: Val::Px(MACHINE_BAR_WIDTH),
+                    height: Val::Px(MACHINE_BAR_HEIGHT),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.10, 0.10, 0.11, 0.96)),
+            ))
+            .with_child((
+                Node {
+                    width: Val::Px(0.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.33, 0.74, 0.48)),
+                BurnerProgressFill,
+            ));
+        panel
+            .spawn((
+                Node {
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|slots| {
+                spawn_labeled_slot(
+                    slots,
+                    "Fuel",
+                    InventoryPanel::BurnerFuel,
+                    BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
+                );
+                spawn_labeled_slot(
+                    slots,
+                    "Output",
+                    InventoryPanel::BurnerOutput,
+                    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX,
+                );
+            });
+    });
+}
+
+fn spawn_labeled_slot(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    panel: InventoryPanel,
+    slot_index: usize,
+) {
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(3.0),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ))
+        .with_children(|slot| {
+            slot.spawn((
+                Text::new(label),
+                TextFont::from_font_size(11.0),
+                TextColor(Color::srgb(0.78, 0.80, 0.78)),
+            ));
+            spawn_slot_button(slot, panel, slot_index);
         });
 }
 
@@ -763,17 +909,67 @@ fn update_container_slot_text(
     let container_inventory = open_container
         .entity_id
         .and_then(|entity_id| sim.sim.entity_inventory(entity_id).ok());
+    let burner_drill_state = open_container
+        .entity_id
+        .and_then(|entity_id| sim.sim.burner_drill_state(entity_id).ok());
 
     for (marker, mut text) in &mut texts {
-        let inventory = match marker.panel {
-            InventoryPanel::Player => Some(&sim.sim.player_inventory),
-            InventoryPanel::Container => container_inventory,
+        let stack = match marker.panel {
+            InventoryPanel::Player => sim
+                .sim
+                .player_inventory
+                .slots
+                .get(marker.slot_index)
+                .and_then(|slot| *slot),
+            InventoryPanel::Container => container_inventory
+                .and_then(|inventory| inventory.slots.get(marker.slot_index))
+                .and_then(|slot| *slot),
+            InventoryPanel::BurnerFuel => burner_drill_state.and_then(|state| {
+                (marker.slot_index == BURNER_MINING_DRILL_FUEL_SLOT_INDEX)
+                    .then_some(state.energy.fuel_slot)
+                    .flatten()
+            }),
+            InventoryPanel::BurnerOutput => burner_drill_state.and_then(|state| {
+                (marker.slot_index == BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX)
+                    .then_some(state.output_slot)
+                    .flatten()
+            }),
         };
-        text.0 = inventory
-            .and_then(|inventory| inventory.slots.get(marker.slot_index))
-            .and_then(|slot| *slot)
+        text.0 = stack
             .map(|stack| format_item_stack(stack, &sim.sim.world.prototypes))
             .unwrap_or_default();
+    }
+}
+
+fn update_burner_drill_indicators(
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
+    mut progress_fills: Query<&mut Node, With<BurnerProgressFill>>,
+) {
+    let state = open_container
+        .entity_id
+        .and_then(|entity_id| sim.sim.burner_drill_state(entity_id).ok());
+
+    for mut text in &mut energy_texts {
+        text.0 = state
+            .map(|state| {
+                format!(
+                    "Energy: {} J",
+                    state.energy.energy_remaining_joules.max(0.0).round() as u64
+                )
+            })
+            .unwrap_or_else(|| "Energy: 0 J".to_string());
+    }
+
+    for mut node in &mut progress_fills {
+        let progress = state
+            .map(|state| {
+                state.mining_progress_ticks as f32 / state.mining_required_ticks.max(1) as f32
+            })
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        node.width = Val::Px(MACHINE_BAR_WIDTH * progress);
     }
 }
 
@@ -866,8 +1062,20 @@ fn tile_translation(x: i32, y: i32, z: f32) -> Vec3 {
     )
 }
 
+fn entity_translation(footprint: &EntityFootprint, z: f32) -> Vec3 {
+    Vec3::new(
+        footprint.x as f32 * TILE_SIZE + footprint.width as f32 * TILE_SIZE * 0.5,
+        footprint.y as f32 * TILE_SIZE + footprint.height as f32 * TILE_SIZE * 0.5,
+        z,
+    )
+}
+
 fn chest_color() -> Color {
     Color::srgb(0.58, 0.42, 0.23)
+}
+
+fn burner_drill_color() -> Color {
+    Color::srgb(0.40, 0.43, 0.40)
 }
 
 fn manual_mining_bar_translation(x: i32, y: i32, z: f32) -> Vec3 {
@@ -931,7 +1139,9 @@ pub fn opened_container_after_world_click(
     let (x, y) = cursor_tile?;
     let entity_id = sim.entities.occupancy().entity_at(x, y)?;
 
-    is_chest_entity(sim, entity_id).then_some(entity_id)
+    open_machine_kind(sim, entity_id)
+        .is_some()
+        .then_some(entity_id)
 }
 
 pub fn transfer_open_container_slot(
@@ -943,21 +1153,65 @@ pub fn transfer_open_container_slot(
     let entity_id = open_entity_id.ok_or(ContainerSlotClickError::NoOpenContainer)?;
 
     match panel {
-        InventoryPanel::Player => sim.transfer_player_slot_to_entity(entity_id, slot_index),
+        InventoryPanel::Player => {
+            if is_burner_drill_entity(sim, entity_id) {
+                return sim
+                    .transfer_player_slot_to_burner_drill_fuel(entity_id, slot_index)
+                    .map_err(ContainerSlotClickError::BurnerDrill);
+            }
+            sim.transfer_player_slot_to_entity(entity_id, slot_index)
+        }
         InventoryPanel::Container => sim.transfer_entity_slot_to_player(entity_id, slot_index),
+        InventoryPanel::BurnerFuel => {
+            return sim
+                .transfer_burner_drill_fuel_to_player(entity_id)
+                .map_err(ContainerSlotClickError::BurnerDrill);
+        }
+        InventoryPanel::BurnerOutput => {
+            return sim
+                .transfer_burner_drill_output_to_player(entity_id)
+                .map_err(ContainerSlotClickError::BurnerDrill);
+        }
     }
     .map_err(ContainerSlotClickError::Transfer)
 }
 
-fn is_chest_entity(sim: &Simulation, entity_id: u64) -> bool {
-    let Some(entity) = sim.entities.placed_entity(entity_id) else {
-        return false;
-    };
-    sim.world
+fn is_burner_drill_entity(sim: &Simulation, entity_id: u64) -> bool {
+    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::BurnerDrill)
+}
+
+fn open_machine_kind(sim: &Simulation, entity_id: u64) -> Option<OpenMachineKind> {
+    let entity = sim.entities.placed_entity(entity_id)?;
+    let prototype = sim
+        .world
         .prototypes
         .entities
-        .get(entity.prototype_id.index())
-        .is_some_and(|prototype| prototype.entity_kind == EntityKind::Chest)
+        .get(entity.prototype_id.index())?;
+
+    if prototype.entity_kind == EntityKind::Chest {
+        Some(OpenMachineKind::Chest)
+    } else if prototype.entity_kind == EntityKind::MiningDrill
+        && sim.burner_drill_state(entity_id).is_ok()
+    {
+        Some(OpenMachineKind::BurnerDrill)
+    } else {
+        None
+    }
+}
+
+fn renderable_entity_style(sim: &Simulation, entity_id: u64) -> Option<(Color, Vec2)> {
+    let placed = sim.entities.placed_entity(entity_id)?;
+    match open_machine_kind(sim, entity_id) {
+        Some(OpenMachineKind::Chest) => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
+        Some(OpenMachineKind::BurnerDrill) => Some((
+            burner_drill_color(),
+            Vec2::new(
+                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            ),
+        )),
+        None => None,
+    }
 }
 
 fn format_item_stack(stack: ItemStack, catalog: &PrototypeCatalog) -> String {
