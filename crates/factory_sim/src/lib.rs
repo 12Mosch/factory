@@ -186,6 +186,14 @@ pub struct AssemblingMachineState {
     pub crafting_speed_denominator: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AssemblerIngredientStatus {
+    pub item: ItemId,
+    pub required: u32,
+    pub available: u32,
+    pub missing: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BeltSegment {
     pub dir: Direction,
@@ -272,6 +280,7 @@ pub enum AssemblerError {
     NotAssembler(u64),
     MissingRecipe(RecipeId),
     InvalidRecipe(RecipeId),
+    RecipeChangeRequiresEmpty { entity_id: u64 },
     InvalidInput(ItemId),
     InvalidSlot { slot_index: usize },
     EmptySlot { slot_index: usize },
@@ -1267,6 +1276,13 @@ impl Simulation {
         }
 
         let state = self.entities.assembler_state_mut(entity_id)?;
+        if state.selected_recipe == Some(recipe_id) {
+            return Ok(());
+        }
+        if !assembler_is_empty_for_recipe_change(state) {
+            return Err(AssemblerError::RecipeChangeRequiresEmpty { entity_id });
+        }
+
         state.selected_recipe = Some(recipe_id);
         state.crafting_progress_ticks = 0;
         state.crafting_required_ticks = assembler_required_ticks(
@@ -1276,6 +1292,58 @@ impl Simulation {
         );
 
         Ok(())
+    }
+
+    pub fn can_select_assembler_recipe(
+        &self,
+        entity_id: u64,
+        recipe_id: RecipeId,
+    ) -> Result<bool, AssemblerError> {
+        let recipe = self
+            .world
+            .prototypes
+            .recipes
+            .get(recipe_id.index())
+            .filter(|recipe| recipe.id == recipe_id)
+            .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
+        if recipe.category != CraftingCategory::Crafting {
+            return Err(AssemblerError::InvalidRecipe(recipe_id));
+        }
+
+        let state = self.entities.assembler_state(entity_id)?;
+        Ok(state.selected_recipe == Some(recipe_id) || assembler_is_empty_for_recipe_change(state))
+    }
+
+    pub fn assembler_ingredient_status(
+        &self,
+        entity_id: u64,
+    ) -> Result<Vec<AssemblerIngredientStatus>, AssemblerError> {
+        let state = self.entities.assembler_state(entity_id)?;
+        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, state) else {
+            return if let Some(recipe_id) = state.selected_recipe {
+                Err(AssemblerError::MissingRecipe(recipe_id))
+            } else {
+                Ok(Vec::new())
+            };
+        };
+        if recipe.category != CraftingCategory::Crafting {
+            return Err(AssemblerError::InvalidRecipe(recipe.id));
+        }
+
+        Ok(recipe
+            .ingredients
+            .iter()
+            .map(|ingredient| {
+                let required = u32::from(ingredient.amount);
+                let available = state.input_inventory.count(ingredient.item);
+                AssemblerIngredientStatus {
+                    item: ingredient.item,
+                    required,
+                    available,
+                    missing: required.saturating_sub(available),
+                }
+            })
+            .collect())
     }
 
     pub fn transfer_player_slot_to_assembler_input(
@@ -1589,13 +1657,7 @@ impl Simulation {
                 .assembler_state(entity_id)
                 .ok()
                 .and_then(|state| {
-                    let recipe_id = state.selected_recipe?;
-                    let recipe = self
-                        .world
-                        .prototypes
-                        .recipes
-                        .get(recipe_id.index())
-                        .filter(|recipe| recipe.id == recipe_id)?;
+                    let recipe = selected_assembler_recipe(&self.world.prototypes, state)?;
                     Some((
                         recipe,
                         assembler_required_ticks(
@@ -3300,6 +3362,23 @@ fn assembler_required_ticks(
         / numerator
 }
 
+fn assembler_is_empty_for_recipe_change(state: &AssemblingMachineState) -> bool {
+    state.crafting_progress_ticks == 0
+        && state.input_inventory.slots.iter().all(Option::is_none)
+        && state.output_inventory.slots.iter().all(Option::is_none)
+}
+
+fn selected_assembler_recipe<'a>(
+    catalog: &'a PrototypeCatalog,
+    state: &AssemblingMachineState,
+) -> Option<&'a factory_data::RecipePrototype> {
+    let recipe_id = state.selected_recipe?;
+    catalog
+        .recipes
+        .get(recipe_id.index())
+        .filter(|recipe| recipe.id == recipe_id)
+}
+
 fn assembler_input_can_accept(
     catalog: &PrototypeCatalog,
     state: &AssemblingMachineState,
@@ -4062,6 +4141,194 @@ mod tests {
                 .expect("assembler should expose state")
                 .selected_recipe,
             None
+        );
+    }
+
+    #[test]
+    fn selecting_different_assembler_recipe_on_empty_assembler_succeeds() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let gear_recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let cable_recipe = recipe_id(&sim.world.prototypes, "copper_cable");
+
+        sim.select_assembler_recipe(assembler_id, gear_recipe)
+            .expect("initial recipe should be accepted");
+        sim.select_assembler_recipe(assembler_id, cable_recipe)
+            .expect("empty assembler should allow recipe changes");
+
+        let state = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state");
+        assert_eq!(state.selected_recipe, Some(cable_recipe));
+        assert_eq!(state.crafting_progress_ticks, 0);
+        assert_eq!(state.crafting_required_ticks, 60);
+    }
+
+    #[test]
+    fn selecting_same_assembler_recipe_while_non_empty_preserves_progress() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let gear_recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+
+        sim.select_assembler_recipe(assembler_id, gear_recipe)
+            .expect("initial recipe should be accepted");
+        {
+            let state = sim
+                .entities
+                .assembler_state_mut(assembler_id)
+                .expect("assembler should expose mutable state");
+            state.input_inventory.slots[0] = Some(ItemStack {
+                item_id: iron_plate,
+                count: 1,
+            });
+            state.crafting_progress_ticks = 17;
+        }
+        let before = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state")
+            .clone();
+
+        sim.select_assembler_recipe(assembler_id, gear_recipe)
+            .expect("same recipe selection should be idempotent");
+
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state"),
+            &before
+        );
+    }
+
+    #[test]
+    fn selecting_different_assembler_recipe_with_input_items_fails_without_mutation() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let gear_recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let cable_recipe = recipe_id(&sim.world.prototypes, "copper_cable");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+
+        sim.select_assembler_recipe(assembler_id, gear_recipe)
+            .expect("initial recipe should be accepted");
+        sim.entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .input_inventory
+            .slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+        let before = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state")
+            .clone();
+
+        assert_eq!(
+            sim.select_assembler_recipe(assembler_id, cable_recipe),
+            Err(AssemblerError::RecipeChangeRequiresEmpty {
+                entity_id: assembler_id
+            })
+        );
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state"),
+            &before
+        );
+    }
+
+    #[test]
+    fn selecting_different_assembler_recipe_with_output_items_fails_without_mutation() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let gear_recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let cable_recipe = recipe_id(&sim.world.prototypes, "copper_cable");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+        sim.select_assembler_recipe(assembler_id, gear_recipe)
+            .expect("initial recipe should be accepted");
+        sim.entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .output_inventory
+            .slots[0] = Some(ItemStack {
+            item_id: iron_gear_wheel,
+            count: 1,
+        });
+        let before = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state")
+            .clone();
+
+        assert_eq!(
+            sim.select_assembler_recipe(assembler_id, cable_recipe),
+            Err(AssemblerError::RecipeChangeRequiresEmpty {
+                entity_id: assembler_id
+            })
+        );
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state"),
+            &before
+        );
+    }
+
+    #[test]
+    fn selecting_different_assembler_recipe_with_progress_fails_without_mutation() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let gear_recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let cable_recipe = recipe_id(&sim.world.prototypes, "copper_cable");
+
+        sim.select_assembler_recipe(assembler_id, gear_recipe)
+            .expect("initial recipe should be accepted");
+        sim.entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .crafting_progress_ticks = 1;
+        let before = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state")
+            .clone();
+
+        assert_eq!(
+            sim.select_assembler_recipe(assembler_id, cable_recipe),
+            Err(AssemblerError::RecipeChangeRequiresEmpty {
+                entity_id: assembler_id
+            })
+        );
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state"),
+            &before
+        );
+    }
+
+    #[test]
+    fn assembler_ingredient_status_reports_partial_ingredients() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+
+        sim.select_assembler_recipe(assembler_id, recipe)
+            .expect("crafting recipe should be accepted by assembler");
+        sim.entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .input_inventory
+            .slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+
+        assert_eq!(
+            sim.assembler_ingredient_status(assembler_id)
+                .expect("ingredient status should be available"),
+            vec![AssemblerIngredientStatus {
+                item: iron_plate,
+                required: 2,
+                available: 1,
+                missing: 1,
+            }]
         );
     }
 

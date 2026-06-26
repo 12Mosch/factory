@@ -1,11 +1,12 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::{
-    DebugBuildDirection, FactoryAppPlugin, InventoryPanel, SimResource,
-    handle_debug_belt_item_insertion_at_tile, handle_debug_build_action_at_tile,
-    opened_container_after_world_click, transfer_open_container_slot, world_position_to_tile_coord,
+    DebugBuildDirection, FactoryAppPlugin, InventoryPanel, SimResource, crafting_recipe_choices,
+    format_assembler_detail_text, handle_debug_belt_item_insertion_at_tile,
+    handle_debug_build_action_at_tile, opened_container_after_world_click,
+    transfer_open_container_slot, world_position_to_tile_coord,
 };
-use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
+use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
 use std::time::Duration;
 
@@ -197,6 +198,63 @@ fn opening_clicked_assembler_selects_correct_entity() {
         opened_container_after_world_click(&sim, Some((x, y))),
         Some(entity_id)
     );
+}
+
+#[test]
+fn assembler_recipe_choices_are_all_and_only_crafting_recipes() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let choices = crafting_recipe_choices(&catalog);
+    let expected_count = catalog
+        .recipes
+        .iter()
+        .filter(|recipe| recipe.category == CraftingCategory::Crafting)
+        .count();
+
+    assert_eq!(choices.len(), expected_count);
+    assert!(
+        choices
+            .iter()
+            .all(|recipe| recipe.category == CraftingCategory::Crafting)
+    );
+    assert!(
+        catalog
+            .recipes
+            .iter()
+            .filter(|recipe| recipe.category != CraftingCategory::Crafting)
+            .all(|recipe| !choices.iter().any(|choice| choice.id == recipe.id))
+    );
+}
+
+#[test]
+fn assembler_detail_formatting_reports_partial_ingredients() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let recipe = recipe_id_by_name(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id_by_name(&sim.world.prototypes, "iron_plate");
+    let (x, y) = first_buildable_rect(&sim, assembler);
+    let entity_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    sim.select_assembler_recipe(entity_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[2] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 1,
+    });
+    sim.transfer_player_slot_to_assembler_input(entity_id, 2)
+        .expect("partial ingredients should transfer to assembler input");
+
+    let details =
+        format_assembler_detail_text(&sim, entity_id).expect("assembler details should format");
+
+    assert_eq!(details.recipe, "Recipe: Iron Gear Wheel");
+    assert_eq!(
+        details.ingredients,
+        "Ingredients:\nIron Plate: need 2, have 1, missing 1"
+    );
+    assert_eq!(details.products, "Output: Iron Gear Wheel x1");
+    assert_eq!(details.progress, "Progress: 0/60");
 }
 
 #[test]

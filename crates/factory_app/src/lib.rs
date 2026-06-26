@@ -3,13 +3,15 @@ use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
 use bevy::time::Fixed;
 use bevy::window::PrimaryWindow;
-use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId};
+use factory_data::{
+    CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId,
+};
 use factory_sim::{
-    ASSEMBLING_MACHINE_INPUT_SLOT_COUNT, ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT, AssemblerError,
-    BELT_SUBTILES_PER_TILE, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
-    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BurnerDrillError, CHUNK_SIZE, ContainerError, Direction,
-    EntityFootprint, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX,
-    FurnaceError, ItemStack, ManualMiningTarget, PlayerState, ResourceCell, Simulation,
+    AssemblerError, AssemblingMachineState, BELT_SUBTILES_PER_TILE,
+    BURNER_MINING_DRILL_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BurnerDrillError,
+    CHUNK_SIZE, ContainerError, Direction, EntityFootprint, FURNACE_FUEL_SLOT_INDEX,
+    FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX, FurnaceError, ItemStack,
+    ManualMiningTarget, PlayerState, ResourceCell, Simulation,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -185,6 +187,15 @@ struct AssemblerRecipeButton {
 #[derive(Component)]
 struct AssemblerRecipeText;
 
+#[derive(Component)]
+struct AssemblerIngredientsText;
+
+#[derive(Component)]
+struct AssemblerProductsText;
+
+#[derive(Component)]
+struct AssemblerProgressText;
+
 type CursorCameraFilter = (With<Camera2d>, Without<CursorTileHighlight>);
 type ManualMiningProgressBarBackgroundFilter = (
     With<ManualMiningProgressBarBackground>,
@@ -217,6 +228,17 @@ type AssemblerRecipeButtonInteractionQuery<'w, 's> = Query<
     's,
     (&'static Interaction, &'static AssemblerRecipeButton),
     (Changed<Interaction>, With<Button>),
+>;
+type AssemblerDetailTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Text,
+        Has<AssemblerRecipeText>,
+        Has<AssemblerIngredientsText>,
+        Has<AssemblerProductsText>,
+        Has<AssemblerProgressText>,
+    ),
 >;
 
 impl Plugin for FactoryAppPlugin {
@@ -284,7 +306,8 @@ impl Plugin for FactoryAppPlugin {
                 Update,
                 (
                     handle_assembler_recipe_button_clicks,
-                    update_assembler_recipe_text,
+                    update_assembler_detail_text,
+                    update_assembler_recipe_button_colors,
                 ),
             );
     }
@@ -1005,7 +1028,11 @@ fn sync_container_window(
                 OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
                 OpenMachineKind::Furnace => spawn_furnace_panel(root),
                 OpenMachineKind::Assembler => {
-                    spawn_assembler_panel(root, &sim.sim.world.prototypes)
+                    let state = sim
+                        .sim
+                        .assembler_state(entity_id)
+                        .expect("open assembler should expose state");
+                    spawn_assembler_panel(root, &sim.sim.world.prototypes, state)
                 }
             }
         });
@@ -1218,12 +1245,13 @@ fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
 fn spawn_assembler_panel(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     catalog: &PrototypeCatalog,
+    state: &AssemblingMachineState,
 ) {
     root.spawn((
         Node {
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(8.0),
-            width: Val::Px(260.0),
+            width: Val::Px(420.0),
             ..default()
         },
         BackgroundColor(Color::NONE),
@@ -1243,6 +1271,7 @@ fn spawn_assembler_panel(
         panel
             .spawn((
                 Node {
+                    width: Val::Px(420.0),
                     flex_wrap: FlexWrap::Wrap,
                     row_gap: Val::Px(4.0),
                     column_gap: Val::Px(4.0),
@@ -1251,15 +1280,28 @@ fn spawn_assembler_panel(
                 BackgroundColor(Color::NONE),
             ))
             .with_children(|recipes| {
-                for recipe_name in [
-                    "iron_gear_wheel",
-                    "transport_belt",
-                    "automation_science_pack",
-                ] {
-                    let recipe_id = find_recipe_id(catalog, recipe_name);
-                    spawn_assembler_recipe_button(recipes, recipe_id, recipe_name);
+                for recipe in crafting_recipe_choices(catalog) {
+                    spawn_assembler_recipe_button(recipes, recipe.id, &recipe.name);
                 }
             });
+        panel.spawn((
+            Text::new("Ingredients: <none>"),
+            TextFont::from_font_size(11.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            AssemblerIngredientsText,
+        ));
+        panel.spawn((
+            Text::new("Output: <none>"),
+            TextFont::from_font_size(11.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            AssemblerProductsText,
+        ));
+        panel.spawn((
+            Text::new("Progress: 0/0"),
+            TextFont::from_font_size(11.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            AssemblerProgressText,
+        ));
         panel
             .spawn((
                 Node {
@@ -1304,7 +1346,7 @@ fn spawn_assembler_panel(
                         BackgroundColor(Color::NONE),
                     ))
                     .with_children(|slots| {
-                        for slot_index in 0..ASSEMBLING_MACHINE_INPUT_SLOT_COUNT {
+                        for slot_index in 0..state.input_inventory.slots.len() {
                             spawn_slot_button(slots, InventoryPanel::AssemblerInput, slot_index);
                         }
                     });
@@ -1324,7 +1366,7 @@ fn spawn_assembler_panel(
                         BackgroundColor(Color::NONE),
                     ))
                     .with_children(|slots| {
-                        for slot_index in 0..ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT {
+                        for slot_index in 0..state.output_inventory.slots.len() {
                             spawn_slot_button(slots, InventoryPanel::AssemblerOutput, slot_index);
                         }
                     });
@@ -1341,14 +1383,14 @@ fn spawn_assembler_recipe_button(
         .spawn((
             Button,
             Node {
-                width: Val::Px(78.0),
-                height: Val::Px(34.0),
+                width: Val::Px(132.0),
+                height: Val::Px(38.0),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 padding: UiRect::all(Val::Px(3.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.16, 0.18, 0.18, 0.96)),
+            BackgroundColor(assembler_recipe_button_normal_color()),
             AssemblerRecipeButton { recipe_id },
         ))
         .with_child((
@@ -1576,29 +1618,55 @@ fn update_burner_drill_indicators(
     }
 }
 
-fn update_assembler_recipe_text(
+fn update_assembler_detail_text(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
-    mut texts: Query<&mut Text, With<AssemblerRecipeText>>,
+    mut texts: AssemblerDetailTextQuery,
 ) {
-    let recipe_name = open_container
+    let details = open_container
         .entity_id
-        .and_then(|entity_id| sim.sim.assembler_state(entity_id).ok())
-        .and_then(|state| state.selected_recipe)
-        .and_then(|recipe_id| {
-            sim.sim
-                .world
-                .prototypes
-                .recipes
-                .get(recipe_id.index())
-                .filter(|recipe| recipe.id == recipe_id)
-                .map(|recipe| recipe.name.as_str())
-        })
-        .map(format_recipe_display_name)
-        .unwrap_or_else(|| "<none>".to_string());
+        .and_then(|entity_id| format_assembler_detail_text(&sim.sim, entity_id))
+        .unwrap_or_else(AssemblerDetailText::empty);
 
-    for mut text in &mut texts {
-        text.0 = format!("Recipe: {recipe_name}");
+    for (mut text, is_recipe, is_ingredients, is_products, is_progress) in &mut texts {
+        if is_recipe {
+            text.0 = details.recipe.clone();
+        } else if is_ingredients {
+            text.0 = details.ingredients.clone();
+        } else if is_products {
+            text.0 = details.products.clone();
+        } else if is_progress {
+            text.0 = details.progress.clone();
+        }
+    }
+}
+
+fn update_assembler_recipe_button_colors(
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut buttons: Query<(&AssemblerRecipeButton, &mut BackgroundColor)>,
+) {
+    let Some(entity_id) = open_container.entity_id else {
+        return;
+    };
+    let selected_recipe = sim
+        .sim
+        .assembler_state(entity_id)
+        .ok()
+        .and_then(|state| state.selected_recipe);
+
+    for (button, mut color) in &mut buttons {
+        color.0 = if selected_recipe == Some(button.recipe_id) {
+            assembler_recipe_button_selected_color()
+        } else if sim
+            .sim
+            .can_select_assembler_recipe(entity_id, button.recipe_id)
+            .unwrap_or(false)
+        {
+            assembler_recipe_button_normal_color()
+        } else {
+            assembler_recipe_button_muted_color()
+        };
     }
 }
 
@@ -2076,6 +2144,114 @@ fn compact_item_name(name: &str) -> String {
         .to_uppercase()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssemblerDetailText {
+    pub recipe: String,
+    pub ingredients: String,
+    pub products: String,
+    pub progress: String,
+}
+
+impl AssemblerDetailText {
+    fn empty() -> Self {
+        Self {
+            recipe: "Recipe: <none>".to_string(),
+            ingredients: "Ingredients: <none>".to_string(),
+            products: "Output: <none>".to_string(),
+            progress: "Progress: 0/0".to_string(),
+        }
+    }
+}
+
+pub fn crafting_recipe_choices(catalog: &PrototypeCatalog) -> Vec<&factory_data::RecipePrototype> {
+    catalog
+        .recipes
+        .iter()
+        .filter(|recipe| recipe.category == CraftingCategory::Crafting)
+        .collect()
+}
+
+pub fn format_assembler_detail_text(
+    sim: &Simulation,
+    entity_id: u64,
+) -> Option<AssemblerDetailText> {
+    let state = sim.assembler_state(entity_id).ok()?;
+    let Some(recipe) = state
+        .selected_recipe
+        .and_then(|recipe_id| recipe_by_id(&sim.world.prototypes, recipe_id))
+    else {
+        return Some(AssemblerDetailText::empty());
+    };
+
+    let statuses = sim.assembler_ingredient_status(entity_id).ok()?;
+    let ingredients = if statuses.is_empty() {
+        "Ingredients: <none>".to_string()
+    } else {
+        format!(
+            "Ingredients:\n{}",
+            statuses
+                .iter()
+                .map(|status| {
+                    format!(
+                        "{}: need {}, have {}, missing {}",
+                        format_item_display_name(&sim.world.prototypes, status.item),
+                        status.required,
+                        status.available,
+                        status.missing
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    let products = if recipe.products.is_empty() {
+        "Output: <none>".to_string()
+    } else {
+        format!(
+            "Output: {}",
+            recipe
+                .products
+                .iter()
+                .map(|product| format!(
+                    "{} x{}",
+                    format_item_display_name(&sim.world.prototypes, product.item),
+                    product.amount
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    Some(AssemblerDetailText {
+        recipe: format!("Recipe: {}", format_recipe_display_name(&recipe.name)),
+        ingredients,
+        products,
+        progress: format!(
+            "Progress: {}/{}",
+            state.crafting_progress_ticks, state.crafting_required_ticks
+        ),
+    })
+}
+
+fn recipe_by_id(
+    catalog: &PrototypeCatalog,
+    recipe_id: RecipeId,
+) -> Option<&factory_data::RecipePrototype> {
+    catalog
+        .recipes
+        .get(recipe_id.index())
+        .filter(|recipe| recipe.id == recipe_id)
+}
+
+fn format_item_display_name(catalog: &PrototypeCatalog, item_id: ItemId) -> String {
+    catalog
+        .items
+        .get(item_id.index())
+        .filter(|item| item.id == item_id)
+        .map(|item| format_recipe_display_name(&item.name))
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
 fn format_recipe_display_name(name: &str) -> String {
     name.split('_')
         .map(|part| {
@@ -2091,10 +2267,18 @@ fn format_recipe_display_name(name: &str) -> String {
 
 fn format_recipe_button_label(name: &str) -> String {
     format_recipe_display_name(name)
-        .split(' ')
-        .filter_map(|part| part.chars().next())
-        .collect::<String>()
-        .to_uppercase()
+}
+
+fn assembler_recipe_button_normal_color() -> Color {
+    Color::srgba(0.16, 0.18, 0.18, 0.96)
+}
+
+fn assembler_recipe_button_selected_color() -> Color {
+    Color::srgba(0.18, 0.43, 0.55, 0.98)
+}
+
+fn assembler_recipe_button_muted_color() -> Color {
+    Color::srgba(0.08, 0.09, 0.09, 0.96)
 }
 
 fn tile_color(tile_id: TileId, ids: RenderPrototypeIds) -> Color {
@@ -2169,15 +2353,6 @@ fn find_entity_prototype_id(catalog: &PrototypeCatalog, name: &str) -> EntityPro
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required entity prototype {name:?}"))
-}
-
-fn find_recipe_id(catalog: &PrototypeCatalog, name: &str) -> RecipeId {
-    catalog
-        .recipes
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
 }
 
 #[cfg(test)]
