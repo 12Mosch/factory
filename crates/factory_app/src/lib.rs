@@ -3,8 +3,9 @@ use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
 use bevy::time::Fixed;
 use bevy::window::PrimaryWindow;
-use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, TileId};
+use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId};
 use factory_sim::{
+    ASSEMBLING_MACHINE_INPUT_SLOT_COUNT, ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT, AssemblerError,
     BELT_SUBTILES_PER_TILE, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
     BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BurnerDrillError, CHUNK_SIZE, ContainerError, Direction,
     EntityFootprint, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX,
@@ -73,6 +74,8 @@ pub enum InventoryPanel {
     FurnaceInput,
     FurnaceFuel,
     FurnaceOutput,
+    AssemblerInput,
+    AssemblerOutput,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +84,7 @@ pub enum ContainerSlotClickError {
     Transfer(ContainerError),
     BurnerDrill(BurnerDrillError),
     Furnace(FurnaceError),
+    Assembler(AssemblerError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +92,7 @@ enum OpenMachineKind {
     Chest,
     BurnerDrill,
     Furnace,
+    Assembler,
 }
 
 #[derive(Component)]
@@ -172,6 +177,14 @@ struct BurnerEnergyText;
 #[derive(Component)]
 struct BurnerProgressFill;
 
+#[derive(Component)]
+struct AssemblerRecipeButton {
+    recipe_id: RecipeId,
+}
+
+#[derive(Component)]
+struct AssemblerRecipeText;
+
 type CursorCameraFilter = (With<Camera2d>, Without<CursorTileHighlight>);
 type ManualMiningProgressBarBackgroundFilter = (
     With<ManualMiningProgressBarBackground>,
@@ -197,6 +210,12 @@ type ContainerSlotInteractionQuery<'w, 's> = Query<
     'w,
     's,
     (&'static Interaction, &'static ContainerSlotButton),
+    (Changed<Interaction>, With<Button>),
+>;
+type AssemblerRecipeButtonInteractionQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Interaction, &'static AssemblerRecipeButton),
     (Changed<Interaction>, With<Button>),
 >;
 
@@ -259,6 +278,13 @@ impl Plugin for FactoryAppPlugin {
                     handle_container_slot_clicks,
                     update_container_slot_text,
                     update_burner_drill_indicators,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_assembler_recipe_button_clicks,
+                    update_assembler_recipe_text,
                 ),
             );
     }
@@ -665,6 +691,8 @@ fn debug_build_prototype_name(keyboard: &ButtonInput<KeyCode>) -> Option<&'stati
         Some("stone_furnace")
     } else if keyboard.just_pressed(KeyCode::KeyT) {
         Some("transport_belt")
+    } else if keyboard.just_pressed(KeyCode::KeyA) {
+        Some("assembling_machine")
     } else {
         None
     }
@@ -976,6 +1004,9 @@ fn sync_container_window(
                 OpenMachineKind::Chest => spawn_chest_panel(root),
                 OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
                 OpenMachineKind::Furnace => spawn_furnace_panel(root),
+                OpenMachineKind::Assembler => {
+                    spawn_assembler_panel(root, &sim.sim.world.prototypes)
+                }
             }
         });
 }
@@ -1184,6 +1215,150 @@ fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
     });
 }
 
+fn spawn_assembler_panel(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    catalog: &PrototypeCatalog,
+) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(260.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Assembling Machine 1"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel.spawn((
+            Text::new("Recipe: <none>"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            AssemblerRecipeText,
+        ));
+        panel
+            .spawn((
+                Node {
+                    flex_wrap: FlexWrap::Wrap,
+                    row_gap: Val::Px(4.0),
+                    column_gap: Val::Px(4.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|recipes| {
+                for recipe_name in [
+                    "iron_gear_wheel",
+                    "transport_belt",
+                    "automation_science_pack",
+                ] {
+                    let recipe_id = find_recipe_id(catalog, recipe_name);
+                    spawn_assembler_recipe_button(recipes, recipe_id, recipe_name);
+                }
+            });
+        panel
+            .spawn((
+                Node {
+                    width: Val::Px(MACHINE_BAR_WIDTH),
+                    height: Val::Px(MACHINE_BAR_HEIGHT),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.10, 0.10, 0.11, 0.96)),
+            ))
+            .with_child((
+                Node {
+                    width: Val::Px(0.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.34, 0.70, 0.86)),
+                BurnerProgressFill,
+            ));
+        panel
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|groups| {
+                groups.spawn((
+                    Text::new("Input"),
+                    TextFont::from_font_size(11.0),
+                    TextColor(Color::srgb(0.78, 0.80, 0.78)),
+                ));
+                groups
+                    .spawn((
+                        Node {
+                            flex_wrap: FlexWrap::Wrap,
+                            row_gap: Val::Px(4.0),
+                            column_gap: Val::Px(4.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|slots| {
+                        for slot_index in 0..ASSEMBLING_MACHINE_INPUT_SLOT_COUNT {
+                            spawn_slot_button(slots, InventoryPanel::AssemblerInput, slot_index);
+                        }
+                    });
+                groups.spawn((
+                    Text::new("Output"),
+                    TextFont::from_font_size(11.0),
+                    TextColor(Color::srgb(0.78, 0.80, 0.78)),
+                ));
+                groups
+                    .spawn((
+                        Node {
+                            flex_wrap: FlexWrap::Wrap,
+                            row_gap: Val::Px(4.0),
+                            column_gap: Val::Px(4.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|slots| {
+                        for slot_index in 0..ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT {
+                            spawn_slot_button(slots, InventoryPanel::AssemblerOutput, slot_index);
+                        }
+                    });
+            });
+    });
+}
+
+fn spawn_assembler_recipe_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    recipe_id: RecipeId,
+    recipe_name: &str,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                width: Val::Px(78.0),
+                height: Val::Px(34.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::all(Val::Px(3.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.16, 0.18, 0.18, 0.96)),
+            AssemblerRecipeButton { recipe_id },
+        ))
+        .with_child((
+            Text::new(format_recipe_button_label(recipe_name)),
+            TextFont::from_font_size(9.0),
+            TextColor(Color::WHITE),
+            TextLayout::justify(Justify::Center),
+        ));
+}
+
 fn spawn_labeled_slot(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     label: &str,
@@ -1255,6 +1430,27 @@ fn handle_container_slot_clicks(
     }
 }
 
+fn handle_assembler_recipe_button_clicks(
+    mut interactions: AssemblerRecipeButtonInteractionQuery,
+    mut sim: ResMut<SimResource>,
+    open_container: Res<OpenContainer>,
+) {
+    let Some(entity_id) = open_container.entity_id else {
+        return;
+    };
+    if open_machine_kind(&sim.sim, entity_id) != Some(OpenMachineKind::Assembler) {
+        return;
+    }
+
+    for (interaction, button) in &mut interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+
+        let _ = sim.sim.select_assembler_recipe(entity_id, button.recipe_id);
+    }
+}
+
 fn update_container_slot_text(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
@@ -1269,6 +1465,9 @@ fn update_container_slot_text(
     let furnace_state = open_container
         .entity_id
         .and_then(|entity_id| sim.sim.furnace_state(entity_id).ok());
+    let assembler_state = open_container
+        .entity_id
+        .and_then(|entity_id| sim.sim.assembler_state(entity_id).ok());
 
     for (marker, mut text) in &mut texts {
         let stack = match marker.panel {
@@ -1306,6 +1505,12 @@ fn update_container_slot_text(
                     .then_some(state.output_slot)
                     .flatten()
             }),
+            InventoryPanel::AssemblerInput => assembler_state
+                .and_then(|state| state.input_inventory.slots.get(marker.slot_index))
+                .and_then(|slot| *slot),
+            InventoryPanel::AssemblerOutput => assembler_state
+                .and_then(|state| state.output_inventory.slots.get(marker.slot_index))
+                .and_then(|slot| *slot),
         };
         text.0 = stack
             .map(|stack| format_item_stack(stack, &sim.sim.world.prototypes))
@@ -1337,6 +1542,14 @@ fn update_burner_drill_indicators(
                     state.crafting_required_ticks,
                 ))
             }
+            OpenMachineKind::Assembler => {
+                let state = sim.sim.assembler_state(entity_id).ok()?;
+                Some((
+                    0.0,
+                    state.crafting_progress_ticks,
+                    state.crafting_required_ticks,
+                ))
+            }
             OpenMachineKind::Chest => None,
         }
     });
@@ -1360,6 +1573,32 @@ fn update_burner_drill_indicators(
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
         node.width = Val::Px(MACHINE_BAR_WIDTH * progress);
+    }
+}
+
+fn update_assembler_recipe_text(
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut texts: Query<&mut Text, With<AssemblerRecipeText>>,
+) {
+    let recipe_name = open_container
+        .entity_id
+        .and_then(|entity_id| sim.sim.assembler_state(entity_id).ok())
+        .and_then(|state| state.selected_recipe)
+        .and_then(|recipe_id| {
+            sim.sim
+                .world
+                .prototypes
+                .recipes
+                .get(recipe_id.index())
+                .filter(|recipe| recipe.id == recipe_id)
+                .map(|recipe| recipe.name.as_str())
+        })
+        .map(format_recipe_display_name)
+        .unwrap_or_else(|| "<none>".to_string());
+
+    for mut text in &mut texts {
+        text.0 = format!("Recipe: {recipe_name}");
     }
 }
 
@@ -1472,6 +1711,10 @@ fn furnace_color() -> Color {
     Color::srgb(0.54, 0.45, 0.36)
 }
 
+fn assembler_color() -> Color {
+    Color::srgb(0.28, 0.48, 0.56)
+}
+
 fn transport_belt_color() -> Color {
     Color::srgb(0.93, 0.72, 0.18)
 }
@@ -1561,6 +1804,11 @@ pub fn transfer_open_container_slot(
                 return transfer_player_slot_to_furnace(sim, entity_id, slot_index)
                     .map_err(ContainerSlotClickError::Furnace);
             }
+            if is_assembler_entity(sim, entity_id) {
+                return sim
+                    .transfer_player_slot_to_assembler_input(entity_id, slot_index)
+                    .map_err(ContainerSlotClickError::Assembler);
+            }
             sim.transfer_player_slot_to_entity(entity_id, slot_index)
         }
         InventoryPanel::Container => sim.transfer_entity_slot_to_player(entity_id, slot_index),
@@ -1589,6 +1837,16 @@ pub fn transfer_open_container_slot(
                 .transfer_furnace_output_to_player(entity_id)
                 .map_err(ContainerSlotClickError::Furnace);
         }
+        InventoryPanel::AssemblerInput => {
+            return sim
+                .transfer_assembler_input_slot_to_player(entity_id, slot_index)
+                .map_err(ContainerSlotClickError::Assembler);
+        }
+        InventoryPanel::AssemblerOutput => {
+            return sim
+                .transfer_assembler_output_slot_to_player(entity_id, slot_index)
+                .map_err(ContainerSlotClickError::Assembler);
+        }
     }
     .map_err(ContainerSlotClickError::Transfer)
 }
@@ -1599,6 +1857,10 @@ fn is_burner_drill_entity(sim: &Simulation, entity_id: u64) -> bool {
 
 fn is_furnace_entity(sim: &Simulation, entity_id: u64) -> bool {
     open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Furnace)
+}
+
+fn is_assembler_entity(sim: &Simulation, entity_id: u64) -> bool {
+    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Assembler)
 }
 
 fn transfer_player_slot_to_furnace(
@@ -1644,6 +1906,10 @@ fn open_machine_kind(sim: &Simulation, entity_id: u64) -> Option<OpenMachineKind
         Some(OpenMachineKind::BurnerDrill)
     } else if prototype.entity_kind == EntityKind::Furnace && sim.furnace_state(entity_id).is_ok() {
         Some(OpenMachineKind::Furnace)
+    } else if prototype.entity_kind == EntityKind::AssemblingMachine
+        && sim.assembler_state(entity_id).is_ok()
+    {
+        Some(OpenMachineKind::Assembler)
     } else {
         None
     }
@@ -1674,6 +1940,13 @@ fn renderable_entity_style(sim: &Simulation, entity_id: u64) -> Option<(Color, V
         )),
         Some(OpenMachineKind::Furnace) => Some((
             furnace_color(),
+            Vec2::new(
+                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            ),
+        )),
+        Some(OpenMachineKind::Assembler) => Some((
+            assembler_color(),
             Vec2::new(
                 placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
                 placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
@@ -1803,6 +2076,27 @@ fn compact_item_name(name: &str) -> String {
         .to_uppercase()
 }
 
+fn format_recipe_display_name(name: &str) -> String {
+    name.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_recipe_button_label(name: &str) -> String {
+    format_recipe_display_name(name)
+        .split(' ')
+        .filter_map(|part| part.chars().next())
+        .collect::<String>()
+        .to_uppercase()
+}
+
 fn tile_color(tile_id: TileId, ids: RenderPrototypeIds) -> Color {
     if tile_id == ids.water {
         Color::srgb(0.12, 0.34, 0.62)
@@ -1875,6 +2169,15 @@ fn find_entity_prototype_id(catalog: &PrototypeCatalog, name: &str) -> EntityPro
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required entity prototype {name:?}"))
+}
+
+fn find_recipe_id(catalog: &PrototypeCatalog, name: &str) -> RecipeId {
+    catalog
+        .recipes
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
 }
 
 #[cfg(test)]

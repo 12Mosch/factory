@@ -25,6 +25,8 @@ pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_FUEL_SLOT_INDEX: usize = 0;
 pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
+pub const ASSEMBLING_MACHINE_INPUT_SLOT_COUNT: usize = 4;
+pub const ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT: usize = 1;
 pub const BELT_SUBTILES_PER_TILE: u16 = 256;
 pub const BELT_ITEM_SPACING_SUBTILES: u16 = 64;
 pub const BASIC_BELT_SPEED_SUBTILES_PER_TICK: u16 = 8;
@@ -174,6 +176,17 @@ pub struct FurnaceState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AssemblingMachineState {
+    pub selected_recipe: Option<RecipeId>,
+    pub input_inventory: Inventory,
+    pub output_inventory: Inventory,
+    pub crafting_progress_ticks: u32,
+    pub crafting_required_ticks: u32,
+    pub crafting_speed_numerator: u32,
+    pub crafting_speed_denominator: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BeltSegment {
     pub dir: Direction,
     pub lanes: [BeltLane; 2],
@@ -254,6 +267,19 @@ pub enum FurnaceError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssemblerError {
+    MissingEntity(u64),
+    NotAssembler(u64),
+    MissingRecipe(RecipeId),
+    InvalidRecipe(RecipeId),
+    InvalidInput(ItemId),
+    InvalidSlot { slot_index: usize },
+    EmptySlot { slot_index: usize },
+    InsufficientSpace,
+    UnknownItem,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BeltError {
     MissingEntity(u64),
     NotTransportBelt(u64),
@@ -274,6 +300,7 @@ pub struct EntityStore {
     entity_inventories: BTreeMap<u64, Inventory>,
     burner_mining_drills: BTreeMap<u64, BurnerMiningDrillState>,
     furnaces: BTreeMap<u64, FurnaceState>,
+    assembling_machines: BTreeMap<u64, AssemblingMachineState>,
     transport_belts: BTreeMap<u64, BeltSegment>,
     inserters: BTreeMap<u64, InserterState>,
     occupancy: OccupancyGrid,
@@ -314,6 +341,7 @@ struct EntityReservation {
     inventory_slot_count: Option<usize>,
     burner_mining_drill: Option<BurnerMiningDrillState>,
     furnace: Option<FurnaceState>,
+    assembling_machine: Option<AssemblingMachineState>,
     transport_belt: Option<BeltSegment>,
     inserter: Option<InserterState>,
 }
@@ -534,6 +562,18 @@ impl From<InventoryError> for FurnaceError {
     }
 }
 
+impl From<InventoryError> for AssemblerError {
+    fn from(error: InventoryError) -> Self {
+        match error {
+            InventoryError::UnknownItem => Self::UnknownItem,
+            InventoryError::InsufficientSpace => Self::InsufficientSpace,
+            InventoryError::InsufficientItems => {
+                unreachable!("assembler transfers remove a known slot stack")
+            }
+        }
+    }
+}
+
 fn stack_in_slot(inventory: &Inventory, slot_index: usize) -> Result<ItemStack, ContainerError> {
     inventory
         .slots
@@ -594,6 +634,7 @@ impl Simulation {
         self.advance_transport_belts();
         self.advance_burner_mining_drills();
         self.advance_furnaces();
+        self.advance_assembling_machines();
         self.advance_inserters();
         self.advance_manual_crafting();
     }
@@ -862,6 +903,7 @@ impl Simulation {
         let inventory_slot_count = prototype.inventory_slot_count;
         let burner_mining_drill = burner_mining_drill_state_for_prototype(prototype);
         let furnace = furnace_state_for_prototype(prototype);
+        let assembling_machine = assembling_machine_state_for_prototype(prototype);
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
         let inserter = inserter_state_for_prototype(prototype);
         Ok(self.entities.reserve_entity(EntityReservation {
@@ -873,6 +915,7 @@ impl Simulation {
             inventory_slot_count,
             burner_mining_drill,
             furnace,
+            assembling_machine,
             transport_belt,
             inserter,
         }))
@@ -1200,6 +1243,125 @@ impl Simulation {
             .map_err(FurnaceError::from)
     }
 
+    pub fn assembler_state(
+        &self,
+        entity_id: u64,
+    ) -> Result<&AssemblingMachineState, AssemblerError> {
+        self.entities.assembler_state(entity_id)
+    }
+
+    pub fn select_assembler_recipe(
+        &mut self,
+        entity_id: u64,
+        recipe_id: RecipeId,
+    ) -> Result<(), AssemblerError> {
+        let recipe = self
+            .world
+            .prototypes
+            .recipes
+            .get(recipe_id.index())
+            .filter(|recipe| recipe.id == recipe_id)
+            .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
+        if recipe.category != CraftingCategory::Crafting {
+            return Err(AssemblerError::InvalidRecipe(recipe_id));
+        }
+
+        let state = self.entities.assembler_state_mut(entity_id)?;
+        state.selected_recipe = Some(recipe_id);
+        state.crafting_progress_ticks = 0;
+        state.crafting_required_ticks = assembler_required_ticks(
+            recipe.crafting_time_ticks,
+            state.crafting_speed_numerator,
+            state.crafting_speed_denominator,
+        );
+
+        Ok(())
+    }
+
+    pub fn transfer_player_slot_to_assembler_input(
+        &mut self,
+        entity_id: u64,
+        player_slot_index: usize,
+    ) -> Result<(), AssemblerError> {
+        let stack = self
+            .player_inventory
+            .slots
+            .get(player_slot_index)
+            .ok_or(AssemblerError::InvalidSlot {
+                slot_index: player_slot_index,
+            })?
+            .ok_or(AssemblerError::EmptySlot {
+                slot_index: player_slot_index,
+            })?;
+        let state = self.entities.assembler_state(entity_id)?;
+        if !assembler_input_can_accept(&self.world.prototypes, state, stack) {
+            return Err(AssemblerError::InvalidInput(stack.item_id));
+        }
+        if !state
+            .input_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(AssemblerError::InsufficientSpace);
+        }
+
+        self.player_inventory.slots[player_slot_index] = None;
+        self.entities
+            .assembler_state_mut(entity_id)?
+            .input_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(AssemblerError::from)
+    }
+
+    pub fn transfer_assembler_input_slot_to_player(
+        &mut self,
+        entity_id: u64,
+        slot_index: usize,
+    ) -> Result<(), AssemblerError> {
+        let stack = {
+            let state = self.entities.assembler_state(entity_id)?;
+            stack_in_assembler_inventory_slot(&state.input_inventory, slot_index)?
+        };
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(AssemblerError::InsufficientSpace);
+        }
+
+        self.entities
+            .assembler_state_mut(entity_id)?
+            .input_inventory
+            .slots[slot_index] = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(AssemblerError::from)
+    }
+
+    pub fn transfer_assembler_output_slot_to_player(
+        &mut self,
+        entity_id: u64,
+        slot_index: usize,
+    ) -> Result<(), AssemblerError> {
+        let stack = {
+            let state = self.entities.assembler_state(entity_id)?;
+            stack_in_assembler_inventory_slot(&state.output_inventory, slot_index)?
+        };
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(AssemblerError::InsufficientSpace);
+        }
+
+        self.entities
+            .assembler_state_mut(entity_id)?
+            .output_inventory
+            .slots[slot_index] = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(AssemblerError::from)
+    }
+
     pub fn advance_transport_belts(&mut self) {
         let tile_to_belt = transport_belt_tile_map(&self.entities);
         let lane_keys = self
@@ -1406,6 +1568,102 @@ impl Simulation {
             remove_from_single_slot(&mut state.input_slot, ingredient.item, ingredient.amount)
                 .expect("selected furnace input should still contain ingredient");
             insert_output_item(&mut state.output_slot, product.item, product.amount);
+        }
+    }
+
+    fn advance_assembling_machines(&mut self) {
+        let assembler_ids = self
+            .entities
+            .assembling_machines
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        for entity_id in assembler_ids {
+            if self.entities.placed_entity(entity_id).is_none() {
+                continue;
+            }
+
+            let Some((recipe, required_ticks)) = self
+                .entities
+                .assembler_state(entity_id)
+                .ok()
+                .and_then(|state| {
+                    let recipe_id = state.selected_recipe?;
+                    let recipe = self
+                        .world
+                        .prototypes
+                        .recipes
+                        .get(recipe_id.index())
+                        .filter(|recipe| recipe.id == recipe_id)?;
+                    Some((
+                        recipe,
+                        assembler_required_ticks(
+                            recipe.crafting_time_ticks,
+                            state.crafting_speed_numerator,
+                            state.crafting_speed_denominator,
+                        ),
+                    ))
+                })
+            else {
+                if let Ok(state) = self.entities.assembler_state_mut(entity_id) {
+                    state.crafting_progress_ticks = 0;
+                    state.crafting_required_ticks = 0;
+                }
+                continue;
+            };
+
+            let can_craft = self.entities.assembler_state(entity_id).is_ok_and(|state| {
+                assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
+                    && assembler_output_can_accept(
+                        &self.world.prototypes,
+                        &state.output_inventory,
+                        &recipe.products,
+                    )
+            });
+            if !can_craft {
+                if let Ok(state) = self.entities.assembler_state_mut(entity_id) {
+                    state.crafting_required_ticks = required_ticks;
+                }
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .assembler_state_mut(entity_id)
+                    .expect("assembler id came from assembler state map");
+                state.crafting_required_ticks = required_ticks;
+                state.crafting_progress_ticks += 1;
+
+                if state.crafting_progress_ticks < required_ticks {
+                    false
+                } else {
+                    state.crafting_progress_ticks = 0;
+                    true
+                }
+            };
+
+            if !completed {
+                continue;
+            }
+
+            let state = self
+                .entities
+                .assembler_state_mut(entity_id)
+                .expect("assembler id came from assembler state map");
+            for ingredient in &recipe.ingredients {
+                state
+                    .input_inventory
+                    .remove(ingredient.item, ingredient.amount)
+                    .expect("assembler checked ingredients before completion");
+            }
+            for product in &recipe.products {
+                state
+                    .output_inventory
+                    .insert(&self.world.prototypes, product.item, product.amount)
+                    .expect("assembler checked output capacity before completion");
+            }
         }
     }
 
@@ -1946,6 +2204,7 @@ impl EntityStore {
             entity_inventories: BTreeMap::new(),
             burner_mining_drills: BTreeMap::new(),
             furnaces: BTreeMap::new(),
+            assembling_machines: BTreeMap::new(),
             transport_belts: BTreeMap::new(),
             inserters: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
@@ -2017,6 +2276,29 @@ impl EntityStore {
         self.furnaces
             .get_mut(&entity_id)
             .ok_or(FurnaceError::NotFurnace(entity_id))
+    }
+
+    fn assembler_state(&self, entity_id: u64) -> Result<&AssemblingMachineState, AssemblerError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(AssemblerError::MissingEntity(entity_id));
+        }
+
+        self.assembling_machines
+            .get(&entity_id)
+            .ok_or(AssemblerError::NotAssembler(entity_id))
+    }
+
+    fn assembler_state_mut(
+        &mut self,
+        entity_id: u64,
+    ) -> Result<&mut AssemblingMachineState, AssemblerError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(AssemblerError::MissingEntity(entity_id));
+        }
+
+        self.assembling_machines
+            .get_mut(&entity_id)
+            .ok_or(AssemblerError::NotAssembler(entity_id))
     }
 
     fn belt_segment(&self, entity_id: u64) -> Result<&BeltSegment, BeltError> {
@@ -2111,6 +2393,9 @@ impl EntityStore {
         if let Some(state) = reservation.furnace {
             self.furnaces.insert(id, state);
         }
+        if let Some(state) = reservation.assembling_machine {
+            self.assembling_machines.insert(id, state);
+        }
         if let Some(segment) = reservation.transport_belt {
             self.transport_belts.insert(id, segment);
         }
@@ -2149,6 +2434,7 @@ impl EntityStore {
         self.entity_inventories.remove(&entity_id);
         self.burner_mining_drills.remove(&entity_id);
         self.furnaces.remove(&entity_id);
+        self.assembling_machines.remove(&entity_id);
         self.transport_belts.remove(&entity_id);
         self.inserters.remove(&entity_id);
         self.occupancy
@@ -2711,6 +2997,26 @@ fn furnace_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Opt
     })
 }
 
+fn assembling_machine_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<AssemblingMachineState> {
+    if prototype.entity_kind != EntityKind::AssemblingMachine {
+        return None;
+    }
+
+    let assembling_machine = prototype.assembling_machine.as_ref()?;
+
+    Some(AssemblingMachineState {
+        selected_recipe: None,
+        input_inventory: Inventory::with_slot_count(assembling_machine.input_slot_count),
+        output_inventory: Inventory::with_slot_count(assembling_machine.output_slot_count),
+        crafting_progress_ticks: 0,
+        crafting_required_ticks: 0,
+        crafting_speed_numerator: assembling_machine.crafting_speed_numerator,
+        crafting_speed_denominator: assembling_machine.crafting_speed_denominator,
+    })
+}
+
 fn transport_belt_segment_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,
@@ -2749,6 +3055,16 @@ fn peek_inserter_source_item(entities: &EntityStore, pickup_tile: (i32, i32)) ->
         return furnace.output_slot.map(|stack| stack.item_id);
     }
 
+    if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
+        return assembler
+            .output_inventory
+            .slots
+            .iter()
+            .flatten()
+            .map(|stack| stack.item_id)
+            .next();
+    }
+
     entities
         .transport_belts
         .get(&entity_id)
@@ -2773,6 +3089,13 @@ fn inserter_target_can_accept(
         return input_slot_can_accept(catalog, furnace.input_slot, item);
     }
 
+    if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
+        return assembler_input_can_accept(catalog, assembler, item)
+            && assembler
+                .input_inventory
+                .can_insert(catalog, item.item_id, item.count);
+    }
+
     entities
         .transport_belts
         .get(&entity_id)
@@ -2795,6 +3118,11 @@ fn try_take_inserter_source_item(
 
     if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
         remove_from_single_slot(&mut furnace.output_slot, item_id, 1).ok()?;
+        return Some(ItemStack { item_id, count: 1 });
+    }
+
+    if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
+        assembler.output_inventory.remove(item_id, 1).ok()?;
         return Some(ItemStack { item_id, count: 1 });
     }
 
@@ -2828,6 +3156,17 @@ fn try_drop_inserter_item(
 
         insert_into_single_slot(&mut furnace.input_slot, item);
         return true;
+    }
+
+    if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
+        if !assembler_input_can_accept(catalog, assembler, item) {
+            return false;
+        }
+
+        return assembler
+            .input_inventory
+            .insert(catalog, item.item_id, item.count)
+            .is_ok();
     }
 
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id) {
@@ -2946,6 +3285,77 @@ fn input_slot_can_accept(
     }
 
     output_slot_can_accept(catalog, input_slot, stack.item_id, stack.count)
+}
+
+fn assembler_required_ticks(
+    recipe_ticks: u32,
+    speed_numerator: u32,
+    speed_denominator: u32,
+) -> u32 {
+    let numerator = speed_numerator.max(1);
+    let denominator = speed_denominator.max(1);
+    recipe_ticks
+        .saturating_mul(denominator)
+        .saturating_add(numerator - 1)
+        / numerator
+}
+
+fn assembler_input_can_accept(
+    catalog: &PrototypeCatalog,
+    state: &AssemblingMachineState,
+    stack: ItemStack,
+) -> bool {
+    let Some(recipe_id) = state.selected_recipe else {
+        return false;
+    };
+    let Some(recipe) = catalog
+        .recipes
+        .get(recipe_id.index())
+        .filter(|recipe| recipe.id == recipe_id && recipe.category == CraftingCategory::Crafting)
+    else {
+        return false;
+    };
+
+    recipe
+        .ingredients
+        .iter()
+        .any(|ingredient| ingredient.item == stack.item_id)
+}
+
+fn assembler_has_ingredients(
+    input_inventory: &Inventory,
+    ingredients: &[factory_data::ItemAmount],
+) -> bool {
+    let mut required = BTreeMap::<ItemId, u32>::new();
+    for ingredient in ingredients {
+        *required.entry(ingredient.item).or_default() += u32::from(ingredient.amount);
+    }
+
+    required
+        .into_iter()
+        .all(|(item_id, count)| input_inventory.count(item_id) >= count)
+}
+
+fn assembler_output_can_accept(
+    catalog: &PrototypeCatalog,
+    output_inventory: &Inventory,
+    products: &[factory_data::ItemAmount],
+) -> bool {
+    let mut output = output_inventory.clone();
+    products
+        .iter()
+        .all(|product| output.insert(catalog, product.item, product.amount).is_ok())
+}
+
+fn stack_in_assembler_inventory_slot(
+    inventory: &Inventory,
+    slot_index: usize,
+) -> Result<ItemStack, AssemblerError> {
+    inventory
+        .slots
+        .get(slot_index)
+        .ok_or(AssemblerError::InvalidSlot { slot_index })?
+        .ok_or(AssemblerError::EmptySlot { slot_index })
 }
 
 fn burner_fuel_slot_can_accept(
@@ -3507,6 +3917,225 @@ mod tests {
                 .len(),
             16
         );
+    }
+
+    #[test]
+    fn catalog_loads_assembler_metadata() {
+        let sim = Simulation::new_test_world(123);
+        let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+        let prototype = &sim.world.prototypes.entities[assembler.index()];
+        let metadata = prototype
+            .assembling_machine
+            .as_ref()
+            .expect("assembler prototype should load metadata");
+
+        assert_eq!(prototype.entity_kind, EntityKind::AssemblingMachine);
+        assert_eq!((prototype.size.x, prototype.size.y), (3, 3));
+        assert_eq!(metadata.crafting_speed_numerator, 1);
+        assert_eq!(metadata.crafting_speed_denominator, 2);
+        assert_eq!(
+            metadata.input_slot_count,
+            ASSEMBLING_MACHINE_INPUT_SLOT_COUNT
+        );
+        assert_eq!(
+            metadata.output_slot_count,
+            ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT
+        );
+    }
+
+    #[test]
+    fn assembler_crafts_gears_from_iron_plates() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+        sim.select_assembler_recipe(assembler_id, recipe)
+            .expect("crafting recipe should be accepted by assembler");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 2,
+        });
+        sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+            .expect("assembler should accept gear ingredients");
+
+        for _ in 0..60 {
+            sim.tick();
+        }
+
+        let state = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state");
+        assert_eq!(state.input_inventory.count(iron_plate), 0);
+        assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
+        assert_eq!(state.crafting_progress_ticks, 0);
+        assert_eq!(state.crafting_required_ticks, 60);
+    }
+
+    #[test]
+    fn assembler_blocks_without_inputs() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+        sim.select_assembler_recipe(assembler_id, recipe)
+            .expect("crafting recipe should be accepted by assembler");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+        sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+            .expect("assembler should accept partial ingredients");
+
+        for _ in 0..90 {
+            sim.tick();
+        }
+
+        let state = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state");
+        assert_eq!(state.input_inventory.count(iron_plate), 1);
+        assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
+        assert_eq!(state.crafting_progress_ticks, 0);
+    }
+
+    #[test]
+    fn assembler_blocks_when_output_full() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+        let stack_size = item_stack_size(&sim.world.prototypes, iron_gear_wheel)
+            .expect("gear should have stack size");
+
+        sim.select_assembler_recipe(assembler_id, recipe)
+            .expect("crafting recipe should be accepted by assembler");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 2,
+        });
+        sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+            .expect("assembler should accept gear ingredients");
+        sim.entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .output_inventory
+            .slots[0] = Some(ItemStack {
+            item_id: iron_gear_wheel,
+            count: stack_size,
+        });
+
+        for _ in 0..60 {
+            sim.tick();
+        }
+
+        let state = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state");
+        assert_eq!(state.input_inventory.count(iron_plate), 2);
+        assert_eq!(
+            state.output_inventory.count(iron_gear_wheel),
+            u32::from(stack_size)
+        );
+        assert_eq!(state.crafting_progress_ticks, 0);
+    }
+
+    #[test]
+    fn invalid_assembler_recipe_is_rejected() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let smelting_recipe = recipe_id(&sim.world.prototypes, "iron_plate");
+
+        assert_eq!(
+            sim.select_assembler_recipe(assembler_id, smelting_recipe),
+            Err(AssemblerError::InvalidRecipe(smelting_recipe))
+        );
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state")
+                .selected_recipe,
+            None
+        );
+    }
+
+    #[test]
+    fn inserter_moves_ingredients_from_chest_to_assembler() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let (chest_id, inserter_id, assembler_id) = place_chest_inserter_assembler_line(&mut sim);
+        sim.select_assembler_recipe(assembler_id, recipe)
+            .expect("crafting recipe should be accepted by assembler");
+        sim.entity_inventory_mut(chest_id)
+            .expect("chest should have inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_plate),
+            0
+        );
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state")
+                .input_inventory
+                .count(iron_plate),
+            1
+        );
+    }
+
+    #[test]
+    fn inserter_removes_assembler_output_to_chest() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+        let (assembler_id, inserter_id, chest_id) = place_assembler_inserter_chest_line(&mut sim);
+        sim.entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .output_inventory
+            .slots[0] = Some(ItemStack {
+            item_id: iron_gear_wheel,
+            count: 1,
+        });
+
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state")
+                .output_inventory
+                .count(iron_gear_wheel),
+            0
+        );
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should have inventory")
+                .count(iron_gear_wheel),
+            1
+        );
+    }
+
+    #[test]
+    fn assembler_state_hash_remains_deterministic_for_same_seed_actions() {
+        let mut first = Simulation::new_test_world(123);
+        let mut second = Simulation::new_test_world(123);
+        run_same_assembler_actions(&mut first);
+        run_same_assembler_actions(&mut second);
+
+        assert_eq!(first.state_hash(), second.state_hash());
     }
 
     #[test]
@@ -5154,6 +5783,13 @@ mod tests {
             .expect("stone furnace should be placeable")
     }
 
+    fn place_assembling_machine(sim: &mut Simulation) -> u64 {
+        let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+        let (x, y) = first_buildable_rect(&sim.world, 3, 3);
+        sim.place_entity(assembler, x, y, Direction::North)
+            .expect("assembling machine should be placeable")
+    }
+
     fn add_furnace_input_and_fuel(
         sim: &mut Simulation,
         entity_id: u64,
@@ -5238,6 +5874,24 @@ mod tests {
         (chest_id, inserter_id, furnace_id)
     }
 
+    fn place_chest_inserter_assembler_line(sim: &mut Simulation) -> (u64, u64, u64) {
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 5, 3);
+        let chest_id = sim
+            .place_entity(chest, x, y + 1, Direction::North)
+            .expect("chest should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 1, y + 1, Direction::East)
+            .expect("inserter should be placeable");
+        let assembler_id = sim
+            .place_entity(assembler, x + 2, y, Direction::North)
+            .expect("assembler should be placeable");
+
+        (chest_id, inserter_id, assembler_id)
+    }
+
     fn place_belt_inserter_furnace_line(sim: &mut Simulation) -> (u64, u64, u64) {
         let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
         let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
@@ -5272,6 +5926,24 @@ mod tests {
             .expect("chest should be placeable");
 
         (furnace_id, inserter_id, chest_id)
+    }
+
+    fn place_assembler_inserter_chest_line(sim: &mut Simulation) -> (u64, u64, u64) {
+        let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 5, 3);
+        let assembler_id = sim
+            .place_entity(assembler, x, y, Direction::North)
+            .expect("assembler should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 3, y + 1, Direction::East)
+            .expect("inserter should be placeable");
+        let chest_id = sim
+            .place_entity(chest, x + 4, y + 1, Direction::North)
+            .expect("chest should be placeable");
+
+        (assembler_id, inserter_id, chest_id)
     }
 
     fn place_furnace_inserter_belt_line(sim: &mut Simulation) -> (u64, u64, u64) {
@@ -5334,6 +6006,15 @@ mod tests {
                         + count_slot_item(drill.output_slot, item_id)
                 })
                 .sum::<u32>()
+            + sim
+                .entities
+                .assembling_machines
+                .values()
+                .map(|assembler| {
+                    assembler.input_inventory.count(item_id)
+                        + assembler.output_inventory.count(item_id)
+                })
+                .sum::<u32>()
             + total_belt_count_for_item(sim, item_id)
             + sim
                 .entities
@@ -5367,6 +6048,24 @@ mod tests {
         match slot {
             Some(stack) if stack.item_id == item_id => u32::from(stack.count),
             _ => 0,
+        }
+    }
+
+    fn run_same_assembler_actions(sim: &mut Simulation) {
+        let assembler_id = place_assembling_machine(sim);
+        let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        sim.select_assembler_recipe(assembler_id, recipe)
+            .expect("crafting recipe should be accepted by assembler");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 4,
+        });
+        sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+            .expect("assembler should accept gear ingredients");
+        for _ in 0..125 {
+            sim.tick();
         }
     }
 

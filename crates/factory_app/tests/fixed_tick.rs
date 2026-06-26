@@ -185,6 +185,21 @@ fn opening_clicked_furnace_selects_correct_entity() {
 }
 
 #[test]
+fn opening_clicked_assembler_selects_correct_entity() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = first_buildable_rect(&sim, assembler);
+    let entity_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+
+    assert_eq!(
+        opened_container_after_world_click(&sim, Some((x, y))),
+        Some(entity_id)
+    );
+}
+
+#[test]
 fn slot_click_transfer_delegates_to_sim_transfer_api() {
     let mut sim = Simulation::new_test_world(123);
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
@@ -272,6 +287,59 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
             .expect("furnace should expose state")
             .output_slot,
         None
+    );
+}
+
+#[test]
+fn slot_click_transfer_routes_assembler_input_and_output() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let recipe = recipe_id_by_name(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id_by_name(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id_by_name(&sim.world.prototypes, "iron_gear_wheel");
+    let (x, y) = first_buildable_rect(&sim, assembler);
+    let entity_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    sim.select_assembler_recipe(entity_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[2] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+        .expect("player ingredients should transfer to assembler input");
+
+    assert_eq!(sim.player_inventory.slots[2], None);
+    assert_eq!(
+        sim.assembler_state(entity_id)
+            .expect("assembler should expose state")
+            .input_inventory
+            .count(iron_plate),
+        2
+    );
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    transfer_open_container_slot(
+        &mut sim,
+        Some(entity_id),
+        InventoryPanel::AssemblerOutput,
+        0,
+    )
+    .expect("assembler output should transfer to player");
+
+    assert_eq!(sim.player_inventory.count(iron_gear_wheel), 1);
+    assert_eq!(
+        sim.assembler_state(entity_id)
+            .expect("assembler should expose state")
+            .output_inventory
+            .count(iron_gear_wheel),
+        0
     );
 }
 
@@ -405,6 +473,32 @@ fn debug_placement_key_places_transport_belt_with_current_direction() {
 }
 
 #[test]
+fn debug_placement_key_places_assembler() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let mut build_direction = DebugBuildDirection::default();
+    let mut keyboard = ButtonInput::default();
+    let (x, y) = first_buildable_rect(&sim, assembler);
+
+    keyboard.press(KeyCode::KeyA);
+    let entity_id =
+        handle_debug_build_action_at_tile(&mut sim, &keyboard, &mut build_direction, x, y)
+            .expect("A should place an assembler");
+
+    assert_eq!(
+        sim.world.prototypes.entities[sim
+            .entities
+            .placed_entity(entity_id)
+            .expect("placed assembler should remain")
+            .prototype_id
+            .index()]
+        .entity_kind,
+        EntityKind::AssemblingMachine
+    );
+    assert!(sim.assembler_state(entity_id).is_ok());
+}
+
+#[test]
 fn debug_belt_insert_key_adds_selected_item_to_clicked_belt() {
     let mut sim = Simulation::new_test_world(123);
     let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
@@ -530,4 +624,13 @@ fn item_id_by_name(catalog: &PrototypeCatalog, name: &str) -> ItemId {
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
+}
+
+fn recipe_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::RecipeId {
+    catalog
+        .recipes
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
 }

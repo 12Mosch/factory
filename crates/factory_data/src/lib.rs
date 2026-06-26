@@ -66,6 +66,7 @@ pub struct EntityPrototype {
     pub inventory_slot_count: Option<usize>,
     pub burner: Option<BurnerPrototype>,
     pub mining_drill: Option<MiningDrillPrototype>,
+    pub assembling_machine: Option<AssemblingMachinePrototype>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
@@ -77,6 +78,14 @@ pub struct BurnerPrototype {
 pub struct MiningDrillPrototype {
     pub mining_area: IVec2,
     pub ticks_per_item: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+pub struct AssemblingMachinePrototype {
+    pub crafting_speed_numerator: u32,
+    pub crafting_speed_denominator: u32,
+    pub input_slot_count: usize,
+    pub output_slot_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -233,6 +242,7 @@ impl PrototypeCatalog {
                             ),
                             ticks_per_item: mining_drill.ticks_per_item,
                         }),
+                    assembling_machine: entity.assembling_machine,
                 })
             })
             .collect::<Result<_, PrototypeLoadError>>()?;
@@ -438,6 +448,7 @@ struct RawEntityPrototype {
     inventory_slot_count: Option<usize>,
     burner: Option<BurnerPrototype>,
     mining_drill: Option<RawMiningDrillPrototype>,
+    assembling_machine: Option<AssemblingMachinePrototype>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -725,6 +736,28 @@ mod tests {
                 .as_ref()
                 .map(|burner| burner.energy_usage_watts),
             Some(90_000)
+        );
+    }
+
+    #[test]
+    fn assembling_machine_loads_metadata() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let assembler = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == "assembling_machine")
+            .expect("base catalog should contain assembling machine");
+
+        assert_eq!(assembler.entity_kind, EntityKind::AssemblingMachine);
+        assert_eq!(assembler.size, IVec2::new(3, 3));
+        assert_eq!(
+            assembler.assembling_machine,
+            Some(AssemblingMachinePrototype {
+                crafting_speed_numerator: 1,
+                crafting_speed_denominator: 2,
+                input_slot_count: 4,
+                output_slot_count: 1,
+            })
         );
     }
 

@@ -210,6 +210,12 @@
             entity_kind: AssemblingMachine,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
+            assembling_machine: Some((
+                crafting_speed_numerator: 1,
+                crafting_speed_denominator: 2,
+                input_slot_count: 4,
+                output_slot_count: 1,
+            )),
         ),
         (
             id: 6,
