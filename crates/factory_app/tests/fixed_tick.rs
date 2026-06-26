@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use factory_app::{FactoryAppPlugin, SimResource};
+use factory_app::{FactoryAppPlugin, SimResource, world_position_to_tile_coord};
 use factory_sim::Simulation;
 use std::time::Duration;
 
@@ -46,6 +46,41 @@ fn zero_duration_render_pause_does_not_advance_or_corrupt_sim() {
         sim_tick_and_hash(&app),
         (TARGET_TICKS, expected.state_hash())
     );
+}
+
+#[test]
+fn world_position_to_tile_coord_floors_negative_coordinates() {
+    assert_eq!(world_position_to_tile_coord(Vec2::new(0.0, 0.0)), (0, 0));
+    assert_eq!(world_position_to_tile_coord(Vec2::new(7.99, 7.99)), (0, 0));
+    assert_eq!(world_position_to_tile_coord(Vec2::new(8.0, 8.0)), (1, 1));
+    assert_eq!(
+        world_position_to_tile_coord(Vec2::new(-0.01, -0.01)),
+        (-1, -1)
+    );
+    assert_eq!(
+        world_position_to_tile_coord(Vec2::new(-8.0, -8.0)),
+        (-1, -1)
+    );
+    assert_eq!(
+        world_position_to_tile_coord(Vec2::new(-8.01, -8.01)),
+        (-2, -2)
+    );
+}
+
+#[test]
+fn input_movement_changes_player_position_under_fixed_ticks() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    let before = app.world().resource::<SimResource>().sim.player;
+    let before_tick = app.world().resource::<SimResource>().sim.tick_count();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyD);
+    run_until_tick(&mut app, before_tick + 1);
+
+    let after = app.world().resource::<SimResource>().sim.player;
+    assert!(after.x_fixed() > before.x_fixed());
+    assert_eq!(after.y_fixed(), before.y_fixed());
 }
 
 fn run_to_tick_with_frame_rate(frame_rate: f64, target_tick: u64) -> (u64, u64) {
