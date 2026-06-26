@@ -273,4 +273,14 @@
             collision_mask: (layers: ["water"]),
         ),
     ],
+    technologies: [
+        (
+            id: 0,
+            name: "automation",
+            prerequisites: [],
+            science_packs: [(item: "automation_science_pack", amount: 1)],
+            required_units: 10,
+            effects: [UnlockRecipe("assembling_machine")],
+        ),
+    ],
 )

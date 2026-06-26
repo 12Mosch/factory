@@ -1,5 +1,6 @@
 use factory_data::{
-    CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TileId,
+    CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId,
+    TechnologyEffect, TechnologyId, TileId,
 };
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, VecDeque};
@@ -78,7 +79,44 @@ pub struct CraftingJob {
 pub enum CraftingError {
     MissingRecipe(RecipeId),
     NotManualRecipe(RecipeId),
+    RecipeLocked(RecipeId),
     InsufficientIngredients,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ResearchState {
+    pub active: Option<TechnologyId>,
+    pub technologies: Vec<TechnologyResearchState>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TechnologyResearchState {
+    pub technology_id: TechnologyId,
+    pub progress_units: u32,
+    pub unlocked: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResearchError {
+    MissingTechnology(TechnologyId),
+    AlreadyResearched(TechnologyId),
+    PrerequisiteLocked {
+        technology_id: TechnologyId,
+        prerequisite_id: TechnologyId,
+    },
+    NoActiveResearch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResearchProgressResult {
+    InProgress {
+        technology_id: TechnologyId,
+        progress_units: u32,
+        required_units: u32,
+    },
+    Completed {
+        technology_id: TechnologyId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -90,6 +128,7 @@ pub struct Simulation {
     pub player_inventory: Inventory,
     pub manual_mining_progress: Option<ManualMiningProgress>,
     pub crafting_queue: CraftingQueue,
+    pub research: ResearchState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -280,6 +319,7 @@ pub enum AssemblerError {
     NotAssembler(u64),
     MissingRecipe(RecipeId),
     InvalidRecipe(RecipeId),
+    RecipeLocked(RecipeId),
     RecipeChangeRequiresEmpty { entity_id: u64 },
     InvalidInput(ItemId),
     InvalidSlot { slot_index: usize },
@@ -603,9 +643,27 @@ fn ensure_inventory_can_accept(
     }
 }
 
+impl ResearchState {
+    fn from_catalog(catalog: &PrototypeCatalog) -> Self {
+        Self {
+            active: None,
+            technologies: catalog
+                .technologies
+                .iter()
+                .map(|technology| TechnologyResearchState {
+                    technology_id: technology.id,
+                    progress_units: 0,
+                    unlocked: false,
+                })
+                .collect(),
+        }
+    }
+}
+
 impl Simulation {
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
         let world = WorldSim::new(seed, prototypes);
+        let research = ResearchState::from_catalog(&world.prototypes);
         let entities = EntityStore::new_test_entities(seed);
         let player = find_player_start(&world, &entities.occupancy)
             .expect("test world should contain a walkable player start");
@@ -627,6 +685,7 @@ impl Simulation {
             player_inventory,
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
+            research,
         }
     }
 
@@ -668,6 +727,124 @@ impl Simulation {
         let mut hasher = StableHasher::default();
         self.hash(&mut hasher);
         hasher.finish()
+    }
+
+    pub fn is_technology_unlocked(&self, technology_id: TechnologyId) -> bool {
+        self.research
+            .technologies
+            .get(technology_id.index())
+            .filter(|state| state.technology_id == technology_id)
+            .is_some_and(|state| state.unlocked)
+    }
+
+    pub fn technology_progress(&self, technology_id: TechnologyId) -> Option<u32> {
+        self.research
+            .technologies
+            .get(technology_id.index())
+            .filter(|state| state.technology_id == technology_id)
+            .map(|state| state.progress_units)
+    }
+
+    pub fn select_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
+        let technology = self
+            .world
+            .prototypes
+            .technologies
+            .get(technology_id.index())
+            .filter(|technology| technology.id == technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))?;
+        let state = self
+            .research
+            .technologies
+            .get(technology_id.index())
+            .filter(|state| state.technology_id == technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))?;
+        if state.unlocked {
+            return Err(ResearchError::AlreadyResearched(technology_id));
+        }
+
+        for prerequisite_id in &technology.prerequisites {
+            if !self.is_technology_unlocked(*prerequisite_id) {
+                return Err(ResearchError::PrerequisiteLocked {
+                    technology_id,
+                    prerequisite_id: *prerequisite_id,
+                });
+            }
+        }
+
+        self.research.active = Some(technology_id);
+        Ok(())
+    }
+
+    pub fn add_research_units(
+        &mut self,
+        units: u32,
+    ) -> Result<ResearchProgressResult, ResearchError> {
+        let technology_id = self
+            .research
+            .active
+            .ok_or(ResearchError::NoActiveResearch)?;
+        let technology = self
+            .world
+            .prototypes
+            .technologies
+            .get(technology_id.index())
+            .filter(|technology| technology.id == technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))?;
+        let state = self
+            .research
+            .technologies
+            .get_mut(technology_id.index())
+            .filter(|state| state.technology_id == technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))?;
+
+        state.progress_units = state
+            .progress_units
+            .saturating_add(units)
+            .min(technology.required_units);
+
+        if state.progress_units >= technology.required_units {
+            state.unlocked = true;
+            self.research.active = None;
+            Ok(ResearchProgressResult::Completed { technology_id })
+        } else {
+            Ok(ResearchProgressResult::InProgress {
+                technology_id,
+                progress_units: state.progress_units,
+                required_units: technology.required_units,
+            })
+        }
+    }
+
+    pub fn is_recipe_unlocked(&self, recipe_id: RecipeId) -> bool {
+        let is_locked_by_technology =
+            self.world.prototypes.technologies.iter().any(|technology| {
+                technology.effects.iter().any(|effect| {
+                    matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
+                })
+            });
+        if !is_locked_by_technology {
+            return true;
+        }
+
+        self.world.prototypes.technologies.iter().any(|technology| {
+            self.is_technology_unlocked(technology.id)
+                && technology.effects.iter().any(|effect| {
+                    matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
+                })
+        })
+    }
+
+    pub fn available_recipes(
+        &self,
+        category: CraftingCategory,
+    ) -> Vec<&factory_data::RecipePrototype> {
+        self.world
+            .prototypes
+            .recipes
+            .iter()
+            .filter(|recipe| recipe.category == category && self.is_recipe_unlocked(recipe.id))
+            .collect()
     }
 
     pub fn move_player(&mut self, direction_x: f32, direction_y: f32, delta_seconds: f32) {
@@ -780,6 +957,9 @@ impl Simulation {
             CraftingCategory::Crafting | CraftingCategory::Manual
         ) {
             return Err(CraftingError::NotManualRecipe(recipe_id));
+        }
+        if !self.is_recipe_unlocked(recipe_id) {
+            return Err(CraftingError::RecipeLocked(recipe_id));
         }
 
         for ingredient in &recipe.ingredients {
@@ -1274,6 +1454,9 @@ impl Simulation {
         if recipe.category != CraftingCategory::Crafting {
             return Err(AssemblerError::InvalidRecipe(recipe_id));
         }
+        if !self.is_recipe_unlocked(recipe_id) {
+            return Err(AssemblerError::RecipeLocked(recipe_id));
+        }
 
         let state = self.entities.assembler_state_mut(entity_id)?;
         if state.selected_recipe == Some(recipe_id) {
@@ -1308,6 +1491,9 @@ impl Simulation {
             .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
         if recipe.category != CraftingCategory::Crafting {
             return Err(AssemblerError::InvalidRecipe(recipe_id));
+        }
+        if !self.is_recipe_unlocked(recipe_id) {
+            return Ok(false);
         }
 
         let state = self.entities.assembler_state(entity_id)?;
@@ -2997,6 +3183,16 @@ fn recipe_id(prototypes: &PrototypeCatalog, name: &str) -> RecipeId {
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
+}
+
+#[cfg(test)]
+fn technology_id(prototypes: &PrototypeCatalog, name: &str) -> TechnologyId {
+    prototypes
+        .technologies
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required technology prototype {name:?}"))
 }
 
 fn item_stack_size(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u16> {
@@ -5304,6 +5500,194 @@ mod tests {
         );
         assert_eq!(inventory, before);
         assert_eq!(inventory.count(iron_plate), 3);
+    }
+
+    #[test]
+    fn new_simulations_start_with_automation_locked_and_no_progress() {
+        let sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+
+        assert!(!sim.is_technology_unlocked(automation));
+        assert_eq!(sim.technology_progress(automation), Some(0));
+        assert_eq!(sim.research.active, None);
+    }
+
+    #[test]
+    fn technology_unlocked_recipes_are_unavailable_until_researched() {
+        let sim = Simulation::new_test_world(123);
+        let assembling_machine = recipe_id(&sim.world.prototypes, "assembling_machine");
+        let iron_gear_wheel = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+        let available_crafting = sim
+            .available_recipes(CraftingCategory::Crafting)
+            .into_iter()
+            .map(|recipe| recipe.id)
+            .collect::<Vec<_>>();
+
+        assert!(!sim.is_recipe_unlocked(assembling_machine));
+        assert!(sim.is_recipe_unlocked(iron_gear_wheel));
+        assert!(!available_crafting.contains(&assembling_machine));
+        assert!(available_crafting.contains(&iron_gear_wheel));
+    }
+
+    #[test]
+    fn locked_manual_craft_fails_without_consuming_ingredients() {
+        let mut sim = Simulation::new_test_world(123);
+        let recipe = recipe_id(&sim.world.prototypes, "assembling_machine");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+        let electronic_circuit = item_id(&sim.world.prototypes, "electronic_circuit");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_plate, 9)
+            .expect("test inventory should accept iron plates");
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_gear_wheel, 5)
+            .expect("test inventory should accept gears");
+        sim.player_inventory
+            .insert(&sim.world.prototypes, electronic_circuit, 3)
+            .expect("test inventory should accept circuits");
+        let before = sim.player_inventory.clone();
+
+        assert_eq!(
+            sim.start_manual_craft(recipe),
+            Err(CraftingError::RecipeLocked(recipe))
+        );
+        assert_eq!(sim.player_inventory, before);
+        assert!(sim.crafting_queue.entries.is_empty());
+    }
+
+    #[test]
+    fn locked_assembler_recipe_selection_fails_without_mutation() {
+        let mut sim = Simulation::new_test_world(123);
+        let assembler_id = place_assembling_machine(&mut sim);
+        let recipe = recipe_id(&sim.world.prototypes, "assembling_machine");
+        let before = sim
+            .assembler_state(assembler_id)
+            .expect("assembler should expose state")
+            .clone();
+
+        assert_eq!(
+            sim.select_assembler_recipe(assembler_id, recipe),
+            Err(AssemblerError::RecipeLocked(recipe))
+        );
+        assert_eq!(
+            sim.can_select_assembler_recipe(assembler_id, recipe),
+            Ok(false)
+        );
+        assert_eq!(
+            sim.assembler_state(assembler_id)
+                .expect("assembler should expose state"),
+            &before
+        );
+    }
+
+    #[test]
+    fn research_progress_unlocks_automation_recipe_effects() {
+        let mut sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+        let assembling_machine = recipe_id(&sim.world.prototypes, "assembling_machine");
+
+        sim.select_research(automation)
+            .expect("automation should be selectable");
+        assert_eq!(
+            sim.add_research_units(9),
+            Ok(ResearchProgressResult::InProgress {
+                technology_id: automation,
+                progress_units: 9,
+                required_units: 10,
+            })
+        );
+        assert!(!sim.is_technology_unlocked(automation));
+        assert!(!sim.is_recipe_unlocked(assembling_machine));
+        assert_eq!(
+            sim.add_research_units(1),
+            Ok(ResearchProgressResult::Completed {
+                technology_id: automation
+            })
+        );
+
+        assert!(sim.is_technology_unlocked(automation));
+        assert_eq!(sim.technology_progress(automation), Some(10));
+        assert_eq!(sim.research.active, None);
+        assert!(sim.is_recipe_unlocked(assembling_machine));
+    }
+
+    #[test]
+    fn zero_research_units_return_current_progress_without_advancing() {
+        let mut sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+
+        sim.select_research(automation)
+            .expect("automation should be selectable");
+
+        assert_eq!(
+            sim.add_research_units(0),
+            Ok(ResearchProgressResult::InProgress {
+                technology_id: automation,
+                progress_units: 0,
+                required_units: 10,
+            })
+        );
+        assert_eq!(sim.technology_progress(automation), Some(0));
+        assert!(!sim.is_technology_unlocked(automation));
+    }
+
+    #[test]
+    fn after_automation_unlock_assembling_machine_can_be_manually_crafted() {
+        let mut sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+        let recipe = recipe_id(&sim.world.prototypes, "assembling_machine");
+        let assembling_machine = item_id(&sim.world.prototypes, "assembling_machine");
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+        let electronic_circuit = item_id(&sim.world.prototypes, "electronic_circuit");
+        sim.select_research(automation)
+            .expect("automation should be selectable");
+        sim.add_research_units(10)
+            .expect("automation research should complete");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_plate, 9)
+            .expect("test inventory should accept iron plates");
+        sim.player_inventory
+            .insert(&sim.world.prototypes, iron_gear_wheel, 5)
+            .expect("test inventory should accept gears");
+        sim.player_inventory
+            .insert(&sim.world.prototypes, electronic_circuit, 3)
+            .expect("test inventory should accept circuits");
+
+        sim.start_manual_craft(recipe)
+            .expect("unlocked recipe should craft with enough ingredients");
+        for _ in 0..30 {
+            sim.tick();
+        }
+
+        assert_eq!(sim.player_inventory.count(assembling_machine), 1);
+        assert!(sim.crafting_queue.entries.is_empty());
+    }
+
+    #[test]
+    fn research_progress_participates_in_state_hash_deterministically() {
+        let mut first = Simulation::new_test_world(123);
+        let mut second = Simulation::new_test_world(123);
+        let automation = technology_id(&first.world.prototypes, "automation");
+        let initial_hash = first.state_hash();
+
+        first
+            .select_research(automation)
+            .expect("automation should be selectable");
+        first
+            .add_research_units(4)
+            .expect("research should accept units");
+        second
+            .select_research(automation)
+            .expect("automation should be selectable");
+        second
+            .add_research_units(4)
+            .expect("research should accept units");
+
+        assert_ne!(first.state_hash(), initial_hash);
+        assert_eq!(first.state_hash(), second.state_hash());
     }
 
     #[test]

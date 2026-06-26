@@ -2171,6 +2171,10 @@ pub fn crafting_recipe_choices(catalog: &PrototypeCatalog) -> Vec<&factory_data:
         .collect()
 }
 
+pub fn available_crafting_recipe_choices(sim: &Simulation) -> Vec<&factory_data::RecipePrototype> {
+    sim.available_recipes(CraftingCategory::Crafting)
+}
+
 pub fn format_assembler_detail_text(
     sim: &Simulation,
     entity_id: u64,

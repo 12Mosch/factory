@@ -29,6 +29,7 @@ id_type!(ItemId);
 id_type!(RecipeId);
 id_type!(EntityPrototypeId);
 id_type!(TileId);
+id_type!(TechnologyId);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PrototypeCatalog {
@@ -36,6 +37,7 @@ pub struct PrototypeCatalog {
     pub recipes: Vec<RecipePrototype>,
     pub entities: Vec<EntityPrototype>,
     pub tiles: Vec<TilePrototype>,
+    pub technologies: Vec<TechnologyPrototype>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -93,6 +95,21 @@ pub struct TilePrototype {
     pub id: TileId,
     pub name: String,
     pub collision_mask: CollisionMask,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TechnologyPrototype {
+    pub id: TechnologyId,
+    pub name: String,
+    pub prerequisites: Vec<TechnologyId>,
+    pub science_packs: Vec<ItemAmount>,
+    pub required_units: u32,
+    pub effects: Vec<TechnologyEffect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TechnologyEffect {
+    UnlockRecipe(RecipeId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -155,6 +172,27 @@ pub enum PrototypeLoadError {
         recipe: String,
         item: String,
     },
+    MissingTechnologyPrerequisite {
+        technology: String,
+        prerequisite: String,
+    },
+    MissingTechnologySciencePackItem {
+        technology: String,
+        item: String,
+    },
+    MissingTechnologyUnlockRecipe {
+        technology: String,
+        recipe: String,
+    },
+    InvalidTechnologyRequiredUnits {
+        technology: String,
+    },
+    TechnologySelfPrerequisite {
+        technology: String,
+    },
+    TechnologyPrerequisiteCycle {
+        technology: String,
+    },
     InvalidCollisionLayer {
         owner: String,
         layer: String,
@@ -182,6 +220,8 @@ impl PrototypeCatalog {
         validate_group(&mut entities, "entities")?;
         let mut tiles = raw.tiles;
         validate_group(&mut tiles, "tiles")?;
+        let mut technologies = raw.technologies;
+        validate_group(&mut technologies, "technologies")?;
 
         let mut item_ids_by_name = HashMap::with_capacity(items.len());
         let loaded_items = items
@@ -198,7 +238,7 @@ impl PrototypeCatalog {
             })
             .collect();
 
-        let loaded_recipes = recipes
+        let loaded_recipes: Vec<RecipePrototype> = recipes
             .into_iter()
             .map(|recipe| {
                 let recipe_name = recipe.name.clone();
@@ -220,6 +260,10 @@ impl PrototypeCatalog {
                 })
             })
             .collect::<Result<_, PrototypeLoadError>>()?;
+        let recipe_ids_by_name = loaded_recipes
+            .iter()
+            .map(|recipe: &RecipePrototype| (recipe.name.clone(), recipe.id))
+            .collect::<HashMap<_, _>>();
 
         let loaded_entities = entities
             .into_iter()
@@ -259,11 +303,90 @@ impl PrototypeCatalog {
             })
             .collect::<Result<_, PrototypeLoadError>>()?;
 
+        let technology_ids_by_name = technologies
+            .iter()
+            .map(|technology| (technology.name.clone(), TechnologyId::new(technology.id)))
+            .collect::<HashMap<_, _>>();
+        let loaded_technologies = technologies
+            .into_iter()
+            .map(|technology| {
+                if technology.required_units == 0 {
+                    return Err(PrototypeLoadError::InvalidTechnologyRequiredUnits {
+                        technology: technology.name,
+                    });
+                }
+
+                let id = TechnologyId::new(technology.id);
+                let prerequisites = technology
+                    .prerequisites
+                    .into_iter()
+                    .map(|prerequisite| {
+                        let prerequisite_id = *technology_ids_by_name
+                            .get(&prerequisite)
+                            .ok_or_else(|| PrototypeLoadError::MissingTechnologyPrerequisite {
+                                technology: technology.name.clone(),
+                                prerequisite: prerequisite.clone(),
+                            })?;
+                        if prerequisite_id == id {
+                            return Err(PrototypeLoadError::TechnologySelfPrerequisite {
+                                technology: technology.name.clone(),
+                            });
+                        }
+                        Ok(prerequisite_id)
+                    })
+                    .collect::<Result<_, PrototypeLoadError>>()?;
+
+                let science_packs = technology
+                    .science_packs
+                    .into_iter()
+                    .map(|amount| {
+                        let item = *item_ids_by_name.get(&amount.item).ok_or_else(|| {
+                            PrototypeLoadError::MissingTechnologySciencePackItem {
+                                technology: technology.name.clone(),
+                                item: amount.item.clone(),
+                            }
+                        })?;
+                        Ok(ItemAmount {
+                            item,
+                            amount: amount.amount,
+                        })
+                    })
+                    .collect::<Result<_, PrototypeLoadError>>()?;
+
+                let effects = technology
+                    .effects
+                    .into_iter()
+                    .map(|effect| match effect {
+                        RawTechnologyEffect::UnlockRecipe(recipe) => {
+                            let recipe_id = *recipe_ids_by_name.get(&recipe).ok_or_else(|| {
+                                PrototypeLoadError::MissingTechnologyUnlockRecipe {
+                                    technology: technology.name.clone(),
+                                    recipe: recipe.clone(),
+                                }
+                            })?;
+                            Ok(TechnologyEffect::UnlockRecipe(recipe_id))
+                        }
+                    })
+                    .collect::<Result<_, PrototypeLoadError>>()?;
+
+                Ok(TechnologyPrototype {
+                    id,
+                    name: technology.name,
+                    prerequisites,
+                    science_packs,
+                    required_units: technology.required_units,
+                    effects,
+                })
+            })
+            .collect::<Result<Vec<_>, PrototypeLoadError>>()?;
+        validate_technology_prerequisite_graph(&loaded_technologies)?;
+
         Ok(Self {
             items: loaded_items,
             recipes: loaded_recipes,
             entities: loaded_entities,
             tiles: loaded_tiles,
+            technologies: loaded_technologies,
         })
     }
 
@@ -297,6 +420,33 @@ impl fmt::Display for PrototypeLoadError {
                     "recipe {recipe:?} references missing item {item:?}"
                 )
             }
+            Self::MissingTechnologyPrerequisite {
+                technology,
+                prerequisite,
+            } => write!(
+                formatter,
+                "technology {technology:?} references missing prerequisite {prerequisite:?}"
+            ),
+            Self::MissingTechnologySciencePackItem { technology, item } => write!(
+                formatter,
+                "technology {technology:?} references missing science pack item {item:?}"
+            ),
+            Self::MissingTechnologyUnlockRecipe { technology, recipe } => write!(
+                formatter,
+                "technology {technology:?} references missing unlock recipe {recipe:?}"
+            ),
+            Self::InvalidTechnologyRequiredUnits { technology } => write!(
+                formatter,
+                "technology {technology:?} must require at least one research unit"
+            ),
+            Self::TechnologySelfPrerequisite { technology } => write!(
+                formatter,
+                "technology {technology:?} cannot list itself as a prerequisite"
+            ),
+            Self::TechnologyPrerequisiteCycle { technology } => write!(
+                formatter,
+                "technology prerequisite graph contains a cycle at {technology:?}"
+            ),
             Self::InvalidCollisionLayer { owner, layer } => {
                 write!(
                     formatter,
@@ -412,12 +562,66 @@ fn resolve_collision_mask(
     Ok(CollisionMask { layers })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TechnologyVisitState {
+    Visiting,
+    Visited,
+}
+
+fn validate_technology_prerequisite_graph(
+    technologies: &[TechnologyPrototype],
+) -> Result<(), PrototypeLoadError> {
+    let mut states = vec![None; technologies.len()];
+
+    for technology in technologies {
+        visit_technology_prerequisites(technology.id.index(), technologies, &mut states)?;
+    }
+
+    Ok(())
+}
+
+fn visit_technology_prerequisites(
+    index: usize,
+    technologies: &[TechnologyPrototype],
+    states: &mut [Option<TechnologyVisitState>],
+) -> Result<(), PrototypeLoadError> {
+    match states[index] {
+        Some(TechnologyVisitState::Visited) => return Ok(()),
+        Some(TechnologyVisitState::Visiting) => {
+            return Err(PrototypeLoadError::TechnologyPrerequisiteCycle {
+                technology: technologies[index].name.clone(),
+            });
+        }
+        None => {}
+    }
+
+    states[index] = Some(TechnologyVisitState::Visiting);
+
+    for prerequisite in &technologies[index].prerequisites {
+        let prerequisite_index = prerequisite.index();
+        if prerequisite_index >= technologies.len()
+            || technologies[prerequisite_index].id != *prerequisite
+        {
+            return Err(PrototypeLoadError::MissingTechnologyPrerequisite {
+                technology: technologies[index].name.clone(),
+                prerequisite: format!("<id:{}>", prerequisite.raw()),
+            });
+        }
+        visit_technology_prerequisites(prerequisite_index, technologies, states)?;
+    }
+
+    states[index] = Some(TechnologyVisitState::Visited);
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct RawPrototypeCatalog {
     items: Vec<RawItemPrototype>,
     recipes: Vec<RawRecipePrototype>,
     entities: Vec<RawEntityPrototype>,
     tiles: Vec<RawTilePrototype>,
+    #[serde(default)]
+    technologies: Vec<RawTechnologyPrototype>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -462,6 +666,21 @@ struct RawTilePrototype {
     id: u16,
     name: String,
     collision_mask: RawCollisionMask,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTechnologyPrototype {
+    id: u16,
+    name: String,
+    prerequisites: Vec<String>,
+    science_packs: Vec<RawItemAmount>,
+    required_units: u32,
+    effects: Vec<RawTechnologyEffect>,
+}
+
+#[derive(Debug, Deserialize)]
+enum RawTechnologyEffect {
+    UnlockRecipe(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -512,6 +731,16 @@ impl RawPrototype for RawEntityPrototype {
 }
 
 impl RawPrototype for RawTilePrototype {
+    fn id(&self) -> u16 {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl RawPrototype for RawTechnologyPrototype {
     fn id(&self) -> u16 {
         self.id
     }
@@ -580,6 +809,7 @@ mod tests {
     ];
 
     const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
+    const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
 
     #[test]
     fn base_catalog_loads_from_ron() {
@@ -589,6 +819,7 @@ mod tests {
         assert_eq!(catalog.recipes.len(), 15);
         assert_eq!(catalog.entities.len(), 11);
         assert_eq!(catalog.tiles.len(), 3);
+        assert_eq!(catalog.technologies.len(), 1);
     }
 
     #[test]
@@ -628,6 +859,16 @@ mod tests {
                 "missing tile {name}"
             );
         }
+
+        for name in TECHNOLOGY_NAMES {
+            assert!(
+                catalog
+                    .technologies
+                    .iter()
+                    .any(|prototype| prototype.name == name),
+                "missing technology {name}"
+            );
+        }
     }
 
     #[test]
@@ -648,6 +889,10 @@ mod tests {
 
         for (expected, tile) in catalog.tiles.iter().enumerate() {
             assert_eq!(tile.id.index(), expected);
+        }
+
+        for (expected, technology) in catalog.technologies.iter().enumerate() {
+            assert_eq!(technology.id.index(), expected);
         }
     }
 
@@ -801,6 +1046,42 @@ mod tests {
     }
 
     #[test]
+    fn automation_technology_loads_research_cost_and_unlock_effect() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let automation_science_pack = catalog
+            .items
+            .iter()
+            .find(|item| item.name == "automation_science_pack")
+            .expect("base catalog should contain automation science pack")
+            .id;
+        let assembling_machine_recipe = catalog
+            .recipes
+            .iter()
+            .find(|recipe| recipe.name == "assembling_machine")
+            .expect("base catalog should contain assembling machine recipe")
+            .id;
+        let automation = catalog
+            .technologies
+            .iter()
+            .find(|technology| technology.name == "automation")
+            .expect("base catalog should contain automation technology");
+
+        assert_eq!(automation.prerequisites, Vec::<TechnologyId>::new());
+        assert_eq!(
+            automation.science_packs,
+            vec![ItemAmount {
+                item: automation_science_pack,
+                amount: 1,
+            }]
+        );
+        assert_eq!(automation.required_units, 10);
+        assert_eq!(
+            automation.effects,
+            vec![TechnologyEffect::UnlockRecipe(assembling_machine_recipe)]
+        );
+    }
+
+    #[test]
     fn duplicate_ids_fail() {
         let error = PrototypeCatalog::from_ron_str(
             r#"
@@ -904,6 +1185,277 @@ mod tests {
             error,
             PrototypeLoadError::InvalidCollisionLayer { owner, layer }
                 if owner == "bad_entity" && layer == "invalid"
+        ));
+    }
+
+    #[test]
+    fn missing_technology_prerequisites_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [(
+                    id: 0,
+                    name: "automation",
+                    prerequisites: ["missing"],
+                    science_packs: [],
+                    required_units: 1,
+                    effects: [],
+                )],
+            )
+            "#,
+        )
+        .expect_err("missing technology prerequisites should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::MissingTechnologyPrerequisite {
+                technology,
+                prerequisite,
+            } if technology == "automation" && prerequisite == "missing"
+        ));
+    }
+
+    #[test]
+    fn missing_technology_science_pack_items_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [(
+                    id: 0,
+                    name: "automation",
+                    prerequisites: [],
+                    science_packs: [(item: "missing_pack", amount: 1)],
+                    required_units: 1,
+                    effects: [],
+                )],
+            )
+            "#,
+        )
+        .expect_err("missing science pack item should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::MissingTechnologySciencePackItem {
+                technology,
+                item,
+            } if technology == "automation" && item == "missing_pack"
+        ));
+    }
+
+    #[test]
+    fn missing_technology_unlock_recipes_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [(
+                    id: 0,
+                    name: "automation",
+                    prerequisites: [],
+                    science_packs: [],
+                    required_units: 1,
+                    effects: [UnlockRecipe("missing_recipe")],
+                )],
+            )
+            "#,
+        )
+        .expect_err("missing unlock recipe should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::MissingTechnologyUnlockRecipe {
+                technology,
+                recipe,
+            } if technology == "automation" && recipe == "missing_recipe"
+        ));
+    }
+
+    #[test]
+    fn duplicate_technology_ids_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [
+                    (
+                        id: 0,
+                        name: "automation",
+                        prerequisites: [],
+                        science_packs: [],
+                        required_units: 1,
+                        effects: [],
+                    ),
+                    (
+                        id: 0,
+                        name: "logistics",
+                        prerequisites: [],
+                        science_packs: [],
+                        required_units: 1,
+                        effects: [],
+                    ),
+                ],
+            )
+            "#,
+        )
+        .expect_err("duplicate technology ids should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::DuplicateId {
+                group: "technologies",
+                id: 0,
+            }
+        ));
+    }
+
+    #[test]
+    fn duplicate_technology_names_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [
+                    (
+                        id: 0,
+                        name: "automation",
+                        prerequisites: [],
+                        science_packs: [],
+                        required_units: 1,
+                        effects: [],
+                    ),
+                    (
+                        id: 1,
+                        name: "automation",
+                        prerequisites: [],
+                        science_packs: [],
+                        required_units: 1,
+                        effects: [],
+                    ),
+                ],
+            )
+            "#,
+        )
+        .expect_err("duplicate technology names should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::DuplicateName {
+                group: "technologies",
+                name,
+            } if name == "automation"
+        ));
+    }
+
+    #[test]
+    fn invalid_technology_required_units_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [(
+                    id: 0,
+                    name: "automation",
+                    prerequisites: [],
+                    science_packs: [],
+                    required_units: 0,
+                    effects: [],
+                )],
+            )
+            "#,
+        )
+        .expect_err("zero required units should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::InvalidTechnologyRequiredUnits { technology }
+                if technology == "automation"
+        ));
+    }
+
+    #[test]
+    fn technology_self_prerequisites_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [(
+                    id: 0,
+                    name: "automation",
+                    prerequisites: ["automation"],
+                    science_packs: [],
+                    required_units: 1,
+                    effects: [],
+                )],
+            )
+            "#,
+        )
+        .expect_err("self prerequisites should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::TechnologySelfPrerequisite { technology }
+                if technology == "automation"
+        ));
+    }
+
+    #[test]
+    fn technology_prerequisite_cycles_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [
+                    (
+                        id: 0,
+                        name: "automation",
+                        prerequisites: ["logistics"],
+                        science_packs: [],
+                        required_units: 1,
+                        effects: [],
+                    ),
+                    (
+                        id: 1,
+                        name: "logistics",
+                        prerequisites: ["automation"],
+                        science_packs: [],
+                        required_units: 1,
+                        effects: [],
+                    ),
+                ],
+            )
+            "#,
+        )
+        .expect_err("technology prerequisite cycles should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::TechnologyPrerequisiteCycle { .. }
         ));
     }
 }

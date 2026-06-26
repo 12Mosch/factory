@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::{
-    DebugBuildDirection, FactoryAppPlugin, InventoryPanel, SimResource, crafting_recipe_choices,
-    format_assembler_detail_text, handle_debug_belt_item_insertion_at_tile,
-    handle_debug_build_action_at_tile, opened_container_after_world_click,
-    transfer_open_container_slot, world_position_to_tile_coord,
+    DebugBuildDirection, FactoryAppPlugin, InventoryPanel, SimResource,
+    available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
+    handle_debug_belt_item_insertion_at_tile, handle_debug_build_action_at_tile,
+    opened_container_after_world_click, transfer_open_container_slot, world_position_to_tile_coord,
 };
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
@@ -222,6 +222,48 @@ fn assembler_recipe_choices_are_all_and_only_crafting_recipes() {
             .iter()
             .filter(|recipe| recipe.category != CraftingCategory::Crafting)
             .all(|recipe| !choices.iter().any(|choice| choice.id == recipe.id))
+    );
+}
+
+#[test]
+fn available_crafting_recipe_choices_follow_research_unlocks() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id_by_name(&sim.world.prototypes, "automation");
+    let assembling_machine = recipe_id_by_name(&sim.world.prototypes, "assembling_machine");
+
+    let initial_choices = available_crafting_recipe_choices(&sim);
+    assert!(
+        !initial_choices
+            .iter()
+            .any(|recipe| recipe.id == assembling_machine)
+    );
+
+    sim.select_research(automation)
+        .expect("automation should be selectable");
+    sim.add_research_units(10)
+        .expect("automation research should complete");
+
+    let unlocked_choices = available_crafting_recipe_choices(&sim);
+    assert!(
+        unlocked_choices
+            .iter()
+            .any(|recipe| recipe.id == assembling_machine)
+    );
+}
+
+#[test]
+fn locked_assembler_recipe_buttons_are_unavailable_without_error() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let recipe = recipe_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = first_buildable_rect(&sim, assembler);
+    let entity_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+
+    assert_eq!(
+        sim.can_select_assembler_recipe(entity_id, recipe),
+        Ok(false)
     );
 }
 
@@ -691,4 +733,13 @@ fn recipe_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::Re
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
+}
+
+fn technology_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::TechnologyId {
+    catalog
+        .technologies
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required technology prototype {name:?}"))
 }
