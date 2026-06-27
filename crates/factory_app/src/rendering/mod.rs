@@ -1,9 +1,9 @@
 pub mod belts;
-pub mod colors;
-pub mod entities;
-pub mod player;
-pub mod resources;
-pub mod transforms;
-pub mod world;
-
-pub use crate::app::world_position_to_tile_coord;
+pub(crate) mod camera;
+pub(crate) mod colors;
+pub(crate) mod entities;
+pub(crate) mod manual_mining;
+pub(crate) mod player;
+pub(crate) mod resources;
+pub(crate) mod transforms;
+pub(crate) mod world;
