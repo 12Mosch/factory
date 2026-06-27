@@ -1,7 +1,14 @@
-use crate::simulation::Simulation;
+use crate::simulation::{NoopTickProfiler, ProfilePhase, Simulation, TickProfiler};
 
 pub fn advance_simulation(sim: &mut Simulation) {
-    sim.advance_one_tick();
+    let mut profiler = NoopTickProfiler;
+    advance_simulation_profiled(sim, &mut profiler);
+}
+
+pub(crate) fn advance_simulation_profiled<P: TickProfiler>(sim: &mut Simulation, profiler: &mut P) {
+    sim.advance_one_tick(profiler);
     #[cfg(debug_assertions)]
-    sim.validate().unwrap();
+    {
+        profiler.measure(ProfilePhase::Validation, || sim.validate().unwrap());
+    }
 }

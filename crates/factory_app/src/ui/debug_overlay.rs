@@ -1,7 +1,12 @@
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
+use factory_sim::SimulationCounts;
+use std::time::Duration;
 
 use crate::input::debug_inventory::selected_inventory_item_state;
-use crate::resources::{DebugInventorySelection, SimResource, UpsStats};
+use crate::resources::{
+    DebugInventorySelection, RenderSyncStats, SimProfileStats, SimResource, UpsStats,
+};
 
 #[derive(Component)]
 pub(crate) struct DebugOverlayText;
@@ -44,20 +49,169 @@ pub(crate) fn update_ups_stats(time: Res<Time<Real>>, mut stats: ResMut<UpsStats
 pub(crate) fn update_debug_overlay(
     sim: Res<SimResource>,
     stats: Res<UpsStats>,
+    diagnostics: Res<DiagnosticsStore>,
+    sim_profile: Res<SimProfileStats>,
+    render_sync: Res<RenderSyncStats>,
     inventory_selection: Res<DebugInventorySelection>,
     mut overlay: Query<&mut Text, With<DebugOverlayText>>,
 ) {
     let catalog = sim.sim.catalog();
     let (selected_name, selected_count) =
         selected_inventory_item_state(&sim.sim, &inventory_selection, catalog);
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|diagnostic| diagnostic.smoothed());
+    let frame_ms = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|diagnostic| diagnostic.smoothed());
+    let counts = sim.sim.counts();
+    let overlay_text = format_debug_overlay(DebugOverlaySnapshot {
+        tick: sim.sim.tick_count(),
+        ups: stats.ups,
+        fps,
+        frame_ms,
+        sim_profile: &sim_profile,
+        render_sync: &render_sync,
+        counts,
+        selected_name: &selected_name,
+        selected_count,
+    });
 
     for mut text in &mut overlay {
-        text.0 = format!(
-            "Tick: {}\nUPS: {:.1}\nItem: {}\nCount: {}",
-            sim.sim.tick_count(),
-            stats.ups,
-            selected_name,
-            selected_count
-        );
+        text.0 = overlay_text.clone();
+    }
+}
+
+pub(crate) struct DebugOverlaySnapshot<'a> {
+    pub tick: u64,
+    pub ups: f64,
+    pub fps: Option<f64>,
+    pub frame_ms: Option<f64>,
+    pub sim_profile: &'a SimProfileStats,
+    pub render_sync: &'a RenderSyncStats,
+    pub counts: SimulationCounts,
+    pub selected_name: &'a str,
+    pub selected_count: u32,
+}
+
+pub(crate) fn format_debug_overlay(snapshot: DebugOverlaySnapshot<'_>) -> String {
+    format!(
+        "\
+Tick: {}
+UPS: {:.1}
+FPS: {}
+Frame: {}
+Sim tick: {:.3} ms
+Entities: {}
+Chunks: {}
+Belts: {}
+Belt items: {}
+Machines: {}
+Inserters: {}
+Machines active/idle: {}/{}
+Phases: belts {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync {}
+Item: {}
+Count: {}",
+        snapshot.tick,
+        snapshot.ups,
+        format_optional(snapshot.fps, "", 1),
+        format_optional(snapshot.frame_ms, " ms", 3),
+        snapshot.sim_profile.rolling_average_sim_tick_ms,
+        snapshot.counts.entity_count,
+        snapshot.counts.chunk_count,
+        snapshot.counts.belt_count,
+        snapshot.counts.belt_item_count,
+        snapshot.counts.machine_count,
+        snapshot.counts.inserter_count,
+        snapshot.counts.active_machines,
+        snapshot.counts.idle_machines,
+        format_duration_ms(snapshot.sim_profile.last_tick.belts),
+        format_duration_ms(snapshot.sim_profile.last_tick.machines),
+        format_duration_ms(snapshot.sim_profile.last_tick.inserters),
+        format_duration_ms(snapshot.sim_profile.last_tick.inventory_transfers),
+        format_duration_ms(snapshot.sim_profile.last_tick.chunk_lookup),
+        format_duration_ms(snapshot.render_sync.total),
+        snapshot.selected_name,
+        snapshot.selected_count,
+    )
+}
+
+fn format_duration_ms(duration: Duration) -> String {
+    format!("{:.3} ms", duration.as_secs_f64() * 1000.0)
+}
+
+fn format_optional(value: Option<f64>, suffix: &str, decimals: usize) -> String {
+    match value {
+        Some(value) => format!("{value:.decimals$}{suffix}"),
+        None => "n/a".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use factory_sim::SimulationTickProfile;
+
+    #[test]
+    fn debug_overlay_format_includes_required_profiling_labels() {
+        let sim_profile = SimProfileStats {
+            last_tick: SimulationTickProfile {
+                belts: Duration::from_micros(100),
+                machines: Duration::from_micros(200),
+                inserters: Duration::from_micros(300),
+                inventory_transfers: Duration::from_micros(400),
+                chunk_lookup: Duration::from_micros(500),
+                ..default()
+            },
+            rolling_average_sim_tick_ms: 1.25,
+        };
+        let render_sync = RenderSyncStats {
+            total: Duration::from_micros(600),
+            ..default()
+        };
+        let text = format_debug_overlay(DebugOverlaySnapshot {
+            tick: 7,
+            ups: 60.0,
+            fps: Some(59.9),
+            frame_ms: Some(16.667),
+            sim_profile: &sim_profile,
+            render_sync: &render_sync,
+            counts: SimulationCounts {
+                entity_count: 10,
+                chunk_count: 25,
+                belt_count: 3,
+                belt_item_count: 4,
+                machine_count: 5,
+                inserter_count: 6,
+                active_machines: 2,
+                idle_machines: 3,
+            },
+            selected_name: "Iron Ore",
+            selected_count: 9,
+        });
+
+        for label in [
+            "UPS:",
+            "FPS:",
+            "Frame:",
+            "Sim tick:",
+            "Entities:",
+            "Chunks:",
+            "Belts:",
+            "Belt items:",
+            "Machines:",
+            "Inserters:",
+            "Machines active/idle:",
+            "belts",
+            "machines",
+            "inserters",
+            "inventory transfers",
+            "chunk lookup",
+            "render sync",
+            "Item:",
+            "Count:",
+        ] {
+            assert!(text.contains(label), "missing debug overlay label {label}");
+        }
     }
 }

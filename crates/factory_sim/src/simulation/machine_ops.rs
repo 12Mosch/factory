@@ -353,6 +353,30 @@ pub(super) fn first_resource_in_mining_area(
     None
 }
 
+pub(super) fn first_resource_in_mining_area_profiled<P: TickProfiler>(
+    world: &WorldSim,
+    footprint: &EntityFootprint,
+    mining_drill: &factory_data::MiningDrillPrototype,
+    profiler: &mut P,
+) -> Option<(ManualMiningTarget, ItemId)> {
+    let width = mining_drill.mining_area.x.min(footprint.width).max(0);
+    let height = mining_drill.mining_area.y.min(footprint.height).max(0);
+
+    for y in footprint.y..footprint.y + height {
+        for x in footprint.x..footprint.x + width {
+            let Some(resource) = world
+                .tile_at_profiled(x, y, profiler)
+                .and_then(|tile| tile.resource)
+            else {
+                continue;
+            };
+            return Some((ManualMiningTarget { x, y }, resource.resource_item));
+        }
+    }
+
+    None
+}
+
 pub(super) fn first_matching_smelting_recipe(
     catalog: &PrototypeCatalog,
     input_item: ItemId,

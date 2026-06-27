@@ -3,13 +3,14 @@ use bevy::sprite::{Anchor, Text2dShadow};
 use factory_data::{BasePrototypeIds, ItemId};
 use factory_sim::{BELT_SUBTILES_PER_TILE, Direction, EntityId, Simulation};
 use std::collections::BTreeSet;
+use std::time::Instant;
 
 use crate::constants::{
     BELT_DIRECTION_HEAD_SIZE, BELT_DIRECTION_SHAFT_LENGTH, BELT_DIRECTION_SHAFT_WIDTH,
     BELT_ITEM_LABEL_FONT_SIZE, BELT_ITEM_SPRITE_SIZE, TILE_SIZE,
 };
 use crate::rendering::transforms::tile_translation;
-use crate::resources::SimResource;
+use crate::resources::{RenderSyncStats, SimResource};
 use crate::utils::compact_item_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,6 +87,17 @@ pub(crate) fn sync_belt_direction_rendering(
             ));
         }
     }
+}
+
+pub(crate) fn measured_sync_belt_direction_rendering(
+    commands: Commands,
+    sim: Res<SimResource>,
+    sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
+    mut stats: ResMut<RenderSyncStats>,
+) {
+    let started = Instant::now();
+    sync_belt_direction_rendering(commands, sim, sprites);
+    stats.record_belt_directions(started.elapsed());
 }
 
 pub(crate) fn sync_belt_item_rendering(
@@ -187,6 +199,18 @@ pub(crate) fn sync_belt_item_rendering(
             }
         }
     }
+}
+
+pub(crate) fn measured_sync_belt_item_rendering(
+    commands: Commands,
+    sim: Res<SimResource>,
+    sprites: Query<(Entity, &BeltItemSprite, &mut Transform, &mut Sprite), Without<BeltItemLabel>>,
+    labels: Query<(Entity, &BeltItemLabel, &mut Transform, &mut Text2d), Without<BeltItemSprite>>,
+    mut stats: ResMut<RenderSyncStats>,
+) {
+    let started = Instant::now();
+    sync_belt_item_rendering(commands, sim, sprites, labels);
+    stats.record_belt_items(started.elapsed());
 }
 
 pub(crate) fn belt_direction_render_state(

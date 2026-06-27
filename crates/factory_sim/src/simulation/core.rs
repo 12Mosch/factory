@@ -44,16 +44,27 @@ impl Simulation {
         crate::tick::advance_simulation(self);
     }
 
-    pub(crate) fn advance_one_tick(&mut self) {
+    pub(crate) fn advance_one_tick<P: TickProfiler>(&mut self, profiler: &mut P) {
         self.tick += 1;
-        self.entities.advance(Tick(self.tick), self.world.seed);
-        self.advance_transport_belts();
-        self.advance_burner_mining_drills();
-        self.advance_furnaces();
-        self.advance_assembling_machines();
-        self.advance_labs();
-        self.advance_inserters();
-        self.advance_manual_crafting();
+        profiler.measure(ProfilePhase::EntityMotion, || {
+            self.entities.advance(Tick(self.tick), self.world.seed);
+        });
+        profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
+
+        let machines = profiler.begin();
+        self.advance_burner_mining_drills(profiler);
+        self.advance_furnaces(profiler);
+        self.advance_assembling_machines(profiler);
+        self.advance_labs(profiler);
+        profiler.finish(ProfilePhase::Machines, machines);
+
+        let inserters = profiler.begin();
+        self.advance_inserters(profiler);
+        profiler.finish(ProfilePhase::Inserters, inserters);
+
+        profiler.measure(ProfilePhase::ManualCrafting, || {
+            self.advance_manual_crafting();
+        });
     }
 
     pub fn tick_count(&self) -> u64 {

@@ -1,8 +1,9 @@
 use bevy::prelude::*;
+use std::time::Instant;
 
 use crate::constants::PLAYER_SPRITE_SIZE;
 use crate::rendering::transforms::player_translation;
-use crate::resources::SimResource;
+use crate::resources::{RenderSyncStats, SimResource};
 
 #[derive(Component)]
 pub(crate) struct PlayerSprite;
@@ -25,4 +26,14 @@ pub(crate) fn sync_player_sprite(
     for mut transform in &mut players {
         transform.translation = player_translation(sim.sim.player(), transform.translation.z);
     }
+}
+
+pub(crate) fn measured_sync_player_sprite(
+    sim: Res<SimResource>,
+    players: Query<&mut Transform, With<PlayerSprite>>,
+    mut stats: ResMut<RenderSyncStats>,
+) {
+    let started = Instant::now();
+    sync_player_sprite(sim, players);
+    stats.record_player(started.elapsed());
 }

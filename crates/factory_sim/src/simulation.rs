@@ -577,6 +577,7 @@ mod generation;
 mod inventory_ops;
 mod machine_ops;
 mod player_ops;
+mod profiling;
 mod research_ops;
 mod save;
 mod scripted;
@@ -588,6 +589,8 @@ use self::belt_ops::*;
 use self::generation::*;
 use self::inventory_ops::*;
 use self::machine_ops::*;
+pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
+pub use self::profiling::{SimulationCounts, SimulationTickProfile};
 pub use self::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_VERSION, SaveLoadError, load_from_bytes, prototype_hash,
     save_to_bytes,

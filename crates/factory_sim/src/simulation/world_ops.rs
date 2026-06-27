@@ -25,6 +25,15 @@ impl WorldSim {
             .and_then(|chunk| chunk.tiles.get(index))
     }
 
+    pub(super) fn tile_at_profiled<P: TickProfiler>(
+        &self,
+        x: i32,
+        y: i32,
+        profiler: &mut P,
+    ) -> Option<&TileCell> {
+        profiler.measure(ProfilePhase::ChunkLookup, || self.tile_at(x, y))
+    }
+
     pub fn resource_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
 
@@ -56,6 +65,35 @@ impl WorldSim {
 
         let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
         let tile = self.tile_at_mut(x, y)?;
+        let resource = tile.resource.as_mut()?;
+        let mined_amount = amount.min(resource.amount);
+        let mined = MinedResource {
+            resource_item: resource.resource_item,
+            amount: mined_amount,
+        };
+
+        resource.amount -= mined_amount;
+        if resource.amount == 0 {
+            tile.resource = None;
+            tile.collision = collision_for_tile(tile.tile_id, ids);
+        }
+
+        Some(mined)
+    }
+
+    pub(super) fn mine_resource_at_profiled<P: TickProfiler>(
+        &mut self,
+        x: i32,
+        y: i32,
+        amount: u32,
+        profiler: &mut P,
+    ) -> Option<MinedResource> {
+        if amount == 0 {
+            return None;
+        }
+
+        let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
+        let tile = profiler.measure(ProfilePhase::ChunkLookup, || self.tile_at_mut(x, y))?;
         let resource = tile.resource.as_mut()?;
         let mined_amount = amount.min(resource.amount);
         let mined = MinedResource {

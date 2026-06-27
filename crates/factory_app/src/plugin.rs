@@ -1,3 +1,4 @@
+use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 use bevy::time::Fixed;
@@ -15,18 +16,21 @@ use crate::input::movement::move_player_from_input;
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
-use crate::rendering::belts::{sync_belt_direction_rendering, sync_belt_item_rendering};
+use crate::rendering::belts::{
+    measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
+};
 use crate::rendering::camera::{follow_player_camera, setup_camera};
-use crate::rendering::entities::sync_placed_entity_rendering;
+use crate::rendering::entities::measured_sync_placed_entity_rendering;
 use crate::rendering::manual_mining::{
     spawn_cursor_tile_highlight, spawn_manual_mining_progress_bar, update_cursor_tile_highlight,
     update_manual_mining_progress_bar,
 };
-use crate::rendering::player::{spawn_player, sync_player_sprite};
-use crate::rendering::resources::sync_resource_debug_rendering;
+use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
+use crate::rendering::resources::measured_sync_resource_debug_rendering;
 use crate::rendering::world::spawn_world_tiles;
 use crate::resources::{
-    DebugBuildDirection, DebugInventorySelection, OpenContainer, SimResource, UpsStats,
+    DebugBuildDirection, DebugInventorySelection, OpenContainer, RenderSyncStats, SimProfileStats,
+    SimResource, UpsStats,
 };
 use crate::simulation::tick_sim;
 use crate::ui::assembler_panel::{
@@ -42,6 +46,16 @@ pub struct FactoryAppPlugin;
 
 impl Plugin for FactoryAppPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<DiagnosticsPlugin>() {
+            app.add_plugins(DiagnosticsPlugin);
+        }
+        if !app.is_plugin_added::<FrameCountPlugin>() {
+            app.add_plugins(FrameCountPlugin);
+        }
+        if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
+            app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+        }
+
         app.insert_resource(Time::<Fixed>::from_hz(SIM_TICKS_PER_SECOND))
             .insert_resource(SimResource {
                 sim: Simulation::new(
@@ -53,6 +67,8 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<UpsStats>()
+            .init_resource::<SimProfileStats>()
+            .init_resource::<RenderSyncStats>()
             .init_resource::<DebugInventorySelection>()
             .init_resource::<OpenContainer>()
             .init_resource::<DebugBuildDirection>()
@@ -80,7 +96,7 @@ impl Plugin for FactoryAppPlugin {
                 Update,
                 (
                     zoom_camera,
-                    sync_player_sprite,
+                    measured_sync_player_sprite,
                     follow_player_camera,
                     update_cursor_tile_highlight,
                     update_manual_mining_progress_bar,
@@ -91,10 +107,10 @@ impl Plugin for FactoryAppPlugin {
                     handle_container_open_input,
                     handle_container_close_input,
                     update_debug_overlay,
-                    sync_resource_debug_rendering,
-                    sync_placed_entity_rendering,
-                    sync_belt_direction_rendering,
-                    sync_belt_item_rendering,
+                    measured_sync_resource_debug_rendering,
+                    measured_sync_placed_entity_rendering,
+                    measured_sync_belt_direction_rendering,
+                    measured_sync_belt_item_rendering,
                     sync_container_window,
                     handle_container_slot_clicks,
                     update_container_slot_text,

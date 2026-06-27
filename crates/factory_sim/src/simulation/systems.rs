@@ -27,7 +27,7 @@ impl Simulation {
         }
     }
 
-    pub(super) fn advance_burner_mining_drills(&mut self) {
+    pub(super) fn advance_burner_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
         let drill_ids = self
             .entities
             .burner_mining_drills
@@ -44,15 +44,21 @@ impl Simulation {
                 continue;
             };
             let output_target = drill_output_target(&self.entities, &placed);
-            try_export_stored_drill_output(
-                &mut self.entities,
-                entity_id,
-                output_target,
-                &self.world.prototypes,
-            );
+            profiler.measure(ProfilePhase::InventoryTransfers, || {
+                try_export_stored_drill_output(
+                    &mut self.entities,
+                    entity_id,
+                    output_target,
+                    &self.world.prototypes,
+                )
+            });
 
-            let target =
-                first_resource_in_mining_area(&self.world, &placed.footprint, mining_drill);
+            let target = first_resource_in_mining_area_profiled(
+                &self.world,
+                &placed.footprint,
+                mining_drill,
+                profiler,
+            );
             let Some((target, resource_item)) = target else {
                 if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
                     state.resource_target = None;
@@ -65,14 +71,16 @@ impl Simulation {
                 self.entities
                     .burner_drill_state(entity_id)
                     .is_ok_and(|state| {
-                        drill_output_target_can_accept(
-                            &self.world.prototypes,
-                            &self.entities,
-                            output_target,
-                            state.output_slot,
-                            resource_item,
-                            1,
-                        )
+                        profiler.measure(ProfilePhase::InventoryTransfers, || {
+                            drill_output_target_can_accept(
+                                &self.world.prototypes,
+                                &self.entities,
+                                output_target,
+                                state.output_slot,
+                                resource_item,
+                                1,
+                            )
+                        })
                     });
             if !output_can_accept {
                 if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
@@ -90,7 +98,9 @@ impl Simulation {
                 let joules_per_tick =
                     state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
                 if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
-                    && !try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                    && !profiler.measure(ProfilePhase::InventoryTransfers, || {
+                        try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                    })
                 {
                     continue;
                 }
@@ -116,22 +126,24 @@ impl Simulation {
 
             let mined = self
                 .world
-                .mine_resource_at(target.x, target.y, 1)
+                .mine_resource_at_profiled(target.x, target.y, 1, profiler)
                 .expect("selected drill target should contain a resource");
             debug_assert_eq!(mined.resource_item, resource_item);
             debug_assert_eq!(mined.amount, 1);
-            insert_drill_output(
-                &mut self.entities,
-                entity_id,
-                output_target,
-                mined.resource_item,
-                mined.amount as u16,
-                &self.world.prototypes,
-            );
+            profiler.measure(ProfilePhase::InventoryTransfers, || {
+                insert_drill_output(
+                    &mut self.entities,
+                    entity_id,
+                    output_target,
+                    mined.resource_item,
+                    mined.amount as u16,
+                    &self.world.prototypes,
+                );
+            });
         }
     }
 
-    pub(super) fn advance_furnaces(&mut self) {
+    pub(super) fn advance_furnaces<P: TickProfiler>(&mut self, profiler: &mut P) {
         let furnace_ids = self.entities.furnaces.keys().copied().collect::<Vec<_>>();
 
         for entity_id in furnace_ids {
@@ -154,12 +166,14 @@ impl Simulation {
             };
 
             let output_can_accept = self.entities.furnace_state(entity_id).is_ok_and(|state| {
-                output_slot_can_accept(
-                    &self.world.prototypes,
-                    state.output_slot,
-                    product.item,
-                    product.amount,
-                )
+                profiler.measure(ProfilePhase::InventoryTransfers, || {
+                    output_slot_can_accept(
+                        &self.world.prototypes,
+                        state.output_slot,
+                        product.item,
+                        product.amount,
+                    )
+                })
             });
             if !output_can_accept {
                 if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
@@ -186,7 +200,9 @@ impl Simulation {
                 let joules_per_tick =
                     state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
                 if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
-                    && !try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                    && !profiler.measure(ProfilePhase::InventoryTransfers, || {
+                        try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                    })
                 {
                     continue;
                 }
@@ -214,13 +230,15 @@ impl Simulation {
                 .entities
                 .furnace_state_mut(entity_id)
                 .expect("furnace id came from furnace state map");
-            remove_from_single_slot(&mut state.input_slot, ingredient.item, ingredient.amount)
-                .expect("selected furnace input should still contain ingredient");
-            insert_output_item(&mut state.output_slot, product.item, product.amount);
+            profiler.measure(ProfilePhase::InventoryTransfers, || {
+                remove_from_single_slot(&mut state.input_slot, ingredient.item, ingredient.amount)
+                    .expect("selected furnace input should still contain ingredient");
+                insert_output_item(&mut state.output_slot, product.item, product.amount);
+            });
         }
     }
 
-    pub(super) fn advance_assembling_machines(&mut self) {
+    pub(super) fn advance_assembling_machines<P: TickProfiler>(&mut self, profiler: &mut P) {
         let assembler_ids = self
             .entities
             .assembling_machines
@@ -257,12 +275,14 @@ impl Simulation {
             };
 
             let can_craft = self.entities.assembler_state(entity_id).is_ok_and(|state| {
-                assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
-                    && assembler_output_can_accept(
-                        &self.world.prototypes,
-                        &state.output_inventory,
-                        &recipe.products,
-                    )
+                profiler.measure(ProfilePhase::InventoryTransfers, || {
+                    assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
+                        && assembler_output_can_accept(
+                            &self.world.prototypes,
+                            &state.output_inventory,
+                            &recipe.products,
+                        )
+                })
             });
             if !can_craft {
                 if let Ok(state) = self.entities.assembler_state_mut(entity_id) {
@@ -295,22 +315,24 @@ impl Simulation {
                 .entities
                 .assembler_state_mut(entity_id)
                 .expect("assembler id came from assembler state map");
-            for ingredient in &recipe.ingredients {
-                state
-                    .input_inventory
-                    .remove(ingredient.item, ingredient.amount)
-                    .expect("assembler checked ingredients before completion");
-            }
-            for product in &recipe.products {
-                state
-                    .output_inventory
-                    .insert(&self.world.prototypes, product.item, product.amount)
-                    .expect("assembler checked output capacity before completion");
-            }
+            profiler.measure(ProfilePhase::InventoryTransfers, || {
+                for ingredient in &recipe.ingredients {
+                    state
+                        .input_inventory
+                        .remove(ingredient.item, ingredient.amount)
+                        .expect("assembler checked ingredients before completion");
+                }
+                for product in &recipe.products {
+                    state
+                        .output_inventory
+                        .insert(&self.world.prototypes, product.item, product.amount)
+                        .expect("assembler checked output capacity before completion");
+                }
+            });
         }
     }
 
-    pub(super) fn advance_labs(&mut self) {
+    pub(super) fn advance_labs<P: TickProfiler>(&mut self, profiler: &mut P) {
         let lab_ids = self.entities.labs.keys().copied().collect::<Vec<_>>();
 
         for entity_id in lab_ids {
@@ -354,7 +376,9 @@ impl Simulation {
                     state.progress_ticks = 0;
                 }
                 state.required_ticks = required_ticks;
-                lab_has_science_packs(&state.inventory, &science_packs)
+                profiler.measure(ProfilePhase::InventoryTransfers, || {
+                    lab_has_science_packs(&state.inventory, &science_packs)
+                })
             };
             if !can_work {
                 continue;
@@ -381,18 +405,20 @@ impl Simulation {
                 .entities
                 .lab_state_mut(entity_id)
                 .expect("lab id came from lab state map");
-            for science_pack in &science_packs {
-                state
-                    .inventory
-                    .remove(science_pack.item, science_pack.amount)
-                    .expect("lab checked science packs before completion");
-            }
+            profiler.measure(ProfilePhase::InventoryTransfers, || {
+                for science_pack in &science_packs {
+                    state
+                        .inventory
+                        .remove(science_pack.item, science_pack.amount)
+                        .expect("lab checked science packs before completion");
+                }
+            });
             self.add_research_units(1)
                 .expect("lab completion should have active research");
         }
     }
 
-    pub(super) fn advance_inserters(&mut self) {
+    pub(super) fn advance_inserters<P: TickProfiler>(&mut self, profiler: &mut P) {
         let inserter_ids = self.entities.inserters.keys().copied().collect::<Vec<_>>();
 
         for entity_id in inserter_ids {
@@ -406,17 +432,20 @@ impl Simulation {
 
             let next_state = match state {
                 InserterState::WaitingForItem => {
-                    let Some(item_id) = peek_inserter_source_item(&self.entities, pickup_tile)
-                    else {
+                    let Some(item_id) = profiler.measure(ProfilePhase::InventoryTransfers, || {
+                        peek_inserter_source_item(&self.entities, pickup_tile)
+                    }) else {
                         continue;
                     };
                     let item = ItemStack { item_id, count: 1 };
-                    if !inserter_target_can_accept(
-                        &self.world.prototypes,
-                        &self.entities,
-                        drop_tile,
-                        item,
-                    ) {
+                    if !profiler.measure(ProfilePhase::InventoryTransfers, || {
+                        inserter_target_can_accept(
+                            &self.world.prototypes,
+                            &self.entities,
+                            drop_tile,
+                            item,
+                        )
+                    }) {
                         continue;
                     }
 
@@ -429,19 +458,30 @@ impl Simulation {
                         InserterState::Picking {
                             ticks_left: ticks_left - 1,
                         }
-                    } else if let Some(item_id) =
-                        peek_inserter_source_item(&self.entities, pickup_tile)
+                    } else if let Some(item_id) = profiler
+                        .measure(ProfilePhase::InventoryTransfers, || {
+                            peek_inserter_source_item(&self.entities, pickup_tile)
+                        })
                     {
                         let item = ItemStack { item_id, count: 1 };
-                        if !inserter_target_can_accept(
-                            &self.world.prototypes,
-                            &self.entities,
-                            drop_tile,
-                            item,
-                        ) {
+                        if !profiler.measure(ProfilePhase::InventoryTransfers, || {
+                            inserter_target_can_accept(
+                                &self.world.prototypes,
+                                &self.entities,
+                                drop_tile,
+                                item,
+                            )
+                        }) {
                             InserterState::WaitingForItem
                         } else {
-                            try_take_inserter_source_item(&mut self.entities, pickup_tile, item_id)
+                            profiler
+                                .measure(ProfilePhase::InventoryTransfers, || {
+                                    try_take_inserter_source_item(
+                                        &mut self.entities,
+                                        pickup_tile,
+                                        item_id,
+                                    )
+                                })
                                 .map_or(InserterState::WaitingForItem, |item| {
                                     InserterState::Holding { item }
                                 })
@@ -451,19 +491,23 @@ impl Simulation {
                     }
                 }
                 InserterState::Holding { item } => {
-                    if !inserter_target_can_accept(
-                        &self.world.prototypes,
-                        &self.entities,
-                        drop_tile,
-                        item,
-                    ) {
+                    if !profiler.measure(ProfilePhase::InventoryTransfers, || {
+                        inserter_target_can_accept(
+                            &self.world.prototypes,
+                            &self.entities,
+                            drop_tile,
+                            item,
+                        )
+                    }) {
                         InserterState::Holding { item }
-                    } else if try_drop_inserter_item(
-                        &self.world.prototypes,
-                        &mut self.entities,
-                        drop_tile,
-                        item,
-                    ) {
+                    } else if profiler.measure(ProfilePhase::InventoryTransfers, || {
+                        try_drop_inserter_item(
+                            &self.world.prototypes,
+                            &mut self.entities,
+                            drop_tile,
+                            item,
+                        )
+                    }) {
                         InserterState::Dropping {
                             ticks_left: BASIC_INSERTER_DROP_TICKS,
                         }

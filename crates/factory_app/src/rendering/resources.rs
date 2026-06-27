@@ -2,11 +2,12 @@ use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
 use factory_sim::{CHUNK_SIZE, ResourceCell, Simulation};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 use crate::constants::RESOURCE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color};
 use crate::rendering::transforms::tile_translation;
-use crate::resources::SimResource;
+use crate::resources::{RenderSyncStats, SimResource};
 
 #[derive(Component)]
 pub(crate) struct ResourceSprite {
@@ -77,6 +78,18 @@ pub(crate) fn sync_resource_debug_rendering(
             ));
         }
     }
+}
+
+pub(crate) fn measured_sync_resource_debug_rendering(
+    commands: Commands,
+    sim: Res<SimResource>,
+    sprites: Query<(Entity, &ResourceSprite, &mut Sprite)>,
+    labels: Query<(Entity, &ResourceAmountLabel, &mut Text2d)>,
+    mut stats: ResMut<RenderSyncStats>,
+) {
+    let started = Instant::now();
+    sync_resource_debug_rendering(commands, sim, sprites, labels);
+    stats.record_resources(started.elapsed());
 }
 
 pub(crate) fn collect_resource_tiles(sim: &Simulation) -> BTreeMap<(i32, i32), ResourceCell> {

@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use factory_data::EntityKind;
 use factory_sim::{EntityId, Simulation};
 use std::collections::BTreeSet;
+use std::time::Instant;
 
 use crate::constants::{
     BURNER_DRILL_SPRITE_PADDING, CHEST_SPRITE_SIZE, TILE_SIZE, TRANSPORT_BELT_SPRITE_SIZE,
@@ -11,7 +12,7 @@ use crate::rendering::colors::{
     transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
-use crate::resources::SimResource;
+use crate::resources::{RenderSyncStats, SimResource};
 
 #[derive(Component)]
 pub(crate) struct PlacedEntitySprite {
@@ -57,6 +58,17 @@ pub(crate) fn sync_placed_entity_rendering(
             },
         ));
     }
+}
+
+pub(crate) fn measured_sync_placed_entity_rendering(
+    commands: Commands,
+    sim: Res<SimResource>,
+    sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
+    mut stats: ResMut<RenderSyncStats>,
+) {
+    let started = Instant::now();
+    sync_placed_entity_rendering(commands, sim, sprites);
+    stats.record_placed_entities(started.elapsed());
 }
 
 pub(crate) fn renderable_entity_style(
