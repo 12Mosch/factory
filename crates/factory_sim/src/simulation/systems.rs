@@ -1,0 +1,483 @@
+use super::*;
+
+impl Simulation {
+    pub fn advance_transport_belts(&mut self) {
+        let tile_to_belt = transport_belt_tile_map(&self.entities);
+        let lane_keys = self
+            .entities
+            .transport_belts
+            .keys()
+            .flat_map(|entity_id| {
+                [
+                    BeltLaneKey {
+                        entity_id: *entity_id,
+                        lane_index: 0,
+                    },
+                    BeltLaneKey {
+                        entity_id: *entity_id,
+                        lane_index: 1,
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        let mut advancement = TransportBeltAdvancement::new(&mut self.entities, tile_to_belt);
+
+        for key in lane_keys {
+            advancement.process_lane(key);
+        }
+    }
+
+    pub(super) fn advance_burner_mining_drills(&mut self) {
+        let drill_ids = self
+            .entities
+            .burner_mining_drills
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        for entity_id in drill_ids {
+            let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
+                continue;
+            };
+            let prototype = &self.world.prototypes.entities[placed.prototype_id.index()];
+            let Some(mining_drill) = prototype.mining_drill.as_ref() else {
+                continue;
+            };
+            let target =
+                first_resource_in_mining_area(&self.world, &placed.footprint, mining_drill);
+            let Some((target, resource_item)) = target else {
+                if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
+                    state.resource_target = None;
+                    state.mining_progress_ticks = 0;
+                }
+                continue;
+            };
+
+            let output_target = drill_output_target(&self.entities, &placed);
+            let output_can_accept =
+                self.entities
+                    .burner_drill_state(entity_id)
+                    .is_ok_and(|state| {
+                        drill_output_target_can_accept(
+                            &self.world.prototypes,
+                            &self.entities,
+                            output_target,
+                            state.output_slot,
+                            resource_item,
+                            1,
+                        )
+                    });
+            if !output_can_accept {
+                if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
+                    state.resource_target = Some(target);
+                }
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .burner_drill_state_mut(entity_id)
+                    .expect("burner drill id came from burner drill state map");
+                state.resource_target = Some(target);
+                let joules_per_tick =
+                    state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
+                    && !try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                {
+                    continue;
+                }
+
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    continue;
+                }
+
+                state.energy.energy_remaining_joules -= joules_per_tick;
+                state.mining_progress_ticks += 1;
+
+                if state.mining_progress_ticks < state.mining_required_ticks {
+                    false
+                } else {
+                    state.mining_progress_ticks = 0;
+                    true
+                }
+            };
+
+            if !completed {
+                continue;
+            }
+
+            let mined = self
+                .world
+                .mine_resource_at(target.x, target.y, 1)
+                .expect("selected drill target should contain a resource");
+            debug_assert_eq!(mined.resource_item, resource_item);
+            debug_assert_eq!(mined.amount, 1);
+            insert_drill_output(
+                &mut self.entities,
+                entity_id,
+                output_target,
+                mined.resource_item,
+                mined.amount as u16,
+                &self.world.prototypes,
+            );
+        }
+    }
+
+    pub(super) fn advance_furnaces(&mut self) {
+        let furnace_ids = self.entities.furnaces.keys().copied().collect::<Vec<_>>();
+
+        for entity_id in furnace_ids {
+            if self.entities.placed_entity(entity_id).is_none() {
+                continue;
+            }
+
+            let Some((recipe_id, required_ticks, ingredient, product)) = self
+                .entities
+                .furnace_state(entity_id)
+                .ok()
+                .and_then(|state| furnace_work_selection(&self.world.prototypes, state.input_slot))
+            else {
+                if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
+                    state.active_recipe = None;
+                    state.crafting_progress_ticks = 0;
+                    state.crafting_required_ticks = 0;
+                }
+                continue;
+            };
+
+            let output_can_accept = self.entities.furnace_state(entity_id).is_ok_and(|state| {
+                output_slot_can_accept(
+                    &self.world.prototypes,
+                    state.output_slot,
+                    product.item,
+                    product.amount,
+                )
+            });
+            if !output_can_accept {
+                if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
+                    if state.active_recipe != Some(recipe_id) {
+                        state.crafting_progress_ticks = 0;
+                    }
+                    state.active_recipe = Some(recipe_id);
+                    state.crafting_required_ticks = required_ticks;
+                }
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .furnace_state_mut(entity_id)
+                    .expect("furnace id came from furnace state map");
+                if state.active_recipe != Some(recipe_id) {
+                    state.active_recipe = Some(recipe_id);
+                    state.crafting_progress_ticks = 0;
+                    state.crafting_required_ticks = required_ticks;
+                }
+
+                let joules_per_tick =
+                    state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
+                    && !try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                {
+                    continue;
+                }
+
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    continue;
+                }
+
+                state.energy.energy_remaining_joules -= joules_per_tick;
+                state.crafting_progress_ticks += 1;
+
+                if state.crafting_progress_ticks < required_ticks {
+                    false
+                } else {
+                    state.crafting_progress_ticks = 0;
+                    true
+                }
+            };
+
+            if !completed {
+                continue;
+            }
+
+            let state = self
+                .entities
+                .furnace_state_mut(entity_id)
+                .expect("furnace id came from furnace state map");
+            remove_from_single_slot(&mut state.input_slot, ingredient.item, ingredient.amount)
+                .expect("selected furnace input should still contain ingredient");
+            insert_output_item(&mut state.output_slot, product.item, product.amount);
+        }
+    }
+
+    pub(super) fn advance_assembling_machines(&mut self) {
+        let assembler_ids = self
+            .entities
+            .assembling_machines
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        for entity_id in assembler_ids {
+            if self.entities.placed_entity(entity_id).is_none() {
+                continue;
+            }
+
+            let Some((recipe, required_ticks)) = self
+                .entities
+                .assembler_state(entity_id)
+                .ok()
+                .and_then(|state| {
+                    let recipe = selected_assembler_recipe(&self.world.prototypes, state)?;
+                    Some((
+                        recipe,
+                        assembler_required_ticks(
+                            recipe.crafting_time_ticks,
+                            state.crafting_speed_numerator,
+                            state.crafting_speed_denominator,
+                        ),
+                    ))
+                })
+            else {
+                if let Ok(state) = self.entities.assembler_state_mut(entity_id) {
+                    state.crafting_progress_ticks = 0;
+                    state.crafting_required_ticks = 0;
+                }
+                continue;
+            };
+
+            let can_craft = self.entities.assembler_state(entity_id).is_ok_and(|state| {
+                assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
+                    && assembler_output_can_accept(
+                        &self.world.prototypes,
+                        &state.output_inventory,
+                        &recipe.products,
+                    )
+            });
+            if !can_craft {
+                if let Ok(state) = self.entities.assembler_state_mut(entity_id) {
+                    state.crafting_required_ticks = required_ticks;
+                }
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .assembler_state_mut(entity_id)
+                    .expect("assembler id came from assembler state map");
+                state.crafting_required_ticks = required_ticks;
+                state.crafting_progress_ticks += 1;
+
+                if state.crafting_progress_ticks < required_ticks {
+                    false
+                } else {
+                    state.crafting_progress_ticks = 0;
+                    true
+                }
+            };
+
+            if !completed {
+                continue;
+            }
+
+            let state = self
+                .entities
+                .assembler_state_mut(entity_id)
+                .expect("assembler id came from assembler state map");
+            for ingredient in &recipe.ingredients {
+                state
+                    .input_inventory
+                    .remove(ingredient.item, ingredient.amount)
+                    .expect("assembler checked ingredients before completion");
+            }
+            for product in &recipe.products {
+                state
+                    .output_inventory
+                    .insert(&self.world.prototypes, product.item, product.amount)
+                    .expect("assembler checked output capacity before completion");
+            }
+        }
+    }
+
+    pub(super) fn advance_labs(&mut self) {
+        let lab_ids = self.entities.labs.keys().copied().collect::<Vec<_>>();
+
+        for entity_id in lab_ids {
+            if self.entities.placed_entity(entity_id).is_none() {
+                continue;
+            }
+
+            let Some(technology_id) = self.research.active else {
+                if let Ok(state) = self.entities.lab_state_mut(entity_id) {
+                    state.active_technology = None;
+                    state.progress_ticks = 0;
+                    state.required_ticks = 0;
+                }
+                continue;
+            };
+
+            let Some(technology) = self
+                .world
+                .prototypes
+                .technologies
+                .get(technology_id.index())
+                .filter(|technology| technology.id == technology_id)
+            else {
+                if let Ok(state) = self.entities.lab_state_mut(entity_id) {
+                    state.active_technology = None;
+                    state.progress_ticks = 0;
+                    state.required_ticks = 0;
+                }
+                continue;
+            };
+            let required_ticks = technology.research_time_ticks;
+            let science_packs = technology.science_packs.clone();
+
+            let can_work = {
+                let state = self
+                    .entities
+                    .lab_state_mut(entity_id)
+                    .expect("lab id came from lab state map");
+                if state.active_technology != Some(technology_id) {
+                    state.active_technology = Some(technology_id);
+                    state.progress_ticks = 0;
+                }
+                state.required_ticks = required_ticks;
+                lab_has_science_packs(&state.inventory, &science_packs)
+            };
+            if !can_work {
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .lab_state_mut(entity_id)
+                    .expect("lab id came from lab state map");
+                state.progress_ticks += 1;
+                if state.progress_ticks < required_ticks {
+                    false
+                } else {
+                    state.progress_ticks = 0;
+                    true
+                }
+            };
+            if !completed {
+                continue;
+            }
+
+            let state = self
+                .entities
+                .lab_state_mut(entity_id)
+                .expect("lab id came from lab state map");
+            for science_pack in &science_packs {
+                state
+                    .inventory
+                    .remove(science_pack.item, science_pack.amount)
+                    .expect("lab checked science packs before completion");
+            }
+            self.add_research_units(1)
+                .expect("lab completion should have active research");
+        }
+    }
+
+    pub(super) fn advance_inserters(&mut self) {
+        let inserter_ids = self.entities.inserters.keys().copied().collect::<Vec<_>>();
+
+        for entity_id in inserter_ids {
+            let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
+                continue;
+            };
+            let Ok(state) = self.entities.inserter_state(entity_id).cloned() else {
+                continue;
+            };
+            let (pickup_tile, drop_tile) = inserter_transfer_tiles(&placed);
+
+            let next_state = match state {
+                InserterState::WaitingForItem => {
+                    let Some(item_id) = peek_inserter_source_item(&self.entities, pickup_tile)
+                    else {
+                        continue;
+                    };
+                    let item = ItemStack { item_id, count: 1 };
+                    if !inserter_target_can_accept(
+                        &self.world.prototypes,
+                        &self.entities,
+                        drop_tile,
+                        item,
+                    ) {
+                        continue;
+                    }
+
+                    InserterState::Picking {
+                        ticks_left: BASIC_INSERTER_PICKUP_TICKS,
+                    }
+                }
+                InserterState::Picking { ticks_left } => {
+                    if ticks_left > 1 {
+                        InserterState::Picking {
+                            ticks_left: ticks_left - 1,
+                        }
+                    } else if let Some(item_id) =
+                        peek_inserter_source_item(&self.entities, pickup_tile)
+                    {
+                        let item = ItemStack { item_id, count: 1 };
+                        if !inserter_target_can_accept(
+                            &self.world.prototypes,
+                            &self.entities,
+                            drop_tile,
+                            item,
+                        ) {
+                            InserterState::WaitingForItem
+                        } else {
+                            try_take_inserter_source_item(&mut self.entities, pickup_tile, item_id)
+                                .map_or(InserterState::WaitingForItem, |item| {
+                                    InserterState::Holding { item }
+                                })
+                        }
+                    } else {
+                        InserterState::WaitingForItem
+                    }
+                }
+                InserterState::Holding { item } => {
+                    if !inserter_target_can_accept(
+                        &self.world.prototypes,
+                        &self.entities,
+                        drop_tile,
+                        item,
+                    ) {
+                        InserterState::Holding { item }
+                    } else if try_drop_inserter_item(
+                        &self.world.prototypes,
+                        &mut self.entities,
+                        drop_tile,
+                        item,
+                    ) {
+                        InserterState::Dropping {
+                            ticks_left: BASIC_INSERTER_DROP_TICKS,
+                        }
+                    } else {
+                        InserterState::Holding { item }
+                    }
+                }
+                InserterState::Dropping { ticks_left } => {
+                    if ticks_left > 1 {
+                        InserterState::Dropping {
+                            ticks_left: ticks_left - 1,
+                        }
+                    } else {
+                        InserterState::WaitingForItem
+                    }
+                }
+            };
+
+            if let Ok(state) = self.entities.inserter_state_mut(entity_id) {
+                *state = next_state;
+            }
+        }
+    }
+}
