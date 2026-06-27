@@ -246,6 +246,7 @@
             entity_kind: Lab,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
+            inventory_slot_count: Some(16),
         ),
         (
             id: 10,
@@ -280,6 +281,7 @@
             prerequisites: [],
             science_packs: [(item: "automation_science_pack", amount: 1)],
             required_units: 10,
+            research_time_ticks: 600,
             effects: [UnlockRecipe("assembling_machine")],
         ),
     ],

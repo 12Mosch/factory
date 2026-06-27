@@ -225,6 +225,14 @@ pub struct AssemblingMachineState {
     pub crafting_speed_denominator: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LabState {
+    pub inventory: Inventory,
+    pub active_technology: Option<TechnologyId>,
+    pub progress_ticks: u32,
+    pub required_ticks: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AssemblerIngredientStatus {
     pub item: ItemId,
@@ -342,6 +350,12 @@ pub enum InserterError {
     NotInserter(u64),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabError {
+    MissingEntity(u64),
+    NotLab(u64),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EntityStore {
     entities: Vec<SimEntity>,
@@ -350,6 +364,7 @@ pub struct EntityStore {
     burner_mining_drills: BTreeMap<u64, BurnerMiningDrillState>,
     furnaces: BTreeMap<u64, FurnaceState>,
     assembling_machines: BTreeMap<u64, AssemblingMachineState>,
+    labs: BTreeMap<u64, LabState>,
     transport_belts: BTreeMap<u64, BeltSegment>,
     inserters: BTreeMap<u64, InserterState>,
     occupancy: OccupancyGrid,
@@ -391,6 +406,7 @@ struct EntityReservation {
     burner_mining_drill: Option<BurnerMiningDrillState>,
     furnace: Option<FurnaceState>,
     assembling_machine: Option<AssemblingMachineState>,
+    lab: Option<LabState>,
     transport_belt: Option<BeltSegment>,
     inserter: Option<InserterState>,
 }
@@ -432,6 +448,7 @@ pub enum BuildError {
 pub enum ContainerError {
     MissingEntity(u64),
     NotContainer(u64),
+    InvalidItem(ItemId),
     InvalidSlot { slot_index: usize },
     EmptySlot { slot_index: usize },
     InsufficientSpace,
@@ -703,6 +720,7 @@ impl Simulation {
         self.advance_burner_mining_drills();
         self.advance_furnaces();
         self.advance_assembling_machines();
+        self.advance_labs();
         self.advance_inserters();
         self.advance_manual_crafting();
     }
@@ -1089,10 +1107,13 @@ impl Simulation {
     ) -> Result<u64, BuildError> {
         let footprint = self.can_place_entity(prototype_id, x, y, direction)?;
         let prototype = &self.world.prototypes.entities[prototype_id.index()];
-        let inventory_slot_count = prototype.inventory_slot_count;
+        let inventory_slot_count = (prototype.entity_kind == EntityKind::Chest)
+            .then_some(prototype.inventory_slot_count)
+            .flatten();
         let burner_mining_drill = burner_mining_drill_state_for_prototype(prototype);
         let furnace = furnace_state_for_prototype(prototype);
         let assembling_machine = assembling_machine_state_for_prototype(prototype);
+        let lab = lab_state_for_prototype(prototype);
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
         let inserter = inserter_state_for_prototype(prototype);
         Ok(self.entities.reserve_entity(EntityReservation {
@@ -1105,6 +1126,7 @@ impl Simulation {
             burner_mining_drill,
             furnace,
             assembling_machine,
+            lab,
             transport_belt,
             inserter,
         }))
@@ -1161,6 +1183,11 @@ impl Simulation {
         player_slot_index: usize,
     ) -> Result<(), ContainerError> {
         let stack = stack_in_slot(&self.player_inventory, player_slot_index)?;
+        if self.entities.labs.contains_key(&entity_id)
+            && !lab_can_accept_item(&self.world.prototypes, stack.item_id)
+        {
+            return Err(ContainerError::InvalidItem(stack.item_id));
+        }
         let entity_inventory = self.entities.entity_inventory(entity_id)?;
         ensure_inventory_can_accept(&self.world.prototypes, entity_inventory, stack)?;
 
@@ -1289,6 +1316,10 @@ impl Simulation {
 
     pub fn inserter_state(&self, entity_id: u64) -> Result<&InserterState, InserterError> {
         self.entities.inserter_state(entity_id)
+    }
+
+    pub fn lab_state(&self, entity_id: u64) -> Result<&LabState, LabError> {
+        self.entities.lab_state(entity_id)
     }
 
     pub fn insert_item_onto_belt(
@@ -1915,6 +1946,88 @@ impl Simulation {
         }
     }
 
+    fn advance_labs(&mut self) {
+        let lab_ids = self.entities.labs.keys().copied().collect::<Vec<_>>();
+
+        for entity_id in lab_ids {
+            if self.entities.placed_entity(entity_id).is_none() {
+                continue;
+            }
+
+            let Some(technology_id) = self.research.active else {
+                if let Ok(state) = self.entities.lab_state_mut(entity_id) {
+                    state.active_technology = None;
+                    state.progress_ticks = 0;
+                    state.required_ticks = 0;
+                }
+                continue;
+            };
+
+            let Some(technology) = self
+                .world
+                .prototypes
+                .technologies
+                .get(technology_id.index())
+                .filter(|technology| technology.id == technology_id)
+            else {
+                if let Ok(state) = self.entities.lab_state_mut(entity_id) {
+                    state.active_technology = None;
+                    state.progress_ticks = 0;
+                    state.required_ticks = 0;
+                }
+                continue;
+            };
+            let required_ticks = technology.research_time_ticks;
+            let science_packs = technology.science_packs.clone();
+
+            let can_work = {
+                let state = self
+                    .entities
+                    .lab_state_mut(entity_id)
+                    .expect("lab id came from lab state map");
+                if state.active_technology != Some(technology_id) {
+                    state.active_technology = Some(technology_id);
+                    state.progress_ticks = 0;
+                }
+                state.required_ticks = required_ticks;
+                lab_has_science_packs(&state.inventory, &science_packs)
+            };
+            if !can_work {
+                continue;
+            }
+
+            let completed = {
+                let state = self
+                    .entities
+                    .lab_state_mut(entity_id)
+                    .expect("lab id came from lab state map");
+                state.progress_ticks += 1;
+                if state.progress_ticks < required_ticks {
+                    false
+                } else {
+                    state.progress_ticks = 0;
+                    true
+                }
+            };
+            if !completed {
+                continue;
+            }
+
+            let state = self
+                .entities
+                .lab_state_mut(entity_id)
+                .expect("lab id came from lab state map");
+            for science_pack in &science_packs {
+                state
+                    .inventory
+                    .remove(science_pack.item, science_pack.amount)
+                    .expect("lab checked science packs before completion");
+            }
+            self.add_research_units(1)
+                .expect("lab completion should have active research");
+        }
+    }
+
     fn advance_inserters(&mut self) {
         let inserter_ids = self.entities.inserters.keys().copied().collect::<Vec<_>>();
 
@@ -2453,6 +2566,7 @@ impl EntityStore {
             burner_mining_drills: BTreeMap::new(),
             furnaces: BTreeMap::new(),
             assembling_machines: BTreeMap::new(),
+            labs: BTreeMap::new(),
             transport_belts: BTreeMap::new(),
             inserters: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
@@ -2467,6 +2581,7 @@ impl EntityStore {
 
         self.entity_inventories
             .get(&entity_id)
+            .or_else(|| self.labs.get(&entity_id).map(|lab| &lab.inventory))
             .ok_or(ContainerError::NotContainer(entity_id))
     }
 
@@ -2477,7 +2592,26 @@ impl EntityStore {
 
         self.entity_inventories
             .get_mut(&entity_id)
+            .or_else(|| self.labs.get_mut(&entity_id).map(|lab| &mut lab.inventory))
             .ok_or(ContainerError::NotContainer(entity_id))
+    }
+
+    fn lab_state(&self, entity_id: u64) -> Result<&LabState, LabError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(LabError::MissingEntity(entity_id));
+        }
+
+        self.labs.get(&entity_id).ok_or(LabError::NotLab(entity_id))
+    }
+
+    fn lab_state_mut(&mut self, entity_id: u64) -> Result<&mut LabState, LabError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(LabError::MissingEntity(entity_id));
+        }
+
+        self.labs
+            .get_mut(&entity_id)
+            .ok_or(LabError::NotLab(entity_id))
     }
 
     fn burner_drill_state(
@@ -2644,6 +2778,9 @@ impl EntityStore {
         if let Some(state) = reservation.assembling_machine {
             self.assembling_machines.insert(id, state);
         }
+        if let Some(state) = reservation.lab {
+            self.labs.insert(id, state);
+        }
         if let Some(segment) = reservation.transport_belt {
             self.transport_belts.insert(id, segment);
         }
@@ -2683,6 +2820,7 @@ impl EntityStore {
         self.burner_mining_drills.remove(&entity_id);
         self.furnaces.remove(&entity_id);
         self.assembling_machines.remove(&entity_id);
+        self.labs.remove(&entity_id);
         self.transport_belts.remove(&entity_id);
         self.inserters.remove(&entity_id);
         self.occupancy
@@ -3211,6 +3349,27 @@ fn fuel_value_joules(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u
         .and_then(|prototype| prototype.fuel_value_joules)
 }
 
+fn is_science_pack_item(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
+    catalog
+        .technologies
+        .iter()
+        .flat_map(|technology| &technology.science_packs)
+        .any(|science_pack| science_pack.item == item_id)
+}
+
+fn lab_can_accept_item(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
+    is_science_pack_item(catalog, item_id)
+}
+
+fn lab_has_science_packs(
+    inventory: &Inventory,
+    science_packs: &[factory_data::ItemAmount],
+) -> bool {
+    science_packs
+        .iter()
+        .all(|science_pack| inventory.count(science_pack.item) >= u32::from(science_pack.amount))
+}
+
 fn burner_mining_drill_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<BurnerMiningDrillState> {
@@ -3275,6 +3434,19 @@ fn assembling_machine_state_for_prototype(
     })
 }
 
+fn lab_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<LabState> {
+    (prototype.entity_kind == EntityKind::Lab).then(|| LabState {
+        inventory: Inventory::with_slot_count(
+            prototype
+                .inventory_slot_count
+                .expect("lab prototype should define inventory slots"),
+        ),
+        active_technology: None,
+        progress_ticks: 0,
+        required_ticks: 0,
+    })
+}
+
 fn transport_belt_segment_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,
@@ -3302,6 +3474,16 @@ fn peek_inserter_source_item(entities: &EntityStore, pickup_tile: (i32, i32)) ->
 
     if let Some(inventory) = entities.entity_inventories.get(&entity_id) {
         return inventory
+            .slots
+            .iter()
+            .flatten()
+            .map(|stack| stack.item_id)
+            .next();
+    }
+
+    if let Some(lab) = entities.labs.get(&entity_id) {
+        return lab
+            .inventory
             .slots
             .iter()
             .flatten()
@@ -3343,6 +3525,11 @@ fn inserter_target_can_accept(
         return inventory.can_insert(catalog, item.item_id, item.count);
     }
 
+    if let Some(lab) = entities.labs.get(&entity_id) {
+        return lab_can_accept_item(catalog, item.item_id)
+            && lab.inventory.can_insert(catalog, item.item_id, item.count);
+    }
+
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
         return input_slot_can_accept(catalog, furnace.input_slot, item);
     }
@@ -3371,6 +3558,11 @@ fn try_take_inserter_source_item(
 
     if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
         inventory.remove(item_id, 1).ok()?;
+        return Some(ItemStack { item_id, count: 1 });
+    }
+
+    if let Some(lab) = entities.labs.get_mut(&entity_id) {
+        lab.inventory.remove(item_id, 1).ok()?;
         return Some(ItemStack { item_id, count: 1 });
     }
 
@@ -3405,6 +3597,17 @@ fn try_drop_inserter_item(
 
     if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
         return inventory.insert(catalog, item.item_id, item.count).is_ok();
+    }
+
+    if let Some(lab) = entities.labs.get_mut(&entity_id) {
+        if !lab_can_accept_item(catalog, item.item_id) {
+            return false;
+        }
+
+        return lab
+            .inventory
+            .insert(catalog, item.item_id, item.count)
+            .is_ok();
     }
 
     if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
@@ -4561,6 +4764,41 @@ mod tests {
     }
 
     #[test]
+    fn inserter_does_not_place_invalid_items_into_lab() {
+        let mut sim = Simulation::new_test_world(123);
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        let (chest_id, inserter_id, lab_id) = place_chest_inserter_lab_line(&mut sim);
+        sim.entity_inventory_mut(chest_id)
+            .expect("chest should expose inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+
+        for _ in 0..100 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            sim.entity_inventory(chest_id)
+                .expect("chest should expose inventory")
+                .count(iron_plate),
+            1
+        );
+        assert_eq!(
+            sim.entity_inventory(lab_id)
+                .expect("lab should expose inventory")
+                .count(iron_plate),
+            0
+        );
+        assert_eq!(
+            sim.inserter_state(inserter_id)
+                .expect("inserter should expose state"),
+            &InserterState::WaitingForItem
+        );
+    }
+
+    #[test]
     fn inserter_removes_assembler_output_to_chest() {
         let mut sim = Simulation::new_test_world(123);
         let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
@@ -5377,6 +5615,36 @@ mod tests {
     }
 
     #[test]
+    fn lab_rejects_non_science_pack_player_transfer_without_mutation() {
+        let mut sim = Simulation::new_test_world(123);
+        let lab_id = place_lab(&mut sim);
+        let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+        sim.player_inventory = Inventory::player();
+        sim.player_inventory.slots[0] = Some(ItemStack {
+            item_id: iron_plate,
+            count: 1,
+        });
+
+        assert_eq!(
+            sim.transfer_player_slot_to_entity(lab_id, 0),
+            Err(ContainerError::InvalidItem(iron_plate))
+        );
+        assert_eq!(
+            sim.player_inventory.slots[0],
+            Some(ItemStack {
+                item_id: iron_plate,
+                count: 1,
+            })
+        );
+        assert_eq!(
+            sim.entity_inventory(lab_id)
+                .expect("lab should expose inventory")
+                .count(iron_plate),
+            0
+        );
+    }
+
+    #[test]
     fn player_starts_on_walkable_generated_tile() {
         let sim = Simulation::new_test_world(123);
         let (x, y) = sim.player.tile_position();
@@ -5630,6 +5898,152 @@ mod tests {
         );
         assert_eq!(sim.technology_progress(automation), Some(0));
         assert!(!sim.is_technology_unlocked(automation));
+    }
+
+    #[test]
+    fn lab_consumes_science_and_increases_research_progress() {
+        let mut sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+        let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
+        let (chest_id, inserter_id, lab_id) = place_chest_inserter_lab_line(&mut sim);
+        sim.select_research(automation)
+            .expect("automation should be selectable");
+        sim.entity_inventory_mut(chest_id)
+            .expect("chest should expose inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: science_pack,
+            count: 1,
+        });
+
+        run_inserter_until_idle(&mut sim, inserter_id);
+
+        assert_eq!(
+            sim.entity_inventory(lab_id)
+                .expect("lab should expose inventory")
+                .count(science_pack),
+            1
+        );
+
+        let progress_after_insert = sim
+            .lab_state(lab_id)
+            .expect("lab should expose state")
+            .progress_ticks;
+        for _ in progress_after_insert..599 {
+            sim.tick();
+        }
+
+        assert_eq!(sim.technology_progress(automation), Some(0));
+        assert_eq!(
+            sim.entity_inventory(lab_id)
+                .expect("lab should expose inventory")
+                .count(science_pack),
+            1
+        );
+
+        sim.tick();
+
+        assert_eq!(
+            sim.entity_inventory(lab_id)
+                .expect("lab should expose inventory")
+                .count(science_pack),
+            0
+        );
+        assert_eq!(sim.technology_progress(automation), Some(1));
+        assert!(!sim.is_technology_unlocked(automation));
+    }
+
+    #[test]
+    fn multiple_labs_contribute_research_units_in_parallel() {
+        let mut sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+        let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
+        let first_lab = place_lab(&mut sim);
+        let second_lab = place_lab(&mut sim);
+        sim.select_research(automation)
+            .expect("automation should be selectable");
+        for lab_id in [first_lab, second_lab] {
+            sim.entity_inventory_mut(lab_id)
+                .expect("lab should expose inventory")
+                .slots[0] = Some(ItemStack {
+                item_id: science_pack,
+                count: 1,
+            });
+        }
+
+        for _ in 0..600 {
+            sim.tick();
+        }
+
+        assert_eq!(sim.technology_progress(automation), Some(2));
+        assert_eq!(
+            sim.entity_inventory(first_lab)
+                .expect("lab should expose inventory")
+                .count(science_pack),
+            0
+        );
+        assert_eq!(
+            sim.entity_inventory(second_lab)
+                .expect("lab should expose inventory")
+                .count(science_pack),
+            0
+        );
+    }
+
+    #[test]
+    fn no_active_research_leaves_labs_idle() {
+        let mut sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+        let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
+        let lab_id = place_lab(&mut sim);
+        sim.entity_inventory_mut(lab_id)
+            .expect("lab should expose inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: science_pack,
+            count: 1,
+        });
+
+        for _ in 0..1_000 {
+            sim.tick();
+        }
+
+        let lab = sim.lab_state(lab_id).expect("lab should expose state");
+        assert_eq!(lab.active_technology, None);
+        assert_eq!(lab.progress_ticks, 0);
+        assert_eq!(lab.required_ticks, 0);
+        assert_eq!(lab.inventory.count(science_pack), 1);
+        assert_eq!(sim.technology_progress(automation), Some(0));
+    }
+
+    #[test]
+    fn lab_completed_research_unlocks_recipe() {
+        let mut sim = Simulation::new_test_world(123);
+        let automation = technology_id(&sim.world.prototypes, "automation");
+        let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
+        let assembling_machine = recipe_id(&sim.world.prototypes, "assembling_machine");
+        let lab_id = place_lab(&mut sim);
+        sim.select_research(automation)
+            .expect("automation should be selectable");
+        sim.entity_inventory_mut(lab_id)
+            .expect("lab should expose inventory")
+            .slots[0] = Some(ItemStack {
+            item_id: science_pack,
+            count: 10,
+        });
+
+        for _ in 0..6_000 {
+            sim.tick();
+        }
+
+        assert!(sim.is_technology_unlocked(automation));
+        assert!(sim.is_recipe_unlocked(assembling_machine));
+        assert_eq!(sim.research.active, None);
+        assert_eq!(sim.technology_progress(automation), Some(10));
+        assert_eq!(
+            sim.entity_inventory(lab_id)
+                .expect("lab should expose inventory")
+                .count(science_pack),
+            0
+        );
     }
 
     #[test]
@@ -6507,6 +6921,19 @@ mod tests {
         panic!("expected buildable area without resources");
     }
 
+    fn place_lab(sim: &mut Simulation) -> u64 {
+        let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+        for (x, y) in all_tile_coords(&sim.world) {
+            if sim.can_place_entity(lab, x, y, Direction::North).is_ok() {
+                return sim
+                    .place_entity(lab, x, y, Direction::North)
+                    .expect("validated lab target should be placeable");
+            }
+        }
+
+        panic!("expected placeable lab area");
+    }
+
     fn place_chest_inserter_furnace_line(sim: &mut Simulation) -> (u64, u64, u64) {
         let chest = entity_id_by_name(&sim.world.prototypes, "chest");
         let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
@@ -6541,6 +6968,24 @@ mod tests {
             .expect("assembler should be placeable");
 
         (chest_id, inserter_id, assembler_id)
+    }
+
+    fn place_chest_inserter_lab_line(sim: &mut Simulation) -> (u64, u64, u64) {
+        let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+        let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+        let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 5, 3);
+        let chest_id = sim
+            .place_entity(chest, x, y + 1, Direction::North)
+            .expect("chest should be placeable");
+        let inserter_id = sim
+            .place_entity(inserter, x + 1, y + 1, Direction::East)
+            .expect("inserter should be placeable");
+        let lab_id = sim
+            .place_entity(lab, x + 2, y, Direction::North)
+            .expect("lab should be placeable");
+
+        (chest_id, inserter_id, lab_id)
     }
 
     fn place_belt_inserter_furnace_line(sim: &mut Simulation) -> (u64, u64, u64) {
@@ -6637,6 +7082,12 @@ mod tests {
                 .entity_inventories
                 .values()
                 .map(|inventory| inventory.count(item_id))
+                .sum::<u32>()
+            + sim
+                .entities
+                .labs
+                .values()
+                .map(|lab| lab.inventory.count(item_id))
                 .sum::<u32>()
             + sim
                 .entities

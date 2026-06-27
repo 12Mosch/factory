@@ -201,6 +201,21 @@ fn opening_clicked_assembler_selects_correct_entity() {
 }
 
 #[test]
+fn opening_clicked_lab_selects_correct_entity() {
+    let mut sim = Simulation::new_test_world(123);
+    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+    let (x, y) = first_buildable_rect(&sim, lab);
+    let entity_id = sim
+        .place_entity(lab, x, y, Direction::North)
+        .expect("lab should be placeable");
+
+    assert_eq!(
+        opened_container_after_world_click(&sim, Some((x, y))),
+        Some(entity_id)
+    );
+}
+
+#[test]
 fn assembler_recipe_choices_are_all_and_only_crafting_recipes() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let choices = crafting_recipe_choices(&catalog);
@@ -246,6 +261,43 @@ fn available_crafting_recipe_choices_follow_research_unlocks() {
     let unlocked_choices = available_crafting_recipe_choices(&sim);
     assert!(
         unlocked_choices
+            .iter()
+            .any(|recipe| recipe.id == assembling_machine)
+    );
+}
+
+#[test]
+fn completed_research_unlocks_recipe() {
+    let mut sim = Simulation::new_test_world(123);
+    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+    let automation = technology_id_by_name(&sim.world.prototypes, "automation");
+    let science_pack = item_id_by_name(&sim.world.prototypes, "automation_science_pack");
+    let assembling_machine = recipe_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = first_buildable_rect(&sim, lab);
+    let lab_id = sim
+        .place_entity(lab, x, y, Direction::North)
+        .expect("lab should be placeable");
+    sim.select_research(automation)
+        .expect("automation should be selectable");
+    sim.entity_inventory_mut(lab_id)
+        .expect("lab should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: science_pack,
+        count: 10,
+    });
+
+    assert!(
+        !available_crafting_recipe_choices(&sim)
+            .iter()
+            .any(|recipe| recipe.id == assembling_machine)
+    );
+
+    for _ in 0..6_000 {
+        sim.tick();
+    }
+
+    assert!(
+        available_crafting_recipe_choices(&sim)
             .iter()
             .any(|recipe| recipe.id == assembling_machine)
     );
@@ -323,6 +375,33 @@ fn slot_click_transfer_delegates_to_sim_transfer_api() {
             .expect("chest should have inventory")
             .count(iron_plate),
         9
+    );
+}
+
+#[test]
+fn slot_click_transfer_routes_science_to_lab_inventory() {
+    let mut sim = Simulation::new_test_world(123);
+    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+    let science_pack = item_id_by_name(&sim.world.prototypes, "automation_science_pack");
+    let (x, y) = first_buildable_rect(&sim, lab);
+    let entity_id = sim
+        .place_entity(lab, x, y, Direction::North)
+        .expect("lab should be placeable");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[2] = Some(ItemStack {
+        item_id: science_pack,
+        count: 3,
+    });
+
+    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+        .expect("slot click should transfer science packs to lab");
+
+    assert_eq!(sim.player_inventory.slots[2], None);
+    assert_eq!(
+        sim.entity_inventory(entity_id)
+            .expect("lab should expose inventory")
+            .count(science_pack),
+        3
     );
 }
 
@@ -596,6 +675,32 @@ fn debug_placement_key_places_assembler() {
         EntityKind::AssemblingMachine
     );
     assert!(sim.assembler_state(entity_id).is_ok());
+}
+
+#[test]
+fn debug_placement_key_places_lab() {
+    let mut sim = Simulation::new_test_world(123);
+    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+    let mut build_direction = DebugBuildDirection::default();
+    let mut keyboard = ButtonInput::default();
+    let (x, y) = first_buildable_rect(&sim, lab);
+
+    keyboard.press(KeyCode::KeyL);
+    let entity_id =
+        handle_debug_build_action_at_tile(&mut sim, &keyboard, &mut build_direction, x, y)
+            .expect("L should place a lab");
+
+    assert_eq!(
+        sim.world.prototypes.entities[sim
+            .entities
+            .placed_entity(entity_id)
+            .expect("placed lab should remain")
+            .prototype_id
+            .index()]
+        .entity_kind,
+        EntityKind::Lab
+    );
+    assert!(sim.lab_state(entity_id).is_ok());
 }
 
 #[test]

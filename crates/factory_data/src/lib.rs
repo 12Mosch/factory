@@ -104,6 +104,7 @@ pub struct TechnologyPrototype {
     pub prerequisites: Vec<TechnologyId>,
     pub science_packs: Vec<ItemAmount>,
     pub required_units: u32,
+    pub research_time_ticks: u32,
     pub effects: Vec<TechnologyEffect>,
 }
 
@@ -185,6 +186,9 @@ pub enum PrototypeLoadError {
         recipe: String,
     },
     InvalidTechnologyRequiredUnits {
+        technology: String,
+    },
+    InvalidTechnologyResearchTime {
         technology: String,
     },
     TechnologySelfPrerequisite {
@@ -315,6 +319,11 @@ impl PrototypeCatalog {
                         technology: technology.name,
                     });
                 }
+                if technology.research_time_ticks == 0 {
+                    return Err(PrototypeLoadError::InvalidTechnologyResearchTime {
+                        technology: technology.name,
+                    });
+                }
 
                 let id = TechnologyId::new(technology.id);
                 let prerequisites = technology
@@ -375,6 +384,7 @@ impl PrototypeCatalog {
                     prerequisites,
                     science_packs,
                     required_units: technology.required_units,
+                    research_time_ticks: technology.research_time_ticks,
                     effects,
                 })
             })
@@ -438,6 +448,10 @@ impl fmt::Display for PrototypeLoadError {
             Self::InvalidTechnologyRequiredUnits { technology } => write!(
                 formatter,
                 "technology {technology:?} must require at least one research unit"
+            ),
+            Self::InvalidTechnologyResearchTime { technology } => write!(
+                formatter,
+                "technology {technology:?} must require at least one research tick per unit"
             ),
             Self::TechnologySelfPrerequisite { technology } => write!(
                 formatter,
@@ -675,6 +689,7 @@ struct RawTechnologyPrototype {
     prerequisites: Vec<String>,
     science_packs: Vec<RawItemAmount>,
     required_units: u32,
+    research_time_ticks: u32,
     effects: Vec<RawTechnologyEffect>,
 }
 
@@ -920,6 +935,18 @@ mod tests {
     }
 
     #[test]
+    fn lab_entity_loads_inventory_slot_count() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let lab = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == "lab")
+            .expect("base catalog should contain lab entity");
+
+        assert_eq!(lab.inventory_slot_count, Some(16));
+    }
+
+    #[test]
     fn coal_loads_fuel_value() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
         let coal = catalog
@@ -1075,6 +1102,7 @@ mod tests {
             }]
         );
         assert_eq!(automation.required_units, 10);
+        assert_eq!(automation.research_time_ticks, 600);
         assert_eq!(
             automation.effects,
             vec![TechnologyEffect::UnlockRecipe(assembling_machine_recipe)]
@@ -1203,6 +1231,7 @@ mod tests {
                     prerequisites: ["missing"],
                     science_packs: [],
                     required_units: 1,
+                    research_time_ticks: 1,
                     effects: [],
                 )],
             )
@@ -1234,6 +1263,7 @@ mod tests {
                     prerequisites: [],
                     science_packs: [(item: "missing_pack", amount: 1)],
                     required_units: 1,
+                    research_time_ticks: 1,
                     effects: [],
                 )],
             )
@@ -1265,6 +1295,7 @@ mod tests {
                     prerequisites: [],
                     science_packs: [],
                     required_units: 1,
+                    research_time_ticks: 1,
                     effects: [UnlockRecipe("missing_recipe")],
                 )],
             )
@@ -1297,6 +1328,7 @@ mod tests {
                         prerequisites: [],
                         science_packs: [],
                         required_units: 1,
+                        research_time_ticks: 1,
                         effects: [],
                     ),
                     (
@@ -1305,6 +1337,7 @@ mod tests {
                         prerequisites: [],
                         science_packs: [],
                         required_units: 1,
+                        research_time_ticks: 1,
                         effects: [],
                     ),
                 ],
@@ -1338,6 +1371,7 @@ mod tests {
                         prerequisites: [],
                         science_packs: [],
                         required_units: 1,
+                        research_time_ticks: 1,
                         effects: [],
                     ),
                     (
@@ -1346,6 +1380,7 @@ mod tests {
                         prerequisites: [],
                         science_packs: [],
                         required_units: 1,
+                        research_time_ticks: 1,
                         effects: [],
                     ),
                 ],
@@ -1378,6 +1413,7 @@ mod tests {
                     prerequisites: [],
                     science_packs: [],
                     required_units: 0,
+                    research_time_ticks: 1,
                     effects: [],
                 )],
             )
@@ -1388,6 +1424,36 @@ mod tests {
         assert!(matches!(
             error,
             PrototypeLoadError::InvalidTechnologyRequiredUnits { technology }
+                if technology == "automation"
+        ));
+    }
+
+    #[test]
+    fn invalid_technology_research_time_fail() {
+        let error = PrototypeCatalog::from_ron_str(
+            r#"
+            (
+                items: [],
+                recipes: [],
+                entities: [],
+                tiles: [],
+                technologies: [(
+                    id: 0,
+                    name: "automation",
+                    prerequisites: [],
+                    science_packs: [],
+                    required_units: 1,
+                    research_time_ticks: 0,
+                    effects: [],
+                )],
+            )
+            "#,
+        )
+        .expect_err("zero research time should fail");
+
+        assert!(matches!(
+            error,
+            PrototypeLoadError::InvalidTechnologyResearchTime { technology }
                 if technology == "automation"
         ));
     }
@@ -1407,6 +1473,7 @@ mod tests {
                     prerequisites: ["automation"],
                     science_packs: [],
                     required_units: 1,
+                    research_time_ticks: 1,
                     effects: [],
                 )],
             )
@@ -1437,6 +1504,7 @@ mod tests {
                         prerequisites: ["logistics"],
                         science_packs: [],
                         required_units: 1,
+                        research_time_ticks: 1,
                         effects: [],
                     ),
                     (
@@ -1445,6 +1513,7 @@ mod tests {
                         prerequisites: ["automation"],
                         science_packs: [],
                         required_units: 1,
+                        research_time_ticks: 1,
                         effects: [],
                     ),
                 ],

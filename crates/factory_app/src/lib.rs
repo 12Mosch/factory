@@ -95,6 +95,7 @@ enum OpenMachineKind {
     BurnerDrill,
     Furnace,
     Assembler,
+    Lab,
 }
 
 #[derive(Component)]
@@ -716,6 +717,8 @@ fn debug_build_prototype_name(keyboard: &ButtonInput<KeyCode>) -> Option<&'stati
         Some("transport_belt")
     } else if keyboard.just_pressed(KeyCode::KeyA) {
         Some("assembling_machine")
+    } else if keyboard.just_pressed(KeyCode::KeyL) {
+        Some("lab")
     } else {
         None
     }
@@ -1034,6 +1037,15 @@ fn sync_container_window(
                         .expect("open assembler should expose state");
                     spawn_assembler_panel(root, &sim.sim.world.prototypes, state)
                 }
+                OpenMachineKind::Lab => {
+                    let slot_count = sim
+                        .sim
+                        .entity_inventory(entity_id)
+                        .expect("open lab should expose inventory")
+                        .slots
+                        .len();
+                    spawn_lab_panel(root, slot_count);
+                }
             }
         });
 }
@@ -1100,6 +1112,40 @@ fn spawn_chest_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
             ))
             .with_children(|grid| {
                 for slot_index in 0..16 {
+                    spawn_slot_button(grid, InventoryPanel::Container, slot_index);
+                }
+            });
+    });
+}
+
+fn spawn_lab_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, slot_count: usize) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Lab"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel
+            .spawn((
+                Node {
+                    width: Val::Px(244.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    row_gap: Val::Px(4.0),
+                    column_gap: Val::Px(4.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|grid| {
+                for slot_index in 0..slot_count {
                     spawn_slot_button(grid, InventoryPanel::Container, slot_index);
                 }
             });
@@ -1592,7 +1638,7 @@ fn update_burner_drill_indicators(
                     state.crafting_required_ticks,
                 ))
             }
-            OpenMachineKind::Chest => None,
+            OpenMachineKind::Chest | OpenMachineKind::Lab => None,
         }
     });
 
@@ -1781,6 +1827,10 @@ fn furnace_color() -> Color {
 
 fn assembler_color() -> Color {
     Color::srgb(0.28, 0.48, 0.56)
+}
+
+fn lab_color() -> Color {
+    Color::srgb(0.47, 0.36, 0.62)
 }
 
 fn transport_belt_color() -> Color {
@@ -1978,6 +2028,8 @@ fn open_machine_kind(sim: &Simulation, entity_id: u64) -> Option<OpenMachineKind
         && sim.assembler_state(entity_id).is_ok()
     {
         Some(OpenMachineKind::Assembler)
+    } else if prototype.entity_kind == EntityKind::Lab && sim.lab_state(entity_id).is_ok() {
+        Some(OpenMachineKind::Lab)
     } else {
         None
     }
@@ -2015,6 +2067,13 @@ fn renderable_entity_style(sim: &Simulation, entity_id: u64) -> Option<(Color, V
         )),
         Some(OpenMachineKind::Assembler) => Some((
             assembler_color(),
+            Vec2::new(
+                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            ),
+        )),
+        Some(OpenMachineKind::Lab) => Some((
+            lab_color(),
             Vec2::new(
                 placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
                 placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
