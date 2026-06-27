@@ -18,6 +18,7 @@ impl Simulation {
             .ok_or(BuildError::MissingPrototype(prototype_id))?;
         self.world
             .validate_entity_footprint_for_prototype(prototype, &footprint)?;
+        self.validate_footprint_clear_of_player(&footprint)?;
         self.entities
             .occupancy
             .validate_available(&footprint, None)?;
@@ -82,6 +83,7 @@ impl Simulation {
 
         self.world
             .validate_entity_footprint_for_prototype(prototype, &footprint)?;
+        self.validate_footprint_clear_of_player(&footprint)?;
         self.entities
             .occupancy
             .validate_available(&footprint, Some(entity_id))?;
@@ -91,6 +93,21 @@ impl Simulation {
 
     pub fn remove_entity(&mut self, entity_id: EntityId) -> Option<PlacedEntity> {
         self.entities.remove_placed_entity(entity_id)
+    }
+
+    fn validate_footprint_clear_of_player(
+        &self,
+        footprint: &EntityFootprint,
+    ) -> Result<(), BuildError> {
+        let player_tile = self.player.tile_position();
+        if footprint.contains_tile(player_tile.0, player_tile.1) {
+            return Err(BuildError::TileBlocked {
+                x: player_tile.0,
+                y: player_tile.1,
+            });
+        }
+
+        Ok(())
     }
 
     pub fn entity_inventory(&self, entity_id: EntityId) -> Result<&Inventory, ContainerError> {

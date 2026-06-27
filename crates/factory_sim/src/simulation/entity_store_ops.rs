@@ -366,6 +366,10 @@ impl EntityFootprint {
 
         tiles
     }
+
+    pub fn contains_tile(&self, x: i32, y: i32) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    }
 }
 
 impl OccupancyGrid {

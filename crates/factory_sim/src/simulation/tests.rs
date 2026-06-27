@@ -307,6 +307,36 @@ fn entity_cannot_be_placed_on_water() {
 }
 
 #[test]
+fn entity_cannot_be_placed_on_player_tile() {
+    let mut sim = Simulation::new_test_world(123);
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+    sim.player = PlayerState::centered_on_tile(x, y);
+
+    let error = sim
+        .place_entity(inserter, x, y, Direction::North)
+        .expect_err("player tile should block entity placement");
+
+    assert!(matches!(error, BuildError::TileBlocked { x: bx, y: by } if bx == x && by == y));
+}
+
+#[test]
+fn multi_tile_entity_cannot_overlap_player_tile() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let (x, y) = first_buildable_rect(&sim.world, 2, 2);
+    sim.player = PlayerState::centered_on_tile(x + 1, y + 1);
+
+    let error = sim
+        .place_entity(furnace, x, y, Direction::North)
+        .expect_err("entity footprint should not overlap the player tile");
+
+    assert!(
+        matches!(error, BuildError::TileBlocked { x: bx, y: by } if bx == x + 1 && by == y + 1)
+    );
+}
+
+#[test]
 fn entity_cannot_be_placed_outside_generated_chunks() {
     let mut sim = Simulation::new_test_world(123);
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
@@ -356,6 +386,29 @@ fn rotation_updates_entity_footprint() {
         Some(entity_id)
     );
     assert_eq!(sim.entities.occupancy().entity_at(x, y + 1), None);
+}
+
+#[test]
+fn rotation_cannot_overlap_player_tile() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let inserter = entity_id_by_name(&catalog, "inserter");
+    catalog.entities[inserter.index()].size.y = 2;
+
+    let mut sim = Simulation::new(123, catalog);
+    let (x, y) = first_buildable_rect(&sim.world, 2, 2);
+    let entity_id = sim
+        .place_entity(inserter, x, y, Direction::North)
+        .expect("rectangular entity should be placeable");
+    sim.player = PlayerState::centered_on_tile(x + 1, y);
+
+    let error = sim
+        .rotate_entity(entity_id, Direction::East)
+        .expect_err("rotated footprint should not overlap the player tile");
+
+    assert!(matches!(
+        error,
+        BuildError::TileBlocked { x: bx, y: by } if bx == x + 1 && by == y
+    ));
 }
 
 #[test]
