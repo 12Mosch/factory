@@ -3416,12 +3416,7 @@ fn all_tile_coords(world: &WorldSim) -> Vec<(i32, i32)> {
 }
 
 fn entity_id_by_name(catalog: &PrototypeCatalog, name: &str) -> EntityPrototypeId {
-    catalog
-        .entities
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required entity prototype {name:?}"))
+    factory_data::entity_prototype_id_by_name(catalog, name)
 }
 
 const CARDINAL_DIRECTIONS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];

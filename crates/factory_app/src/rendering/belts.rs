@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
-use factory_data::{ItemId, PrototypeCatalog};
+use factory_data::{BasePrototypeIds, ItemId};
 use factory_sim::{BELT_SUBTILES_PER_TILE, Direction, EntityId, Simulation};
 use std::collections::BTreeSet;
 
@@ -100,13 +100,15 @@ pub(crate) fn sync_belt_item_rendering(
         Without<BeltItemSprite>,
     >,
 ) {
+    let ids = BasePrototypeIds::from_catalog(sim.sim.catalog());
     let mut seen_sprites = BTreeSet::new();
     let mut seen_labels = BTreeSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
         let key = (marker.entity_id, marker.lane_index, marker.item_index);
-        if let Some((translation, color)) = belt_item_render_state(
+        if let Some((translation, color)) = belt_item_render_state_with_ids(
             &sim.sim,
+            ids,
             marker.entity_id,
             marker.lane_index,
             marker.item_index,
@@ -145,9 +147,9 @@ pub(crate) fn sync_belt_item_rendering(
             for item_index in 0..lane.items.len() {
                 let key = (placed.id, lane_index, item_index);
                 if !seen_sprites.contains(&key) {
-                    let Some((translation, color)) =
-                        belt_item_render_state(&sim.sim, placed.id, lane_index, item_index)
-                    else {
+                    let Some((translation, color)) = belt_item_render_state_with_ids(
+                        &sim.sim, ids, placed.id, lane_index, item_index,
+                    ) else {
                         continue;
                     };
                     commands.spawn((
@@ -225,6 +227,22 @@ pub(crate) fn belt_item_render_state(
     lane_index: usize,
     item_index: usize,
 ) -> Option<(Vec3, Color)> {
+    belt_item_render_state_with_ids(
+        sim,
+        BasePrototypeIds::from_catalog(sim.catalog()),
+        entity_id,
+        lane_index,
+        item_index,
+    )
+}
+
+fn belt_item_render_state_with_ids(
+    sim: &Simulation,
+    ids: BasePrototypeIds,
+    entity_id: EntityId,
+    lane_index: usize,
+    item_index: usize,
+) -> Option<(Vec3, Color)> {
     let placed = sim.entities().placed_entity(entity_id)?;
     let segment = sim.belt_segment(entity_id).ok()?;
     let item = segment.lanes.get(lane_index)?.items.get(item_index)?;
@@ -234,7 +252,7 @@ pub(crate) fn belt_item_render_state(
     let progress = f32::from(item.position_subtile) / f32::from(BELT_SUBTILES_PER_TILE) - 0.5;
     let lane_offset = if lane_index == 0 { -0.18 } else { 0.18 };
     let offset = (along * progress + perpendicular * lane_offset) * TILE_SIZE;
-    let color = belt_item_color(item.item_id, sim.catalog());
+    let color = belt_item_color(item.item_id, ids);
 
     Some((
         Vec3::new(center.x + offset.x, center.y + offset.y, 4.0),
@@ -275,19 +293,18 @@ pub(crate) fn belt_direction_color() -> Color {
     Color::srgb(0.30, 0.22, 0.07)
 }
 
-pub(crate) fn belt_item_color(item_id: ItemId, catalog: &PrototypeCatalog) -> Color {
-    catalog
-        .items
-        .get(item_id.index())
-        .map(|item| item.name.as_str())
-        .map(|name| match name {
-            "iron_ore" => Color::srgb(0.70, 0.66, 0.58),
-            "copper_ore" => Color::srgb(0.86, 0.42, 0.20),
-            "coal" => Color::srgb(0.05, 0.05, 0.05),
-            "stone" => Color::srgb(0.54, 0.51, 0.47),
-            _ => Color::srgb(0.64, 0.82, 0.95),
-        })
-        .unwrap_or(Color::WHITE)
+pub(crate) fn belt_item_color(item_id: ItemId, ids: BasePrototypeIds) -> Color {
+    if item_id == ids.items.iron_ore {
+        Color::srgb(0.70, 0.66, 0.58)
+    } else if item_id == ids.items.copper_ore {
+        Color::srgb(0.86, 0.42, 0.20)
+    } else if item_id == ids.items.coal {
+        Color::srgb(0.05, 0.05, 0.05)
+    } else if item_id == ids.items.stone {
+        Color::srgb(0.54, 0.51, 0.47)
+    } else {
+        Color::srgb(0.64, 0.82, 0.95)
+    }
 }
 
 #[cfg(test)]
@@ -296,14 +313,13 @@ mod tests {
     use factory_data::EntityPrototypeId;
     use factory_sim::CHUNK_SIZE;
 
-    use crate::rendering::colors::find_item_id;
     use crate::utils::find_entity_prototype_id;
 
     #[test]
     pub(crate) fn belt_item_render_state_changes_only_when_sim_position_changes() {
         let mut sim = Simulation::new_test_world(123);
         let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
-        let iron_ore = find_item_id(sim.catalog(), "iron_ore");
+        let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
         let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
         let belt_id = sim
             .place_entity(belt, x, y, Direction::East)
@@ -355,7 +371,9 @@ mod tests {
     fn belt_item_label_uses_item_prototype_initials() {
         let mut sim = Simulation::new_test_world(123);
         let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
-        let copper_ore = find_item_id(sim.catalog(), "copper_ore");
+        let copper_ore = BasePrototypeIds::from_catalog(sim.catalog())
+            .items
+            .copper_ore;
         let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
         let belt_id = sim
             .place_entity(belt, x, y, Direction::East)

@@ -1,3 +1,4 @@
+mod base_ids;
 mod catalog;
 
 pub mod error;
@@ -8,6 +9,10 @@ pub mod prelude;
 mod raw;
 mod validation;
 
+pub use base_ids::{
+    BaseItemIds, BasePrototypeIds, BaseTileIds, entity_prototype_id_by_name, item_id_by_name,
+    recipe_id_by_name, technology_id_by_name, tile_id_by_name,
+};
 pub use catalog::PrototypeCatalog;
 pub use error::PrototypeLoadError;
 pub use ids::{EntityPrototypeId, ItemId, RecipeId, TechnologyId, TileId};

@@ -1,4 +1,5 @@
 use super::*;
+use factory_data::{BasePrototypeIds, item_id_by_name};
 
 #[derive(Default)]
 pub(super) struct StableHasher {
@@ -371,56 +372,28 @@ pub(super) struct WorldPrototypeIds {
 
 impl WorldPrototypeIds {
     pub(super) fn from_catalog(prototypes: &PrototypeCatalog) -> Self {
+        let ids = BasePrototypeIds::from_catalog(prototypes);
         Self {
-            grass: tile_id(prototypes, "grass"),
-            dirt: tile_id(prototypes, "dirt"),
-            water: tile_id(prototypes, "water"),
-            resources: [
-                item_id(prototypes, "iron_ore"),
-                item_id(prototypes, "copper_ore"),
-                item_id(prototypes, "coal"),
-                item_id(prototypes, "stone"),
-            ],
+            grass: ids.tiles.grass,
+            dirt: ids.tiles.dirt,
+            water: ids.tiles.water,
+            resources: ids.items.resource_items(),
         }
     }
 }
 
-pub(super) fn tile_id(prototypes: &PrototypeCatalog, name: &str) -> TileId {
-    prototypes
-        .tiles
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required tile prototype {name:?}"))
-}
-
 pub(super) fn item_id(prototypes: &PrototypeCatalog, name: &str) -> ItemId {
-    prototypes
-        .items
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
+    item_id_by_name(prototypes, name)
 }
 
 #[cfg(test)]
 pub(super) fn recipe_id(prototypes: &PrototypeCatalog, name: &str) -> RecipeId {
-    prototypes
-        .recipes
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
+    factory_data::recipe_id_by_name(prototypes, name)
 }
 
 #[cfg(test)]
 pub(super) fn technology_id(prototypes: &PrototypeCatalog, name: &str) -> TechnologyId {
-    prototypes
-        .technologies
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required technology prototype {name:?}"))
+    factory_data::technology_id_by_name(prototypes, name)
 }
 
 pub(super) fn item_stack_size(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u16> {

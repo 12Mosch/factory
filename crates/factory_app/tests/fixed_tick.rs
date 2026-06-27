@@ -813,37 +813,17 @@ fn first_placeable_resource_rect(
 }
 
 fn entity_id_by_name(catalog: &PrototypeCatalog, name: &str) -> EntityPrototypeId {
-    catalog
-        .entities
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required entity prototype {name:?}"))
+    factory_data::entity_prototype_id_by_name(catalog, name)
 }
 
 fn item_id_by_name(catalog: &PrototypeCatalog, name: &str) -> ItemId {
-    catalog
-        .items
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
+    factory_data::item_id_by_name(catalog, name)
 }
 
 fn recipe_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::RecipeId {
-    catalog
-        .recipes
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required recipe prototype {name:?}"))
+    factory_data::recipe_id_by_name(catalog, name)
 }
 
 fn technology_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::TechnologyId {
-    catalog
-        .technologies
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required technology prototype {name:?}"))
+    factory_data::technology_id_by_name(catalog, name)
 }

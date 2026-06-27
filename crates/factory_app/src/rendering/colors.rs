@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_data::{ItemId, PrototypeCatalog, TileId};
+use factory_data::{BasePrototypeIds, ItemId, PrototypeCatalog, TileId};
 use factory_sim::ResourceCell;
 
 pub(crate) fn chest_color() -> Color {
@@ -66,31 +66,14 @@ pub(crate) struct RenderPrototypeIds {
 
 impl RenderPrototypeIds {
     pub(crate) fn from_catalog(catalog: &PrototypeCatalog) -> Self {
+        let ids = BasePrototypeIds::from_catalog(catalog);
         Self {
-            dirt: find_tile_id(catalog, "dirt"),
-            water: find_tile_id(catalog, "water"),
-            iron_ore: find_item_id(catalog, "iron_ore"),
-            copper_ore: find_item_id(catalog, "copper_ore"),
-            coal: find_item_id(catalog, "coal"),
-            stone: find_item_id(catalog, "stone"),
+            dirt: ids.tiles.dirt,
+            water: ids.tiles.water,
+            iron_ore: ids.items.iron_ore,
+            copper_ore: ids.items.copper_ore,
+            coal: ids.items.coal,
+            stone: ids.items.stone,
         }
     }
-}
-
-pub(crate) fn find_tile_id(catalog: &PrototypeCatalog, name: &str) -> TileId {
-    catalog
-        .tiles
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required tile prototype {name:?}"))
-}
-
-pub(crate) fn find_item_id(catalog: &PrototypeCatalog, name: &str) -> ItemId {
-    catalog
-        .items
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
 }
