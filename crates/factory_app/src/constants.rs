@@ -1,1 +1,23 @@
-pub use crate::app::SIM_TICKS_PER_SECOND;
+pub const SIM_TICKS_PER_SECOND: f64 = 60.0;
+
+pub(crate) const TILE_SIZE: f32 = 8.0;
+pub(crate) const RESOURCE_SIZE: f32 = 4.0;
+pub(crate) const PLAYER_SPRITE_SIZE: f32 = 6.0;
+pub(crate) const MANUAL_MINING_BAR_WIDTH: f32 = TILE_SIZE * 0.8;
+pub(crate) const MANUAL_MINING_BAR_HEIGHT: f32 = 1.0;
+pub(crate) const MANUAL_MINING_BAR_Y_OFFSET: f32 = TILE_SIZE * 0.68;
+pub(crate) const MIN_CAMERA_SCALE: f32 = 0.35;
+pub(crate) const MAX_CAMERA_SCALE: f32 = 8.0;
+pub(crate) const INITIAL_CAMERA_SCALE: f32 = 2.0;
+pub(crate) const CHEST_SPRITE_SIZE: f32 = TILE_SIZE * 0.9;
+pub(crate) const BURNER_DRILL_SPRITE_PADDING: f32 = TILE_SIZE * 0.12;
+pub(crate) const TRANSPORT_BELT_SPRITE_SIZE: f32 = TILE_SIZE * 0.92;
+pub(crate) const BELT_DIRECTION_SHAFT_LENGTH: f32 = TILE_SIZE * 0.46;
+pub(crate) const BELT_DIRECTION_SHAFT_WIDTH: f32 = TILE_SIZE * 0.12;
+pub(crate) const BELT_DIRECTION_HEAD_SIZE: f32 = TILE_SIZE * 0.22;
+pub(crate) const BELT_ITEM_SPRITE_SIZE: f32 = TILE_SIZE * 0.28;
+pub(crate) const BELT_ITEM_LABEL_FONT_SIZE: f32 = 3.0;
+pub(crate) const SLOT_BUTTON_WIDTH: f32 = 58.0;
+pub(crate) const SLOT_BUTTON_HEIGHT: f32 = 38.0;
+pub(crate) const MACHINE_BAR_WIDTH: f32 = 180.0;
+pub(crate) const MACHINE_BAR_HEIGHT: f32 = 10.0;

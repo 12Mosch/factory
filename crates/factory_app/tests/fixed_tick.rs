@@ -1,11 +1,17 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use factory_app::{
-    DebugBuildDirection, FactoryAppPlugin, InventoryPanel, SimResource,
-    available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
+use factory_app::FactoryAppPlugin;
+use factory_app::input::debug_build::{
     handle_debug_belt_item_insertion_at_tile, handle_debug_build_action_at_tile,
-    opened_container_after_world_click, transfer_open_container_slot, world_position_to_tile_coord,
 };
+use factory_app::interaction::container_open::opened_container_after_world_click;
+use factory_app::interaction::cursor::world_position_to_tile_coord;
+use factory_app::interaction::slot_transfer::transfer_open_container_slot;
+use factory_app::resources::{DebugBuildDirection, DebugInventorySelection, SimResource};
+use factory_app::ui::formatting::{
+    available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
+};
+use factory_app::ui::inventory_panel::InventoryPanel;
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
 use std::time::Duration;
@@ -705,7 +711,7 @@ fn debug_belt_insert_key_adds_selected_item_to_clicked_belt() {
     let belt_id = sim
         .place_entity(belt, x, y, Direction::East)
         .expect("belt should be placeable");
-    let inventory_selection = factory_app::DebugInventorySelection { selected_index: 0 };
+    let inventory_selection = DebugInventorySelection { selected_index: 0 };
 
     handle_debug_belt_item_insertion_at_tile(&mut sim, &inventory_selection, x, y)
         .expect("clicked belt should accept selected debug item");
