@@ -1,8 +1,9 @@
 use crate::model::{
     EntityPrototype, ItemPrototype, RecipePrototype, TechnologyPrototype, TilePrototype,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct PrototypeCatalog {
     pub items: Vec<ItemPrototype>,
     pub recipes: Vec<RecipePrototype>,

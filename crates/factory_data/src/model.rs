@@ -1,9 +1,9 @@
 use glam::IVec2;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ids::{EntityPrototypeId, ItemId, RecipeId, TechnologyId, TileId};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ItemPrototype {
     pub id: ItemId,
     pub name: String,
@@ -11,7 +11,7 @@ pub struct ItemPrototype {
     pub fuel_value_joules: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RecipePrototype {
     pub id: RecipeId,
     pub name: String,
@@ -21,7 +21,7 @@ pub struct RecipePrototype {
     pub products: Vec<ItemAmount>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct EntityPrototype {
     pub id: EntityPrototypeId,
     pub name: String,
@@ -34,18 +34,18 @@ pub struct EntityPrototype {
     pub assembling_machine: Option<AssemblingMachinePrototype>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BurnerPrototype {
     pub energy_usage_watts: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct MiningDrillPrototype {
     pub mining_area: IVec2,
     pub ticks_per_item: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct AssemblingMachinePrototype {
     pub crafting_speed_numerator: u32,
     pub crafting_speed_denominator: u32,
@@ -53,14 +53,14 @@ pub struct AssemblingMachinePrototype {
     pub output_slot_count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TilePrototype {
     pub id: TileId,
     pub name: String,
     pub collision_mask: CollisionMask,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TechnologyPrototype {
     pub id: TechnologyId,
     pub name: String,
@@ -71,25 +71,25 @@ pub struct TechnologyPrototype {
     pub effects: Vec<TechnologyEffect>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum TechnologyEffect {
     UnlockRecipe(RecipeId),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ItemAmount {
     pub item: ItemId,
     pub amount: u16,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum CraftingCategory {
     Manual,
     Smelting,
     Crafting,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum EntityKind {
     ResourcePatch,
     Furnace,
@@ -101,12 +101,12 @@ pub enum EntityKind {
     Chest,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct CollisionMask {
     pub layers: Vec<CollisionLayer>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum CollisionLayer {
     Ground,
     Water,

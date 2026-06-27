@@ -77,6 +77,7 @@ impl Simulation {
         "factory-sim-state-v1".hash(&mut hasher);
         self.tick.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
+        prototype_hash(&self.world.prototypes).hash(&mut hasher);
         self.world.chunks.hash(&mut hasher);
         self.entities.hash(&mut hasher);
         self.player.hash(&mut hasher);

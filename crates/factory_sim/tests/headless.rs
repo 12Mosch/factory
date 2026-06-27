@@ -1,4 +1,6 @@
-use factory_sim::{Simulation, scripted_inputs_for_red_science_factory};
+use factory_sim::{
+    Simulation, load_from_bytes, save_to_bytes, scripted_inputs_for_red_science_factory,
+};
 
 #[test]
 fn sim_runs_3600_ticks_without_bevy() {
@@ -48,4 +50,38 @@ fn red_science_factory_is_stable_for_100k_ticks() {
 
     assert!(sim.research.is_unlocked("basic-automation"));
     assert!(sim.validate_item_conservation());
+}
+
+#[test]
+fn save_load_preserves_state_hash() {
+    let mut sim = Simulation::new_scripted_red_science_factory();
+
+    for _ in 0..10_000 {
+        sim.tick();
+    }
+
+    let before = sim.state_hash();
+    let bytes = save_to_bytes(&sim).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+
+    assert_eq!(before, loaded.state_hash());
+}
+
+#[test]
+fn save_load_then_continue_matches_original() {
+    let mut a = Simulation::new_scripted_red_science_factory();
+
+    for _ in 0..10_000 {
+        a.tick();
+    }
+
+    let bytes = save_to_bytes(&a).unwrap();
+    let mut b = load_from_bytes(&bytes).unwrap();
+
+    for _ in 0..10_000 {
+        a.tick();
+        b.tick();
+    }
+
+    assert_eq!(a.state_hash(), b.state_hash());
 }
