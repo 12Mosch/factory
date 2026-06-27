@@ -489,6 +489,14 @@ pub enum PlayerBuildError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntityDestroyError {
+    MissingEntity(EntityId),
+    MissingBuildItem { prototype_id: EntityPrototypeId },
+    InsufficientInventory { item_id: ItemId },
+    UnknownItem(ItemId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContainerError {
     MissingEntity(EntityId),
     NotContainer(EntityId),

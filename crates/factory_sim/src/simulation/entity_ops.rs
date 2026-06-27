@@ -155,6 +155,109 @@ impl Simulation {
         self.entities.remove_placed_entity(entity_id)
     }
 
+    pub fn destroy_entity_to_player_inventory(
+        &mut self,
+        entity_id: EntityId,
+    ) -> Result<PlacedEntity, EntityDestroyError> {
+        let placed = self
+            .entities
+            .placed_entity(entity_id)
+            .cloned()
+            .ok_or(EntityDestroyError::MissingEntity(entity_id))?;
+        let recovery_stacks = self.entity_recovery_stacks(&placed)?;
+        let mut player_inventory = self.player_inventory.clone();
+
+        for stack in recovery_stacks {
+            player_inventory
+                .insert(&self.world.prototypes, stack.item_id, stack.count)
+                .map_err(|error| match error {
+                    InventoryError::InsufficientSpace => {
+                        EntityDestroyError::InsufficientInventory {
+                            item_id: stack.item_id,
+                        }
+                    }
+                    InventoryError::UnknownItem => EntityDestroyError::UnknownItem(stack.item_id),
+                    InventoryError::InsufficientItems => {
+                        unreachable!("destroy recovery only inserts items")
+                    }
+                })?;
+        }
+
+        let removed = self
+            .entities
+            .remove_placed_entity(entity_id)
+            .expect("validated placed entity should still be removable");
+        self.player_inventory = player_inventory;
+        self.manual_mining_progress = None;
+
+        Ok(removed)
+    }
+
+    fn entity_recovery_stacks(
+        &self,
+        placed: &PlacedEntity,
+    ) -> Result<Vec<ItemStack>, EntityDestroyError> {
+        let mut stacks = Vec::new();
+        stacks.push(ItemStack {
+            item_id: self.build_item_for_entity(placed.prototype_id)?,
+            count: 1,
+        });
+
+        if let Some(inventory) = self.entities.entity_inventories.get(&placed.id) {
+            push_inventory_stacks(&mut stacks, inventory);
+        }
+        if let Some(state) = self.entities.burner_mining_drills.get(&placed.id) {
+            push_optional_stack(&mut stacks, state.energy.fuel_slot);
+            push_optional_stack(&mut stacks, state.output_slot);
+        }
+        if let Some(state) = self.entities.furnaces.get(&placed.id) {
+            push_optional_stack(&mut stacks, state.input_slot);
+            push_optional_stack(&mut stacks, state.energy.fuel_slot);
+            push_optional_stack(&mut stacks, state.output_slot);
+        }
+        if let Some(state) = self.entities.assembling_machines.get(&placed.id) {
+            push_inventory_stacks(&mut stacks, &state.input_inventory);
+            push_inventory_stacks(&mut stacks, &state.output_inventory);
+        }
+        if let Some(state) = self.entities.labs.get(&placed.id) {
+            push_inventory_stacks(&mut stacks, &state.inventory);
+        }
+        if let Some(segment) = self.entities.transport_belts.get(&placed.id) {
+            stacks.extend(segment.lanes.iter().flat_map(|lane| {
+                lane.items.iter().map(|item| ItemStack {
+                    item_id: item.item_id,
+                    count: 1,
+                })
+            }));
+        }
+        if let Some(InserterState::Holding { item }) = self.entities.inserters.get(&placed.id) {
+            stacks.push(*item);
+        }
+
+        Ok(stacks)
+    }
+
+    fn build_item_for_entity(
+        &self,
+        prototype_id: EntityPrototypeId,
+    ) -> Result<ItemId, EntityDestroyError> {
+        let prototype = self
+            .world
+            .prototypes
+            .entities
+            .get(prototype_id.index())
+            .filter(|prototype| prototype.id == prototype_id)
+            .ok_or(EntityDestroyError::MissingBuildItem { prototype_id })?;
+
+        self.world
+            .prototypes
+            .items
+            .iter()
+            .find(|item| item.name == prototype.name)
+            .map(|item| item.id)
+            .ok_or(EntityDestroyError::MissingBuildItem { prototype_id })
+    }
+
     fn validate_footprint_clear_of_player(
         &self,
         footprint: &EntityFootprint,
@@ -655,5 +758,15 @@ impl Simulation {
         self.player_inventory
             .insert(&self.world.prototypes, stack.item_id, stack.count)
             .map_err(AssemblerError::from)
+    }
+}
+
+fn push_inventory_stacks(stacks: &mut Vec<ItemStack>, inventory: &Inventory) {
+    stacks.extend(inventory.slots.iter().flatten().copied());
+}
+
+fn push_optional_stack(stacks: &mut Vec<ItemStack>, stack: Option<ItemStack>) {
+    if let Some(stack) = stack {
+        stacks.push(stack);
     }
 }

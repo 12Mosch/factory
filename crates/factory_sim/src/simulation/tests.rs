@@ -3179,6 +3179,133 @@ fn inventory_backed_placement_rejects_resource_patch() {
     assert_eq!(sim.player_inventory.count(belt_item), 1);
 }
 
+#[test]
+fn destroying_entity_returns_building_and_contents_to_player() {
+    let mut sim = Simulation::new_test_world(123);
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let chest_item = item_id_by_name(&sim.world.prototypes, "chest");
+    let iron_plate = item_id_by_name(&sim.world.prototypes, "iron_plate");
+    let (x, y) = first_placeable_entity_tile(&sim, chest, Direction::North);
+    let entity_id = sim
+        .place_entity(chest, x, y, Direction::North)
+        .expect("chest should be placeable");
+    sim.entity_inventory_mut(entity_id)
+        .expect("chest should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 7,
+    });
+    sim.player_inventory = Inventory::player();
+
+    let removed = sim
+        .destroy_entity_to_player_inventory(entity_id)
+        .expect("player should have room to recover entity");
+
+    assert_eq!(removed.id, entity_id);
+    assert!(sim.entities.placed_entity(entity_id).is_none());
+    assert_eq!(sim.entities.occupancy().entity_at(x, y), None);
+    assert_eq!(sim.player_inventory.count(chest_item), 1);
+    assert_eq!(sim.player_inventory.count(iron_plate), 7);
+}
+
+#[test]
+fn destroying_entity_keeps_world_unchanged_when_inventory_is_full() {
+    let mut sim = Simulation::new_test_world(123);
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let chest_item = item_id_by_name(&sim.world.prototypes, "chest");
+    let iron_plate = item_id_by_name(&sim.world.prototypes, "iron_plate");
+    let iron_stack_size =
+        item_stack_size(&sim.world.prototypes, iron_plate).expect("iron plate should stack");
+    let (x, y) = first_placeable_entity_tile(&sim, chest, Direction::North);
+    let entity_id = sim
+        .place_entity(chest, x, y, Direction::North)
+        .expect("chest should be placeable");
+    sim.player_inventory = Inventory::with_slot_count(1);
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: iron_stack_size,
+    });
+
+    let result = sim.destroy_entity_to_player_inventory(entity_id);
+
+    assert_eq!(
+        result,
+        Err(EntityDestroyError::InsufficientInventory {
+            item_id: chest_item,
+        })
+    );
+    assert!(sim.entities.placed_entity(entity_id).is_some());
+    assert_eq!(sim.entities.occupancy().entity_at(x, y), Some(entity_id));
+    assert_eq!(sim.player_inventory.count(chest_item), 0);
+}
+
+#[test]
+fn manual_mining_right_click_destroys_building_before_mining_resource_under_it() {
+    let mut sim = Simulation::new_test_world(123);
+    let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+    let drill_item = item_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+    let coal = item_id_by_name(&sim.world.prototypes, "coal");
+    let (x, y, before_amount) = first_placeable_resource_tile(&sim, drill, coal);
+    sim.player_inventory = Inventory::player();
+    let entity_id = sim
+        .place_entity(drill, x, y, Direction::North)
+        .expect("burner drill should be placeable over resources");
+    let player_tile = first_manual_mining_reach_tile(&sim, x, y);
+    sim.player = PlayerState::centered_on_tile(player_tile.0, player_tile.1);
+
+    for _ in 0..MANUAL_MINING_TICKS_PER_ITEM {
+        sim.update_manual_mining(Some(ManualMiningTarget { x, y }));
+    }
+
+    assert!(sim.entities.placed_entity(entity_id).is_none());
+    assert_eq!(sim.entities.occupancy().entity_at(x, y), None);
+    assert_eq!(
+        resource_amount_at(&sim.world, x, y),
+        Some(before_amount),
+        "underlying resource should not be mined on the same completion tick"
+    );
+    assert_eq!(sim.player_inventory.count(drill_item), 1);
+}
+
+fn first_placeable_resource_tile(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+    resource_item: ItemId,
+) -> (i32, i32, u32) {
+    for (x, y) in all_tile_coords(&sim.world) {
+        let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
+            continue;
+        };
+        if resource.resource_item == resource_item
+            && sim
+                .can_place_entity(prototype_id, x, y, Direction::North)
+                .is_ok()
+        {
+            return (x, y, resource.amount);
+        }
+    }
+
+    panic!("expected at least one placeable resource tile");
+}
+
+fn first_manual_mining_reach_tile(sim: &Simulation, target_x: i32, target_y: i32) -> (i32, i32) {
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            if dx * dx + dy * dy > 4 {
+                continue;
+            }
+
+            let x = target_x + dx;
+            let y = target_y + dy;
+            if sim.can_player_occupy_tile(x, y) {
+                return (x, y);
+            }
+        }
+    }
+
+    panic!("expected a reachable walkable tile near manual mining target");
+}
+
 fn fill_inventory_with(sim: &mut Simulation, entity_id: EntityId, item_id: ItemId) {
     let stack_size = item_stack_size(&sim.world.prototypes, item_id)
         .expect("test item should have a stack size");

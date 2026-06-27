@@ -59,6 +59,31 @@ impl Simulation {
             return;
         }
 
+        if let Some(entity_id) = self.entities.occupancy.entity_at(target.x, target.y) {
+            match self.destroy_entity_to_player_inventory(entity_id) {
+                Ok(_) => {
+                    self.manual_mining_progress = if self.is_valid_manual_mining_target(target) {
+                        Some(ManualMiningProgress {
+                            target,
+                            progress_ticks: 0,
+                            required_ticks: MANUAL_MINING_TICKS_PER_ITEM,
+                        })
+                    } else {
+                        None
+                    };
+                }
+                Err(EntityDestroyError::InsufficientInventory { .. })
+                | Err(EntityDestroyError::UnknownItem(_))
+                | Err(EntityDestroyError::MissingBuildItem { .. }) => {
+                    self.manual_mining_progress = Some(progress);
+                }
+                Err(EntityDestroyError::MissingEntity(_)) => {
+                    self.manual_mining_progress = None;
+                }
+            }
+            return;
+        }
+
         let resource_item = self
             .world
             .tile_at(target.x, target.y)
@@ -179,10 +204,16 @@ impl Simulation {
     }
 
     pub(super) fn is_valid_manual_mining_target(&self, target: ManualMiningTarget) -> bool {
-        self.world
-            .tile_at(target.x, target.y)
-            .and_then(|tile| tile.resource)
+        (self
+            .entities
+            .occupancy
+            .entity_at(target.x, target.y)
             .is_some()
+            || self
+                .world
+                .tile_at(target.x, target.y)
+                .and_then(|tile| tile.resource)
+                .is_some())
             && self.is_manual_mining_target_in_reach(target)
     }
 
