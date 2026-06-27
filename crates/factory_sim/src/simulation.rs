@@ -474,8 +474,26 @@ pub enum SimulationInput {
     BuildRedScienceResearchFixture,
 }
 
+pub type SimulationValidationError = SimValidationError;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SimulationValidationError {
+pub enum SimValidationError {
+    MissingTile {
+        x: i32,
+        y: i32,
+    },
+    InvalidEntityPrototype {
+        entity_id: EntityId,
+        prototype_id: EntityPrototypeId,
+    },
+    InvalidEntityFootprint {
+        entity_id: EntityId,
+    },
+    InvalidEntityTile {
+        entity_id: EntityId,
+        x: i32,
+        y: i32,
+    },
     UnknownItem(ItemId),
     EmptyItemStack(ItemId),
     StackExceedsLimit {
@@ -491,6 +509,28 @@ pub enum SimulationValidationError {
     },
     OccupancyMismatch,
     OrphanEntityState(EntityId),
+    InvalidEntityState {
+        entity_id: EntityId,
+    },
+    InvalidRecipeItem {
+        recipe_id: RecipeId,
+        item_id: ItemId,
+    },
+    InvalidTechnologyItem {
+        technology_id: TechnologyId,
+        item_id: ItemId,
+    },
+    InvalidTechnologyRecipe {
+        technology_id: TechnologyId,
+        recipe_id: RecipeId,
+    },
+    InvalidTechnologyPrerequisite {
+        technology_id: TechnologyId,
+        prerequisite_id: TechnologyId,
+    },
+    InvalidCraftingRecipe {
+        recipe_id: RecipeId,
+    },
     InvalidBeltItemPosition {
         entity_id: EntityId,
         lane_index: usize,
@@ -507,6 +547,22 @@ pub enum SimulationValidationError {
     InvalidMachineRecipe {
         entity_id: EntityId,
         recipe_id: RecipeId,
+    },
+    InvalidResearchTechnology {
+        technology_id: TechnologyId,
+    },
+    InvalidResearchProgress {
+        technology_id: TechnologyId,
+        progress_units: u32,
+        required_units: u32,
+    },
+    InvalidActiveResearch {
+        technology_id: TechnologyId,
+    },
+    InvalidInserterTarget {
+        entity_id: EntityId,
+        x: i32,
+        y: i32,
     },
 }
 
