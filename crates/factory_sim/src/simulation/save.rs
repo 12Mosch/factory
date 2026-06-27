@@ -1,9 +1,12 @@
 use super::*;
+use bincode::Options;
 
 pub const SAVE_VERSION: u32 = 1;
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 1;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
+const SAVE_HEADER_LEN: usize = 8 + 4 + 4 + 8;
+const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum SaveLoadError {
@@ -28,6 +31,14 @@ struct SaveFile {
     prototype_format_version: u32,
     prototype_hash: u64,
     snapshot: SimulationSnapshot,
+}
+
+#[derive(Clone, Copy)]
+struct SaveHeader {
+    magic: [u8; 8],
+    save_version: u32,
+    prototype_format_version: u32,
+    prototype_hash: u64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -58,26 +69,42 @@ pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
 }
 
 pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
-    let save_file: SaveFile = bincode::deserialize(bytes).map_err(SaveLoadError::from)?;
+    let (header, snapshot_bytes) = read_header(bytes)?;
 
-    if save_file.magic != SAVE_MAGIC {
+    if header.magic != SAVE_MAGIC {
         return Err(SaveLoadError::InvalidMagic {
-            found: save_file.magic,
+            found: header.magic,
         });
     }
-    if save_file.save_version != SAVE_VERSION {
+    if header.save_version != SAVE_VERSION {
         return Err(SaveLoadError::UnsupportedSaveVersion {
-            found: save_file.save_version,
+            found: header.save_version,
             supported: SAVE_VERSION,
         });
     }
-    if save_file.prototype_format_version != PROTOTYPE_FORMAT_VERSION {
+    if header.prototype_format_version != PROTOTYPE_FORMAT_VERSION {
         return Err(SaveLoadError::UnsupportedPrototypeFormatVersion {
-            found: save_file.prototype_format_version,
+            found: header.prototype_format_version,
             supported: PROTOTYPE_FORMAT_VERSION,
         });
     }
 
+    if snapshot_bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
+        return Err(size_limit_error());
+    }
+
+    let snapshot = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(MAX_SNAPSHOT_BYTES)
+        .deserialize(snapshot_bytes)
+        .map_err(SaveLoadError::from)?;
+    let save_file = SaveFile {
+        magic: header.magic,
+        save_version: header.save_version,
+        prototype_format_version: header.prototype_format_version,
+        prototype_hash: header.prototype_hash,
+        snapshot,
+    };
     let computed_hash = prototype_hash(&save_file.snapshot.prototypes);
     if save_file.prototype_hash != computed_hash {
         return Err(SaveLoadError::PrototypeHashMismatch {
@@ -90,6 +117,40 @@ pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
     sim.validate_state()
         .map_err(SaveLoadError::InvalidSimulationState)?;
     Ok(sim)
+}
+
+fn read_header(bytes: &[u8]) -> Result<(SaveHeader, &[u8]), SaveLoadError> {
+    if bytes.len() < SAVE_HEADER_LEN {
+        return Err(unexpected_eof_error("save header is truncated"));
+    }
+
+    let mut magic = [0; 8];
+    magic.copy_from_slice(&bytes[0..8]);
+
+    let header = SaveHeader {
+        magic,
+        save_version: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+        prototype_format_version: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+        prototype_hash: u64::from_le_bytes([
+            bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23],
+        ]),
+    };
+
+    Ok((header, &bytes[SAVE_HEADER_LEN..]))
+}
+
+fn size_limit_error() -> SaveLoadError {
+    SaveLoadError::Codec(bincode::ErrorKind::SizeLimit.into())
+}
+
+fn unexpected_eof_error(message: &'static str) -> SaveLoadError {
+    SaveLoadError::Codec(
+        bincode::ErrorKind::Io(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            message,
+        ))
+        .into(),
+    )
 }
 
 pub fn prototype_hash(catalog: &PrototypeCatalog) -> u64 {
@@ -142,6 +203,21 @@ mod tests {
         let result = load_from_bytes(&[0, 1, 2, 3]);
 
         assert!(matches!(result, Err(SaveLoadError::Codec(_))));
+    }
+
+    #[test]
+    fn load_rejects_invalid_magic_before_snapshot_decode() {
+        let sim = Simulation::new_test_world(123);
+        let mut bytes = save_to_bytes(&sim).unwrap();
+        bytes[0] = b'X';
+        bytes.truncate(SAVE_HEADER_LEN + 1);
+
+        let result = load_from_bytes(&bytes);
+
+        assert!(matches!(
+            result,
+            Err(SaveLoadError::InvalidMagic { found }) if found[0] == b'X'
+        ));
     }
 
     #[test]
