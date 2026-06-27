@@ -203,6 +203,8 @@ pub(super) fn ensure_inventory_can_accept(
 ) -> Result<(), ContainerError> {
     if inventory.can_insert(catalog, stack.item_id, stack.count) {
         Ok(())
+    } else if item_stack_size(catalog, stack.item_id).is_none() {
+        Err(ContainerError::UnknownItem)
     } else {
         Err(ContainerError::InsufficientSpace)
     }

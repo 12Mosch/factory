@@ -28,7 +28,8 @@ fn world_tile_lookup_is_stable_across_chunk_boundaries() {
 fn generated_chunks_have_expected_shape() {
     let world = WorldSim::new_seeded(123);
 
-    assert_eq!(world.chunks.len(), 16);
+    let generated_side = (WORLD_MAX_CHUNK - WORLD_MIN_CHUNK + 1) as usize;
+    assert_eq!(world.chunks.len(), generated_side * generated_side);
     for chunk in world.chunks.values() {
         assert_eq!(chunk.tiles.len(), (CHUNK_SIZE * CHUNK_SIZE) as usize);
     }
@@ -291,7 +292,7 @@ fn entity_cannot_be_placed_on_water() {
 fn entity_cannot_be_placed_outside_generated_chunks() {
     let mut sim = Simulation::new_test_world(123);
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
-    let outside_x = (TEST_WORLD_MAX_CHUNK + 1) * CHUNK_SIZE;
+    let outside_x = (WORLD_MAX_CHUNK + 1) * CHUNK_SIZE;
 
     let error = sim
         .place_entity(inserter, outside_x, 0, Direction::North)
@@ -1196,6 +1197,41 @@ fn blocked_belt_preserves_item_order() {
 }
 
 #[test]
+fn belt_pickup_uses_front_most_item_across_lanes() {
+    let iron_ore = ItemId::new(0);
+    let copper_ore = ItemId::new(1);
+    let mut segment = BeltSegment::new(Direction::East);
+    segment.lanes[0].items.push(BeltItem {
+        item_id: iron_ore,
+        position_subtile: 100,
+    });
+    segment.lanes[1].items.push(BeltItem {
+        item_id: copper_ore,
+        position_subtile: 200,
+    });
+
+    assert_eq!(belt_pickup_item(&segment), Some(copper_ore));
+}
+
+#[test]
+fn belt_removal_uses_front_most_matching_item_across_lanes() {
+    let iron_ore = ItemId::new(0);
+    let mut segment = BeltSegment::new(Direction::East);
+    segment.lanes[0].items.push(BeltItem {
+        item_id: iron_ore,
+        position_subtile: 100,
+    });
+    segment.lanes[1].items.push(BeltItem {
+        item_id: iron_ore,
+        position_subtile: 200,
+    });
+
+    assert!(remove_one_item_from_belt(&mut segment, iron_ore));
+    assert_eq!(segment.lanes[0].items.len(), 1);
+    assert!(segment.lanes[1].items.is_empty());
+}
+
+#[test]
 fn burner_drill_outputs_ore_onto_belt() {
     let mut sim = Simulation::new_test_world(123);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
@@ -1706,6 +1742,25 @@ fn inventory_rejects_insert_when_full() {
         Err(InventoryError::InsufficientSpace)
     );
     assert_eq!(inventory, before);
+}
+
+#[test]
+fn inventory_acceptance_reports_unknown_items() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let inventory = Inventory::with_slot_count(1);
+    let unknown_item = ItemId::new(catalog.items.len() as u16);
+
+    assert_eq!(
+        ensure_inventory_can_accept(
+            &catalog,
+            &inventory,
+            ItemStack {
+                item_id: unknown_item,
+                count: 1,
+            },
+        ),
+        Err(ContainerError::UnknownItem)
+    );
 }
 
 #[test]
@@ -2337,6 +2392,34 @@ fn inserter_moves_item_from_chest_to_furnace() {
         InserterState::Holding { .. }
     ));
     assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
+}
+
+#[test]
+fn inserter_moves_fuel_from_chest_to_furnace_fuel_slot() {
+    let mut sim = Simulation::new_test_world(123);
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
+
+    sim.entity_inventory_mut(chest_id)
+        .expect("chest should have inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: coal,
+        count: 1,
+    });
+
+    run_inserter_until_idle(&mut sim, inserter_id);
+
+    let furnace = sim
+        .furnace_state(furnace_id)
+        .expect("furnace should have state");
+    assert_eq!(furnace.input_slot, None);
+    assert_eq!(
+        furnace.energy.fuel_slot,
+        Some(ItemStack {
+            item_id: coal,
+            count: 1,
+        })
+    );
 }
 
 #[test]

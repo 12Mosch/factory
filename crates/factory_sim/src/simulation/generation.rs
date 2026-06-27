@@ -3,6 +3,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct StableHasher {
     hash: u64,
+    initialized: bool,
 }
 
 impl Hasher for StableHasher {
@@ -14,8 +15,9 @@ impl Hasher for StableHasher {
         const FNV_OFFSET: u64 = 0xcbf29ce484222325;
         const FNV_PRIME: u64 = 0x100000001b3;
 
-        if self.hash == 0 {
+        if !self.initialized {
             self.hash = FNV_OFFSET;
+            self.initialized = true;
         }
 
         for byte in bytes {
@@ -32,21 +34,30 @@ pub(super) fn splitmix64(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-pub(super) fn generate_test_chunks(
+pub(super) fn generate_world_chunks(
     seed: u64,
     prototypes: &PrototypeCatalog,
+) -> BTreeMap<ChunkCoord, Chunk> {
+    generate_chunks(seed, prototypes, WORLD_MIN_CHUNK, WORLD_MAX_CHUNK)
+}
+
+pub(super) fn generate_chunks(
+    seed: u64,
+    prototypes: &PrototypeCatalog,
+    min_chunk: i32,
+    max_chunk: i32,
 ) -> BTreeMap<ChunkCoord, Chunk> {
     let ids = WorldPrototypeIds::from_catalog(prototypes);
     let resource_map = generate_resource_map(
         seed,
         ids,
-        TEST_WORLD_MIN_CHUNK * CHUNK_SIZE,
-        TEST_WORLD_MAX_CHUNK * CHUNK_SIZE + CHUNK_SIZE - 1,
+        min_chunk * CHUNK_SIZE,
+        max_chunk * CHUNK_SIZE + CHUNK_SIZE - 1,
     );
     let mut chunks = BTreeMap::new();
 
-    for chunk_y in TEST_WORLD_MIN_CHUNK..=TEST_WORLD_MAX_CHUNK {
-        for chunk_x in TEST_WORLD_MIN_CHUNK..=TEST_WORLD_MAX_CHUNK {
+    for chunk_y in min_chunk..=max_chunk {
+        for chunk_x in min_chunk..=max_chunk {
             let coord = ChunkCoord {
                 x: chunk_x,
                 y: chunk_y,

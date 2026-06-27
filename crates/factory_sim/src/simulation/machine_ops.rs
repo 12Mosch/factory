@@ -177,7 +177,8 @@ pub(super) fn inserter_target_can_accept(
     }
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
-        return input_slot_can_accept(catalog, furnace.input_slot, item);
+        return burner_fuel_slot_can_accept(catalog, furnace.energy.fuel_slot, item)
+            || input_slot_can_accept(catalog, furnace.input_slot, item);
     }
 
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
@@ -257,12 +258,17 @@ pub(super) fn try_drop_inserter_item(
     }
 
     if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
-        if !input_slot_can_accept(catalog, furnace.input_slot, item) {
-            return false;
+        if burner_fuel_slot_can_accept(catalog, furnace.energy.fuel_slot, item) {
+            insert_into_single_slot(&mut furnace.energy.fuel_slot, item);
+            return true;
         }
 
-        insert_into_single_slot(&mut furnace.input_slot, item);
-        return true;
+        if input_slot_can_accept(catalog, furnace.input_slot, item) {
+            insert_into_single_slot(&mut furnace.input_slot, item);
+            return true;
+        }
+
+        return false;
     }
 
     if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
@@ -298,36 +304,33 @@ pub(super) fn try_drop_inserter_item(
 }
 
 pub(super) fn belt_pickup_item(segment: &BeltSegment) -> Option<ItemId> {
-    segment.lanes[0]
-        .items
+    segment
+        .lanes
         .iter()
+        .flat_map(|lane| lane.items.iter())
         .max_by_key(|item| item.position_subtile)
-        .or_else(|| {
-            segment.lanes[1]
-                .items
-                .iter()
-                .max_by_key(|item| item.position_subtile)
-        })
         .map(|item| item.item_id)
 }
 
 pub(super) fn remove_one_item_from_belt(segment: &mut BeltSegment, item_id: ItemId) -> bool {
-    for lane in &mut segment.lanes {
-        let Some((item_index, _)) = lane
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.item_id == item_id)
-            .max_by_key(|(_, item)| item.position_subtile)
-        else {
-            continue;
-        };
+    let Some((lane_index, item_index, _)) = segment
+        .lanes
+        .iter()
+        .enumerate()
+        .flat_map(|(lane_index, lane)| {
+            lane.items
+                .iter()
+                .enumerate()
+                .map(move |(item_index, item)| (lane_index, item_index, item))
+        })
+        .filter(|(_, _, item)| item.item_id == item_id)
+        .max_by_key(|(_, _, item)| item.position_subtile)
+    else {
+        return false;
+    };
 
-        lane.items.remove(item_index);
-        return true;
-    }
-
-    false
+    segment.lanes[lane_index].items.remove(item_index);
+    true
 }
 
 pub(super) fn first_resource_in_mining_area(

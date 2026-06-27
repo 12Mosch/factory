@@ -156,6 +156,9 @@ impl Simulation {
             });
             if !output_can_accept {
                 if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
+                    if state.active_recipe != Some(recipe_id) {
+                        state.crafting_progress_ticks = 0;
+                    }
                     state.active_recipe = Some(recipe_id);
                     state.crafting_required_ticks = required_ticks;
                 }

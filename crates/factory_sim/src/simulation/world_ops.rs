@@ -2,7 +2,7 @@ use super::*;
 
 impl WorldSim {
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
-        let chunks = generate_test_chunks(seed, &prototypes);
+        let chunks = generate_world_chunks(seed, &prototypes);
         Self {
             seed,
             prototypes,
@@ -175,11 +175,24 @@ pub(super) fn find_player_start(
     world: &WorldSim,
     occupancy: &OccupancyGrid,
 ) -> Option<PlayerState> {
-    let max_radius = (TEST_WORLD_MAX_CHUNK - TEST_WORLD_MIN_CHUNK + 1) * CHUNK_SIZE;
+    let (min_x, max_x, min_y, max_y) = world_tile_bounds(world)?;
+    let max_radius = min_x
+        .abs()
+        .max(max_x.abs())
+        .max(min_y.abs())
+        .max(max_y.abs());
 
     for radius in 0..=max_radius {
         for y in -radius..=radius {
+            if y < min_y || y > max_y {
+                continue;
+            }
+
             for x in -radius..=radius {
+                if x < min_x || x > max_x {
+                    continue;
+                }
+
                 if x.abs().max(y.abs()) != radius {
                     continue;
                 }
@@ -192,6 +205,20 @@ pub(super) fn find_player_start(
     }
 
     None
+}
+
+pub(super) fn world_tile_bounds(world: &WorldSim) -> Option<(i32, i32, i32, i32)> {
+    let min_chunk_x = world.chunks.keys().map(|coord| coord.x).min()?;
+    let max_chunk_x = world.chunks.keys().map(|coord| coord.x).max()?;
+    let min_chunk_y = world.chunks.keys().map(|coord| coord.y).min()?;
+    let max_chunk_y = world.chunks.keys().map(|coord| coord.y).max()?;
+
+    Some((
+        min_chunk_x * CHUNK_SIZE,
+        max_chunk_x * CHUNK_SIZE + CHUNK_SIZE - 1,
+        min_chunk_y * CHUNK_SIZE,
+        max_chunk_y * CHUNK_SIZE + CHUNK_SIZE - 1,
+    ))
 }
 
 pub(super) fn player_can_occupy_tile(
