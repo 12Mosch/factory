@@ -41,7 +41,7 @@ fn resource_generation_is_deterministic() {
     let a = WorldSim::new_seeded(123);
     let b = WorldSim::new_seeded(123);
 
-    assert_eq!(a.resource_hash(), b.resource_hash());
+    assert_eq!(resource_tiles(&a), resource_tiles(&b));
 }
 
 #[test]
@@ -99,16 +99,33 @@ fn over_mining_clears_resource_tile() {
 }
 
 #[test]
-fn resource_hash_changes_after_mining() {
+fn resource_dirty_revision_records_mined_tile() {
     let mut world = WorldSim::new_seeded(123);
-    let before_hash = world.resource_hash();
-    let (x, y, _) = first_resource_tile(&world);
+    let before_revision = world.resource_revision();
+    let (x, y, before) = first_resource_tile(&world);
 
     world
         .mine_resource_at(x, y, 1)
         .expect("resource tile should be minable");
 
-    assert_ne!(world.resource_hash(), before_hash);
+    assert_eq!(world.resource_revision(), before_revision + 1);
+
+    let changes = world
+        .resource_dirty_tiles_since(before_revision)
+        .expect("dirty history should include the just-mined tile")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        changes,
+        vec![ResourceTileChange {
+            revision: before_revision + 1,
+            x,
+            y,
+            resource: Some(ResourceCell {
+                resource_item: before.resource_item,
+                amount: before.amount - 1,
+            }),
+        }]
+    );
 }
 
 #[test]
@@ -3455,6 +3472,24 @@ fn all_tile_coords(world: &WorldSim) -> Vec<(i32, i32)> {
                 .iter()
                 .enumerate()
                 .map(move |(index, _)| tile_coord(chunk, index))
+        })
+        .collect()
+}
+
+fn resource_tiles(world: &WorldSim) -> Vec<(i32, i32, ResourceCell)> {
+    world
+        .chunks
+        .values()
+        .flat_map(|chunk| {
+            chunk
+                .tiles
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, tile)| {
+                    let resource = tile.resource?;
+                    let (x, y) = tile_coord(chunk, index);
+                    Some((x, y, resource))
+                })
         })
         .collect()
 }

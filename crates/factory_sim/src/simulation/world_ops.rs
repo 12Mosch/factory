@@ -1,6 +1,8 @@
 use super::*;
 
 impl WorldSim {
+    const RESOURCE_DIRTY_HISTORY_LIMIT: usize = 4096;
+
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
         let chunks = generate_world_chunks(seed, &prototypes);
         Self {
@@ -8,6 +10,7 @@ impl WorldSim {
             prototypes,
             chunks,
             resource_revision: 0,
+            resource_dirty_tiles: VecDeque::new(),
         }
     }
 
@@ -35,32 +38,33 @@ impl WorldSim {
         profiler.measure(ProfilePhase::ChunkLookup, || self.tile_at(x, y))
     }
 
-    pub fn resource_hash(&self) -> u64 {
-        let mut hasher = StableHasher::default();
-
-        for chunk in self.chunks.values() {
-            for (index, tile) in chunk.tiles.iter().enumerate() {
-                let Some(resource) = tile.resource else {
-                    continue;
-                };
-
-                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
-                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                let x = chunk.coord.x * CHUNK_SIZE + local_x;
-                let y = chunk.coord.y * CHUNK_SIZE + local_y;
-
-                x.hash(&mut hasher);
-                y.hash(&mut hasher);
-                resource.resource_item.hash(&mut hasher);
-                resource.amount.hash(&mut hasher);
-            }
-        }
-
-        hasher.finish()
-    }
-
     pub fn resource_revision(&self) -> u64 {
         self.resource_revision
+    }
+
+    pub fn resource_dirty_tiles_since(
+        &self,
+        revision: u64,
+    ) -> Option<impl Iterator<Item = ResourceTileChange> + '_> {
+        if revision > self.resource_revision {
+            return None;
+        }
+
+        if revision < self.resource_revision
+            && self
+                .resource_dirty_tiles
+                .front()
+                .is_none_or(|change| change.revision > revision.saturating_add(1))
+        {
+            return None;
+        }
+
+        Some(
+            self.resource_dirty_tiles
+                .iter()
+                .copied()
+                .filter(move |change| change.revision > revision),
+        )
     }
 
     pub fn mine_resource_at(&mut self, x: i32, y: i32, amount: u32) -> Option<MinedResource> {
@@ -69,20 +73,12 @@ impl WorldSim {
         }
 
         let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
-        let tile = self.tile_at_mut(x, y)?;
-        let resource = tile.resource.as_mut()?;
-        let mined_amount = amount.min(resource.amount);
-        let mined = MinedResource {
-            resource_item: resource.resource_item,
-            amount: mined_amount,
+        let (mined, resource) = {
+            let tile = self.tile_at_mut(x, y)?;
+            let mined = mine_resource_from_tile(tile, ids, amount)?;
+            (mined, tile.resource)
         };
-
-        resource.amount -= mined_amount;
-        if resource.amount == 0 {
-            tile.resource = None;
-            tile.collision = collision_for_tile(tile.tile_id, ids);
-        }
-        self.resource_revision = self.resource_revision.wrapping_add(1);
+        self.record_resource_tile_change(x, y, resource);
 
         Some(mined)
     }
@@ -99,20 +95,12 @@ impl WorldSim {
         }
 
         let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
-        let tile = profiler.measure(ProfilePhase::ChunkLookup, || self.tile_at_mut(x, y))?;
-        let resource = tile.resource.as_mut()?;
-        let mined_amount = amount.min(resource.amount);
-        let mined = MinedResource {
-            resource_item: resource.resource_item,
-            amount: mined_amount,
+        let (mined, resource) = {
+            let tile = profiler.measure(ProfilePhase::ChunkLookup, || self.tile_at_mut(x, y))?;
+            let mined = mine_resource_from_tile(tile, ids, amount)?;
+            (mined, tile.resource)
         };
-
-        resource.amount -= mined_amount;
-        if resource.amount == 0 {
-            tile.resource = None;
-            tile.collision = collision_for_tile(tile.tile_id, ids);
-        }
-        self.resource_revision = self.resource_revision.wrapping_add(1);
+        self.record_resource_tile_change(x, y, resource);
 
         Some(mined)
     }
@@ -202,6 +190,41 @@ impl WorldSim {
             .get_mut(&coord)
             .and_then(|chunk| chunk.tiles.get_mut(index))
     }
+
+    fn record_resource_tile_change(&mut self, x: i32, y: i32, resource: Option<ResourceCell>) {
+        self.resource_revision = self.resource_revision.wrapping_add(1);
+        self.resource_dirty_tiles.push_back(ResourceTileChange {
+            revision: self.resource_revision,
+            x,
+            y,
+            resource,
+        });
+
+        while self.resource_dirty_tiles.len() > Self::RESOURCE_DIRTY_HISTORY_LIMIT {
+            self.resource_dirty_tiles.pop_front();
+        }
+    }
+}
+
+fn mine_resource_from_tile(
+    tile: &mut TileCell,
+    ids: WorldPrototypeIds,
+    amount: u32,
+) -> Option<MinedResource> {
+    let resource = tile.resource.as_mut()?;
+    let mined_amount = amount.min(resource.amount);
+    let mined = MinedResource {
+        resource_item: resource.resource_item,
+        amount: mined_amount,
+    };
+
+    resource.amount -= mined_amount;
+    if resource.amount == 0 {
+        tile.resource = None;
+        tile.collision = collision_for_tile(tile.tile_id, ids);
+    }
+
+    Some(mined)
 }
 
 pub(super) fn chunk_coord_and_tile_index(x: i32, y: i32) -> (ChunkCoord, usize) {

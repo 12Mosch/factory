@@ -184,6 +184,7 @@ impl SimulationSnapshot {
                 prototypes: self.prototypes,
                 chunks: self.chunks,
                 resource_revision: 0,
+                resource_dirty_tiles: VecDeque::new(),
             },
             entities: self.entities,
             player: self.player,

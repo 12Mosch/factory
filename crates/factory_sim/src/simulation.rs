@@ -173,6 +173,8 @@ pub struct WorldSim {
     pub prototypes: PrototypeCatalog,
     pub chunks: BTreeMap<ChunkCoord, Chunk>,
     resource_revision: u64,
+    #[serde(skip, default)]
+    resource_dirty_tiles: VecDeque<ResourceTileChange>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -205,6 +207,14 @@ pub struct TileCollision {
 pub struct ResourceCell {
     pub resource_item: ItemId,
     pub amount: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ResourceTileChange {
+    pub revision: u64,
+    pub x: i32,
+    pub y: i32,
+    pub resource: Option<ResourceCell>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
