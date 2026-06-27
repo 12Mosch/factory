@@ -43,6 +43,14 @@ impl Simulation {
             let Some(mining_drill) = prototype.mining_drill.as_ref() else {
                 continue;
             };
+            let output_target = drill_output_target(&self.entities, &placed);
+            try_export_stored_drill_output(
+                &mut self.entities,
+                entity_id,
+                output_target,
+                &self.world.prototypes,
+            );
+
             let target =
                 first_resource_in_mining_area(&self.world, &placed.footprint, mining_drill);
             let Some((target, resource_item)) = target else {
@@ -53,7 +61,6 @@ impl Simulation {
                 continue;
             };
 
-            let output_target = drill_output_target(&self.entities, &placed);
             let output_can_accept =
                 self.entities
                     .burner_drill_state(entity_id)

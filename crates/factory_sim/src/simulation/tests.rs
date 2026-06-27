@@ -1259,6 +1259,35 @@ fn burner_drill_outputs_ore_onto_belt() {
 }
 
 #[test]
+fn burner_drill_exports_stored_output_onto_belt_without_new_production() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (drill_id, _, x, y, before) = place_burner_drill_outputting_to_belt(&mut sim, iron_ore);
+    let state = sim
+        .entities
+        .burner_drill_state_mut(drill_id)
+        .expect("burner drill should expose state");
+    state.output_slot = Some(ItemStack {
+        item_id: iron_ore,
+        count: 3,
+    });
+
+    sim.tick();
+
+    assert_eq!(
+        sim.burner_drill_state(drill_id)
+            .expect("burner drill should expose state")
+            .output_slot,
+        Some(ItemStack {
+            item_id: iron_ore,
+            count: 2,
+        })
+    );
+    assert_eq!(total_belt_count_for_item(&sim, iron_ore), 1);
+    assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
+}
+
+#[test]
 fn belt_line_moves_100_items_across_20_tiles() {
     let mut sim = Simulation::new_test_world(123);
     let belts = place_belt_line(&mut sim, 20);

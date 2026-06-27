@@ -633,6 +633,48 @@ pub(super) fn insert_drill_output(
     }
 }
 
+pub(super) fn try_export_stored_drill_output(
+    entities: &mut EntityStore,
+    drill_entity_id: EntityId,
+    output_target: DrillOutputTarget,
+    catalog: &PrototypeCatalog,
+) -> bool {
+    if !matches!(
+        output_target,
+        DrillOutputTarget::Inventory(_) | DrillOutputTarget::Belt(_)
+    ) {
+        return false;
+    }
+
+    let Some(stack) = entities
+        .burner_drill_state(drill_entity_id)
+        .ok()
+        .and_then(|state| state.output_slot)
+    else {
+        return false;
+    };
+
+    if !drill_output_target_can_accept(catalog, entities, output_target, None, stack.item_id, 1) {
+        return false;
+    }
+
+    insert_drill_output(
+        entities,
+        drill_entity_id,
+        output_target,
+        stack.item_id,
+        1,
+        catalog,
+    );
+    let state = entities
+        .burner_drill_state_mut(drill_entity_id)
+        .expect("burner drill id came from burner drill state map");
+    remove_from_single_slot(&mut state.output_slot, stack.item_id, 1)
+        .expect("stored drill output should still contain exported item");
+
+    true
+}
+
 pub(super) fn belt_output_lane_index(segment: &BeltSegment, _item_id: ItemId) -> Option<usize> {
     if belt_lane_can_accept_position(&segment.lanes[0], 0) {
         Some(0)
