@@ -36,6 +36,10 @@ impl Simulation {
         )
     }
 
+    pub fn new_seeded(seed: u64) -> Self {
+        Self::new_test_world(seed)
+    }
+
     pub fn tick(&mut self) {
         crate::tick::advance_simulation(self);
     }
@@ -70,7 +74,17 @@ impl Simulation {
 
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
-        self.hash(&mut hasher);
+        "factory-sim-state-v1".hash(&mut hasher);
+        self.tick.hash(&mut hasher);
+        self.world.seed.hash(&mut hasher);
+        self.world.chunks.hash(&mut hasher);
+        self.entities.hash(&mut hasher);
+        self.player.hash(&mut hasher);
+        self.player_inventory.hash(&mut hasher);
+        self.manual_mining_progress.hash(&mut hasher);
+        self.crafting_queue.hash(&mut hasher);
+        self.research.active.hash(&mut hasher);
+        self.research.technologies.hash(&mut hasher);
         hasher.finish()
     }
 

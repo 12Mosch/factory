@@ -98,6 +98,7 @@ pub enum CraftingError {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ResearchState {
+    pub technology_names: Vec<String>,
     pub active: Option<TechnologyId>,
     pub technologies: Vec<TechnologyResearchState>,
 }
@@ -141,7 +142,7 @@ pub struct Simulation {
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
-    research: ResearchState,
+    pub research: ResearchState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -468,6 +469,47 @@ pub enum ContainerError {
     UnknownItem,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SimulationInput {
+    BuildRedScienceResearchFixture,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimulationValidationError {
+    UnknownItem(ItemId),
+    EmptyItemStack(ItemId),
+    StackExceedsLimit {
+        item_id: ItemId,
+        count: u16,
+        stack_size: u16,
+    },
+    EntityOverlap {
+        x: i32,
+        y: i32,
+        first: EntityId,
+        second: EntityId,
+    },
+    OccupancyMismatch,
+    OrphanEntityState(EntityId),
+    InvalidBeltItemPosition {
+        entity_id: EntityId,
+        lane_index: usize,
+        position_subtile: u16,
+    },
+    BeltItemSpacingViolation {
+        entity_id: EntityId,
+        lane_index: usize,
+    },
+    InvalidMachineItem {
+        entity_id: EntityId,
+        item_id: ItemId,
+    },
+    InvalidMachineRecipe {
+        entity_id: EntityId,
+        recipe_id: RecipeId,
+    },
+}
+
 mod belt_ops;
 mod core;
 mod entity_ops;
@@ -477,13 +519,16 @@ mod inventory_ops;
 mod machine_ops;
 mod player_ops;
 mod research_ops;
+mod scripted;
 mod systems;
+mod validation;
 mod world_ops;
 
 use self::belt_ops::*;
 use self::generation::*;
 use self::inventory_ops::*;
 use self::machine_ops::*;
+pub use self::scripted::scripted_inputs_for_red_science_factory;
 use self::world_ops::*;
 
 #[cfg(test)]
