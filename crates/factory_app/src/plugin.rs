@@ -6,11 +6,10 @@ use factory_data::PrototypeCatalog;
 use factory_sim::Simulation;
 
 use crate::constants::SIM_TICKS_PER_SECOND;
-use crate::input::camera::zoom_camera;
-use crate::input::debug_build::{
-    handle_debug_belt_item_insertion_input, handle_debug_entity_placement,
+use crate::input::build::{
+    handle_build_hotbar_keys, handle_build_rotate_cancel_keys, handle_build_world_click,
 };
-use crate::input::debug_inventory::handle_debug_inventory_input;
+use crate::input::camera::zoom_camera;
 use crate::input::mining::update_manual_mining_from_input;
 use crate::input::movement::move_player_from_input;
 use crate::interaction::container_open::{
@@ -19,6 +18,7 @@ use crate::interaction::container_open::{
 use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
 };
+use crate::rendering::build_preview::{spawn_build_preview, update_build_preview};
 use crate::rendering::camera::{follow_player_camera, setup_camera};
 use crate::rendering::entities::measured_sync_placed_entity_rendering;
 use crate::rendering::manual_mining::{
@@ -31,13 +31,16 @@ use crate::rendering::resources::{
 };
 use crate::rendering::world::spawn_world_tiles;
 use crate::resources::{
-    DebugBuildDirection, DebugInventorySelection, OpenContainer, RenderSyncStats, SimProfileStats,
-    SimResource, UpsStats,
+    BuildPlacementState, OpenContainer, RenderSyncStats, SimProfileStats, SimResource, UpsStats,
 };
 use crate::simulation::tick_sim;
 use crate::ui::assembler_panel::{
     handle_assembler_recipe_button_clicks, update_assembler_detail_text,
     update_assembler_recipe_button_colors,
+};
+use crate::ui::build_bar::{
+    handle_build_bar_button_clicks, setup_build_bar, update_build_bar_action_visuals,
+    update_build_bar_visuals, update_build_status_text,
 };
 use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{setup_debug_overlay, update_debug_overlay, update_ups_stats};
@@ -75,9 +78,8 @@ impl Plugin for FactoryAppPlugin {
                 show_amount_labels: true,
             })
             .init_resource::<ResourceRenderCache>()
-            .init_resource::<DebugInventorySelection>()
+            .init_resource::<BuildPlacementState>()
             .init_resource::<OpenContainer>()
-            .init_resource::<DebugBuildDirection>()
             .add_systems(
                 Startup,
                 (
@@ -87,6 +89,8 @@ impl Plugin for FactoryAppPlugin {
                     spawn_cursor_tile_highlight,
                     spawn_manual_mining_progress_bar,
                     setup_debug_overlay,
+                    setup_build_bar,
+                    spawn_build_preview,
                 ),
             )
             .add_systems(
@@ -107,19 +111,34 @@ impl Plugin for FactoryAppPlugin {
                     update_cursor_tile_highlight,
                     update_manual_mining_progress_bar,
                     update_ups_stats,
-                    handle_debug_inventory_input,
-                    handle_debug_entity_placement,
-                    handle_debug_belt_item_insertion_input.after(handle_debug_inventory_input),
-                    handle_container_open_input,
+                    handle_build_hotbar_keys,
+                    handle_build_rotate_cancel_keys.before(handle_container_close_input),
+                    handle_build_bar_button_clicks,
+                    handle_container_open_input.before(handle_build_world_click),
+                    handle_build_world_click,
                     handle_container_close_input,
-                    update_debug_overlay,
+                    update_build_preview,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
                     measured_sync_belt_direction_rendering,
                     measured_sync_belt_item_rendering,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_debug_overlay,
                     sync_container_window,
                     handle_container_slot_clicks,
                     update_container_slot_text,
+                    update_build_bar_visuals,
+                    update_build_bar_action_visuals,
+                    update_build_status_text,
                     update_burner_drill_indicators,
                 ),
             )

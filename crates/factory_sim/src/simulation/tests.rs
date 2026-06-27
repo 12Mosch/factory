@@ -3059,6 +3059,126 @@ fn add_furnace_input_and_fuel(
         .expect("fuel should transfer to furnace");
 }
 
+#[test]
+fn inventory_backed_placement_consumes_one_item() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let belt_item = item_id_by_name(&sim.world.prototypes, "transport_belt");
+    let (x, y) = first_placeable_entity_tile(&sim, belt, Direction::North);
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, belt_item, 1)
+        .expect("test inventory should accept belt");
+
+    let entity_id = sim
+        .place_entity_from_player_inventory(belt, belt_item, x, y, Direction::North)
+        .expect("inventory-backed belt placement should succeed");
+
+    assert!(sim.entities.placed_entity(entity_id).is_some());
+    assert_eq!(sim.player_inventory.count(belt_item), 0);
+}
+
+#[test]
+fn inventory_backed_placement_fails_without_item() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let belt_item = item_id_by_name(&sim.world.prototypes, "transport_belt");
+    let (x, y) = first_placeable_entity_tile(&sim, belt, Direction::North);
+    sim.player_inventory = Inventory::player();
+    let before_entities = sim.entities.placed_len();
+
+    let result = sim.place_entity_from_player_inventory(belt, belt_item, x, y, Direction::North);
+
+    assert_eq!(
+        result,
+        Err(PlayerBuildError::InsufficientInventory { item_id: belt_item })
+    );
+    assert_eq!(sim.entities.placed_len(), before_entities);
+}
+
+#[test]
+fn inventory_backed_placement_does_not_consume_on_blocked_tile() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let belt_item = item_id_by_name(&sim.world.prototypes, "transport_belt");
+    let (x, y) = first_placeable_entity_tile(&sim, belt, Direction::North);
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, belt_item, 1)
+        .expect("test inventory should accept belt");
+    let blocker = sim
+        .place_entity(belt, x, y, Direction::North)
+        .expect("blocking belt should be placeable");
+
+    let result = sim.place_entity_from_player_inventory(belt, belt_item, x, y, Direction::North);
+
+    assert_eq!(
+        result,
+        Err(PlayerBuildError::Build(BuildError::EntityOccupied {
+            x,
+            y,
+            entity_id: blocker,
+        }))
+    );
+    assert_eq!(sim.player_inventory.count(belt_item), 1);
+}
+
+#[test]
+fn inventory_backed_placement_rejects_item_entity_mismatch() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let chest_item = item_id_by_name(&sim.world.prototypes, "chest");
+    let (x, y) = first_placeable_entity_tile(&sim, belt, Direction::North);
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, chest_item, 1)
+        .expect("test inventory should accept chest");
+    let before_entities = sim.entities.placed_len();
+
+    let result = sim.place_entity_from_player_inventory(belt, chest_item, x, y, Direction::North);
+
+    assert_eq!(
+        result,
+        Err(PlayerBuildError::ItemDoesNotBuildEntity {
+            item_id: chest_item,
+            prototype_id: belt,
+        })
+    );
+    assert_eq!(sim.entities.placed_len(), before_entities);
+    assert_eq!(sim.player_inventory.count(chest_item), 1);
+}
+
+#[test]
+fn inventory_backed_placement_rejects_resource_patch() {
+    let mut sim = Simulation::new_test_world(123);
+    let resource_patch = sim
+        .world
+        .prototypes
+        .entities
+        .iter()
+        .find(|prototype| prototype.entity_kind == EntityKind::ResourcePatch)
+        .expect("base catalog should include resource patch prototypes")
+        .id;
+    let belt_item = item_id_by_name(&sim.world.prototypes, "transport_belt");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, belt_item, 1)
+        .expect("test inventory should accept belt");
+    let before_entities = sim.entities.placed_len();
+
+    let result =
+        sim.place_entity_from_player_inventory(resource_patch, belt_item, 0, 0, Direction::North);
+
+    assert_eq!(
+        result,
+        Err(PlayerBuildError::MissingBuildItem {
+            prototype_id: resource_patch,
+        })
+    );
+    assert_eq!(sim.entities.placed_len(), before_entities);
+    assert_eq!(sim.player_inventory.count(belt_item), 1);
+}
+
 fn fill_inventory_with(sim: &mut Simulation, entity_id: EntityId, item_id: ItemId) {
     let stack_size = item_stack_size(&sim.world.prototypes, item_id)
         .expect("test item should have a stack size");
@@ -3529,6 +3649,20 @@ fn all_tile_coords(world: &WorldSim) -> Vec<(i32, i32)> {
         .collect()
 }
 
+fn first_placeable_entity_tile(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+    direction: Direction,
+) -> (i32, i32) {
+    for (x, y) in all_tile_coords(&sim.world) {
+        if sim.can_place_entity(prototype_id, x, y, direction).is_ok() {
+            return (x, y);
+        }
+    }
+
+    panic!("expected at least one placeable entity tile");
+}
+
 fn resource_tiles(world: &WorldSim) -> Vec<(i32, i32, ResourceCell)> {
     world
         .chunks
@@ -3549,6 +3683,10 @@ fn resource_tiles(world: &WorldSim) -> Vec<(i32, i32, ResourceCell)> {
 
 fn entity_id_by_name(catalog: &PrototypeCatalog, name: &str) -> EntityPrototypeId {
     factory_data::entity_prototype_id_by_name(catalog, name)
+}
+
+fn item_id_by_name(catalog: &PrototypeCatalog, name: &str) -> ItemId {
+    factory_data::item_id_by_name(catalog, name)
 }
 
 const CARDINAL_DIRECTIONS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];

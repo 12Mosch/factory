@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use factory_data::EntityKind;
-use factory_sim::{EntityId, Simulation};
+use factory_data::{EntityKind, EntityPrototypeId, PrototypeCatalog};
+use factory_sim::{Direction, EntityFootprint, EntityId, Simulation};
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -76,11 +76,23 @@ pub(crate) fn renderable_entity_style(
     entity_id: EntityId,
 ) -> Option<(Color, Vec2)> {
     let placed = sim.entities().placed_entity(entity_id)?;
-    let prototype = sim.catalog().entities.get(placed.prototype_id.index())?;
+    entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
+}
+
+pub(crate) fn entity_prototype_render_style(
+    catalog: &PrototypeCatalog,
+    prototype_id: EntityPrototypeId,
+    direction: Direction,
+) -> Option<(Color, Vec2)> {
+    let prototype = catalog
+        .entities
+        .get(prototype_id.index())
+        .filter(|prototype| prototype.id == prototype_id)?;
+    let footprint = EntityFootprint::from_size(0, 0, prototype.size.x, prototype.size.y, direction);
     let machine_size = || {
         Vec2::new(
-            placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-            placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
         )
     };
 

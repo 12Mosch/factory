@@ -1,6 +1,66 @@
 use super::*;
 
 impl Simulation {
+    pub fn can_place_entity_from_player_inventory(
+        &self,
+        prototype_id: EntityPrototypeId,
+        item_id: ItemId,
+        x: i32,
+        y: i32,
+        direction: Direction,
+    ) -> Result<EntityFootprint, PlayerBuildError> {
+        let prototype = self
+            .world
+            .prototypes
+            .entities
+            .get(prototype_id.index())
+            .filter(|prototype| prototype.id == prototype_id)
+            .ok_or(PlayerBuildError::MissingPrototype(prototype_id))?;
+        if prototype.entity_kind == EntityKind::ResourcePatch {
+            return Err(PlayerBuildError::MissingBuildItem { prototype_id });
+        }
+
+        let item = self
+            .world
+            .prototypes
+            .items
+            .get(item_id.index())
+            .filter(|item| item.id == item_id)
+            .ok_or(PlayerBuildError::MissingBuildItem { prototype_id })?;
+        if item.name != prototype.name {
+            return Err(PlayerBuildError::ItemDoesNotBuildEntity {
+                item_id,
+                prototype_id,
+            });
+        }
+        if self.player_inventory.count(item_id) == 0 {
+            return Err(PlayerBuildError::InsufficientInventory { item_id });
+        }
+
+        self.can_place_entity(prototype_id, x, y, direction)
+            .map_err(PlayerBuildError::Build)
+    }
+
+    pub fn place_entity_from_player_inventory(
+        &mut self,
+        prototype_id: EntityPrototypeId,
+        item_id: ItemId,
+        x: i32,
+        y: i32,
+        direction: Direction,
+    ) -> Result<EntityId, PlayerBuildError> {
+        self.can_place_entity_from_player_inventory(prototype_id, item_id, x, y, direction)?;
+
+        let entity_id = self
+            .place_entity(prototype_id, x, y, direction)
+            .map_err(PlayerBuildError::Build)?;
+        self.player_inventory
+            .remove(item_id, 1)
+            .expect("validated player build item should remain removable");
+
+        Ok(entity_id)
+    }
+
     pub fn can_place_entity(
         &self,
         prototype_id: EntityPrototypeId,

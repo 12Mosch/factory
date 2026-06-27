@@ -1,4 +1,5 @@
 pub mod belts;
+pub(crate) mod build_preview;
 pub(crate) mod camera;
 pub(crate) mod colors;
 pub(crate) mod entities;

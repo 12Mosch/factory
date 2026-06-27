@@ -4,7 +4,7 @@ use factory_sim::{EntityId, Simulation};
 
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::interaction::machine_kind::open_machine_kind;
-use crate::resources::{OpenContainer, SimResource};
+use crate::resources::{BuildPlacementState, OpenContainer, SimResource};
 
 pub(crate) fn handle_container_open_input(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
@@ -12,12 +12,16 @@ pub(crate) fn handle_container_open_input(
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
     sim: Res<SimResource>,
+    build_state: Res<BuildPlacementState>,
     mut open_container: ResMut<OpenContainer>,
 ) {
     let Some(mouse) = mouse else {
         return;
     };
     if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    if !container_open_input_allowed(&build_state) {
         return;
     }
     if ui_buttons
@@ -53,4 +57,8 @@ pub fn opened_container_after_world_click(
     open_machine_kind(sim, entity_id)
         .is_some()
         .then_some(entity_id)
+}
+
+pub fn container_open_input_allowed(build_state: &BuildPlacementState) -> bool {
+    build_state.selected.is_none()
 }

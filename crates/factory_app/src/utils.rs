@@ -1,5 +1,3 @@
-use factory_data::{EntityPrototypeId, PrototypeCatalog, entity_prototype_id_by_name};
-
 pub(crate) fn compact_item_name(name: &str) -> String {
     name.split('_')
         .filter_map(|part| part.chars().next())
@@ -7,9 +5,10 @@ pub(crate) fn compact_item_name(name: &str) -> String {
         .to_uppercase()
 }
 
+#[cfg(test)]
 pub(crate) fn find_entity_prototype_id(
-    catalog: &PrototypeCatalog,
+    catalog: &factory_data::PrototypeCatalog,
     name: &str,
-) -> EntityPrototypeId {
-    entity_prototype_id_by_name(catalog, name)
+) -> factory_data::EntityPrototypeId {
+    factory_data::entity_prototype_id_by_name(catalog, name)
 }
