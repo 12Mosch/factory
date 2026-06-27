@@ -2,6 +2,7 @@ use factory_data::{
     CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId,
     TechnologyEffect, TechnologyId, TileId,
 };
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -35,10 +36,12 @@ pub const BASIC_INSERTER_PICKUP_TICKS: u32 = 35;
 pub const BASIC_INSERTER_DROP_TICKS: u32 = 35;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize,
+)]
 pub struct Tick(pub u64);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EntityId(u64);
 
 impl EntityId {
@@ -51,18 +54,18 @@ impl EntityId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct Inventory {
     pub slots: Vec<Option<ItemStack>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ItemStack {
     pub item_id: ItemId,
     pub count: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum InserterState {
     WaitingForItem,
     Picking { ticks_left: u32 },
@@ -77,12 +80,12 @@ pub enum InventoryError {
     InsufficientItems,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct CraftingQueue {
     pub entries: VecDeque<CraftingJob>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct CraftingJob {
     pub recipe_id: RecipeId,
     pub remaining_ticks: u32,
@@ -96,14 +99,14 @@ pub enum CraftingError {
     InsufficientIngredients,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ResearchState {
     pub technology_names: Vec<String>,
     pub active: Option<TechnologyId>,
     pub technologies: Vec<TechnologyResearchState>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TechnologyResearchState {
     pub technology_id: TechnologyId,
     pub progress_units: u32,
@@ -133,7 +136,7 @@ pub enum ResearchProgressResult {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct Simulation {
     tick: u64,
     world: WorldSim,
@@ -145,71 +148,71 @@ pub struct Simulation {
     pub research: ResearchState,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct PlayerState {
     x: i64,
     y: i64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ManualMiningTarget {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ManualMiningProgress {
     pub target: ManualMiningTarget,
     pub progress_ticks: u32,
     pub required_ticks: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct WorldSim {
     pub seed: u64,
     pub prototypes: PrototypeCatalog,
     pub chunks: BTreeMap<ChunkCoord, Chunk>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ChunkCoord {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct Chunk {
     pub coord: ChunkCoord,
     pub tiles: Vec<TileCell>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TileCell {
     pub tile_id: TileId,
     pub collision: TileCollision,
     pub resource: Option<ResourceCell>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TileCollision {
     pub walkable: bool,
     pub buildable: bool,
     pub minable: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ResourceCell {
     pub resource_item: ItemId,
     pub amount: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct MinedResource {
     pub resource_item: ItemId,
     pub amount: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BurnerMiningDrillState {
     pub energy: BurnerEnergy,
     pub mining_progress_ticks: u32,
@@ -218,7 +221,7 @@ pub struct BurnerMiningDrillState {
     pub output_slot: Option<ItemStack>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct FurnaceState {
     pub input_slot: Option<ItemStack>,
     pub energy: BurnerEnergy,
@@ -228,7 +231,7 @@ pub struct FurnaceState {
     pub crafting_required_ticks: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct AssemblingMachineState {
     pub selected_recipe: Option<RecipeId>,
     pub input_inventory: Inventory,
@@ -239,7 +242,7 @@ pub struct AssemblingMachineState {
     pub crafting_speed_denominator: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct LabState {
     pub inventory: Inventory,
     pub active_technology: Option<TechnologyId>,
@@ -255,24 +258,24 @@ pub struct AssemblerIngredientStatus {
     pub missing: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BeltSegment {
     pub dir: Direction,
     pub lanes: [BeltLane; 2],
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BeltLane {
     pub items: SmallVec<[BeltItem; 8]>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BeltItem {
     pub item_id: ItemId,
     pub position_subtile: u16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BurnerEnergy {
     pub fuel_slot: Option<ItemStack>,
     pub energy_remaining_joules: f64,
@@ -370,7 +373,7 @@ pub enum LabError {
     NotLab(EntityId),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct EntityStore {
     entities: Vec<SimEntity>,
     placed_entities: BTreeMap<EntityId, PlacedEntity>,
@@ -385,14 +388,14 @@ pub struct EntityStore {
     next_entity_id: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct SimEntity {
     pub id: EntityId,
     pub x: i64,
     pub y: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct PlacedEntity {
     pub id: EntityId,
     pub prototype_id: EntityPrototypeId,
@@ -425,7 +428,7 @@ struct EntityReservation {
     inserter: Option<InserterState>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum Direction {
     #[default]
     North,
@@ -434,7 +437,7 @@ pub enum Direction {
     West,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct EntityFootprint {
     pub x: i32,
     pub y: i32,
@@ -442,7 +445,7 @@ pub struct EntityFootprint {
     pub height: i32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct OccupancyGrid {
     // maps occupied tile -> entity id
     occupied_tiles: BTreeMap<(i32, i32), EntityId>,
@@ -575,6 +578,7 @@ mod inventory_ops;
 mod machine_ops;
 mod player_ops;
 mod research_ops;
+mod save;
 mod scripted;
 mod systems;
 mod validation;
@@ -584,6 +588,10 @@ use self::belt_ops::*;
 use self::generation::*;
 use self::inventory_ops::*;
 use self::machine_ops::*;
+pub use self::save::{
+    PROTOTYPE_FORMAT_VERSION, SAVE_VERSION, SaveLoadError, load_from_bytes, prototype_hash,
+    save_to_bytes,
+};
 pub use self::scripted::scripted_inputs_for_red_science_factory;
 use self::world_ops::*;
 
