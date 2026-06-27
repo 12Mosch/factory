@@ -25,6 +25,7 @@ pub(crate) struct BuildSlotCountText {
 #[derive(Component)]
 pub(crate) struct BuildSlotLabelText {
     pub(crate) prototype_id: EntityPrototypeId,
+    pub(crate) item_id: ItemId,
 }
 
 #[derive(Component)]
@@ -253,19 +254,13 @@ pub(crate) fn update_build_bar_visuals(
     }
 
     for (marker, mut color) in &mut label_texts {
-        let available = sim
+        let prototype_exists = sim
             .sim
             .catalog()
             .entities
             .get(marker.prototype_id.index())
-            .and_then(|entity| {
-                sim.sim
-                    .catalog()
-                    .items
-                    .iter()
-                    .find(|item| item.name == entity.name)
-            })
-            .is_some_and(|item| sim.sim.player_inventory().count(item.id) > 0);
+            .is_some_and(|prototype| prototype.id == marker.prototype_id);
+        let available = prototype_exists && sim.sim.player_inventory().count(marker.item_id) > 0;
         *color = TextColor(if available {
             Color::WHITE
         } else {
@@ -356,6 +351,7 @@ fn spawn_build_slot(
                 TextLayout::justify(Justify::Center),
                 BuildSlotLabelText {
                     prototype_id: buildable.prototype_id,
+                    item_id: buildable.item_id,
                 },
             ));
             slot.spawn((

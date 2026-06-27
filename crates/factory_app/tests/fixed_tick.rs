@@ -150,12 +150,15 @@ fn number_key_selects_hotbar_slot_without_placing() {
         .placed_len();
     let slot = {
         let sim = &app.world().resource::<SimResource>().sim;
-        buildable_prototype_at_slot(sim.catalog(), 0).expect("slot 0 should be buildable")
+        buildable_prototypes(sim.catalog())
+            .into_iter()
+            .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
+            .expect("starting inventory should include at least one buildable item")
     };
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::Digit1);
+        .press(hotbar_key_for_slot(slot.slot_index));
     app.update();
 
     let build_state = app.world().resource::<BuildPlacementState>();
@@ -825,6 +828,21 @@ fn first_available_build_selection(app: &App) -> BuildSelection {
     BuildSelection {
         prototype_id: buildable.prototype_id,
         item_id: buildable.item_id,
+    }
+}
+
+fn hotbar_key_for_slot(slot_index: usize) -> KeyCode {
+    match slot_index {
+        0 => KeyCode::Digit1,
+        1 => KeyCode::Digit2,
+        2 => KeyCode::Digit3,
+        3 => KeyCode::Digit4,
+        4 => KeyCode::Digit5,
+        5 => KeyCode::Digit6,
+        6 => KeyCode::Digit7,
+        7 => KeyCode::Digit8,
+        8 => KeyCode::Digit9,
+        _ => panic!("test hotbar slot should be addressable by number key"),
     }
 }
 
