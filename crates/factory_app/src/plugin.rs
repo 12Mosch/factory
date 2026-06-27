@@ -71,7 +71,9 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<UpsStats>()
             .init_resource::<SimProfileStats>()
             .init_resource::<RenderSyncStats>()
-            .init_resource::<ResourceRenderSettings>()
+            .insert_resource(ResourceRenderSettings {
+                show_amount_labels: true,
+            })
             .init_resource::<ResourceRenderCache>()
             .init_resource::<DebugInventorySelection>()
             .init_resource::<OpenContainer>()

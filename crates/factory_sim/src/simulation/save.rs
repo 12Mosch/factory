@@ -183,6 +183,7 @@ impl SimulationSnapshot {
                 seed: self.world_seed,
                 prototypes: self.prototypes,
                 chunks: self.chunks,
+                resource_revision: 0,
             },
             entities: self.entities,
             player: self.player,

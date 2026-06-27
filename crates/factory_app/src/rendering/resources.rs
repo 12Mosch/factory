@@ -28,7 +28,7 @@ pub(crate) struct ResourceRenderSettings {
 
 #[derive(Resource, Default)]
 pub(crate) struct ResourceRenderCache {
-    last_resource_hash: Option<u64>,
+    last_resource_revision: Option<u64>,
 }
 
 pub(crate) fn sync_resource_debug_rendering(
@@ -43,15 +43,15 @@ pub(crate) fn sync_resource_debug_rendering(
         return;
     }
 
-    let resource_hash = sim.sim.world().resource_hash();
-    let resources_changed = cache.last_resource_hash != Some(resource_hash);
+    let resource_revision = sim.sim.world().resource_revision();
+    let resources_changed = cache.last_resource_revision != Some(resource_revision);
     let label_setting_changed = settings.is_changed();
 
     if !resources_changed && !label_setting_changed {
         return;
     }
 
-    cache.last_resource_hash = Some(resource_hash);
+    cache.last_resource_revision = Some(resource_revision);
 
     if !settings.show_amount_labels {
         for (entity, _, _) in &mut labels {
