@@ -9,7 +9,8 @@ use crate::resources::{OpenContainer, SimResource};
 pub(crate) fn handle_container_open_input(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
+    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
+    ui_buttons: Query<&Interaction, With<Button>>,
     sim: Res<SimResource>,
     mut open_container: ResMut<OpenContainer>,
 ) {
@@ -19,12 +20,15 @@ pub(crate) fn handle_container_open_input(
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-
-    if let Some(entity_id) =
-        opened_container_after_world_click(&sim.sim, cursor_tile_from_window(&windows, &cameras))
+    if ui_buttons
+        .iter()
+        .any(|interaction| *interaction != Interaction::None)
     {
-        open_container.entity_id = Some(entity_id);
+        return;
     }
+
+    open_container.entity_id =
+        opened_container_after_world_click(&sim.sim, cursor_tile_from_window(&windows, &cameras));
 }
 
 pub(crate) fn handle_container_close_input(

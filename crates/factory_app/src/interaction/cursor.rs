@@ -8,7 +8,7 @@ pub(crate) type CursorCameraFilter = (With<Camera2d>, Without<CursorTileHighligh
 
 pub(crate) fn cursor_tile_from_window(
     windows: &Query<&Window, With<PrimaryWindow>>,
-    cameras: &Query<(&Camera, &Transform), CursorCameraFilter>,
+    cameras: &Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
 ) -> Option<(i32, i32)> {
     windows
         .single()
@@ -16,9 +16,8 @@ pub(crate) fn cursor_tile_from_window(
         .and_then(Window::cursor_position)
         .and_then(|cursor_position| {
             let (camera, camera_transform) = cameras.single().ok()?;
-            let camera_global = GlobalTransform::from(*camera_transform);
             camera
-                .viewport_to_world_2d(&camera_global, cursor_position)
+                .viewport_to_world_2d(camera_transform, cursor_position)
                 .ok()
         })
         .map(world_position_to_tile_coord)

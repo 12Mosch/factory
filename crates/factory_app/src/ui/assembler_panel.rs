@@ -45,6 +45,12 @@ pub(crate) type AssemblerDetailTextQuery<'w, 's> = Query<
         Has<AssemblerProductsText>,
         Has<AssemblerProgressText>,
     ),
+    Or<(
+        With<AssemblerRecipeText>,
+        With<AssemblerIngredientsText>,
+        With<AssemblerProductsText>,
+        With<AssemblerProgressText>,
+    )>,
 >;
 
 pub(crate) fn spawn_assembler_panel(

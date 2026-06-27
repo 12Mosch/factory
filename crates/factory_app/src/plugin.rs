@@ -87,7 +87,7 @@ impl Plugin for FactoryAppPlugin {
                     update_ups_stats,
                     handle_debug_inventory_input,
                     handle_debug_entity_placement,
-                    handle_debug_belt_item_insertion_input,
+                    handle_debug_belt_item_insertion_input.after(handle_debug_inventory_input),
                     handle_container_open_input,
                     handle_container_close_input,
                     update_debug_overlay,
@@ -104,9 +104,9 @@ impl Plugin for FactoryAppPlugin {
             .add_systems(
                 Update,
                 (
-                    handle_assembler_recipe_button_clicks,
-                    update_assembler_detail_text,
-                    update_assembler_recipe_button_colors,
+                    handle_assembler_recipe_button_clicks.after(sync_container_window),
+                    update_assembler_detail_text.after(sync_container_window),
+                    update_assembler_recipe_button_colors.after(sync_container_window),
                 ),
             );
     }

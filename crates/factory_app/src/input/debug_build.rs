@@ -3,13 +3,13 @@ use bevy::window::PrimaryWindow;
 use factory_sim::{Direction, EntityId, Simulation};
 
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
-use crate::rendering::colors::find_entity_prototype_id;
 use crate::resources::{DebugBuildDirection, DebugInventorySelection, SimResource};
+use crate::utils::find_entity_prototype_id;
 
 pub(crate) fn handle_debug_entity_placement(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
+    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut sim: ResMut<SimResource>,
     mut build_direction: ResMut<DebugBuildDirection>,
 ) {
@@ -29,7 +29,7 @@ pub(crate) fn handle_debug_entity_placement(
 pub(crate) fn handle_debug_belt_item_insertion_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
+    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     inventory_selection: Res<DebugInventorySelection>,
     mut sim: ResMut<SimResource>,
 ) {

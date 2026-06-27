@@ -6,9 +6,8 @@ use std::collections::BTreeSet;
 use crate::constants::{
     BURNER_DRILL_SPRITE_PADDING, CHEST_SPRITE_SIZE, TILE_SIZE, TRANSPORT_BELT_SPRITE_SIZE,
 };
-use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::rendering::colors::{
-    assembler_color, burner_drill_color, chest_color, furnace_color, lab_color,
+    assembler_color, burner_drill_color, chest_color, furnace_color, inserter_color, lab_color,
     transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
@@ -66,43 +65,24 @@ pub(crate) fn renderable_entity_style(
 ) -> Option<(Color, Vec2)> {
     let placed = sim.entities().placed_entity(entity_id)?;
     let prototype = sim.catalog().entities.get(placed.prototype_id.index())?;
-    if prototype.entity_kind == EntityKind::TransportBelt {
-        return Some((
+    let machine_size = || {
+        Vec2::new(
+            placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+        )
+    };
+
+    match prototype.entity_kind {
+        EntityKind::TransportBelt => Some((
             transport_belt_color(),
             Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
-        ));
-    }
-
-    match open_machine_kind(sim, entity_id) {
-        Some(OpenMachineKind::Chest) => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
-        Some(OpenMachineKind::BurnerDrill) => Some((
-            burner_drill_color(),
-            Vec2::new(
-                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-            ),
         )),
-        Some(OpenMachineKind::Furnace) => Some((
-            furnace_color(),
-            Vec2::new(
-                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-            ),
-        )),
-        Some(OpenMachineKind::Assembler) => Some((
-            assembler_color(),
-            Vec2::new(
-                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-            ),
-        )),
-        Some(OpenMachineKind::Lab) => Some((
-            lab_color(),
-            Vec2::new(
-                placed.footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-                placed.footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-            ),
-        )),
-        None => None,
+        EntityKind::Chest => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
+        EntityKind::MiningDrill => Some((burner_drill_color(), machine_size())),
+        EntityKind::Furnace => Some((furnace_color(), machine_size())),
+        EntityKind::AssemblingMachine => Some((assembler_color(), machine_size())),
+        EntityKind::Lab => Some((lab_color(), machine_size())),
+        EntityKind::Inserter => Some((inserter_color(), machine_size())),
+        EntityKind::ResourcePatch => None,
     }
 }

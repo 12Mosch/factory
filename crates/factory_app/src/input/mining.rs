@@ -8,7 +8,7 @@ use crate::resources::SimResource;
 pub(crate) fn update_manual_mining_from_input(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
+    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut sim: ResMut<SimResource>,
 ) {
     let target = mouse

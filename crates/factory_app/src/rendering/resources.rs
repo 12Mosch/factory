@@ -26,6 +26,10 @@ pub(crate) fn sync_resource_debug_rendering(
     mut sprites: Query<(Entity, &ResourceSprite, &mut Sprite)>,
     mut labels: Query<(Entity, &ResourceAmountLabel, &mut Text2d)>,
 ) {
+    if !sim.is_changed() {
+        return;
+    }
+
     let ids = RenderPrototypeIds::from_catalog(sim.sim.catalog());
     let resources = collect_resource_tiles(&sim.sim);
     let mut seen_sprites = BTreeSet::new();

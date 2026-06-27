@@ -1,6 +1,7 @@
 mod app;
 mod plugin;
 mod simulation;
+mod utils;
 
 pub mod constants;
 pub mod input;

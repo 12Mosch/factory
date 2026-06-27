@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog, TileId};
+use factory_data::{ItemId, PrototypeCatalog, TileId};
 use factory_sim::ResourceCell;
 
 pub(crate) fn chest_color() -> Color {
@@ -24,6 +24,10 @@ pub(crate) fn lab_color() -> Color {
 
 pub(crate) fn transport_belt_color() -> Color {
     Color::srgb(0.93, 0.72, 0.18)
+}
+
+pub(crate) fn inserter_color() -> Color {
+    Color::srgb(0.66, 0.58, 0.34)
 }
 
 pub(crate) fn tile_color(tile_id: TileId, ids: RenderPrototypeIds) -> Color {
@@ -89,16 +93,4 @@ pub(crate) fn find_item_id(catalog: &PrototypeCatalog, name: &str) -> ItemId {
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
-}
-
-pub(crate) fn find_entity_prototype_id(
-    catalog: &PrototypeCatalog,
-    name: &str,
-) -> EntityPrototypeId {
-    catalog
-        .entities
-        .iter()
-        .find(|prototype| prototype.name == name)
-        .map(|prototype| prototype.id)
-        .unwrap_or_else(|| panic!("missing required entity prototype {name:?}"))
 }

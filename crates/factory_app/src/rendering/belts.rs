@@ -10,7 +10,7 @@ use crate::constants::{
 };
 use crate::rendering::transforms::tile_translation;
 use crate::resources::SimResource;
-use crate::ui::formatting::compact_item_name;
+use crate::utils::compact_item_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum BeltDirectionPart {
@@ -296,7 +296,8 @@ mod tests {
     use factory_data::EntityPrototypeId;
     use factory_sim::CHUNK_SIZE;
 
-    use crate::rendering::colors::{find_entity_prototype_id, find_item_id};
+    use crate::rendering::colors::find_item_id;
+    use crate::utils::find_entity_prototype_id;
 
     #[test]
     pub(crate) fn belt_item_render_state_changes_only_when_sim_position_changes() {

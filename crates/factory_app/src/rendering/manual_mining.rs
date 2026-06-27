@@ -68,7 +68,7 @@ pub(crate) fn spawn_manual_mining_progress_bar(mut commands: Commands) {
 
 pub(crate) fn update_cursor_tile_highlight(
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &Transform), CursorCameraFilter>,
+    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut highlights: Query<(&mut Transform, &mut Visibility), With<CursorTileHighlight>>,
 ) {
     let cursor_tile = cursor_tile_from_window(&windows, &cameras);

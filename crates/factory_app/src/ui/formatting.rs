@@ -1,20 +1,16 @@
 use factory_data::{CraftingCategory, ItemId, PrototypeCatalog, RecipeId};
 use factory_sim::{EntityId, ItemStack, Simulation};
 
+use crate::utils::compact_item_name;
+
 pub(crate) fn format_item_stack(stack: ItemStack, catalog: &PrototypeCatalog) -> String {
     let name = catalog
         .items
         .get(stack.item_id.index())
+        .filter(|item| item.id == stack.item_id)
         .map(|item| item.name.as_str())
         .unwrap_or("unknown");
     format!("{}\n{}", compact_item_name(name), stack.count)
-}
-
-pub(crate) fn compact_item_name(name: &str) -> String {
-    name.split('_')
-        .filter_map(|part| part.chars().next())
-        .collect::<String>()
-        .to_uppercase()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
