@@ -7,6 +7,7 @@ impl WorldSim {
             seed,
             prototypes,
             chunks,
+            resource_revision: 0,
         }
     }
 
@@ -58,6 +59,10 @@ impl WorldSim {
         hasher.finish()
     }
 
+    pub fn resource_revision(&self) -> u64 {
+        self.resource_revision
+    }
+
     pub fn mine_resource_at(&mut self, x: i32, y: i32, amount: u32) -> Option<MinedResource> {
         if amount == 0 {
             return None;
@@ -77,6 +82,7 @@ impl WorldSim {
             tile.resource = None;
             tile.collision = collision_for_tile(tile.tile_id, ids);
         }
+        self.resource_revision = self.resource_revision.wrapping_add(1);
 
         Some(mined)
     }
@@ -106,6 +112,7 @@ impl WorldSim {
             tile.resource = None;
             tile.collision = collision_for_tile(tile.tile_id, ids);
         }
+        self.resource_revision = self.resource_revision.wrapping_add(1);
 
         Some(mined)
     }

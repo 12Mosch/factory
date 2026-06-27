@@ -26,7 +26,9 @@ use crate::rendering::manual_mining::{
     update_manual_mining_progress_bar,
 };
 use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
-use crate::rendering::resources::measured_sync_resource_debug_rendering;
+use crate::rendering::resources::{
+    ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
+};
 use crate::rendering::world::spawn_world_tiles;
 use crate::resources::{
     DebugBuildDirection, DebugInventorySelection, OpenContainer, RenderSyncStats, SimProfileStats,
@@ -69,6 +71,10 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<UpsStats>()
             .init_resource::<SimProfileStats>()
             .init_resource::<RenderSyncStats>()
+            .insert_resource(ResourceRenderSettings {
+                show_amount_labels: true,
+            })
+            .init_resource::<ResourceRenderCache>()
             .init_resource::<DebugInventorySelection>()
             .init_resource::<OpenContainer>()
             .init_resource::<DebugBuildDirection>()

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
 use factory_data::{BasePrototypeIds, ItemId};
 use factory_sim::{BELT_SUBTILES_PER_TILE, Direction, EntityId, Simulation};
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::constants::{
@@ -13,7 +13,7 @@ use crate::rendering::transforms::tile_translation;
 use crate::resources::{RenderSyncStats, SimResource};
 use crate::utils::compact_item_name;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum BeltDirectionPart {
     Shaft,
     Head,
@@ -44,7 +44,7 @@ pub(crate) fn sync_belt_direction_rendering(
     sim: Res<SimResource>,
     mut sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
 ) {
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
         let key = (marker.entity_id, marker.part);
@@ -113,8 +113,8 @@ pub(crate) fn sync_belt_item_rendering(
     >,
 ) {
     let ids = BasePrototypeIds::from_catalog(sim.sim.catalog());
-    let mut seen_sprites = BTreeSet::new();
-    let mut seen_labels = BTreeSet::new();
+    let mut seen_sprites = HashSet::new();
+    let mut seen_labels = HashSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
         let key = (marker.entity_id, marker.lane_index, marker.item_index);

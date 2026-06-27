@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use factory_data::EntityKind;
 use factory_sim::{EntityId, Simulation};
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::constants::{
@@ -24,7 +24,7 @@ pub(crate) fn sync_placed_entity_rendering(
     sim: Res<SimResource>,
     mut sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
 ) {
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
         if let Some((color, size)) = renderable_entity_style(&sim.sim, marker.entity_id) {

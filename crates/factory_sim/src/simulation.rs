@@ -172,6 +172,7 @@ pub struct WorldSim {
     pub seed: u64,
     pub prototypes: PrototypeCatalog,
     pub chunks: BTreeMap<ChunkCoord, Chunk>,
+    resource_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
