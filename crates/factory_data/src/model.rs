@@ -28,10 +28,12 @@ pub struct EntityPrototype {
     pub entity_kind: EntityKind,
     pub size: IVec2,
     pub collision_mask: CollisionMask,
+    pub build_item: Option<ItemId>,
     pub inventory_slot_count: Option<usize>,
     pub burner: Option<BurnerPrototype>,
     pub mining_drill: Option<MiningDrillPrototype>,
     pub assembling_machine: Option<AssemblingMachinePrototype>,
+    pub transport_belt: Option<TransportBeltPrototype>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -51,6 +53,23 @@ pub struct AssemblingMachinePrototype {
     pub crafting_speed_denominator: u32,
     pub input_slot_count: usize,
     pub output_slot_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TransportBeltPrototype {
+    pub underground: Option<UndergroundBeltPrototype>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct UndergroundBeltPrototype {
+    pub part: UndergroundBeltPart,
+    pub max_distance: u8,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum UndergroundBeltPart {
+    Entrance,
+    Exit,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

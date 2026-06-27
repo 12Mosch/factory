@@ -57,6 +57,11 @@ impl<'a> TransportBeltAdvancement<'a> {
     pub(super) fn downstream_lane_key(&self, key: BeltLaneKey) -> Option<BeltLaneKey> {
         let placed = self.entities.placed_entities.get(&key.entity_id)?;
         let segment = self.entities.transport_belts.get(&key.entity_id)?;
+
+        if underground_part(segment) == Some(UndergroundBeltPart::Entrance) {
+            return self.paired_underground_exit_lane_key(placed, segment, key.lane_index);
+        }
+
         let (dx, dy) = direction_tile_delta(segment.dir);
         let next_entity_id = self.tile_to_belt.get(&(placed.x + dx, placed.y + dy))?;
 
@@ -64,6 +69,39 @@ impl<'a> TransportBeltAdvancement<'a> {
             entity_id: *next_entity_id,
             lane_index: key.lane_index,
         })
+    }
+
+    fn paired_underground_exit_lane_key(
+        &self,
+        entrance_placed: &PlacedEntity,
+        entrance_segment: &BeltSegment,
+        lane_index: usize,
+    ) -> Option<BeltLaneKey> {
+        let entrance_underground = entrance_segment.underground?;
+        let (dx, dy) = direction_tile_delta(entrance_segment.dir);
+        let max_offset = i32::from(entrance_underground.max_distance) + 1;
+
+        for offset in 1..=max_offset {
+            let Some(exit_entity_id) = self.tile_to_belt.get(&(
+                entrance_placed.x + dx * offset,
+                entrance_placed.y + dy * offset,
+            )) else {
+                continue;
+            };
+            let Some(exit_segment) = self.entities.transport_belts.get(exit_entity_id) else {
+                continue;
+            };
+            let underground_distance = (offset - 1) as u8;
+
+            if is_valid_underground_pair(entrance_segment, exit_segment, underground_distance) {
+                return Some(BeltLaneKey {
+                    entity_id: *exit_entity_id,
+                    lane_index,
+                });
+            }
+        }
+
+        None
     }
 
     pub(super) fn advance_lane_items(&mut self, key: BeltLaneKey, downstream: Option<BeltLaneKey>) {
@@ -157,6 +195,32 @@ pub(super) fn belt_lane_can_accept_position(lane: &BeltLane, position_subtile: u
     lane.items
         .first()
         .is_none_or(|first| first.position_subtile >= position_subtile + BELT_ITEM_SPACING_SUBTILES)
+}
+
+fn is_valid_underground_pair(
+    entrance: &BeltSegment,
+    exit: &BeltSegment,
+    underground_distance: u8,
+) -> bool {
+    let Some(entrance_underground) = entrance.underground else {
+        return false;
+    };
+    let Some(exit_underground) = exit.underground else {
+        return false;
+    };
+
+    entrance_underground.part == UndergroundBeltPart::Entrance
+        && exit_underground.part == UndergroundBeltPart::Exit
+        && entrance.dir == exit.dir
+        && underground_distance <= entrance_underground.max_distance
+        && underground_distance <= exit_underground.max_distance
+}
+
+fn underground_part(segment: &BeltSegment) -> Option<UndergroundBeltPart> {
+    segment
+        .underground
+        .as_ref()
+        .map(|underground| underground.part)
 }
 
 pub(super) fn direction_tile_delta(direction: Direction) -> (i32, i32) {

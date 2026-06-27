@@ -1,6 +1,6 @@
 use factory_data::{
     CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId,
-    TechnologyEffect, TechnologyId, TileId,
+    TechnologyEffect, TechnologyId, TileId, UndergroundBeltPart,
 };
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -272,7 +272,14 @@ pub struct AssemblerIngredientStatus {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BeltSegment {
     pub dir: Direction,
+    pub underground: Option<UndergroundBeltSegment>,
     pub lanes: [BeltLane; 2],
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct UndergroundBeltSegment {
+    pub part: UndergroundBeltPart,
+    pub max_distance: u8,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -315,6 +322,15 @@ impl BeltSegment {
     pub fn new(dir: Direction) -> Self {
         Self {
             dir,
+            underground: None,
+            lanes: [BeltLane::default(), BeltLane::default()],
+        }
+    }
+
+    pub fn underground(dir: Direction, part: UndergroundBeltPart, max_distance: u8) -> Self {
+        Self {
+            dir,
+            underground: Some(UndergroundBeltSegment { part, max_distance }),
             lanes: [BeltLane::default(), BeltLane::default()],
         }
     }

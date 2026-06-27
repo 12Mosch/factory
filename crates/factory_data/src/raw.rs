@@ -1,6 +1,9 @@
 use serde::Deserialize;
 
-use crate::model::{AssemblingMachinePrototype, BurnerPrototype, CraftingCategory, EntityKind};
+use crate::model::{
+    AssemblingMachinePrototype, BurnerPrototype, CraftingCategory, EntityKind,
+    TransportBeltPrototype,
+};
 use crate::validation::RawPrototype;
 
 #[derive(Debug, Deserialize)]
@@ -38,10 +41,12 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) entity_kind: EntityKind,
     pub(crate) size: RawIVec2,
     pub(crate) collision_mask: RawCollisionMask,
+    pub(crate) build_item: Option<String>,
     pub(crate) inventory_slot_count: Option<usize>,
     pub(crate) burner: Option<BurnerPrototype>,
     pub(crate) mining_drill: Option<RawMiningDrillPrototype>,
     pub(crate) assembling_machine: Option<AssemblingMachinePrototype>,
+    pub(crate) transport_belt: Option<TransportBeltPrototype>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -5,9 +5,10 @@ use crate::error::PrototypeLoadError;
 use crate::ids::TechnologyId;
 use crate::model::{
     AssemblingMachinePrototype, CraftingCategory, EntityKind, ItemAmount, TechnologyEffect,
+    UndergroundBeltPart,
 };
 
-const ITEM_NAMES: [&str; 19] = [
+const ITEM_NAMES: [&str; 20] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -27,9 +28,10 @@ const ITEM_NAMES: [&str; 19] = [
     "automation_science_pack",
     "chest",
     "stone_brick",
+    "underground_belt",
 ];
 
-const RECIPE_NAMES: [&str; 15] = [
+const RECIPE_NAMES: [&str; 16] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -45,9 +47,10 @@ const RECIPE_NAMES: [&str; 15] = [
     "automation_science_pack",
     "chest",
     "stone_brick",
+    "underground_belt",
 ];
 
-const ENTITY_NAMES: [&str; 11] = [
+const ENTITY_NAMES: [&str; 13] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -59,6 +62,8 @@ const ENTITY_NAMES: [&str; 11] = [
     "burner_mining_drill",
     "lab",
     "chest",
+    "underground_belt_entrance",
+    "underground_belt_exit",
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -68,9 +73,9 @@ const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 19);
-    assert_eq!(catalog.recipes.len(), 15);
-    assert_eq!(catalog.entities.len(), 11);
+    assert_eq!(catalog.items.len(), 20);
+    assert_eq!(catalog.recipes.len(), 16);
+    assert_eq!(catalog.entities.len(), 13);
     assert_eq!(catalog.tiles.len(), 3);
     assert_eq!(catalog.technologies.len(), 1);
 }
@@ -268,6 +273,47 @@ fn assembling_machine_loads_metadata() {
             input_slot_count: 4,
             output_slot_count: 1,
         })
+    );
+}
+
+#[test]
+fn underground_belt_endpoints_load_shared_build_item_and_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let underground_belt = catalog
+        .items
+        .iter()
+        .find(|prototype| prototype.name == "underground_belt")
+        .expect("base catalog should contain underground belt item")
+        .id;
+    let entrance = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "underground_belt_entrance")
+        .expect("base catalog should contain underground belt entrance");
+    let exit = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "underground_belt_exit")
+        .expect("base catalog should contain underground belt exit");
+
+    assert_eq!(entrance.entity_kind, EntityKind::TransportBelt);
+    assert_eq!(exit.entity_kind, EntityKind::TransportBelt);
+    assert_eq!(entrance.build_item, Some(underground_belt));
+    assert_eq!(exit.build_item, Some(underground_belt));
+    assert_eq!(
+        entrance
+            .transport_belt
+            .as_ref()
+            .and_then(|belt| belt.underground.as_ref())
+            .map(|underground| (underground.part, underground.max_distance)),
+        Some((UndergroundBeltPart::Entrance, 4))
+    );
+    assert_eq!(
+        exit.transport_belt
+            .as_ref()
+            .and_then(|belt| belt.underground.as_ref())
+            .map(|underground| (underground.part, underground.max_distance)),
+        Some((UndergroundBeltPart::Exit, 4))
     );
 }
 

@@ -108,6 +108,14 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
         }
     }
 
+    for prototype in &catalog.entities {
+        if let Some(item_id) = prototype.build_item
+            && !item_exists(catalog, item_id)
+        {
+            return Err(SimValidationError::UnknownItem(item_id));
+        }
+    }
+
     Ok(())
 }
 

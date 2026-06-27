@@ -16,9 +16,9 @@ impl Simulation {
             .get(prototype_id.index())
             .filter(|prototype| prototype.id == prototype_id)
             .ok_or(PlayerBuildError::MissingPrototype(prototype_id))?;
-        if prototype.entity_kind == EntityKind::ResourcePatch {
-            return Err(PlayerBuildError::MissingBuildItem { prototype_id });
-        }
+        let build_item = prototype
+            .build_item
+            .ok_or(PlayerBuildError::MissingBuildItem { prototype_id })?;
 
         let item = self
             .world
@@ -27,7 +27,7 @@ impl Simulation {
             .get(item_id.index())
             .filter(|item| item.id == item_id)
             .ok_or(PlayerBuildError::MissingBuildItem { prototype_id })?;
-        if item.name != prototype.name {
+        if item.id != build_item {
             return Err(PlayerBuildError::ItemDoesNotBuildEntity {
                 item_id,
                 prototype_id,
@@ -249,11 +249,15 @@ impl Simulation {
             .filter(|prototype| prototype.id == prototype_id)
             .ok_or(EntityDestroyError::MissingBuildItem { prototype_id })?;
 
+        let build_item = prototype
+            .build_item
+            .ok_or(EntityDestroyError::MissingBuildItem { prototype_id })?;
+
         self.world
             .prototypes
             .items
-            .iter()
-            .find(|item| item.name == prototype.name)
+            .get(build_item.index())
+            .filter(|item| item.id == build_item)
             .map(|item| item.id)
             .ok_or(EntityDestroyError::MissingBuildItem { prototype_id })
     }

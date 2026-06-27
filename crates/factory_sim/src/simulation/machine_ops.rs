@@ -94,7 +94,23 @@ pub(super) fn transport_belt_segment_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,
 ) -> Option<BeltSegment> {
-    (prototype.entity_kind == EntityKind::TransportBelt).then(|| BeltSegment::new(direction))
+    if prototype.entity_kind != EntityKind::TransportBelt {
+        return None;
+    }
+
+    let Some(underground) = prototype
+        .transport_belt
+        .as_ref()
+        .and_then(|belt| belt.underground.as_ref())
+    else {
+        return Some(BeltSegment::new(direction));
+    };
+
+    Some(BeltSegment::underground(
+        direction,
+        underground.part,
+        underground.max_distance,
+    ))
 }
 
 pub(super) fn inserter_state_for_prototype(

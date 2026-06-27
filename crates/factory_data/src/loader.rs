@@ -37,7 +37,7 @@ impl PrototypeCatalog {
 
         let (items, item_ids_by_name) = load_items(raw.items);
         let (recipes, recipe_ids_by_name) = load_recipes(raw.recipes, &item_ids_by_name)?;
-        let entities = load_entities(raw.entities)?;
+        let entities = load_entities(raw.entities, &item_ids_by_name)?;
         let tiles = load_tiles(raw.tiles)?;
         let technologies =
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
@@ -139,17 +139,20 @@ fn load_recipes(
 
 fn load_entities(
     entities: Vec<RawEntityPrototype>,
+    item_ids_by_name: &HashMap<String, ItemId>,
 ) -> Result<Vec<EntityPrototype>, PrototypeLoadError> {
     entities
         .into_iter()
         .map(|entity| {
             let name = entity.name;
+            let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
             Ok(EntityPrototype {
                 id: EntityPrototypeId::new(entity.id),
                 name: name.clone(),
                 entity_kind: entity.entity_kind,
                 size: IVec2::new(entity.size.x, entity.size.y),
                 collision_mask: resolve_collision_mask(name, entity.collision_mask)?,
+                build_item,
                 inventory_slot_count: entity.inventory_slot_count,
                 burner: entity.burner,
                 mining_drill: entity
@@ -162,9 +165,29 @@ fn load_entities(
                         ticks_per_item: mining_drill.ticks_per_item,
                     }),
                 assembling_machine: entity.assembling_machine,
+                transport_belt: entity.transport_belt,
             })
         })
         .collect()
+}
+
+fn resolve_entity_build_item(
+    entity_name: &str,
+    raw_build_item: Option<String>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+) -> Result<Option<ItemId>, PrototypeLoadError> {
+    match raw_build_item {
+        Some(item_name) => {
+            let item_id = *item_ids_by_name.get(&item_name).ok_or_else(|| {
+                PrototypeLoadError::MissingEntityBuildItem {
+                    entity: entity_name.to_string(),
+                    item: item_name.clone(),
+                }
+            })?;
+            Ok(Some(item_id))
+        }
+        None => Ok(item_ids_by_name.get(entity_name).copied()),
+    }
 }
 
 fn load_tiles(tiles: Vec<RawTilePrototype>) -> Result<Vec<TilePrototype>, PrototypeLoadError> {

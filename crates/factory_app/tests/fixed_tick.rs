@@ -125,6 +125,8 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
         "burner_mining_drill",
         "assembling_machine",
         "lab",
+        "underground_belt_entrance",
+        "underground_belt_exit",
     ] {
         assert!(
             buildable_names.contains(&expected),
@@ -133,8 +135,8 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
     }
     assert!(buildables.iter().all(|buildable| {
         let entity = &catalog.entities[buildable.prototype_id.index()];
-        let item = &catalog.items[buildable.item_id.index()];
-        entity.entity_kind != EntityKind::ResourcePatch && entity.name == item.name
+        entity.entity_kind != EntityKind::ResourcePatch
+            && entity.build_item == Some(buildable.item_id)
     }));
 }
 

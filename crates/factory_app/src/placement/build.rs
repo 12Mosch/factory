@@ -18,14 +18,22 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
         if entity.entity_kind == EntityKind::ResourcePatch {
             continue;
         }
-        let Some(item) = catalog.items.iter().find(|item| item.name == entity.name) else {
+        let Some(item_id) = entity.build_item else {
             continue;
         };
+        if catalog
+            .items
+            .get(item_id.index())
+            .filter(|item| item.id == item_id)
+            .is_none()
+        {
+            continue;
+        }
 
         buildables.push(BuildablePrototype {
             slot_index: buildables.len(),
             prototype_id: entity.id,
-            item_id: item.id,
+            item_id,
             display_name: display_name(&entity.name),
         });
     }

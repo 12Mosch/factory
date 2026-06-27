@@ -21,6 +21,10 @@ pub enum PrototypeLoadError {
         recipe: String,
         item: String,
     },
+    MissingEntityBuildItem {
+        entity: String,
+        item: String,
+    },
     MissingTechnologyPrerequisite {
         technology: String,
         prerequisite: String,
@@ -74,6 +78,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "recipe {recipe:?} references missing item {item:?}"
+                )
+            }
+            Self::MissingEntityBuildItem { entity, item } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} references missing build item {item:?}"
                 )
             }
             Self::MissingTechnologyPrerequisite {

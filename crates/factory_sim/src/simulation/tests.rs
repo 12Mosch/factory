@@ -2,6 +2,8 @@ use super::*;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+const BASIC_UNDERGROUND_BELT_MAX_OFFSET: i32 = 5;
+
 #[test]
 fn world_tile_lookup_is_stable_across_chunk_boundaries() {
     let world = WorldSim::new_seeded(123);
@@ -1265,6 +1267,181 @@ fn blocked_belt_preserves_item_order() {
     for pair in lane.windows(2) {
         assert!(pair[1].position_subtile - pair[0].position_subtile >= BELT_ITEM_SPACING_SUBTILES);
     }
+}
+
+#[test]
+fn underground_belt_pair_transfers_items_to_exit_preserving_order() {
+    let mut sim = Simulation::new_test_world(123);
+    let (entrance_id, exit_id) =
+        place_underground_belt_pair(&mut sim, BASIC_UNDERGROUND_BELT_MAX_OFFSET, Direction::East);
+    let inserted = [
+        item_id(&sim.world.prototypes, "iron_ore"),
+        item_id(&sim.world.prototypes, "copper_ore"),
+        item_id(&sim.world.prototypes, "coal"),
+    ];
+
+    for item_id in inserted {
+        loop {
+            if sim.insert_item_onto_belt(entrance_id, 0, item_id).is_ok() {
+                break;
+            }
+            sim.tick();
+        }
+        for _ in 0..8 {
+            sim.tick();
+        }
+    }
+    for _ in 0..200 {
+        sim.tick();
+    }
+
+    assert!(
+        sim.belt_segment(entrance_id).unwrap().lanes[0]
+            .items
+            .is_empty()
+    );
+    let lane = &sim.belt_segment(exit_id).unwrap().lanes[0].items;
+    let downstream_to_upstream = lane
+        .iter()
+        .rev()
+        .map(|item| item.item_id)
+        .collect::<Vec<_>>();
+    assert_eq!(downstream_to_upstream, inserted);
+}
+
+#[test]
+fn underground_belt_does_not_pair_beyond_max_distance() {
+    let mut sim = Simulation::new_test_world(123);
+    let (entrance_id, exit_id) = place_underground_belt_pair(
+        &mut sim,
+        BASIC_UNDERGROUND_BELT_MAX_OFFSET + 1,
+        Direction::East,
+    );
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+
+    sim.insert_item_onto_belt(entrance_id, 0, iron_ore)
+        .expect("empty underground entrance should accept an item");
+    for _ in 0..100 {
+        sim.tick();
+    }
+
+    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    assert_eq!(entrance_lane.len(), 1);
+    assert_eq!(entrance_lane[0].item_id, iron_ore);
+    assert_eq!(
+        entrance_lane[0].position_subtile,
+        BELT_SUBTILES_PER_TILE - 1
+    );
+    assert!(sim.belt_segment(exit_id).unwrap().lanes[0].items.is_empty());
+}
+
+#[test]
+fn underground_belt_requires_exit_to_face_same_direction() {
+    let mut sim = Simulation::new_test_world(123);
+    let (entrance_id, exit_id) = place_underground_belt_pair(
+        &mut sim,
+        BASIC_UNDERGROUND_BELT_MAX_OFFSET,
+        Direction::North,
+    );
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+
+    sim.insert_item_onto_belt(entrance_id, 0, iron_ore)
+        .expect("empty underground entrance should accept an item");
+    for _ in 0..100 {
+        sim.tick();
+    }
+
+    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    assert_eq!(entrance_lane.len(), 1);
+    assert_eq!(entrance_lane[0].item_id, iron_ore);
+    assert!(sim.belt_segment(exit_id).unwrap().lanes[0].items.is_empty());
+}
+
+#[test]
+fn underground_belt_requires_exit_endpoint() {
+    let mut sim = Simulation::new_test_world(123);
+    let (entrance_id, other_entrance_id) = place_underground_belt_endpoint_pair(
+        &mut sim,
+        "underground_belt_entrance",
+        BASIC_UNDERGROUND_BELT_MAX_OFFSET,
+        Direction::East,
+    );
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+
+    sim.insert_item_onto_belt(entrance_id, 0, iron_ore)
+        .expect("empty underground entrance should accept an item");
+    for _ in 0..100 {
+        sim.tick();
+    }
+
+    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    assert_eq!(entrance_lane.len(), 1);
+    assert_eq!(entrance_lane[0].item_id, iron_ore);
+    assert!(
+        sim.belt_segment(other_entrance_id).unwrap().lanes[0]
+            .items
+            .is_empty()
+    );
+}
+
+#[test]
+fn underground_belt_blocks_when_exit_lane_is_full() {
+    let mut sim = Simulation::new_test_world(123);
+    let (entrance_id, exit_id) =
+        place_underground_belt_pair(&mut sim, BASIC_UNDERGROUND_BELT_MAX_OFFSET, Direction::East);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+
+    {
+        let exit = sim
+            .entities
+            .transport_belts
+            .get_mut(&exit_id)
+            .expect("placed underground exit should have belt state");
+        for position_subtile in [0, 64, 128, 192] {
+            exit.lanes[0].items.push(BeltItem {
+                item_id: copper_ore,
+                position_subtile,
+            });
+        }
+    }
+
+    sim.insert_item_onto_belt(entrance_id, 0, iron_ore)
+        .expect("empty underground entrance should accept an item");
+    for _ in 0..100 {
+        sim.tick();
+    }
+
+    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    assert_eq!(entrance_lane.len(), 1);
+    assert_eq!(entrance_lane[0].item_id, iron_ore);
+    assert_eq!(total_belt_count_for_item(&sim, copper_ore), 4);
+    assert_eq!(total_belt_count_for_item(&sim, iron_ore), 1);
+}
+
+#[test]
+fn removing_underground_exit_invalidates_pair_without_losing_items() {
+    let mut sim = Simulation::new_test_world(123);
+    let (entrance_id, exit_id) =
+        place_underground_belt_pair(&mut sim, BASIC_UNDERGROUND_BELT_MAX_OFFSET, Direction::East);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+
+    sim.insert_item_onto_belt(entrance_id, 0, iron_ore)
+        .expect("empty underground entrance should accept an item");
+    sim.remove_entity(exit_id)
+        .expect("placed underground exit should be removable");
+    for _ in 0..100 {
+        sim.tick();
+    }
+
+    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    assert_eq!(entrance_lane.len(), 1);
+    assert_eq!(entrance_lane[0].item_id, iron_ore);
+    assert_eq!(
+        entrance_lane[0].position_subtile,
+        BELT_SUBTILES_PER_TILE - 1
+    );
+    assert_eq!(total_belt_count_for_item(&sim, iron_ore), 1);
 }
 
 #[test]
@@ -2840,6 +3017,45 @@ fn place_belt_line(sim: &mut Simulation, length: i32) -> Vec<EntityId> {
     }
 
     panic!("expected placeable belt line of length {length}");
+}
+
+fn place_underground_belt_pair(
+    sim: &mut Simulation,
+    offset: i32,
+    exit_direction: Direction,
+) -> (EntityId, EntityId) {
+    place_underground_belt_endpoint_pair(sim, "underground_belt_exit", offset, exit_direction)
+}
+
+fn place_underground_belt_endpoint_pair(
+    sim: &mut Simulation,
+    output_endpoint_name: &str,
+    offset: i32,
+    output_direction: Direction,
+) -> (EntityId, EntityId) {
+    let entrance = entity_id_by_name(&sim.world.prototypes, "underground_belt_entrance");
+    let output = entity_id_by_name(&sim.world.prototypes, output_endpoint_name);
+
+    for (x, y) in all_tile_coords(&sim.world) {
+        let output_x = x + offset;
+        if sim
+            .can_place_entity(entrance, x, y, Direction::East)
+            .is_ok()
+            && sim
+                .can_place_entity(output, output_x, y, output_direction)
+                .is_ok()
+        {
+            let entrance_id = sim
+                .place_entity(entrance, x, y, Direction::East)
+                .expect("validated underground entrance tile should be placeable");
+            let output_id = sim
+                .place_entity(output, output_x, y, output_direction)
+                .expect("validated underground endpoint tile should be placeable");
+            return (entrance_id, output_id);
+        }
+    }
+
+    panic!("expected placeable underground belt pair with offset {offset}");
 }
 
 fn feed_belt_items(sim: &mut Simulation, belt_id: EntityId, item_id: ItemId, count: usize) {
