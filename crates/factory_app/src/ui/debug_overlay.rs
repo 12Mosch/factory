@@ -3,13 +3,10 @@ use bevy::prelude::*;
 use factory_sim::SimulationCounts;
 use std::time::Duration;
 
-use crate::input::debug_inventory::selected_inventory_item_state;
-use crate::resources::{
-    DebugInventorySelection, RenderSyncStats, SimProfileStats, SimResource, UpsStats,
-};
+use crate::resources::{RenderSyncStats, SimProfileStats, SimResource, UpsStats};
 
 #[derive(Component)]
-pub(crate) struct DebugOverlayText;
+pub struct DebugOverlayText;
 
 pub(crate) fn setup_debug_overlay(mut commands: Commands) {
     commands
@@ -52,12 +49,8 @@ pub(crate) fn update_debug_overlay(
     diagnostics: Res<DiagnosticsStore>,
     sim_profile: Res<SimProfileStats>,
     render_sync: Res<RenderSyncStats>,
-    inventory_selection: Res<DebugInventorySelection>,
     mut overlay: Query<&mut Text, With<DebugOverlayText>>,
 ) {
-    let catalog = sim.sim.catalog();
-    let (selected_name, selected_count) =
-        selected_inventory_item_state(&sim.sim, &inventory_selection, catalog);
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|diagnostic| diagnostic.smoothed());
@@ -73,8 +66,6 @@ pub(crate) fn update_debug_overlay(
         sim_profile: &sim_profile,
         render_sync: &render_sync,
         counts,
-        selected_name: &selected_name,
-        selected_count,
     });
 
     for mut text in &mut overlay {
@@ -82,7 +73,7 @@ pub(crate) fn update_debug_overlay(
     }
 }
 
-pub(crate) struct DebugOverlaySnapshot<'a> {
+pub struct DebugOverlaySnapshot<'a> {
     pub tick: u64,
     pub ups: f64,
     pub fps: Option<f64>,
@@ -90,11 +81,9 @@ pub(crate) struct DebugOverlaySnapshot<'a> {
     pub sim_profile: &'a SimProfileStats,
     pub render_sync: &'a RenderSyncStats,
     pub counts: SimulationCounts,
-    pub selected_name: &'a str,
-    pub selected_count: u32,
 }
 
-pub(crate) fn format_debug_overlay(snapshot: DebugOverlaySnapshot<'_>) -> String {
+pub fn format_debug_overlay(snapshot: DebugOverlaySnapshot<'_>) -> String {
     format!(
         "\
 Tick: {}
@@ -109,9 +98,7 @@ Belt items: {}
 Machines: {}
 Inserters: {}
 Machines active/idle: {}/{}
-Phases: belts {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync {}
-Item: {}
-Count: {}",
+Phases: belts {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync {}",
         snapshot.tick,
         snapshot.ups,
         format_optional(snapshot.fps, "", 1),
@@ -131,8 +118,6 @@ Count: {}",
         format_duration_ms(snapshot.sim_profile.last_tick.inventory_transfers),
         format_duration_ms(snapshot.sim_profile.last_tick.chunk_lookup),
         format_duration_ms(snapshot.render_sync.total),
-        snapshot.selected_name,
-        snapshot.selected_count,
     )
 }
 
@@ -186,8 +171,6 @@ mod tests {
                 active_machines: 2,
                 idle_machines: 3,
             },
-            selected_name: "Iron Ore",
-            selected_count: 9,
         });
 
         for label in [
@@ -208,10 +191,10 @@ mod tests {
             "inventory transfers",
             "chunk lookup",
             "render sync",
-            "Item:",
-            "Count:",
         ] {
             assert!(text.contains(label), "missing debug overlay label {label}");
         }
+        assert!(!text.contains("Item:"));
+        assert!(!text.contains("Count:"));
     }
 }

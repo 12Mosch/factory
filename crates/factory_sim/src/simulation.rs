@@ -473,6 +473,22 @@ pub enum BuildError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerBuildError {
+    Build(BuildError),
+    MissingPrototype(EntityPrototypeId),
+    MissingBuildItem {
+        prototype_id: EntityPrototypeId,
+    },
+    ItemDoesNotBuildEntity {
+        item_id: ItemId,
+        prototype_id: EntityPrototypeId,
+    },
+    InsufficientInventory {
+        item_id: ItemId,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContainerError {
     MissingEntity(EntityId),
     NotContainer(EntityId),

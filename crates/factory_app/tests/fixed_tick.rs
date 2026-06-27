@@ -1,19 +1,28 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
-use factory_app::input::debug_build::{
-    handle_debug_belt_item_insertion_at_tile, handle_debug_build_action_at_tile,
+use factory_app::interaction::container_open::{
+    container_open_input_allowed, opened_container_after_world_click,
 };
-use factory_app::interaction::container_open::opened_container_after_world_click;
 use factory_app::interaction::cursor::world_position_to_tile_coord;
 use factory_app::interaction::slot_transfer::transfer_open_container_slot;
-use factory_app::resources::{DebugBuildDirection, DebugInventorySelection, SimResource};
+use factory_app::placement::build::{
+    buildable_prototype_at_slot, buildable_prototypes, place_selected_building_at_tile,
+};
+use factory_app::resources::{
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, RenderSyncStats, SimProfileStats,
+    SimResource,
+};
+use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
 };
 use factory_app::ui::inventory_panel::InventoryPanel;
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
-use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
+use factory_sim::{
+    CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation, SimulationCounts,
+    SimulationTickProfile,
+};
 use std::time::Duration;
 
 const TARGET_TICKS: u64 = 3_600;
@@ -96,46 +105,228 @@ fn input_movement_changes_player_position_under_fixed_ticks() {
 }
 
 #[test]
-fn debug_inventory_keys_insert_and_remove_selected_item() {
+fn buildable_prototypes_include_placeable_item_backed_entities() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let buildables = buildable_prototypes(&catalog);
+    let buildable_names = buildables
+        .iter()
+        .map(|buildable| {
+            catalog.entities[buildable.prototype_id.index()]
+                .name
+                .as_str()
+        })
+        .collect::<Vec<_>>();
+
+    for expected in [
+        "chest",
+        "transport_belt",
+        "inserter",
+        "stone_furnace",
+        "burner_mining_drill",
+        "assembling_machine",
+        "lab",
+    ] {
+        assert!(
+            buildable_names.contains(&expected),
+            "missing buildable prototype {expected}"
+        );
+    }
+    assert!(buildables.iter().all(|buildable| {
+        let entity = &catalog.entities[buildable.prototype_id.index()];
+        let item = &catalog.items[buildable.item_id.index()];
+        entity.entity_kind != EntityKind::ResourcePatch && entity.name == item.name
+    }));
+}
+
+#[test]
+fn number_key_selects_hotbar_slot_without_placing() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
-
-    let selected_item = app.world().resource::<SimResource>().sim.catalog().items[0].id;
-    let before = app
+    let before_entities = app
         .world()
         .resource::<SimResource>()
         .sim
-        .player_inventory()
-        .count(selected_item);
+        .entities()
+        .placed_len();
+    let slot = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        buildable_prototype_at_slot(sim.catalog(), 0).expect("slot 0 should be buildable")
+    };
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyI);
+        .press(KeyCode::Digit1);
     app.update();
 
-    let after_insert = app
-        .world()
-        .resource::<SimResource>()
-        .sim
-        .player_inventory()
-        .count(selected_item);
-    assert_eq!(after_insert, before + 1);
+    let build_state = app.world().resource::<BuildPlacementState>();
+    assert_eq!(
+        build_state.selected,
+        Some(BuildSelection {
+            prototype_id: slot.prototype_id,
+            item_id: slot.item_id,
+        })
+    );
+    assert_eq!(
+        app.world()
+            .resource::<SimResource>()
+            .sim
+            .entities()
+            .placed_len(),
+        before_entities
+    );
+}
 
-    {
-        let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        keyboard.release(KeyCode::KeyI);
-        keyboard.clear();
-        keyboard.press(KeyCode::KeyO);
+#[test]
+fn rotate_key_updates_build_direction() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let selection = first_available_build_selection(&app);
+    app.world_mut()
+        .resource_mut::<BuildPlacementState>()
+        .selected = Some(selection);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyR);
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<BuildPlacementState>().direction,
+        Direction::East
+    );
+}
+
+#[test]
+fn escape_clears_build_selection() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let selection = first_available_build_selection(&app);
+    app.world_mut()
+        .resource_mut::<BuildPlacementState>()
+        .selected = Some(selection);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Escape);
+    app.update();
+
+    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+}
+
+#[test]
+fn place_selected_building_consumes_inventory() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(sim.catalog(), "transport_belt");
+    let belt_item = item_id_by_name(sim.catalog(), "transport_belt");
+    let (x, y) = first_buildable_rect(&sim, belt);
+    *sim.player_inventory_mut() = Inventory::player();
+    let catalog = sim.catalog().clone();
+    sim.player_inventory_mut()
+        .insert(&catalog, belt_item, 1)
+        .expect("test inventory should accept belt");
+    let before_entities = sim.entities().placed_len();
+
+    let status = place_selected_building_at_tile(
+        &mut sim,
+        BuildSelection {
+            prototype_id: belt,
+            item_id: belt_item,
+        },
+        Direction::North,
+        x,
+        y,
+    );
+
+    assert!(matches!(status, BuildPlacementStatus::Placed(_)));
+    assert_eq!(sim.player_inventory().count(belt_item), 0);
+    assert_eq!(sim.entities().placed_len(), before_entities + 1);
+}
+
+#[test]
+fn failed_selected_building_placement_keeps_inventory() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(sim.catalog(), "transport_belt");
+    let belt_item = item_id_by_name(sim.catalog(), "transport_belt");
+    let (x, y) = first_buildable_rect(&sim, belt);
+    *sim.player_inventory_mut() = Inventory::player();
+    let catalog = sim.catalog().clone();
+    sim.player_inventory_mut()
+        .insert(&catalog, belt_item, 1)
+        .expect("test inventory should accept belt");
+    sim.place_entity(belt, x, y, Direction::North)
+        .expect("blocking belt should be placeable");
+
+    let status = place_selected_building_at_tile(
+        &mut sim,
+        BuildSelection {
+            prototype_id: belt,
+            item_id: belt_item,
+        },
+        Direction::North,
+        x,
+        y,
+    );
+
+    assert!(matches!(status, BuildPlacementStatus::CannotPlace(_)));
+    assert_eq!(sim.player_inventory().count(belt_item), 1);
+}
+
+#[test]
+fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
+    let sim_profile = SimProfileStats {
+        last_tick: SimulationTickProfile {
+            belts: Duration::from_micros(100),
+            machines: Duration::from_micros(200),
+            inserters: Duration::from_micros(300),
+            inventory_transfers: Duration::from_micros(400),
+            chunk_lookup: Duration::from_micros(500),
+            ..default()
+        },
+        rolling_average_sim_tick_ms: 1.25,
+    };
+    let render_sync = RenderSyncStats {
+        total: Duration::from_micros(600),
+        ..default()
+    };
+    let text = format_debug_overlay(DebugOverlaySnapshot {
+        tick: 7,
+        ups: 60.0,
+        fps: Some(59.9),
+        frame_ms: Some(16.667),
+        sim_profile: &sim_profile,
+        render_sync: &render_sync,
+        counts: SimulationCounts {
+            entity_count: 10,
+            chunk_count: 25,
+            belt_count: 3,
+            belt_item_count: 4,
+            machine_count: 5,
+            inserter_count: 6,
+            active_machines: 2,
+            idle_machines: 3,
+        },
+    });
+
+    for label in ["UPS:", "FPS:", "Sim tick:", "Entities:", "render sync"] {
+        assert!(text.contains(label), "missing debug overlay label {label}");
     }
-    app.update();
+    assert!(!text.contains("Item:"));
+    assert!(!text.contains("Count:"));
+}
 
-    let after_remove = app
-        .world()
-        .resource::<SimResource>()
-        .sim
-        .player_inventory()
-        .count(selected_item);
-    assert_eq!(after_remove, before);
+#[test]
+fn container_open_ignores_click_when_building_selected() {
+    let mut build_state = BuildPlacementState::default();
+    assert!(container_open_input_allowed(&build_state));
+
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let slot = buildable_prototype_at_slot(&catalog, 0).expect("slot 0 should be buildable");
+    build_state.selected = Some(BuildSelection {
+        prototype_id: slot.prototype_id,
+        item_id: slot.item_id,
+    });
+
+    assert!(!container_open_input_allowed(&build_state));
 }
 
 #[test]
@@ -600,131 +791,6 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
     );
 }
 
-#[test]
-fn debug_placement_key_places_transport_belt_with_current_direction() {
-    let mut sim = Simulation::new_test_world(123);
-    let belt = entity_id_by_name(sim.catalog(), "transport_belt");
-    let mut build_direction = DebugBuildDirection::default();
-    let mut keyboard = ButtonInput::default();
-    let (first_x, first_y) = first_buildable_rect(&sim, belt);
-
-    keyboard.press(KeyCode::KeyT);
-    let first_id = handle_debug_build_action_at_tile(
-        &mut sim,
-        &keyboard,
-        &mut build_direction,
-        first_x,
-        first_y,
-    )
-    .expect("T should place a transport belt");
-
-    let first = sim.entities().placed_entity(first_id).unwrap();
-    assert_eq!(first.direction, Direction::North);
-    assert_eq!(
-        sim.catalog().entities[first.prototype_id.index()].entity_kind,
-        EntityKind::TransportBelt
-    );
-
-    keyboard.release(KeyCode::KeyT);
-    keyboard.clear();
-    keyboard.press(KeyCode::KeyR);
-    handle_debug_build_action_at_tile(&mut sim, &keyboard, &mut build_direction, first_x, first_y);
-    assert_eq!(build_direction.direction, Direction::East);
-
-    keyboard.release(KeyCode::KeyR);
-    keyboard.clear();
-    keyboard.press(KeyCode::KeyT);
-    let (second_x, second_y) = first_buildable_rect(&sim, belt);
-    let second_id = handle_debug_build_action_at_tile(
-        &mut sim,
-        &keyboard,
-        &mut build_direction,
-        second_x,
-        second_y,
-    )
-    .expect("T should place another transport belt");
-
-    assert_eq!(
-        sim.entities().placed_entity(second_id).unwrap().direction,
-        Direction::East
-    );
-}
-
-#[test]
-fn debug_placement_key_places_assembler() {
-    let mut sim = Simulation::new_test_world(123);
-    let assembler = entity_id_by_name(sim.catalog(), "assembling_machine");
-    let mut build_direction = DebugBuildDirection::default();
-    let mut keyboard = ButtonInput::default();
-    let (x, y) = first_buildable_rect(&sim, assembler);
-
-    keyboard.press(KeyCode::KeyA);
-    let entity_id =
-        handle_debug_build_action_at_tile(&mut sim, &keyboard, &mut build_direction, x, y)
-            .expect("A should place an assembler");
-
-    assert_eq!(
-        sim.catalog().entities[sim
-            .entities()
-            .placed_entity(entity_id)
-            .expect("placed assembler should remain")
-            .prototype_id
-            .index()]
-        .entity_kind,
-        EntityKind::AssemblingMachine
-    );
-    assert!(sim.assembler_state(entity_id).is_ok());
-}
-
-#[test]
-fn debug_placement_key_places_lab() {
-    let mut sim = Simulation::new_test_world(123);
-    let lab = entity_id_by_name(sim.catalog(), "lab");
-    let mut build_direction = DebugBuildDirection::default();
-    let mut keyboard = ButtonInput::default();
-    let (x, y) = first_buildable_rect(&sim, lab);
-
-    keyboard.press(KeyCode::KeyL);
-    let entity_id =
-        handle_debug_build_action_at_tile(&mut sim, &keyboard, &mut build_direction, x, y)
-            .expect("L should place a lab");
-
-    assert_eq!(
-        sim.catalog().entities[sim
-            .entities()
-            .placed_entity(entity_id)
-            .expect("placed lab should remain")
-            .prototype_id
-            .index()]
-        .entity_kind,
-        EntityKind::Lab
-    );
-    assert!(sim.lab_state(entity_id).is_ok());
-}
-
-#[test]
-fn debug_belt_insert_key_adds_selected_item_to_clicked_belt() {
-    let mut sim = Simulation::new_test_world(123);
-    let belt = entity_id_by_name(sim.catalog(), "transport_belt");
-    let iron_ore = item_id_by_name(sim.catalog(), "iron_ore");
-    let (x, y) = first_buildable_rect(&sim, belt);
-    let belt_id = sim
-        .place_entity(belt, x, y, Direction::East)
-        .expect("belt should be placeable");
-    let inventory_selection = DebugInventorySelection { selected_index: 0 };
-
-    handle_debug_belt_item_insertion_at_tile(&mut sim, &inventory_selection, x, y)
-        .expect("clicked belt should accept selected debug item");
-
-    assert!(
-        sim.belt_segment(belt_id)
-            .expect("belt should expose segment state")
-            .lanes
-            .iter()
-            .any(|lane| lane.items.iter().any(|item| item.item_id == iron_ore))
-    );
-}
-
 fn run_to_tick_with_frame_rate(frame_rate: f64, target_tick: u64) -> (u64, u64) {
     let mut app = test_app(Duration::from_secs_f64(1.0 / frame_rate));
     run_until_tick(&mut app, target_tick);
@@ -748,6 +814,18 @@ fn run_until_tick(app: &mut App, target_tick: u64) {
 fn sim_tick_and_hash(app: &App) -> (u64, u64) {
     let sim = &app.world().resource::<SimResource>().sim;
     (sim.tick_count(), sim.state_hash())
+}
+
+fn first_available_build_selection(app: &App) -> BuildSelection {
+    let sim = &app.world().resource::<SimResource>().sim;
+    let buildable = buildable_prototypes(sim.catalog())
+        .into_iter()
+        .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
+        .expect("starting inventory should include at least one buildable item");
+    BuildSelection {
+        prototype_id: buildable.prototype_id,
+        item_id: buildable.item_id,
+    }
 }
 
 fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i32, i32) {

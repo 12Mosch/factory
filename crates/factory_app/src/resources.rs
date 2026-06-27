@@ -1,4 +1,5 @@
 use bevy::prelude::Resource;
+use factory_data::{EntityPrototypeId, ItemId};
 use factory_sim::{Direction, EntityId, Simulation, SimulationTickProfile};
 use std::time::Duration;
 
@@ -66,16 +67,28 @@ impl RenderSyncStats {
 }
 
 #[derive(Resource, Default)]
-pub struct DebugInventorySelection {
-    pub selected_index: usize,
-}
-
-#[derive(Resource, Default)]
 pub struct OpenContainer {
     pub entity_id: Option<EntityId>,
 }
 
 #[derive(Resource, Default)]
-pub struct DebugBuildDirection {
+pub struct BuildPlacementState {
+    pub selected: Option<BuildSelection>,
     pub direction: Direction,
+    pub last_status: BuildPlacementStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildSelection {
+    pub prototype_id: EntityPrototypeId,
+    pub item_id: ItemId,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum BuildPlacementStatus {
+    #[default]
+    Ready,
+    Placed(String),
+    CannotPlace(String),
+    MissingInventory(String),
 }

@@ -6,6 +6,7 @@ mod utils;
 pub mod constants;
 pub mod input;
 pub mod interaction;
+pub mod placement;
 pub mod rendering;
 pub mod resources;
 pub mod ui;
