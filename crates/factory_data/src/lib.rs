@@ -10,16 +10,17 @@ mod raw;
 mod validation;
 
 pub use base_ids::{
-    BaseItemIds, BasePrototypeIds, BaseTileIds, entity_prototype_id_by_name, item_id_by_name,
-    recipe_id_by_name, technology_id_by_name, tile_id_by_name,
+    BaseFluidIds, BaseItemIds, BasePrototypeIds, BaseTileIds, entity_prototype_id_by_name,
+    fluid_id_by_name, item_id_by_name, recipe_id_by_name, technology_id_by_name, tile_id_by_name,
 };
 pub use catalog::PrototypeCatalog;
 pub use error::PrototypeLoadError;
-pub use ids::{EntityPrototypeId, ItemId, RecipeId, TechnologyId, TileId};
+pub use ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 pub use model::{
     AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CollisionLayer, CollisionMask,
     CraftingCategory, ElectricEnergySourcePrototype, ElectricPolePrototype, EntityKind,
-    EntityPrototype, InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype,
+    EntityPrototype, FluidBoxPrototype, FluidConnectionPrototype, FluidConnectionSide,
+    FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype,
     OffshorePumpPrototype, RecipePrototype, SplitterPrototype, SteamEnginePrototype,
     TechnologyEffect, TechnologyPrototype, TilePrototype, TransportBeltPrototype,
     UndergroundBeltPart, UndergroundBeltPrototype,

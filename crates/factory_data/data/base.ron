@@ -33,6 +33,12 @@
         (id: 30, name: "steam_engine", stack_size: 10),
         (id: 31, name: "boiler", stack_size: 50),
         (id: 32, name: "offshore_pump", stack_size: 20),
+        (id: 33, name: "pipe", stack_size: 100),
+        (id: 34, name: "storage_tank", stack_size: 50),
+    ],
+    fluids: [
+        (id: 0, name: "water"),
+        (id: 1, name: "steam"),
     ],
     recipes: [
         (
@@ -272,6 +278,25 @@
                 (item: "electronic_circuit", amount: 2),
             ],
             products: [(item: "offshore_pump", amount: 1)],
+        ),
+        (
+            id: 23,
+            name: "pipe",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [(item: "iron_plate", amount: 1)],
+            products: [(item: "pipe", amount: 1)],
+        ),
+        (
+            id: 24,
+            name: "storage_tank",
+            category: Crafting,
+            crafting_time_ticks: 180,
+            ingredients: [
+                (item: "iron_plate", amount: 20),
+                (item: "steel_plate", amount: 5),
+            ],
+            products: [(item: "storage_tank", amount: 1)],
         ),
     ],
     entities: [
@@ -540,6 +565,15 @@
                 max_power_output_watts: 900000,
                 steam_consumption_per_second_milliunits: 30000,
             )),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 100000,
+                    filter: Some("steam"),
+                    connections: [
+                        (local_offset: (x: 0, y: 1), side: West),
+                    ],
+                ),
+            ],
         ),
         (
             id: 26,
@@ -552,6 +586,23 @@
                 water_consumption_per_second_milliunits: 6000,
                 steam_output_per_second_milliunits: 60000,
             )),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 100000,
+                    filter: Some("water"),
+                    connections: [
+                        (local_offset: (x: 0, y: 0), side: North),
+                        (local_offset: (x: 0, y: 2), side: South),
+                    ],
+                ),
+                (
+                    capacity_milliunits: 100000,
+                    filter: Some("steam"),
+                    connections: [
+                        (local_offset: (x: 1, y: 1), side: East),
+                    ],
+                ),
+            ],
         ),
         (
             id: 27,
@@ -562,6 +613,51 @@
             offshore_pump: Some((
                 pumping_speed_per_second_milliunits: 1200000,
             )),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 100000,
+                    filter: Some("water"),
+                    connections: [
+                        (local_offset: (x: 0, y: 0), side: South),
+                    ],
+                ),
+            ],
+        ),
+        (
+            id: 28,
+            name: "pipe",
+            entity_kind: Pipe,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 100000,
+                    connections: [
+                        (local_offset: (x: 0, y: 0), side: North),
+                        (local_offset: (x: 0, y: 0), side: East),
+                        (local_offset: (x: 0, y: 0), side: South),
+                        (local_offset: (x: 0, y: 0), side: West),
+                    ],
+                ),
+            ],
+        ),
+        (
+            id: 29,
+            name: "storage_tank",
+            entity_kind: StorageTank,
+            size: (x: 3, y: 3),
+            collision_mask: (layers: ["ground", "building"]),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 25000000,
+                    connections: [
+                        (local_offset: (x: 1, y: 0), side: North),
+                        (local_offset: (x: 2, y: 1), side: East),
+                        (local_offset: (x: 1, y: 2), side: South),
+                        (local_offset: (x: 0, y: 1), side: West),
+                    ],
+                ),
+            ],
         ),
     ],
     tiles: [

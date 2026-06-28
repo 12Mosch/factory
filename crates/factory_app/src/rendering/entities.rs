@@ -9,8 +9,8 @@ use crate::constants::{
 };
 use crate::rendering::colors::{
     assembler_color, boiler_color, burner_drill_color, chest_color, electric_pole_color,
-    furnace_color, inserter_color, lab_color, offshore_pump_color, splitter_color,
-    steam_engine_color, transport_belt_color,
+    furnace_color, inserter_color, lab_color, offshore_pump_color, pipe_color, splitter_color,
+    steam_engine_color, storage_tank_color, transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
 use crate::resources::{RenderSyncStats, SimResource};
@@ -126,6 +126,26 @@ pub(crate) fn entity_prototype_render_style(
         EntityKind::SteamEngine => Some((steam_engine_color(), machine_size())),
         EntityKind::Boiler => Some((boiler_color(), machine_size())),
         EntityKind::OffshorePump => Some((offshore_pump_color(), machine_size())),
+        EntityKind::Pipe => Some((pipe_color(), Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE))),
+        EntityKind::StorageTank => Some((storage_tank_color(), machine_size())),
         EntityKind::ResourcePatch => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fluid_entities_have_render_styles() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+        for entity_name in ["pipe", "storage_tank"] {
+            let prototype_id = factory_data::entity_prototype_id_by_name(&catalog, entity_name);
+            assert!(
+                entity_prototype_render_style(&catalog, prototype_id, Direction::North).is_some(),
+                "{entity_name} should have a render style"
+            );
+        }
     }
 }

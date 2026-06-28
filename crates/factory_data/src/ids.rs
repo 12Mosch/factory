@@ -31,6 +31,7 @@ macro_rules! id_type {
 }
 
 id_type!(ItemId);
+id_type!(FluidId);
 id_type!(RecipeId);
 id_type!(EntityPrototypeId);
 id_type!(TileId);

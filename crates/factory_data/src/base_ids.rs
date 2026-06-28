@@ -1,8 +1,9 @@
-use crate::{EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId, TechnologyId, TileId};
+use crate::{EntityPrototypeId, FluidId, ItemId, PrototypeCatalog, RecipeId, TechnologyId, TileId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BasePrototypeIds {
     pub items: BaseItemIds,
+    pub fluids: BaseFluidIds,
     pub tiles: BaseTileIds,
 }
 
@@ -10,6 +11,7 @@ impl BasePrototypeIds {
     pub fn from_catalog(catalog: &PrototypeCatalog) -> Self {
         Self {
             items: BaseItemIds::from_catalog(catalog),
+            fluids: BaseFluidIds::from_catalog(catalog),
             tiles: BaseTileIds::from_catalog(catalog),
         }
     }
@@ -50,6 +52,8 @@ pub struct BaseItemIds {
     pub steam_engine: ItemId,
     pub boiler: ItemId,
     pub offshore_pump: ItemId,
+    pub pipe: ItemId,
+    pub storage_tank: ItemId,
 }
 
 impl BaseItemIds {
@@ -88,11 +92,28 @@ impl BaseItemIds {
             steam_engine: item_id_by_name(catalog, "steam_engine"),
             boiler: item_id_by_name(catalog, "boiler"),
             offshore_pump: item_id_by_name(catalog, "offshore_pump"),
+            pipe: item_id_by_name(catalog, "pipe"),
+            storage_tank: item_id_by_name(catalog, "storage_tank"),
         }
     }
 
     pub const fn resource_items(self) -> [ItemId; 4] {
         [self.iron_ore, self.copper_ore, self.coal, self.stone]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BaseFluidIds {
+    pub water: FluidId,
+    pub steam: FluidId,
+}
+
+impl BaseFluidIds {
+    pub fn from_catalog(catalog: &PrototypeCatalog) -> Self {
+        Self {
+            water: fluid_id_by_name(catalog, "water"),
+            steam: fluid_id_by_name(catalog, "steam"),
+        }
     }
 }
 
@@ -120,6 +141,15 @@ pub fn item_id_by_name(catalog: &PrototypeCatalog, name: &str) -> ItemId {
         .find(|prototype| prototype.name == name)
         .map(|prototype| prototype.id)
         .unwrap_or_else(|| panic!("missing required item prototype {name:?}"))
+}
+
+pub fn fluid_id_by_name(catalog: &PrototypeCatalog, name: &str) -> FluidId {
+    catalog
+        .fluids
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .map(|prototype| prototype.id)
+        .unwrap_or_else(|| panic!("missing required fluid prototype {name:?}"))
 }
 
 pub fn tile_id_by_name(catalog: &PrototypeCatalog, name: &str) -> TileId {

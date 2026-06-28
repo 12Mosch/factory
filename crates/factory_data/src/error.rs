@@ -25,6 +25,10 @@ pub enum PrototypeLoadError {
         entity: String,
         item: String,
     },
+    MissingFluidReference {
+        owner: String,
+        fluid: String,
+    },
     MissingTechnologyPrerequisite {
         technology: String,
         prerequisite: String,
@@ -84,6 +88,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} references missing build item {item:?}"
+                )
+            }
+            Self::MissingFluidReference { owner, fluid } => {
+                write!(
+                    formatter,
+                    "prototype {owner:?} references missing fluid {fluid:?}"
                 )
             }
             Self::MissingTechnologyPrerequisite {

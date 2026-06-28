@@ -107,6 +107,7 @@ impl Simulation {
         let steam_engine = steam_engine_state_for_prototype(prototype);
         let boiler = boiler_state_for_prototype(prototype);
         let offshore_pump = offshore_pump_state_for_prototype(prototype);
+        let fluid_boxes = fluid_box_states_for_prototype(prototype);
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
         let splitter = splitter_state_for_prototype(prototype, direction);
         let inserter = inserter_state_for_prototype(prototype);
@@ -126,11 +127,13 @@ impl Simulation {
             steam_engine,
             boiler,
             offshore_pump,
+            fluid_boxes,
             transport_belt,
             splitter,
             inserter,
         });
         self.invalidate_power_state();
+        self.invalidate_fluid_state();
         Ok(entity_id)
     }
 
@@ -164,6 +167,7 @@ impl Simulation {
         self.entities
             .update_entity_footprint(entity_id, direction, footprint)?;
         self.invalidate_power_state();
+        self.invalidate_fluid_state();
         Ok(())
     }
 
@@ -171,6 +175,7 @@ impl Simulation {
         let removed = self.entities.remove_placed_entity(entity_id);
         if removed.is_some() {
             self.invalidate_power_state();
+            self.invalidate_fluid_state();
         }
         removed
     }
@@ -210,6 +215,7 @@ impl Simulation {
         self.player_inventory = player_inventory;
         self.manual_mining_progress = None;
         self.invalidate_power_state();
+        self.invalidate_fluid_state();
 
         Ok(removed)
     }
@@ -457,6 +463,10 @@ impl Simulation {
 
     pub fn boiler_state(&self, entity_id: EntityId) -> Result<&BoilerState, BoilerError> {
         self.entities.boiler_state(entity_id)
+    }
+
+    pub fn fluid_box_states(&self, entity_id: EntityId) -> Option<&[FluidBoxState]> {
+        self.entities.fluid_box_states(entity_id)
     }
 
     pub fn belt_segment(&self, entity_id: EntityId) -> Result<&BeltSegment, BeltError> {

@@ -1,5 +1,5 @@
 use factory_data::{
-    CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, RecipeId,
+    CraftingCategory, EntityKind, EntityPrototypeId, FluidId, ItemId, PrototypeCatalog, RecipeId,
     TechnologyEffect, TechnologyId, TileId, UndergroundBeltPart,
 };
 use serde::{Deserialize, Serialize};
@@ -150,6 +150,7 @@ pub struct Simulation {
     power_summary: PowerSummary,
     power_networks: Vec<PowerNetworkSnapshot>,
     entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
+    fluid_networks: Vec<FluidNetworkSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -285,6 +286,12 @@ pub struct BoilerState {
 pub struct OffshorePumpState;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidBoxState {
+    pub fluid_id: Option<FluidId>,
+    pub amount_milliunits: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct PowerSummary {
     pub production_watts: u64,
     pub available_production_watts: u64,
@@ -311,6 +318,27 @@ pub struct EntityPowerStatus {
     pub satisfaction_permyriad: u32,
     pub active_usage_watts: u64,
     pub drain_watts: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidNetworkSnapshot {
+    pub network_id: u32,
+    pub fluid_id: Option<FluidId>,
+    pub total_milliunits: u64,
+    pub capacity_milliunits: u64,
+    pub box_count: usize,
+    pub blocked: bool,
+    pub boxes: Vec<FluidNetworkBoxSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidNetworkBoxSnapshot {
+    pub entity_id: EntityId,
+    pub box_index: usize,
+    pub capacity_milliunits: u64,
+    pub amount_milliunits: u64,
+    pub fluid_id: Option<FluidId>,
+    pub filter: Option<FluidId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -513,6 +541,7 @@ pub struct EntityStore {
     steam_engines: BTreeMap<EntityId, SteamEngineState>,
     boilers: BTreeMap<EntityId, BoilerState>,
     offshore_pumps: BTreeMap<EntityId, OffshorePumpState>,
+    fluid_boxes: BTreeMap<EntityId, Vec<FluidBoxState>>,
     transport_belts: BTreeMap<EntityId, BeltSegment>,
     splitters: BTreeMap<EntityId, SplitterState>,
     inserters: BTreeMap<EntityId, InserterState>,
@@ -565,6 +594,7 @@ struct EntityReservation {
     steam_engine: Option<SteamEngineState>,
     boiler: Option<BoilerState>,
     offshore_pump: Option<OffshorePumpState>,
+    fluid_boxes: Option<Vec<FluidBoxState>>,
     transport_belt: Option<BeltSegment>,
     splitter: Option<SplitterState>,
     inserter: Option<InserterState>,
@@ -667,6 +697,7 @@ pub enum SimValidationError {
         y: i32,
     },
     UnknownItem(ItemId),
+    InvalidFluidId(FluidId),
     EmptyItemStack(ItemId),
     StackExceedsLimit {
         item_id: ItemId,
@@ -683,6 +714,13 @@ pub enum SimValidationError {
     OrphanEntityState(EntityId),
     InvalidEntityState {
         entity_id: EntityId,
+    },
+    InvalidFluidBoxState {
+        entity_id: EntityId,
+        box_index: usize,
+    },
+    InvalidFluidNetwork {
+        network_id: u32,
     },
     InvalidRecipeItem {
         recipe_id: RecipeId,
@@ -747,6 +785,7 @@ mod belt_ops;
 mod core;
 mod entity_ops;
 mod entity_store_ops;
+mod fluid_ops;
 mod generation;
 mod inventory_ops;
 mod machine_ops;
@@ -761,6 +800,7 @@ mod validation;
 mod world_ops;
 
 use self::belt_ops::*;
+use self::fluid_ops::*;
 use self::generation::*;
 use self::inventory_ops::*;
 use self::machine_ops::*;

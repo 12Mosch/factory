@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
 struct PoleNode<'a> {
@@ -12,9 +12,12 @@ struct PoleNode<'a> {
 
 #[derive(Clone, Copy)]
 struct SteamEngineAssignment {
-    boiler_id: EntityId,
     network_id: u32,
+    steam_network_id: u32,
+    available_power_output_watts: u64,
     max_power_output_watts: u64,
+    steam_budget_milliunits: u64,
+    steam_consumption_per_tick_milliunits: u64,
 }
 
 #[derive(Default)]
@@ -59,13 +62,14 @@ impl Simulation {
                 .saturating_add(active_usage_watts.saturating_add(*drain_watts));
         }
 
-        let engine_assignments = self.assign_steam_engines_to_boilers(&network_ids_by_entity);
+        let engine_assignments =
+            self.assign_steam_engines_to_fluid_networks(&network_ids_by_entity);
         for assignment in engine_assignments.values() {
             let network = &mut networks[assignment.network_id as usize];
             network.producer_count += 1;
             network.available_production_watts = network
                 .available_production_watts
-                .saturating_add(assignment.max_power_output_watts);
+                .saturating_add(assignment.available_power_output_watts);
         }
 
         for network in &mut networks {
@@ -77,8 +81,9 @@ impl Simulation {
             network.satisfaction_permyriad = satisfaction_permyriad;
         }
 
-        let boiler_output_watts = actual_boiler_outputs(&networks, &engine_assignments);
-        self.consume_boiler_fuel_for_output(boiler_output_watts);
+        let engine_output_watts = actual_steam_engine_outputs(&networks, &engine_assignments);
+        self.consume_steam_for_engine_output(engine_output_watts, &engine_assignments);
+        self.rebuild_fluid_networks_and_equalize();
         self.power_networks = network_snapshots(&networks);
         self.power_summary = aggregate_power_summary(&self.power_networks);
         self.entity_power_statuses =
@@ -302,58 +307,65 @@ impl Simulation {
         }
     }
 
-    fn assign_steam_engines_to_boilers(
+    fn assign_steam_engines_to_fluid_networks(
         &self,
         network_ids_by_entity: &BTreeMap<EntityId, u32>,
     ) -> BTreeMap<EntityId, SteamEngineAssignment> {
+        let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
+            .fluids
+            .steam;
         let mut assignments = BTreeMap::new();
+        let mut remaining_steam_by_network = self
+            .fluid_networks
+            .iter()
+            .filter(|network| !network.blocked && network.fluid_id == Some(steam))
+            .map(|network| (network.network_id, network.total_milliunits))
+            .collect::<BTreeMap<_, _>>();
 
-        for (boiler_id, boiler_state) in &self.entities.boilers {
-            if !self.boiler_has_water(*boiler_id) || !boiler_has_potential_fuel(boiler_state) {
-                continue;
-            }
-            let Some(boiler_placed) = self.entities.placed_entity(*boiler_id) else {
+        for engine_id in self.entities.steam_engines.keys().copied() {
+            let Some(network_id) = network_ids_by_entity.get(&engine_id).copied() else {
                 continue;
             };
-            let Some(boiler_prototype) = self
-                .world
-                .prototypes
-                .entities
-                .get(boiler_placed.prototype_id.index())
-                .filter(|prototype| prototype.id == boiler_placed.prototype_id)
-                .and_then(|prototype| prototype.boiler.as_ref())
+            let Some(engine_prototype) = self.steam_engine_prototype(engine_id) else {
+                continue;
+            };
+            let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+                entity_id: engine_id,
+                box_index: 0,
+            }) else {
+                continue;
+            };
+            let Some(remaining_steam) = remaining_steam_by_network.get_mut(&steam_network_id)
             else {
                 continue;
             };
-            let mut steam_budget_milliunits = boiler_prototype.steam_output_per_second_milliunits;
-            let adjacent_engines = self.adjacent_connected_steam_engines(boiler_placed);
-
-            for engine_id in adjacent_engines {
-                if assignments.contains_key(&engine_id) {
-                    continue;
-                }
-                let Some(network_id) = network_ids_by_entity.get(&engine_id).copied() else {
-                    continue;
-                };
-                let Some(engine_prototype) = self.steam_engine_prototype(engine_id) else {
-                    continue;
-                };
-                if engine_prototype.steam_consumption_per_second_milliunits
-                    > steam_budget_milliunits
-                {
-                    continue;
-                }
-
-                steam_budget_milliunits -= engine_prototype.steam_consumption_per_second_milliunits;
-                assignments.insert(
-                    engine_id,
-                    SteamEngineAssignment {
-                        boiler_id: *boiler_id,
-                        network_id,
-                        max_power_output_watts: engine_prototype.max_power_output_watts,
-                    },
-                );
+            let steam_consumption_per_tick_milliunits =
+                per_tick_milliunits(engine_prototype.steam_consumption_per_second_milliunits);
+            if steam_consumption_per_tick_milliunits == 0 || *remaining_steam == 0 {
+                continue;
             }
+
+            let steam_budget_milliunits =
+                (*remaining_steam).min(steam_consumption_per_tick_milliunits);
+            let available_power_output_watts = engine_prototype
+                .max_power_output_watts
+                .saturating_mul(steam_budget_milliunits)
+                / steam_consumption_per_tick_milliunits;
+            if available_power_output_watts == 0 {
+                continue;
+            }
+            *remaining_steam -= steam_budget_milliunits;
+            assignments.insert(
+                engine_id,
+                SteamEngineAssignment {
+                    network_id,
+                    steam_network_id,
+                    available_power_output_watts,
+                    max_power_output_watts: engine_prototype.max_power_output_watts,
+                    steam_budget_milliunits,
+                    steam_consumption_per_tick_milliunits,
+                },
+            );
         }
 
         assignments
@@ -373,41 +385,33 @@ impl Simulation {
             .as_ref()
     }
 
-    fn adjacent_connected_steam_engines(&self, boiler: &PlacedEntity) -> BTreeSet<EntityId> {
-        adjacent_entity_ids(&self.entities, &boiler.footprint)
-            .into_iter()
-            .filter(|entity_id| self.entities.steam_engines.contains_key(entity_id))
-            .collect()
-    }
-
-    fn boiler_has_water(&self, boiler_id: EntityId) -> bool {
-        let Some(boiler) = self.entities.placed_entity(boiler_id) else {
-            return false;
-        };
-
-        adjacent_entity_ids(&self.entities, &boiler.footprint)
-            .into_iter()
-            .any(|entity_id| self.entities.offshore_pumps.contains_key(&entity_id))
-    }
-
-    fn consume_boiler_fuel_for_output(&mut self, boiler_output_watts: BTreeMap<EntityId, u64>) {
-        for (boiler_id, output_watts) in boiler_output_watts {
+    fn consume_steam_for_engine_output(
+        &mut self,
+        engine_output_watts: BTreeMap<EntityId, u64>,
+        engine_assignments: &BTreeMap<EntityId, SteamEngineAssignment>,
+    ) {
+        let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
+            .fluids
+            .steam;
+        for (engine_id, output_watts) in engine_output_watts {
             if output_watts == 0 {
                 continue;
             }
-            let Ok(state) = self.entities.boiler_state_mut(boiler_id) else {
+            let Some(assignment) = engine_assignments.get(&engine_id) else {
                 continue;
             };
-            let joules = output_watts as f64 / FIXED_SIM_TICKS_PER_SECOND_F64;
-
-            while state.energy.energy_remaining_joules + f64::EPSILON < joules
-                && try_consume_fuel(&self.world.prototypes, &mut state.energy)
-            {}
-
-            if state.energy.energy_remaining_joules + f64::EPSILON >= joules {
-                state.energy.energy_remaining_joules -= joules;
-            } else if state.energy.energy_remaining_joules > 0.0 {
-                state.energy.energy_remaining_joules = 0.0;
+            let steam_to_consume = steam_consumed_for_output(
+                output_watts,
+                assignment.max_power_output_watts,
+                assignment.steam_consumption_per_tick_milliunits,
+            )
+            .min(assignment.steam_budget_milliunits);
+            if steam_to_consume > 0 {
+                self.consume_fluid_from_network(
+                    assignment.steam_network_id,
+                    steam,
+                    steam_to_consume,
+                );
             }
         }
     }
@@ -538,39 +542,6 @@ fn pole_supply_tiles(
     tiles
 }
 
-fn adjacent_entity_ids(entities: &EntityStore, footprint: &EntityFootprint) -> BTreeSet<EntityId> {
-    let mut entity_ids = BTreeSet::new();
-
-    for x in footprint.x..footprint.x + footprint.width {
-        if let Some(entity_id) = entities.occupancy.entity_at(x, footprint.y - 1) {
-            entity_ids.insert(entity_id);
-        }
-        if let Some(entity_id) = entities
-            .occupancy
-            .entity_at(x, footprint.y + footprint.height)
-        {
-            entity_ids.insert(entity_id);
-        }
-    }
-    for y in footprint.y..footprint.y + footprint.height {
-        if let Some(entity_id) = entities.occupancy.entity_at(footprint.x - 1, y) {
-            entity_ids.insert(entity_id);
-        }
-        if let Some(entity_id) = entities
-            .occupancy
-            .entity_at(footprint.x + footprint.width, y)
-        {
-            entity_ids.insert(entity_id);
-        }
-    }
-
-    entity_ids
-}
-
-fn boiler_has_potential_fuel(state: &BoilerState) -> bool {
-    state.energy.energy_remaining_joules > f64::EPSILON || state.energy.fuel_slot.is_some()
-}
-
 fn power_satisfaction(available_watts: u64, demand_watts: u64) -> (u64, u32) {
     if demand_watts == 0 {
         return (0, POWER_SATISFACTION_FULL_PERMYRIAD);
@@ -584,11 +555,11 @@ fn power_satisfaction(available_watts: u64, demand_watts: u64) -> (u64, u32) {
     (available_watts, satisfaction as u32)
 }
 
-fn actual_boiler_outputs(
+fn actual_steam_engine_outputs(
     networks: &[NetworkAccumulator],
     engine_assignments: &BTreeMap<EntityId, SteamEngineAssignment>,
 ) -> BTreeMap<EntityId, u64> {
-    let mut output_by_boiler = BTreeMap::<EntityId, u64>::new();
+    let mut output_by_engine = BTreeMap::<EntityId, u64>::new();
     let mut engines_by_network = BTreeMap::<u32, Vec<(EntityId, SteamEngineAssignment)>>::new();
 
     for (engine_id, assignment) in engine_assignments {
@@ -605,22 +576,36 @@ fn actual_boiler_outputs(
         let mut remaining_production = network.production_watts;
         let mut remaining_available = network.available_production_watts;
 
-        for (_, assignment) in engines {
+        for (engine_id, assignment) in engines {
             if remaining_available == 0 || remaining_production == 0 {
                 break;
             }
             let actual_output = assignment
-                .max_power_output_watts
+                .available_power_output_watts
                 .saturating_mul(remaining_production)
                 / remaining_available;
             remaining_production = remaining_production.saturating_sub(actual_output);
             remaining_available =
-                remaining_available.saturating_sub(assignment.max_power_output_watts);
-            *output_by_boiler.entry(assignment.boiler_id).or_default() += actual_output;
+                remaining_available.saturating_sub(assignment.available_power_output_watts);
+            output_by_engine.insert(engine_id, actual_output);
         }
     }
 
-    output_by_boiler
+    output_by_engine
+}
+
+fn steam_consumed_for_output(
+    output_watts: u64,
+    max_power_output_watts: u64,
+    steam_consumption_per_tick_milliunits: u64,
+) -> u64 {
+    if output_watts == 0 || max_power_output_watts == 0 {
+        return 0;
+    }
+
+    let numerator = u128::from(steam_consumption_per_tick_milliunits) * u128::from(output_watts);
+    let denominator = u128::from(max_power_output_watts);
+    numerator.div_ceil(denominator) as u64
 }
 
 fn network_snapshots(networks: &[NetworkAccumulator]) -> Vec<PowerNetworkSnapshot> {
