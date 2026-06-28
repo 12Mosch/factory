@@ -605,7 +605,11 @@ fn built_fluid_network(
         || filter_fluid
             .zip(nonempty_fluid)
             .is_some_and(|(filter, fluid)| filter != fluid);
-    let fluid_id = nonempty_fluid.or(filter_fluid);
+    let fluid_id = if nonempty_fluids.len() > 1 {
+        None
+    } else {
+        nonempty_fluid.or(filter_fluid)
+    };
 
     BuiltFluidNetwork {
         network_id,

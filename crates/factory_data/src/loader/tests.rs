@@ -940,6 +940,156 @@ fn missing_fluid_references_fail() {
 }
 
 #[test]
+fn empty_fluid_box_connections_fail_loading() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [(id: 0, name: "water")],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_pipe",
+                entity_kind: Pipe,
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["ground", "building"]),
+                fluid_boxes: [(
+                    capacity_milliunits: 100000,
+                    connections: [],
+                )],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("empty fluid box connections should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidBox { entity, box_index }
+            if entity == "bad_pipe" && box_index == 0
+    ));
+}
+
+#[test]
+fn fluid_connection_offsets_outside_entity_fail_loading() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [(id: 0, name: "water")],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_pipe",
+                entity_kind: Pipe,
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["ground", "building"]),
+                fluid_boxes: [(
+                    capacity_milliunits: 100000,
+                    connections: [(local_offset: (x: 1, y: 0), side: East)],
+                )],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("outside fluid connection offsets should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidConnection {
+            entity,
+            box_index: 0,
+            connection_index: 0,
+        } if entity == "bad_pipe"
+    ));
+}
+
+#[test]
+fn fluid_connection_side_must_be_on_matching_outer_edge() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [(id: 0, name: "water")],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_tank",
+                entity_kind: StorageTank,
+                size: (x: 3, y: 3),
+                collision_mask: (layers: ["ground", "building"]),
+                fluid_boxes: [(
+                    capacity_milliunits: 100000,
+                    connections: [(local_offset: (x: 1, y: 1), side: North)],
+                )],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("interior fluid connection side should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidConnection {
+            entity,
+            box_index: 0,
+            connection_index: 0,
+        } if entity == "bad_tank"
+    ));
+}
+
+#[test]
+fn machine_fluid_box_roles_are_validated_during_load() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [
+                (id: 0, name: "water"),
+                (id: 1, name: "steam"),
+            ],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_boiler",
+                entity_kind: Boiler,
+                size: (x: 2, y: 3),
+                collision_mask: (layers: ["ground", "building"]),
+                burner: Some((energy_usage_watts: 1800000)),
+                boiler: Some((
+                    water_consumption_per_second_milliunits: 6000,
+                    steam_output_per_second_milliunits: 60000,
+                )),
+                fluid_boxes: [
+                    (
+                        capacity_milliunits: 100000,
+                        filter: Some("steam"),
+                        connections: [(local_offset: (x: 0, y: 0), side: North)],
+                    ),
+                    (
+                        capacity_milliunits: 100000,
+                        filter: Some("water"),
+                        connections: [(local_offset: (x: 1, y: 1), side: East)],
+                    ),
+                ],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("swapped boiler fluid roles should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidBox { entity, box_index: 0 }
+            if entity == "bad_boiler"
+    ));
+}
+
+#[test]
 fn invalid_collision_layers_fail() {
     let error = PrototypeCatalog::from_ron_str(
         r#"

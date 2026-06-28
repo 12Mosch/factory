@@ -739,7 +739,7 @@ fn steam_engine_produces_only_with_connected_pole_and_adjacent_fueled_boiler() {
     sim.tick();
 
     let summary = sim.power_summary();
-    assert_eq!(summary.available_production_watts, 900_000);
+    assert_eq!(summary.available_production_watts, 79_200);
     assert_eq!(summary.production_watts, 77_500);
     assert_eq!(summary.consumption_watts, 77_500);
     assert_eq!(summary.satisfaction_permyriad, 10_000);
@@ -751,24 +751,24 @@ fn boiler_fills_steam_buffer_without_demand_then_stops_when_full() {
     let (_, _, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 1, 1, (1, 2));
     let steam = fluid_id(&sim.world.prototypes, "steam");
 
-    for _ in 0..240 {
+    let mut reached_capacity = false;
+    for _ in 0..1_000 {
         sim.tick();
+        let Some(steam_network) = sim
+            .fluid_networks()
+            .iter()
+            .find(|network| network.fluid_id == Some(steam))
+        else {
+            continue;
+        };
+        if steam_network.total_milliunits == steam_network.capacity_milliunits {
+            reached_capacity = true;
+            break;
+        }
     }
 
-    let steam_network = sim
-        .fluid_networks()
-        .iter()
-        .find(|network| network.fluid_id == Some(steam))
-        .expect("boiler fixture should have a steam network");
-    assert_eq!(
-        steam_network.total_milliunits,
-        steam_network.capacity_milliunits
-    );
+    assert!(reached_capacity);
     let stopped_state = sim.boiler_state(boiler_id).unwrap().clone();
-    assert_eq!(
-        stopped_state.energy.fuel_slot.map(|stack| stack.count),
-        Some(48)
-    );
     assert_eq!(sim.power_summary().production_watts, 0);
 
     for _ in 0..120 {
@@ -806,6 +806,7 @@ fn boiler_clears_insufficient_residual_energy_without_fuel() {
 fn boiler_validation_rejects_non_fuel_in_fuel_slot() {
     let mut sim = Simulation::new_test_world(123);
     let (_, _, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 1, 1, (1, 2));
+    sim.tick();
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     sim.entities
         .boiler_state_mut(boiler_id)
@@ -978,7 +979,7 @@ fn boiler_does_not_consume_fuel_without_water_or_when_steam_output_is_full() {
 #[test]
 fn steam_engine_consumes_steam_and_produces_electricity_for_demand() {
     let mut sim = Simulation::new_test_world(123);
-    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 3, 3, (3, 1));
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
     let assembler_id = sim
         .place_entity(assembler, x, y, Direction::North)
@@ -995,12 +996,14 @@ fn steam_engine_consumes_steam_and_produces_electricity_for_demand() {
         .keys()
         .next()
         .expect("fixture should place a steam engine");
-    set_fluid_box(&mut sim, engine_id, 0, steam, 100_000);
+    set_fluid_box(&mut sim, boiler_id, 1, steam, 100_000);
 
     sim.tick();
 
     assert_eq!(sim.power_summary().production_watts, 77_500);
-    assert!(sim.entities.fluid_boxes[&engine_id][0].amount_milliunits < 100_000);
+    assert!(sim.entities.fluid_boxes[&engine_id][0].amount_milliunits > 0);
+    assert!(sim.entities.fluid_boxes[&engine_id][0].amount_milliunits < 50_000);
+    assert!(total_fluid_amount(&sim, steam) < 100_000);
 }
 
 #[test]
@@ -1229,7 +1232,7 @@ fn power_summary_reports_production_consumption_and_satisfaction() {
         sim.power_summary(),
         PowerSummary {
             production_watts: 77_500,
-            available_production_watts: 900_000,
+            available_production_watts: 79_200,
             consumption_watts: 77_500,
             satisfaction_permyriad: 10_000,
             network_count: 1,

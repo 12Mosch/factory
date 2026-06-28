@@ -29,6 +29,15 @@ pub enum PrototypeLoadError {
         owner: String,
         fluid: String,
     },
+    InvalidFluidBox {
+        entity: String,
+        box_index: usize,
+    },
+    InvalidFluidConnection {
+        entity: String,
+        box_index: usize,
+        connection_index: usize,
+    },
     MissingTechnologyPrerequisite {
         technology: String,
         prerequisite: String,
@@ -96,6 +105,20 @@ impl fmt::Display for PrototypeLoadError {
                     "prototype {owner:?} references missing fluid {fluid:?}"
                 )
             }
+            Self::InvalidFluidBox { entity, box_index } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid fluid box {box_index}"
+                )
+            }
+            Self::InvalidFluidConnection {
+                entity,
+                box_index,
+                connection_index,
+            } => write!(
+                formatter,
+                "entity {entity:?} has invalid fluid connection {connection_index} in fluid box {box_index}"
+            ),
             Self::MissingTechnologyPrerequisite {
                 technology,
                 prerequisite,

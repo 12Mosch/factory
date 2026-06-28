@@ -63,7 +63,7 @@ impl Simulation {
         }
 
         let engine_assignments =
-            self.assign_steam_engines_to_fluid_networks(&network_ids_by_entity);
+            self.assign_steam_engines_to_fluid_networks(&network_ids_by_entity, &networks);
         for assignment in engine_assignments.values() {
             let network = &mut networks[assignment.network_id as usize];
             network.producer_count += 1;
@@ -310,11 +310,17 @@ impl Simulation {
     fn assign_steam_engines_to_fluid_networks(
         &self,
         network_ids_by_entity: &BTreeMap<EntityId, u32>,
+        networks: &[NetworkAccumulator],
     ) -> BTreeMap<EntityId, SteamEngineAssignment> {
         let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
             .fluids
             .steam;
         let mut assignments = BTreeMap::new();
+        let mut remaining_demand_by_network = networks
+            .iter()
+            .enumerate()
+            .map(|(network_id, network)| (network_id as u32, network.consumption_watts))
+            .collect::<BTreeMap<_, _>>();
         let mut remaining_steam_by_network = self
             .fluid_networks
             .iter()
@@ -326,6 +332,12 @@ impl Simulation {
             let Some(network_id) = network_ids_by_entity.get(&engine_id).copied() else {
                 continue;
             };
+            let Some(remaining_demand) = remaining_demand_by_network.get_mut(&network_id) else {
+                continue;
+            };
+            if *remaining_demand == 0 {
+                continue;
+            }
             let Some(engine_prototype) = self.steam_engine_prototype(engine_id) else {
                 continue;
             };
@@ -345,8 +357,19 @@ impl Simulation {
                 continue;
             }
 
-            let steam_budget_milliunits =
-                (*remaining_steam).min(steam_consumption_per_tick_milliunits);
+            let demand_limited_output =
+                (*remaining_demand).min(engine_prototype.max_power_output_watts);
+            let demand_limited_steam_budget = steam_consumed_for_output(
+                demand_limited_output,
+                engine_prototype.max_power_output_watts,
+                steam_consumption_per_tick_milliunits,
+            );
+            let steam_budget_milliunits = (*remaining_steam)
+                .min(steam_consumption_per_tick_milliunits)
+                .min(demand_limited_steam_budget);
+            if steam_budget_milliunits == 0 {
+                continue;
+            }
             let available_power_output_watts = engine_prototype
                 .max_power_output_watts
                 .saturating_mul(steam_budget_milliunits)
@@ -355,6 +378,7 @@ impl Simulation {
                 continue;
             }
             *remaining_steam -= steam_budget_milliunits;
+            *remaining_demand = remaining_demand.saturating_sub(available_power_output_watts);
             assignments.insert(
                 engine_id,
                 SteamEngineAssignment {
