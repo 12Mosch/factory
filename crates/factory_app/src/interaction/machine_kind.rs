@@ -6,6 +6,7 @@ pub(crate) enum OpenMachineKind {
     Chest,
     BurnerDrill,
     Furnace,
+    Boiler,
     Assembler,
     Lab,
 }
@@ -16,6 +17,10 @@ pub(crate) fn is_burner_drill_entity(sim: &Simulation, entity_id: EntityId) -> b
 
 pub(crate) fn is_furnace_entity(sim: &Simulation, entity_id: EntityId) -> bool {
     open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Furnace)
+}
+
+pub(crate) fn is_boiler_entity(sim: &Simulation, entity_id: EntityId) -> bool {
+    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Boiler)
 }
 
 pub(crate) fn is_assembler_entity(sim: &Simulation, entity_id: EntityId) -> bool {
@@ -34,6 +39,8 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
         Some(OpenMachineKind::BurnerDrill)
     } else if prototype.entity_kind == EntityKind::Furnace && sim.furnace_state(entity_id).is_ok() {
         Some(OpenMachineKind::Furnace)
+    } else if prototype.entity_kind == EntityKind::Boiler && sim.boiler_state(entity_id).is_ok() {
+        Some(OpenMachineKind::Boiler)
     } else if prototype.entity_kind == EntityKind::AssemblingMachine
         && sim.assembler_state(entity_id).is_ok()
     {

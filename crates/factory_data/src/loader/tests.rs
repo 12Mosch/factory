@@ -4,11 +4,11 @@ use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
 use crate::ids::TechnologyId;
 use crate::model::{
-    AssemblingMachinePrototype, CraftingCategory, EntityKind, ItemAmount, TechnologyEffect,
-    UndergroundBeltPart,
+    AssemblingMachinePrototype, CraftingCategory, ElectricEnergySourcePrototype, EntityKind,
+    ItemAmount, TechnologyEffect, UndergroundBeltPart,
 };
 
-const ITEM_NAMES: [&str; 29] = [
+const ITEM_NAMES: [&str; 33] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -38,9 +38,13 @@ const ITEM_NAMES: [&str; 29] = [
     "express_splitter",
     "fast_inserter",
     "long_handed_inserter",
+    "small_electric_pole",
+    "steam_engine",
+    "boiler",
+    "offshore_pump",
 ];
 
-const RECIPE_NAMES: [&str; 19] = [
+const RECIPE_NAMES: [&str; 23] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -60,9 +64,13 @@ const RECIPE_NAMES: [&str; 19] = [
     "splitter",
     "fast_inserter",
     "long_handed_inserter",
+    "small_electric_pole",
+    "steam_engine",
+    "boiler",
+    "offshore_pump",
 ];
 
-const ENTITY_NAMES: [&str; 24] = [
+const ENTITY_NAMES: [&str; 28] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -87,6 +95,10 @@ const ENTITY_NAMES: [&str; 24] = [
     "express_splitter",
     "fast_inserter",
     "long_handed_inserter",
+    "small_electric_pole",
+    "steam_engine",
+    "boiler",
+    "offshore_pump",
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -96,9 +108,9 @@ const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 29);
-    assert_eq!(catalog.recipes.len(), 19);
-    assert_eq!(catalog.entities.len(), 24);
+    assert_eq!(catalog.items.len(), 33);
+    assert_eq!(catalog.recipes.len(), 23);
+    assert_eq!(catalog.entities.len(), 28);
     assert_eq!(catalog.tiles.len(), 3);
     assert_eq!(catalog.technologies.len(), 1);
 }
@@ -210,6 +222,13 @@ fn lab_entity_loads_inventory_slot_count() {
         .expect("base catalog should contain lab entity");
 
     assert_eq!(lab.inventory_slot_count, Some(16));
+    assert_eq!(
+        lab.electric_energy_source,
+        Some(ElectricEnergySourcePrototype {
+            energy_usage_watts: 60_000,
+            drain_watts: 0,
+        })
+    );
 }
 
 #[test]
@@ -297,6 +316,13 @@ fn assembling_machine_loads_metadata() {
             output_slot_count: 1,
         })
     );
+    assert_eq!(
+        assembler.electric_energy_source,
+        Some(ElectricEnergySourcePrototype {
+            energy_usage_watts: 75_000,
+            drain_watts: 2_500,
+        })
+    );
 }
 
 #[test]
@@ -309,15 +335,35 @@ fn inserter_variants_load_metadata() {
         expected_drop_offset,
         expected_pickup_ticks,
         expected_drop_ticks,
+        expected_energy_usage_watts,
+        expected_drain_watts,
     ) in [
-        ("inserter", IVec2::new(0, -1), IVec2::new(0, 1), 35, 35),
-        ("fast_inserter", IVec2::new(0, -1), IVec2::new(0, 1), 12, 12),
+        (
+            "inserter",
+            IVec2::new(0, -1),
+            IVec2::new(0, 1),
+            35,
+            35,
+            15_100,
+            400,
+        ),
+        (
+            "fast_inserter",
+            IVec2::new(0, -1),
+            IVec2::new(0, 1),
+            12,
+            12,
+            59_300,
+            500,
+        ),
         (
             "long_handed_inserter",
             IVec2::new(0, -2),
             IVec2::new(0, 2),
             25,
             25,
+            21_400,
+            400,
         ),
     ] {
         let item = catalog
@@ -341,7 +387,104 @@ fn inserter_variants_load_metadata() {
         assert_eq!(inserter.drop_offset, expected_drop_offset);
         assert_eq!(inserter.pickup_ticks, expected_pickup_ticks);
         assert_eq!(inserter.drop_ticks, expected_drop_ticks);
+        assert_eq!(
+            entity.electric_energy_source,
+            Some(ElectricEnergySourcePrototype {
+                energy_usage_watts: expected_energy_usage_watts,
+                drain_watts: expected_drain_watts,
+            })
+        );
     }
+}
+
+#[test]
+fn electricity_entities_load_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    let pole = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "small_electric_pole")
+        .expect("base catalog should contain small electric pole");
+    assert_eq!(pole.entity_kind, EntityKind::ElectricPole);
+    assert_eq!(pole.size, IVec2::new(1, 1));
+    let pole_metadata = pole
+        .electric_pole
+        .as_ref()
+        .expect("small electric pole should define pole metadata");
+    assert_eq!(pole_metadata.supply_area_tiles, IVec2::new(5, 5));
+    assert_eq!(pole_metadata.wire_reach_tiles_x2, 15);
+    assert!(pole.electric_energy_source.is_none());
+    assert!(pole.steam_engine.is_none());
+    assert!(pole.boiler.is_none());
+    assert!(pole.offshore_pump.is_none());
+    assert!(pole.burner.is_none());
+
+    let steam_engine = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "steam_engine")
+        .expect("base catalog should contain steam engine");
+    assert_eq!(steam_engine.entity_kind, EntityKind::SteamEngine);
+    assert_eq!(steam_engine.size, IVec2::new(3, 5));
+    let steam_engine_metadata = steam_engine
+        .steam_engine
+        .as_ref()
+        .expect("steam engine should define steam engine metadata");
+    assert_eq!(steam_engine_metadata.max_power_output_watts, 900_000);
+    assert_eq!(
+        steam_engine_metadata.steam_consumption_per_second_milliunits,
+        30_000
+    );
+    assert!(steam_engine.electric_energy_source.is_none());
+    assert!(steam_engine.electric_pole.is_none());
+    assert!(steam_engine.boiler.is_none());
+    assert!(steam_engine.offshore_pump.is_none());
+    assert!(steam_engine.burner.is_none());
+
+    let boiler = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "boiler")
+        .expect("base catalog should contain boiler");
+    assert_eq!(boiler.entity_kind, EntityKind::Boiler);
+    assert_eq!(boiler.size, IVec2::new(2, 3));
+    let boiler_burner = boiler
+        .burner
+        .as_ref()
+        .expect("boiler should define burner metadata");
+    assert_eq!(boiler_burner.energy_usage_watts, 1_800_000);
+    let boiler_metadata = boiler
+        .boiler
+        .as_ref()
+        .expect("boiler should define boiler metadata");
+    assert_eq!(
+        boiler_metadata.water_consumption_per_second_milliunits,
+        6_000
+    );
+    assert_eq!(boiler_metadata.steam_output_per_second_milliunits, 60_000);
+    assert!(boiler.electric_energy_source.is_none());
+    assert!(boiler.electric_pole.is_none());
+    assert!(boiler.steam_engine.is_none());
+    assert!(boiler.offshore_pump.is_none());
+
+    let pump = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "offshore_pump")
+        .expect("base catalog should contain offshore pump");
+    assert_eq!(pump.entity_kind, EntityKind::OffshorePump);
+    assert_eq!(pump.size, IVec2::new(2, 1));
+    let pump_metadata = pump
+        .offshore_pump
+        .as_ref()
+        .expect("offshore pump should define pump metadata");
+    assert_eq!(pump_metadata.pumping_speed_per_second_milliunits, 1_200_000);
+    assert!(pump.electric_energy_source.is_none());
+    assert!(pump.electric_pole.is_none());
+    assert!(pump.steam_engine.is_none());
+    assert!(pump.boiler.is_none());
+    assert!(pump.burner.is_none());
 }
 
 #[test]

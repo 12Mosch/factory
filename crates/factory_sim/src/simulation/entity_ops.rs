@@ -77,7 +77,7 @@ impl Simulation {
             .filter(|prototype| prototype.id == prototype_id)
             .ok_or(BuildError::MissingPrototype(prototype_id))?;
         self.world
-            .validate_entity_footprint_for_prototype(prototype, &footprint)?;
+            .validate_entity_footprint_for_prototype(prototype, &footprint, direction)?;
         self.validate_footprint_clear_of_player(&footprint)?;
         self.entities
             .occupancy
@@ -102,10 +102,15 @@ impl Simulation {
         let furnace = furnace_state_for_prototype(prototype);
         let assembling_machine = assembling_machine_state_for_prototype(prototype);
         let lab = lab_state_for_prototype(prototype);
+        let electric_pole = electric_pole_state_for_prototype(prototype);
+        let electric_consumer = electric_consumer_state_for_prototype(prototype);
+        let steam_engine = steam_engine_state_for_prototype(prototype);
+        let boiler = boiler_state_for_prototype(prototype);
+        let offshore_pump = offshore_pump_state_for_prototype(prototype);
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
         let splitter = splitter_state_for_prototype(prototype, direction);
         let inserter = inserter_state_for_prototype(prototype);
-        Ok(self.entities.reserve_entity(EntityReservation {
+        let entity_id = self.entities.reserve_entity(EntityReservation {
             prototype_id,
             x,
             y,
@@ -116,10 +121,17 @@ impl Simulation {
             furnace,
             assembling_machine,
             lab,
+            electric_pole,
+            electric_consumer,
+            steam_engine,
+            boiler,
+            offshore_pump,
             transport_belt,
             splitter,
             inserter,
-        }))
+        });
+        self.invalidate_power_state();
+        Ok(entity_id)
     }
 
     pub fn rotate_entity(
@@ -144,17 +156,23 @@ impl Simulation {
             .ok_or(BuildError::MissingPrototype(entity.prototype_id))?;
 
         self.world
-            .validate_entity_footprint_for_prototype(prototype, &footprint)?;
+            .validate_entity_footprint_for_prototype(prototype, &footprint, direction)?;
         self.validate_footprint_clear_of_player(&footprint)?;
         self.entities
             .occupancy
             .validate_available(&footprint, Some(entity_id))?;
         self.entities
-            .update_entity_footprint(entity_id, direction, footprint)
+            .update_entity_footprint(entity_id, direction, footprint)?;
+        self.invalidate_power_state();
+        Ok(())
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId) -> Option<PlacedEntity> {
-        self.entities.remove_placed_entity(entity_id)
+        let removed = self.entities.remove_placed_entity(entity_id);
+        if removed.is_some() {
+            self.invalidate_power_state();
+        }
+        removed
     }
 
     pub fn destroy_entity_to_player_inventory(
@@ -191,6 +209,7 @@ impl Simulation {
             .expect("validated placed entity should still be removable");
         self.player_inventory = player_inventory;
         self.manual_mining_progress = None;
+        self.invalidate_power_state();
 
         Ok(removed)
     }
@@ -216,6 +235,9 @@ impl Simulation {
             push_optional_stack(&mut stacks, state.input_slot);
             push_optional_stack(&mut stacks, state.energy.fuel_slot);
             push_optional_stack(&mut stacks, state.output_slot);
+        }
+        if let Some(state) = self.entities.boilers.get(&placed.id) {
+            push_optional_stack(&mut stacks, state.energy.fuel_slot);
         }
         if let Some(state) = self.entities.assembling_machines.get(&placed.id) {
             push_inventory_stacks(&mut stacks, &state.input_inventory);
@@ -433,6 +455,10 @@ impl Simulation {
         self.entities.furnace_state(entity_id)
     }
 
+    pub fn boiler_state(&self, entity_id: EntityId) -> Result<&BoilerState, BoilerError> {
+        self.entities.boiler_state(entity_id)
+    }
+
     pub fn belt_segment(&self, entity_id: EntityId) -> Result<&BeltSegment, BeltError> {
         self.entities.belt_segment(entity_id)
     }
@@ -594,6 +620,66 @@ impl Simulation {
         self.player_inventory
             .insert(&self.world.prototypes, stack.item_id, stack.count)
             .map_err(FurnaceError::from)
+    }
+
+    pub fn transfer_player_slot_to_boiler_fuel(
+        &mut self,
+        entity_id: EntityId,
+        player_slot_index: usize,
+    ) -> Result<(), BoilerError> {
+        let stack = self
+            .player_inventory
+            .slots
+            .get(player_slot_index)
+            .ok_or(BoilerError::InvalidSlot {
+                slot_index: player_slot_index,
+            })?
+            .ok_or(BoilerError::EmptySlot {
+                slot_index: player_slot_index,
+            })?;
+
+        if fuel_value_joules(&self.world.prototypes, stack.item_id).is_none() {
+            return Err(BoilerError::InvalidFuel(stack.item_id));
+        }
+
+        let state = self.entities.boiler_state(entity_id)?;
+        if !burner_fuel_slot_can_accept(&self.world.prototypes, state.energy.fuel_slot, stack) {
+            return Err(BoilerError::InsufficientSpace);
+        }
+
+        self.player_inventory.slots[player_slot_index] = None;
+        let state = self.entities.boiler_state_mut(entity_id)?;
+        insert_into_single_slot(&mut state.energy.fuel_slot, stack);
+        self.invalidate_power_state();
+
+        Ok(())
+    }
+
+    pub fn transfer_boiler_fuel_to_player(
+        &mut self,
+        entity_id: EntityId,
+    ) -> Result<(), BoilerError> {
+        let stack = self
+            .entities
+            .boiler_state(entity_id)?
+            .energy
+            .fuel_slot
+            .ok_or(BoilerError::EmptySlot {
+                slot_index: BOILER_FUEL_SLOT_INDEX,
+            })?;
+        if !self
+            .player_inventory
+            .can_insert(&self.world.prototypes, stack.item_id, stack.count)
+        {
+            return Err(BoilerError::InsufficientSpace);
+        }
+
+        self.entities.boiler_state_mut(entity_id)?.energy.fuel_slot = None;
+        self.player_inventory
+            .insert(&self.world.prototypes, stack.item_id, stack.count)
+            .map_err(BoilerError::from)?;
+        self.invalidate_power_state();
+        Ok(())
     }
 
     pub fn assembler_state(

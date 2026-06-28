@@ -27,12 +27,14 @@ pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_FUEL_SLOT_INDEX: usize = 0;
 pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
+pub const BOILER_FUEL_SLOT_INDEX: usize = 0;
 pub const ASSEMBLING_MACHINE_INPUT_SLOT_COUNT: usize = 4;
 pub const ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT: usize = 1;
 pub const BELT_SUBTILES_PER_TILE: u16 = 256;
 pub const BELT_ITEM_SPACING_SUBTILES: u16 = 64;
 pub const BASIC_INSERTER_PICKUP_TICKS: u32 = 35;
 pub const BASIC_INSERTER_DROP_TICKS: u32 = 35;
+pub const POWER_SATISFACTION_FULL_PERMYRIAD: u32 = 10_000;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 
 #[derive(
@@ -145,6 +147,9 @@ pub struct Simulation {
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
     pub research: ResearchState,
+    power_summary: PowerSummary,
+    power_networks: Vec<PowerNetworkSnapshot>,
+    entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -258,6 +263,54 @@ pub struct LabState {
     pub active_technology: Option<TechnologyId>,
     pub progress_ticks: u32,
     pub required_ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ElectricPoleState;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ElectricConsumerState {
+    pub work_remainder_permyriad: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct SteamEngineState;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct BoilerState {
+    pub energy: BurnerEnergy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct OffshorePumpState;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PowerSummary {
+    pub production_watts: u64,
+    pub available_production_watts: u64,
+    pub consumption_watts: u64,
+    pub satisfaction_permyriad: u32,
+    pub network_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PowerNetworkSnapshot {
+    pub network_id: u32,
+    pub pole_count: usize,
+    pub producer_count: usize,
+    pub consumer_count: usize,
+    pub production_watts: u64,
+    pub available_production_watts: u64,
+    pub consumption_watts: u64,
+    pub satisfaction_permyriad: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct EntityPowerStatus {
+    pub network_id: Option<u32>,
+    pub satisfaction_permyriad: u32,
+    pub active_usage_watts: u64,
+    pub drain_watts: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -395,6 +448,17 @@ pub enum FurnaceError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoilerError {
+    MissingEntity(EntityId),
+    NotBoiler(EntityId),
+    InvalidFuel(ItemId),
+    InvalidSlot { slot_index: usize },
+    EmptySlot { slot_index: usize },
+    InsufficientSpace,
+    UnknownItem,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssemblerError {
     MissingEntity(EntityId),
     NotAssembler(EntityId),
@@ -444,6 +508,11 @@ pub struct EntityStore {
     furnaces: BTreeMap<EntityId, FurnaceState>,
     assembling_machines: BTreeMap<EntityId, AssemblingMachineState>,
     labs: BTreeMap<EntityId, LabState>,
+    electric_poles: BTreeMap<EntityId, ElectricPoleState>,
+    electric_consumers: BTreeMap<EntityId, ElectricConsumerState>,
+    steam_engines: BTreeMap<EntityId, SteamEngineState>,
+    boilers: BTreeMap<EntityId, BoilerState>,
+    offshore_pumps: BTreeMap<EntityId, OffshorePumpState>,
     transport_belts: BTreeMap<EntityId, BeltSegment>,
     splitters: BTreeMap<EntityId, SplitterState>,
     inserters: BTreeMap<EntityId, InserterState>,
@@ -491,6 +560,11 @@ struct EntityReservation {
     furnace: Option<FurnaceState>,
     assembling_machine: Option<AssemblingMachineState>,
     lab: Option<LabState>,
+    electric_pole: Option<ElectricPoleState>,
+    electric_consumer: Option<ElectricConsumerState>,
+    steam_engine: Option<SteamEngineState>,
+    boiler: Option<BoilerState>,
+    offshore_pump: Option<OffshorePumpState>,
     transport_belt: Option<BeltSegment>,
     splitter: Option<SplitterState>,
     inserter: Option<InserterState>,
@@ -677,6 +751,7 @@ mod generation;
 mod inventory_ops;
 mod machine_ops;
 mod player_ops;
+mod power_ops;
 mod profiling;
 mod research_ops;
 mod save;

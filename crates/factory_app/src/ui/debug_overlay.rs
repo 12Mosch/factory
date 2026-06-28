@@ -1,6 +1,6 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
-use factory_sim::SimulationCounts;
+use factory_sim::{PowerSummary, SimulationCounts};
 use std::time::Duration;
 
 use crate::resources::{RenderSyncStats, SimProfileStats, SimResource, UpsStats};
@@ -66,6 +66,7 @@ pub(crate) fn update_debug_overlay(
         sim_profile: &sim_profile,
         render_sync: &render_sync,
         counts,
+        power: sim.sim.power_summary(),
     });
 
     for mut text in &mut overlay {
@@ -81,6 +82,7 @@ pub struct DebugOverlaySnapshot<'a> {
     pub sim_profile: &'a SimProfileStats,
     pub render_sync: &'a RenderSyncStats,
     pub counts: SimulationCounts,
+    pub power: PowerSummary,
 }
 
 pub fn format_debug_overlay(snapshot: DebugOverlaySnapshot<'_>) -> String {
@@ -98,6 +100,7 @@ Belt items: {}
 Machines: {}
 Inserters: {}
 Machines active/idle: {}/{}
+Power: production {}, consumption {}, satisfaction {:.1}%
 Phases: belts {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync {}",
         snapshot.tick,
         snapshot.ups,
@@ -112,6 +115,9 @@ Phases: belts {}, machines {}, inserters {}, inventory transfers {}, chunk looku
         snapshot.counts.inserter_count,
         snapshot.counts.active_machines,
         snapshot.counts.idle_machines,
+        format_watts(snapshot.power.production_watts),
+        format_watts(snapshot.power.consumption_watts),
+        f64::from(snapshot.power.satisfaction_permyriad) / 100.0,
         format_duration_ms(snapshot.sim_profile.last_tick.belts),
         format_duration_ms(snapshot.sim_profile.last_tick.machines),
         format_duration_ms(snapshot.sim_profile.last_tick.inserters),
@@ -129,6 +135,16 @@ fn format_optional(value: Option<f64>, suffix: &str, decimals: usize) -> String 
     match value {
         Some(value) => format!("{value:.decimals$}{suffix}"),
         None => "n/a".to_string(),
+    }
+}
+
+pub fn format_watts(watts: u64) -> String {
+    if watts >= 1_000_000 {
+        format!("{:.2} MW", watts as f64 / 1_000_000.0)
+    } else if watts >= 1_000 {
+        format!("{:.1} kW", watts as f64 / 1_000.0)
+    } else {
+        format!("{watts} W")
     }
 }
 
@@ -171,6 +187,13 @@ mod tests {
                 active_machines: 2,
                 idle_machines: 3,
             },
+            power: PowerSummary {
+                production_watts: 900_000,
+                available_production_watts: 900_000,
+                consumption_watts: 75_000,
+                satisfaction_permyriad: 10_000,
+                network_count: 1,
+            },
         });
 
         for label in [
@@ -185,6 +208,7 @@ mod tests {
             "Machines:",
             "Inserters:",
             "Machines active/idle:",
+            "Power:",
             "belts",
             "machines",
             "inserters",
@@ -196,5 +220,12 @@ mod tests {
         }
         assert!(!text.contains("Item:"));
         assert!(!text.contains("Count:"));
+    }
+
+    #[test]
+    fn watts_format_uses_compact_units() {
+        assert_eq!(format_watts(400), "400 W");
+        assert_eq!(format_watts(15_100), "15.1 kW");
+        assert_eq!(format_watts(1_800_000), "1.80 MW");
     }
 }

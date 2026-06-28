@@ -29,6 +29,10 @@
         (id: 26, name: "express_splitter", stack_size: 50),
         (id: 27, name: "fast_inserter", stack_size: 50),
         (id: 28, name: "long_handed_inserter", stack_size: 50),
+        (id: 29, name: "small_electric_pole", stack_size: 50),
+        (id: 30, name: "steam_engine", stack_size: 10),
+        (id: 31, name: "boiler", stack_size: 50),
+        (id: 32, name: "offshore_pump", stack_size: 20),
     ],
     recipes: [
         (
@@ -223,6 +227,52 @@
             ],
             products: [(item: "long_handed_inserter", amount: 1)],
         ),
+        (
+            id: 19,
+            name: "small_electric_pole",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "iron_plate", amount: 1),
+                (item: "copper_cable", amount: 2),
+            ],
+            products: [(item: "small_electric_pole", amount: 1)],
+        ),
+        (
+            id: 20,
+            name: "steam_engine",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "iron_plate", amount: 10),
+                (item: "iron_gear_wheel", amount: 8),
+                (item: "steel_plate", amount: 5),
+            ],
+            products: [(item: "steam_engine", amount: 1)],
+        ),
+        (
+            id: 21,
+            name: "boiler",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "stone_furnace", amount: 1),
+                (item: "iron_plate", amount: 4),
+            ],
+            products: [(item: "boiler", amount: 1)],
+        ),
+        (
+            id: 22,
+            name: "offshore_pump",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "iron_plate", amount: 2),
+                (item: "iron_gear_wheel", amount: 1),
+                (item: "electronic_circuit", amount: 2),
+            ],
+            products: [(item: "offshore_pump", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -273,6 +323,7 @@
                 input_slot_count: 4,
                 output_slot_count: 1,
             )),
+            electric_energy_source: Some((energy_usage_watts: 75000, drain_watts: 2500)),
         ),
         (
             id: 6,
@@ -286,6 +337,7 @@
                 pickup_ticks: 35,
                 drop_ticks: 35,
             )),
+            electric_energy_source: Some((energy_usage_watts: 15100, drain_watts: 400)),
         ),
         (
             id: 7,
@@ -313,6 +365,7 @@
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
             inventory_slot_count: Some(16),
+            electric_energy_source: Some((energy_usage_watts: 60000, drain_watts: 0)),
         ),
         (
             id: 10,
@@ -450,6 +503,7 @@
                 pickup_ticks: 12,
                 drop_ticks: 12,
             )),
+            electric_energy_source: Some((energy_usage_watts: 59300, drain_watts: 500)),
         ),
         (
             id: 23,
@@ -462,6 +516,51 @@
                 drop_offset: (x: 0, y: 2),
                 pickup_ticks: 25,
                 drop_ticks: 25,
+            )),
+            electric_energy_source: Some((energy_usage_watts: 21400, drain_watts: 400)),
+        ),
+        (
+            id: 24,
+            name: "small_electric_pole",
+            entity_kind: ElectricPole,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            electric_pole: Some((
+                supply_area_tiles: (x: 5, y: 5),
+                wire_reach_tiles_x2: 15,
+            )),
+        ),
+        (
+            id: 25,
+            name: "steam_engine",
+            entity_kind: SteamEngine,
+            size: (x: 3, y: 5),
+            collision_mask: (layers: ["ground", "building"]),
+            steam_engine: Some((
+                max_power_output_watts: 900000,
+                steam_consumption_per_second_milliunits: 30000,
+            )),
+        ),
+        (
+            id: 26,
+            name: "boiler",
+            entity_kind: Boiler,
+            size: (x: 2, y: 3),
+            collision_mask: (layers: ["ground", "building"]),
+            burner: Some((energy_usage_watts: 1800000)),
+            boiler: Some((
+                water_consumption_per_second_milliunits: 6000,
+                steam_output_per_second_milliunits: 60000,
+            )),
+        ),
+        (
+            id: 27,
+            name: "offshore_pump",
+            entity_kind: OffshorePump,
+            size: (x: 2, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            offshore_pump: Some((
+                pumping_speed_per_second_milliunits: 1200000,
             )),
         ),
     ],

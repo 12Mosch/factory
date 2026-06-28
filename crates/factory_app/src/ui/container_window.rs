@@ -5,7 +5,9 @@ use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::{OpenContainer, SimResource};
 use crate::ui::assembler_panel::spawn_assembler_panel;
 use crate::ui::inventory_panel::{InventoryPanel, spawn_player_inventory_panel, spawn_slot_button};
-use crate::ui::machine_indicators::{spawn_burner_drill_panel, spawn_furnace_panel};
+use crate::ui::machine_indicators::{
+    spawn_boiler_panel, spawn_burner_drill_panel, spawn_furnace_panel,
+};
 
 #[derive(Component)]
 pub(crate) struct ContainerWindowRoot {
@@ -72,6 +74,7 @@ pub(crate) fn sync_container_window(
                 OpenMachineKind::Chest => spawn_chest_panel(root),
                 OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
                 OpenMachineKind::Furnace => spawn_furnace_panel(root),
+                OpenMachineKind::Boiler => spawn_boiler_panel(root),
                 OpenMachineKind::Assembler => {
                     let state = sim
                         .sim

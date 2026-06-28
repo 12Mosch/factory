@@ -528,6 +528,436 @@ fn assembler_crafts_gears_from_iron_plates() {
 }
 
 #[test]
+fn unpowered_assembler_does_not_craft() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 3);
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..90 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.input_inventory.count(iron_plate), 2);
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
+    assert_eq!(state.crafting_progress_ticks, 0);
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+}
+
+#[test]
+fn powered_assembler_crafts() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
+}
+
+#[test]
+fn insufficient_power_slows_machine_progress() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let assembler = entity_id_by_name(&catalog, "assembling_machine");
+    catalog.entities[assembler.index()]
+        .electric_energy_source
+        .as_mut()
+        .expect("assembler should have electric energy source")
+        .energy_usage_watts = 1_797_500;
+    let mut sim = Simulation::new(123, catalog);
+    let assembler_id = place_assembling_machine(&mut sim);
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.crafting_progress_ticks, 30);
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .satisfaction_permyriad,
+        5_000
+    );
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
+}
+
+#[test]
+fn disconnected_networks_do_not_share_power() {
+    let mut sim = Simulation::new_test_world(123);
+    let _ = place_powered_fixture_origin(&mut sim, 1, 1, (1, 2));
+    let assembler_id = place_disconnected_assembler_network(&mut sim);
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..90 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+    assert!(sim.power_summary().network_count >= 2);
+}
+
+#[test]
+fn small_pole_coverage_connects_nearby_machine_and_wire_reach_connects_networks() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+
+    sim.tick();
+
+    let status = sim
+        .entity_power_status(assembler_id)
+        .expect("assembler should report power status");
+    assert_eq!(status.network_id, Some(0));
+    assert_eq!(sim.power_networks().len(), 1);
+    assert_eq!(sim.power_networks()[0].pole_count, 2);
+}
+
+#[test]
+fn pole_networks_outside_reach_do_not_connect() {
+    let mut sim = Simulation::new_test_world(123);
+    let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+    sim.place_entity(pole, x, y, Direction::North)
+        .expect("first pole should be placeable");
+
+    for (candidate_x, candidate_y) in all_tile_coords(&sim.world) {
+        if !poles_within_small_pole_reach((x, y), (candidate_x, candidate_y))
+            && sim
+                .can_place_entity(pole, candidate_x, candidate_y, Direction::North)
+                .is_ok()
+        {
+            sim.place_entity(pole, candidate_x, candidate_y, Direction::North)
+                .expect("second pole should be placeable");
+            sim.tick();
+            assert_eq!(sim.power_summary().network_count, 2);
+            return;
+        }
+    }
+
+    panic!("expected a second pole location outside wire reach");
+}
+
+#[test]
+fn steam_engine_produces_only_with_connected_pole_and_adjacent_fueled_boiler() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+
+    let summary = sim.power_summary();
+    assert_eq!(summary.available_production_watts, 900_000);
+    assert_eq!(summary.production_watts, 77_500);
+    assert_eq!(summary.consumption_watts, 77_500);
+    assert_eq!(summary.satisfaction_permyriad, 10_000);
+}
+
+#[test]
+fn boiler_does_not_burn_fuel_without_steam_demand() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, _, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 1, 1, (1, 2));
+    let before = sim.boiler_state(boiler_id).unwrap().clone();
+
+    for _ in 0..120 {
+        sim.tick();
+    }
+
+    let after = sim.boiler_state(boiler_id).unwrap();
+    assert_eq!(after.energy.fuel_slot, before.energy.fuel_slot);
+    assert_eq!(
+        after.energy.energy_remaining_joules.to_bits(),
+        before.energy.energy_remaining_joules.to_bits()
+    );
+    assert_eq!(sim.power_summary().production_watts, 0);
+}
+
+#[test]
+fn boiler_clears_insufficient_residual_energy_without_fuel() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 3, 3, (3, 1));
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    add_assembler_gear_job(&mut sim, assembler_id);
+    let state = sim
+        .entities
+        .boiler_state_mut(boiler_id)
+        .expect("boiler should exist");
+    state.energy.fuel_slot = None;
+    state.energy.energy_remaining_joules = 1.0;
+
+    sim.tick();
+
+    let state = sim.boiler_state(boiler_id).unwrap();
+    assert_eq!(state.energy.fuel_slot, None);
+    assert_eq!(state.energy.energy_remaining_joules, 0.0);
+}
+
+#[test]
+fn boiler_validation_rejects_non_fuel_in_fuel_slot() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, _, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 1, 1, (1, 2));
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.entities
+        .boiler_state_mut(boiler_id)
+        .expect("boiler should exist")
+        .energy
+        .fuel_slot = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidMachineItem {
+            entity_id: boiler_id,
+            item_id: iron_ore,
+        })
+    );
+}
+
+#[test]
+fn boiler_with_no_water_or_no_fuel_produces_no_steam_power() {
+    let mut no_fuel = Simulation::new_test_world(123);
+    let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut no_fuel, 3, 3, (3, 1));
+    no_fuel
+        .entities
+        .boiler_state_mut(boiler_id)
+        .expect("boiler should exist")
+        .energy
+        .fuel_slot = None;
+    let assembler = entity_id_by_name(&no_fuel.world.prototypes, "assembling_machine");
+    let assembler_id = no_fuel
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    add_assembler_gear_job(&mut no_fuel, assembler_id);
+    no_fuel.tick();
+    assert_eq!(no_fuel.power_summary().available_production_watts, 0);
+
+    let mut no_water = Simulation::new_test_world(123);
+    let (x, y, _) = place_powered_fixture_origin_with_boiler(&mut no_water, 3, 3, (3, 1));
+    let pump_id = *no_water
+        .entities
+        .offshore_pumps
+        .keys()
+        .next()
+        .expect("fixture should place an offshore pump");
+    no_water
+        .remove_entity(pump_id)
+        .expect("offshore pump should be removable");
+    let assembler = entity_id_by_name(&no_water.world.prototypes, "assembling_machine");
+    let assembler_id = no_water
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    add_assembler_gear_job(&mut no_water, assembler_id);
+    no_water.tick();
+    assert_eq!(no_water.power_summary().available_production_watts, 0);
+}
+
+#[test]
+fn offshore_pump_placement_succeeds_on_shoreline_and_fails_away_from_water() {
+    let mut sim = Simulation::new_test_world(123);
+    let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
+    let (shore_x, shore_y) = first_placeable_offshore_pump(&sim, pump);
+    sim.place_entity(pump, shore_x, shore_y, Direction::North)
+        .expect("offshore pump should place on shoreline");
+
+    let away = first_buildable_offshore_pump_footprint_away_from_water(&sim, pump);
+    assert!(matches!(
+        sim.can_place_entity(pump, away.0, away.1, Direction::North),
+        Err(BuildError::TileBlocked { .. })
+    ));
+}
+
+#[test]
+fn inserter_does_not_move_without_electricity() {
+    let mut sim = Simulation::new_test_world(123);
+    let (chest_id, inserter_id, furnace_id) = place_unpowered_chest_inserter_furnace_line(&mut sim);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.entity_inventory_mut(chest_id)
+        .expect("chest should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) * 2 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.entity_inventory(chest_id).unwrap().count(iron_ore), 1);
+    assert_eq!(sim.furnace_state(furnace_id).unwrap().input_slot, None);
+    assert_eq!(
+        sim.entity_power_status(inserter_id)
+            .expect("inserter should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+}
+
+#[test]
+fn lab_does_not_research_without_electricity() {
+    let mut sim = Simulation::new_test_world(123);
+    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 3);
+    let lab_id = sim
+        .place_entity(lab, x, y, Direction::North)
+        .expect("lab should be placeable");
+    sim.select_research(automation)
+        .expect("automation should be selectable");
+    sim.entity_inventory_mut(lab_id)
+        .expect("lab should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: science_pack,
+        count: 10,
+    });
+
+    for _ in 0..1_200 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.technology_progress(automation), Some(0));
+    assert_eq!(
+        sim.entity_power_status(lab_id)
+            .expect("lab should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+}
+
+#[test]
+fn power_summary_reports_production_consumption_and_satisfaction() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+
+    assert_eq!(
+        sim.power_summary(),
+        PowerSummary {
+            production_watts: 77_500,
+            available_production_watts: 900_000,
+            consumption_watts: 77_500,
+            satisfaction_permyriad: 10_000,
+            network_count: 1,
+        }
+    );
+}
+
+#[test]
+fn save_load_preserves_state_hash_after_electricity_entities_exist() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+    for _ in 0..17 {
+        sim.tick();
+    }
+
+    let before = sim.state_hash();
+    let bytes = save_to_bytes(&sim).expect("electricity sim should save");
+    let loaded = load_from_bytes(&bytes).expect("electricity sim should load");
+
+    assert_eq!(before, loaded.state_hash());
+}
+
+#[test]
 fn assembler_blocks_without_inputs() {
     let mut sim = Simulation::new_test_world(123);
     let assembler_id = place_assembling_machine(&mut sim);
@@ -1728,7 +2158,7 @@ fn counts_report_entities_chunks_belts_items_machines_and_inserters() {
         .expect("empty belt should accept one item");
 
     let counts = sim.counts();
-    assert_eq!(counts.entity_count, 4);
+    assert_eq!(counts.entity_count, 9);
     assert_eq!(counts.chunk_count, 25);
     assert_eq!(counts.belt_count, 1);
     assert_eq!(counts.belt_item_count, 1);
@@ -3119,7 +3549,7 @@ fn inserter_uses_rotated_direction_for_pickup_and_drop() {
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 4, 2, (1, 2));
 
     let chest_id = sim
         .place_entity(chest, x, y, Direction::North)
@@ -3179,7 +3609,7 @@ fn inserter_uses_rotated_direction_for_pickup_and_drop() {
 fn fast_inserter_transfers_faster_than_basic() {
     let mut sim = Simulation::new_test_world(123);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 5);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 4, 5, (1, 2));
 
     let (basic_source, _basic_inserter, basic_target) =
         place_chest_inserter_furnace_line_at(&mut sim, "inserter", x, y);
@@ -4018,7 +4448,7 @@ fn place_stone_furnace(sim: &mut Simulation) -> EntityId {
 
 fn place_assembling_machine(sim: &mut Simulation) -> EntityId {
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let (x, y) = first_buildable_rect(&sim.world, 3, 3);
+    let (x, y) = place_powered_fixture_origin(sim, 3, 3, (3, 1));
     sim.place_entity(assembler, x, y, Direction::North)
         .expect("assembling machine should be placeable")
 }
@@ -4332,17 +4762,205 @@ fn first_buildable_rect_without_resource(world: &WorldSim, width: i32, height: i
     panic!("expected buildable area without resources");
 }
 
-fn place_lab(sim: &mut Simulation) -> EntityId {
-    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+fn place_powered_fixture_origin(
+    sim: &mut Simulation,
+    fixture_width: i32,
+    fixture_height: i32,
+    pole_offset: (i32, i32),
+) -> (i32, i32) {
+    let (x, y, _) =
+        place_powered_fixture_origin_with_boiler(sim, fixture_width, fixture_height, pole_offset);
+    (x, y)
+}
+
+fn place_powered_fixture_origin_with_boiler(
+    sim: &mut Simulation,
+    fixture_width: i32,
+    fixture_height: i32,
+    pole_offset: (i32, i32),
+) -> (i32, i32, EntityId) {
+    let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
+    let boiler = entity_id_by_name(&sim.world.prototypes, "boiler");
+    let steam_engine = entity_id_by_name(&sim.world.prototypes, "steam_engine");
+    let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
+    let coal = item_id(&sim.world.prototypes, "coal");
+
     for (x, y) in all_tile_coords(&sim.world) {
-        if sim.can_place_entity(lab, x, y, Direction::North).is_ok() {
-            return sim
-                .place_entity(lab, x, y, Direction::North)
-                .expect("validated lab target should be placeable");
+        let fixture_x = x + 8;
+        let fixture_y = y + 1;
+        let source_pole = (x + 5, y + 4);
+        let target_pole = (fixture_x + pole_offset.0, fixture_y + pole_offset.1);
+        let fixture = EntityFootprint {
+            x: fixture_x,
+            y: fixture_y,
+            width: fixture_width,
+            height: fixture_height,
+        };
+
+        if !fixture_is_clear_buildable(sim, &fixture)
+            || !poles_within_small_pole_reach(source_pole, target_pole)
+            || sim.can_place_entity(pump, x, y, Direction::North).is_err()
+            || sim
+                .can_place_entity(boiler, x, y + 1, Direction::North)
+                .is_err()
+            || sim
+                .can_place_entity(steam_engine, x + 2, y + 1, Direction::North)
+                .is_err()
+            || sim
+                .can_place_entity(pole, source_pole.0, source_pole.1, Direction::North)
+                .is_err()
+            || sim
+                .can_place_entity(pole, target_pole.0, target_pole.1, Direction::North)
+                .is_err()
+        {
+            continue;
+        }
+
+        sim.place_entity(pump, x, y, Direction::North)
+            .expect("validated offshore pump fixture should be placeable");
+        let boiler_id = sim
+            .place_entity(boiler, x, y + 1, Direction::North)
+            .expect("validated boiler fixture should be placeable");
+        sim.place_entity(steam_engine, x + 2, y + 1, Direction::North)
+            .expect("validated steam engine fixture should be placeable");
+        sim.place_entity(pole, source_pole.0, source_pole.1, Direction::North)
+            .expect("validated source pole fixture should be placeable");
+        sim.place_entity(pole, target_pole.0, target_pole.1, Direction::North)
+            .expect("validated target pole fixture should be placeable");
+        sim.entities
+            .boiler_state_mut(boiler_id)
+            .expect("placed boiler should expose boiler state")
+            .energy
+            .fuel_slot = Some(ItemStack {
+            item_id: coal,
+            count: 50,
+        });
+
+        return (fixture_x, fixture_y, boiler_id);
+    }
+
+    panic!("expected powered fixture area");
+}
+
+fn fixture_is_clear_buildable(sim: &Simulation, footprint: &EntityFootprint) -> bool {
+    footprint.tiles().into_iter().all(|(x, y)| {
+        sim.world
+            .tile_at(x, y)
+            .is_some_and(|tile| tile.collision.buildable && tile.resource.is_none())
+            && sim.entities.occupancy().entity_at(x, y).is_none()
+    })
+}
+
+fn poles_within_small_pole_reach(first: (i32, i32), second: (i32, i32)) -> bool {
+    let dx_x2 = i64::from((first.0 - second.0) * 2);
+    let dy_x2 = i64::from((first.1 - second.1) * 2);
+    dx_x2 * dx_x2 + dy_x2 * dy_x2 <= 15 * 15
+}
+
+fn place_disconnected_assembler_network(sim: &mut Simulation) -> EntityId {
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
+
+    for (x, y) in all_tile_coords(&sim.world) {
+        let pole_pos = (x + 3, y + 1);
+        if sim
+            .can_place_entity(assembler, x, y, Direction::North)
+            .is_err()
+            || sim
+                .can_place_entity(pole, pole_pos.0, pole_pos.1, Direction::North)
+                .is_err()
+            || !pole_is_disconnected_from_existing_poles(sim, pole_pos)
+        {
+            continue;
+        }
+
+        let pole_id = sim
+            .place_entity(pole, pole_pos.0, pole_pos.1, Direction::North)
+            .expect("validated disconnected pole should be placeable");
+        debug_assert!(sim.entities.electric_poles.contains_key(&pole_id));
+        return sim
+            .place_entity(assembler, x, y, Direction::North)
+            .expect("validated disconnected assembler should be placeable");
+    }
+
+    panic!("expected disconnected assembler network fixture");
+}
+
+fn add_assembler_gear_job(sim: &mut Simulation, assembler_id: EntityId) {
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("gear recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+}
+
+fn first_placeable_offshore_pump(sim: &Simulation, pump: EntityPrototypeId) -> (i32, i32) {
+    all_tile_coords(&sim.world)
+        .into_iter()
+        .find(|(x, y)| sim.can_place_entity(pump, *x, *y, Direction::North).is_ok())
+        .expect("expected placeable offshore pump shoreline")
+}
+
+fn first_buildable_offshore_pump_footprint_away_from_water(
+    sim: &Simulation,
+    pump: EntityPrototypeId,
+) -> (i32, i32) {
+    let prototype = &sim.world.prototypes.entities[pump.index()];
+    for (x, y) in all_tile_coords(&sim.world) {
+        let footprint =
+            EntityFootprint::from_size(x, y, prototype.size.x, prototype.size.y, Direction::North);
+        if sim.world.validate_entity_footprint(&footprint).is_err()
+            || sim
+                .entities
+                .occupancy()
+                .validate_available(&footprint, None)
+                .is_err()
+        {
+            continue;
+        }
+        let north_edge_is_water = (x..x + footprint.width).any(|tile_x| {
+            sim.world
+                .tile_at(tile_x, y - 1)
+                .is_some_and(|tile| !tile.collision.walkable && !tile.collision.buildable)
+        });
+        if !north_edge_is_water {
+            return (x, y);
         }
     }
 
-    panic!("expected placeable lab area");
+    panic!("expected buildable offshore pump footprint away from water");
+}
+
+fn place_unpowered_chest_inserter_furnace_line(
+    sim: &mut Simulation,
+) -> (EntityId, EntityId, EntityId) {
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    place_chest_inserter_furnace_line_at(sim, "inserter", x, y)
+}
+
+fn pole_is_disconnected_from_existing_poles(sim: &Simulation, pole_pos: (i32, i32)) -> bool {
+    sim.entities.electric_poles.keys().all(|entity_id| {
+        let placed = sim
+            .entities
+            .placed_entity(*entity_id)
+            .expect("electric pole state should belong to a placed entity");
+        !poles_within_small_pole_reach((placed.x, placed.y), pole_pos)
+    })
+}
+
+fn place_lab(sim: &mut Simulation) -> EntityId {
+    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+    let (x, y) = place_powered_fixture_origin(sim, 3, 3, (3, 1));
+
+    sim.place_entity(lab, x, y, Direction::North)
+        .expect("lab should be placeable")
 }
 
 fn place_chest_inserter_furnace_line_at(
@@ -4368,7 +4986,7 @@ fn place_chest_inserter_furnace_line_at(
 }
 
 fn place_chest_inserter_furnace_line(sim: &mut Simulation) -> (EntityId, EntityId, EntityId) {
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    let (x, y) = place_powered_fixture_origin(sim, 4, 2, (1, 2));
     place_chest_inserter_furnace_line_at(sim, "inserter", x, y)
 }
 
@@ -4379,7 +4997,7 @@ fn place_two_tile_chest_inserter_furnace_line(
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let inserter = entity_id_by_name(&sim.world.prototypes, inserter_name);
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 6, 2);
+    let (x, y) = place_powered_fixture_origin(sim, 6, 2, (2, 2));
     let chest_id = sim
         .place_entity(chest, x, y, Direction::North)
         .expect("chest should be placeable");
@@ -4397,7 +5015,7 @@ fn place_chest_inserter_assembler_line(sim: &mut Simulation) -> (EntityId, Entit
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 5, 3);
+    let (x, y) = place_powered_fixture_origin(sim, 5, 3, (1, 3));
     let chest_id = sim
         .place_entity(chest, x, y + 1, Direction::North)
         .expect("chest should be placeable");
@@ -4415,7 +5033,7 @@ fn place_chest_inserter_lab_line(sim: &mut Simulation) -> (EntityId, EntityId, E
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let lab = entity_id_by_name(&sim.world.prototypes, "lab");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 5, 3);
+    let (x, y) = place_powered_fixture_origin(sim, 5, 3, (1, 3));
     let chest_id = sim
         .place_entity(chest, x, y + 1, Direction::North)
         .expect("chest should be placeable");
@@ -4433,7 +5051,7 @@ fn place_belt_inserter_furnace_line(sim: &mut Simulation) -> (EntityId, EntityId
     let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    let (x, y) = place_powered_fixture_origin(sim, 4, 2, (1, 2));
     let belt_id = sim
         .place_entity(belt, x, y, Direction::East)
         .expect("belt should be placeable");
@@ -4451,7 +5069,7 @@ fn place_furnace_inserter_chest_line(sim: &mut Simulation) -> (EntityId, EntityI
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    let (x, y) = place_powered_fixture_origin(sim, 4, 2, (2, 2));
     let furnace_id = sim
         .place_entity(furnace, x, y, Direction::North)
         .expect("furnace should be placeable");
@@ -4469,7 +5087,7 @@ fn place_assembler_inserter_chest_line(sim: &mut Simulation) -> (EntityId, Entit
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 5, 3);
+    let (x, y) = place_powered_fixture_origin(sim, 5, 3, (1, 3));
     let assembler_id = sim
         .place_entity(assembler, x, y, Direction::North)
         .expect("assembler should be placeable");
@@ -4487,7 +5105,7 @@ fn place_furnace_inserter_belt_line(sim: &mut Simulation) -> (EntityId, EntityId
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    let (x, y) = place_powered_fixture_origin(sim, 4, 2, (2, 2));
     let furnace_id = sim
         .place_entity(furnace, x, y, Direction::North)
         .expect("furnace should be placeable");

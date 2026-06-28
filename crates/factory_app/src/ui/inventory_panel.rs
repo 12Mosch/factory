@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use factory_sim::{
-    BURNER_MINING_DRILL_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX,
-    FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX,
+    BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
+    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
+    FURNACE_OUTPUT_SLOT_INDEX,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -18,6 +19,7 @@ pub enum InventoryPanel {
     FurnaceInput,
     FurnaceFuel,
     FurnaceOutput,
+    BoilerFuel,
     AssemblerInput,
     AssemblerOutput,
 }
@@ -160,6 +162,9 @@ pub(crate) fn update_container_slot_text(
     let furnace_state = open_container
         .entity_id
         .and_then(|entity_id| sim.sim.furnace_state(entity_id).ok());
+    let boiler_state = open_container
+        .entity_id
+        .and_then(|entity_id| sim.sim.boiler_state(entity_id).ok());
     let assembler_state = open_container
         .entity_id
         .and_then(|entity_id| sim.sim.assembler_state(entity_id).ok());
@@ -198,6 +203,11 @@ pub(crate) fn update_container_slot_text(
             InventoryPanel::FurnaceOutput => furnace_state.and_then(|state| {
                 (marker.slot_index == FURNACE_OUTPUT_SLOT_INDEX)
                     .then_some(state.output_slot)
+                    .flatten()
+            }),
+            InventoryPanel::BoilerFuel => boiler_state.and_then(|state| {
+                (marker.slot_index == BOILER_FUEL_SLOT_INDEX)
+                    .then_some(state.energy.fuel_slot)
                     .flatten()
             }),
             InventoryPanel::AssemblerInput => assembler_state

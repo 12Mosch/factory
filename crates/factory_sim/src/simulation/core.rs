@@ -26,6 +26,12 @@ impl Simulation {
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
             research,
+            power_summary: PowerSummary {
+                satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
+                ..PowerSummary::default()
+            },
+            power_networks: Vec::new(),
+            entity_power_statuses: BTreeMap::new(),
         }
     }
 
@@ -50,6 +56,7 @@ impl Simulation {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
+        self.rebuild_power_state();
 
         let machines = profiler.begin();
         self.advance_burner_mining_drills(profiler);
@@ -97,6 +104,9 @@ impl Simulation {
         self.crafting_queue.hash(&mut hasher);
         self.research.active.hash(&mut hasher);
         self.research.technologies.hash(&mut hasher);
+        self.power_summary.hash(&mut hasher);
+        self.power_networks.hash(&mut hasher);
+        self.entity_power_statuses.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -106,6 +116,18 @@ impl Simulation {
 
     pub fn entities(&self) -> &EntityStore {
         &self.entities
+    }
+
+    pub fn power_summary(&self) -> PowerSummary {
+        self.power_summary
+    }
+
+    pub fn power_networks(&self) -> &[PowerNetworkSnapshot] {
+        &self.power_networks
+    }
+
+    pub fn entity_power_status(&self, entity_id: EntityId) -> Option<EntityPowerStatus> {
+        self.entity_power_statuses.get(&entity_id).copied()
     }
 
     pub fn player(&self) -> PlayerState {

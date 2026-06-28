@@ -20,8 +20,8 @@ use factory_app::ui::formatting::{
 use factory_app::ui::inventory_panel::InventoryPanel;
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{
-    CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation, SimulationCounts,
-    SimulationTickProfile,
+    CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, PowerSummary, Simulation,
+    SimulationCounts, SimulationTickProfile,
 };
 use std::time::Duration;
 
@@ -319,9 +319,23 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
             active_machines: 2,
             idle_machines: 3,
         },
+        power: PowerSummary {
+            production_watts: 0,
+            available_production_watts: 0,
+            consumption_watts: 0,
+            satisfaction_permyriad: 10_000,
+            network_count: 0,
+        },
     });
 
-    for label in ["UPS:", "FPS:", "Sim tick:", "Entities:", "render sync"] {
+    for label in [
+        "UPS:",
+        "FPS:",
+        "Sim tick:",
+        "Entities:",
+        "Power:",
+        "render sync",
+    ] {
         assert!(text.contains(label), "missing debug overlay label {label}");
     }
     assert!(!text.contains("Item:"));
@@ -393,7 +407,7 @@ fn opening_clicked_furnace_selects_correct_entity() {
 fn opening_clicked_assembler_selects_correct_entity() {
     let mut sim = Simulation::new_test_world(123);
     let assembler = entity_id_by_name(sim.catalog(), "assembling_machine");
-    let (x, y) = first_buildable_rect(&sim, assembler);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let entity_id = sim
         .place_entity(assembler, x, y, Direction::North)
         .expect("assembler should be placeable");
@@ -408,7 +422,7 @@ fn opening_clicked_assembler_selects_correct_entity() {
 fn opening_clicked_lab_selects_correct_entity() {
     let mut sim = Simulation::new_test_world(123);
     let lab = entity_id_by_name(sim.catalog(), "lab");
-    let (x, y) = first_buildable_rect(&sim, lab);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let entity_id = sim
         .place_entity(lab, x, y, Direction::North)
         .expect("lab should be placeable");
@@ -477,7 +491,7 @@ fn completed_research_unlocks_recipe() {
     let automation = technology_id_by_name(sim.catalog(), "automation");
     let science_pack = item_id_by_name(sim.catalog(), "automation_science_pack");
     let assembling_machine = recipe_id_by_name(sim.catalog(), "assembling_machine");
-    let (x, y) = first_buildable_rect(&sim, lab);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let lab_id = sim
         .place_entity(lab, x, y, Direction::North)
         .expect("lab should be placeable");
@@ -512,7 +526,7 @@ fn locked_assembler_recipe_buttons_are_unavailable_without_error() {
     let mut sim = Simulation::new_test_world(123);
     let assembler = entity_id_by_name(sim.catalog(), "assembling_machine");
     let recipe = recipe_id_by_name(sim.catalog(), "assembling_machine");
-    let (x, y) = first_buildable_rect(&sim, assembler);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let entity_id = sim
         .place_entity(assembler, x, y, Direction::North)
         .expect("assembler should be placeable");
@@ -680,7 +694,7 @@ fn slot_click_transfer_routes_assembler_input_and_output() {
     let recipe = recipe_id_by_name(sim.catalog(), "iron_gear_wheel");
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let iron_gear_wheel = item_id_by_name(sim.catalog(), "iron_gear_wheel");
-    let (x, y) = first_buildable_rect(&sim, assembler);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let entity_id = sim
         .place_entity(assembler, x, y, Direction::North)
         .expect("assembler should be placeable");
@@ -855,6 +869,112 @@ fn hotbar_key_for_slot(slot_index: usize) -> KeyCode {
         8 => KeyCode::Digit9,
         _ => panic!("test hotbar slot should be addressable by number key"),
     }
+}
+
+fn place_powered_fixture_origin(
+    sim: &mut Simulation,
+    fixture_width: i32,
+    fixture_height: i32,
+    pole_offset: (i32, i32),
+) -> (i32, i32) {
+    let pump = entity_id_by_name(sim.catalog(), "offshore_pump");
+    let boiler = entity_id_by_name(sim.catalog(), "boiler");
+    let steam_engine = entity_id_by_name(sim.catalog(), "steam_engine");
+    let pole = entity_id_by_name(sim.catalog(), "small_electric_pole");
+    let coal = item_id_by_name(sim.catalog(), "coal");
+
+    for (x, y) in all_tile_coords(sim) {
+        let fixture_x = x + 8;
+        let fixture_y = y + 1;
+        let source_pole = (x + 5, y + 4);
+        let target_pole = (fixture_x + pole_offset.0, fixture_y + pole_offset.1);
+        let fixture = EntityFootprint {
+            x: fixture_x,
+            y: fixture_y,
+            width: fixture_width,
+            height: fixture_height,
+        };
+
+        if !fixture_is_clear_buildable(sim, &fixture)
+            || !poles_within_small_pole_reach(source_pole, target_pole)
+            || sim.can_place_entity(pump, x, y, Direction::North).is_err()
+            || sim
+                .can_place_entity(boiler, x, y + 1, Direction::North)
+                .is_err()
+            || sim
+                .can_place_entity(steam_engine, x + 2, y + 1, Direction::North)
+                .is_err()
+            || sim
+                .can_place_entity(pole, source_pole.0, source_pole.1, Direction::North)
+                .is_err()
+            || sim
+                .can_place_entity(pole, target_pole.0, target_pole.1, Direction::North)
+                .is_err()
+        {
+            continue;
+        }
+
+        sim.place_entity(pump, x, y, Direction::North)
+            .expect("validated offshore pump fixture should be placeable");
+        let boiler_id = sim
+            .place_entity(boiler, x, y + 1, Direction::North)
+            .expect("validated boiler fixture should be placeable");
+        sim.place_entity(steam_engine, x + 2, y + 1, Direction::North)
+            .expect("validated steam engine fixture should be placeable");
+        sim.place_entity(pole, source_pole.0, source_pole.1, Direction::North)
+            .expect("validated source pole fixture should be placeable");
+        sim.place_entity(pole, target_pole.0, target_pole.1, Direction::North)
+            .expect("validated target pole fixture should be placeable");
+
+        *sim.player_inventory_mut() = Inventory::player();
+        sim.player_inventory_mut().slots[0] = Some(ItemStack {
+            item_id: coal,
+            count: 50,
+        });
+        sim.transfer_player_slot_to_boiler_fuel(boiler_id, 0)
+            .expect("boiler should accept coal fuel");
+
+        return (fixture_x, fixture_y);
+    }
+
+    panic!("expected powered fixture area");
+}
+
+fn all_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
+    sim.world()
+        .chunks
+        .values()
+        .flat_map(|chunk| {
+            chunk.tiles.iter().enumerate().map(move |(index, _)| {
+                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                (
+                    chunk.coord.x * CHUNK_SIZE + local_x,
+                    chunk.coord.y * CHUNK_SIZE + local_y,
+                )
+            })
+        })
+        .collect()
+}
+
+fn fixture_is_clear_buildable(sim: &Simulation, footprint: &EntityFootprint) -> bool {
+    sim.world().validate_entity_footprint(footprint).is_ok()
+        && sim
+            .entities()
+            .occupancy()
+            .validate_available(footprint, None)
+            .is_ok()
+        && footprint.tiles().into_iter().all(|(x, y)| {
+            sim.world()
+                .tile_at(x, y)
+                .is_some_and(|tile| tile.resource.is_none())
+        })
+}
+
+fn poles_within_small_pole_reach(first: (i32, i32), second: (i32, i32)) -> bool {
+    let dx_x2 = i64::from((first.0 - second.0) * 2);
+    let dy_x2 = i64::from((first.1 - second.1) * 2);
+    dx_x2 * dx_x2 + dy_x2 * dy_x2 <= 15 * 15
 }
 
 fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i32, i32) {

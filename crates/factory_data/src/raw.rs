@@ -1,8 +1,9 @@
 use serde::Deserialize;
 
 use crate::model::{
-    AssemblingMachinePrototype, BurnerPrototype, CraftingCategory, EntityKind, SplitterPrototype,
-    TransportBeltPrototype,
+    AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CraftingCategory,
+    ElectricEnergySourcePrototype, EntityKind, OffshorePumpPrototype, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -49,6 +50,11 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) transport_belt: Option<TransportBeltPrototype>,
     pub(crate) splitter: Option<SplitterPrototype>,
     pub(crate) inserter: Option<RawInserterPrototype>,
+    pub(crate) electric_pole: Option<RawElectricPolePrototype>,
+    pub(crate) electric_energy_source: Option<ElectricEnergySourcePrototype>,
+    pub(crate) steam_engine: Option<SteamEnginePrototype>,
+    pub(crate) boiler: Option<BoilerPrototype>,
+    pub(crate) offshore_pump: Option<OffshorePumpPrototype>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +69,12 @@ pub(crate) struct RawInserterPrototype {
     pub(crate) drop_offset: RawIVec2,
     pub(crate) pickup_ticks: u32,
     pub(crate) drop_ticks: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawElectricPolePrototype {
+    pub(crate) supply_area_tiles: RawIVec2,
+    pub(crate) wire_reach_tiles_x2: u16,
 }
 
 #[derive(Debug, Deserialize)]

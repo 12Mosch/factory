@@ -90,6 +90,55 @@ pub(super) fn lab_state_for_prototype(
     })
 }
 
+pub(super) fn electric_pole_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<ElectricPoleState> {
+    (prototype.entity_kind == EntityKind::ElectricPole && prototype.electric_pole.is_some())
+        .then_some(ElectricPoleState)
+}
+
+pub(super) fn electric_consumer_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<ElectricConsumerState> {
+    prototype
+        .electric_energy_source
+        .is_some()
+        .then_some(ElectricConsumerState::default())
+}
+
+pub(super) fn steam_engine_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<SteamEngineState> {
+    (prototype.entity_kind == EntityKind::SteamEngine && prototype.steam_engine.is_some())
+        .then_some(SteamEngineState)
+}
+
+pub(super) fn boiler_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<BoilerState> {
+    if prototype.entity_kind != EntityKind::Boiler {
+        return None;
+    }
+
+    let burner = prototype.burner.as_ref()?;
+    prototype.boiler.as_ref()?;
+
+    Some(BoilerState {
+        energy: BurnerEnergy {
+            fuel_slot: None,
+            energy_remaining_joules: 0.0,
+            energy_usage_watts: burner.energy_usage_watts as f64,
+        },
+    })
+}
+
+pub(super) fn offshore_pump_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<OffshorePumpState> {
+    (prototype.entity_kind == EntityKind::OffshorePump && prototype.offshore_pump.is_some())
+        .then_some(OffshorePumpState)
+}
+
 pub(super) fn transport_belt_segment_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,
@@ -253,6 +302,10 @@ pub(super) fn inserter_target_can_accept(
             || input_slot_can_accept(catalog, furnace.input_slot, item);
     }
 
+    if let Some(boiler) = entities.boilers.get(&entity_id) {
+        return burner_fuel_slot_can_accept(catalog, boiler.energy.fuel_slot, item);
+    }
+
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
         return assembler_input_can_accept(catalog, assembler, item)
             && assembler
@@ -351,6 +404,15 @@ pub(super) fn try_drop_inserter_item(
 
         if input_slot_can_accept(catalog, furnace.input_slot, item) {
             insert_into_single_slot(&mut furnace.input_slot, item);
+            return true;
+        }
+
+        return false;
+    }
+
+    if let Some(boiler) = entities.boilers.get_mut(&entity_id) {
+        if burner_fuel_slot_can_accept(catalog, boiler.energy.fuel_slot, item) {
+            insert_into_single_slot(&mut boiler.energy.fuel_slot, item);
             return true;
         }
 

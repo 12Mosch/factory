@@ -36,6 +36,11 @@ pub struct EntityPrototype {
     pub transport_belt: Option<TransportBeltPrototype>,
     pub splitter: Option<SplitterPrototype>,
     pub inserter: Option<InserterPrototype>,
+    pub electric_pole: Option<ElectricPolePrototype>,
+    pub electric_energy_source: Option<ElectricEnergySourcePrototype>,
+    pub steam_engine: Option<SteamEnginePrototype>,
+    pub boiler: Option<BoilerPrototype>,
+    pub offshore_pump: Option<OffshorePumpPrototype>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -74,6 +79,35 @@ pub struct InserterPrototype {
     pub drop_offset: IVec2,
     pub pickup_ticks: u32,
     pub drop_ticks: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ElectricPolePrototype {
+    pub supply_area_tiles: IVec2,
+    pub wire_reach_tiles_x2: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ElectricEnergySourcePrototype {
+    pub energy_usage_watts: u64,
+    pub drain_watts: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct SteamEnginePrototype {
+    pub max_power_output_watts: u64,
+    pub steam_consumption_per_second_milliunits: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct BoilerPrototype {
+    pub water_consumption_per_second_milliunits: u64,
+    pub steam_output_per_second_milliunits: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct OffshorePumpPrototype {
+    pub pumping_speed_per_second_milliunits: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -135,6 +169,10 @@ pub enum EntityKind {
     Splitter,
     Lab,
     Chest,
+    ElectricPole,
+    SteamEngine,
+    Boiler,
+    OffshorePump,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

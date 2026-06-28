@@ -6,8 +6,8 @@ use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
 use crate::ids::{EntityPrototypeId, ItemId, RecipeId, TechnologyId, TileId};
 use crate::model::{
-    EntityPrototype, InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype,
-    RecipePrototype, TechnologyEffect, TechnologyPrototype, TilePrototype,
+    ElectricPolePrototype, EntityPrototype, InserterPrototype, ItemAmount, ItemPrototype,
+    MiningDrillPrototype, RecipePrototype, TechnologyEffect, TechnologyPrototype, TilePrototype,
 };
 use crate::raw::{
     RawEntityPrototype, RawItemPrototype, RawPrototypeCatalog, RawRecipePrototype,
@@ -173,6 +173,19 @@ fn load_entities(
                     pickup_ticks: inserter.pickup_ticks,
                     drop_ticks: inserter.drop_ticks,
                 }),
+                electric_pole: entity
+                    .electric_pole
+                    .map(|electric_pole| ElectricPolePrototype {
+                        supply_area_tiles: IVec2::new(
+                            electric_pole.supply_area_tiles.x,
+                            electric_pole.supply_area_tiles.y,
+                        ),
+                        wire_reach_tiles_x2: electric_pole.wire_reach_tiles_x2,
+                    }),
+                electric_energy_source: entity.electric_energy_source,
+                steam_engine: entity.steam_engine,
+                boiler: entity.boiler,
+                offshore_pump: entity.offshore_pump,
             })
         })
         .collect()
