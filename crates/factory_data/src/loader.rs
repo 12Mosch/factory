@@ -4,14 +4,16 @@ use std::path::Path;
 
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
-use crate::ids::{EntityPrototypeId, ItemId, RecipeId, TechnologyId, TileId};
+use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 use crate::model::{
-    ElectricPolePrototype, EntityPrototype, InserterPrototype, ItemAmount, ItemPrototype,
+    ElectricPolePrototype, EntityPrototype, FluidBoxPrototype, FluidConnectionPrototype,
+    FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
     MiningDrillPrototype, RecipePrototype, TechnologyEffect, TechnologyPrototype, TilePrototype,
 };
 use crate::raw::{
-    RawEntityPrototype, RawItemPrototype, RawPrototypeCatalog, RawRecipePrototype,
-    RawTechnologyEffect, RawTechnologyPrototype, RawTilePrototype,
+    RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype,
+    RawItemPrototype, RawPrototypeCatalog, RawRecipePrototype, RawTechnologyEffect,
+    RawTechnologyPrototype, RawTilePrototype,
 };
 use crate::validation::{
     resolve_collision_mask, resolve_item_amounts, validate_group,
@@ -36,8 +38,9 @@ impl PrototypeCatalog {
         let raw = ValidatedRawCatalog::from_raw(raw)?;
 
         let (items, item_ids_by_name) = load_items(raw.items);
+        let (fluids, fluid_ids_by_name) = load_fluids(raw.fluids);
         let (recipes, recipe_ids_by_name) = load_recipes(raw.recipes, &item_ids_by_name)?;
-        let entities = load_entities(raw.entities, &item_ids_by_name)?;
+        let entities = load_entities(raw.entities, &item_ids_by_name, &fluid_ids_by_name)?;
         let tiles = load_tiles(raw.tiles)?;
         let technologies =
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
@@ -45,6 +48,7 @@ impl PrototypeCatalog {
 
         Ok(Self {
             items,
+            fluids,
             recipes,
             entities,
             tiles,
@@ -55,6 +59,7 @@ impl PrototypeCatalog {
 
 struct ValidatedRawCatalog {
     items: Vec<RawItemPrototype>,
+    fluids: Vec<RawFluidPrototype>,
     recipes: Vec<RawRecipePrototype>,
     entities: Vec<RawEntityPrototype>,
     tiles: Vec<RawTilePrototype>,
@@ -65,6 +70,9 @@ impl ValidatedRawCatalog {
     fn from_raw(raw: RawPrototypeCatalog) -> Result<Self, PrototypeLoadError> {
         let mut items = raw.items;
         validate_group(&mut items, "items")?;
+
+        let mut fluids = raw.fluids;
+        validate_group(&mut fluids, "fluids")?;
 
         let mut recipes = raw.recipes;
         validate_group(&mut recipes, "recipes")?;
@@ -80,6 +88,7 @@ impl ValidatedRawCatalog {
 
         Ok(Self {
             items,
+            fluids,
             recipes,
             entities,
             tiles,
@@ -105,6 +114,23 @@ fn load_items(items: Vec<RawItemPrototype>) -> (Vec<ItemPrototype>, HashMap<Stri
         .collect();
 
     (items, item_ids_by_name)
+}
+
+fn load_fluids(fluids: Vec<RawFluidPrototype>) -> (Vec<FluidPrototype>, HashMap<String, FluidId>) {
+    let mut fluid_ids_by_name = HashMap::with_capacity(fluids.len());
+    let fluids = fluids
+        .into_iter()
+        .map(|fluid| {
+            let id = FluidId::new(fluid.id);
+            fluid_ids_by_name.insert(fluid.name.clone(), id);
+            FluidPrototype {
+                id,
+                name: fluid.name,
+            }
+        })
+        .collect();
+
+    (fluids, fluid_ids_by_name)
 }
 
 fn load_recipes(
@@ -140,17 +166,27 @@ fn load_recipes(
 fn load_entities(
     entities: Vec<RawEntityPrototype>,
     item_ids_by_name: &HashMap<String, ItemId>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
 ) -> Result<Vec<EntityPrototype>, PrototypeLoadError> {
     entities
         .into_iter()
         .map(|entity| {
             let name = entity.name;
+            let size = IVec2::new(entity.size.x, entity.size.y);
             let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
+            let fluid_boxes =
+                resolve_fluid_boxes(&name, size, entity.fluid_boxes, fluid_ids_by_name)?;
+            validate_machine_fluid_roles(
+                &name,
+                entity.entity_kind,
+                &fluid_boxes,
+                fluid_ids_by_name,
+            )?;
             Ok(EntityPrototype {
                 id: EntityPrototypeId::new(entity.id),
                 name: name.clone(),
                 entity_kind: entity.entity_kind,
-                size: IVec2::new(entity.size.x, entity.size.y),
+                size,
                 collision_mask: resolve_collision_mask(name, entity.collision_mask)?,
                 build_item,
                 inventory_slot_count: entity.inventory_slot_count,
@@ -186,9 +222,156 @@ fn load_entities(
                 steam_engine: entity.steam_engine,
                 boiler: entity.boiler,
                 offshore_pump: entity.offshore_pump,
+                fluid_boxes,
             })
         })
         .collect()
+}
+
+fn resolve_fluid_boxes(
+    entity_name: &str,
+    entity_size: IVec2,
+    fluid_boxes: Vec<RawFluidBoxPrototype>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<Vec<FluidBoxPrototype>, PrototypeLoadError> {
+    fluid_boxes
+        .into_iter()
+        .enumerate()
+        .map(|(box_index, fluid_box)| {
+            if fluid_box.capacity_milliunits == 0 || fluid_box.connections.is_empty() {
+                return Err(PrototypeLoadError::InvalidFluidBox {
+                    entity: entity_name.to_string(),
+                    box_index,
+                });
+            }
+            let filter = fluid_box
+                .filter
+                .map(|fluid_name| {
+                    fluid_ids_by_name.get(&fluid_name).copied().ok_or_else(|| {
+                        PrototypeLoadError::MissingFluidReference {
+                            owner: entity_name.to_string(),
+                            fluid: fluid_name,
+                        }
+                    })
+                })
+                .transpose()?;
+            let connections = fluid_box
+                .connections
+                .into_iter()
+                .enumerate()
+                .map(|(connection_index, connection)| {
+                    validate_fluid_connection_geometry(
+                        entity_name,
+                        box_index,
+                        connection_index,
+                        entity_size,
+                        &connection,
+                    )?;
+                    Ok(FluidConnectionPrototype {
+                        local_offset: IVec2::new(
+                            connection.local_offset.x,
+                            connection.local_offset.y,
+                        ),
+                        side: connection.side,
+                    })
+                })
+                .collect::<Result<_, PrototypeLoadError>>()?;
+
+            Ok(FluidBoxPrototype {
+                capacity_milliunits: fluid_box.capacity_milliunits,
+                filter,
+                connections,
+            })
+        })
+        .collect()
+}
+
+fn validate_fluid_connection_geometry(
+    entity_name: &str,
+    box_index: usize,
+    connection_index: usize,
+    entity_size: IVec2,
+    connection: &RawFluidConnectionPrototype,
+) -> Result<(), PrototypeLoadError> {
+    let x = connection.local_offset.x;
+    let y = connection.local_offset.y;
+    let on_entity = x >= 0 && y >= 0 && x < entity_size.x && y < entity_size.y;
+    let on_side = match connection.side {
+        FluidConnectionSide::North => y == 0,
+        FluidConnectionSide::East => x == entity_size.x - 1,
+        FluidConnectionSide::South => y == entity_size.y - 1,
+        FluidConnectionSide::West => x == 0,
+    };
+
+    if on_entity && on_side {
+        Ok(())
+    } else {
+        Err(PrototypeLoadError::InvalidFluidConnection {
+            entity: entity_name.to_string(),
+            box_index,
+            connection_index,
+        })
+    }
+}
+
+fn validate_machine_fluid_roles(
+    entity_name: &str,
+    entity_kind: crate::model::EntityKind,
+    fluid_boxes: &[FluidBoxPrototype],
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<(), PrototypeLoadError> {
+    let required_fluid = |fluid_name: &str| {
+        fluid_ids_by_name.get(fluid_name).copied().ok_or_else(|| {
+            PrototypeLoadError::MissingFluidReference {
+                owner: entity_name.to_string(),
+                fluid: fluid_name.to_string(),
+            }
+        })
+    };
+
+    match entity_kind {
+        crate::model::EntityKind::OffshorePump => {
+            require_fluid_box_filters(entity_name, fluid_boxes, &[Some(required_fluid("water")?)])
+        }
+        crate::model::EntityKind::Boiler => require_fluid_box_filters(
+            entity_name,
+            fluid_boxes,
+            &[
+                Some(required_fluid("water")?),
+                Some(required_fluid("steam")?),
+            ],
+        ),
+        crate::model::EntityKind::SteamEngine => {
+            require_fluid_box_filters(entity_name, fluid_boxes, &[Some(required_fluid("steam")?)])
+        }
+        _ => Ok(()),
+    }
+}
+
+fn require_fluid_box_filters(
+    entity_name: &str,
+    fluid_boxes: &[FluidBoxPrototype],
+    expected_filters: &[Option<FluidId>],
+) -> Result<(), PrototypeLoadError> {
+    if fluid_boxes.len() != expected_filters.len() {
+        return Err(PrototypeLoadError::InvalidFluidBox {
+            entity: entity_name.to_string(),
+            box_index: fluid_boxes.len(),
+        });
+    }
+
+    for (box_index, (fluid_box, expected_filter)) in
+        fluid_boxes.iter().zip(expected_filters.iter()).enumerate()
+    {
+        if fluid_box.filter != *expected_filter {
+            return Err(PrototypeLoadError::InvalidFluidBox {
+                entity: entity_name.to_string(),
+                box_index,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn resolve_entity_build_item(

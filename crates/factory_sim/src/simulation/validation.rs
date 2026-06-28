@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeSet;
 
 pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_catalog(&sim.world.prototypes)?;
@@ -6,6 +7,8 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_placed_entities(sim)?;
     validate_entity_occupancy(&sim.entities)?;
     validate_entity_state_ownership_and_kind(sim)?;
+    validate_fluid_box_states(sim)?;
+    validate_fluid_network_snapshots(sim)?;
 
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
     validate_crafting_queue(sim)?;
@@ -70,6 +73,12 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
         }
     }
 
+    for (index, fluid) in catalog.fluids.iter().enumerate() {
+        if fluid.id.index() != index {
+            return Err(SimValidationError::InvalidFluidId(fluid.id));
+        }
+    }
+
     for (index, recipe) in catalog.recipes.iter().enumerate() {
         if recipe.id.index() != index {
             return Err(SimValidationError::InvalidCraftingRecipe {
@@ -127,6 +136,18 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
         {
             return Err(SimValidationError::UnknownItem(item_id));
         }
+        for fluid_box in &prototype.fluid_boxes {
+            if fluid_box.capacity_milliunits == 0 {
+                return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                    prototype_id: prototype.id,
+                });
+            }
+            if let Some(fluid_id) = fluid_box.filter
+                && !fluid_exists(catalog, fluid_id)
+            {
+                return Err(SimValidationError::InvalidFluidId(fluid_id));
+            }
+        }
 
         match prototype.entity_kind {
             EntityKind::ElectricPole => {
@@ -152,6 +173,7 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
                 };
                 if steam_engine.max_power_output_watts == 0
                     || steam_engine.steam_consumption_per_second_milliunits == 0
+                    || prototype.fluid_boxes.len() != 1
                 {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,
@@ -167,6 +189,7 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
                 if prototype.burner.is_none()
                     || boiler.water_consumption_per_second_milliunits == 0
                     || boiler.steam_output_per_second_milliunits == 0
+                    || prototype.fluid_boxes.len() != 2
                 {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,
@@ -180,6 +203,18 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
                     });
                 };
                 if offshore_pump.pumping_speed_per_second_milliunits == 0 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+                if prototype.fluid_boxes.len() != 1 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::Pipe | EntityKind::StorageTank => {
+                if prototype.fluid_boxes.len() != 1 {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,
                     });
@@ -420,6 +455,9 @@ fn validate_entity_state_ownership_and_kind(sim: &Simulation) -> Result<(), SimV
     for entity_id in sim.entities.offshore_pumps.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::OffshorePump)?;
     }
+    for entity_id in sim.entities.fluid_boxes.keys() {
+        validate_fluid_box_owner(sim, *entity_id)?;
+    }
     for entity_id in sim.entities.transport_belts.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::TransportBelt)?;
     }
@@ -428,6 +466,29 @@ fn validate_entity_state_ownership_and_kind(sim: &Simulation) -> Result<(), SimV
     }
     for entity_id in sim.entities.inserters.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::Inserter)?;
+    }
+
+    Ok(())
+}
+
+fn validate_fluid_box_owner(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<(), SimValidationError> {
+    let placed = sim
+        .entities
+        .placed_entities
+        .get(&entity_id)
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
+    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+        SimValidationError::InvalidEntityPrototype {
+            entity_id,
+            prototype_id: placed.prototype_id,
+        },
+    )?;
+
+    if prototype.fluid_boxes.is_empty() {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
     Ok(())
@@ -478,6 +539,204 @@ fn validate_entity_state_kind(
     }
 
     Ok(())
+}
+
+fn validate_fluid_box_states(sim: &Simulation) -> Result<(), SimValidationError> {
+    for placed in sim.entities.placed_entities.values() {
+        let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+            SimValidationError::InvalidEntityPrototype {
+                entity_id: placed.id,
+                prototype_id: placed.prototype_id,
+            },
+        )?;
+        let states = sim.entities.fluid_boxes.get(&placed.id);
+        if prototype.fluid_boxes.is_empty() {
+            if states.is_some() {
+                return Err(SimValidationError::InvalidEntityState {
+                    entity_id: placed.id,
+                });
+            }
+            continue;
+        }
+
+        let Some(states) = states else {
+            return Err(SimValidationError::InvalidEntityState {
+                entity_id: placed.id,
+            });
+        };
+        if states.len() != prototype.fluid_boxes.len() {
+            return Err(SimValidationError::InvalidEntityState {
+                entity_id: placed.id,
+            });
+        }
+
+        for (box_index, (state, fluid_box)) in
+            states.iter().zip(prototype.fluid_boxes.iter()).enumerate()
+        {
+            if state.amount_milliunits > fluid_box.capacity_milliunits {
+                return Err(SimValidationError::InvalidFluidBoxState {
+                    entity_id: placed.id,
+                    box_index,
+                });
+            }
+            if state.amount_milliunits == 0 {
+                if state.fluid_id.is_some() {
+                    return Err(SimValidationError::InvalidFluidBoxState {
+                        entity_id: placed.id,
+                        box_index,
+                    });
+                }
+                continue;
+            }
+
+            let Some(fluid_id) = state.fluid_id else {
+                return Err(SimValidationError::InvalidFluidBoxState {
+                    entity_id: placed.id,
+                    box_index,
+                });
+            };
+            if !fluid_exists(&sim.world.prototypes, fluid_id)
+                || fluid_box.filter.is_some_and(|filter| filter != fluid_id)
+            {
+                return Err(SimValidationError::InvalidFluidBoxState {
+                    entity_id: placed.id,
+                    box_index,
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_fluid_network_snapshots(sim: &Simulation) -> Result<(), SimValidationError> {
+    let expected_boxes = sim
+        .entities
+        .fluid_boxes
+        .iter()
+        .flat_map(|(entity_id, boxes)| {
+            let entity_id = *entity_id;
+            (0..boxes.len()).map(move |box_index| (entity_id, box_index))
+        })
+        .collect::<BTreeSet<_>>();
+    let mut networked_boxes = BTreeSet::new();
+
+    for (expected_network_id, network) in sim.fluid_networks.iter().enumerate() {
+        if network.network_id != expected_network_id as u32
+            || network.box_count != network.boxes.len()
+            || network.total_milliunits > network.capacity_milliunits
+        {
+            return Err(SimValidationError::InvalidFluidNetwork {
+                network_id: network.network_id,
+            });
+        }
+
+        let mut seen_boxes = BTreeSet::new();
+        let mut total = 0_u64;
+        let mut capacity = 0_u64;
+        let mut filters = BTreeSet::new();
+        let mut nonempty_fluids = BTreeSet::new();
+        for box_snapshot in &network.boxes {
+            let box_key = (box_snapshot.entity_id, box_snapshot.box_index);
+            if !seen_boxes.insert(box_key) || !networked_boxes.insert(box_key) {
+                return Err(SimValidationError::InvalidFluidNetwork {
+                    network_id: network.network_id,
+                });
+            }
+            let placed = sim.entities.placed_entity(box_snapshot.entity_id).ok_or(
+                SimValidationError::InvalidFluidNetwork {
+                    network_id: network.network_id,
+                },
+            )?;
+            let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id)
+                .ok_or(SimValidationError::InvalidFluidNetwork {
+                    network_id: network.network_id,
+                })?;
+            let fluid_box = prototype.fluid_boxes.get(box_snapshot.box_index).ok_or(
+                SimValidationError::InvalidFluidNetwork {
+                    network_id: network.network_id,
+                },
+            )?;
+            let state = sim
+                .entities
+                .fluid_boxes
+                .get(&box_snapshot.entity_id)
+                .and_then(|boxes| boxes.get(box_snapshot.box_index))
+                .ok_or(SimValidationError::InvalidFluidNetwork {
+                    network_id: network.network_id,
+                })?;
+
+            if box_snapshot.capacity_milliunits != fluid_box.capacity_milliunits
+                || box_snapshot.amount_milliunits != state.amount_milliunits
+                || box_snapshot.fluid_id != state.fluid_id
+                || box_snapshot.filter != fluid_box.filter
+            {
+                return Err(SimValidationError::InvalidFluidNetwork {
+                    network_id: network.network_id,
+                });
+            }
+            if let Some(filter) = box_snapshot.filter {
+                filters.insert(filter);
+            }
+            if box_snapshot.amount_milliunits > 0 {
+                let Some(fluid_id) = box_snapshot.fluid_id else {
+                    return Err(SimValidationError::InvalidFluidNetwork {
+                        network_id: network.network_id,
+                    });
+                };
+                if network
+                    .fluid_id
+                    .is_some_and(|network_fluid| network_fluid != fluid_id)
+                {
+                    return Err(SimValidationError::InvalidFluidNetwork {
+                        network_id: network.network_id,
+                    });
+                }
+                nonempty_fluids.insert(fluid_id);
+            }
+            total = total.saturating_add(box_snapshot.amount_milliunits);
+            capacity = capacity.saturating_add(box_snapshot.capacity_milliunits);
+        }
+
+        if total != network.total_milliunits || capacity != network.capacity_milliunits {
+            return Err(SimValidationError::InvalidFluidNetwork {
+                network_id: network.network_id,
+            });
+        }
+        let filter_fluid = single_fluid(filters.iter().copied());
+        let nonempty_fluid = single_fluid(nonempty_fluids.iter().copied());
+        let expected_blocked = filters.len() > 1
+            || nonempty_fluids.len() > 1
+            || filter_fluid
+                .zip(nonempty_fluid)
+                .is_some_and(|(filter, fluid)| filter != fluid);
+        if network.blocked != expected_blocked {
+            return Err(SimValidationError::InvalidFluidNetwork {
+                network_id: network.network_id,
+            });
+        }
+        let expected_fluid_id = if nonempty_fluids.len() > 1 {
+            None
+        } else {
+            nonempty_fluid.or(filter_fluid)
+        };
+        if network.fluid_id != expected_fluid_id {
+            return Err(SimValidationError::InvalidFluidNetwork {
+                network_id: network.network_id,
+            });
+        }
+    }
+
+    if networked_boxes != expected_boxes {
+        return Err(SimValidationError::InvalidFluidNetwork { network_id: 0 });
+    }
+
+    Ok(())
+}
+
+fn single_fluid(mut fluids: impl Iterator<Item = FluidId>) -> Option<FluidId> {
+    let first = fluids.next()?;
+    fluids.next().is_none().then_some(first)
 }
 
 fn validate_crafting_queue(sim: &Simulation) -> Result<(), SimValidationError> {
@@ -830,6 +1089,13 @@ fn item_exists(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
         .items
         .get(item_id.index())
         .is_some_and(|item| item.id == item_id)
+}
+
+fn fluid_exists(catalog: &PrototypeCatalog, fluid_id: FluidId) -> bool {
+    catalog
+        .fluids
+        .get(fluid_id.index())
+        .is_some_and(|fluid| fluid.id == fluid_id)
 }
 
 fn recipe_by_id(

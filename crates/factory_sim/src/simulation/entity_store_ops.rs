@@ -43,6 +43,7 @@ impl EntityStore {
             steam_engines: BTreeMap::new(),
             boilers: BTreeMap::new(),
             offshore_pumps: BTreeMap::new(),
+            fluid_boxes: BTreeMap::new(),
             transport_belts: BTreeMap::new(),
             splitters: BTreeMap::new(),
             inserters: BTreeMap::new(),
@@ -167,6 +168,10 @@ impl EntityStore {
         self.boilers
             .get_mut(&entity_id)
             .ok_or(BoilerError::NotBoiler(entity_id))
+    }
+
+    pub(super) fn fluid_box_states(&self, entity_id: EntityId) -> Option<&[FluidBoxState]> {
+        self.fluid_boxes.get(&entity_id).map(Vec::as_slice)
     }
 
     pub(super) fn assembler_state(
@@ -330,6 +335,9 @@ impl EntityStore {
         if let Some(state) = reservation.offshore_pump {
             self.offshore_pumps.insert(id, state);
         }
+        if let Some(fluid_boxes) = reservation.fluid_boxes {
+            self.fluid_boxes.insert(id, fluid_boxes);
+        }
         if let Some(segment) = reservation.transport_belt {
             self.transport_belts.insert(id, segment);
         }
@@ -381,6 +389,7 @@ impl EntityStore {
         self.steam_engines.remove(&entity_id);
         self.boilers.remove(&entity_id);
         self.offshore_pumps.remove(&entity_id);
+        self.fluid_boxes.remove(&entity_id);
         self.transport_belts.remove(&entity_id);
         self.splitters.remove(&entity_id);
         self.inserters.remove(&entity_id);

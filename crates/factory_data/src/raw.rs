@@ -2,14 +2,16 @@ use serde::Deserialize;
 
 use crate::model::{
     AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CraftingCategory,
-    ElectricEnergySourcePrototype, EntityKind, OffshorePumpPrototype, SplitterPrototype,
-    SteamEnginePrototype, TransportBeltPrototype,
+    ElectricEnergySourcePrototype, EntityKind, FluidConnectionSide, OffshorePumpPrototype,
+    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
 };
 use crate::validation::RawPrototype;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawPrototypeCatalog {
     pub(crate) items: Vec<RawItemPrototype>,
+    #[serde(default)]
+    pub(crate) fluids: Vec<RawFluidPrototype>,
     pub(crate) recipes: Vec<RawRecipePrototype>,
     pub(crate) entities: Vec<RawEntityPrototype>,
     pub(crate) tiles: Vec<RawTilePrototype>,
@@ -23,6 +25,12 @@ pub(crate) struct RawItemPrototype {
     pub(crate) name: String,
     pub(crate) stack_size: u16,
     pub(crate) fuel_value_joules: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawFluidPrototype {
+    pub(crate) id: u16,
+    pub(crate) name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +63,21 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) steam_engine: Option<SteamEnginePrototype>,
     pub(crate) boiler: Option<BoilerPrototype>,
     pub(crate) offshore_pump: Option<OffshorePumpPrototype>,
+    #[serde(default)]
+    pub(crate) fluid_boxes: Vec<RawFluidBoxPrototype>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawFluidBoxPrototype {
+    pub(crate) capacity_milliunits: u64,
+    pub(crate) filter: Option<String>,
+    pub(crate) connections: Vec<RawFluidConnectionPrototype>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawFluidConnectionPrototype {
+    pub(crate) local_offset: RawIVec2,
+    pub(crate) side: FluidConnectionSide,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +151,16 @@ impl RawPrototype for RawItemPrototype {
 }
 
 impl RawPrototype for RawRecipePrototype {
+    fn id(&self) -> u16 {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl RawPrototype for RawFluidPrototype {
     fn id(&self) -> u16 {
         self.id
     }

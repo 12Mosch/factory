@@ -5,10 +5,10 @@ use crate::error::PrototypeLoadError;
 use crate::ids::TechnologyId;
 use crate::model::{
     AssemblingMachinePrototype, CraftingCategory, ElectricEnergySourcePrototype, EntityKind,
-    ItemAmount, TechnologyEffect, UndergroundBeltPart,
+    FluidConnectionSide, ItemAmount, TechnologyEffect, UndergroundBeltPart,
 };
 
-const ITEM_NAMES: [&str; 33] = [
+const ITEM_NAMES: [&str; 35] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -42,9 +42,13 @@ const ITEM_NAMES: [&str; 33] = [
     "steam_engine",
     "boiler",
     "offshore_pump",
+    "pipe",
+    "storage_tank",
 ];
 
-const RECIPE_NAMES: [&str; 23] = [
+const FLUID_NAMES: [&str; 2] = ["water", "steam"];
+
+const RECIPE_NAMES: [&str; 25] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -68,9 +72,11 @@ const RECIPE_NAMES: [&str; 23] = [
     "steam_engine",
     "boiler",
     "offshore_pump",
+    "pipe",
+    "storage_tank",
 ];
 
-const ENTITY_NAMES: [&str; 28] = [
+const ENTITY_NAMES: [&str; 30] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -99,6 +105,8 @@ const ENTITY_NAMES: [&str; 28] = [
     "steam_engine",
     "boiler",
     "offshore_pump",
+    "pipe",
+    "storage_tank",
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -108,9 +116,10 @@ const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 33);
-    assert_eq!(catalog.recipes.len(), 23);
-    assert_eq!(catalog.entities.len(), 28);
+    assert_eq!(catalog.items.len(), 35);
+    assert_eq!(catalog.fluids.len(), 2);
+    assert_eq!(catalog.recipes.len(), 25);
+    assert_eq!(catalog.entities.len(), 30);
     assert_eq!(catalog.tiles.len(), 3);
     assert_eq!(catalog.technologies.len(), 1);
 }
@@ -123,6 +132,16 @@ fn base_catalog_contains_expected_names() {
         assert!(
             catalog.items.iter().any(|prototype| prototype.name == name),
             "missing item {name}"
+        );
+    }
+
+    for name in FLUID_NAMES {
+        assert!(
+            catalog
+                .fluids
+                .iter()
+                .any(|prototype| prototype.name == name),
+            "missing fluid {name}"
         );
     }
 
@@ -172,6 +191,10 @@ fn explicit_ids_are_sorted_and_stable() {
         assert_eq!(item.id.index(), expected);
     }
 
+    for (expected, fluid) in catalog.fluids.iter().enumerate() {
+        assert_eq!(fluid.id.index(), expected);
+    }
+
     for (expected, recipe) in catalog.recipes.iter().enumerate() {
         assert_eq!(recipe.id.index(), expected);
     }
@@ -187,6 +210,16 @@ fn explicit_ids_are_sorted_and_stable() {
     for (expected, technology) in catalog.technologies.iter().enumerate() {
         assert_eq!(technology.id.index(), expected);
     }
+}
+
+#[test]
+fn fluid_ids_are_stable_and_contiguous() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    assert_eq!(catalog.fluids[0].name, "water");
+    assert_eq!(catalog.fluids[0].id.index(), 0);
+    assert_eq!(catalog.fluids[1].name, "steam");
+    assert_eq!(catalog.fluids[1].id.index(), 1);
 }
 
 #[test]
@@ -441,6 +474,7 @@ fn electricity_entities_load_metadata() {
     assert!(steam_engine.boiler.is_none());
     assert!(steam_engine.offshore_pump.is_none());
     assert!(steam_engine.burner.is_none());
+    assert_eq!(steam_engine.fluid_boxes.len(), 1);
 
     let boiler = catalog
         .entities
@@ -467,6 +501,7 @@ fn electricity_entities_load_metadata() {
     assert!(boiler.electric_pole.is_none());
     assert!(boiler.steam_engine.is_none());
     assert!(boiler.offshore_pump.is_none());
+    assert_eq!(boiler.fluid_boxes.len(), 2);
 
     let pump = catalog
         .entities
@@ -485,6 +520,92 @@ fn electricity_entities_load_metadata() {
     assert!(pump.steam_engine.is_none());
     assert!(pump.boiler.is_none());
     assert!(pump.burner.is_none());
+    assert_eq!(pump.fluid_boxes.len(), 1);
+}
+
+#[test]
+fn fluid_metadata_resolves_to_valid_fluid_ids() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let water = catalog
+        .fluids
+        .iter()
+        .find(|prototype| prototype.name == "water")
+        .expect("base catalog should contain water")
+        .id;
+    let steam = catalog
+        .fluids
+        .iter()
+        .find(|prototype| prototype.name == "steam")
+        .expect("base catalog should contain steam")
+        .id;
+
+    for entity_name in [
+        "offshore_pump",
+        "boiler",
+        "steam_engine",
+        "pipe",
+        "storage_tank",
+    ] {
+        let entity = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == entity_name)
+            .unwrap_or_else(|| panic!("base catalog should contain {entity_name}"));
+        for fluid_box in &entity.fluid_boxes {
+            if let Some(fluid_id) = fluid_box.filter {
+                assert!(fluid_id.index() < catalog.fluids.len());
+            }
+            assert!(fluid_box.capacity_milliunits > 0);
+            assert!(!fluid_box.connections.is_empty());
+        }
+    }
+
+    let offshore_pump = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "offshore_pump")
+        .expect("base catalog should contain offshore pump");
+    assert_eq!(offshore_pump.fluid_boxes[0].filter, Some(water));
+
+    let boiler = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "boiler")
+        .expect("base catalog should contain boiler");
+    assert_eq!(boiler.fluid_boxes[0].filter, Some(water));
+    assert_eq!(boiler.fluid_boxes[1].filter, Some(steam));
+
+    let steam_engine = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "steam_engine")
+        .expect("base catalog should contain steam engine");
+    assert_eq!(steam_engine.fluid_boxes[0].filter, Some(steam));
+
+    let pipe = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "pipe")
+        .expect("base catalog should contain pipe");
+    assert_eq!(pipe.entity_kind, EntityKind::Pipe);
+    assert_eq!(pipe.size, IVec2::new(1, 1));
+    assert_eq!(pipe.fluid_boxes.len(), 1);
+    assert_eq!(pipe.fluid_boxes[0].filter, None);
+    assert_eq!(pipe.fluid_boxes[0].connections.len(), 4);
+
+    let storage_tank = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "storage_tank")
+        .expect("base catalog should contain storage tank");
+    assert_eq!(storage_tank.entity_kind, EntityKind::StorageTank);
+    assert_eq!(storage_tank.size, IVec2::new(3, 3));
+    assert_eq!(storage_tank.fluid_boxes.len(), 1);
+    assert_eq!(storage_tank.fluid_boxes[0].filter, None);
+    assert_eq!(
+        storage_tank.fluid_boxes[0].connections[0].side,
+        FluidConnectionSide::North
+    );
 }
 
 #[test]
@@ -782,6 +903,189 @@ fn missing_item_references_fail() {
         error,
         PrototypeLoadError::MissingItemReference { recipe, item }
             if recipe == "missing_recipe" && item == "missing_item"
+    ));
+}
+
+#[test]
+fn missing_fluid_references_fail() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [(id: 0, name: "water")],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_pipe",
+                entity_kind: Pipe,
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["ground", "building"]),
+                fluid_boxes: [(
+                    capacity_milliunits: 100000,
+                    filter: Some("missing_fluid"),
+                    connections: [(local_offset: (x: 0, y: 0), side: North)],
+                )],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("missing fluid references should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::MissingFluidReference { owner, fluid }
+            if owner == "bad_pipe" && fluid == "missing_fluid"
+    ));
+}
+
+#[test]
+fn empty_fluid_box_connections_fail_loading() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [(id: 0, name: "water")],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_pipe",
+                entity_kind: Pipe,
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["ground", "building"]),
+                fluid_boxes: [(
+                    capacity_milliunits: 100000,
+                    connections: [],
+                )],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("empty fluid box connections should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidBox { entity, box_index }
+            if entity == "bad_pipe" && box_index == 0
+    ));
+}
+
+#[test]
+fn fluid_connection_offsets_outside_entity_fail_loading() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [(id: 0, name: "water")],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_pipe",
+                entity_kind: Pipe,
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["ground", "building"]),
+                fluid_boxes: [(
+                    capacity_milliunits: 100000,
+                    connections: [(local_offset: (x: 1, y: 0), side: East)],
+                )],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("outside fluid connection offsets should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidConnection {
+            entity,
+            box_index: 0,
+            connection_index: 0,
+        } if entity == "bad_pipe"
+    ));
+}
+
+#[test]
+fn fluid_connection_side_must_be_on_matching_outer_edge() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [(id: 0, name: "water")],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_tank",
+                entity_kind: StorageTank,
+                size: (x: 3, y: 3),
+                collision_mask: (layers: ["ground", "building"]),
+                fluid_boxes: [(
+                    capacity_milliunits: 100000,
+                    connections: [(local_offset: (x: 1, y: 1), side: North)],
+                )],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("interior fluid connection side should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidConnection {
+            entity,
+            box_index: 0,
+            connection_index: 0,
+        } if entity == "bad_tank"
+    ));
+}
+
+#[test]
+fn machine_fluid_box_roles_are_validated_during_load() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            fluids: [
+                (id: 0, name: "water"),
+                (id: 1, name: "steam"),
+            ],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_boiler",
+                entity_kind: Boiler,
+                size: (x: 2, y: 3),
+                collision_mask: (layers: ["ground", "building"]),
+                burner: Some((energy_usage_watts: 1800000)),
+                boiler: Some((
+                    water_consumption_per_second_milliunits: 6000,
+                    steam_output_per_second_milliunits: 60000,
+                )),
+                fluid_boxes: [
+                    (
+                        capacity_milliunits: 100000,
+                        filter: Some("steam"),
+                        connections: [(local_offset: (x: 0, y: 0), side: North)],
+                    ),
+                    (
+                        capacity_milliunits: 100000,
+                        filter: Some("water"),
+                        connections: [(local_offset: (x: 1, y: 1), side: East)],
+                    ),
+                ],
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("swapped boiler fluid roles should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidFluidBox { entity, box_index: 0 }
+            if entity == "bad_boiler"
     ));
 }
 

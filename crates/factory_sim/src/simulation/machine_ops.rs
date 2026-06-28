@@ -139,6 +139,18 @@ pub(super) fn offshore_pump_state_for_prototype(
         .then_some(OffshorePumpState)
 }
 
+pub(super) fn fluid_box_states_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<Vec<FluidBoxState>> {
+    (!prototype.fluid_boxes.is_empty()).then(|| {
+        prototype
+            .fluid_boxes
+            .iter()
+            .map(|_| FluidBoxState::default())
+            .collect()
+    })
+}
+
 pub(super) fn transport_belt_segment_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,

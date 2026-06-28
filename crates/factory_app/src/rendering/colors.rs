@@ -38,6 +38,14 @@ pub(crate) fn offshore_pump_color() -> Color {
     Color::srgb(0.18, 0.44, 0.62)
 }
 
+pub(crate) fn pipe_color() -> Color {
+    Color::srgb(0.44, 0.50, 0.52)
+}
+
+pub(crate) fn storage_tank_color() -> Color {
+    Color::srgb(0.47, 0.57, 0.60)
+}
+
 pub(crate) fn transport_belt_color(speed_subtiles_per_tick: Option<u16>) -> Color {
     match speed_subtiles_per_tick {
         Some(16) => Color::srgb(0.83, 0.24, 0.18),

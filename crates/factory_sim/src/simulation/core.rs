@@ -32,6 +32,7 @@ impl Simulation {
             },
             power_networks: Vec::new(),
             entity_power_statuses: BTreeMap::new(),
+            fluid_networks: Vec::new(),
         }
     }
 
@@ -56,6 +57,7 @@ impl Simulation {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
+        self.advance_fluids_before_power();
         self.rebuild_power_state();
 
         let machines = profiler.begin();
@@ -107,6 +109,7 @@ impl Simulation {
         self.power_summary.hash(&mut hasher);
         self.power_networks.hash(&mut hasher);
         self.entity_power_statuses.hash(&mut hasher);
+        self.fluid_networks.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -124,6 +127,10 @@ impl Simulation {
 
     pub fn power_networks(&self) -> &[PowerNetworkSnapshot] {
         &self.power_networks
+    }
+
+    pub fn fluid_networks(&self) -> &[FluidNetworkSnapshot] {
+        &self.fluid_networks
     }
 
     pub fn entity_power_status(&self, entity_id: EntityId) -> Option<EntityPowerStatus> {

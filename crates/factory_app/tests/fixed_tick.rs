@@ -136,6 +136,8 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
         "fast_underground_belt_exit",
         "express_underground_belt_entrance",
         "express_underground_belt_exit",
+        "pipe",
+        "storage_tank",
     ] {
         assert!(
             buildable_names.contains(&expected),

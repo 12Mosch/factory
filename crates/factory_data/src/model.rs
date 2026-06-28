@@ -1,7 +1,13 @@
 use glam::IVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{EntityPrototypeId, ItemId, RecipeId, TechnologyId, TileId};
+use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidPrototype {
+    pub id: FluidId,
+    pub name: String,
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ItemPrototype {
@@ -41,6 +47,28 @@ pub struct EntityPrototype {
     pub steam_engine: Option<SteamEnginePrototype>,
     pub boiler: Option<BoilerPrototype>,
     pub offshore_pump: Option<OffshorePumpPrototype>,
+    pub fluid_boxes: Vec<FluidBoxPrototype>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidBoxPrototype {
+    pub capacity_milliunits: u64,
+    pub filter: Option<FluidId>,
+    pub connections: Vec<FluidConnectionPrototype>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidConnectionPrototype {
+    pub local_offset: IVec2,
+    pub side: FluidConnectionSide,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum FluidConnectionSide {
+    North,
+    East,
+    South,
+    West,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -173,6 +201,8 @@ pub enum EntityKind {
     SteamEngine,
     Boiler,
     OffshorePump,
+    Pipe,
+    StorageTank,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
