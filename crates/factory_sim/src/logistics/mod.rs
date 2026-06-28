@@ -4,4 +4,5 @@ pub mod transfer;
 
 pub use crate::simulation::{
     BeltError, BeltItem, BeltLane, BeltSegment, ContainerError, InserterError, InserterState,
+    SplitterError, SplitterState,
 };

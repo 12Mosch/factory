@@ -103,6 +103,7 @@ impl Simulation {
         let assembling_machine = assembling_machine_state_for_prototype(prototype);
         let lab = lab_state_for_prototype(prototype);
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
+        let splitter = splitter_state_for_prototype(prototype, direction);
         let inserter = inserter_state_for_prototype(prototype);
         Ok(self.entities.reserve_entity(EntityReservation {
             prototype_id,
@@ -116,6 +117,7 @@ impl Simulation {
             assembling_machine,
             lab,
             transport_belt,
+            splitter,
             inserter,
         }))
     }
@@ -227,6 +229,16 @@ impl Simulation {
                 lane.items.iter().map(|item| ItemStack {
                     item_id: item.item_id,
                     count: 1,
+                })
+            }));
+        }
+        if let Some(state) = self.entities.splitters.get(&placed.id) {
+            stacks.extend(state.input_lanes.iter().flat_map(|input_lanes| {
+                input_lanes.iter().flat_map(|lane| {
+                    lane.items.iter().map(|item| ItemStack {
+                        item_id: item.item_id,
+                        count: 1,
+                    })
                 })
             }));
         }
@@ -423,6 +435,10 @@ impl Simulation {
 
     pub fn belt_segment(&self, entity_id: EntityId) -> Result<&BeltSegment, BeltError> {
         self.entities.belt_segment(entity_id)
+    }
+
+    pub fn splitter_state(&self, entity_id: EntityId) -> Result<&SplitterState, SplitterError> {
+        self.entities.splitter_state(entity_id)
     }
 
     pub fn inserter_state(&self, entity_id: EntityId) -> Result<&InserterState, InserterError> {

@@ -118,7 +118,7 @@ impl Simulation {
         SimulationCounts {
             entity_count: self.entities.len() + self.entities.placed_len(),
             chunk_count: self.world.chunks.len(),
-            belt_count: self.entities.transport_belts.len(),
+            belt_count: self.entities.transport_belts.len() + self.entities.splitters.len(),
             belt_item_count: self
                 .entities
                 .transport_belts
@@ -130,7 +130,20 @@ impl Simulation {
                         .map(|lane| lane.items.len())
                         .sum::<usize>()
                 })
-                .sum(),
+                .sum::<usize>()
+                + self
+                    .entities
+                    .splitters
+                    .values()
+                    .map(|state| {
+                        state
+                            .input_lanes
+                            .iter()
+                            .flat_map(|input_lanes| input_lanes.iter())
+                            .map(|lane| lane.items.len())
+                            .sum::<usize>()
+                    })
+                    .sum::<usize>(),
             machine_count,
             inserter_count: self.entities.inserters.len(),
             active_machines,

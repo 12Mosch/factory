@@ -29,6 +29,9 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     for (entity_id, segment) in &sim.entities.transport_belts {
         validate_belt_segment(sim, *entity_id, segment)?;
     }
+    for (entity_id, state) in &sim.entities.splitters {
+        validate_splitter_state(sim, *entity_id, state)?;
+    }
     for (entity_id, state) in &sim.entities.inserters {
         validate_inserter(sim, *entity_id, state)?;
     }
@@ -273,6 +276,9 @@ fn validate_entity_state_ownership_and_kind(sim: &Simulation) -> Result<(), SimV
     for entity_id in sim.entities.transport_belts.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::TransportBelt)?;
     }
+    for entity_id in sim.entities.splitters.keys() {
+        validate_entity_state_kind(sim, *entity_id, EntityKind::Splitter)?;
+    }
     for entity_id in sim.entities.inserters.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::Inserter)?;
     }
@@ -469,33 +475,74 @@ fn validate_belt_segment(
     }
 
     for (lane_index, lane) in segment.lanes.iter().enumerate() {
-        let mut previous_position = None;
-        for item in &lane.items {
-            validate_item_stack(
-                &sim.world.prototypes,
-                ItemStack {
-                    item_id: item.item_id,
-                    count: 1,
-                },
-            )?;
-            if item.position_subtile >= BELT_SUBTILES_PER_TILE {
-                return Err(SimValidationError::InvalidBeltItemPosition {
-                    entity_id,
-                    lane_index,
-                    position_subtile: item.position_subtile,
-                });
-            }
-            if let Some(previous) = previous_position
-                && u32::from(item.position_subtile)
-                    < u32::from(previous) + u32::from(BELT_ITEM_SPACING_SUBTILES)
-            {
-                return Err(SimValidationError::BeltItemSpacingViolation {
-                    entity_id,
-                    lane_index,
-                });
-            }
-            previous_position = Some(item.position_subtile);
+        validate_transport_lane_items(sim, entity_id, lane_index, lane)?;
+    }
+
+    Ok(())
+}
+
+fn validate_splitter_state(
+    sim: &Simulation,
+    entity_id: EntityId,
+    state: &SplitterState,
+) -> Result<(), SimValidationError> {
+    if let Some(placed) = sim.entities.placed_entity(entity_id)
+        && placed.direction != state.dir
+    {
+        return Err(SimValidationError::OccupancyMismatch);
+    }
+
+    for (lane_index, output_port) in state.next_output_by_lane.iter().copied().enumerate() {
+        if output_port >= 2 {
+            return Err(SimValidationError::InvalidSplitterOutputCursor {
+                entity_id,
+                lane_index,
+                output_port,
+            });
         }
+    }
+
+    for (input_port, input_lanes) in state.input_lanes.iter().enumerate() {
+        for (lane_index, lane) in input_lanes.iter().enumerate() {
+            validate_transport_lane_items(sim, entity_id, input_port * 2 + lane_index, lane)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_transport_lane_items(
+    sim: &Simulation,
+    entity_id: EntityId,
+    lane_index: usize,
+    lane: &BeltLane,
+) -> Result<(), SimValidationError> {
+    let mut previous_position = None;
+    for item in &lane.items {
+        validate_item_stack(
+            &sim.world.prototypes,
+            ItemStack {
+                item_id: item.item_id,
+                count: 1,
+            },
+        )?;
+        if item.position_subtile >= BELT_SUBTILES_PER_TILE {
+            return Err(SimValidationError::InvalidBeltItemPosition {
+                entity_id,
+                lane_index,
+                position_subtile: item.position_subtile,
+            });
+        }
+        if let Some(previous) = previous_position
+            && u32::from(item.position_subtile)
+                < u32::from(previous) + u32::from(BELT_ITEM_SPACING_SUBTILES)
+        {
+            return Err(SimValidationError::BeltItemSpacingViolation {
+                entity_id,
+                lane_index,
+            });
+        }
+        previous_position = Some(item.position_subtile);
     }
 
     Ok(())

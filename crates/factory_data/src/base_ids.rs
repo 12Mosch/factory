@@ -37,6 +37,7 @@ pub struct BaseItemIds {
     pub chest: ItemId,
     pub stone_brick: ItemId,
     pub underground_belt: ItemId,
+    pub splitter: ItemId,
 }
 
 impl BaseItemIds {
@@ -62,6 +63,7 @@ impl BaseItemIds {
             chest: item_id_by_name(catalog, "chest"),
             stone_brick: item_id_by_name(catalog, "stone_brick"),
             underground_belt: item_id_by_name(catalog, "underground_belt"),
+            splitter: item_id_by_name(catalog, "splitter"),
         }
     }
 

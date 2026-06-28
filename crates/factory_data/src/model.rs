@@ -116,6 +116,7 @@ pub enum EntityKind {
     AssemblingMachine,
     Inserter,
     TransportBelt,
+    Splitter,
     Lab,
     Chest,
 }

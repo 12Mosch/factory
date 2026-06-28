@@ -26,6 +26,10 @@ pub(crate) fn transport_belt_color() -> Color {
     Color::srgb(0.93, 0.72, 0.18)
 }
 
+pub(crate) fn splitter_color() -> Color {
+    Color::srgb(0.80, 0.54, 0.20)
+}
+
 pub(crate) fn inserter_color() -> Color {
     Color::srgb(0.66, 0.58, 0.34)
 }

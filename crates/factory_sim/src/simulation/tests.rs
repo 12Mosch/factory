@@ -1232,6 +1232,127 @@ fn belt_does_not_duplicate_items() {
 }
 
 #[test]
+fn splitter_balances_one_full_input_across_two_outputs() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let fixture = place_splitter_fixture(&mut sim, 20, true);
+    let inserted = 40;
+
+    feed_belt_items(&mut sim, fixture.input0, iron_ore, inserted);
+    for _ in 0..2_000 {
+        sim.tick();
+    }
+
+    let output0 = total_item_count_on_belts(&sim, &fixture.output0, iron_ore);
+    let output1 = total_item_count_on_belts(&sim, &fixture.output1, iron_ore);
+
+    assert_eq!(output0 + output1, inserted as u32);
+    assert!(output0.abs_diff(output1) <= 1);
+}
+
+#[test]
+fn splitter_merges_two_inputs_into_one_output_without_loss() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+    let fixture = place_splitter_fixture(&mut sim, 30, false);
+    let inserted_per_input = 20;
+
+    feed_belt_items(&mut sim, fixture.input0, iron_ore, inserted_per_input);
+    feed_belt_items(&mut sim, fixture.input1, copper_ore, inserted_per_input);
+    for _ in 0..3_000 {
+        sim.tick();
+    }
+
+    let iron_output = total_item_count_on_belts(&sim, &fixture.output0, iron_ore);
+    let copper_output = total_item_count_on_belts(&sim, &fixture.output0, copper_ore);
+
+    assert_eq!(
+        total_belt_count_for_item(&sim, iron_ore),
+        inserted_per_input as u32
+    );
+    assert_eq!(
+        total_belt_count_for_item(&sim, copper_ore),
+        inserted_per_input as u32
+    );
+    assert!(iron_output > 0);
+    assert!(copper_output > 0);
+}
+
+#[test]
+fn splitter_blocked_outputs_do_not_delete_items() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let fixture = place_splitter_fixture(&mut sim, 0, false);
+    let inserted = 10;
+
+    feed_belt_items(&mut sim, fixture.input0, iron_ore, inserted);
+    for _ in 0..1_000 {
+        sim.tick();
+    }
+
+    assert_eq!(total_belt_count_for_item(&sim, iron_ore), inserted as u32);
+    sim.validate_state()
+        .expect("blocked splitter fixture should remain valid");
+}
+
+#[test]
+fn splitter_conserves_items_over_10000_ticks() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let fixture = place_splitter_fixture(&mut sim, 12, false);
+
+    feed_belt_items(&mut sim, fixture.input0, iron_ore, 12);
+    feed_belt_items(&mut sim, fixture.input1, copper_ore, 12);
+    feed_belt_items(&mut sim, fixture.input0, coal, 8);
+    let before = [
+        (iron_ore, total_belt_count_for_item(&sim, iron_ore)),
+        (copper_ore, total_belt_count_for_item(&sim, copper_ore)),
+        (coal, total_belt_count_for_item(&sim, coal)),
+    ];
+
+    for _ in 0..10_000 {
+        sim.tick();
+    }
+
+    for (item_id, before_count) in before {
+        assert_eq!(total_belt_count_for_item(&sim, item_id), before_count);
+    }
+    sim.validate_state()
+        .expect("long-running splitter fixture should remain valid");
+}
+
+#[test]
+fn save_load_round_trip_preserves_splitter_internal_state_hash() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+    let fixture = place_splitter_fixture(&mut sim, 1, true);
+    let state = sim
+        .entities
+        .splitters
+        .get_mut(&fixture.splitter)
+        .expect("placed splitter should have state");
+    state.input_lanes[0][0].items.push(BeltItem {
+        item_id: iron_ore,
+        position_subtile: 64,
+    });
+    state.input_lanes[1][1].items.push(BeltItem {
+        item_id: copper_ore,
+        position_subtile: 128,
+    });
+    state.next_output_by_lane = [1, 0];
+
+    let before_hash = sim.state_hash();
+    let bytes = save_to_bytes(&sim).expect("splitter state should save");
+    let loaded = load_from_bytes(&bytes).expect("splitter state should load");
+
+    assert_eq!(before_hash, loaded.state_hash());
+}
+
+#[test]
 fn blocked_belt_preserves_item_order() {
     let mut sim = Simulation::new_test_world(123);
     let belts = place_belt_line(&mut sim, 1);
@@ -3019,6 +3140,112 @@ fn place_belt_line(sim: &mut Simulation, length: i32) -> Vec<EntityId> {
     panic!("expected placeable belt line of length {length}");
 }
 
+struct SplitterFixture {
+    input0: EntityId,
+    input1: EntityId,
+    splitter: EntityId,
+    output0: Vec<EntityId>,
+    output1: Vec<EntityId>,
+}
+
+fn place_splitter_fixture(
+    sim: &mut Simulation,
+    output_len: i32,
+    connect_second_output: bool,
+) -> SplitterFixture {
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let splitter = entity_id_by_name(&sim.world.prototypes, "splitter");
+
+    for (x, y) in all_tile_coords(&sim.world) {
+        let input0 = (x, y);
+        let input1 = (x, y + 1);
+        let splitter_tile = (x + 1, y);
+        let output0_start = (x + 2, y);
+        let output1_start = (x + 2, y + 1);
+
+        let output0_tiles = (0..output_len)
+            .map(|offset| (output0_start.0 + offset, output0_start.1))
+            .collect::<Vec<_>>();
+        let output1_tiles = if connect_second_output {
+            (0..output_len)
+                .map(|offset| (output1_start.0 + offset, output1_start.1))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        if sim
+            .can_place_entity(belt, input0.0, input0.1, Direction::East)
+            .is_err()
+            || sim
+                .can_place_entity(belt, input1.0, input1.1, Direction::East)
+                .is_err()
+            || sim
+                .can_place_entity(splitter, splitter_tile.0, splitter_tile.1, Direction::East)
+                .is_err()
+            || output0_tiles.iter().any(|(tile_x, tile_y)| {
+                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .is_err()
+            })
+            || output1_tiles.iter().any(|(tile_x, tile_y)| {
+                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .is_err()
+            })
+        {
+            continue;
+        }
+
+        let input0_id = sim
+            .place_entity(belt, input0.0, input0.1, Direction::East)
+            .expect("validated splitter input belt should be placeable");
+        let input1_id = sim
+            .place_entity(belt, input1.0, input1.1, Direction::East)
+            .expect("validated splitter input belt should be placeable");
+        let splitter_id = sim
+            .place_entity(splitter, splitter_tile.0, splitter_tile.1, Direction::East)
+            .expect("validated splitter should be placeable");
+        let output0 = output0_tiles
+            .iter()
+            .map(|(tile_x, tile_y)| {
+                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .expect("validated splitter output belt should be placeable")
+            })
+            .collect();
+        let output1 = output1_tiles
+            .iter()
+            .map(|(tile_x, tile_y)| {
+                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .expect("validated splitter output belt should be placeable")
+            })
+            .collect();
+
+        return SplitterFixture {
+            input0: input0_id,
+            input1: input1_id,
+            splitter: splitter_id,
+            output0,
+            output1,
+        };
+    }
+
+    panic!("expected placeable splitter fixture");
+}
+
+fn total_item_count_on_belts(sim: &Simulation, belts: &[EntityId], item_id: ItemId) -> u32 {
+    belts
+        .iter()
+        .filter_map(|entity_id| sim.belt_segment(*entity_id).ok())
+        .map(|segment| {
+            segment
+                .lanes
+                .iter()
+                .flat_map(|lane| lane.items.iter())
+                .filter(|item| item.item_id == item_id)
+                .count() as u32
+        })
+        .sum()
+}
+
 fn place_underground_belt_pair(
     sim: &mut Simulation,
     offset: i32,
@@ -3075,7 +3302,8 @@ fn feed_belt_items(sim: &mut Simulation, belt_id: EntityId, item_id: ItemId, cou
 }
 
 fn total_belt_item_count(sim: &Simulation) -> usize {
-    sim.entities
+    let belt_items = sim
+        .entities
         .placed_entities()
         .filter_map(|placed| sim.belt_segment(placed.id).ok())
         .map(|segment| {
@@ -3085,7 +3313,22 @@ fn total_belt_item_count(sim: &Simulation) -> usize {
                 .map(|lane| lane.items.len())
                 .sum::<usize>()
         })
-        .sum()
+        .sum::<usize>();
+    let splitter_items = sim
+        .entities
+        .splitters
+        .values()
+        .map(|state| {
+            state
+                .input_lanes
+                .iter()
+                .flat_map(|input_lanes| input_lanes.iter())
+                .map(|lane| lane.items.len())
+                .sum::<usize>()
+        })
+        .sum::<usize>();
+
+    belt_items + splitter_items
 }
 
 fn place_burner_drill_on_resource(
@@ -3771,7 +4014,8 @@ fn total_item_count_in_sim(sim: &Simulation, item_id: ItemId) -> u32 {
 }
 
 fn total_belt_count_for_item(sim: &Simulation, item_id: ItemId) -> u32 {
-    sim.entities
+    let belt_count = sim
+        .entities
         .transport_belts
         .values()
         .map(|segment| {
@@ -3782,7 +4026,23 @@ fn total_belt_count_for_item(sim: &Simulation, item_id: ItemId) -> u32 {
                 .filter(|item| item.item_id == item_id)
                 .count() as u32
         })
-        .sum()
+        .sum::<u32>();
+    let splitter_count = sim
+        .entities
+        .splitters
+        .values()
+        .map(|state| {
+            state
+                .input_lanes
+                .iter()
+                .flat_map(|input_lanes| input_lanes.iter())
+                .flat_map(|lane| lane.items.iter())
+                .filter(|item| item.item_id == item_id)
+                .count() as u32
+        })
+        .sum::<u32>();
+
+    belt_count + splitter_count
 }
 
 fn count_slot_item(slot: Option<ItemStack>, item_id: ItemId) -> u32 {

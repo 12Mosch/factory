@@ -113,6 +113,13 @@ pub(super) fn transport_belt_segment_for_prototype(
     ))
 }
 
+pub(super) fn splitter_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+    direction: Direction,
+) -> Option<SplitterState> {
+    (prototype.entity_kind == EntityKind::Splitter).then(|| SplitterState::new(direction))
+}
+
 pub(super) fn inserter_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<InserterState> {
@@ -171,6 +178,12 @@ pub(super) fn peek_inserter_source_item(
         .transport_belts
         .get(&entity_id)
         .and_then(belt_pickup_item)
+        .or_else(|| {
+            entities
+                .splitters
+                .get(&entity_id)
+                .and_then(splitter_pickup_item)
+        })
 }
 
 pub(super) fn inserter_target_can_accept(
@@ -210,6 +223,14 @@ pub(super) fn inserter_target_can_accept(
         .is_some_and(|segment| {
             item.count == 1 && belt_output_lane_index(segment, item.item_id).is_some()
         })
+        || entities.splitters.get(&entity_id).is_some_and(|state| {
+            let Some(input_port) =
+                splitter_input_port_for_occupied_tile(entities, entity_id, drop_tile)
+            else {
+                return false;
+            };
+            item.count == 1 && splitter_output_lane_index(state, input_port, item.item_id).is_some()
+        })
 }
 
 pub(super) fn try_take_inserter_source_item(
@@ -241,6 +262,12 @@ pub(super) fn try_take_inserter_source_item(
 
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id)
         && remove_one_item_from_belt(segment, item_id)
+    {
+        return Some(ItemStack { item_id, count: 1 });
+    }
+
+    if let Some(state) = entities.splitters.get_mut(&entity_id)
+        && remove_one_item_from_splitter(state, item_id)
     {
         return Some(ItemStack { item_id, count: 1 });
     }
@@ -316,6 +343,28 @@ pub(super) fn try_drop_inserter_item(
         return true;
     }
 
+    let splitter_input_port = splitter_input_port_for_occupied_tile(entities, entity_id, drop_tile);
+    if let Some(state) = entities.splitters.get_mut(&entity_id) {
+        if item.count != 1 {
+            return false;
+        }
+
+        let Some(input_port) = splitter_input_port else {
+            return false;
+        };
+        let Some(lane_index) = splitter_output_lane_index(state, input_port, item.item_id) else {
+            return false;
+        };
+        state.input_lanes[input_port][lane_index].items.insert(
+            0,
+            BeltItem {
+                item_id: item.item_id,
+                position_subtile: 0,
+            },
+        );
+        return true;
+    }
+
     false
 }
 
@@ -346,6 +395,44 @@ pub(super) fn remove_one_item_from_belt(segment: &mut BeltSegment, item_id: Item
     };
 
     segment.lanes[lane_index].items.remove(item_index);
+    true
+}
+
+pub(super) fn splitter_pickup_item(state: &SplitterState) -> Option<ItemId> {
+    state
+        .input_lanes
+        .iter()
+        .flat_map(|input_lanes| input_lanes.iter())
+        .flat_map(|lane| lane.items.iter())
+        .max_by_key(|item| item.position_subtile)
+        .map(|item| item.item_id)
+}
+
+pub(super) fn remove_one_item_from_splitter(state: &mut SplitterState, item_id: ItemId) -> bool {
+    let Some((input_port, lane_index, item_index, _)) = state
+        .input_lanes
+        .iter()
+        .enumerate()
+        .flat_map(|(input_port, input_lanes)| {
+            input_lanes
+                .iter()
+                .enumerate()
+                .flat_map(move |(lane_index, lane)| {
+                    lane.items
+                        .iter()
+                        .enumerate()
+                        .map(move |(item_index, item)| (input_port, lane_index, item_index, item))
+                })
+        })
+        .filter(|(_, _, _, item)| item.item_id == item_id)
+        .max_by_key(|(_, _, _, item)| item.position_subtile)
+    else {
+        return false;
+    };
+
+    state.input_lanes[input_port][lane_index]
+        .items
+        .remove(item_index);
     true
 }
 
@@ -577,6 +664,15 @@ pub(super) fn drill_output_target(
         Some(entity_id) if entities.transport_belts.contains_key(&entity_id) => {
             DrillOutputTarget::Belt(entity_id)
         }
+        Some(entity_id) if entities.splitters.contains_key(&entity_id) => {
+            splitter_input_port_for_occupied_tile(entities, entity_id, (x, y)).map_or(
+                DrillOutputTarget::Blocked,
+                |input_port| DrillOutputTarget::Splitter {
+                    entity_id,
+                    input_port,
+                },
+            )
+        }
         Some(entity_id) if entities.entity_inventories.contains_key(&entity_id) => {
             DrillOutputTarget::Inventory(entity_id)
         }
@@ -625,6 +721,13 @@ pub(super) fn drill_output_target_can_accept(
             .transport_belts
             .get(&entity_id)
             .is_some_and(|segment| belt_output_lane_index(segment, item_id).is_some()),
+        DrillOutputTarget::Splitter {
+            entity_id,
+            input_port,
+        } => entities
+            .splitters
+            .get(&entity_id)
+            .is_some_and(|state| splitter_output_lane_index(state, input_port, item_id).is_some()),
         DrillOutputTarget::Blocked => false,
     }
 }
@@ -667,6 +770,24 @@ pub(super) fn insert_drill_output(
                 },
             );
         }
+        DrillOutputTarget::Splitter {
+            entity_id,
+            input_port,
+        } => {
+            let state = entities
+                .splitters
+                .get_mut(&entity_id)
+                .expect("validated output splitter should still exist");
+            let lane_index = splitter_output_lane_index(state, input_port, item_id)
+                .expect("validated splitter lane should accept");
+            state.input_lanes[input_port][lane_index].items.insert(
+                0,
+                BeltItem {
+                    item_id,
+                    position_subtile: 0,
+                },
+            );
+        }
         DrillOutputTarget::Blocked => {
             unreachable!("blocked drill output is checked before mining")
         }
@@ -681,7 +802,9 @@ pub(super) fn try_export_stored_drill_output(
 ) -> bool {
     if !matches!(
         output_target,
-        DrillOutputTarget::Inventory(_) | DrillOutputTarget::Belt(_)
+        DrillOutputTarget::Inventory(_)
+            | DrillOutputTarget::Belt(_)
+            | DrillOutputTarget::Splitter { .. }
     ) {
         return false;
     }
@@ -723,6 +846,32 @@ pub(super) fn belt_output_lane_index(segment: &BeltSegment, _item_id: ItemId) ->
     } else {
         None
     }
+}
+
+pub(super) fn splitter_output_lane_index(
+    state: &SplitterState,
+    input_port: usize,
+    _item_id: ItemId,
+) -> Option<usize> {
+    let input_lanes = state.input_lanes.get(input_port)?;
+    if belt_lane_can_accept_position(&input_lanes[0], 0) {
+        Some(0)
+    } else if belt_lane_can_accept_position(&input_lanes[1], 0) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn splitter_input_port_for_occupied_tile(
+    entities: &EntityStore,
+    entity_id: EntityId,
+    tile: (i32, i32),
+) -> Option<usize> {
+    let placed = entities.placed_entities.get(&entity_id)?;
+    splitter_port_tiles(placed)?
+        .into_iter()
+        .position(|port_tile| port_tile == tile)
 }
 
 pub(super) fn insert_into_single_slot(slot: &mut Option<ItemStack>, stack: ItemStack) {

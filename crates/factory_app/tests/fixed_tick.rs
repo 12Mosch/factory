@@ -120,6 +120,7 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
     for expected in [
         "chest",
         "transport_belt",
+        "splitter",
         "inserter",
         "stone_furnace",
         "burner_mining_drill",

@@ -9,7 +9,7 @@ use crate::constants::{
 };
 use crate::rendering::colors::{
     assembler_color, burner_drill_color, chest_color, furnace_color, inserter_color, lab_color,
-    transport_belt_color,
+    splitter_color, transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
 use crate::resources::{RenderSyncStats, SimResource};
@@ -101,6 +101,7 @@ pub(crate) fn entity_prototype_render_style(
             transport_belt_color(),
             Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
         )),
+        EntityKind::Splitter => Some((splitter_color(), machine_size())),
         EntityKind::Chest => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
         EntityKind::MiningDrill => Some((burner_drill_color(), machine_size())),
         EntityKind::Furnace => Some((furnace_color(), machine_size())),

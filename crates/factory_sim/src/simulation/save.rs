@@ -1,7 +1,7 @@
 use super::*;
 use bincode::Options;
 
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 1;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";

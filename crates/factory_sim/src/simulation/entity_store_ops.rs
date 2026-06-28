@@ -39,6 +39,7 @@ impl EntityStore {
             assembling_machines: BTreeMap::new(),
             labs: BTreeMap::new(),
             transport_belts: BTreeMap::new(),
+            splitters: BTreeMap::new(),
             inserters: BTreeMap::new(),
             occupancy: OccupancyGrid::default(),
             next_entity_id: 2,
@@ -215,6 +216,19 @@ impl EntityStore {
             .ok_or(InserterError::NotInserter(entity_id))
     }
 
+    pub(super) fn splitter_state(
+        &self,
+        entity_id: EntityId,
+    ) -> Result<&SplitterState, SplitterError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(SplitterError::MissingEntity(entity_id));
+        }
+
+        self.splitters
+            .get(&entity_id)
+            .ok_or(SplitterError::NotSplitter(entity_id))
+    }
+
     pub(super) fn insert_item_onto_belt(
         &mut self,
         entity_id: EntityId,
@@ -276,6 +290,9 @@ impl EntityStore {
         if let Some(segment) = reservation.transport_belt {
             self.transport_belts.insert(id, segment);
         }
+        if let Some(state) = reservation.splitter {
+            self.splitters.insert(id, state);
+        }
         if let Some(state) = reservation.inserter {
             self.inserters.insert(id, state);
         }
@@ -302,6 +319,9 @@ impl EntityStore {
         if let Some(segment) = self.transport_belts.get_mut(&entity_id) {
             segment.dir = direction;
         }
+        if let Some(splitter) = self.splitters.get_mut(&entity_id) {
+            splitter.dir = direction;
+        }
 
         Ok(())
     }
@@ -314,6 +334,7 @@ impl EntityStore {
         self.assembling_machines.remove(&entity_id);
         self.labs.remove(&entity_id);
         self.transport_belts.remove(&entity_id);
+        self.splitters.remove(&entity_id);
         self.inserters.remove(&entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);

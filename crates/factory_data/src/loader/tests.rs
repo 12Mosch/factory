@@ -8,7 +8,7 @@ use crate::model::{
     UndergroundBeltPart,
 };
 
-const ITEM_NAMES: [&str; 20] = [
+const ITEM_NAMES: [&str; 21] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -29,9 +29,10 @@ const ITEM_NAMES: [&str; 20] = [
     "chest",
     "stone_brick",
     "underground_belt",
+    "splitter",
 ];
 
-const RECIPE_NAMES: [&str; 16] = [
+const RECIPE_NAMES: [&str; 17] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -48,9 +49,10 @@ const RECIPE_NAMES: [&str; 16] = [
     "chest",
     "stone_brick",
     "underground_belt",
+    "splitter",
 ];
 
-const ENTITY_NAMES: [&str; 13] = [
+const ENTITY_NAMES: [&str; 14] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -64,6 +66,7 @@ const ENTITY_NAMES: [&str; 13] = [
     "chest",
     "underground_belt_entrance",
     "underground_belt_exit",
+    "splitter",
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -73,9 +76,9 @@ const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 20);
-    assert_eq!(catalog.recipes.len(), 16);
-    assert_eq!(catalog.entities.len(), 13);
+    assert_eq!(catalog.items.len(), 21);
+    assert_eq!(catalog.recipes.len(), 17);
+    assert_eq!(catalog.entities.len(), 14);
     assert_eq!(catalog.tiles.len(), 3);
     assert_eq!(catalog.technologies.len(), 1);
 }

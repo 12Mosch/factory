@@ -276,6 +276,13 @@ pub struct BeltSegment {
     pub lanes: [BeltLane; 2],
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct SplitterState {
+    pub dir: Direction,
+    pub input_lanes: [[BeltLane; 2]; 2],
+    pub next_output_by_lane: [usize; 2],
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct UndergroundBeltSegment {
     pub part: UndergroundBeltPart,
@@ -336,6 +343,19 @@ impl BeltSegment {
     }
 }
 
+impl SplitterState {
+    pub fn new(dir: Direction) -> Self {
+        Self {
+            dir,
+            input_lanes: [
+                [BeltLane::default(), BeltLane::default()],
+                [BeltLane::default(), BeltLane::default()],
+            ],
+            next_output_by_lane: [0, 0],
+        }
+    }
+}
+
 impl Default for BeltSegment {
     fn default() -> Self {
         Self::new(Direction::default())
@@ -389,6 +409,12 @@ pub enum BeltError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitterError {
+    MissingEntity(EntityId),
+    NotSplitter(EntityId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InserterError {
     MissingEntity(EntityId),
     NotInserter(EntityId),
@@ -410,6 +436,7 @@ pub struct EntityStore {
     assembling_machines: BTreeMap<EntityId, AssemblingMachineState>,
     labs: BTreeMap<EntityId, LabState>,
     transport_belts: BTreeMap<EntityId, BeltSegment>,
+    splitters: BTreeMap<EntityId, SplitterState>,
     inserters: BTreeMap<EntityId, InserterState>,
     occupancy: OccupancyGrid,
     next_entity_id: u64,
@@ -437,6 +464,10 @@ enum DrillOutputTarget {
     InternalSlot,
     Inventory(EntityId),
     Belt(EntityId),
+    Splitter {
+        entity_id: EntityId,
+        input_port: usize,
+    },
     Blocked,
 }
 
@@ -452,6 +483,7 @@ struct EntityReservation {
     assembling_machine: Option<AssemblingMachineState>,
     lab: Option<LabState>,
     transport_belt: Option<BeltSegment>,
+    splitter: Option<SplitterState>,
     inserter: Option<InserterState>,
 }
 
@@ -593,6 +625,11 @@ pub enum SimValidationError {
     BeltItemSpacingViolation {
         entity_id: EntityId,
         lane_index: usize,
+    },
+    InvalidSplitterOutputCursor {
+        entity_id: EntityId,
+        lane_index: usize,
+        output_port: usize,
     },
     InvalidMachineItem {
         entity_id: EntityId,

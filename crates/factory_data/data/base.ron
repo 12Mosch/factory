@@ -20,6 +20,7 @@
         (id: 17, name: "chest", stack_size: 50),
         (id: 18, name: "stone_brick", stack_size: 100),
         (id: 19, name: "underground_belt", stack_size: 50),
+        (id: 20, name: "splitter", stack_size: 50),
     ],
     recipes: [
         (
@@ -178,6 +179,18 @@
             ],
             products: [(item: "underground_belt", amount: 2)],
         ),
+        (
+            id: 16,
+            name: "splitter",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "iron_plate", amount: 5),
+                (item: "electronic_circuit", amount: 5),
+                (item: "transport_belt", amount: 4),
+            ],
+            products: [(item: "splitter", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -289,6 +302,13 @@
             transport_belt: Some((
                 underground: Some((part: Exit, max_distance: 4)),
             )),
+        ),
+        (
+            id: 13,
+            name: "splitter",
+            entity_kind: Splitter,
+            size: (x: 2, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
         ),
     ],
     tiles: [

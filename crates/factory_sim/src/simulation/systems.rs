@@ -2,25 +2,49 @@ use super::*;
 
 impl Simulation {
     pub fn advance_transport_belts(&mut self) {
-        let tile_to_belt = transport_belt_tile_map(&self.entities);
-        let lane_keys = self
+        let tile_to_endpoint = transport_endpoint_map(&self.entities);
+        let mut lane_keys = self
             .entities
             .transport_belts
             .keys()
             .flat_map(|entity_id| {
                 [
-                    BeltLaneKey {
+                    TransportLaneKey::Belt {
                         entity_id: *entity_id,
                         lane_index: 0,
                     },
-                    BeltLaneKey {
+                    TransportLaneKey::Belt {
                         entity_id: *entity_id,
                         lane_index: 1,
                     },
                 ]
             })
             .collect::<Vec<_>>();
-        let mut advancement = TransportBeltAdvancement::new(&mut self.entities, tile_to_belt);
+        lane_keys.extend(self.entities.splitters.keys().flat_map(|entity_id| {
+            [
+                TransportLaneKey::Splitter {
+                    entity_id: *entity_id,
+                    input_port: 0,
+                    lane_index: 0,
+                },
+                TransportLaneKey::Splitter {
+                    entity_id: *entity_id,
+                    input_port: 0,
+                    lane_index: 1,
+                },
+                TransportLaneKey::Splitter {
+                    entity_id: *entity_id,
+                    input_port: 1,
+                    lane_index: 0,
+                },
+                TransportLaneKey::Splitter {
+                    entity_id: *entity_id,
+                    input_port: 1,
+                    lane_index: 1,
+                },
+            ]
+        }));
+        let mut advancement = TransportBeltAdvancement::new(&mut self.entities, tile_to_endpoint);
 
         for key in lane_keys {
             advancement.process_lane(key);
