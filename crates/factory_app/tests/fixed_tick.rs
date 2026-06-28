@@ -120,7 +120,11 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
     for expected in [
         "chest",
         "transport_belt",
+        "fast_transport_belt",
+        "express_transport_belt",
         "splitter",
+        "fast_splitter",
+        "express_splitter",
         "inserter",
         "stone_furnace",
         "burner_mining_drill",
@@ -128,6 +132,10 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
         "lab",
         "underground_belt_entrance",
         "underground_belt_exit",
+        "fast_underground_belt_entrance",
+        "fast_underground_belt_exit",
+        "express_underground_belt_entrance",
+        "express_underground_belt_exit",
     ] {
         assert!(
             buildable_names.contains(&expected),

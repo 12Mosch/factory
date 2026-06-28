@@ -98,10 +98,23 @@ pub(crate) fn entity_prototype_render_style(
 
     match prototype.entity_kind {
         EntityKind::TransportBelt => Some((
-            transport_belt_color(),
+            transport_belt_color(
+                prototype
+                    .transport_belt
+                    .as_ref()
+                    .map(|belt| belt.speed_subtiles_per_tick),
+            ),
             Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
         )),
-        EntityKind::Splitter => Some((splitter_color(), machine_size())),
+        EntityKind::Splitter => Some((
+            splitter_color(
+                prototype
+                    .splitter
+                    .as_ref()
+                    .map(|splitter| splitter.speed_subtiles_per_tick),
+            ),
+            machine_size(),
+        )),
         EntityKind::Chest => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
         EntityKind::MiningDrill => Some((burner_drill_color(), machine_size())),
         EntityKind::Furnace => Some((furnace_color(), machine_size())),

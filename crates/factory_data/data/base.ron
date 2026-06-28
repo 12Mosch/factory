@@ -21,6 +21,12 @@
         (id: 18, name: "stone_brick", stack_size: 100),
         (id: 19, name: "underground_belt", stack_size: 50),
         (id: 20, name: "splitter", stack_size: 50),
+        (id: 21, name: "fast_transport_belt", stack_size: 100),
+        (id: 22, name: "express_transport_belt", stack_size: 100),
+        (id: 23, name: "fast_underground_belt", stack_size: 50),
+        (id: 24, name: "express_underground_belt", stack_size: 50),
+        (id: 25, name: "fast_splitter", stack_size: 50),
+        (id: 26, name: "express_splitter", stack_size: 50),
     ],
     recipes: [
         (
@@ -255,6 +261,9 @@
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
+            transport_belt: Some((
+                speed_subtiles_per_tick: 8,
+            )),
         ),
         (
             id: 8,
@@ -289,6 +298,7 @@
             collision_mask: (layers: ["ground", "transport"]),
             build_item: Some("underground_belt"),
             transport_belt: Some((
+                speed_subtiles_per_tick: 8,
                 underground: Some((part: Entrance, max_distance: 4)),
             )),
         ),
@@ -300,6 +310,7 @@
             collision_mask: (layers: ["ground", "transport"]),
             build_item: Some("underground_belt"),
             transport_belt: Some((
+                speed_subtiles_per_tick: 8,
                 underground: Some((part: Exit, max_distance: 4)),
             )),
         ),
@@ -309,6 +320,91 @@
             entity_kind: Splitter,
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
+            splitter: Some((speed_subtiles_per_tick: 8)),
+        ),
+        (
+            id: 14,
+            name: "fast_transport_belt",
+            entity_kind: TransportBelt,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            transport_belt: Some((
+                speed_subtiles_per_tick: 16,
+            )),
+        ),
+        (
+            id: 15,
+            name: "express_transport_belt",
+            entity_kind: TransportBelt,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            transport_belt: Some((
+                speed_subtiles_per_tick: 24,
+            )),
+        ),
+        (
+            id: 16,
+            name: "fast_underground_belt_entrance",
+            entity_kind: TransportBelt,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            build_item: Some("fast_underground_belt"),
+            transport_belt: Some((
+                speed_subtiles_per_tick: 16,
+                underground: Some((part: Entrance, max_distance: 6)),
+            )),
+        ),
+        (
+            id: 17,
+            name: "fast_underground_belt_exit",
+            entity_kind: TransportBelt,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            build_item: Some("fast_underground_belt"),
+            transport_belt: Some((
+                speed_subtiles_per_tick: 16,
+                underground: Some((part: Exit, max_distance: 6)),
+            )),
+        ),
+        (
+            id: 18,
+            name: "express_underground_belt_entrance",
+            entity_kind: TransportBelt,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            build_item: Some("express_underground_belt"),
+            transport_belt: Some((
+                speed_subtiles_per_tick: 24,
+                underground: Some((part: Entrance, max_distance: 8)),
+            )),
+        ),
+        (
+            id: 19,
+            name: "express_underground_belt_exit",
+            entity_kind: TransportBelt,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            build_item: Some("express_underground_belt"),
+            transport_belt: Some((
+                speed_subtiles_per_tick: 24,
+                underground: Some((part: Exit, max_distance: 8)),
+            )),
+        ),
+        (
+            id: 20,
+            name: "fast_splitter",
+            entity_kind: Splitter,
+            size: (x: 2, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            splitter: Some((speed_subtiles_per_tick: 16)),
+        ),
+        (
+            id: 21,
+            name: "express_splitter",
+            entity_kind: Splitter,
+            size: (x: 2, y: 1),
+            collision_mask: (layers: ["ground", "transport"]),
+            splitter: Some((speed_subtiles_per_tick: 24)),
         ),
     ],
     tiles: [

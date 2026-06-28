@@ -34,6 +34,7 @@ pub struct EntityPrototype {
     pub mining_drill: Option<MiningDrillPrototype>,
     pub assembling_machine: Option<AssemblingMachinePrototype>,
     pub transport_belt: Option<TransportBeltPrototype>,
+    pub splitter: Option<SplitterPrototype>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -57,7 +58,13 @@ pub struct AssemblingMachinePrototype {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TransportBeltPrototype {
+    pub speed_subtiles_per_tick: u16,
     pub underground: Option<UndergroundBeltPrototype>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct SplitterPrototype {
+    pub speed_subtiles_per_tick: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

@@ -22,12 +22,20 @@ pub(crate) fn lab_color() -> Color {
     Color::srgb(0.47, 0.36, 0.62)
 }
 
-pub(crate) fn transport_belt_color() -> Color {
-    Color::srgb(0.93, 0.72, 0.18)
+pub(crate) fn transport_belt_color(speed_subtiles_per_tick: Option<u16>) -> Color {
+    match speed_subtiles_per_tick {
+        Some(16) => Color::srgb(0.83, 0.24, 0.18),
+        Some(24) => Color::srgb(0.18, 0.45, 0.88),
+        _ => Color::srgb(0.93, 0.72, 0.18),
+    }
 }
 
-pub(crate) fn splitter_color() -> Color {
-    Color::srgb(0.80, 0.54, 0.20)
+pub(crate) fn splitter_color(speed_subtiles_per_tick: Option<u16>) -> Color {
+    match speed_subtiles_per_tick {
+        Some(16) => Color::srgb(0.68, 0.18, 0.15),
+        Some(24) => Color::srgb(0.14, 0.34, 0.72),
+        _ => Color::srgb(0.80, 0.54, 0.20),
+    }
 }
 
 pub(crate) fn inserter_color() -> Color {

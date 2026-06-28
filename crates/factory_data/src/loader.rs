@@ -166,6 +166,7 @@ fn load_entities(
                     }),
                 assembling_machine: entity.assembling_machine,
                 transport_belt: entity.transport_belt,
+                splitter: entity.splitter,
             })
         })
         .collect()

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::model::{
-    AssemblingMachinePrototype, BurnerPrototype, CraftingCategory, EntityKind,
+    AssemblingMachinePrototype, BurnerPrototype, CraftingCategory, EntityKind, SplitterPrototype,
     TransportBeltPrototype,
 };
 use crate::validation::RawPrototype;
@@ -47,6 +47,7 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) mining_drill: Option<RawMiningDrillPrototype>,
     pub(crate) assembling_machine: Option<AssemblingMachinePrototype>,
     pub(crate) transport_belt: Option<TransportBeltPrototype>,
+    pub(crate) splitter: Option<SplitterPrototype>,
 }
 
 #[derive(Debug, Deserialize)]

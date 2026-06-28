@@ -3,6 +3,46 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 const BASIC_UNDERGROUND_BELT_MAX_OFFSET: i32 = 5;
+const THROUGHPUT_TEST_TICKS: usize = 60;
+const THROUGHPUT_UPSTREAM_LEN: i32 = 12;
+const THROUGHPUT_DOWNSTREAM_LEN: i32 = 12;
+
+#[derive(Clone, Copy)]
+struct BeltTier {
+    belt: &'static str,
+    underground_entrance: &'static str,
+    underground_exit: &'static str,
+    splitter: &'static str,
+    underground_max_distance: u8,
+    items_per_second: u32,
+}
+
+const BELT_TIERS: [BeltTier; 3] = [
+    BeltTier {
+        belt: "transport_belt",
+        underground_entrance: "underground_belt_entrance",
+        underground_exit: "underground_belt_exit",
+        splitter: "splitter",
+        underground_max_distance: 4,
+        items_per_second: 15,
+    },
+    BeltTier {
+        belt: "fast_transport_belt",
+        underground_entrance: "fast_underground_belt_entrance",
+        underground_exit: "fast_underground_belt_exit",
+        splitter: "fast_splitter",
+        underground_max_distance: 6,
+        items_per_second: 30,
+    },
+    BeltTier {
+        belt: "express_transport_belt",
+        underground_entrance: "express_underground_belt_entrance",
+        underground_exit: "express_underground_belt_exit",
+        splitter: "express_splitter",
+        underground_max_distance: 8,
+        items_per_second: 45,
+    },
+];
 
 #[test]
 fn world_tile_lookup_is_stable_across_chunk_boundaries() {
@@ -1232,6 +1272,57 @@ fn belt_does_not_duplicate_items() {
 }
 
 #[test]
+fn straight_belt_tier_throughput_matches_prototype_speed() {
+    for tier in BELT_TIERS {
+        let mut sim = Simulation::new_test_world(123);
+
+        assert_eq!(
+            straight_belt_throughput_over_one_second(&mut sim, tier.belt),
+            tier.items_per_second,
+            "{} should move {} items per second",
+            tier.belt,
+            tier.items_per_second
+        );
+    }
+}
+
+#[test]
+fn underground_belt_tier_throughput_matches_prototype_speed() {
+    for tier in BELT_TIERS {
+        let mut sim = Simulation::new_test_world(123);
+
+        assert_eq!(
+            underground_belt_throughput_over_one_second(
+                &mut sim,
+                tier.belt,
+                tier.underground_entrance,
+                tier.underground_exit,
+                tier.underground_max_distance,
+            ),
+            tier.items_per_second,
+            "{} pair should move {} items per second",
+            tier.underground_entrance,
+            tier.items_per_second
+        );
+    }
+}
+
+#[test]
+fn splitter_tier_throughput_matches_prototype_speed() {
+    for tier in BELT_TIERS {
+        let mut sim = Simulation::new_test_world(123);
+
+        assert_eq!(
+            splitter_throughput_over_one_second(&mut sim, tier.belt, tier.splitter),
+            tier.items_per_second,
+            "{} should move {} items per second",
+            tier.splitter,
+            tier.items_per_second
+        );
+    }
+}
+
+#[test]
 fn splitter_balances_one_full_input_across_two_outputs() {
     let mut sim = Simulation::new_test_world(123);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
@@ -1569,7 +1660,7 @@ fn removing_underground_exit_invalidates_pair_without_losing_items() {
 fn belt_pickup_uses_front_most_item_across_lanes() {
     let iron_ore = ItemId::new(0);
     let copper_ore = ItemId::new(1);
-    let mut segment = BeltSegment::new(Direction::East);
+    let mut segment = BeltSegment::new(Direction::East, 8);
     segment.lanes[0].items.push(BeltItem {
         item_id: iron_ore,
         position_subtile: 100,
@@ -1585,7 +1676,7 @@ fn belt_pickup_uses_front_most_item_across_lanes() {
 #[test]
 fn belt_removal_uses_front_most_matching_item_across_lanes() {
     let iron_ore = ItemId::new(0);
-    let mut segment = BeltSegment::new(Direction::East);
+    let mut segment = BeltSegment::new(Direction::East, 8);
     segment.lanes[0].items.push(BeltItem {
         item_id: iron_ore,
         position_subtile: 100,
@@ -3121,8 +3212,66 @@ fn first_resource_tile_for_item(world: &WorldSim, resource_item: ItemId) -> (i32
     panic!("expected at least one resource tile for {resource_item:?}");
 }
 
+fn straight_belt_throughput_over_one_second(sim: &mut Simulation, belt_name: &str) -> u32 {
+    let belts = place_named_belt_line(
+        sim,
+        belt_name,
+        THROUGHPUT_UPSTREAM_LEN + THROUGHPUT_DOWNSTREAM_LEN,
+    );
+    let split = THROUGHPUT_UPSTREAM_LEN as usize;
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    seed_saturated_belts(sim, &belts[..split], iron_ore);
+
+    for _ in 0..THROUGHPUT_TEST_TICKS {
+        sim.tick();
+    }
+
+    total_item_count_on_belts(sim, &belts[split..], iron_ore)
+}
+
+fn underground_belt_throughput_over_one_second(
+    sim: &mut Simulation,
+    belt_name: &str,
+    entrance_name: &str,
+    exit_name: &str,
+    max_distance: u8,
+) -> u32 {
+    let (seeded, measured) =
+        place_throughput_underground_pair(sim, belt_name, entrance_name, exit_name, max_distance);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    seed_saturated_belts(sim, &seeded, iron_ore);
+
+    for _ in 0..THROUGHPUT_TEST_TICKS {
+        sim.tick();
+    }
+
+    total_item_count_on_belts(sim, &measured, iron_ore)
+}
+
+fn splitter_throughput_over_one_second(
+    sim: &mut Simulation,
+    belt_name: &str,
+    splitter_name: &str,
+) -> u32 {
+    let (input, splitter_id, outputs) =
+        place_throughput_splitter_fixture(sim, belt_name, splitter_name);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    seed_saturated_belts(sim, &input, iron_ore);
+    seed_saturated_splitter_input(sim, splitter_id, 0, iron_ore);
+
+    for _ in 0..THROUGHPUT_TEST_TICKS {
+        sim.tick();
+    }
+
+    total_item_count_on_belts(sim, &outputs, iron_ore)
+}
+
 fn place_belt_line(sim: &mut Simulation, length: i32) -> Vec<EntityId> {
-    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    place_named_belt_line(sim, "transport_belt", length)
+}
+
+fn place_named_belt_line(sim: &mut Simulation, belt_name: &str, length: i32) -> Vec<EntityId> {
+    let belt = entity_id_by_name(&sim.world.prototypes, belt_name);
     for (x, y) in all_tile_coords(&sim.world) {
         if (0..length).all(|offset| {
             sim.can_place_entity(belt, x + offset, y, Direction::East)
@@ -3138,6 +3287,177 @@ fn place_belt_line(sim: &mut Simulation, length: i32) -> Vec<EntityId> {
     }
 
     panic!("expected placeable belt line of length {length}");
+}
+
+fn place_throughput_underground_pair(
+    sim: &mut Simulation,
+    belt_name: &str,
+    entrance_name: &str,
+    exit_name: &str,
+    max_distance: u8,
+) -> (Vec<EntityId>, Vec<EntityId>) {
+    let belt = entity_id_by_name(&sim.world.prototypes, belt_name);
+    let entrance = entity_id_by_name(&sim.world.prototypes, entrance_name);
+    let exit = entity_id_by_name(&sim.world.prototypes, exit_name);
+    let underground_offset = i32::from(max_distance) + 1;
+
+    for (x, y) in all_tile_coords(&sim.world) {
+        let entrance_x = x + THROUGHPUT_UPSTREAM_LEN;
+        let exit_x = entrance_x + underground_offset;
+        let input_tiles = (0..THROUGHPUT_UPSTREAM_LEN)
+            .map(|offset| (x + offset, y))
+            .collect::<Vec<_>>();
+        let output_tiles = (1..=THROUGHPUT_DOWNSTREAM_LEN)
+            .map(|offset| (exit_x + offset, y))
+            .collect::<Vec<_>>();
+
+        if input_tiles.iter().any(|(tile_x, tile_y)| {
+            sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
+                .is_err()
+        }) || sim
+            .can_place_entity(entrance, entrance_x, y, Direction::East)
+            .is_err()
+            || sim
+                .can_place_entity(exit, exit_x, y, Direction::East)
+                .is_err()
+            || output_tiles.iter().any(|(tile_x, tile_y)| {
+                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .is_err()
+            })
+        {
+            continue;
+        }
+
+        let mut seeded = input_tiles
+            .iter()
+            .map(|(tile_x, tile_y)| {
+                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .expect("validated throughput input belt should be placeable")
+            })
+            .collect::<Vec<_>>();
+        seeded.push(
+            sim.place_entity(entrance, entrance_x, y, Direction::East)
+                .expect("validated throughput underground entrance should be placeable"),
+        );
+        let mut measured = vec![
+            sim.place_entity(exit, exit_x, y, Direction::East)
+                .expect("validated throughput underground exit should be placeable"),
+        ];
+        measured.extend(output_tiles.iter().map(|(tile_x, tile_y)| {
+            sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
+                .expect("validated throughput output belt should be placeable")
+        }));
+
+        return (seeded, measured);
+    }
+
+    panic!("expected placeable throughput underground fixture for {entrance_name}");
+}
+
+fn place_throughput_splitter_fixture(
+    sim: &mut Simulation,
+    belt_name: &str,
+    splitter_name: &str,
+) -> (Vec<EntityId>, EntityId, Vec<EntityId>) {
+    let belt = entity_id_by_name(&sim.world.prototypes, belt_name);
+    let splitter = entity_id_by_name(&sim.world.prototypes, splitter_name);
+
+    for (x, y) in all_tile_coords(&sim.world) {
+        let splitter_x = x + THROUGHPUT_UPSTREAM_LEN;
+        let input_tiles = (0..THROUGHPUT_UPSTREAM_LEN)
+            .map(|offset| (x + offset, y))
+            .collect::<Vec<_>>();
+        let output0_tiles = (1..=THROUGHPUT_DOWNSTREAM_LEN)
+            .map(|offset| (splitter_x + offset, y))
+            .collect::<Vec<_>>();
+        let output1_tiles = (1..=THROUGHPUT_DOWNSTREAM_LEN)
+            .map(|offset| (splitter_x + offset, y + 1))
+            .collect::<Vec<_>>();
+
+        if input_tiles.iter().any(|(tile_x, tile_y)| {
+            sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
+                .is_err()
+        }) || sim
+            .can_place_entity(splitter, splitter_x, y, Direction::East)
+            .is_err()
+            || output0_tiles.iter().any(|(tile_x, tile_y)| {
+                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .is_err()
+            })
+            || output1_tiles.iter().any(|(tile_x, tile_y)| {
+                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .is_err()
+            })
+        {
+            continue;
+        }
+
+        let input = input_tiles
+            .iter()
+            .map(|(tile_x, tile_y)| {
+                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .expect("validated splitter throughput input belt should be placeable")
+            })
+            .collect::<Vec<_>>();
+        let splitter_id = sim
+            .place_entity(splitter, splitter_x, y, Direction::East)
+            .expect("validated throughput splitter should be placeable");
+        let mut outputs = output0_tiles
+            .iter()
+            .map(|(tile_x, tile_y)| {
+                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
+                    .expect("validated splitter throughput output belt should be placeable")
+            })
+            .collect::<Vec<_>>();
+        outputs.extend(output1_tiles.iter().map(|(tile_x, tile_y)| {
+            sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
+                .expect("validated splitter throughput output belt should be placeable")
+        }));
+
+        return (input, splitter_id, outputs);
+    }
+
+    panic!("expected placeable throughput splitter fixture for {splitter_name}");
+}
+
+fn seed_saturated_belts(sim: &mut Simulation, belts: &[EntityId], item_id: ItemId) {
+    for entity_id in belts {
+        let segment = sim
+            .entities
+            .transport_belts
+            .get_mut(entity_id)
+            .expect("throughput fixture should contain belt state");
+        seed_saturated_lane(&mut segment.lanes[0], item_id, &[0, 64, 128, 192]);
+        seed_saturated_lane(&mut segment.lanes[1], item_id, &[32, 96, 160, 224]);
+    }
+}
+
+fn seed_saturated_splitter_input(
+    sim: &mut Simulation,
+    splitter_id: EntityId,
+    input_port: usize,
+    item_id: ItemId,
+) {
+    let state = sim
+        .entities
+        .splitters
+        .get_mut(&splitter_id)
+        .expect("throughput fixture should contain splitter state");
+    let input_lanes = state
+        .input_lanes
+        .get_mut(input_port)
+        .expect("throughput splitter input port should exist");
+    seed_saturated_lane(&mut input_lanes[0], item_id, &[0, 64, 128, 192]);
+    seed_saturated_lane(&mut input_lanes[1], item_id, &[32, 96, 160, 224]);
+}
+
+fn seed_saturated_lane(lane: &mut BeltLane, item_id: ItemId, positions: &[u16]) {
+    lane.items.clear();
+    lane.items
+        .extend(positions.iter().map(|position_subtile| BeltItem {
+            item_id,
+            position_subtile: *position_subtile,
+        }));
 }
 
 struct SplitterFixture {

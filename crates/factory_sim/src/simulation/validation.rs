@@ -117,6 +117,34 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
         {
             return Err(SimValidationError::UnknownItem(item_id));
         }
+
+        match prototype.entity_kind {
+            EntityKind::TransportBelt => {
+                let Some(transport_belt) = prototype.transport_belt.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if transport_belt.speed_subtiles_per_tick == 0 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::Splitter => {
+                let Some(splitter) = prototype.splitter.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if splitter.speed_subtiles_per_tick == 0 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
 
     Ok(())
@@ -473,6 +501,25 @@ fn validate_belt_segment(
     {
         return Err(SimValidationError::OccupancyMismatch);
     }
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
+    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+        SimValidationError::InvalidEntityPrototype {
+            entity_id,
+            prototype_id: placed.prototype_id,
+        },
+    )?;
+    if prototype
+        .transport_belt
+        .as_ref()
+        .is_none_or(|transport_belt| {
+            transport_belt.speed_subtiles_per_tick != segment.speed_subtiles_per_tick
+        })
+    {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
 
     for (lane_index, lane) in segment.lanes.iter().enumerate() {
         validate_transport_lane_items(sim, entity_id, lane_index, lane)?;
@@ -490,6 +537,23 @@ fn validate_splitter_state(
         && placed.direction != state.dir
     {
         return Err(SimValidationError::OccupancyMismatch);
+    }
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
+    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+        SimValidationError::InvalidEntityPrototype {
+            entity_id,
+            prototype_id: placed.prototype_id,
+        },
+    )?;
+    if prototype
+        .splitter
+        .as_ref()
+        .is_none_or(|splitter| splitter.speed_subtiles_per_tick != state.speed_subtiles_per_tick)
+    {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
     for (lane_index, output_port) in state.next_output_by_lane.iter().copied().enumerate() {

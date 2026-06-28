@@ -180,6 +180,9 @@ impl<'a> TransportBeltAdvancement<'a> {
     }
 
     pub(super) fn advance_lane_items(&mut self, key: TransportLaneKey) {
+        let Some(speed_subtiles_per_tick) = self.lane_speed_subtiles_per_tick(key) else {
+            return;
+        };
         let Some(mut items) = self.take_lane_items(key) else {
             return;
         };
@@ -187,7 +190,7 @@ impl<'a> TransportBeltAdvancement<'a> {
         let mut downstream_item_position: Option<u16> = None;
 
         while let Some(mut item) = items.pop() {
-            let mut next_position = item.position_subtile + BASIC_BELT_SPEED_SUBTILES_PER_TICK;
+            let mut next_position = item.position_subtile + speed_subtiles_per_tick;
             if let Some(ahead_position) = downstream_item_position {
                 next_position =
                     next_position.min(ahead_position.saturating_sub(BELT_ITEM_SPACING_SUBTILES));
@@ -209,6 +212,21 @@ impl<'a> TransportBeltAdvancement<'a> {
         }
 
         self.set_lane_items(key, advanced_descending.into_iter().rev().collect());
+    }
+
+    fn lane_speed_subtiles_per_tick(&self, key: TransportLaneKey) -> Option<u16> {
+        match key {
+            TransportLaneKey::Belt { entity_id, .. } => self
+                .entities
+                .transport_belts
+                .get(&entity_id)
+                .map(|segment| segment.speed_subtiles_per_tick),
+            TransportLaneKey::Splitter { entity_id, .. } => self
+                .entities
+                .splitters
+                .get(&entity_id)
+                .map(|state| state.speed_subtiles_per_tick),
+        }
     }
 
     fn try_route_carried_item(

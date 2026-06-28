@@ -31,7 +31,6 @@ pub const ASSEMBLING_MACHINE_INPUT_SLOT_COUNT: usize = 4;
 pub const ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT: usize = 1;
 pub const BELT_SUBTILES_PER_TILE: u16 = 256;
 pub const BELT_ITEM_SPACING_SUBTILES: u16 = 64;
-pub const BASIC_BELT_SPEED_SUBTILES_PER_TICK: u16 = 8;
 pub const BASIC_INSERTER_PICKUP_TICKS: u32 = 35;
 pub const BASIC_INSERTER_DROP_TICKS: u32 = 35;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
@@ -272,6 +271,7 @@ pub struct AssemblerIngredientStatus {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BeltSegment {
     pub dir: Direction,
+    pub speed_subtiles_per_tick: u16,
     pub underground: Option<UndergroundBeltSegment>,
     pub lanes: [BeltLane; 2],
 }
@@ -279,6 +279,7 @@ pub struct BeltSegment {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct SplitterState {
     pub dir: Direction,
+    pub speed_subtiles_per_tick: u16,
     pub input_lanes: [[BeltLane; 2]; 2],
     pub next_output_by_lane: [usize; 2],
 }
@@ -326,17 +327,24 @@ impl Hash for BurnerEnergy {
 }
 
 impl BeltSegment {
-    pub fn new(dir: Direction) -> Self {
+    pub fn new(dir: Direction, speed_subtiles_per_tick: u16) -> Self {
         Self {
             dir,
+            speed_subtiles_per_tick,
             underground: None,
             lanes: [BeltLane::default(), BeltLane::default()],
         }
     }
 
-    pub fn underground(dir: Direction, part: UndergroundBeltPart, max_distance: u8) -> Self {
+    pub fn underground(
+        dir: Direction,
+        speed_subtiles_per_tick: u16,
+        part: UndergroundBeltPart,
+        max_distance: u8,
+    ) -> Self {
         Self {
             dir,
+            speed_subtiles_per_tick,
             underground: Some(UndergroundBeltSegment { part, max_distance }),
             lanes: [BeltLane::default(), BeltLane::default()],
         }
@@ -344,9 +352,10 @@ impl BeltSegment {
 }
 
 impl SplitterState {
-    pub fn new(dir: Direction) -> Self {
+    pub fn new(dir: Direction, speed_subtiles_per_tick: u16) -> Self {
         Self {
             dir,
+            speed_subtiles_per_tick,
             input_lanes: [
                 [BeltLane::default(), BeltLane::default()],
                 [BeltLane::default(), BeltLane::default()],
@@ -358,7 +367,7 @@ impl SplitterState {
 
 impl Default for BeltSegment {
     fn default() -> Self {
-        Self::new(Direction::default())
+        Self::new(Direction::default(), 1)
     }
 }
 
@@ -570,6 +579,9 @@ pub enum SimValidationError {
     },
     InvalidEntityPrototype {
         entity_id: EntityId,
+        prototype_id: EntityPrototypeId,
+    },
+    InvalidCatalogEntityPrototype {
         prototype_id: EntityPrototypeId,
     },
     InvalidEntityFootprint {

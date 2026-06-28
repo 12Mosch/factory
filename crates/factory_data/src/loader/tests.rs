@@ -8,7 +8,7 @@ use crate::model::{
     UndergroundBeltPart,
 };
 
-const ITEM_NAMES: [&str; 21] = [
+const ITEM_NAMES: [&str; 27] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -30,6 +30,12 @@ const ITEM_NAMES: [&str; 21] = [
     "stone_brick",
     "underground_belt",
     "splitter",
+    "fast_transport_belt",
+    "express_transport_belt",
+    "fast_underground_belt",
+    "express_underground_belt",
+    "fast_splitter",
+    "express_splitter",
 ];
 
 const RECIPE_NAMES: [&str; 17] = [
@@ -52,7 +58,7 @@ const RECIPE_NAMES: [&str; 17] = [
     "splitter",
 ];
 
-const ENTITY_NAMES: [&str; 14] = [
+const ENTITY_NAMES: [&str; 22] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -67,6 +73,14 @@ const ENTITY_NAMES: [&str; 14] = [
     "underground_belt_entrance",
     "underground_belt_exit",
     "splitter",
+    "fast_transport_belt",
+    "express_transport_belt",
+    "fast_underground_belt_entrance",
+    "fast_underground_belt_exit",
+    "express_underground_belt_entrance",
+    "express_underground_belt_exit",
+    "fast_splitter",
+    "express_splitter",
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -76,9 +90,9 @@ const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 21);
+    assert_eq!(catalog.items.len(), 27);
     assert_eq!(catalog.recipes.len(), 17);
-    assert_eq!(catalog.entities.len(), 14);
+    assert_eq!(catalog.entities.len(), 22);
     assert_eq!(catalog.tiles.len(), 3);
     assert_eq!(catalog.technologies.len(), 1);
 }
@@ -318,6 +332,107 @@ fn underground_belt_endpoints_load_shared_build_item_and_metadata() {
             .map(|underground| (underground.part, underground.max_distance)),
         Some((UndergroundBeltPart::Exit, 4))
     );
+}
+
+#[test]
+fn transport_belt_tiers_load_speed_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    for (entity_name, expected_speed) in [
+        ("transport_belt", 8),
+        ("fast_transport_belt", 16),
+        ("express_transport_belt", 24),
+    ] {
+        let entity = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == entity_name)
+            .unwrap_or_else(|| panic!("base catalog should contain {entity_name}"));
+
+        assert_eq!(entity.entity_kind, EntityKind::TransportBelt);
+        assert_eq!(
+            entity
+                .transport_belt
+                .as_ref()
+                .map(|belt| (belt.speed_subtiles_per_tick, belt.underground.as_ref())),
+            Some((expected_speed, None)),
+            "{entity_name} should define straight belt metadata"
+        );
+    }
+}
+
+#[test]
+fn underground_belt_tiers_load_speed_and_distance_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    for (base_name, item_name, expected_speed, expected_distance) in [
+        ("underground_belt", "underground_belt", 8, 4),
+        ("fast_underground_belt", "fast_underground_belt", 16, 6),
+        (
+            "express_underground_belt",
+            "express_underground_belt",
+            24,
+            8,
+        ),
+    ] {
+        let item = catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == item_name)
+            .unwrap_or_else(|| panic!("base catalog should contain {item_name} item"))
+            .id;
+        for (suffix, expected_part) in [
+            ("entrance", UndergroundBeltPart::Entrance),
+            ("exit", UndergroundBeltPart::Exit),
+        ] {
+            let entity_name = format!("{base_name}_{suffix}");
+            let entity = catalog
+                .entities
+                .iter()
+                .find(|prototype| prototype.name == entity_name)
+                .unwrap_or_else(|| panic!("base catalog should contain {entity_name}"));
+            let belt = entity
+                .transport_belt
+                .as_ref()
+                .expect("underground endpoint should define belt metadata");
+            let underground = belt
+                .underground
+                .as_ref()
+                .expect("underground endpoint should define underground metadata");
+
+            assert_eq!(entity.entity_kind, EntityKind::TransportBelt);
+            assert_eq!(entity.build_item, Some(item));
+            assert_eq!(belt.speed_subtiles_per_tick, expected_speed);
+            assert_eq!(underground.part, expected_part);
+            assert_eq!(underground.max_distance, expected_distance);
+        }
+    }
+}
+
+#[test]
+fn splitter_tiers_load_speed_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    for (entity_name, expected_speed) in [
+        ("splitter", 8),
+        ("fast_splitter", 16),
+        ("express_splitter", 24),
+    ] {
+        let entity = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == entity_name)
+            .unwrap_or_else(|| panic!("base catalog should contain {entity_name}"));
+
+        assert_eq!(entity.entity_kind, EntityKind::Splitter);
+        assert_eq!(
+            entity
+                .splitter
+                .as_ref()
+                .map(|splitter| splitter.speed_subtiles_per_tick),
+            Some(expected_speed)
+        );
+    }
 }
 
 #[test]

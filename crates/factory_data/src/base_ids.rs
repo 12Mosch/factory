@@ -38,6 +38,12 @@ pub struct BaseItemIds {
     pub stone_brick: ItemId,
     pub underground_belt: ItemId,
     pub splitter: ItemId,
+    pub fast_transport_belt: ItemId,
+    pub express_transport_belt: ItemId,
+    pub fast_underground_belt: ItemId,
+    pub express_underground_belt: ItemId,
+    pub fast_splitter: ItemId,
+    pub express_splitter: ItemId,
 }
 
 impl BaseItemIds {
@@ -64,6 +70,12 @@ impl BaseItemIds {
             stone_brick: item_id_by_name(catalog, "stone_brick"),
             underground_belt: item_id_by_name(catalog, "underground_belt"),
             splitter: item_id_by_name(catalog, "splitter"),
+            fast_transport_belt: item_id_by_name(catalog, "fast_transport_belt"),
+            express_transport_belt: item_id_by_name(catalog, "express_transport_belt"),
+            fast_underground_belt: item_id_by_name(catalog, "fast_underground_belt"),
+            express_underground_belt: item_id_by_name(catalog, "express_underground_belt"),
+            fast_splitter: item_id_by_name(catalog, "fast_splitter"),
+            express_splitter: item_id_by_name(catalog, "express_splitter"),
         }
     }
 

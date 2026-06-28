@@ -98,16 +98,17 @@ pub(super) fn transport_belt_segment_for_prototype(
         return None;
     }
 
-    let Some(underground) = prototype
-        .transport_belt
-        .as_ref()
-        .and_then(|belt| belt.underground.as_ref())
-    else {
-        return Some(BeltSegment::new(direction));
+    let transport_belt = prototype.transport_belt.as_ref()?;
+    let Some(underground) = transport_belt.underground.as_ref() else {
+        return Some(BeltSegment::new(
+            direction,
+            transport_belt.speed_subtiles_per_tick,
+        ));
     };
 
     Some(BeltSegment::underground(
         direction,
+        transport_belt.speed_subtiles_per_tick,
         underground.part,
         underground.max_distance,
     ))
@@ -117,7 +118,15 @@ pub(super) fn splitter_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,
 ) -> Option<SplitterState> {
-    (prototype.entity_kind == EntityKind::Splitter).then(|| SplitterState::new(direction))
+    if prototype.entity_kind != EntityKind::Splitter {
+        return None;
+    }
+
+    let splitter = prototype.splitter.as_ref()?;
+    Some(SplitterState::new(
+        direction,
+        splitter.speed_subtiles_per_tick,
+    ))
 }
 
 pub(super) fn inserter_state_for_prototype(
