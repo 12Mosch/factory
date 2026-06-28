@@ -414,6 +414,11 @@ fn electricity_entities_load_metadata() {
         .expect("small electric pole should define pole metadata");
     assert_eq!(pole_metadata.supply_area_tiles, IVec2::new(5, 5));
     assert_eq!(pole_metadata.wire_reach_tiles_x2, 15);
+    assert!(pole.electric_energy_source.is_none());
+    assert!(pole.steam_engine.is_none());
+    assert!(pole.boiler.is_none());
+    assert!(pole.offshore_pump.is_none());
+    assert!(pole.burner.is_none());
 
     let steam_engine = catalog
         .entities
@@ -422,13 +427,20 @@ fn electricity_entities_load_metadata() {
         .expect("base catalog should contain steam engine");
     assert_eq!(steam_engine.entity_kind, EntityKind::SteamEngine);
     assert_eq!(steam_engine.size, IVec2::new(3, 5));
+    let steam_engine_metadata = steam_engine
+        .steam_engine
+        .as_ref()
+        .expect("steam engine should define steam engine metadata");
+    assert_eq!(steam_engine_metadata.max_power_output_watts, 900_000);
     assert_eq!(
-        steam_engine
-            .steam_engine
-            .as_ref()
-            .map(|metadata| metadata.max_power_output_watts),
-        Some(900_000)
+        steam_engine_metadata.steam_consumption_per_second_milliunits,
+        30_000
     );
+    assert!(steam_engine.electric_energy_source.is_none());
+    assert!(steam_engine.electric_pole.is_none());
+    assert!(steam_engine.boiler.is_none());
+    assert!(steam_engine.offshore_pump.is_none());
+    assert!(steam_engine.burner.is_none());
 
     let boiler = catalog
         .entities
@@ -437,20 +449,24 @@ fn electricity_entities_load_metadata() {
         .expect("base catalog should contain boiler");
     assert_eq!(boiler.entity_kind, EntityKind::Boiler);
     assert_eq!(boiler.size, IVec2::new(2, 3));
+    let boiler_burner = boiler
+        .burner
+        .as_ref()
+        .expect("boiler should define burner metadata");
+    assert_eq!(boiler_burner.energy_usage_watts, 1_800_000);
+    let boiler_metadata = boiler
+        .boiler
+        .as_ref()
+        .expect("boiler should define boiler metadata");
     assert_eq!(
-        boiler
-            .burner
-            .as_ref()
-            .map(|metadata| metadata.energy_usage_watts),
-        Some(1_800_000)
+        boiler_metadata.water_consumption_per_second_milliunits,
+        6_000
     );
-    assert_eq!(
-        boiler
-            .boiler
-            .as_ref()
-            .map(|metadata| metadata.steam_output_per_second_milliunits),
-        Some(60_000)
-    );
+    assert_eq!(boiler_metadata.steam_output_per_second_milliunits, 60_000);
+    assert!(boiler.electric_energy_source.is_none());
+    assert!(boiler.electric_pole.is_none());
+    assert!(boiler.steam_engine.is_none());
+    assert!(boiler.offshore_pump.is_none());
 
     let pump = catalog
         .entities
@@ -459,12 +475,16 @@ fn electricity_entities_load_metadata() {
         .expect("base catalog should contain offshore pump");
     assert_eq!(pump.entity_kind, EntityKind::OffshorePump);
     assert_eq!(pump.size, IVec2::new(2, 1));
-    assert_eq!(
-        pump.offshore_pump
-            .as_ref()
-            .map(|metadata| metadata.pumping_speed_per_second_milliunits),
-        Some(1_200_000)
-    );
+    let pump_metadata = pump
+        .offshore_pump
+        .as_ref()
+        .expect("offshore pump should define pump metadata");
+    assert_eq!(pump_metadata.pumping_speed_per_second_milliunits, 1_200_000);
+    assert!(pump.electric_energy_source.is_none());
+    assert!(pump.electric_pole.is_none());
+    assert!(pump.steam_engine.is_none());
+    assert!(pump.boiler.is_none());
+    assert!(pump.burner.is_none());
 }
 
 #[test]

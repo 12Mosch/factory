@@ -328,7 +328,14 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         },
     });
 
-    for label in ["UPS:", "FPS:", "Sim tick:", "Entities:", "render sync"] {
+    for label in [
+        "UPS:",
+        "FPS:",
+        "Sim tick:",
+        "Entities:",
+        "Power:",
+        "render sync",
+    ] {
         assert!(text.contains(label), "missing debug overlay label {label}");
     }
     assert!(!text.contains("Item:"));

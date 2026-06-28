@@ -33,8 +33,8 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
             });
         }
     }
-    for state in sim.entities.boilers.values() {
-        validate_boiler(sim, state)?;
+    for (entity_id, state) in &sim.entities.boilers {
+        validate_boiler(sim, *entity_id, state)?;
     }
     for (entity_id, segment) in &sim.entities.transport_belts {
         validate_belt_segment(sim, *entity_id, segment)?;
@@ -584,8 +584,23 @@ fn validate_furnace(
     Ok(())
 }
 
-fn validate_boiler(sim: &Simulation, state: &BoilerState) -> Result<(), SimValidationError> {
-    validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)
+fn validate_boiler(
+    sim: &Simulation,
+    entity_id: EntityId,
+    state: &BoilerState,
+) -> Result<(), SimValidationError> {
+    validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
+
+    if let Some(stack) = state.energy.fuel_slot
+        && fuel_value_joules(&sim.world.prototypes, stack.item_id).is_none()
+    {
+        return Err(SimValidationError::InvalidMachineItem {
+            entity_id,
+            item_id: stack.item_id,
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_assembler(

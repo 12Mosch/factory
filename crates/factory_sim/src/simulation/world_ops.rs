@@ -353,3 +353,27 @@ pub(super) fn fixed_to_tile(value: i64) -> i32 {
 pub(super) fn tile_center_fixed(tile: i32) -> i64 {
     i64::from(tile) * PLAYER_POSITION_SCALE + PLAYER_POSITION_SCALE / 2
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offshore_pump_water_tiles_returns_non_north_facing_edge_tiles() {
+        let footprint = EntityFootprint {
+            x: 10,
+            y: 20,
+            width: 2,
+            height: 3,
+        };
+        let cases = [
+            (Direction::East, vec![(12, 20), (12, 21), (12, 22)]),
+            (Direction::South, vec![(10, 23), (11, 23)]),
+            (Direction::West, vec![(9, 20), (9, 21), (9, 22)]),
+        ];
+
+        for (direction, expected) in cases {
+            assert_eq!(offshore_pump_water_tiles(&footprint, direction), expected);
+        }
+    }
+}

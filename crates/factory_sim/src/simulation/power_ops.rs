@@ -35,6 +35,15 @@ struct UnionFind {
 }
 
 impl Simulation {
+    pub(super) fn invalidate_power_state(&mut self) {
+        self.power_summary = PowerSummary {
+            satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
+            ..PowerSummary::default()
+        };
+        self.power_networks.clear();
+        self.entity_power_statuses.clear();
+    }
+
     pub(super) fn rebuild_power_state(&mut self) {
         let (network_ids_by_entity, mut networks) = self.build_pole_networks();
         let consumer_demands = self.consumer_power_demands();
@@ -397,6 +406,8 @@ impl Simulation {
 
             if state.energy.energy_remaining_joules + f64::EPSILON >= joules {
                 state.energy.energy_remaining_joules -= joules;
+            } else if state.energy.energy_remaining_joules > 0.0 {
+                state.energy.energy_remaining_joules = 0.0;
             }
         }
     }

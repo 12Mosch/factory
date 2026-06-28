@@ -110,7 +110,7 @@ impl Simulation {
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
         let splitter = splitter_state_for_prototype(prototype, direction);
         let inserter = inserter_state_for_prototype(prototype);
-        Ok(self.entities.reserve_entity(EntityReservation {
+        let entity_id = self.entities.reserve_entity(EntityReservation {
             prototype_id,
             x,
             y,
@@ -129,7 +129,9 @@ impl Simulation {
             transport_belt,
             splitter,
             inserter,
-        }))
+        });
+        self.invalidate_power_state();
+        Ok(entity_id)
     }
 
     pub fn rotate_entity(
@@ -160,11 +162,17 @@ impl Simulation {
             .occupancy
             .validate_available(&footprint, Some(entity_id))?;
         self.entities
-            .update_entity_footprint(entity_id, direction, footprint)
+            .update_entity_footprint(entity_id, direction, footprint)?;
+        self.invalidate_power_state();
+        Ok(())
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId) -> Option<PlacedEntity> {
-        self.entities.remove_placed_entity(entity_id)
+        let removed = self.entities.remove_placed_entity(entity_id);
+        if removed.is_some() {
+            self.invalidate_power_state();
+        }
+        removed
     }
 
     pub fn destroy_entity_to_player_inventory(
@@ -201,6 +209,7 @@ impl Simulation {
             .expect("validated placed entity should still be removable");
         self.player_inventory = player_inventory;
         self.manual_mining_progress = None;
+        self.invalidate_power_state();
 
         Ok(removed)
     }
@@ -641,6 +650,7 @@ impl Simulation {
         self.player_inventory.slots[player_slot_index] = None;
         let state = self.entities.boiler_state_mut(entity_id)?;
         insert_into_single_slot(&mut state.energy.fuel_slot, stack);
+        self.invalidate_power_state();
 
         Ok(())
     }
@@ -667,7 +677,9 @@ impl Simulation {
         self.entities.boiler_state_mut(entity_id)?.energy.fuel_slot = None;
         self.player_inventory
             .insert(&self.world.prototypes, stack.item_id, stack.count)
-            .map_err(BoilerError::from)
+            .map_err(BoilerError::from)?;
+        self.invalidate_power_state();
+        Ok(())
     }
 
     pub fn assembler_state(

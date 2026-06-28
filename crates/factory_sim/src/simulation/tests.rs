@@ -765,6 +765,52 @@ fn boiler_does_not_burn_fuel_without_steam_demand() {
 }
 
 #[test]
+fn boiler_clears_insufficient_residual_energy_without_fuel() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 3, 3, (3, 1));
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    add_assembler_gear_job(&mut sim, assembler_id);
+    let state = sim
+        .entities
+        .boiler_state_mut(boiler_id)
+        .expect("boiler should exist");
+    state.energy.fuel_slot = None;
+    state.energy.energy_remaining_joules = 1.0;
+
+    sim.tick();
+
+    let state = sim.boiler_state(boiler_id).unwrap();
+    assert_eq!(state.energy.fuel_slot, None);
+    assert_eq!(state.energy.energy_remaining_joules, 0.0);
+}
+
+#[test]
+fn boiler_validation_rejects_non_fuel_in_fuel_slot() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, _, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 1, 1, (1, 2));
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.entities
+        .boiler_state_mut(boiler_id)
+        .expect("boiler should exist")
+        .energy
+        .fuel_slot = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidMachineItem {
+            entity_id: boiler_id,
+            item_id: iron_ore,
+        })
+    );
+}
+
+#[test]
 fn boiler_with_no_water_or_no_fuel_produces_no_steam_power() {
     let mut no_fuel = Simulation::new_test_world(123);
     let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut no_fuel, 3, 3, (3, 1));
@@ -4751,7 +4797,7 @@ fn place_powered_fixture_origin_with_boiler(
             height: fixture_height,
         };
 
-        if !fixture_is_clear_buildable(&sim.world, &fixture)
+        if !fixture_is_clear_buildable(sim, &fixture)
             || !poles_within_small_pole_reach(source_pole, target_pole)
             || sim.can_place_entity(pump, x, y, Direction::North).is_err()
             || sim
@@ -4796,11 +4842,12 @@ fn place_powered_fixture_origin_with_boiler(
     panic!("expected powered fixture area");
 }
 
-fn fixture_is_clear_buildable(world: &WorldSim, footprint: &EntityFootprint) -> bool {
+fn fixture_is_clear_buildable(sim: &Simulation, footprint: &EntityFootprint) -> bool {
     footprint.tiles().into_iter().all(|(x, y)| {
-        world
+        sim.world
             .tile_at(x, y)
             .is_some_and(|tile| tile.collision.buildable && tile.resource.is_none())
+            && sim.entities.occupancy().entity_at(x, y).is_none()
     })
 }
 
