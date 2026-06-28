@@ -1,8 +1,8 @@
 use super::*;
 use bincode::Options;
 
-pub const SAVE_VERSION: u32 = 3;
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 3;
+pub const SAVE_VERSION: u32 = 4;
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 4;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 const SAVE_HEADER_LEN: usize = 8 + 4 + 4 + 8;
@@ -53,6 +53,9 @@ struct SimulationSnapshot {
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
     research: ResearchState,
+    power_summary: PowerSummary,
+    power_networks: Vec<PowerNetworkSnapshot>,
+    entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
 }
 
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
@@ -173,6 +176,9 @@ impl SimulationSnapshot {
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: sim.crafting_queue.clone(),
             research: sim.research.clone(),
+            power_summary: sim.power_summary,
+            power_networks: sim.power_networks.clone(),
+            entity_power_statuses: sim.entity_power_statuses.clone(),
         }
     }
 
@@ -192,6 +198,9 @@ impl SimulationSnapshot {
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,
             research: self.research,
+            power_summary: self.power_summary,
+            power_networks: self.power_networks,
+            entity_power_statuses: self.entity_power_statuses,
         }
     }
 }

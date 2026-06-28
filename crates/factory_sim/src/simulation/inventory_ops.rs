@@ -173,6 +173,18 @@ impl From<InventoryError> for FurnaceError {
     }
 }
 
+impl From<InventoryError> for BoilerError {
+    fn from(error: InventoryError) -> Self {
+        match error {
+            InventoryError::UnknownItem => Self::UnknownItem,
+            InventoryError::InsufficientSpace => Self::InsufficientSpace,
+            InventoryError::InsufficientItems => {
+                unreachable!("boiler transfers remove a known slot stack")
+            }
+        }
+    }
+}
+
 impl From<InventoryError> for AssemblerError {
     fn from(error: InventoryError) -> Self {
         match error {

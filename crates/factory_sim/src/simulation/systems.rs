@@ -275,14 +275,15 @@ impl Simulation {
                 continue;
             }
 
-            let Some((recipe, required_ticks)) = self
+            let Some((ingredients, products, required_ticks)) = self
                 .entities
                 .assembler_state(entity_id)
                 .ok()
                 .and_then(|state| {
                     let recipe = selected_assembler_recipe(&self.world.prototypes, state)?;
                     Some((
-                        recipe,
+                        recipe.ingredients.clone(),
+                        recipe.products.clone(),
                         assembler_required_ticks(
                             recipe.crafting_time_ticks,
                             state.crafting_speed_numerator,
@@ -300,11 +301,11 @@ impl Simulation {
 
             let can_craft = self.entities.assembler_state(entity_id).is_ok_and(|state| {
                 profiler.measure(ProfilePhase::InventoryTransfers, || {
-                    assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
+                    assembler_has_ingredients(&state.input_inventory, &ingredients)
                         && assembler_output_can_accept(
                             &self.world.prototypes,
                             &state.output_inventory,
-                            &recipe.products,
+                            &products,
                         )
                 })
             });
@@ -312,6 +313,12 @@ impl Simulation {
                 if let Ok(state) = self.entities.assembler_state_mut(entity_id) {
                     state.crafting_required_ticks = required_ticks;
                 }
+                continue;
+            }
+            if let Ok(state) = self.entities.assembler_state_mut(entity_id) {
+                state.crafting_required_ticks = required_ticks;
+            }
+            if !self.electric_work_allowed(entity_id) {
                 continue;
             }
 
@@ -340,13 +347,13 @@ impl Simulation {
                 .assembler_state_mut(entity_id)
                 .expect("assembler id came from assembler state map");
             profiler.measure(ProfilePhase::InventoryTransfers, || {
-                for ingredient in &recipe.ingredients {
+                for ingredient in &ingredients {
                     state
                         .input_inventory
                         .remove(ingredient.item, ingredient.amount)
                         .expect("assembler checked ingredients before completion");
                 }
-                for product in &recipe.products {
+                for product in &products {
                     state
                         .output_inventory
                         .insert(&self.world.prototypes, product.item, product.amount)
@@ -407,6 +414,9 @@ impl Simulation {
             if !can_work {
                 continue;
             }
+            if !self.electric_work_allowed(entity_id) {
+                continue;
+            }
 
             let completed = {
                 let state = self
@@ -458,13 +468,14 @@ impl Simulation {
             else {
                 continue;
             };
-            let Some(inserter) = prototype.inserter.as_ref() else {
+            let Some(inserter) = prototype.inserter.as_ref().cloned() else {
                 continue;
             };
             let Ok(state) = self.entities.inserter_state(entity_id).cloned() else {
                 continue;
             };
-            let (pickup_tile, drop_tile) = inserter_transfer_tiles_for_prototype(&placed, inserter);
+            let (pickup_tile, drop_tile) =
+                inserter_transfer_tiles_for_prototype(&placed, &inserter);
 
             let next_state = match state {
                 InserterState::WaitingForItem => {
@@ -484,13 +495,18 @@ impl Simulation {
                     }) {
                         continue;
                     }
+                    if !self.electric_work_allowed(entity_id) {
+                        continue;
+                    }
 
                     InserterState::Picking {
                         ticks_left: inserter.pickup_ticks,
                     }
                 }
                 InserterState::Picking { ticks_left } => {
-                    if ticks_left > 1 {
+                    if !self.electric_work_allowed(entity_id) {
+                        InserterState::Picking { ticks_left }
+                    } else if ticks_left > 1 {
                         InserterState::Picking {
                             ticks_left: ticks_left - 1,
                         }
@@ -527,14 +543,16 @@ impl Simulation {
                     }
                 }
                 InserterState::Holding { item } => {
-                    if !profiler.measure(ProfilePhase::InventoryTransfers, || {
-                        inserter_target_can_accept(
-                            &self.world.prototypes,
-                            &self.entities,
-                            drop_tile,
-                            item,
-                        )
-                    }) {
+                    let target_can_accept =
+                        profiler.measure(ProfilePhase::InventoryTransfers, || {
+                            inserter_target_can_accept(
+                                &self.world.prototypes,
+                                &self.entities,
+                                drop_tile,
+                                item,
+                            )
+                        });
+                    if !target_can_accept || !self.electric_work_allowed(entity_id) {
                         InserterState::Holding { item }
                     } else if profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_drop_inserter_item(
@@ -552,7 +570,9 @@ impl Simulation {
                     }
                 }
                 InserterState::Dropping { ticks_left } => {
-                    if ticks_left > 1 {
+                    if !self.electric_work_allowed(entity_id) {
+                        InserterState::Dropping { ticks_left }
+                    } else if ticks_left > 1 {
                         InserterState::Dropping {
                             ticks_left: ticks_left - 1,
                         }

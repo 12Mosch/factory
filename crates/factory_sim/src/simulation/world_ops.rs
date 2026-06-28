@@ -154,7 +154,23 @@ impl WorldSim {
         &self,
         prototype: &factory_data::EntityPrototype,
         footprint: &EntityFootprint,
+        direction: Direction,
     ) -> Result<(), BuildError> {
+        if prototype.entity_kind == EntityKind::OffshorePump && prototype.offshore_pump.is_some() {
+            self.validate_entity_footprint(footprint)?;
+            if offshore_pump_water_tiles(footprint, direction)
+                .into_iter()
+                .any(|(x, y)| self.tile_at(x, y).is_some_and(is_water_like_tile))
+            {
+                return Ok(());
+            }
+
+            return Err(BuildError::TileBlocked {
+                x: footprint.x,
+                y: footprint.y,
+            });
+        }
+
         if prototype.entity_kind != EntityKind::MiningDrill || prototype.mining_drill.is_none() {
             return self.validate_entity_footprint(footprint);
         }
@@ -203,6 +219,30 @@ impl WorldSim {
         while self.resource_dirty_tiles.len() > Self::RESOURCE_DIRTY_HISTORY_LIMIT {
             self.resource_dirty_tiles.pop_front();
         }
+    }
+}
+
+pub(super) fn is_water_like_tile(tile: &TileCell) -> bool {
+    !tile.collision.walkable && !tile.collision.buildable
+}
+
+pub(super) fn offshore_pump_water_tiles(
+    footprint: &EntityFootprint,
+    direction: Direction,
+) -> Vec<(i32, i32)> {
+    match direction {
+        Direction::North => (footprint.x..footprint.x + footprint.width)
+            .map(|x| (x, footprint.y - 1))
+            .collect(),
+        Direction::East => (footprint.y..footprint.y + footprint.height)
+            .map(|y| (footprint.x + footprint.width, y))
+            .collect(),
+        Direction::South => (footprint.x..footprint.x + footprint.width)
+            .map(|x| (x, footprint.y + footprint.height))
+            .collect(),
+        Direction::West => (footprint.y..footprint.y + footprint.height)
+            .map(|y| (footprint.x - 1, y))
+            .collect(),
     }
 }
 

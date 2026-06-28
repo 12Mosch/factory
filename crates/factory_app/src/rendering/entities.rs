@@ -8,8 +8,9 @@ use crate::constants::{
     BURNER_DRILL_SPRITE_PADDING, CHEST_SPRITE_SIZE, TILE_SIZE, TRANSPORT_BELT_SPRITE_SIZE,
 };
 use crate::rendering::colors::{
-    assembler_color, burner_drill_color, chest_color, furnace_color, inserter_color, lab_color,
-    splitter_color, transport_belt_color,
+    assembler_color, boiler_color, burner_drill_color, chest_color, electric_pole_color,
+    furnace_color, inserter_color, lab_color, offshore_pump_color, splitter_color,
+    steam_engine_color, transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
 use crate::resources::{RenderSyncStats, SimResource};
@@ -121,6 +122,10 @@ pub(crate) fn entity_prototype_render_style(
         EntityKind::AssemblingMachine => Some((assembler_color(), machine_size())),
         EntityKind::Lab => Some((lab_color(), machine_size())),
         EntityKind::Inserter => Some((inserter_color(prototype.inserter.as_ref()), machine_size())),
+        EntityKind::ElectricPole => Some((electric_pole_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
+        EntityKind::SteamEngine => Some((steam_engine_color(), machine_size())),
+        EntityKind::Boiler => Some((boiler_color(), machine_size())),
+        EntityKind::OffshorePump => Some((offshore_pump_color(), machine_size())),
         EntityKind::ResourcePatch => None,
     }
 }

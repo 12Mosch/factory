@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use factory_sim::{
-    BURNER_MINING_DRILL_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX,
-    FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX,
+    BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
+    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
+    FURNACE_OUTPUT_SLOT_INDEX,
 };
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
@@ -151,6 +152,47 @@ pub(crate) fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerC
     });
 }
 
+pub(crate) fn spawn_boiler_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(220.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Boiler"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel.spawn((
+            Text::new("Energy: 0 J"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            BurnerEnergyText,
+        ));
+        panel
+            .spawn((
+                Node {
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|slots| {
+                spawn_labeled_slot(
+                    slots,
+                    "Fuel",
+                    InventoryPanel::BoilerFuel,
+                    BOILER_FUEL_SLOT_INDEX,
+                );
+            });
+    });
+}
+
 pub(crate) fn update_burner_drill_indicators(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
@@ -174,6 +216,10 @@ pub(crate) fn update_burner_drill_indicators(
                     state.crafting_progress_ticks,
                     state.crafting_required_ticks,
                 ))
+            }
+            OpenMachineKind::Boiler => {
+                let state = sim.sim.boiler_state(entity_id).ok()?;
+                Some((state.energy.energy_remaining_joules, 0, 1))
             }
             OpenMachineKind::Assembler => {
                 let state = sim.sim.assembler_state(entity_id).ok()?;

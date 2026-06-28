@@ -38,6 +38,11 @@ impl EntityStore {
             furnaces: BTreeMap::new(),
             assembling_machines: BTreeMap::new(),
             labs: BTreeMap::new(),
+            electric_poles: BTreeMap::new(),
+            electric_consumers: BTreeMap::new(),
+            steam_engines: BTreeMap::new(),
+            boilers: BTreeMap::new(),
+            offshore_pumps: BTreeMap::new(),
             transport_belts: BTreeMap::new(),
             splitters: BTreeMap::new(),
             inserters: BTreeMap::new(),
@@ -139,6 +144,29 @@ impl EntityStore {
         self.furnaces
             .get_mut(&entity_id)
             .ok_or(FurnaceError::NotFurnace(entity_id))
+    }
+
+    pub(super) fn boiler_state(&self, entity_id: EntityId) -> Result<&BoilerState, BoilerError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(BoilerError::MissingEntity(entity_id));
+        }
+
+        self.boilers
+            .get(&entity_id)
+            .ok_or(BoilerError::NotBoiler(entity_id))
+    }
+
+    pub(super) fn boiler_state_mut(
+        &mut self,
+        entity_id: EntityId,
+    ) -> Result<&mut BoilerState, BoilerError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(BoilerError::MissingEntity(entity_id));
+        }
+
+        self.boilers
+            .get_mut(&entity_id)
+            .ok_or(BoilerError::NotBoiler(entity_id))
     }
 
     pub(super) fn assembler_state(
@@ -287,6 +315,21 @@ impl EntityStore {
         if let Some(state) = reservation.lab {
             self.labs.insert(id, state);
         }
+        if let Some(state) = reservation.electric_pole {
+            self.electric_poles.insert(id, state);
+        }
+        if let Some(state) = reservation.electric_consumer {
+            self.electric_consumers.insert(id, state);
+        }
+        if let Some(state) = reservation.steam_engine {
+            self.steam_engines.insert(id, state);
+        }
+        if let Some(state) = reservation.boiler {
+            self.boilers.insert(id, state);
+        }
+        if let Some(state) = reservation.offshore_pump {
+            self.offshore_pumps.insert(id, state);
+        }
         if let Some(segment) = reservation.transport_belt {
             self.transport_belts.insert(id, segment);
         }
@@ -333,6 +376,11 @@ impl EntityStore {
         self.furnaces.remove(&entity_id);
         self.assembling_machines.remove(&entity_id);
         self.labs.remove(&entity_id);
+        self.electric_poles.remove(&entity_id);
+        self.electric_consumers.remove(&entity_id);
+        self.steam_engines.remove(&entity_id);
+        self.boilers.remove(&entity_id);
+        self.offshore_pumps.remove(&entity_id);
         self.transport_belts.remove(&entity_id);
         self.splitters.remove(&entity_id);
         self.inserters.remove(&entity_id);

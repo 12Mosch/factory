@@ -5,6 +5,7 @@ pub mod lab;
 pub mod mining_drill;
 
 pub use crate::simulation::{
-    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BurnerDrillError,
-    BurnerEnergy, BurnerMiningDrillState, FurnaceError, FurnaceState, LabError, LabState,
+    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BoilerError, BoilerState,
+    BurnerDrillError, BurnerEnergy, BurnerMiningDrillState, FurnaceError, FurnaceState, LabError,
+    LabState,
 };

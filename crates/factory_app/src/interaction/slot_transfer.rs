@@ -1,9 +1,10 @@
 use factory_sim::{
-    AssemblerError, BurnerDrillError, ContainerError, EntityId, FurnaceError, Simulation,
+    AssemblerError, BoilerError, BurnerDrillError, ContainerError, EntityId, FurnaceError,
+    Simulation,
 };
 
 use crate::interaction::machine_kind::{
-    is_assembler_entity, is_burner_drill_entity, is_furnace_entity,
+    is_assembler_entity, is_boiler_entity, is_burner_drill_entity, is_furnace_entity,
 };
 use crate::ui::inventory_panel::InventoryPanel;
 
@@ -13,6 +14,7 @@ pub enum ContainerSlotClickError {
     Transfer(ContainerError),
     BurnerDrill(BurnerDrillError),
     Furnace(FurnaceError),
+    Boiler(BoilerError),
     Assembler(AssemblerError),
 }
 
@@ -34,6 +36,11 @@ pub fn transfer_open_container_slot(
             if is_furnace_entity(sim, entity_id) {
                 return transfer_player_slot_to_furnace(sim, entity_id, slot_index)
                     .map_err(ContainerSlotClickError::Furnace);
+            }
+            if is_boiler_entity(sim, entity_id) {
+                return sim
+                    .transfer_player_slot_to_boiler_fuel(entity_id, slot_index)
+                    .map_err(ContainerSlotClickError::Boiler);
             }
             if is_assembler_entity(sim, entity_id) {
                 return sim
@@ -67,6 +74,11 @@ pub fn transfer_open_container_slot(
             return sim
                 .transfer_furnace_output_to_player(entity_id)
                 .map_err(ContainerSlotClickError::Furnace);
+        }
+        InventoryPanel::BoilerFuel => {
+            return sim
+                .transfer_boiler_fuel_to_player(entity_id)
+                .map_err(ContainerSlotClickError::Boiler);
         }
         InventoryPanel::AssemblerInput => {
             return sim

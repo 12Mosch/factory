@@ -46,6 +46,10 @@ pub struct BaseItemIds {
     pub express_underground_belt: ItemId,
     pub fast_splitter: ItemId,
     pub express_splitter: ItemId,
+    pub small_electric_pole: ItemId,
+    pub steam_engine: ItemId,
+    pub boiler: ItemId,
+    pub offshore_pump: ItemId,
 }
 
 impl BaseItemIds {
@@ -80,6 +84,10 @@ impl BaseItemIds {
             express_underground_belt: item_id_by_name(catalog, "express_underground_belt"),
             fast_splitter: item_id_by_name(catalog, "fast_splitter"),
             express_splitter: item_id_by_name(catalog, "express_splitter"),
+            small_electric_pole: item_id_by_name(catalog, "small_electric_pole"),
+            steam_engine: item_id_by_name(catalog, "steam_engine"),
+            boiler: item_id_by_name(catalog, "boiler"),
+            offshore_pump: item_id_by_name(catalog, "offshore_pump"),
         }
     }
 

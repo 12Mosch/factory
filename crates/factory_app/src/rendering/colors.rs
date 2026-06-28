@@ -22,6 +22,22 @@ pub(crate) fn lab_color() -> Color {
     Color::srgb(0.47, 0.36, 0.62)
 }
 
+pub(crate) fn electric_pole_color() -> Color {
+    Color::srgb(0.70, 0.58, 0.34)
+}
+
+pub(crate) fn steam_engine_color() -> Color {
+    Color::srgb(0.36, 0.50, 0.55)
+}
+
+pub(crate) fn boiler_color() -> Color {
+    Color::srgb(0.55, 0.34, 0.25)
+}
+
+pub(crate) fn offshore_pump_color() -> Color {
+    Color::srgb(0.18, 0.44, 0.62)
+}
+
 pub(crate) fn transport_belt_color(speed_subtiles_per_tick: Option<u16>) -> Color {
     match speed_subtiles_per_tick {
         Some(16) => Color::srgb(0.83, 0.24, 0.18),

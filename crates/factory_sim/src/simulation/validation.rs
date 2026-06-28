@@ -26,6 +26,16 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     for (entity_id, state) in &sim.entities.labs {
         validate_lab(sim, *entity_id, state)?;
     }
+    for (entity_id, state) in &sim.entities.electric_consumers {
+        if state.work_remainder_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
+            return Err(SimValidationError::InvalidEntityState {
+                entity_id: *entity_id,
+            });
+        }
+    }
+    for state in sim.entities.boilers.values() {
+        validate_boiler(sim, state)?;
+    }
     for (entity_id, segment) in &sim.entities.transport_belts {
         validate_belt_segment(sim, *entity_id, segment)?;
     }
@@ -119,6 +129,62 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
         }
 
         match prototype.entity_kind {
+            EntityKind::ElectricPole => {
+                let Some(electric_pole) = prototype.electric_pole.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if electric_pole.supply_area_tiles.x <= 0
+                    || electric_pole.supply_area_tiles.y <= 0
+                    || electric_pole.wire_reach_tiles_x2 == 0
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::SteamEngine => {
+                let Some(steam_engine) = prototype.steam_engine.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if steam_engine.max_power_output_watts == 0
+                    || steam_engine.steam_consumption_per_second_milliunits == 0
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::Boiler => {
+                let Some(boiler) = prototype.boiler.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if prototype.burner.is_none()
+                    || boiler.water_consumption_per_second_milliunits == 0
+                    || boiler.steam_output_per_second_milliunits == 0
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::OffshorePump => {
+                let Some(offshore_pump) = prototype.offshore_pump.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if offshore_pump.pumping_speed_per_second_milliunits == 0 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
             EntityKind::TransportBelt => {
                 let Some(transport_belt) = prototype.transport_belt.as_ref() else {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
@@ -162,6 +228,14 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
                 }
             }
             _ => {}
+        }
+
+        if let Some(electric_energy_source) = prototype.electric_energy_source.as_ref()
+            && electric_energy_source.energy_usage_watts == 0
+        {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
         }
     }
 
@@ -234,6 +308,18 @@ fn validate_placed_entities(sim: &Simulation) -> Result<(), SimValidationError> 
                     y,
                 });
             }
+        }
+
+        if prototype.entity_kind == EntityKind::OffshorePump
+            && !offshore_pump_water_tiles(&placed.footprint, placed.direction)
+                .into_iter()
+                .any(|(x, y)| sim.world.tile_at(x, y).is_some_and(is_water_like_tile))
+        {
+            return Err(SimValidationError::InvalidEntityTile {
+                entity_id: placed.id,
+                x: placed.footprint.x,
+                y: placed.footprint.y,
+            });
         }
     }
 
@@ -319,6 +405,21 @@ fn validate_entity_state_ownership_and_kind(sim: &Simulation) -> Result<(), SimV
     for entity_id in sim.entities.labs.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::Lab)?;
     }
+    for entity_id in sim.entities.electric_poles.keys() {
+        validate_entity_state_kind(sim, *entity_id, EntityKind::ElectricPole)?;
+    }
+    for entity_id in sim.entities.electric_consumers.keys() {
+        validate_electric_consumer_owner(sim, *entity_id)?;
+    }
+    for entity_id in sim.entities.steam_engines.keys() {
+        validate_entity_state_kind(sim, *entity_id, EntityKind::SteamEngine)?;
+    }
+    for entity_id in sim.entities.boilers.keys() {
+        validate_entity_state_kind(sim, *entity_id, EntityKind::Boiler)?;
+    }
+    for entity_id in sim.entities.offshore_pumps.keys() {
+        validate_entity_state_kind(sim, *entity_id, EntityKind::OffshorePump)?;
+    }
     for entity_id in sim.entities.transport_belts.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::TransportBelt)?;
     }
@@ -327,6 +428,29 @@ fn validate_entity_state_ownership_and_kind(sim: &Simulation) -> Result<(), SimV
     }
     for entity_id in sim.entities.inserters.keys() {
         validate_entity_state_kind(sim, *entity_id, EntityKind::Inserter)?;
+    }
+
+    Ok(())
+}
+
+fn validate_electric_consumer_owner(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<(), SimValidationError> {
+    let placed = sim
+        .entities
+        .placed_entities
+        .get(&entity_id)
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
+    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+        SimValidationError::InvalidEntityPrototype {
+            entity_id,
+            prototype_id: placed.prototype_id,
+        },
+    )?;
+
+    if prototype.electric_energy_source.is_none() {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
     Ok(())
@@ -458,6 +582,10 @@ fn validate_furnace(
     }
 
     Ok(())
+}
+
+fn validate_boiler(sim: &Simulation, state: &BoilerState) -> Result<(), SimValidationError> {
+    validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)
 }
 
 fn validate_assembler(
