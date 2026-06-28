@@ -35,6 +35,7 @@ pub struct EntityPrototype {
     pub assembling_machine: Option<AssemblingMachinePrototype>,
     pub transport_belt: Option<TransportBeltPrototype>,
     pub splitter: Option<SplitterPrototype>,
+    pub inserter: Option<InserterPrototype>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -65,6 +66,14 @@ pub struct TransportBeltPrototype {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct SplitterPrototype {
     pub speed_subtiles_per_tick: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct InserterPrototype {
+    pub pickup_offset: IVec2,
+    pub drop_offset: IVec2,
+    pub pickup_ticks: u32,
+    pub drop_ticks: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

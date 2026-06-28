@@ -27,6 +27,8 @@
         (id: 24, name: "express_underground_belt", stack_size: 50),
         (id: 25, name: "fast_splitter", stack_size: 50),
         (id: 26, name: "express_splitter", stack_size: 50),
+        (id: 27, name: "fast_inserter", stack_size: 50),
+        (id: 28, name: "long_handed_inserter", stack_size: 50),
     ],
     recipes: [
         (
@@ -197,6 +199,30 @@
             ],
             products: [(item: "splitter", amount: 1)],
         ),
+        (
+            id: 17,
+            name: "fast_inserter",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "inserter", amount: 1),
+                (item: "iron_plate", amount: 2),
+                (item: "electronic_circuit", amount: 2),
+            ],
+            products: [(item: "fast_inserter", amount: 1)],
+        ),
+        (
+            id: 18,
+            name: "long_handed_inserter",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "inserter", amount: 1),
+                (item: "iron_plate", amount: 1),
+                (item: "iron_gear_wheel", amount: 1),
+            ],
+            products: [(item: "long_handed_inserter", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -254,6 +280,12 @@
             entity_kind: Inserter,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
+            inserter: Some((
+                pickup_offset: (x: 0, y: -1),
+                drop_offset: (x: 0, y: 1),
+                pickup_ticks: 35,
+                drop_ticks: 35,
+            )),
         ),
         (
             id: 7,
@@ -405,6 +437,32 @@
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
             splitter: Some((speed_subtiles_per_tick: 24)),
+        ),
+        (
+            id: 22,
+            name: "fast_inserter",
+            entity_kind: Inserter,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            inserter: Some((
+                pickup_offset: (x: 0, y: -1),
+                drop_offset: (x: 0, y: 1),
+                pickup_ticks: 12,
+                drop_ticks: 12,
+            )),
+        ),
+        (
+            id: 23,
+            name: "long_handed_inserter",
+            entity_kind: Inserter,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            inserter: Some((
+                pickup_offset: (x: 0, y: -2),
+                drop_offset: (x: 0, y: 2),
+                pickup_ticks: 25,
+                drop_ticks: 25,
+            )),
         ),
     ],
     tiles: [

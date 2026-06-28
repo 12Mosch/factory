@@ -132,16 +132,50 @@ pub(super) fn splitter_state_for_prototype(
 pub(super) fn inserter_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<InserterState> {
-    (prototype.entity_kind == EntityKind::Inserter).then_some(InserterState::WaitingForItem)
+    (prototype.entity_kind == EntityKind::Inserter && prototype.inserter.is_some())
+        .then_some(InserterState::WaitingForItem)
 }
 
-pub(super) fn inserter_transfer_tiles(placed: &PlacedEntity) -> ((i32, i32), (i32, i32)) {
-    let (dx, dy) = direction_tile_delta(placed.direction);
+pub(super) fn inserter_transfer_tiles(
+    catalog: &PrototypeCatalog,
+    placed: &PlacedEntity,
+) -> Option<((i32, i32), (i32, i32))> {
+    let prototype = catalog
+        .entities
+        .get(placed.prototype_id.index())
+        .filter(|prototype| prototype.id == placed.prototype_id)?;
+    let inserter = prototype.inserter.as_ref()?;
+
+    Some(inserter_transfer_tiles_for_prototype(placed, inserter))
+}
+
+pub(super) fn inserter_transfer_tiles_for_prototype(
+    placed: &PlacedEntity,
+    inserter: &factory_data::InserterPrototype,
+) -> ((i32, i32), (i32, i32)) {
+    let pickup_offset = rotate_inserter_offset(
+        (inserter.pickup_offset.x, inserter.pickup_offset.y),
+        placed.direction,
+    );
+    let drop_offset = rotate_inserter_offset(
+        (inserter.drop_offset.x, inserter.drop_offset.y),
+        placed.direction,
+    );
 
     (
-        (placed.x - dx, placed.y - dy),
-        (placed.x + dx, placed.y + dy),
+        (placed.x + pickup_offset.0, placed.y + pickup_offset.1),
+        (placed.x + drop_offset.0, placed.y + drop_offset.1),
     )
+}
+
+fn rotate_inserter_offset(offset: (i32, i32), direction: Direction) -> (i32, i32) {
+    let (x, y) = offset;
+    match direction {
+        Direction::North => (x, y),
+        Direction::East => (y, -x),
+        Direction::South => (-x, -y),
+        Direction::West => (-y, x),
+    }
 }
 
 pub(super) fn peek_inserter_source_item(

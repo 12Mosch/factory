@@ -449,10 +449,22 @@ impl Simulation {
             let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
                 continue;
             };
+            let Some(prototype) = self
+                .world
+                .prototypes
+                .entities
+                .get(placed.prototype_id.index())
+                .filter(|prototype| prototype.id == placed.prototype_id)
+            else {
+                continue;
+            };
+            let Some(inserter) = prototype.inserter.as_ref() else {
+                continue;
+            };
             let Ok(state) = self.entities.inserter_state(entity_id).cloned() else {
                 continue;
             };
-            let (pickup_tile, drop_tile) = inserter_transfer_tiles(&placed);
+            let (pickup_tile, drop_tile) = inserter_transfer_tiles_for_prototype(&placed, inserter);
 
             let next_state = match state {
                 InserterState::WaitingForItem => {
@@ -474,7 +486,7 @@ impl Simulation {
                     }
 
                     InserterState::Picking {
-                        ticks_left: BASIC_INSERTER_PICKUP_TICKS,
+                        ticks_left: inserter.pickup_ticks,
                     }
                 }
                 InserterState::Picking { ticks_left } => {
@@ -533,7 +545,7 @@ impl Simulation {
                         )
                     }) {
                         InserterState::Dropping {
-                            ticks_left: BASIC_INSERTER_DROP_TICKS,
+                            ticks_left: inserter.drop_ticks,
                         }
                     } else {
                         InserterState::Holding { item }

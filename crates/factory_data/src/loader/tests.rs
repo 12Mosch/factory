@@ -8,7 +8,7 @@ use crate::model::{
     UndergroundBeltPart,
 };
 
-const ITEM_NAMES: [&str; 27] = [
+const ITEM_NAMES: [&str; 29] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -36,9 +36,11 @@ const ITEM_NAMES: [&str; 27] = [
     "express_underground_belt",
     "fast_splitter",
     "express_splitter",
+    "fast_inserter",
+    "long_handed_inserter",
 ];
 
-const RECIPE_NAMES: [&str; 17] = [
+const RECIPE_NAMES: [&str; 19] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -56,9 +58,11 @@ const RECIPE_NAMES: [&str; 17] = [
     "stone_brick",
     "underground_belt",
     "splitter",
+    "fast_inserter",
+    "long_handed_inserter",
 ];
 
-const ENTITY_NAMES: [&str; 22] = [
+const ENTITY_NAMES: [&str; 24] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -81,6 +85,8 @@ const ENTITY_NAMES: [&str; 22] = [
     "express_underground_belt_exit",
     "fast_splitter",
     "express_splitter",
+    "fast_inserter",
+    "long_handed_inserter",
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
@@ -90,9 +96,9 @@ const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 27);
-    assert_eq!(catalog.recipes.len(), 17);
-    assert_eq!(catalog.entities.len(), 22);
+    assert_eq!(catalog.items.len(), 29);
+    assert_eq!(catalog.recipes.len(), 19);
+    assert_eq!(catalog.entities.len(), 24);
     assert_eq!(catalog.tiles.len(), 3);
     assert_eq!(catalog.technologies.len(), 1);
 }
@@ -291,6 +297,51 @@ fn assembling_machine_loads_metadata() {
             output_slot_count: 1,
         })
     );
+}
+
+#[test]
+fn inserter_variants_load_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    for (
+        entity_name,
+        expected_pickup_offset,
+        expected_drop_offset,
+        expected_pickup_ticks,
+        expected_drop_ticks,
+    ) in [
+        ("inserter", IVec2::new(0, -1), IVec2::new(0, 1), 35, 35),
+        ("fast_inserter", IVec2::new(0, -1), IVec2::new(0, 1), 12, 12),
+        (
+            "long_handed_inserter",
+            IVec2::new(0, -2),
+            IVec2::new(0, 2),
+            25,
+            25,
+        ),
+    ] {
+        let item = catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == entity_name)
+            .unwrap_or_else(|| panic!("base catalog should contain {entity_name} item"));
+        let entity = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == entity_name)
+            .unwrap_or_else(|| panic!("base catalog should contain {entity_name} entity"));
+        let inserter = entity
+            .inserter
+            .as_ref()
+            .expect("inserter entity should define inserter metadata");
+
+        assert_eq!(entity.entity_kind, EntityKind::Inserter);
+        assert_eq!(entity.build_item, Some(item.id));
+        assert_eq!(inserter.pickup_offset, expected_pickup_offset);
+        assert_eq!(inserter.drop_offset, expected_drop_offset);
+        assert_eq!(inserter.pickup_ticks, expected_pickup_ticks);
+        assert_eq!(inserter.drop_ticks, expected_drop_ticks);
+    }
 }
 
 #[test]

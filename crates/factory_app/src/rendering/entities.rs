@@ -120,7 +120,7 @@ pub(crate) fn entity_prototype_render_style(
         EntityKind::Furnace => Some((furnace_color(), machine_size())),
         EntityKind::AssemblingMachine => Some((assembler_color(), machine_size())),
         EntityKind::Lab => Some((lab_color(), machine_size())),
-        EntityKind::Inserter => Some((inserter_color(), machine_size())),
+        EntityKind::Inserter => Some((inserter_color(prototype.inserter.as_ref()), machine_size())),
         EntityKind::ResourcePatch => None,
     }
 }

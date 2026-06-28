@@ -143,6 +143,24 @@ fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError
                     });
                 }
             }
+            EntityKind::Inserter => {
+                let Some(inserter) = prototype.inserter.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if inserter.pickup_ticks == 0
+                    || inserter.drop_ticks == 0
+                    || (inserter.pickup_offset.x == 0
+                        && inserter.pickup_offset.y == 0
+                        && inserter.drop_offset.x == 0
+                        && inserter.drop_offset.y == 0)
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -624,7 +642,11 @@ fn validate_inserter(
     let Some(placed) = sim.entities.placed_entity(entity_id) else {
         return Err(SimValidationError::OrphanEntityState(entity_id));
     };
-    let (pickup_tile, drop_tile) = inserter_transfer_tiles(placed);
+    let (pickup_tile, drop_tile) = inserter_transfer_tiles(&sim.world.prototypes, placed).ok_or(
+        SimValidationError::InvalidCatalogEntityPrototype {
+            prototype_id: placed.prototype_id,
+        },
+    )?;
     validate_inserter_target(sim, entity_id, pickup_tile)?;
     validate_inserter_target(sim, entity_id, drop_tile)?;
 

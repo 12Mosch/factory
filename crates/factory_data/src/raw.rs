@@ -48,12 +48,21 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) assembling_machine: Option<AssemblingMachinePrototype>,
     pub(crate) transport_belt: Option<TransportBeltPrototype>,
     pub(crate) splitter: Option<SplitterPrototype>,
+    pub(crate) inserter: Option<RawInserterPrototype>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawMiningDrillPrototype {
     pub(crate) mining_area: RawIVec2,
     pub(crate) ticks_per_item: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawInserterPrototype {
+    pub(crate) pickup_offset: RawIVec2,
+    pub(crate) drop_offset: RawIVec2,
+    pub(crate) pickup_ticks: u32,
+    pub(crate) drop_ticks: u32,
 }
 
 #[derive(Debug, Deserialize)]

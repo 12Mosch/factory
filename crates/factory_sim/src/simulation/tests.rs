@@ -3175,6 +3175,212 @@ fn inserter_uses_rotated_direction_for_pickup_and_drop() {
     assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
 }
 
+#[test]
+fn fast_inserter_transfers_faster_than_basic() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 5);
+
+    let (basic_source, _basic_inserter, basic_target) =
+        place_chest_inserter_furnace_line_at(&mut sim, "inserter", x, y);
+    let (fast_source, _fast_inserter, fast_target) =
+        place_chest_inserter_furnace_line_at(&mut sim, "fast_inserter", x, y + 3);
+
+    sim.entity_inventory_mut(basic_source)
+        .expect("basic source chest should have inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+    sim.entity_inventory_mut(fast_source)
+        .expect("fast source chest should have inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    for _ in 0..20 {
+        sim.tick();
+    }
+
+    assert_eq!(
+        sim.furnace_state(fast_target)
+            .expect("fast target should be a furnace")
+            .input_slot,
+        Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        })
+    );
+    assert_eq!(
+        sim.furnace_state(basic_target)
+            .expect("basic target should be a furnace")
+            .input_slot,
+        None
+    );
+    assert_eq!(
+        sim.entity_inventory(basic_source)
+            .expect("basic source chest should have inventory")
+            .count(iron_ore),
+        1
+    );
+    assert_eq!(total_item_count_in_sim(&sim, iron_ore), 2);
+}
+
+#[test]
+fn long_handed_inserter_uses_two_tile_pickup_and_drop() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (chest_id, inserter_id, furnace_id) =
+        place_two_tile_chest_inserter_furnace_line(&mut sim, "long_handed_inserter");
+
+    sim.entity_inventory_mut(chest_id)
+        .expect("chest should have inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    run_inserter_until_idle(&mut sim, inserter_id);
+
+    assert_eq!(
+        sim.entity_inventory(chest_id)
+            .expect("chest should have inventory")
+            .count(iron_ore),
+        0
+    );
+    assert_eq!(
+        sim.furnace_state(furnace_id)
+            .expect("furnace should have state")
+            .input_slot,
+        Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        })
+    );
+    assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
+}
+
+#[test]
+fn basic_inserter_does_not_reach_long_handed_positions() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (chest_id, inserter_id, furnace_id) =
+        place_two_tile_chest_inserter_furnace_line(&mut sim, "inserter");
+
+    sim.entity_inventory_mut(chest_id)
+        .expect("chest should have inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) {
+        sim.tick();
+    }
+
+    assert_eq!(
+        sim.entity_inventory(chest_id)
+            .expect("chest should have inventory")
+            .count(iron_ore),
+        1
+    );
+    assert_eq!(
+        sim.furnace_state(furnace_id)
+            .expect("furnace should have state")
+            .input_slot,
+        None
+    );
+    assert_eq!(
+        sim.inserter_state(inserter_id)
+            .expect("inserter should have state"),
+        &InserterState::WaitingForItem
+    );
+}
+
+#[test]
+fn inserter_holding_item_does_not_duplicate_when_target_becomes_blocked() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+    let stack_size = item_stack_size(&sim.world.prototypes, copper_ore)
+        .expect("copper ore should have stack size");
+    let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
+
+    sim.entity_inventory_mut(chest_id)
+        .expect("chest should have inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    run_inserter_until_holding(&mut sim, inserter_id);
+    sim.entities
+        .furnace_state_mut(furnace_id)
+        .expect("furnace should have state")
+        .input_slot = Some(ItemStack {
+        item_id: copper_ore,
+        count: stack_size,
+    });
+
+    for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) * 3 {
+        sim.tick();
+    }
+
+    assert_eq!(
+        sim.entity_inventory(chest_id)
+            .expect("chest should have inventory")
+            .count(iron_ore),
+        0
+    );
+    assert_eq!(
+        sim.furnace_state(furnace_id)
+            .expect("furnace should have state")
+            .input_slot,
+        Some(ItemStack {
+            item_id: copper_ore,
+            count: stack_size,
+        })
+    );
+    assert_eq!(
+        sim.inserter_state(inserter_id)
+            .expect("inserter should have state"),
+        &InserterState::Holding {
+            item: ItemStack {
+                item_id: iron_ore,
+                count: 1,
+            },
+        }
+    );
+    assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
+    assert_eq!(
+        total_item_count_in_sim(&sim, copper_ore),
+        u32::from(stack_size)
+    );
+
+    sim.entities
+        .furnace_state_mut(furnace_id)
+        .expect("furnace should have state")
+        .input_slot = None;
+    sim.tick();
+
+    assert_eq!(
+        sim.furnace_state(furnace_id)
+            .expect("furnace should have state")
+            .input_slot,
+        Some(ItemStack {
+            item_id: iron_ore,
+            count: 1,
+        })
+    );
+    assert!(!matches!(
+        sim.inserter_state(inserter_id)
+            .expect("inserter should have state"),
+        InserterState::Holding { .. }
+    ));
+    assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
+}
+
 fn first_resource_tile(world: &WorldSim) -> (i32, i32, ResourceCell) {
     for chunk in world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
@@ -4139,11 +4345,15 @@ fn place_lab(sim: &mut Simulation) -> EntityId {
     panic!("expected placeable lab area");
 }
 
-fn place_chest_inserter_furnace_line(sim: &mut Simulation) -> (EntityId, EntityId, EntityId) {
+fn place_chest_inserter_furnace_line_at(
+    sim: &mut Simulation,
+    inserter_name: &str,
+    x: i32,
+    y: i32,
+) -> (EntityId, EntityId, EntityId) {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
-    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let inserter = entity_id_by_name(&sim.world.prototypes, inserter_name);
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
     let chest_id = sim
         .place_entity(chest, x, y, Direction::North)
         .expect("chest should be placeable");
@@ -4152,6 +4362,32 @@ fn place_chest_inserter_furnace_line(sim: &mut Simulation) -> (EntityId, EntityI
         .expect("inserter should be placeable");
     let furnace_id = sim
         .place_entity(furnace, x + 2, y, Direction::North)
+        .expect("furnace should be placeable");
+
+    (chest_id, inserter_id, furnace_id)
+}
+
+fn place_chest_inserter_furnace_line(sim: &mut Simulation) -> (EntityId, EntityId, EntityId) {
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    place_chest_inserter_furnace_line_at(sim, "inserter", x, y)
+}
+
+fn place_two_tile_chest_inserter_furnace_line(
+    sim: &mut Simulation,
+    inserter_name: &str,
+) -> (EntityId, EntityId, EntityId) {
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let inserter = entity_id_by_name(&sim.world.prototypes, inserter_name);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 6, 2);
+    let chest_id = sim
+        .place_entity(chest, x, y, Direction::North)
+        .expect("chest should be placeable");
+    let inserter_id = sim
+        .place_entity(inserter, x + 2, y, Direction::East)
+        .expect("inserter should be placeable");
+    let furnace_id = sim
+        .place_entity(furnace, x + 4, y, Direction::North)
         .expect("furnace should be placeable");
 
     (chest_id, inserter_id, furnace_id)
@@ -4266,7 +4502,7 @@ fn place_furnace_inserter_belt_line(sim: &mut Simulation) -> (EntityId, EntityId
 }
 
 fn run_inserter_until_idle(sim: &mut Simulation, inserter_id: EntityId) {
-    for _ in 0..BASIC_INSERTER_PICKUP_TICKS + BASIC_INSERTER_DROP_TICKS + 20 {
+    for _ in 0..inserter_cycle_tick_budget(sim, inserter_id) {
         sim.tick();
         if matches!(
             sim.inserter_state(inserter_id)
@@ -4278,6 +4514,41 @@ fn run_inserter_until_idle(sim: &mut Simulation, inserter_id: EntityId) {
     }
 
     panic!("inserter did not return to idle");
+}
+
+fn run_inserter_until_holding(sim: &mut Simulation, inserter_id: EntityId) {
+    for _ in 0..inserter_cycle_tick_budget(sim, inserter_id) {
+        sim.tick();
+        if matches!(
+            sim.inserter_state(inserter_id)
+                .expect("inserter should have state"),
+            InserterState::Holding { .. }
+        ) {
+            return;
+        }
+    }
+
+    panic!("inserter did not pick up an item");
+}
+
+fn inserter_cycle_tick_budget(sim: &Simulation, inserter_id: EntityId) -> u32 {
+    let placed = sim
+        .entities
+        .placed_entity(inserter_id)
+        .expect("inserter should be placed");
+    let prototype = sim
+        .world
+        .prototypes
+        .entities
+        .get(placed.prototype_id.index())
+        .filter(|prototype| prototype.id == placed.prototype_id)
+        .expect("inserter prototype should exist");
+    let inserter = prototype
+        .inserter
+        .as_ref()
+        .expect("inserter prototype should define metadata");
+
+    inserter.pickup_ticks + inserter.drop_ticks + 20
 }
 
 fn total_item_count_in_sim(sim: &Simulation, item_id: ItemId) -> u32 {

@@ -18,7 +18,8 @@ pub use error::PrototypeLoadError;
 pub use ids::{EntityPrototypeId, ItemId, RecipeId, TechnologyId, TileId};
 pub use model::{
     AssemblingMachinePrototype, BurnerPrototype, CollisionLayer, CollisionMask, CraftingCategory,
-    EntityKind, EntityPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype, RecipePrototype,
-    SplitterPrototype, TechnologyEffect, TechnologyPrototype, TilePrototype,
-    TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype,
+    EntityKind, EntityPrototype, InserterPrototype, ItemAmount, ItemPrototype,
+    MiningDrillPrototype, RecipePrototype, SplitterPrototype, TechnologyEffect,
+    TechnologyPrototype, TilePrototype, TransportBeltPrototype, UndergroundBeltPart,
+    UndergroundBeltPrototype,
 };

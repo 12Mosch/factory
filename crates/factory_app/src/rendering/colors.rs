@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_data::{BasePrototypeIds, ItemId, PrototypeCatalog, TileId};
+use factory_data::{BasePrototypeIds, InserterPrototype, ItemId, PrototypeCatalog, TileId};
 use factory_sim::ResourceCell;
 
 pub(crate) fn chest_color() -> Color {
@@ -38,8 +38,29 @@ pub(crate) fn splitter_color(speed_subtiles_per_tick: Option<u16>) -> Color {
     }
 }
 
-pub(crate) fn inserter_color() -> Color {
-    Color::srgb(0.66, 0.58, 0.34)
+pub(crate) fn inserter_color(inserter: Option<&InserterPrototype>) -> Color {
+    match inserter {
+        Some(inserter)
+            if inserter
+                .pickup_offset
+                .x
+                .abs()
+                .max(inserter.pickup_offset.y.abs())
+                > 1
+                || inserter
+                    .drop_offset
+                    .x
+                    .abs()
+                    .max(inserter.drop_offset.y.abs())
+                    > 1 =>
+        {
+            Color::srgb(0.86, 0.32, 0.14)
+        }
+        Some(inserter) if inserter.pickup_ticks <= 12 && inserter.drop_ticks <= 12 => {
+            Color::srgb(0.18, 0.45, 0.88)
+        }
+        _ => Color::srgb(0.66, 0.58, 0.34),
+    }
 }
 
 pub(crate) fn tile_color(tile_id: TileId, ids: RenderPrototypeIds) -> Color {
