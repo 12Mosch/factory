@@ -625,25 +625,18 @@ pub(super) fn first_resource_in_mining_area_profiled<P: TickProfiler>(
     None
 }
 
-pub(super) fn first_matching_smelting_recipe(
-    catalog: &PrototypeCatalog,
-    input_item: ItemId,
-) -> Option<&factory_data::RecipePrototype> {
-    catalog.recipes.iter().find(|recipe| {
-        recipe.category == CraftingCategory::Smelting
-            && recipe.ingredients.len() == 1
-            && recipe.products.len() == 1
-            && recipe.ingredients[0].item == input_item
-    })
-}
-
 pub(super) fn first_matching_unlocked_smelting_recipe<'a>(
     catalog: &'a PrototypeCatalog,
     research: &ResearchState,
     input_item: ItemId,
 ) -> Option<&'a factory_data::RecipePrototype> {
-    first_matching_smelting_recipe(catalog, input_item)
-        .filter(|recipe| recipe_is_unlocked(catalog, research, recipe.id))
+    catalog.recipes.iter().find(|recipe| {
+        recipe.category == CraftingCategory::Smelting
+            && recipe.ingredients.len() == 1
+            && recipe.products.len() == 1
+            && recipe.ingredients[0].item == input_item
+            && recipe_is_unlocked(catalog, research, recipe.id)
+    })
 }
 
 pub(super) fn furnace_work_selection(

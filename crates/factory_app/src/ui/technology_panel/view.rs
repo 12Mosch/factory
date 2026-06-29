@@ -36,22 +36,28 @@ pub(crate) fn spawn_technology_panel(
             GlobalZIndex(2100),
             TechnologyPanelRoot { snapshot },
         ))
-        .with_children(|root| {
-            spawn_header(root, sim);
-            root.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(12.0),
-                    align_items: AlignItems::Stretch,
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|content| {
-                spawn_technology_list(content, sim, selected);
-                spawn_technology_detail(content, sim, selected);
-            });
-        });
+        .with_children(|root| spawn_technology_panel_contents(root, sim, selected));
+}
+
+pub(crate) fn spawn_technology_panel_contents(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &factory_sim::Simulation,
+    selected: Option<TechnologyId>,
+) {
+    spawn_header(root, sim);
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(12.0),
+            align_items: AlignItems::Stretch,
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|content| {
+        spawn_technology_list(content, sim, selected);
+        spawn_technology_detail(content, sim, selected);
+    });
 }
 
 fn spawn_header(
@@ -243,6 +249,11 @@ fn spawn_start_queue_button(
 ) {
     let actionable = can_enqueue_for_ui(sim, technology_id);
     let label = start_queue_label(sim, technology_id);
+    if !actionable {
+        spawn_disabled_control(parent, &label, 160.0);
+        return;
+    }
+
     parent
         .spawn((
             Button,
@@ -255,16 +266,8 @@ fn spawn_start_queue_button(
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(if actionable {
-                Color::srgba(0.20, 0.34, 0.28, 0.98)
-            } else {
-                Color::srgba(0.10, 0.11, 0.11, 0.92)
-            }),
-            BorderColor::all(if actionable {
-                Color::srgba(0.42, 0.68, 0.48, 0.85)
-            } else {
-                Color::srgba(0.28, 0.29, 0.28, 0.75)
-            }),
+            BackgroundColor(Color::srgba(0.20, 0.34, 0.28, 0.98)),
+            BorderColor::all(Color::srgba(0.42, 0.68, 0.48, 0.85)),
             TechnologyStartQueueButton,
         ))
         .with_child((
@@ -303,6 +306,9 @@ fn spawn_queue_controls(
             }
 
             for (index, technology_id) in sim.research_queue().iter().copied().enumerate() {
+                let can_move_up = index > 0 && can_move_queued_research(sim, index, index - 1);
+                let can_move_down = index + 1 < sim.research_queue().len()
+                    && can_move_queued_research(sim, index, index + 1);
                 queue
                     .spawn((
                         Node {
@@ -323,9 +329,27 @@ fn spawn_queue_controls(
                             TextFont::from_font_size(11.0),
                             TextColor(Color::srgb(0.86, 0.88, 0.82)),
                         ));
-                        spawn_queue_button(row, "Up", index, TechnologyQueueAction::MoveUp);
-                        spawn_queue_button(row, "Down", index, TechnologyQueueAction::MoveDown);
-                        spawn_queue_button(row, "Remove", index, TechnologyQueueAction::Remove);
+                        spawn_queue_button(
+                            row,
+                            "Up",
+                            index,
+                            TechnologyQueueAction::MoveUp,
+                            can_move_up,
+                        );
+                        spawn_queue_button(
+                            row,
+                            "Down",
+                            index,
+                            TechnologyQueueAction::MoveDown,
+                            can_move_down,
+                        );
+                        spawn_queue_button(
+                            row,
+                            "Remove",
+                            index,
+                            TechnologyQueueAction::Remove,
+                            true,
+                        );
                     });
             }
         });
@@ -336,7 +360,13 @@ fn spawn_queue_button(
     label: &str,
     index: usize,
     action: TechnologyQueueAction,
+    enabled: bool,
 ) {
+    if !enabled {
+        spawn_disabled_control(parent, label, 58.0);
+        return;
+    }
+
     parent
         .spawn((
             Button,
@@ -356,4 +386,39 @@ fn spawn_queue_button(
             TextFont::from_font_size(10.0),
             TextColor(Color::WHITE),
         ));
+}
+
+fn spawn_disabled_control(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    width: f32,
+) {
+    parent
+        .spawn((
+            Node {
+                width: Val::Px(width),
+                height: Val::Px(24.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::horizontal(Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.10, 0.11, 0.11, 0.92)),
+            BorderColor::all(Color::srgba(0.28, 0.29, 0.28, 0.75)),
+        ))
+        .with_child((
+            Text::new(label.to_string()),
+            TextFont::from_font_size(10.0),
+            TextColor(Color::srgb(0.58, 0.59, 0.56)),
+        ));
+}
+
+fn can_move_queued_research(
+    sim: &factory_sim::Simulation,
+    from_index: usize,
+    to_index: usize,
+) -> bool {
+    let mut sim = sim.clone();
+    sim.move_queued_research(from_index, to_index).is_ok()
 }

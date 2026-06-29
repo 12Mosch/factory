@@ -23,7 +23,12 @@ pub(crate) fn handle_build_hotbar_keys(
 
     for (slot_index, key_code) in hotbar_keys().into_iter().enumerate() {
         if keyboard.just_pressed(key_code) {
-            select_build_slot(&sim.sim, &mut build_state, slot_index);
+            select_build_slot(
+                &sim.sim,
+                technology_window.as_deref(),
+                &mut build_state,
+                slot_index,
+            );
             return;
         }
     }
@@ -91,9 +96,14 @@ pub(crate) fn handle_build_world_click(
 
 pub fn select_build_slot(
     sim: &factory_sim::Simulation,
+    technology_window: Option<&TechnologyWindowState>,
     build_state: &mut BuildPlacementState,
     slot_index: usize,
 ) {
+    if technology_window_open(technology_window) {
+        return;
+    }
+
     let Some(buildable) = buildable_prototype_at_slot(sim.catalog(), slot_index) else {
         build_state.selected = None;
         return;

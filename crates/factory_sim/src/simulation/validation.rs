@@ -788,6 +788,16 @@ fn validate_research_state(sim: &Simulation) -> Result<(), SimValidationError> {
                 required_units: technology.required_units,
             });
         }
+        if state.unlocked
+            && technology
+                .prerequisites
+                .iter()
+                .any(|prerequisite_id| !technology_researched(&sim.research, *prerequisite_id))
+        {
+            return Err(SimValidationError::InvalidResearchTechnology {
+                technology_id: technology.id,
+            });
+        }
     }
 
     for state in &sim.research.technologies {

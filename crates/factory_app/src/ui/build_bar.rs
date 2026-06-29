@@ -4,7 +4,9 @@ use factory_sim::Direction;
 
 use crate::input::build::select_build_slot;
 use crate::placement::build::{buildable_prototypes, next_direction};
-use crate::resources::{BuildPlacementState, BuildPlacementStatus, BuildSelection, SimResource};
+use crate::resources::{
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, SimResource, TechnologyWindowState,
+};
 use crate::utils::compact_item_name;
 
 #[derive(Component)]
@@ -199,11 +201,17 @@ pub(crate) fn handle_build_bar_button_clicks(
     mut rotate_interactions: BuildRotateInteractionQuery,
     mut cancel_interactions: BuildCancelInteractionQuery,
     sim: Res<SimResource>,
+    technology_window: Option<Res<TechnologyWindowState>>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
     for (interaction, button) in &mut slot_interactions {
         if *interaction == Interaction::Pressed {
-            select_build_slot(&sim.sim, &mut build_state, button.slot_index);
+            select_build_slot(
+                &sim.sim,
+                technology_window.as_deref(),
+                &mut build_state,
+                button.slot_index,
+            );
         }
     }
 

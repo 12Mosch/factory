@@ -54,6 +54,12 @@ use crate::ui::technology_panel::{
 
 pub struct FactoryAppPlugin;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SystemSet)]
+enum AppInputSet {
+    TechnologyWindow,
+    WorldInput,
+}
+
 impl Plugin for FactoryAppPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<DiagnosticsPlugin>() {
@@ -116,7 +122,9 @@ impl Plugin for FactoryAppPlugin {
                     handle_technology_panel_buttons,
                     sync_technology_panel,
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(AppInputSet::TechnologyWindow)
+                    .before(AppInputSet::WorldInput),
             )
             .add_systems(
                 Update,
@@ -134,7 +142,8 @@ impl Plugin for FactoryAppPlugin {
                     handle_build_world_click,
                     handle_container_close_input,
                     update_build_preview,
-                ),
+                )
+                    .in_set(AppInputSet::WorldInput),
             )
             .add_systems(
                 Update,

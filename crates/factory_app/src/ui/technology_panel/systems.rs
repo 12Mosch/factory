@@ -7,7 +7,7 @@ use super::components::{
     TechnologyStartQueueButton,
 };
 use super::helpers::{technology_by_id, technology_panel_snapshot};
-use super::view::spawn_technology_panel;
+use super::view::{spawn_technology_panel, spawn_technology_panel_contents};
 
 type TechnologySelectInteractionQuery<'w, 's> = Query<
     'w,
@@ -146,24 +146,36 @@ pub(crate) fn sync_technology_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
     window_state: Res<TechnologyWindowState>,
-    roots: Query<(Entity, &TechnologyPanelRoot)>,
+    mut roots: Query<(Entity, &mut TechnologyPanelRoot, Option<&Children>)>,
 ) {
     if !window_state.open {
-        for (entity, _) in &roots {
+        for (entity, _, _) in &roots {
             commands.entity(entity).despawn();
         }
         return;
     }
 
     let snapshot = technology_panel_snapshot(&sim.sim, &window_state);
-    for (entity, root) in &roots {
-        if root.snapshot != snapshot {
-            commands.entity(entity).despawn();
-        }
+    let mut roots_iter = roots.iter_mut();
+    let Some((root_entity, mut root, children)) = roots_iter.next() else {
+        spawn_technology_panel(&mut commands, &sim.sim, window_state.selected, snapshot);
+        return;
+    };
+    for (duplicate_entity, _, _) in roots_iter {
+        commands.entity(duplicate_entity).despawn();
     }
-    if roots.iter().any(|(_, root)| root.snapshot == snapshot) {
+
+    if root.snapshot == snapshot {
         return;
     }
 
-    spawn_technology_panel(&mut commands, &sim.sim, window_state.selected, snapshot);
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).despawn();
+        }
+    }
+    root.snapshot = snapshot;
+    commands.entity(root_entity).with_children(|root| {
+        spawn_technology_panel_contents(root, &sim.sim, window_state.selected)
+    });
 }
