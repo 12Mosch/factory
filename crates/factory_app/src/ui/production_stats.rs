@@ -64,15 +64,19 @@ pub(crate) fn sync_production_stats_window(
         return;
     }
 
-    let snapshot = production_stats_snapshot(&sim.sim, state.selected_tab);
     let mut roots_iter = roots.iter_mut();
     let Some((root_entity, mut root, children)) = roots_iter.next() else {
+        let snapshot = production_stats_snapshot(&sim.sim, state.selected_tab);
         spawn_production_stats_window(&mut commands, &sim.sim, snapshot);
         return;
     };
     for (duplicate, _, _) in roots_iter {
         commands.entity(duplicate).despawn();
     }
+    if !sim.is_changed() && !state.is_changed() {
+        return;
+    }
+    let snapshot = production_stats_snapshot(&sim.sim, state.selected_tab);
     if root.snapshot == snapshot {
         return;
     }
