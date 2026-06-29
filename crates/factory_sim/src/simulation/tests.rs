@@ -3499,6 +3499,50 @@ fn research_queue_auto_starts_next_technology_after_completion() {
 }
 
 #[test]
+fn logistics_3_unlocks_express_recipes_and_entities() {
+    let mut sim = Simulation::new_test_world(123);
+    let express_recipes = [
+        recipe_id(&sim.world.prototypes, "express_transport_belt"),
+        recipe_id(&sim.world.prototypes, "express_underground_belt"),
+        recipe_id(&sim.world.prototypes, "express_splitter"),
+    ];
+    let express_entities = [
+        entity_id_by_name(&sim.world.prototypes, "express_transport_belt"),
+        entity_id_by_name(&sim.world.prototypes, "express_underground_belt_entrance"),
+        entity_id_by_name(&sim.world.prototypes, "express_underground_belt_exit"),
+        entity_id_by_name(&sim.world.prototypes, "express_splitter"),
+    ];
+
+    for recipe in express_recipes {
+        assert!(!sim.is_recipe_unlocked(recipe));
+    }
+    for entity in express_entities {
+        assert!(!sim.is_entity_unlocked(entity));
+    }
+
+    complete_research_by_name(&mut sim, "automation");
+    complete_research_by_name(&mut sim, "logistics");
+    complete_research_by_name(&mut sim, "logistic_science_pack");
+    complete_research_by_name(&mut sim, "logistics_2");
+
+    for recipe in express_recipes {
+        assert!(!sim.is_recipe_unlocked(recipe));
+    }
+    for entity in express_entities {
+        assert!(!sim.is_entity_unlocked(entity));
+    }
+
+    complete_research_by_name(&mut sim, "logistics_3");
+
+    for recipe in express_recipes {
+        assert!(sim.is_recipe_unlocked(recipe));
+    }
+    for entity in express_entities {
+        assert!(sim.is_entity_unlocked(entity));
+    }
+}
+
+#[test]
 fn removing_queued_prerequisite_removes_dependent_technologies() {
     let mut sim = Simulation::new_test_world(123);
     let automation = technology_id(&sim.world.prototypes, "automation");

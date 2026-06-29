@@ -807,6 +807,47 @@ fn available_crafting_recipe_choices_follow_research_unlocks() {
 }
 
 #[test]
+fn available_crafting_recipe_choices_include_express_only_after_logistics_3() {
+    let mut sim = Simulation::new_test_world(123);
+    let express_recipes = [
+        recipe_id_by_name(sim.catalog(), "express_transport_belt"),
+        recipe_id_by_name(sim.catalog(), "express_underground_belt"),
+        recipe_id_by_name(sim.catalog(), "express_splitter"),
+    ];
+
+    for recipe_id in express_recipes {
+        assert!(
+            !available_crafting_recipe_choices(&sim)
+                .iter()
+                .any(|recipe| recipe.id == recipe_id)
+        );
+    }
+
+    complete_research_by_name(&mut sim, "automation");
+    complete_research_by_name(&mut sim, "logistics");
+    complete_research_by_name(&mut sim, "logistic_science_pack");
+    complete_research_by_name(&mut sim, "logistics_2");
+
+    for recipe_id in express_recipes {
+        assert!(
+            !available_crafting_recipe_choices(&sim)
+                .iter()
+                .any(|recipe| recipe.id == recipe_id)
+        );
+    }
+
+    complete_research_by_name(&mut sim, "logistics_3");
+
+    for recipe_id in express_recipes {
+        assert!(
+            available_crafting_recipe_choices(&sim)
+                .iter()
+                .any(|recipe| recipe.id == recipe_id)
+        );
+    }
+}
+
+#[test]
 fn completed_research_unlocks_recipe() {
     let mut sim = Simulation::new_test_world(123);
     let lab = entity_id_by_name(sim.catalog(), "lab");
@@ -1422,6 +1463,16 @@ fn item_id_by_name(catalog: &PrototypeCatalog, name: &str) -> ItemId {
 
 fn recipe_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::RecipeId {
     factory_data::recipe_id_by_name(catalog, name)
+}
+
+fn complete_research_by_name(sim: &mut Simulation, technology_name: &str) {
+    let technology_id = technology_id_by_name(sim.catalog(), technology_name);
+    let required_units = sim.catalog().technologies[technology_id.index()].required_units;
+
+    sim.select_research(technology_id)
+        .unwrap_or_else(|_| panic!("{technology_name} should be selectable"));
+    sim.add_research_units(required_units)
+        .unwrap_or_else(|_| panic!("{technology_name} should complete"));
 }
 
 fn technology_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::TechnologyId {

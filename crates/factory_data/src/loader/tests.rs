@@ -1,8 +1,9 @@
 use glam::IVec2;
+use std::collections::BTreeSet;
 
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
-use crate::ids::TechnologyId;
+use crate::ids::{RecipeId, TechnologyId};
 use crate::model::{
     AssemblingMachinePrototype, CraftingCategory, ElectricEnergySourcePrototype, EntityKind,
     FluidConnectionSide, ItemAmount, TechnologyEffect, UndergroundBeltPart,
@@ -49,7 +50,7 @@ const ITEM_NAMES: [&str; 36] = [
 
 const FLUID_NAMES: [&str; 2] = ["water", "steam"];
 
-const RECIPE_NAMES: [&str; 29] = [
+const RECIPE_NAMES: [&str; 32] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -79,6 +80,9 @@ const RECIPE_NAMES: [&str; 29] = [
     "fast_transport_belt",
     "fast_underground_belt",
     "fast_splitter",
+    "express_transport_belt",
+    "express_underground_belt",
+    "express_splitter",
 ];
 
 const ENTITY_NAMES: [&str; 30] = [
@@ -115,7 +119,7 @@ const ENTITY_NAMES: [&str; 30] = [
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
-const TECHNOLOGY_NAMES: [&str; 7] = [
+const TECHNOLOGY_NAMES: [&str; 8] = [
     "automation",
     "logistics",
     "logistic_science_pack",
@@ -123,6 +127,7 @@ const TECHNOLOGY_NAMES: [&str; 7] = [
     "fast_inserter",
     "logistics_2",
     "fluid_handling",
+    "logistics_3",
 ];
 
 #[test]
@@ -131,10 +136,10 @@ fn base_catalog_loads_from_ron() {
 
     assert_eq!(catalog.items.len(), 36);
     assert_eq!(catalog.fluids.len(), 2);
-    assert_eq!(catalog.recipes.len(), 29);
+    assert_eq!(catalog.recipes.len(), 32);
     assert_eq!(catalog.entities.len(), 30);
     assert_eq!(catalog.tiles.len(), 3);
-    assert_eq!(catalog.technologies.len(), 7);
+    assert_eq!(catalog.technologies.len(), 8);
 }
 
 #[test]
@@ -242,6 +247,99 @@ fn recipe_item_references_resolve_to_valid_item_ids() {
     for recipe in &catalog.recipes {
         for amount in recipe.ingredients.iter().chain(recipe.products.iter()) {
             assert!(amount.item.index() < catalog.items.len());
+        }
+    }
+}
+
+#[test]
+fn placeable_items_have_acquisition_paths() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let item_ids = catalog
+        .items
+        .iter()
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    let recipe_products = catalog
+        .recipes
+        .iter()
+        .flat_map(|recipe| recipe.products.iter().map(|product| product.item))
+        .collect::<BTreeSet<_>>();
+    let research_unlocked_recipes = catalog
+        .technologies
+        .iter()
+        .flat_map(|technology| technology.effects.iter())
+        .map(|effect| match effect {
+            TechnologyEffect::UnlockRecipe(recipe_id) => *recipe_id,
+        })
+        .collect::<BTreeSet<_>>();
+    let starting_inventory_items = ["burner_mining_drill", "stone_furnace"]
+        .into_iter()
+        .map(|name| crate::item_id_by_name(&catalog, name))
+        .collect::<BTreeSet<_>>();
+    let mineable_resource_items = ["iron_ore", "copper_ore", "coal", "stone"]
+        .into_iter()
+        .map(|name| crate::item_id_by_name(&catalog, name))
+        .collect::<BTreeSet<_>>();
+
+    for entity in catalog
+        .entities
+        .iter()
+        .filter(|entity| entity.entity_kind != EntityKind::ResourcePatch)
+    {
+        let Some(build_item) = entity.build_item else {
+            continue;
+        };
+
+        assert!(
+            item_ids.contains(&build_item),
+            "{} build item should exist",
+            entity.name
+        );
+        assert!(
+            recipe_products.contains(&build_item)
+                || starting_inventory_items.contains(&build_item)
+                || mineable_resource_items.contains(&build_item),
+            "{} build item should have an acquisition path",
+            entity.name
+        );
+    }
+
+    let researchable_technologies = researchable_technology_ids(&catalog);
+    assert_eq!(
+        researchable_technologies.len(),
+        catalog.technologies.len(),
+        "every technology should be reachable from prerequisite roots"
+    );
+
+    for technology in &catalog.technologies {
+        assert!(
+            researchable_technologies.contains(&technology.id),
+            "{} should be reachable through research",
+            technology.name
+        );
+
+        for effect in &technology.effects {
+            let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
+            let recipe = recipe_by_id(&catalog, recipe_id);
+
+            assert!(
+                research_unlocked_recipes.contains(&recipe_id),
+                "{} should be unlocked by a technology",
+                recipe.name
+            );
+            assert!(
+                !recipe.products.is_empty(),
+                "{} should produce at least one item",
+                recipe.name
+            );
+            assert!(
+                recipe
+                    .products
+                    .iter()
+                    .all(|product| recipe_products.contains(&product.item)),
+                "{} locked products should resolve to catalog recipe products",
+                recipe.name
+            );
         }
     }
 }
@@ -916,6 +1014,11 @@ fn green_science_technologies_load_prerequisites_costs_and_unlocks() {
         .iter()
         .find(|technology| technology.name == "logistics_2")
         .expect("base catalog should contain logistics 2 technology");
+    let logistics_3 = catalog
+        .technologies
+        .iter()
+        .find(|technology| technology.name == "logistics_3")
+        .expect("base catalog should contain logistics 3 technology");
     let red = catalog
         .items
         .iter()
@@ -933,6 +1036,24 @@ fn green_science_technologies_load_prerequisites_costs_and_unlocks() {
         .iter()
         .find(|recipe| recipe.name == "fast_transport_belt")
         .expect("base catalog should contain fast transport belt recipe")
+        .id;
+    let express_transport_belt = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "express_transport_belt")
+        .expect("base catalog should contain express transport belt recipe")
+        .id;
+    let express_underground_belt = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "express_underground_belt")
+        .expect("base catalog should contain express underground belt recipe")
+        .id;
+    let express_splitter = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "express_splitter")
+        .expect("base catalog should contain express splitter recipe")
         .id;
 
     assert_eq!(
@@ -958,6 +1079,30 @@ fn green_science_technologies_load_prerequisites_costs_and_unlocks() {
             .effects
             .contains(&TechnologyEffect::UnlockRecipe(fast_transport_belt))
     );
+    assert_eq!(logistics_3.prerequisites, vec![logistics_2.id]);
+    assert_eq!(
+        logistics_3.science_packs,
+        vec![
+            ItemAmount {
+                item: red,
+                amount: 1,
+            },
+            ItemAmount {
+                item: green,
+                amount: 1,
+            },
+        ]
+    );
+    assert_eq!(logistics_3.required_units, 150);
+    assert_eq!(logistics_3.research_time_ticks, 600);
+    assert_eq!(
+        logistics_3.effects,
+        vec![
+            TechnologyEffect::UnlockRecipe(express_transport_belt),
+            TechnologyEffect::UnlockRecipe(express_underground_belt),
+            TechnologyEffect::UnlockRecipe(express_splitter),
+        ]
+    );
 
     let logistic_science_pack_technology = catalog
         .technologies
@@ -968,6 +1113,94 @@ fn green_science_technologies_load_prerequisites_costs_and_unlocks() {
         logistic_science_pack_technology.prerequisites,
         vec![automation, logistics]
     );
+}
+
+#[test]
+fn express_logistics_recipes_resolve_expected_items() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    assert_recipe(
+        &catalog,
+        "express_transport_belt",
+        &[("fast_transport_belt", 1), ("iron_gear_wheel", 10)],
+        &[("express_transport_belt", 1)],
+    );
+    assert_recipe(
+        &catalog,
+        "express_underground_belt",
+        &[("fast_underground_belt", 2), ("iron_gear_wheel", 80)],
+        &[("express_underground_belt", 2)],
+    );
+    assert_recipe(
+        &catalog,
+        "express_splitter",
+        &[
+            ("fast_splitter", 1),
+            ("iron_gear_wheel", 10),
+            ("electronic_circuit", 10),
+        ],
+        &[("express_splitter", 1)],
+    );
+}
+
+fn assert_recipe(
+    catalog: &PrototypeCatalog,
+    recipe_name: &str,
+    expected_ingredients: &[(&str, u16)],
+    expected_products: &[(&str, u16)],
+) {
+    let recipe = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == recipe_name)
+        .unwrap_or_else(|| panic!("base catalog should contain {recipe_name} recipe"));
+    let ingredients = expected_item_amounts(catalog, expected_ingredients);
+    let products = expected_item_amounts(catalog, expected_products);
+
+    assert_eq!(recipe.category, CraftingCategory::Crafting);
+    assert_eq!(recipe.crafting_time_ticks, 30);
+    assert_eq!(recipe.ingredients, ingredients);
+    assert_eq!(recipe.products, products);
+}
+
+fn expected_item_amounts(catalog: &PrototypeCatalog, amounts: &[(&str, u16)]) -> Vec<ItemAmount> {
+    amounts
+        .iter()
+        .map(|(name, amount)| ItemAmount {
+            item: crate::item_id_by_name(catalog, name),
+            amount: *amount,
+        })
+        .collect()
+}
+
+fn recipe_by_id(catalog: &PrototypeCatalog, recipe_id: RecipeId) -> &crate::RecipePrototype {
+    catalog
+        .recipes
+        .get(recipe_id.index())
+        .filter(|recipe| recipe.id == recipe_id)
+        .expect("recipe id should resolve")
+}
+
+fn researchable_technology_ids(catalog: &PrototypeCatalog) -> BTreeSet<TechnologyId> {
+    let mut researchable = BTreeSet::new();
+    loop {
+        let mut inserted = false;
+        for technology in &catalog.technologies {
+            if !researchable.contains(&technology.id)
+                && technology
+                    .prerequisites
+                    .iter()
+                    .all(|prerequisite| researchable.contains(prerequisite))
+            {
+                researchable.insert(technology.id);
+                inserted = true;
+            }
+        }
+
+        if !inserted {
+            return researchable;
+        }
+    }
 }
 
 #[test]
