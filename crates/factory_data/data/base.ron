@@ -344,6 +344,40 @@
             ],
             products: [(item: "fast_splitter", amount: 1)],
         ),
+        (
+            id: 29,
+            name: "express_transport_belt",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "fast_transport_belt", amount: 1),
+                (item: "iron_gear_wheel", amount: 10),
+            ],
+            products: [(item: "express_transport_belt", amount: 1)],
+        ),
+        (
+            id: 30,
+            name: "express_underground_belt",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "fast_underground_belt", amount: 2),
+                (item: "iron_gear_wheel", amount: 80),
+            ],
+            products: [(item: "express_underground_belt", amount: 2)],
+        ),
+        (
+            id: 31,
+            name: "express_splitter",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "fast_splitter", amount: 1),
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "electronic_circuit", amount: 10),
+            ],
+            products: [(item: "express_splitter", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -802,6 +836,22 @@
             required_units: 50,
             research_time_ticks: 600,
             effects: [UnlockRecipe("storage_tank")],
+        ),
+        (
+            id: 7,
+            name: "logistics_3",
+            prerequisites: ["logistics_2"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 150,
+            research_time_ticks: 600,
+            effects: [
+                UnlockRecipe("express_transport_belt"),
+                UnlockRecipe("express_underground_belt"),
+                UnlockRecipe("express_splitter"),
+            ],
         ),
     ],
 )
