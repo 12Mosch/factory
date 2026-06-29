@@ -5,14 +5,16 @@ use crate::resources::{
     AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapViewState,
     OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
+use crate::save_load::SaveLoadWindowState;
 
 pub(crate) fn reset_app_input_state(
     map: Res<MapViewState>,
     stats: Res<ProductionStatsWindowState>,
     crafting: Res<CraftingWindowState>,
+    save_load: Res<SaveLoadWindowState>,
     mut input_state: ResMut<AppInputState>,
 ) {
-    input_state.world_blocked = map.open || stats.open || crafting.open;
+    input_state.world_blocked = map.open || stats.open || crafting.open || save_load.open;
     input_state.escape_consumed = false;
 }
 
@@ -24,6 +26,7 @@ pub(crate) struct PanelInputResources<'w> {
     stats: ResMut<'w, ProductionStatsWindowState>,
     crafting: ResMut<'w, CraftingWindowState>,
     technology: ResMut<'w, TechnologyWindowState>,
+    save_load: ResMut<'w, SaveLoadWindowState>,
     open_container: ResMut<'w, OpenContainer>,
     build_state: ResMut<'w, BuildPlacementState>,
 }
@@ -82,11 +85,20 @@ pub(crate) fn handle_panel_input(
             resources.build_state.selected = None;
             resources.build_state.last_status = Default::default();
             resources.input_state.escape_consumed = true;
+        } else if resources.save_load.open {
+            resources.save_load.open = false;
+            resources.input_state.escape_consumed = true;
+        } else {
+            resources.save_load.open = true;
+            resources.save_load.tab = crate::save_load::SaveLoadTab::Save;
+            resources.input_state.escape_consumed = true;
         }
     }
 
-    resources.input_state.world_blocked =
-        resources.map.open || resources.stats.open || resources.crafting.open;
+    resources.input_state.world_blocked = resources.map.open
+        || resources.stats.open
+        || resources.crafting.open
+        || resources.save_load.open;
 }
 
 pub fn world_input_blocked(input_state: Option<&AppInputState>) -> bool {

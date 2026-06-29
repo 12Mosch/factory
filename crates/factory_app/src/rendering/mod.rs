@@ -6,6 +6,6 @@ pub(crate) mod entities;
 pub(crate) mod manual_mining;
 pub mod map_texture;
 pub(crate) mod player;
-pub(crate) mod resources;
+pub mod resources;
 pub(crate) mod transforms;
 pub(crate) mod world;
