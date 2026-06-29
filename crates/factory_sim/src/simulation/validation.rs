@@ -66,7 +66,7 @@ fn validate_chart_state(sim: &Simulation) -> Result<(), SimValidationError> {
 
 fn validate_item_statistics(sim: &Simulation) -> Result<(), SimValidationError> {
     if sim.item_statistics.buckets.len() != ITEM_STATISTICS_WINDOW_TICKS as usize
-        || sim.item_statistics.last_advanced_tick > sim.tick
+        || sim.item_statistics.last_advanced_tick != sim.tick
     {
         return Err(SimValidationError::InvalidItemStatistics(ItemId::new(0)));
     }
@@ -95,10 +95,10 @@ fn validate_item_statistics(sim: &Simulation) -> Result<(), SimValidationError> 
         }
         if in_window {
             for (item_id, amount) in &bucket.produced {
-                *rolling_produced.entry(*item_id).or_default() += amount;
+                add_checked_stat(&mut rolling_produced, *item_id, *amount)?;
             }
             for (item_id, amount) in &bucket.consumed {
-                *rolling_consumed.entry(*item_id).or_default() += amount;
+                add_checked_stat(&mut rolling_consumed, *item_id, *amount)?;
             }
         }
     }
@@ -122,6 +122,18 @@ fn validate_item_statistics(sim: &Simulation) -> Result<(), SimValidationError> 
         }
     }
 
+    Ok(())
+}
+
+fn add_checked_stat(
+    stats: &mut BTreeMap<ItemId, u64>,
+    item_id: ItemId,
+    amount: u64,
+) -> Result<(), SimValidationError> {
+    let current = stats.entry(item_id).or_default();
+    *current = current
+        .checked_add(amount)
+        .ok_or(SimValidationError::InvalidItemStatistics(item_id))?;
     Ok(())
 }
 

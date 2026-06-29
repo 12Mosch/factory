@@ -6,7 +6,16 @@ use crate::ui::debug_overlay::format_watts;
 use crate::ui::formatting::format_item_display_name;
 
 #[derive(Component)]
-pub(crate) struct ProductionStatsRoot;
+pub(crate) struct ProductionStatsRoot {
+    snapshot: ProductionStatsSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProductionStatsSnapshot {
+    selected_tab: StatsTab,
+    item_rows: Vec<ItemStatDisplayRow>,
+    power_lines: Vec<String>,
+}
 
 #[derive(Component)]
 pub struct ProductionStatsTabButton {
@@ -46,15 +55,43 @@ pub(crate) fn sync_production_stats_window(
     mut commands: Commands,
     sim: Res<SimResource>,
     state: Res<ProductionStatsWindowState>,
-    roots: Query<Entity, With<ProductionStatsRoot>>,
+    mut roots: Query<(Entity, &mut ProductionStatsRoot, Option<&Children>)>,
 ) {
-    for entity in &roots {
-        commands.entity(entity).despawn();
-    }
     if !state.open {
+        for (entity, _, _) in &roots {
+            commands.entity(entity).despawn();
+        }
         return;
     }
 
+    let snapshot = production_stats_snapshot(&sim.sim, state.selected_tab);
+    let mut roots_iter = roots.iter_mut();
+    let Some((root_entity, mut root, children)) = roots_iter.next() else {
+        spawn_production_stats_window(&mut commands, &sim.sim, snapshot);
+        return;
+    };
+    for (duplicate, _, _) in roots_iter {
+        commands.entity(duplicate).despawn();
+    }
+    if root.snapshot == snapshot {
+        return;
+    }
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).despawn();
+        }
+    }
+    root.snapshot = snapshot.clone();
+    commands
+        .entity(root_entity)
+        .with_children(|root| spawn_production_stats_contents(root, &sim.sim, &snapshot));
+}
+
+fn spawn_production_stats_window(
+    commands: &mut Commands,
+    sim: &Simulation,
+    snapshot: ProductionStatsSnapshot,
+) {
     commands
         .spawn((
             Node {
@@ -70,28 +107,48 @@ pub(crate) fn sync_production_stats_window(
             },
             BackgroundColor(Color::srgba(0.028, 0.030, 0.032, 0.97)),
             GlobalZIndex(2300),
-            ProductionStatsRoot,
+            ProductionStatsRoot {
+                snapshot: snapshot.clone(),
+            },
         ))
-        .with_children(|root| {
-            spawn_tabs(root, state.selected_tab);
-            match state.selected_tab {
-                StatsTab::Production => spawn_item_rows(
-                    root,
-                    &production_rows(&sim.sim),
-                    "Production",
-                    "/min",
-                    "Total",
-                ),
-                StatsTab::Consumption => spawn_item_rows(
-                    root,
-                    &consumption_rows(&sim.sim),
-                    "Consumption",
-                    "/min",
-                    "Total",
-                ),
-                StatsTab::Power => spawn_power_rows(root, &sim.sim),
-            }
-        });
+        .with_children(|root| spawn_production_stats_contents(root, sim, &snapshot));
+}
+
+fn production_stats_snapshot(sim: &Simulation, selected_tab: StatsTab) -> ProductionStatsSnapshot {
+    match selected_tab {
+        StatsTab::Production => ProductionStatsSnapshot {
+            selected_tab,
+            item_rows: production_rows(sim),
+            power_lines: Vec::new(),
+        },
+        StatsTab::Consumption => ProductionStatsSnapshot {
+            selected_tab,
+            item_rows: consumption_rows(sim),
+            power_lines: Vec::new(),
+        },
+        StatsTab::Power => ProductionStatsSnapshot {
+            selected_tab,
+            item_rows: Vec::new(),
+            power_lines: power_summary_lines(sim.power_summary(), sim.power_networks()),
+        },
+    }
+}
+
+fn spawn_production_stats_contents(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &Simulation,
+    snapshot: &ProductionStatsSnapshot,
+) {
+    spawn_tabs(root, snapshot.selected_tab);
+    match snapshot.selected_tab {
+        StatsTab::Production => {
+            spawn_item_rows(root, &snapshot.item_rows, "Production", "/min", "Total")
+        }
+        StatsTab::Consumption => {
+            spawn_item_rows(root, &snapshot.item_rows, "Consumption", "/min", "Total")
+        }
+        StatsTab::Power => spawn_power_rows(root, sim, &snapshot.power_lines),
+    }
 }
 
 pub fn production_rows(sim: &Simulation) -> Vec<ItemStatDisplayRow> {
@@ -230,15 +287,19 @@ fn spawn_item_rows(
     }
 }
 
-fn spawn_power_rows(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, sim: &Simulation) {
+fn spawn_power_rows(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    _sim: &Simulation,
+    lines: &[String],
+) {
     parent.spawn((
         Text::new("Power"),
         TextFont::from_font_size(16.0),
         TextColor(Color::srgb(0.92, 0.93, 0.88)),
     ));
-    for line in power_summary_lines(sim.power_summary(), sim.power_networks()) {
+    for line in lines {
         parent.spawn((
-            Text::new(line),
+            Text::new(line.clone()),
             TextFont::from_font_size(12.0),
             TextColor(Color::srgb(0.84, 0.86, 0.80)),
         ));

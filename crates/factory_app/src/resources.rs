@@ -100,7 +100,7 @@ pub struct MapTextureBounds {
 pub struct MapTextureCache {
     pub handle: Option<Handle<Image>>,
     pub bounds: Option<MapTextureBounds>,
-    pub last_sim_tick: u64,
+    pub last_player_tile: Option<(i32, i32)>,
     pub last_resource_revision: u64,
     pub last_entity_signature: u64,
     pub last_revealed_signature: u64,

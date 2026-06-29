@@ -113,7 +113,7 @@ impl Simulation {
                 continue;
             }
 
-            let (completed, consumed_fuel) = {
+            let (ready, completed, consumed_fuel) = {
                 let state = self
                     .entities
                     .burner_drill_state_mut(entity_id)
@@ -126,30 +126,38 @@ impl Simulation {
                     consumed_fuel = profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_consume_fuel(&self.world.prototypes, &mut state.energy)
                     });
-                    if consumed_fuel.is_none() {
-                        continue;
+                    if consumed_fuel.is_none()
+                        || state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
+                    {
+                        (false, false, consumed_fuel)
+                    } else {
+                        state.energy.energy_remaining_joules -= joules_per_tick;
+                        state.mining_progress_ticks += 1;
+
+                        if state.mining_progress_ticks < state.mining_required_ticks {
+                            (true, false, consumed_fuel)
+                        } else {
+                            state.mining_progress_ticks = 0;
+                            (true, true, consumed_fuel)
+                        }
                     }
-                }
-
-                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
-                    continue;
-                }
-
-                state.energy.energy_remaining_joules -= joules_per_tick;
-                state.mining_progress_ticks += 1;
-
-                if state.mining_progress_ticks < state.mining_required_ticks {
-                    (false, consumed_fuel)
                 } else {
-                    state.mining_progress_ticks = 0;
-                    (true, consumed_fuel)
+                    state.energy.energy_remaining_joules -= joules_per_tick;
+                    state.mining_progress_ticks += 1;
+
+                    if state.mining_progress_ticks < state.mining_required_ticks {
+                        (true, false, consumed_fuel)
+                    } else {
+                        state.mining_progress_ticks = 0;
+                        (true, true, consumed_fuel)
+                    }
                 }
             };
             if let Some(item_id) = consumed_fuel {
                 self.record_item_consumed(item_id, 1);
             }
 
-            if !completed {
+            if !ready || !completed {
                 continue;
             }
 
@@ -218,7 +226,7 @@ impl Simulation {
                 continue;
             }
 
-            let (completed, consumed_fuel) = {
+            let (ready, completed, consumed_fuel) = {
                 let state = self
                     .entities
                     .furnace_state_mut(entity_id)
@@ -236,30 +244,38 @@ impl Simulation {
                     consumed_fuel = profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_consume_fuel(&self.world.prototypes, &mut state.energy)
                     });
-                    if consumed_fuel.is_none() {
-                        continue;
+                    if consumed_fuel.is_none()
+                        || state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
+                    {
+                        (false, false, consumed_fuel)
+                    } else {
+                        state.energy.energy_remaining_joules -= joules_per_tick;
+                        state.crafting_progress_ticks += 1;
+
+                        if state.crafting_progress_ticks < required_ticks {
+                            (true, false, consumed_fuel)
+                        } else {
+                            state.crafting_progress_ticks = 0;
+                            (true, true, consumed_fuel)
+                        }
                     }
-                }
-
-                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
-                    continue;
-                }
-
-                state.energy.energy_remaining_joules -= joules_per_tick;
-                state.crafting_progress_ticks += 1;
-
-                if state.crafting_progress_ticks < required_ticks {
-                    (false, consumed_fuel)
                 } else {
-                    state.crafting_progress_ticks = 0;
-                    (true, consumed_fuel)
+                    state.energy.energy_remaining_joules -= joules_per_tick;
+                    state.crafting_progress_ticks += 1;
+
+                    if state.crafting_progress_ticks < required_ticks {
+                        (true, false, consumed_fuel)
+                    } else {
+                        state.crafting_progress_ticks = 0;
+                        (true, true, consumed_fuel)
+                    }
                 }
             };
             if let Some(item_id) = consumed_fuel {
                 self.record_item_consumed(item_id, 1);
             }
 
-            if !completed {
+            if !ready || !completed {
                 continue;
             }
 

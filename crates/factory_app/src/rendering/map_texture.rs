@@ -32,8 +32,9 @@ pub(crate) fn update_map_texture(
     let entity_signature = entity_signature(&sim.sim);
     let revealed_signature = revealed_signature(&sim.sim);
     let debug_flags = (settings.debug_reveal_all, settings.show_chunk_grid);
+    let player_tile = sim.sim.player().tile_position();
     let needs_update = cache.handle.is_none()
-        || cache.last_sim_tick != sim.sim.tick_count()
+        || cache.last_player_tile != Some(player_tile)
         || cache.last_resource_revision != sim.sim.world().resource_revision()
         || cache.last_entity_signature != entity_signature
         || cache.last_revealed_signature != revealed_signature
@@ -68,7 +69,7 @@ pub(crate) fn update_map_texture(
 
     cache.handle = Some(handle);
     cache.bounds = Some(map.bounds);
-    cache.last_sim_tick = sim.sim.tick_count();
+    cache.last_player_tile = Some(player_tile);
     cache.last_resource_revision = sim.sim.world().resource_revision();
     cache.last_entity_signature = entity_signature;
     cache.last_revealed_signature = revealed_signature;
@@ -101,14 +102,6 @@ pub fn generate_map_pixels(sim: &Simulation, settings: &MapDisplaySettings) -> M
     }
 
     for placed in sim.entities().placed_entities() {
-        let center = (placed.footprint.x, placed.footprint.y);
-        let coord = ChunkCoord {
-            x: center.0.div_euclid(CHUNK_SIZE),
-            y: center.1.div_euclid(CHUNK_SIZE),
-        };
-        if !settings.debug_reveal_all && !sim.is_chunk_revealed(coord) {
-            continue;
-        }
         let Some((color, _)) =
             entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
         else {
@@ -116,6 +109,13 @@ pub fn generate_map_pixels(sim: &Simulation, settings: &MapDisplaySettings) -> M
         };
         let pixel = color_to_pixel(color);
         for (x, y) in placed.footprint.tiles() {
+            let coord = ChunkCoord {
+                x: x.div_euclid(CHUNK_SIZE),
+                y: y.div_euclid(CHUNK_SIZE),
+            };
+            if !settings.debug_reveal_all && !sim.is_chunk_revealed(coord) {
+                continue;
+            }
             set_world_pixel(&mut data, bounds, x, y, pixel);
         }
     }
