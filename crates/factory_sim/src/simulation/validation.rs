@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_catalog(&sim.world.prototypes)?;
     validate_world_resources(&sim.world)?;
+    validate_chart_state(sim)?;
+    validate_item_statistics(sim)?;
     validate_placed_entities(sim)?;
     validate_entity_occupancy(&sim.entities)?;
     validate_entity_state_ownership_and_kind(sim)?;
@@ -47,6 +49,77 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     }
     for (entity_id, state) in &sim.entities.inserters {
         validate_inserter(sim, *entity_id, state)?;
+    }
+
+    Ok(())
+}
+
+fn validate_chart_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    for coord in &sim.chart.revealed_chunks {
+        if !sim.world.chunks.contains_key(coord) {
+            return Err(SimValidationError::InvalidChartChunk(*coord));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_item_statistics(sim: &Simulation) -> Result<(), SimValidationError> {
+    if sim.item_statistics.buckets.len() != ITEM_STATISTICS_WINDOW_TICKS as usize
+        || sim.item_statistics.last_advanced_tick > sim.tick
+    {
+        return Err(SimValidationError::InvalidItemStatistics(ItemId::new(0)));
+    }
+
+    let mut rolling_produced = BTreeMap::<ItemId, u64>::new();
+    let mut rolling_consumed = BTreeMap::<ItemId, u64>::new();
+
+    for bucket in &sim.item_statistics.buckets {
+        let in_window = bucket.tick <= sim.tick
+            && bucket.tick.saturating_add(ITEM_STATISTICS_WINDOW_TICKS) > sim.tick;
+        if (!bucket.produced.is_empty() || !bucket.consumed.is_empty()) && !in_window {
+            return Err(SimValidationError::InvalidItemStatistics(
+                bucket
+                    .produced
+                    .keys()
+                    .chain(bucket.consumed.keys())
+                    .copied()
+                    .next()
+                    .unwrap_or_else(|| ItemId::new(0)),
+            ));
+        }
+        for (item_id, amount) in bucket.produced.iter().chain(bucket.consumed.iter()) {
+            if *amount == 0 || !item_exists(&sim.world.prototypes, *item_id) {
+                return Err(SimValidationError::InvalidItemStatistics(*item_id));
+            }
+        }
+        if in_window {
+            for (item_id, amount) in &bucket.produced {
+                *rolling_produced.entry(*item_id).or_default() += amount;
+            }
+            for (item_id, amount) in &bucket.consumed {
+                *rolling_consumed.entry(*item_id).or_default() += amount;
+            }
+        }
+    }
+
+    if rolling_produced != sim.item_statistics.rolling_produced
+        || rolling_consumed != sim.item_statistics.rolling_consumed
+    {
+        return Err(SimValidationError::InvalidItemStatistics(ItemId::new(0)));
+    }
+
+    for (item_id, amount) in sim
+        .item_statistics
+        .rolling_produced
+        .iter()
+        .chain(sim.item_statistics.rolling_consumed.iter())
+        .chain(sim.item_statistics.total_produced.iter())
+        .chain(sim.item_statistics.total_consumed.iter())
+    {
+        if *amount == 0 || !item_exists(&sim.world.prototypes, *item_id) {
+            return Err(SimValidationError::InvalidItemStatistics(*item_id));
+        }
     }
 
     Ok(())

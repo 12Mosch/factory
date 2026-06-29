@@ -4,6 +4,7 @@ pub(crate) mod camera;
 pub(crate) mod colors;
 pub(crate) mod entities;
 pub(crate) mod manual_mining;
+pub mod map_texture;
 pub(crate) mod player;
 pub(crate) mod resources;
 pub(crate) mod transforms;

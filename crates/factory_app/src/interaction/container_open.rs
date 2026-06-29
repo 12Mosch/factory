@@ -3,13 +3,17 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use factory_sim::{EntityId, Simulation};
 
+use crate::input::panels::{escape_consumed, world_input_blocked};
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::interaction::machine_kind::open_machine_kind;
-use crate::resources::{BuildPlacementState, OpenContainer, SimResource, TechnologyWindowState};
+use crate::resources::{
+    AppInputState, BuildPlacementState, OpenContainer, SimResource, TechnologyWindowState,
+};
 
 #[derive(SystemParam)]
 pub(crate) struct ContainerOpenState<'w> {
     build_state: Res<'w, BuildPlacementState>,
+    input_state: Option<Res<'w, AppInputState>>,
     technology_window: Option<Res<'w, TechnologyWindowState>>,
     open_container: ResMut<'w, OpenContainer>,
 }
@@ -28,7 +32,9 @@ pub(crate) fn handle_container_open_input(
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    if !container_open_input_allowed(&state.build_state) {
+    if world_input_blocked(state.input_state.as_deref())
+        || !container_open_input_allowed(&state.build_state)
+    {
         return;
     }
     if state
@@ -51,11 +57,15 @@ pub(crate) fn handle_container_open_input(
 
 pub(crate) fn handle_container_close_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    input_state: Option<Res<AppInputState>>,
     mut open_container: ResMut<OpenContainer>,
 ) {
     let Some(keyboard) = keyboard else {
         return;
     };
+    if escape_consumed(input_state.as_deref()) {
+        return;
+    }
     if keyboard.just_pressed(KeyCode::Escape) {
         open_container.entity_id = None;
     }

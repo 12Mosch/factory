@@ -1,4 +1,4 @@
-use bevy::prelude::Resource;
+use bevy::prelude::{Handle, Image, Resource};
 use factory_data::{EntityPrototypeId, ItemId, TechnologyId};
 use factory_sim::{Direction, EntityId, Simulation, SimulationTickProfile};
 use std::time::Duration;
@@ -75,6 +75,64 @@ pub struct OpenContainer {
 pub struct TechnologyWindowState {
     pub open: bool,
     pub selected: Option<TechnologyId>,
+}
+
+#[derive(Resource, Default)]
+pub struct MapViewState {
+    pub open: bool,
+}
+
+#[derive(Resource, Default)]
+pub struct MapDisplaySettings {
+    pub debug_reveal_all: bool,
+    pub show_chunk_grid: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapTextureBounds {
+    pub min_x: i32,
+    pub min_y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Resource, Default)]
+pub struct MapTextureCache {
+    pub handle: Option<Handle<Image>>,
+    pub bounds: Option<MapTextureBounds>,
+    pub last_sim_tick: u64,
+    pub last_resource_revision: u64,
+    pub last_entity_signature: u64,
+    pub last_revealed_signature: u64,
+    pub last_debug_flags: (bool, bool),
+}
+
+#[derive(Resource)]
+pub struct ProductionStatsWindowState {
+    pub open: bool,
+    pub selected_tab: StatsTab,
+}
+
+impl Default for ProductionStatsWindowState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            selected_tab: StatsTab::Production,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StatsTab {
+    Production,
+    Consumption,
+    Power,
+}
+
+#[derive(Resource, Default)]
+pub struct AppInputState {
+    pub world_blocked: bool,
+    pub escape_consumed: bool,
 }
 
 #[derive(Resource, Default)]

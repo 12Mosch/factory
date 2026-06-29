@@ -324,19 +324,30 @@ impl Simulation {
             if joules_per_tick <= f64::EPSILON {
                 continue;
             }
-            let Ok(state) = self.entities.boiler_state_mut(entity_id) else {
-                continue;
-            };
-            while state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
-                && try_consume_fuel(&self.world.prototypes, &mut state.energy)
-            {}
-            if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
-                if state.energy.energy_remaining_joules > 0.0 {
-                    state.energy.energy_remaining_joules = 0.0;
+            let consumed_fuel = {
+                let Ok(state) = self.entities.boiler_state_mut(entity_id) else {
+                    continue;
+                };
+                let mut consumed_fuel = Vec::new();
+                while state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    let Some(item_id) = try_consume_fuel(&self.world.prototypes, &mut state.energy)
+                    else {
+                        break;
+                    };
+                    consumed_fuel.push(item_id);
                 }
-                continue;
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    if state.energy.energy_remaining_joules > 0.0 {
+                        state.energy.energy_remaining_joules = 0.0;
+                    }
+                    continue;
+                }
+                state.energy.energy_remaining_joules -= joules_per_tick;
+                consumed_fuel
+            };
+            for item_id in consumed_fuel {
+                self.record_item_consumed(item_id, 1);
             }
-            state.energy.energy_remaining_joules -= joules_per_tick;
 
             if !self.consume_fluid_from_network(water_network_id, water, water_amount) {
                 continue;

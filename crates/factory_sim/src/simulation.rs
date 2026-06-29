@@ -4,7 +4,7 @@ use factory_data::{
 };
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{Hash, Hasher};
 
 pub const CHUNK_SIZE: i32 = 32;
@@ -16,6 +16,7 @@ pub const MANUAL_MINING_TICKS_PER_ITEM: u32 =
     (ORE_MINING_TIME_SECONDS / PLAYER_MINING_SPEED * FIXED_SIM_TICKS_PER_SECOND) as u32;
 pub const PLAYER_INVENTORY_SLOT_COUNT: usize = 80;
 const FIXED_SIM_TICKS_PER_SECOND: f32 = 60.0;
+pub const ITEM_STATISTICS_WINDOW_TICKS: u64 = 60 * FIXED_SIM_TICKS_PER_SECOND as u64;
 const PLAYER_POSITION_SCALE: i64 = 1024;
 const WORLD_MIN_CHUNK: i32 = -2;
 const WORLD_MAX_CHUNK: i32 = 2;
@@ -147,6 +148,8 @@ pub enum ResearchProgressResult {
 pub struct Simulation {
     tick: u64,
     world: WorldSim,
+    chart: ChartState,
+    item_statistics: ItemStatistics,
     entities: EntityStore,
     player: PlayerState,
     player_inventory: Inventory,
@@ -157,6 +160,42 @@ pub struct Simulation {
     power_networks: Vec<PowerNetworkSnapshot>,
     entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
     fluid_networks: Vec<FluidNetworkSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ChartState {
+    pub revealed_chunks: BTreeSet<ChunkCoord>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ItemStatistics {
+    pub buckets: Vec<ItemStatisticsBucket>,
+    pub last_advanced_tick: u64,
+    pub rolling_produced: BTreeMap<ItemId, u64>,
+    pub rolling_consumed: BTreeMap<ItemId, u64>,
+    pub total_produced: BTreeMap<ItemId, u64>,
+    pub total_consumed: BTreeMap<ItemId, u64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ItemStatisticsBucket {
+    pub tick: u64,
+    pub produced: BTreeMap<ItemId, u64>,
+    pub consumed: BTreeMap<ItemId, u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ItemStatisticsSnapshot {
+    pub rows: Vec<ItemStatisticsRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemStatisticsRow {
+    pub item_id: ItemId,
+    pub produced_last_minute: u64,
+    pub consumed_last_minute: u64,
+    pub produced_total: u64,
+    pub consumed_total: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -792,6 +831,8 @@ pub enum SimValidationError {
         x: i32,
         y: i32,
     },
+    InvalidChartChunk(ChunkCoord),
+    InvalidItemStatistics(ItemId),
 }
 
 mod belt_ops;
@@ -808,6 +849,7 @@ mod profiling;
 mod research_ops;
 mod save;
 mod scripted;
+mod statistics_ops;
 mod systems;
 mod validation;
 mod world_ops;

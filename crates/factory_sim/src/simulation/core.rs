@@ -17,9 +17,11 @@ impl Simulation {
             .insert(&world.prototypes, stone_furnace, 1)
             .expect("player starting inventory should accept stone furnace");
 
-        Self {
+        let mut sim = Self {
             tick: 0,
             world,
+            chart: ChartState::default(),
+            item_statistics: ItemStatistics::default(),
             entities,
             player,
             player_inventory,
@@ -33,7 +35,9 @@ impl Simulation {
             power_networks: Vec::new(),
             entity_power_statuses: BTreeMap::new(),
             fluid_networks: Vec::new(),
-        }
+        };
+        sim.reveal_chunks_around_player();
+        sim
     }
 
     pub fn new_test_world(seed: u64) -> Self {
@@ -53,6 +57,8 @@ impl Simulation {
 
     pub(crate) fn advance_one_tick<P: TickProfiler>(&mut self, profiler: &mut P) {
         self.tick += 1;
+        self.advance_statistics_to_current_tick();
+        self.reveal_chunks_around_player();
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
@@ -99,6 +105,8 @@ impl Simulation {
         self.world.seed.hash(&mut hasher);
         prototype_hash(&self.world.prototypes).hash(&mut hasher);
         self.world.chunks.hash(&mut hasher);
+        self.chart.hash(&mut hasher);
+        self.item_statistics.hash(&mut hasher);
         self.entities.hash(&mut hasher);
         self.player.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);

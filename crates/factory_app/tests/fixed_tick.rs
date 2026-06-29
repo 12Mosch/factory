@@ -9,15 +9,20 @@ use factory_app::interaction::slot_transfer::transfer_open_container_slot;
 use factory_app::placement::build::{
     buildable_prototype_at_slot, buildable_prototypes, place_selected_building_at_tile,
 };
+use factory_app::rendering::map_texture::{
+    GRID_PIXEL, PLAYER_PIXEL, UNREVEALED_PIXEL, generate_map_pixels,
+};
 use factory_app::resources::{
-    BuildPlacementState, BuildPlacementStatus, BuildSelection, RenderSyncStats, SimProfileStats,
-    SimResource, TechnologyWindowState,
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, MapDisplaySettings, MapViewState,
+    ProductionStatsWindowState, RenderSyncStats, SimProfileStats, SimResource,
+    TechnologyWindowState,
 };
 use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
 };
 use factory_app::ui::inventory_panel::InventoryPanel;
+use factory_app::ui::production_stats::{power_summary_lines, production_rows};
 use factory_app::ui::technology_panel::TechnologyStartQueueButton;
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{
@@ -244,6 +249,75 @@ fn technology_screen_toggles_with_t() {
 }
 
 #[test]
+fn map_screen_toggles_with_m() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyM);
+    app.update();
+
+    assert!(app.world().resource::<MapViewState>().open);
+}
+
+#[test]
+fn production_stats_toggles_with_p() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyP);
+    app.update();
+
+    assert!(app.world().resource::<ProductionStatsWindowState>().open);
+}
+
+#[test]
+fn f3_toggles_map_debug_flags() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::F3);
+    app.update();
+
+    let settings = app.world().resource::<MapDisplaySettings>();
+    assert!(settings.debug_reveal_all);
+    assert!(settings.show_chunk_grid);
+}
+
+#[test]
+fn open_map_suppresses_build_hotbar_selection() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let slot = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        buildable_prototypes(sim.catalog())
+            .into_iter()
+            .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
+            .expect("starting inventory should include at least one buildable item")
+    };
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyM);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyM);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(hotbar_key_for_slot(slot.slot_index));
+    app.update();
+
+    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+}
+
+#[test]
 fn technology_screen_start_button_updates_research_state() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     let automation = {
@@ -449,6 +523,91 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
     }
     assert!(!text.contains("Item:"));
     assert!(!text.contains("Count:"));
+}
+
+#[test]
+fn production_stat_formatting_shows_per_minute_and_totals() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y, resource) = first_resource_tile_for_app(&sim);
+    sim.move_player_by_tiles(
+        x as f32 - sim.player().position_tiles().0,
+        y as f32 - sim.player().position_tiles().1,
+    );
+    for _ in 0..factory_sim::MANUAL_MINING_TICKS_PER_ITEM {
+        sim.update_manual_mining(Some(factory_sim::ManualMiningTarget { x, y }));
+    }
+
+    let rows = production_rows(&sim);
+    let row = rows
+        .iter()
+        .find(|row| row.item_name == format_item_name_for_test(&sim, resource.resource_item))
+        .expect("mined resource should appear in production stats");
+
+    assert_eq!(row.per_minute, "1/min");
+    assert_eq!(row.total, "1");
+}
+
+#[test]
+fn power_stat_formatting_uses_summary_and_network_rows() {
+    let summary = PowerSummary {
+        production_watts: 500,
+        available_production_watts: 1_000,
+        consumption_watts: 500,
+        satisfaction_permyriad: 10_000,
+        network_count: 1,
+    };
+    let networks = [factory_sim::PowerNetworkSnapshot {
+        network_id: 7,
+        pole_count: 2,
+        producer_count: 1,
+        consumer_count: 3,
+        production_watts: 500,
+        available_production_watts: 1_000,
+        consumption_watts: 500,
+        satisfaction_permyriad: 10_000,
+    }];
+
+    let lines = power_summary_lines(summary, &networks);
+
+    assert!(lines.iter().any(|line| line == "Production: 500 W"));
+    assert!(lines.iter().any(|line| line.contains("Network 7")));
+    assert!(lines.iter().any(|line| line.contains("poles 2")));
+}
+
+#[test]
+fn map_pixel_generation_draws_reveal_player_and_debug_grid() {
+    let sim = Simulation::new_test_world(123);
+    let normal = generate_map_pixels(&sim, &MapDisplaySettings::default());
+    let player_tile = sim.player().tile_position();
+
+    assert_eq!(pixel_at(&normal, player_tile), PLAYER_PIXEL);
+
+    let unrevealed_chunk = sim
+        .world()
+        .chunks
+        .keys()
+        .copied()
+        .find(|coord| !sim.is_chunk_revealed(*coord))
+        .expect("initial chart should leave distant chunks unrevealed");
+    assert_eq!(
+        pixel_at(
+            &normal,
+            (
+                unrevealed_chunk.x * CHUNK_SIZE + 1,
+                unrevealed_chunk.y * CHUNK_SIZE + 1
+            )
+        ),
+        UNREVEALED_PIXEL
+    );
+
+    let debug = generate_map_pixels(
+        &sim,
+        &MapDisplaySettings {
+            debug_reveal_all: true,
+            show_chunk_grid: true,
+        },
+    );
+    assert_eq!(pixel_at(&debug, (0, 0)), GRID_PIXEL);
 }
 
 #[test]
@@ -951,6 +1110,57 @@ fn run_until_tick(app: &mut App, target_tick: u64) {
 fn sim_tick_and_hash(app: &App) -> (u64, u64) {
     let sim = &app.world().resource::<SimResource>().sim;
     (sim.tick_count(), sim.state_hash())
+}
+
+fn pixel_at(map: &factory_app::rendering::map_texture::MapPixels, tile: (i32, i32)) -> [u8; 4] {
+    let local_x = (tile.0 - map.bounds.min_x) as u32;
+    let local_y = (tile.1 - map.bounds.min_y) as u32;
+    let flipped_y = map.bounds.height - 1 - local_y;
+    let offset = ((flipped_y * map.bounds.width + local_x) * 4) as usize;
+    [
+        map.data[offset],
+        map.data[offset + 1],
+        map.data[offset + 2],
+        map.data[offset + 3],
+    ]
+}
+
+fn first_resource_tile_for_app(sim: &Simulation) -> (i32, i32, factory_sim::ResourceCell) {
+    sim.world()
+        .chunks
+        .values()
+        .flat_map(|chunk| {
+            chunk
+                .tiles
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, tile)| {
+                    let resource = tile.resource?;
+                    let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                    let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                    Some((
+                        chunk.coord.x * CHUNK_SIZE + local_x,
+                        chunk.coord.y * CHUNK_SIZE + local_y,
+                        resource,
+                    ))
+                })
+        })
+        .next()
+        .expect("generated world should contain resource tiles")
+}
+
+fn format_item_name_for_test(sim: &Simulation, item_id: ItemId) -> String {
+    let name = &sim.catalog().items[item_id.index()].name;
+    name.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn first_available_build_selection(app: &App) -> BuildSelection {

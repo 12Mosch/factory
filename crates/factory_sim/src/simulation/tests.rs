@@ -191,6 +191,70 @@ fn manual_mining_one_ore_decreases_resource_by_one() {
 }
 
 #[test]
+fn initial_simulation_reveals_player_chunk() {
+    let sim = Simulation::new_test_world(123);
+    let (player_x, player_y) = sim.player.tile_position();
+    let coord = ChunkCoord {
+        x: player_x.div_euclid(CHUNK_SIZE),
+        y: player_y.div_euclid(CHUNK_SIZE),
+    };
+
+    assert!(sim.is_chunk_revealed(coord));
+}
+
+#[test]
+fn moving_player_into_another_chunk_reveals_that_chunk() {
+    let mut sim = Simulation::new_test_world(123);
+    let target = ChunkCoord { x: 1, y: 0 };
+    sim.player = PlayerState::centered_on_tile(target.x * CHUNK_SIZE, target.y * CHUNK_SIZE);
+
+    sim.tick();
+
+    assert!(sim.is_chunk_revealed(target));
+}
+
+#[test]
+fn manual_mining_records_item_production() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y, resource) = first_resource_tile(&sim.world);
+    let target = ManualMiningTarget { x, y };
+    sim.player = PlayerState::centered_on_tile(x, y);
+
+    for _ in 0..MANUAL_MINING_TICKS_PER_ITEM {
+        sim.update_manual_mining(Some(target));
+    }
+
+    let row = sim
+        .item_statistics()
+        .rows
+        .into_iter()
+        .find(|row| row.item_id == resource.resource_item)
+        .expect("mined item should be recorded");
+    assert_eq!(row.produced_last_minute, 1);
+    assert_eq!(row.produced_total, 1);
+}
+
+#[test]
+fn item_rolling_window_expires_after_sixty_seconds() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron = item_id(&sim.world.prototypes, "iron_ore");
+    sim.record_item_produced(iron, 3);
+
+    for _ in 0..ITEM_STATISTICS_WINDOW_TICKS {
+        sim.tick();
+    }
+
+    let row = sim
+        .item_statistics()
+        .rows
+        .into_iter()
+        .find(|row| row.item_id == iron)
+        .expect("all-time item should remain visible");
+    assert_eq!(row.produced_last_minute, 0);
+    assert_eq!(row.produced_total, 3);
+}
+
+#[test]
 fn manual_mining_can_mine_each_generated_resource_type() {
     let mut sim = Simulation::new_test_world(123);
     let resource_names = ["iron_ore", "copper_ore", "coal", "stone"];

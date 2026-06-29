@@ -113,20 +113,22 @@ impl Simulation {
                 continue;
             }
 
-            let completed = {
+            let (completed, consumed_fuel) = {
                 let state = self
                     .entities
                     .burner_drill_state_mut(entity_id)
                     .expect("burner drill id came from burner drill state map");
+                let mut consumed_fuel = None;
                 state.resource_target = Some(target);
                 let joules_per_tick =
                     state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
-                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
-                    && !profiler.measure(ProfilePhase::InventoryTransfers, || {
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    consumed_fuel = profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_consume_fuel(&self.world.prototypes, &mut state.energy)
-                    })
-                {
-                    continue;
+                    });
+                    if consumed_fuel.is_none() {
+                        continue;
+                    }
                 }
 
                 if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
@@ -137,12 +139,15 @@ impl Simulation {
                 state.mining_progress_ticks += 1;
 
                 if state.mining_progress_ticks < state.mining_required_ticks {
-                    false
+                    (false, consumed_fuel)
                 } else {
                     state.mining_progress_ticks = 0;
-                    true
+                    (true, consumed_fuel)
                 }
             };
+            if let Some(item_id) = consumed_fuel {
+                self.record_item_consumed(item_id, 1);
+            }
 
             if !completed {
                 continue;
@@ -164,6 +169,7 @@ impl Simulation {
                     &self.world.prototypes,
                 );
             });
+            self.record_item_produced(mined.resource_item, u64::from(mined.amount));
         }
     }
 
@@ -212,11 +218,12 @@ impl Simulation {
                 continue;
             }
 
-            let completed = {
+            let (completed, consumed_fuel) = {
                 let state = self
                     .entities
                     .furnace_state_mut(entity_id)
                     .expect("furnace id came from furnace state map");
+                let mut consumed_fuel = None;
                 if state.active_recipe != Some(recipe_id) {
                     state.active_recipe = Some(recipe_id);
                     state.crafting_progress_ticks = 0;
@@ -225,12 +232,13 @@ impl Simulation {
 
                 let joules_per_tick =
                     state.energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
-                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick
-                    && !profiler.measure(ProfilePhase::InventoryTransfers, || {
+                if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
+                    consumed_fuel = profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_consume_fuel(&self.world.prototypes, &mut state.energy)
-                    })
-                {
-                    continue;
+                    });
+                    if consumed_fuel.is_none() {
+                        continue;
+                    }
                 }
 
                 if state.energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
@@ -241,12 +249,15 @@ impl Simulation {
                 state.crafting_progress_ticks += 1;
 
                 if state.crafting_progress_ticks < required_ticks {
-                    false
+                    (false, consumed_fuel)
                 } else {
                     state.crafting_progress_ticks = 0;
-                    true
+                    (true, consumed_fuel)
                 }
             };
+            if let Some(item_id) = consumed_fuel {
+                self.record_item_consumed(item_id, 1);
+            }
 
             if !completed {
                 continue;
@@ -261,6 +272,8 @@ impl Simulation {
                     .expect("selected furnace input should still contain ingredient");
                 insert_output_item(&mut state.output_slot, product.item, product.amount);
             });
+            self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
+            self.record_item_produced(product.item, u64::from(product.amount));
         }
     }
 
@@ -363,6 +376,12 @@ impl Simulation {
                         .expect("assembler checked output capacity before completion");
                 }
             });
+            for ingredient in &ingredients {
+                self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
+            }
+            for product in &products {
+                self.record_item_produced(product.item, u64::from(product.amount));
+            }
         }
     }
 
@@ -450,6 +469,9 @@ impl Simulation {
                         .expect("lab checked science packs before completion");
                 }
             });
+            for science_pack in &science_packs {
+                self.record_item_consumed(science_pack.item, u64::from(science_pack.amount));
+            }
             self.add_research_units(1)
                 .expect("lab completion should have active research");
         }

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
-use crate::resources::{BuildPlacementState, SimResource, TechnologyWindowState};
+use crate::input::panels::escape_consumed;
+use crate::resources::{AppInputState, BuildPlacementState, SimResource, TechnologyWindowState};
 
 use super::components::{
     TechnologyPanelRoot, TechnologyQueueAction, TechnologyQueueButton, TechnologySelectButton,
@@ -34,6 +35,7 @@ type TechnologyQueueInteractionQuery<'w, 's> = Query<
 
 pub(crate) fn handle_technology_window_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    input_state: Option<Res<AppInputState>>,
     mut window_state: ResMut<TechnologyWindowState>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
@@ -48,7 +50,10 @@ pub(crate) fn handle_technology_window_input(
         }
     }
 
-    if window_state.open && keyboard.just_pressed(KeyCode::Escape) {
+    if !escape_consumed(input_state.as_deref())
+        && window_state.open
+        && keyboard.just_pressed(KeyCode::Escape)
+    {
         window_state.open = false;
     }
 }

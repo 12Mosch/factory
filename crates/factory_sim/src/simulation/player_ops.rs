@@ -110,6 +110,7 @@ impl Simulation {
         self.player_inventory
             .insert(&self.world.prototypes, mined.resource_item, 1)
             .expect("manual mining checked inventory capacity before inserting");
+        self.record_item_produced(mined.resource_item, u64::from(mined.amount));
 
         self.manual_mining_progress = if self.is_valid_manual_mining_target(target) {
             Some(ManualMiningProgress {
@@ -153,15 +154,18 @@ impl Simulation {
             }
         }
 
-        for ingredient in &recipe.ingredients {
+        let ingredients = recipe.ingredients.clone();
+        let crafting_time_ticks = recipe.crafting_time_ticks;
+        for ingredient in &ingredients {
             self.player_inventory
                 .remove(ingredient.item, ingredient.amount)
                 .expect("manual crafting checked ingredients before removing");
+            self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
         }
 
         self.crafting_queue.entries.push_back(CraftingJob {
             recipe_id,
-            remaining_ticks: recipe.crafting_time_ticks,
+            remaining_ticks: crafting_time_ticks,
         });
 
         Ok(())
@@ -188,9 +192,10 @@ impl Simulation {
             .get(recipe_id.index())
             .filter(|recipe| recipe.id == recipe_id)
             .expect("queued manual craft should reference an existing recipe");
+        let products = recipe.products.clone();
         let mut inventory = self.player_inventory.clone();
 
-        for product in &recipe.products {
+        for product in &products {
             if inventory
                 .insert(&self.world.prototypes, product.item, product.amount)
                 .is_err()
@@ -201,6 +206,9 @@ impl Simulation {
 
         self.player_inventory = inventory;
         self.crafting_queue.entries.pop_front();
+        for product in &products {
+            self.record_item_produced(product.item, u64::from(product.amount));
+        }
     }
 
     pub(super) fn is_valid_manual_mining_target(&self, target: ManualMiningTarget) -> bool {
