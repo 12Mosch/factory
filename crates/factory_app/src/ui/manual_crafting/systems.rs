@@ -2,9 +2,13 @@ use bevy::prelude::*;
 
 use crate::resources::{CraftingWindowState, SimResource};
 
-use super::components::{CraftingPanelRoot, CraftingRecipeButton, CraftingTabButton};
-use super::helpers::{craftable_for_player, crafting_panel_snapshot};
-use super::view::{spawn_manual_crafting_contents, spawn_manual_crafting_panel};
+use super::components::{
+    CraftingPanelRoot, CraftingQueueRoot, CraftingRecipeButton, CraftingTabButton,
+};
+use super::helpers::{craftable_for_player, crafting_panel_snapshot, queue_snapshot};
+use super::view::{
+    spawn_manual_crafting_contents, spawn_manual_crafting_panel, spawn_queue_contents,
+};
 
 type CraftingTabInteractionQuery<'w, 's> = Query<
     'w,
@@ -58,6 +62,7 @@ pub(crate) fn sync_manual_crafting_panel(
     sim: Res<SimResource>,
     state: Res<CraftingWindowState>,
     mut roots: Query<(Entity, &mut CraftingPanelRoot, Option<&Children>)>,
+    mut queue_roots: Query<(Entity, &mut CraftingQueueRoot, Option<&Children>)>,
 ) {
     if !state.open {
         for (entity, _, _) in &roots {
@@ -67,9 +72,10 @@ pub(crate) fn sync_manual_crafting_panel(
     }
 
     let snapshot = crafting_panel_snapshot(&sim.sim, state.selected_tab);
+    let queue = queue_snapshot(&sim.sim);
     let mut roots_iter = roots.iter_mut();
     let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        spawn_manual_crafting_panel(&mut commands, snapshot);
+        spawn_manual_crafting_panel(&mut commands, snapshot, queue);
         return;
     };
     for (duplicate_entity, _, _) in roots_iter {
@@ -77,6 +83,7 @@ pub(crate) fn sync_manual_crafting_panel(
     }
 
     if root.snapshot == snapshot {
+        sync_queue_contents(&mut commands, queue, &mut queue_roots);
         return;
     }
 
@@ -88,5 +95,33 @@ pub(crate) fn sync_manual_crafting_panel(
     root.snapshot = snapshot.clone();
     commands
         .entity(root_entity)
-        .with_children(|root| spawn_manual_crafting_contents(root, &snapshot));
+        .with_children(|root| spawn_manual_crafting_contents(root, &snapshot, queue));
+}
+
+fn sync_queue_contents(
+    commands: &mut Commands,
+    queue: Vec<String>,
+    queue_roots: &mut Query<(Entity, &mut CraftingQueueRoot, Option<&Children>)>,
+) {
+    let mut roots_iter = queue_roots.iter_mut();
+    let Some((root_entity, mut root, children)) = roots_iter.next() else {
+        return;
+    };
+    for (duplicate_entity, _, _) in roots_iter {
+        commands.entity(duplicate_entity).despawn();
+    }
+
+    if root.lines == queue {
+        return;
+    }
+
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).despawn();
+        }
+    }
+    root.lines = queue.clone();
+    commands
+        .entity(root_entity)
+        .with_children(|root| spawn_queue_contents(root, &queue));
 }

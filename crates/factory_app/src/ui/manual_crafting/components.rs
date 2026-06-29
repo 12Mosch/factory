@@ -18,11 +18,15 @@ pub(crate) struct CraftingTabButton {
     pub(crate) tab: CraftingPanelTab,
 }
 
+#[derive(Component)]
+pub(crate) struct CraftingQueueRoot {
+    pub(crate) lines: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CraftingPanelSnapshot {
     pub(crate) selected_tab: CraftingPanelTab,
     pub(crate) rows: Vec<ManualCraftRecipeRow>,
-    pub(crate) queue: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

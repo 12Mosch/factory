@@ -1,4 +1,5 @@
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
+use bevy::input::InputSystems;
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 use bevy::time::Fixed;
@@ -122,6 +123,14 @@ impl Plugin for FactoryAppPlugin {
                 ),
             )
             .add_systems(
+                PreUpdate,
+                (reset_app_input_state, handle_panel_input)
+                    .chain()
+                    .in_set(AppInputSet::PanelInput)
+                    .after(InputSystems)
+                    .before(AppInputSet::TechnologyWindow),
+            )
+            .add_systems(
                 FixedUpdate,
                 (
                     move_player_from_input,
@@ -129,13 +138,6 @@ impl Plugin for FactoryAppPlugin {
                     tick_sim,
                 )
                     .chain(),
-            )
-            .add_systems(
-                Update,
-                (reset_app_input_state, handle_panel_input)
-                    .chain()
-                    .in_set(AppInputSet::PanelInput)
-                    .before(AppInputSet::TechnologyWindow),
             )
             .add_systems(
                 Update,
@@ -196,6 +198,7 @@ impl Plugin for FactoryAppPlugin {
                     handle_manual_crafting_tab_buttons,
                     handle_manual_crafting_recipe_buttons,
                     sync_manual_crafting_panel
+                        .after(AppInputSet::PanelInput)
                         .after(handle_manual_crafting_tab_buttons)
                         .after(handle_manual_crafting_recipe_buttons),
                 ),

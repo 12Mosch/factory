@@ -17,7 +17,6 @@ pub(crate) fn crafting_panel_snapshot(
     CraftingPanelSnapshot {
         selected_tab,
         rows: recipe_rows(sim, selected_tab),
-        queue: queue_snapshot(sim),
     }
 }
 
@@ -103,17 +102,17 @@ fn recipe_status(
     ingredients: &BTreeMap<ItemId, u32>,
     unlocked: bool,
 ) -> String {
+    if !unlocked {
+        return format!(
+            "Locked: {}",
+            locking_technology_name(sim.catalog(), recipe.id)
+        );
+    }
+
     match selected_tab {
         CraftingPanelTab::Smelting => "Requires furnace".to_string(),
         CraftingPanelTab::Assembling => "Use assembling machine".to_string(),
         CraftingPanelTab::Player => {
-            if !unlocked {
-                return format!(
-                    "Locked: {}",
-                    locking_technology_name(sim.catalog(), recipe.id)
-                );
-            }
-
             let missing = missing_ingredients(sim.catalog(), sim.player_inventory(), ingredients);
             if missing.is_empty() {
                 "Craft".to_string()
@@ -216,7 +215,7 @@ fn locking_technology_name(catalog: &PrototypeCatalog, recipe_id: RecipeId) -> S
         .unwrap_or_else(|| "Technology".to_string())
 }
 
-fn queue_snapshot(sim: &Simulation) -> Vec<String> {
+pub(crate) fn queue_snapshot(sim: &Simulation) -> Vec<String> {
     sim.crafting_queue()
         .entries
         .iter()
@@ -274,6 +273,16 @@ mod tests {
         let sim = Simulation::new_test_world(123);
         let recipe_id = recipe_id_by_name(sim.catalog(), "assembling_machine");
         let row = row_for_recipe(&sim, CraftingPanelTab::Player, recipe_id);
+
+        assert!(!row.button_enabled);
+        assert_eq!(row.status, "Locked: Automation");
+    }
+
+    #[test]
+    fn manual_craft_ui_preserves_locked_status_on_assembling_tab() {
+        let sim = Simulation::new_test_world(123);
+        let recipe_id = recipe_id_by_name(sim.catalog(), "assembling_machine");
+        let row = row_for_recipe(&sim, CraftingPanelTab::Assembling, recipe_id);
 
         assert!(!row.button_enabled);
         assert_eq!(row.status, "Locked: Automation");

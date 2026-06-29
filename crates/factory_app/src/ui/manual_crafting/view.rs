@@ -3,13 +3,14 @@ use bevy::prelude::*;
 use crate::resources::CraftingPanelTab;
 
 use super::components::{
-    CraftingPanelRoot, CraftingPanelSnapshot, CraftingRecipeButton, CraftingTabButton,
-    ManualCraftRecipeRow,
+    CraftingPanelRoot, CraftingPanelSnapshot, CraftingQueueRoot, CraftingRecipeButton,
+    CraftingTabButton, ManualCraftRecipeRow,
 };
 
 pub(crate) fn spawn_manual_crafting_panel(
     commands: &mut Commands,
     snapshot: CraftingPanelSnapshot,
+    queue: Vec<String>,
 ) {
     commands
         .spawn((
@@ -30,12 +31,13 @@ pub(crate) fn spawn_manual_crafting_panel(
                 snapshot: snapshot.clone(),
             },
         ))
-        .with_children(|root| spawn_manual_crafting_contents(root, &snapshot));
+        .with_children(|root| spawn_manual_crafting_contents(root, &snapshot, queue));
 }
 
 pub(crate) fn spawn_manual_crafting_contents(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &CraftingPanelSnapshot,
+    queue: Vec<String>,
 ) {
     root.spawn((
         Text::new("Crafting"),
@@ -44,7 +46,7 @@ pub(crate) fn spawn_manual_crafting_contents(
     ));
     spawn_tabs(root, snapshot.selected_tab);
     spawn_recipe_rows(root, &snapshot.rows);
-    spawn_queue(root, &snapshot.queue);
+    spawn_queue(root, queue);
 }
 
 fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected: CraftingPanelTab) {
@@ -105,6 +107,9 @@ fn spawn_recipe_rows(
             Node {
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(5.0),
+                height: Val::Px(430.0),
+                overflow: Overflow::scroll_y(),
+                scrollbar_width: 10.0,
                 ..default()
             },
             BackgroundColor(Color::NONE),
@@ -222,7 +227,7 @@ fn spawn_recipe_row(
         });
 }
 
-fn spawn_queue(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, queue: &[String]) {
+fn spawn_queue(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, queue: Vec<String>) {
     parent.spawn((
         Text::new("Queue"),
         TextFont::from_font_size(14.0),
@@ -238,23 +243,31 @@ fn spawn_queue(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, queue: &
                 ..default()
             },
             BackgroundColor(Color::NONE),
+            CraftingQueueRoot {
+                lines: queue.clone(),
+            },
         ))
-        .with_children(|queue_node| {
-            if queue.is_empty() {
-                queue_node.spawn((
-                    Text::new("<empty>"),
-                    TextFont::from_font_size(12.0),
-                    TextColor(Color::srgb(0.62, 0.64, 0.60)),
-                ));
-                return;
-            }
+        .with_children(|queue_node| spawn_queue_contents(queue_node, &queue));
+}
 
-            for line in queue {
-                queue_node.spawn((
-                    Text::new(line.clone()),
-                    TextFont::from_font_size(12.0),
-                    TextColor(Color::srgb(0.84, 0.86, 0.80)),
-                ));
-            }
-        });
+pub(crate) fn spawn_queue_contents(
+    queue_node: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    queue: &[String],
+) {
+    if queue.is_empty() {
+        queue_node.spawn((
+            Text::new("<empty>"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.62, 0.64, 0.60)),
+        ));
+        return;
+    }
+
+    for line in queue {
+        queue_node.spawn((
+            Text::new(line.clone()),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.84, 0.86, 0.80)),
+        ));
+    }
 }

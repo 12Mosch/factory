@@ -285,6 +285,19 @@ fn crafting_screen_toggles_with_c() {
     app.update();
 
     assert!(app.world().resource::<CraftingWindowState>().open);
+
+    {
+        let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keyboard.clear_just_pressed(KeyCode::KeyC);
+        keyboard.release(KeyCode::KeyC);
+    }
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyC);
+    app.update();
+
+    assert!(!app.world().resource::<CraftingWindowState>().open);
 }
 
 #[test]
