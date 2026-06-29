@@ -33,9 +33,9 @@ use crate::rendering::resources::{
 };
 use crate::rendering::world::spawn_world_tiles;
 use crate::resources::{
-    AppInputState, BuildPlacementState, MapDisplaySettings, MapTextureCache, MapViewState,
-    OpenContainer, ProductionStatsWindowState, RenderSyncStats, SimProfileStats, SimResource,
-    TechnologyWindowState, UpsStats,
+    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapTextureCache,
+    MapViewState, OpenContainer, ProductionStatsWindowState, RenderSyncStats, SimProfileStats,
+    SimResource, TechnologyWindowState, UpsStats,
 };
 use crate::simulation::tick_sim;
 use crate::ui::assembler_panel::{
@@ -50,6 +50,10 @@ use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{setup_debug_overlay, update_debug_overlay, update_ups_stats};
 use crate::ui::inventory_panel::{handle_container_slot_clicks, update_container_slot_text};
 use crate::ui::machine_indicators::update_burner_drill_indicators;
+use crate::ui::manual_crafting::{
+    handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
+    sync_manual_crafting_panel,
+};
 use crate::ui::map_view::{sync_full_map_view, sync_minimap};
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
 use crate::ui::technology_panel::{
@@ -98,6 +102,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<BuildPlacementState>()
             .init_resource::<OpenContainer>()
             .init_resource::<TechnologyWindowState>()
+            .init_resource::<CraftingWindowState>()
             .init_resource::<MapViewState>()
             .init_resource::<MapDisplaySettings>()
             .init_resource::<MapTextureCache>()
@@ -188,6 +193,11 @@ impl Plugin for FactoryAppPlugin {
                     sync_full_map_view.after(update_map_texture),
                     handle_production_stats_buttons,
                     sync_production_stats_window.after(handle_production_stats_buttons),
+                    handle_manual_crafting_tab_buttons,
+                    handle_manual_crafting_recipe_buttons,
+                    sync_manual_crafting_panel
+                        .after(handle_manual_crafting_tab_buttons)
+                        .after(handle_manual_crafting_recipe_buttons),
                 ),
             )
             .add_systems(

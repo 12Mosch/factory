@@ -154,6 +154,10 @@ impl Simulation {
         &self.player_inventory
     }
 
+    pub fn crafting_queue(&self) -> &CraftingQueue {
+        &self.crafting_queue
+    }
+
     pub fn player_inventory_mut(&mut self) -> &mut Inventory {
         &mut self.player_inventory
     }

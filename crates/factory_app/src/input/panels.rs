@@ -2,16 +2,17 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::resources::{
-    AppInputState, BuildPlacementState, MapDisplaySettings, MapViewState, OpenContainer,
-    ProductionStatsWindowState, TechnologyWindowState,
+    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapViewState,
+    OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
 
 pub(crate) fn reset_app_input_state(
     map: Res<MapViewState>,
     stats: Res<ProductionStatsWindowState>,
+    crafting: Res<CraftingWindowState>,
     mut input_state: ResMut<AppInputState>,
 ) {
-    input_state.world_blocked = map.open || stats.open;
+    input_state.world_blocked = map.open || stats.open || crafting.open;
     input_state.escape_consumed = false;
 }
 
@@ -21,6 +22,7 @@ pub(crate) struct PanelInputResources<'w> {
     map: ResMut<'w, MapViewState>,
     settings: ResMut<'w, MapDisplaySettings>,
     stats: ResMut<'w, ProductionStatsWindowState>,
+    crafting: ResMut<'w, CraftingWindowState>,
     technology: ResMut<'w, TechnologyWindowState>,
     open_container: ResMut<'w, OpenContainer>,
     build_state: ResMut<'w, BuildPlacementState>,
@@ -48,6 +50,13 @@ pub(crate) fn handle_panel_input(
             resources.open_container.entity_id = None;
         }
     }
+    if keyboard.just_pressed(KeyCode::KeyC) {
+        resources.crafting.open = !resources.crafting.open;
+        if resources.crafting.open {
+            resources.build_state.selected = None;
+            resources.open_container.entity_id = None;
+        }
+    }
     if keyboard.just_pressed(KeyCode::F3) {
         resources.settings.debug_reveal_all = !resources.settings.debug_reveal_all;
         resources.settings.show_chunk_grid = resources.settings.debug_reveal_all;
@@ -59,6 +68,9 @@ pub(crate) fn handle_panel_input(
             resources.input_state.escape_consumed = true;
         } else if resources.stats.open {
             resources.stats.open = false;
+            resources.input_state.escape_consumed = true;
+        } else if resources.crafting.open {
+            resources.crafting.open = false;
             resources.input_state.escape_consumed = true;
         } else if resources.technology.open {
             resources.technology.open = false;
@@ -73,7 +85,8 @@ pub(crate) fn handle_panel_input(
         }
     }
 
-    resources.input_state.world_blocked = resources.map.open || resources.stats.open;
+    resources.input_state.world_blocked =
+        resources.map.open || resources.stats.open || resources.crafting.open;
 }
 
 pub fn world_input_blocked(input_state: Option<&AppInputState>) -> bool {
