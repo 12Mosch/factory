@@ -374,14 +374,14 @@ fn open_crafting_suppresses_build_hotbar_selection() {
 #[test]
 fn technology_screen_start_button_updates_research_state() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
-    let automation = {
+    let logistics = {
         let sim = &app.world().resource::<SimResource>().sim;
-        technology_id_by_name(sim.catalog(), "automation")
+        technology_id_by_name(sim.catalog(), "logistics")
     };
     {
         let mut window = app.world_mut().resource_mut::<TechnologyWindowState>();
         window.open = true;
-        window.selected = Some(automation);
+        window.selected = Some(logistics);
     }
     app.update();
 
@@ -395,7 +395,7 @@ fn technology_screen_start_button_updates_research_state() {
 
     assert_eq!(
         app.world().resource::<SimResource>().sim.active_research(),
-        Some(automation)
+        Some(logistics)
     );
 }
 
@@ -443,11 +443,12 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
     app.update();
     {
         let mut sim = app.world_mut().resource_mut::<SimResource>();
+        complete_research_by_name(&mut sim.sim, "logistics");
         sim.sim
             .select_research(automation)
             .expect("automation should be selectable");
         sim.sim
-            .add_research_units(10)
+            .add_research_units(20)
             .expect("automation should complete");
     }
     app.world_mut()
@@ -793,9 +794,10 @@ fn available_crafting_recipe_choices_follow_research_unlocks() {
             .any(|recipe| recipe.id == assembling_machine)
     );
 
+    complete_research_by_name(&mut sim, "logistics");
     sim.select_research(automation)
         .expect("automation should be selectable");
-    sim.add_research_units(10)
+    sim.add_research_units(20)
         .expect("automation research should complete");
 
     let unlocked_choices = available_crafting_recipe_choices(&sim);
@@ -823,8 +825,9 @@ fn available_crafting_recipe_choices_include_express_only_after_logistics_3() {
         );
     }
 
-    complete_research_by_name(&mut sim, "automation");
     complete_research_by_name(&mut sim, "logistics");
+    complete_research_by_name(&mut sim, "automation");
+    complete_research_by_name(&mut sim, "electric_power");
     complete_research_by_name(&mut sim, "logistic_science_pack");
     complete_research_by_name(&mut sim, "logistics_2");
 
@@ -836,6 +839,7 @@ fn available_crafting_recipe_choices_include_express_only_after_logistics_3() {
         );
     }
 
+    complete_research_by_name(&mut sim, "fluid_handling");
     complete_research_by_name(&mut sim, "logistics_3");
 
     for recipe_id in express_recipes {
@@ -858,13 +862,14 @@ fn completed_research_unlocks_recipe() {
     let lab_id = sim
         .place_entity(lab, x, y, Direction::North)
         .expect("lab should be placeable");
+    complete_research_by_name(&mut sim, "logistics");
     sim.select_research(automation)
         .expect("automation should be selectable");
     sim.entity_inventory_mut(lab_id)
         .expect("lab should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: science_pack,
-        count: 10,
+        count: 20,
     });
 
     assert!(
@@ -873,7 +878,7 @@ fn completed_research_unlocks_recipe() {
             .any(|recipe| recipe.id == assembling_machine)
     );
 
-    for _ in 0..6_000 {
+    for _ in 0..12_000 {
         sim.tick();
     }
 

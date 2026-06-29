@@ -20,10 +20,21 @@ impl Simulation {
     }
 
     fn build_red_science_research_fixture(&mut self) {
+        let logistics = factory_data::technology_id_by_name(&self.world.prototypes, "logistics");
         let automation = factory_data::technology_id_by_name(&self.world.prototypes, "automation");
-        if !self.research.is_unlocked("automation") {
-            self.select_research(automation)
-                .expect("automation research should be selectable");
+        if !self.research.is_unlocked("logistics")
+            && self.active_research() != Some(logistics)
+            && !self.research_queue().contains(&logistics)
+        {
+            self.enqueue_research(logistics)
+                .expect("logistics research should be queueable");
+        }
+        if !self.research.is_unlocked("automation")
+            && self.active_research() != Some(automation)
+            && !self.research_queue().contains(&automation)
+        {
+            self.enqueue_research(automation)
+                .expect("automation research should be queueable after logistics");
         }
 
         let lab = factory_data::entity_prototype_id_by_name(&self.world.prototypes, "lab");
@@ -48,7 +59,7 @@ impl Simulation {
             .lab_state_mut(lab_id)
             .expect("placed lab should expose lab state")
             .inventory
-            .insert(&self.world.prototypes, science_pack, 10)
+            .insert(&self.world.prototypes, science_pack, 35)
             .expect("scripted lab inventory should accept research packs");
     }
 
