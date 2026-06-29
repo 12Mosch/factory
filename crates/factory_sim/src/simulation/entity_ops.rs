@@ -33,6 +33,9 @@ impl Simulation {
                 prototype_id,
             });
         }
+        if !self.is_entity_unlocked(prototype_id) {
+            return Err(PlayerBuildError::EntityLocked { prototype_id });
+        }
         if self.player_inventory.count(item_id) == 0 {
             return Err(PlayerBuildError::InsufficientInventory { item_id });
         }
@@ -511,12 +514,23 @@ impl Simulation {
                 slot_index: player_slot_index,
             })?;
 
-        if first_matching_smelting_recipe(&self.world.prototypes, stack.item_id).is_none() {
+        if first_matching_unlocked_smelting_recipe(
+            &self.world.prototypes,
+            &self.research,
+            stack.item_id,
+        )
+        .is_none()
+        {
             return Err(FurnaceError::InvalidInput(stack.item_id));
         }
 
         let state = self.entities.furnace_state(entity_id)?;
-        if !input_slot_can_accept(&self.world.prototypes, state.input_slot, stack) {
+        if !input_slot_can_accept(
+            &self.world.prototypes,
+            &self.research,
+            state.input_slot,
+            stack,
+        ) {
             return Err(FurnaceError::InsufficientSpace);
         }
 
@@ -765,7 +779,8 @@ impl Simulation {
         entity_id: EntityId,
     ) -> Result<Vec<AssemblerIngredientStatus>, AssemblerError> {
         let state = self.entities.assembler_state(entity_id)?;
-        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, state) else {
+        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, &self.research, state)
+        else {
             return if let Some(recipe_id) = state.selected_recipe {
                 Err(AssemblerError::MissingRecipe(recipe_id))
             } else {
@@ -808,7 +823,7 @@ impl Simulation {
                 slot_index: player_slot_index,
             })?;
         let state = self.entities.assembler_state(entity_id)?;
-        if !assembler_input_can_accept(&self.world.prototypes, state, stack) {
+        if !assembler_input_can_accept(&self.world.prototypes, &self.research, state, stack) {
             return Err(AssemblerError::InvalidInput(stack.item_id));
         }
         if !state

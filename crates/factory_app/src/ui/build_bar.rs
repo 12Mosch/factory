@@ -234,7 +234,8 @@ pub(crate) fn update_build_bar_visuals(
                 prototype_id: button.prototype_id,
                 item_id: button.item_id,
             });
-        let available = sim.sim.player_inventory().count(button.item_id) > 0;
+        let unlocked = sim.sim.is_entity_unlocked(button.prototype_id);
+        let available = unlocked && sim.sim.player_inventory().count(button.item_id) > 0;
         *background = BackgroundColor(slot_background_color(*interaction, selected, available));
         *border = BorderColor::all(if selected {
             Color::srgb(0.94, 0.66, 0.20)
@@ -260,7 +261,9 @@ pub(crate) fn update_build_bar_visuals(
             .entities
             .get(marker.prototype_id.index())
             .is_some_and(|prototype| prototype.id == marker.prototype_id);
-        let available = prototype_exists && sim.sim.player_inventory().count(marker.item_id) > 0;
+        let available = prototype_exists
+            && sim.sim.is_entity_unlocked(marker.prototype_id)
+            && sim.sim.player_inventory().count(marker.item_id) > 0;
         *color = TextColor(if available {
             Color::WHITE
         } else {
@@ -304,6 +307,7 @@ pub(crate) fn update_build_status_text(
         BuildPlacementStatus::MissingInventory(message) => {
             (message.clone(), Color::srgb(0.98, 0.72, 0.28))
         }
+        BuildPlacementStatus::Locked(message) => (message.clone(), Color::srgb(0.98, 0.72, 0.28)),
     };
 
     for (mut text, mut text_color) in &mut texts {

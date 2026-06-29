@@ -6,13 +6,17 @@ use crate::placement::build::{
     buildable_prototype_at_slot, next_direction, place_selected_building_at_tile,
     short_inventory_need,
 };
-use crate::resources::{BuildPlacementState, BuildSelection, SimResource};
+use crate::resources::{BuildPlacementState, BuildSelection, SimResource, TechnologyWindowState};
 
 pub(crate) fn handle_build_hotbar_keys(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    technology_window: Option<Res<TechnologyWindowState>>,
     sim: Res<SimResource>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
+    if technology_window_open(technology_window.as_deref()) {
+        return;
+    }
     let Some(keyboard) = keyboard else {
         return;
     };
@@ -27,8 +31,12 @@ pub(crate) fn handle_build_hotbar_keys(
 
 pub(crate) fn handle_build_rotate_cancel_keys(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    technology_window: Option<Res<TechnologyWindowState>>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
+    if technology_window_open(technology_window.as_deref()) {
+        return;
+    }
     let Some(keyboard) = keyboard else {
         return;
     };
@@ -44,12 +52,16 @@ pub(crate) fn handle_build_rotate_cancel_keys(
 
 pub(crate) fn handle_build_world_click(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
+    technology_window: Option<Res<TechnologyWindowState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
     mut sim: ResMut<SimResource>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
+    if technology_window_open(technology_window.as_deref()) {
+        return;
+    }
     let Some(mouse) = mouse else {
         return;
     };
@@ -87,6 +99,14 @@ pub fn select_build_slot(
         return;
     };
 
+    if !sim.is_entity_unlocked(buildable.prototype_id) {
+        build_state.selected = None;
+        build_state.last_status = crate::resources::BuildPlacementStatus::Locked(format!(
+            "{} locked",
+            buildable.display_name
+        ));
+        return;
+    }
     if sim.player_inventory().count(buildable.item_id) == 0 {
         build_state.selected = None;
         build_state.last_status = crate::resources::BuildPlacementStatus::MissingInventory(
@@ -114,4 +134,8 @@ fn hotbar_keys() -> [KeyCode; 9] {
         KeyCode::Digit8,
         KeyCode::Digit9,
     ]
+}
+
+fn technology_window_open(window: Option<&TechnologyWindowState>) -> bool {
+    window.is_some_and(|state| state.open)
 }

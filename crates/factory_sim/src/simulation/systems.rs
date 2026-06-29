@@ -179,7 +179,9 @@ impl Simulation {
                 .entities
                 .furnace_state(entity_id)
                 .ok()
-                .and_then(|state| furnace_work_selection(&self.world.prototypes, state.input_slot))
+                .and_then(|state| {
+                    furnace_work_selection(&self.world.prototypes, &self.research, state.input_slot)
+                })
             else {
                 if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
                     state.active_recipe = None;
@@ -280,7 +282,8 @@ impl Simulation {
                 .assembler_state(entity_id)
                 .ok()
                 .and_then(|state| {
-                    let recipe = selected_assembler_recipe(&self.world.prototypes, state)?;
+                    let recipe =
+                        selected_assembler_recipe(&self.world.prototypes, &self.research, state)?;
                     Some((
                         recipe.ingredients.clone(),
                         recipe.products.clone(),
@@ -488,6 +491,7 @@ impl Simulation {
                     if !profiler.measure(ProfilePhase::InventoryTransfers, || {
                         inserter_target_can_accept(
                             &self.world.prototypes,
+                            &self.research,
                             &self.entities,
                             drop_tile,
                             item,
@@ -519,6 +523,7 @@ impl Simulation {
                         if !profiler.measure(ProfilePhase::InventoryTransfers, || {
                             inserter_target_can_accept(
                                 &self.world.prototypes,
+                                &self.research,
                                 &self.entities,
                                 drop_tile,
                                 item,
@@ -547,6 +552,7 @@ impl Simulation {
                         profiler.measure(ProfilePhase::InventoryTransfers, || {
                             inserter_target_can_accept(
                                 &self.world.prototypes,
+                                &self.research,
                                 &self.entities,
                                 drop_tile,
                                 item,
@@ -557,6 +563,7 @@ impl Simulation {
                     } else if profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_drop_inserter_item(
                             &self.world.prototypes,
+                            &self.research,
                             &mut self.entities,
                             drop_tile,
                             item,

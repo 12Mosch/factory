@@ -1,10 +1,18 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use factory_sim::{EntityId, Simulation};
 
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::interaction::machine_kind::open_machine_kind;
-use crate::resources::{BuildPlacementState, OpenContainer, SimResource};
+use crate::resources::{BuildPlacementState, OpenContainer, SimResource, TechnologyWindowState};
+
+#[derive(SystemParam)]
+pub(crate) struct ContainerOpenState<'w> {
+    build_state: Res<'w, BuildPlacementState>,
+    technology_window: Option<Res<'w, TechnologyWindowState>>,
+    open_container: ResMut<'w, OpenContainer>,
+}
 
 pub(crate) fn handle_container_open_input(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
@@ -12,8 +20,7 @@ pub(crate) fn handle_container_open_input(
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
     sim: Res<SimResource>,
-    build_state: Res<BuildPlacementState>,
-    mut open_container: ResMut<OpenContainer>,
+    mut state: ContainerOpenState,
 ) {
     let Some(mouse) = mouse else {
         return;
@@ -21,7 +28,14 @@ pub(crate) fn handle_container_open_input(
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    if !container_open_input_allowed(&build_state) {
+    if !container_open_input_allowed(&state.build_state) {
+        return;
+    }
+    if state
+        .technology_window
+        .as_deref()
+        .is_some_and(|window| window.open)
+    {
         return;
     }
     if ui_buttons
@@ -31,7 +45,7 @@ pub(crate) fn handle_container_open_input(
         return;
     }
 
-    open_container.entity_id =
+    state.open_container.entity_id =
         opened_container_after_world_click(&sim.sim, cursor_tile_from_window(&windows, &cameras));
 }
 

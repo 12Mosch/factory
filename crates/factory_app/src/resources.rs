@@ -1,5 +1,5 @@
 use bevy::prelude::Resource;
-use factory_data::{EntityPrototypeId, ItemId};
+use factory_data::{EntityPrototypeId, ItemId, TechnologyId};
 use factory_sim::{Direction, EntityId, Simulation, SimulationTickProfile};
 use std::time::Duration;
 
@@ -72,6 +72,12 @@ pub struct OpenContainer {
 }
 
 #[derive(Resource, Default)]
+pub struct TechnologyWindowState {
+    pub open: bool,
+    pub selected: Option<TechnologyId>,
+}
+
+#[derive(Resource, Default)]
 pub struct BuildPlacementState {
     pub selected: Option<BuildSelection>,
     pub direction: Direction,
@@ -91,4 +97,5 @@ pub enum BuildPlacementStatus {
     Placed(String),
     CannotPlace(String),
     MissingInventory(String),
+    Locked(String),
 }

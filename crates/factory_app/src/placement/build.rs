@@ -97,6 +97,10 @@ fn build_status_from_error(
         PlayerBuildError::InsufficientInventory { item_id } => {
             BuildPlacementStatus::MissingInventory(short_inventory_need(catalog, item_id))
         }
+        PlayerBuildError::EntityLocked { prototype_id } => BuildPlacementStatus::Locked(format!(
+            "{} locked",
+            entity_display_name(catalog, prototype_id).unwrap_or_else(|| "Building".to_string())
+        )),
         PlayerBuildError::Build(BuildError::EntityOccupied { .. })
         | PlayerBuildError::Build(BuildError::TileBlocked { .. }) => {
             BuildPlacementStatus::CannotPlace("Blocked".to_string())

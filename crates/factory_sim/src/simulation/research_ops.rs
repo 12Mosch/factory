@@ -9,6 +9,7 @@ impl ResearchState {
                 .map(|technology| technology.name.clone())
                 .collect(),
             active: None,
+            queue: Vec::new(),
             technologies: catalog
                 .technologies
                 .iter()

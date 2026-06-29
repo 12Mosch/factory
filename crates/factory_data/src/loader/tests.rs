@@ -8,7 +8,7 @@ use crate::model::{
     FluidConnectionSide, ItemAmount, TechnologyEffect, UndergroundBeltPart,
 };
 
-const ITEM_NAMES: [&str; 35] = [
+const ITEM_NAMES: [&str; 36] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -44,11 +44,12 @@ const ITEM_NAMES: [&str; 35] = [
     "offshore_pump",
     "pipe",
     "storage_tank",
+    "logistic_science_pack",
 ];
 
 const FLUID_NAMES: [&str; 2] = ["water", "steam"];
 
-const RECIPE_NAMES: [&str; 25] = [
+const RECIPE_NAMES: [&str; 29] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -74,6 +75,10 @@ const RECIPE_NAMES: [&str; 25] = [
     "offshore_pump",
     "pipe",
     "storage_tank",
+    "logistic_science_pack",
+    "fast_transport_belt",
+    "fast_underground_belt",
+    "fast_splitter",
 ];
 
 const ENTITY_NAMES: [&str; 30] = [
@@ -110,18 +115,26 @@ const ENTITY_NAMES: [&str; 30] = [
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
-const TECHNOLOGY_NAMES: [&str; 1] = ["automation"];
+const TECHNOLOGY_NAMES: [&str; 7] = [
+    "automation",
+    "logistics",
+    "logistic_science_pack",
+    "long_handed_inserter",
+    "fast_inserter",
+    "logistics_2",
+    "fluid_handling",
+];
 
 #[test]
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 35);
+    assert_eq!(catalog.items.len(), 36);
     assert_eq!(catalog.fluids.len(), 2);
-    assert_eq!(catalog.recipes.len(), 25);
+    assert_eq!(catalog.recipes.len(), 29);
     assert_eq!(catalog.entities.len(), 30);
     assert_eq!(catalog.tiles.len(), 3);
-    assert_eq!(catalog.technologies.len(), 1);
+    assert_eq!(catalog.technologies.len(), 7);
 }
 
 #[test]
@@ -823,6 +836,137 @@ fn automation_technology_loads_research_cost_and_unlock_effect() {
     assert_eq!(
         automation.effects,
         vec![TechnologyEffect::UnlockRecipe(assembling_machine_recipe)]
+    );
+}
+
+#[test]
+fn logistic_science_pack_item_and_recipe_resolve() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let inserter = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "inserter")
+        .expect("base catalog should contain inserter")
+        .id;
+    let transport_belt = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "transport_belt")
+        .expect("base catalog should contain transport belt")
+        .id;
+    let logistic_science_pack = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "logistic_science_pack")
+        .expect("base catalog should contain logistic science pack");
+    let recipe = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "logistic_science_pack")
+        .expect("base catalog should contain logistic science pack recipe");
+
+    assert_eq!(logistic_science_pack.stack_size, 200);
+    assert_eq!(recipe.category, CraftingCategory::Crafting);
+    assert_eq!(recipe.crafting_time_ticks, 360);
+    assert_eq!(
+        recipe.ingredients,
+        vec![
+            ItemAmount {
+                item: inserter,
+                amount: 1,
+            },
+            ItemAmount {
+                item: transport_belt,
+                amount: 1,
+            },
+        ]
+    );
+    assert_eq!(
+        recipe.products,
+        vec![ItemAmount {
+            item: logistic_science_pack.id,
+            amount: 1,
+        }]
+    );
+}
+
+#[test]
+fn green_science_technologies_load_prerequisites_costs_and_unlocks() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let automation = catalog
+        .technologies
+        .iter()
+        .find(|technology| technology.name == "automation")
+        .expect("base catalog should contain automation")
+        .id;
+    let logistics = catalog
+        .technologies
+        .iter()
+        .find(|technology| technology.name == "logistics")
+        .expect("base catalog should contain logistics")
+        .id;
+    let logistic_science_pack = catalog
+        .technologies
+        .iter()
+        .find(|technology| technology.name == "logistic_science_pack")
+        .expect("base catalog should contain logistic science pack technology")
+        .id;
+    let logistics_2 = catalog
+        .technologies
+        .iter()
+        .find(|technology| technology.name == "logistics_2")
+        .expect("base catalog should contain logistics 2 technology");
+    let red = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "automation_science_pack")
+        .expect("base catalog should contain automation science pack")
+        .id;
+    let green = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "logistic_science_pack")
+        .expect("base catalog should contain logistic science pack")
+        .id;
+    let fast_transport_belt = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "fast_transport_belt")
+        .expect("base catalog should contain fast transport belt recipe")
+        .id;
+
+    assert_eq!(
+        logistics_2.prerequisites,
+        vec![logistics, logistic_science_pack]
+    );
+    assert_eq!(
+        logistics_2.science_packs,
+        vec![
+            ItemAmount {
+                item: red,
+                amount: 1,
+            },
+            ItemAmount {
+                item: green,
+                amount: 1,
+            },
+        ]
+    );
+    assert_eq!(logistics_2.required_units, 75);
+    assert!(
+        logistics_2
+            .effects
+            .contains(&TechnologyEffect::UnlockRecipe(fast_transport_belt))
+    );
+
+    let logistic_science_pack_technology = catalog
+        .technologies
+        .iter()
+        .find(|technology| technology.id == logistic_science_pack)
+        .expect("technology id should resolve");
+    assert_eq!(
+        logistic_science_pack_technology.prerequisites,
+        vec![automation, logistics]
     );
 }
 

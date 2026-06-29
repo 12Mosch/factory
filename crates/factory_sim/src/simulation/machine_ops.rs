@@ -9,6 +9,32 @@ pub(super) fn lab_has_science_packs(
         .all(|science_pack| inventory.count(science_pack.item) >= u32::from(science_pack.amount))
 }
 
+pub(super) fn recipe_is_unlocked(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    recipe_id: RecipeId,
+) -> bool {
+    let is_locked_by_technology = catalog.technologies.iter().any(|technology| {
+        technology.effects.iter().any(|effect| {
+            matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
+        })
+    });
+    if !is_locked_by_technology {
+        return true;
+    }
+
+    catalog.technologies.iter().any(|technology| {
+        research
+            .technologies
+            .get(technology.id.index())
+            .filter(|state| state.technology_id == technology.id)
+            .is_some_and(|state| state.unlocked)
+            && technology.effects.iter().any(|effect| {
+                matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
+            })
+    })
+}
+
 pub(super) fn burner_mining_drill_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<BurnerMiningDrillState> {
@@ -292,6 +318,7 @@ pub(super) fn peek_inserter_source_item(
 
 pub(super) fn inserter_target_can_accept(
     catalog: &PrototypeCatalog,
+    research: &ResearchState,
     entities: &EntityStore,
     drop_tile: (i32, i32),
     item: ItemStack,
@@ -311,7 +338,7 @@ pub(super) fn inserter_target_can_accept(
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
         return burner_fuel_slot_can_accept(catalog, furnace.energy.fuel_slot, item)
-            || input_slot_can_accept(catalog, furnace.input_slot, item);
+            || input_slot_can_accept(catalog, research, furnace.input_slot, item);
     }
 
     if let Some(boiler) = entities.boilers.get(&entity_id) {
@@ -319,7 +346,7 @@ pub(super) fn inserter_target_can_accept(
     }
 
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
-        return assembler_input_can_accept(catalog, assembler, item)
+        return assembler_input_can_accept(catalog, research, assembler, item)
             && assembler
                 .input_inventory
                 .can_insert(catalog, item.item_id, item.count);
@@ -385,6 +412,7 @@ pub(super) fn try_take_inserter_source_item(
 
 pub(super) fn try_drop_inserter_item(
     catalog: &PrototypeCatalog,
+    research: &ResearchState,
     entities: &mut EntityStore,
     drop_tile: (i32, i32),
     item: ItemStack,
@@ -414,7 +442,7 @@ pub(super) fn try_drop_inserter_item(
             return true;
         }
 
-        if input_slot_can_accept(catalog, furnace.input_slot, item) {
+        if input_slot_can_accept(catalog, research, furnace.input_slot, item) {
             insert_into_single_slot(&mut furnace.input_slot, item);
             return true;
         }
@@ -432,7 +460,7 @@ pub(super) fn try_drop_inserter_item(
     }
 
     if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
-        if !assembler_input_can_accept(catalog, assembler, item) {
+        if !assembler_input_can_accept(catalog, research, assembler, item) {
             return false;
         }
 
@@ -609,8 +637,18 @@ pub(super) fn first_matching_smelting_recipe(
     })
 }
 
+pub(super) fn first_matching_unlocked_smelting_recipe<'a>(
+    catalog: &'a PrototypeCatalog,
+    research: &ResearchState,
+    input_item: ItemId,
+) -> Option<&'a factory_data::RecipePrototype> {
+    first_matching_smelting_recipe(catalog, input_item)
+        .filter(|recipe| recipe_is_unlocked(catalog, research, recipe.id))
+}
+
 pub(super) fn furnace_work_selection(
     catalog: &PrototypeCatalog,
+    research: &ResearchState,
     input_slot: Option<ItemStack>,
 ) -> Option<(
     RecipeId,
@@ -619,7 +657,7 @@ pub(super) fn furnace_work_selection(
     factory_data::ItemAmount,
 )> {
     let input_stack = input_slot?;
-    let recipe = first_matching_smelting_recipe(catalog, input_stack.item_id)?;
+    let recipe = first_matching_unlocked_smelting_recipe(catalog, research, input_stack.item_id)?;
     let ingredient = recipe.ingredients[0].clone();
     if input_stack.count < ingredient.amount {
         return None;
@@ -631,10 +669,11 @@ pub(super) fn furnace_work_selection(
 
 pub(super) fn input_slot_can_accept(
     catalog: &PrototypeCatalog,
+    research: &ResearchState,
     input_slot: Option<ItemStack>,
     stack: ItemStack,
 ) -> bool {
-    if first_matching_smelting_recipe(catalog, stack.item_id).is_none() {
+    if first_matching_unlocked_smelting_recipe(catalog, research, stack.item_id).is_none() {
         return false;
     }
 
@@ -662,17 +701,19 @@ pub(super) fn assembler_is_empty_for_recipe_change(state: &AssemblingMachineStat
 
 pub(super) fn selected_assembler_recipe<'a>(
     catalog: &'a PrototypeCatalog,
+    research: &ResearchState,
     state: &AssemblingMachineState,
 ) -> Option<&'a factory_data::RecipePrototype> {
     let recipe_id = state.selected_recipe?;
     catalog
         .recipes
         .get(recipe_id.index())
-        .filter(|recipe| recipe.id == recipe_id)
+        .filter(|recipe| recipe.id == recipe_id && recipe_is_unlocked(catalog, research, recipe.id))
 }
 
 pub(super) fn assembler_input_can_accept(
     catalog: &PrototypeCatalog,
+    research: &ResearchState,
     state: &AssemblingMachineState,
     stack: ItemStack,
 ) -> bool {
@@ -686,6 +727,9 @@ pub(super) fn assembler_input_can_accept(
     else {
         return false;
     };
+    if !recipe_is_unlocked(catalog, research, recipe.id) {
+        return false;
+    }
 
     recipe
         .ingredients

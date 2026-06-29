@@ -5,3 +5,4 @@ pub mod debug_overlay;
 pub mod formatting;
 pub mod inventory_panel;
 pub(crate) mod machine_indicators;
+pub mod technology_panel;

@@ -104,6 +104,7 @@ pub enum CraftingError {
 pub struct ResearchState {
     pub technology_names: Vec<String>,
     pub active: Option<TechnologyId>,
+    pub queue: Vec<TechnologyId>,
     pub technologies: Vec<TechnologyResearchState>,
 }
 
@@ -118,9 +119,14 @@ pub struct TechnologyResearchState {
 pub enum ResearchError {
     MissingTechnology(TechnologyId),
     AlreadyResearched(TechnologyId),
+    AlreadyActive(TechnologyId),
+    AlreadyQueued(TechnologyId),
     PrerequisiteLocked {
         technology_id: TechnologyId,
         prerequisite_id: TechnologyId,
+    },
+    InvalidQueueIndex {
+        index: usize,
     },
     NoActiveResearch,
 }
@@ -637,6 +643,9 @@ pub enum BuildError {
 pub enum PlayerBuildError {
     Build(BuildError),
     MissingPrototype(EntityPrototypeId),
+    EntityLocked {
+        prototype_id: EntityPrototypeId,
+    },
     MissingBuildItem {
         prototype_id: EntityPrototypeId,
     },
@@ -766,12 +775,16 @@ pub enum SimValidationError {
     InvalidResearchTechnology {
         technology_id: TechnologyId,
     },
+    InvalidResearchTechnologyNames,
     InvalidResearchProgress {
         technology_id: TechnologyId,
         progress_units: u32,
         required_units: u32,
     },
     InvalidActiveResearch {
+        technology_id: TechnologyId,
+    },
+    InvalidQueuedResearch {
         technology_id: TechnologyId,
     },
     InvalidInserterTarget {
