@@ -12,6 +12,7 @@ use crate::input::build::{
 use crate::input::camera::zoom_camera;
 use crate::input::mining::update_manual_mining_from_input;
 use crate::input::movement::move_player_from_input;
+use crate::input::panels::{handle_panel_input, reset_app_input_state};
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
@@ -25,13 +26,15 @@ use crate::rendering::manual_mining::{
     spawn_cursor_tile_highlight, spawn_manual_mining_progress_bar, update_cursor_tile_highlight,
     update_manual_mining_progress_bar,
 };
+use crate::rendering::map_texture::update_map_texture;
 use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
 use crate::rendering::resources::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
 use crate::rendering::world::spawn_world_tiles;
 use crate::resources::{
-    BuildPlacementState, OpenContainer, RenderSyncStats, SimProfileStats, SimResource,
+    AppInputState, BuildPlacementState, MapDisplaySettings, MapTextureCache, MapViewState,
+    OpenContainer, ProductionStatsWindowState, RenderSyncStats, SimProfileStats, SimResource,
     TechnologyWindowState, UpsStats,
 };
 use crate::simulation::tick_sim;
@@ -47,6 +50,8 @@ use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{setup_debug_overlay, update_debug_overlay, update_ups_stats};
 use crate::ui::inventory_panel::{handle_container_slot_clicks, update_container_slot_text};
 use crate::ui::machine_indicators::update_burner_drill_indicators;
+use crate::ui::map_view::{sync_full_map_view, sync_minimap};
+use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
@@ -56,6 +61,7 @@ pub struct FactoryAppPlugin;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SystemSet)]
 enum AppInputSet {
+    PanelInput,
     TechnologyWindow,
     WorldInput,
 }
@@ -92,6 +98,11 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<BuildPlacementState>()
             .init_resource::<OpenContainer>()
             .init_resource::<TechnologyWindowState>()
+            .init_resource::<MapViewState>()
+            .init_resource::<MapDisplaySettings>()
+            .init_resource::<MapTextureCache>()
+            .init_resource::<ProductionStatsWindowState>()
+            .init_resource::<AppInputState>()
             .add_systems(
                 Startup,
                 (
@@ -113,6 +124,13 @@ impl Plugin for FactoryAppPlugin {
                     tick_sim,
                 )
                     .chain(),
+            )
+            .add_systems(
+                Update,
+                (reset_app_input_state, handle_panel_input)
+                    .chain()
+                    .in_set(AppInputSet::PanelInput)
+                    .before(AppInputSet::TechnologyWindow),
             )
             .add_systems(
                 Update,
@@ -148,6 +166,7 @@ impl Plugin for FactoryAppPlugin {
             .add_systems(
                 Update,
                 (
+                    update_map_texture,
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
                     measured_sync_belt_direction_rendering,
@@ -165,6 +184,10 @@ impl Plugin for FactoryAppPlugin {
                     update_build_bar_action_visuals,
                     update_build_status_text,
                     update_burner_drill_indicators,
+                    sync_minimap.after(update_map_texture),
+                    sync_full_map_view.after(update_map_texture),
+                    handle_production_stats_buttons,
+                    sync_production_stats_window.after(handle_production_stats_buttons),
                 ),
             )
             .add_systems(

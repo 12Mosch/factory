@@ -1,3 +1,4 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -6,15 +7,30 @@ use crate::placement::build::{
     buildable_prototype_at_slot, next_direction, place_selected_building_at_tile,
     short_inventory_need,
 };
-use crate::resources::{BuildPlacementState, BuildSelection, SimResource, TechnologyWindowState};
+use crate::resources::{
+    AppInputState, BuildPlacementState, BuildSelection, SimResource, TechnologyWindowState,
+};
+
+use super::panels::{escape_consumed, world_input_blocked};
+
+#[derive(SystemParam)]
+pub(crate) struct BuildWorldClickState<'w> {
+    input_state: Option<Res<'w, AppInputState>>,
+    technology_window: Option<Res<'w, TechnologyWindowState>>,
+    sim: ResMut<'w, SimResource>,
+    build_state: ResMut<'w, BuildPlacementState>,
+}
 
 pub(crate) fn handle_build_hotbar_keys(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     sim: Res<SimResource>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
-    if technology_window_open(technology_window.as_deref()) {
+    if world_input_blocked(input_state.as_deref())
+        || technology_window_open(technology_window.as_deref())
+    {
         return;
     }
     let Some(keyboard) = keyboard else {
@@ -36,10 +52,14 @@ pub(crate) fn handle_build_hotbar_keys(
 
 pub(crate) fn handle_build_rotate_cancel_keys(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
-    if technology_window_open(technology_window.as_deref()) {
+    if world_input_blocked(input_state.as_deref())
+        || escape_consumed(input_state.as_deref())
+        || technology_window_open(technology_window.as_deref())
+    {
         return;
     }
     let Some(keyboard) = keyboard else {
@@ -57,14 +77,14 @@ pub(crate) fn handle_build_rotate_cancel_keys(
 
 pub(crate) fn handle_build_world_click(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
-    technology_window: Option<Res<TechnologyWindowState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
-    mut sim: ResMut<SimResource>,
-    mut build_state: ResMut<BuildPlacementState>,
+    mut state: BuildWorldClickState,
 ) {
-    if technology_window_open(technology_window.as_deref()) {
+    if world_input_blocked(state.input_state.as_deref())
+        || technology_window_open(state.technology_window.as_deref())
+    {
         return;
     }
     let Some(mouse) = mouse else {
@@ -80,17 +100,18 @@ pub(crate) fn handle_build_world_click(
         return;
     }
 
-    let Some(selection) = build_state.selected else {
+    let Some(selection) = state.build_state.selected else {
         return;
     };
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
         return;
     };
 
-    build_state.last_status =
-        place_selected_building_at_tile(&mut sim.sim, selection, build_state.direction, x, y);
-    if sim.sim.player_inventory().count(selection.item_id) == 0 {
-        build_state.selected = None;
+    let direction = state.build_state.direction;
+    state.build_state.last_status =
+        place_selected_building_at_tile(&mut state.sim.sim, selection, direction, x, y);
+    if state.sim.sim.player_inventory().count(selection.item_id) == 0 {
+        state.build_state.selected = None;
     }
 }
 

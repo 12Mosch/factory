@@ -3,9 +3,11 @@ use factory_data::{EntityPrototypeId, ItemId};
 use factory_sim::Direction;
 
 use crate::input::build::select_build_slot;
+use crate::input::panels::world_input_blocked;
 use crate::placement::build::{buildable_prototypes, next_direction};
 use crate::resources::{
-    BuildPlacementState, BuildPlacementStatus, BuildSelection, SimResource, TechnologyWindowState,
+    AppInputState, BuildPlacementState, BuildPlacementStatus, BuildSelection, SimResource,
+    TechnologyWindowState,
 };
 use crate::utils::compact_item_name;
 
@@ -201,9 +203,18 @@ pub(crate) fn handle_build_bar_button_clicks(
     mut rotate_interactions: BuildRotateInteractionQuery,
     mut cancel_interactions: BuildCancelInteractionQuery,
     sim: Res<SimResource>,
+    input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
+    if world_input_blocked(input_state.as_deref())
+        || technology_window
+            .as_deref()
+            .is_some_and(|window| window.open)
+    {
+        return;
+    }
+
     for (interaction, button) in &mut slot_interactions {
         if *interaction == Interaction::Pressed {
             select_build_slot(
