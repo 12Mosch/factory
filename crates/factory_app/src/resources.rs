@@ -82,6 +82,28 @@ pub struct MapViewState {
     pub open: bool,
 }
 
+#[derive(Resource)]
+pub struct CraftingWindowState {
+    pub open: bool,
+    pub selected_tab: CraftingPanelTab,
+}
+
+impl Default for CraftingWindowState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            selected_tab: CraftingPanelTab::Player,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CraftingPanelTab {
+    Player,
+    Smelting,
+    Assembling,
+}
+
 #[derive(Resource, Default)]
 pub struct MapDisplaySettings {
     pub debug_reveal_all: bool,
