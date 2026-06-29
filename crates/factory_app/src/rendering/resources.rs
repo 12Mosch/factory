@@ -21,11 +21,11 @@ pub(crate) struct ResourceRenderSettings {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct ResourceRenderCache {
-    last_resource_revision: Option<u64>,
-    sprite_entities: HashMap<(i32, i32), Entity>,
-    label_entities: HashMap<(i32, i32), Entity>,
-    show_amount_labels: bool,
+pub struct ResourceRenderCache {
+    pub last_resource_revision: Option<u64>,
+    pub sprite_entities: HashMap<(i32, i32), Entity>,
+    pub label_entities: HashMap<(i32, i32), Entity>,
+    pub show_amount_labels: bool,
 }
 
 pub(crate) fn sync_resource_debug_rendering(

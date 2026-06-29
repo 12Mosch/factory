@@ -8,4 +8,5 @@ pub(crate) mod machine_indicators;
 pub(crate) mod manual_crafting;
 pub mod map_view;
 pub mod production_stats;
+pub mod save_load;
 pub mod technology_panel;

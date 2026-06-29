@@ -5,6 +5,10 @@ use factory_sim::CHUNK_SIZE;
 use crate::constants::TILE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, tile_color};
 use crate::resources::SimResource;
+use crate::save_load::PresentationReloadToken;
+
+#[derive(Component)]
+pub struct WorldChunkMesh;
 
 pub(crate) fn spawn_world_tiles(
     mut commands: Commands,
@@ -15,14 +19,47 @@ pub(crate) fn spawn_world_tiles(
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         return;
     };
-    let ids = RenderPrototypeIds::from_catalog(sim.sim.catalog());
+    spawn_world_tile_meshes(&mut commands, &sim.sim, &mut meshes, &mut materials);
+}
+
+pub(crate) fn rebuild_world_tiles_after_load(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    token: Res<PresentationReloadToken>,
+    mut last_seen: Local<u64>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<ColorMaterial>>>,
+    existing: Query<Entity, With<WorldChunkMesh>>,
+) {
+    if token.value == *last_seen {
+        return;
+    }
+    *last_seen = token.value;
+
+    let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
+        return;
+    };
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    spawn_world_tile_meshes(&mut commands, &sim.sim, &mut meshes, &mut materials);
+}
+
+fn spawn_world_tile_meshes(
+    commands: &mut Commands,
+    sim: &factory_sim::Simulation,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+) {
+    let ids = RenderPrototypeIds::from_catalog(sim.catalog());
     let material = materials.add(ColorMaterial::from_color(Color::WHITE));
 
-    for chunk in sim.sim.world().chunks.values() {
+    for chunk in sim.world().chunks.values() {
         commands.spawn((
             Mesh2d(meshes.add(world_chunk_mesh(chunk, ids))),
             MeshMaterial2d(material.clone()),
             Transform::default(),
+            WorldChunkMesh,
         ));
     }
 }

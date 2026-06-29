@@ -32,11 +32,16 @@ use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
 use crate::rendering::resources::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
-use crate::rendering::world::spawn_world_tiles;
+use crate::rendering::world::{rebuild_world_tiles_after_load, spawn_world_tiles};
 use crate::resources::{
     AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapTextureCache,
     MapViewState, OpenContainer, ProductionStatsWindowState, RenderSyncStats, SimProfileStats,
     SimResource, TechnologyWindowState, UpsStats,
+};
+use crate::save_load::{
+    AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
+    SaveLoadWindowState, handle_save_load_shortcuts, initialize_autosave_tick, poll_save_jobs,
+    run_autosave,
 };
 use crate::simulation::tick_sim;
 use crate::ui::assembler_panel::{
@@ -57,6 +62,7 @@ use crate::ui::manual_crafting::{
 };
 use crate::ui::map_view::{sync_full_map_view, sync_minimap};
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
+use crate::ui::save_load::{handle_save_load_buttons, sync_save_load_window};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
@@ -109,6 +115,12 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<MapTextureCache>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<AppInputState>()
+            .init_resource::<SaveLoadConfig>()
+            .init_resource::<SaveLoadWindowState>()
+            .init_resource::<SaveLoadStatus>()
+            .init_resource::<PendingSaveJobs>()
+            .init_resource::<AutosaveState>()
+            .init_resource::<PresentationReloadToken>()
             .add_systems(
                 Startup,
                 (
@@ -120,6 +132,7 @@ impl Plugin for FactoryAppPlugin {
                     setup_debug_overlay,
                     setup_build_bar,
                     spawn_build_preview,
+                    initialize_autosave_tick,
                 ),
             )
             .add_systems(
@@ -173,7 +186,20 @@ impl Plugin for FactoryAppPlugin {
             .add_systems(
                 Update,
                 (
+                    handle_save_load_shortcuts,
+                    handle_save_load_buttons,
+                    run_autosave,
+                    poll_save_jobs,
+                    sync_save_load_window,
+                )
+                    .chain()
+                    .before(update_map_texture),
+            )
+            .add_systems(
+                Update,
+                (
                     update_map_texture,
+                    rebuild_world_tiles_after_load,
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
                     measured_sync_belt_direction_rendering,
