@@ -244,7 +244,8 @@ impl Simulation {
     }
 
     fn assembler_can_work(&self, state: &AssemblingMachineState) -> bool {
-        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, state) else {
+        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, &self.research, state)
+        else {
             return false;
         };
 
@@ -295,15 +296,20 @@ impl Simulation {
                 };
                 inserter_target_can_accept(
                     &self.world.prototypes,
+                    &self.research,
                     &self.entities,
                     drop_tile,
                     ItemStack { item_id, count: 1 },
                 )
             }
             InserterState::Picking { .. } | InserterState::Dropping { .. } => true,
-            InserterState::Holding { item } => {
-                inserter_target_can_accept(&self.world.prototypes, &self.entities, drop_tile, item)
-            }
+            InserterState::Holding { item } => inserter_target_can_accept(
+                &self.world.prototypes,
+                &self.research,
+                &self.entities,
+                drop_tile,
+                item,
+            ),
         }
     }
 

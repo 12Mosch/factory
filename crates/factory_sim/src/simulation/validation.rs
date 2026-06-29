@@ -760,6 +760,17 @@ fn validate_crafting_queue(sim: &Simulation) -> Result<(), SimValidationError> {
 }
 
 fn validate_research_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    let technology_names = sim
+        .world
+        .prototypes
+        .technologies
+        .iter()
+        .map(|technology| technology.name.clone())
+        .collect::<Vec<_>>();
+    if sim.research.technology_names != technology_names {
+        return Err(SimValidationError::InvalidResearchTechnologyNames);
+    }
+
     for technology in &sim.world.prototypes.technologies {
         let state = sim
             .research
@@ -777,6 +788,16 @@ fn validate_research_state(sim: &Simulation) -> Result<(), SimValidationError> {
                 required_units: technology.required_units,
             });
         }
+        if state.unlocked
+            && technology
+                .prerequisites
+                .iter()
+                .any(|prerequisite_id| !technology_researched(&sim.research, *prerequisite_id))
+        {
+            return Err(SimValidationError::InvalidResearchTechnology {
+                technology_id: technology.id,
+            });
+        }
     }
 
     for state in &sim.research.technologies {
@@ -788,6 +809,8 @@ fn validate_research_state(sim: &Simulation) -> Result<(), SimValidationError> {
     }
 
     if let Some(technology_id) = sim.research.active {
+        let technology = technology_by_id(&sim.world.prototypes, technology_id)
+            .ok_or(SimValidationError::InvalidActiveResearch { technology_id })?;
         let state = sim
             .research
             .technologies
@@ -797,6 +820,58 @@ fn validate_research_state(sim: &Simulation) -> Result<(), SimValidationError> {
         if state.unlocked {
             return Err(SimValidationError::InvalidActiveResearch { technology_id });
         }
+        for prerequisite_id in &technology.prerequisites {
+            if !technology_researched(&sim.research, *prerequisite_id) {
+                return Err(SimValidationError::InvalidActiveResearch { technology_id });
+            }
+        }
+    }
+
+    let mut available = sim
+        .research
+        .technologies
+        .iter()
+        .filter(|state| state.unlocked)
+        .map(|state| state.technology_id)
+        .collect::<BTreeSet<_>>();
+    if let Some(technology_id) = sim.research.active {
+        available.insert(technology_id);
+    }
+    let mut queued = BTreeSet::new();
+    for technology_id in &sim.research.queue {
+        let technology = technology_by_id(&sim.world.prototypes, *technology_id).ok_or(
+            SimValidationError::InvalidQueuedResearch {
+                technology_id: *technology_id,
+            },
+        )?;
+        let state = sim
+            .research
+            .technologies
+            .get(technology_id.index())
+            .filter(|state| state.technology_id == *technology_id)
+            .ok_or(SimValidationError::InvalidQueuedResearch {
+                technology_id: *technology_id,
+            })?;
+
+        if state.unlocked
+            || Some(*technology_id) == sim.research.active
+            || !queued.insert(*technology_id)
+        {
+            return Err(SimValidationError::InvalidQueuedResearch {
+                technology_id: *technology_id,
+            });
+        }
+        if technology
+            .prerequisites
+            .iter()
+            .any(|prerequisite_id| !available.contains(prerequisite_id))
+        {
+            return Err(SimValidationError::InvalidQueuedResearch {
+                technology_id: *technology_id,
+            });
+        }
+
+        available.insert(*technology_id);
     }
 
     Ok(())
@@ -1123,6 +1198,14 @@ fn technology_by_id(
         .technologies
         .get(technology_id.index())
         .filter(|technology| technology.id == technology_id)
+}
+
+fn technology_researched(research: &ResearchState, technology_id: TechnologyId) -> bool {
+    research
+        .technologies
+        .get(technology_id.index())
+        .filter(|state| state.technology_id == technology_id)
+        .is_some_and(|state| state.unlocked)
 }
 
 fn entity_prototype_by_id(

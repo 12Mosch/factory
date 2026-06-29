@@ -237,7 +237,11 @@ impl Simulation {
             .prototypes
             .recipes
             .get(recipe_id.index())
-            .filter(|recipe| recipe.id == recipe_id && recipe.products.len() == 1)
+            .filter(|recipe| {
+                recipe.id == recipe_id
+                    && recipe.products.len() == 1
+                    && recipe_is_unlocked(&self.world.prototypes, &self.research, recipe.id)
+            })
         else {
             return false;
         };
@@ -252,7 +256,8 @@ impl Simulation {
     }
 
     fn assembler_is_active(&self, state: &AssemblingMachineState) -> bool {
-        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, state) else {
+        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, &self.research, state)
+        else {
             return false;
         };
 

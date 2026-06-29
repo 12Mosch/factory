@@ -11,13 +11,14 @@ use factory_app::placement::build::{
 };
 use factory_app::resources::{
     BuildPlacementState, BuildPlacementStatus, BuildSelection, RenderSyncStats, SimProfileStats,
-    SimResource,
+    SimResource, TechnologyWindowState,
 };
 use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
 };
 use factory_app::ui::inventory_panel::InventoryPanel;
+use factory_app::ui::technology_panel::TechnologyStartQueueButton;
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{
     CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, PowerSummary, Simulation,
@@ -227,6 +228,112 @@ fn escape_clears_build_selection() {
     app.update();
 
     assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+}
+
+#[test]
+fn technology_screen_toggles_with_t() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyT);
+    app.update();
+
+    assert!(app.world().resource::<TechnologyWindowState>().open);
+}
+
+#[test]
+fn technology_screen_start_button_updates_research_state() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    let automation = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        technology_id_by_name(sim.catalog(), "automation")
+    };
+    {
+        let mut window = app.world_mut().resource_mut::<TechnologyWindowState>();
+        window.open = true;
+        window.selected = Some(automation);
+    }
+    app.update();
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<&mut Interaction, With<TechnologyStartQueueButton>>();
+    for mut interaction in query.iter_mut(app.world_mut()) {
+        *interaction = Interaction::Pressed;
+    }
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<SimResource>().sim.active_research(),
+        Some(automation)
+    );
+}
+
+#[test]
+fn build_bar_rejects_locked_buildable_and_allows_after_research() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let (assembler_entity, assembler_item, automation, slot_index) = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        let assembler_entity = entity_id_by_name(sim.catalog(), "assembling_machine");
+        let assembler_item = item_id_by_name(sim.catalog(), "assembling_machine");
+        let automation = technology_id_by_name(sim.catalog(), "automation");
+        let slot_index = buildable_prototypes(sim.catalog())
+            .into_iter()
+            .find(|buildable| buildable.prototype_id == assembler_entity)
+            .expect("assembling machine should be buildable")
+            .slot_index;
+        (assembler_entity, assembler_item, automation, slot_index)
+    };
+    {
+        let catalog = app.world().resource::<SimResource>().sim.catalog().clone();
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .sim
+            .player_inventory_mut()
+            .insert(&catalog, assembler_item, 1)
+            .expect("test inventory should accept assembler");
+    }
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(hotbar_key_for_slot(slot_index));
+    app.update();
+
+    let build_state = app.world().resource::<BuildPlacementState>();
+    assert_eq!(build_state.selected, None);
+    assert!(matches!(
+        build_state.last_status,
+        BuildPlacementStatus::Locked(_)
+    ));
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(hotbar_key_for_slot(slot_index));
+    app.update();
+    {
+        let mut sim = app.world_mut().resource_mut::<SimResource>();
+        sim.sim
+            .select_research(automation)
+            .expect("automation should be selectable");
+        sim.sim
+            .add_research_units(10)
+            .expect("automation should complete");
+    }
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(hotbar_key_for_slot(slot_index));
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<BuildPlacementState>().selected,
+        Some(BuildSelection {
+            prototype_id: assembler_entity,
+            item_id: assembler_item,
+        })
+    );
 }
 
 #[test]

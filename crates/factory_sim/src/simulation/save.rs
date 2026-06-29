@@ -1,8 +1,8 @@
 use super::*;
 use bincode::Options;
 
-pub const SAVE_VERSION: u32 = 5;
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 5;
+pub const SAVE_VERSION: u32 = 6;
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 6;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 const SAVE_HEADER_LEN: usize = 8 + 4 + 4 + 8;

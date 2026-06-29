@@ -105,6 +105,7 @@ impl Simulation {
         self.manual_mining_progress.hash(&mut hasher);
         self.crafting_queue.hash(&mut hasher);
         self.research.active.hash(&mut hasher);
+        self.research.queue.hash(&mut hasher);
         self.research.technologies.hash(&mut hasher);
         self.power_summary.hash(&mut hasher);
         self.power_networks.hash(&mut hasher);
@@ -173,34 +174,69 @@ impl Simulation {
             .map(|state| state.progress_units)
     }
 
+    pub fn active_research(&self) -> Option<TechnologyId> {
+        self.research.active
+    }
+
+    pub fn research_queue(&self) -> &[TechnologyId] {
+        &self.research.queue
+    }
+
     pub fn select_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
-        let technology = self
-            .world
-            .prototypes
-            .technologies
-            .get(technology_id.index())
-            .filter(|technology| technology.id == technology_id)
-            .ok_or(ResearchError::MissingTechnology(technology_id))?;
-        let state = self
-            .research
-            .technologies
-            .get(technology_id.index())
-            .filter(|state| state.technology_id == technology_id)
-            .ok_or(ResearchError::MissingTechnology(technology_id))?;
-        if state.unlocked {
-            return Err(ResearchError::AlreadyResearched(technology_id));
-        }
-
-        for prerequisite_id in &technology.prerequisites {
-            if !self.is_technology_unlocked(*prerequisite_id) {
-                return Err(ResearchError::PrerequisiteLocked {
-                    technology_id,
-                    prerequisite_id: *prerequisite_id,
-                });
-            }
-        }
-
+        self.can_select_research(technology_id)?;
         self.research.active = Some(technology_id);
+        self.research
+            .queue
+            .retain(|queued_id| *queued_id != technology_id);
+        self.prune_invalid_research_queue();
+        Ok(())
+    }
+
+    pub fn can_enqueue_research(&self, technology_id: TechnologyId) -> Result<(), ResearchError> {
+        let mut proposed_queue = self.research.queue.clone();
+        proposed_queue.push(technology_id);
+        self.validate_research_queue_order(&proposed_queue)
+    }
+
+    pub fn enqueue_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
+        self.can_enqueue_research(technology_id)?;
+        self.research.queue.push(technology_id);
+        self.promote_next_queued_research()?;
+        Ok(())
+    }
+
+    pub fn remove_queued_research(
+        &mut self,
+        index: usize,
+    ) -> Result<Vec<TechnologyId>, ResearchError> {
+        if index >= self.research.queue.len() {
+            return Err(ResearchError::InvalidQueueIndex { index });
+        }
+
+        Ok(self.remove_queued_research_and_dependents(index))
+    }
+
+    pub fn move_queued_research(
+        &mut self,
+        from_index: usize,
+        to_index: usize,
+    ) -> Result<(), ResearchError> {
+        let len = self.research.queue.len();
+        if from_index >= len {
+            return Err(ResearchError::InvalidQueueIndex { index: from_index });
+        }
+        if to_index >= len {
+            return Err(ResearchError::InvalidQueueIndex { index: to_index });
+        }
+        if from_index == to_index {
+            return Ok(());
+        }
+
+        let mut proposed_queue = self.research.queue.clone();
+        let technology_id = proposed_queue.remove(from_index);
+        proposed_queue.insert(to_index, technology_id);
+        self.validate_research_queue_order(&proposed_queue)?;
+        self.research.queue = proposed_queue;
         Ok(())
     }
 
@@ -234,6 +270,7 @@ impl Simulation {
         if state.progress_units >= technology.required_units {
             state.unlocked = true;
             self.research.active = None;
+            self.promote_next_queued_research()?;
             Ok(ResearchProgressResult::Completed { technology_id })
         } else {
             Ok(ResearchProgressResult::InProgress {
@@ -245,21 +282,29 @@ impl Simulation {
     }
 
     pub fn is_recipe_unlocked(&self, recipe_id: RecipeId) -> bool {
-        let is_locked_by_technology =
-            self.world.prototypes.technologies.iter().any(|technology| {
-                technology.effects.iter().any(|effect| {
-                    matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
-                })
-            });
-        if !is_locked_by_technology {
-            return true;
-        }
+        recipe_is_unlocked(&self.world.prototypes, &self.research, recipe_id)
+    }
 
-        self.world.prototypes.technologies.iter().any(|technology| {
-            self.is_technology_unlocked(technology.id)
-                && technology.effects.iter().any(|effect| {
-                    matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
-                })
+    pub fn is_entity_unlocked(&self, prototype_id: EntityPrototypeId) -> bool {
+        let Some(prototype) = self
+            .world
+            .prototypes
+            .entities
+            .get(prototype_id.index())
+            .filter(|prototype| prototype.id == prototype_id)
+        else {
+            return false;
+        };
+        let Some(build_item) = prototype.build_item else {
+            return false;
+        };
+
+        self.world.prototypes.recipes.iter().any(|recipe| {
+            recipe
+                .products
+                .iter()
+                .any(|product| product.item == build_item)
+                && self.is_recipe_unlocked(recipe.id)
         })
     }
 
@@ -273,5 +318,176 @@ impl Simulation {
             .iter()
             .filter(|recipe| recipe.category == category && self.is_recipe_unlocked(recipe.id))
             .collect()
+    }
+
+    fn can_select_research(&self, technology_id: TechnologyId) -> Result<(), ResearchError> {
+        if self.research.active == Some(technology_id) {
+            return Err(ResearchError::AlreadyActive(technology_id));
+        }
+        let technology = self.technology_by_id(technology_id)?;
+        let state = self.technology_research_state(technology_id)?;
+        if state.unlocked {
+            return Err(ResearchError::AlreadyResearched(technology_id));
+        }
+
+        for prerequisite_id in &technology.prerequisites {
+            if !self.is_technology_unlocked(*prerequisite_id) {
+                return Err(ResearchError::PrerequisiteLocked {
+                    technology_id,
+                    prerequisite_id: *prerequisite_id,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn promote_next_queued_research(&mut self) -> Result<(), ResearchError> {
+        if self.research.active.is_some() || self.research.queue.is_empty() {
+            return Ok(());
+        }
+
+        let technology_id = self.research.queue[0];
+        self.can_select_research(technology_id)?;
+        self.research.queue.remove(0);
+        self.research.active = Some(technology_id);
+        Ok(())
+    }
+
+    fn validate_research_queue_order(&self, queue: &[TechnologyId]) -> Result<(), ResearchError> {
+        let mut available = self.researched_technology_ids();
+        if let Some(active_id) = self.research.active {
+            let state = self.technology_research_state(active_id)?;
+            if state.unlocked {
+                return Err(ResearchError::AlreadyResearched(active_id));
+            }
+            available.push(active_id);
+        }
+        let mut seen = Vec::new();
+
+        for technology_id in queue {
+            if self.research.active == Some(*technology_id) {
+                return Err(ResearchError::AlreadyActive(*technology_id));
+            }
+            if seen.contains(technology_id) {
+                return Err(ResearchError::AlreadyQueued(*technology_id));
+            }
+
+            let technology = self.technology_by_id(*technology_id)?;
+            let state = self.technology_research_state(*technology_id)?;
+            if state.unlocked {
+                return Err(ResearchError::AlreadyResearched(*technology_id));
+            }
+
+            for prerequisite_id in &technology.prerequisites {
+                if !available.contains(prerequisite_id) {
+                    return Err(ResearchError::PrerequisiteLocked {
+                        technology_id: *technology_id,
+                        prerequisite_id: *prerequisite_id,
+                    });
+                }
+            }
+
+            seen.push(*technology_id);
+            available.push(*technology_id);
+        }
+
+        Ok(())
+    }
+
+    fn remove_queued_research_and_dependents(&mut self, index: usize) -> Vec<TechnologyId> {
+        let old_queue = std::mem::take(&mut self.research.queue);
+        let mut available = self.researched_technology_ids();
+        if let Some(active_id) = self.research.active {
+            available.push(active_id);
+        }
+        let mut new_queue = Vec::with_capacity(old_queue.len().saturating_sub(1));
+        let mut removed = Vec::new();
+
+        for (candidate_index, technology_id) in old_queue.into_iter().enumerate() {
+            if candidate_index == index {
+                removed.push(technology_id);
+                continue;
+            }
+
+            if self.queued_technology_prerequisites_satisfied(technology_id, &available) {
+                available.push(technology_id);
+                new_queue.push(technology_id);
+            } else {
+                removed.push(technology_id);
+            }
+        }
+
+        self.research.queue = new_queue;
+        removed
+    }
+
+    fn prune_invalid_research_queue(&mut self) {
+        let old_queue = std::mem::take(&mut self.research.queue);
+        let mut available = self.researched_technology_ids();
+        if let Some(active_id) = self.research.active {
+            available.push(active_id);
+        }
+        let mut new_queue = Vec::with_capacity(old_queue.len());
+
+        for technology_id in old_queue {
+            if self.queued_technology_prerequisites_satisfied(technology_id, &available) {
+                available.push(technology_id);
+                new_queue.push(technology_id);
+            }
+        }
+
+        self.research.queue = new_queue;
+    }
+
+    fn queued_technology_prerequisites_satisfied(
+        &self,
+        technology_id: TechnologyId,
+        available: &[TechnologyId],
+    ) -> bool {
+        let Ok(technology) = self.technology_by_id(technology_id) else {
+            return false;
+        };
+        let Ok(state) = self.technology_research_state(technology_id) else {
+            return false;
+        };
+        !state.unlocked
+            && self.research.active != Some(technology_id)
+            && technology
+                .prerequisites
+                .iter()
+                .all(|prerequisite_id| available.contains(prerequisite_id))
+    }
+
+    fn researched_technology_ids(&self) -> Vec<TechnologyId> {
+        self.research
+            .technologies
+            .iter()
+            .filter(|state| state.unlocked)
+            .map(|state| state.technology_id)
+            .collect()
+    }
+
+    fn technology_by_id(
+        &self,
+        technology_id: TechnologyId,
+    ) -> Result<&factory_data::TechnologyPrototype, ResearchError> {
+        self.world
+            .prototypes
+            .technologies
+            .get(technology_id.index())
+            .filter(|technology| technology.id == technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))
+    }
+
+    fn technology_research_state(
+        &self,
+        technology_id: TechnologyId,
+    ) -> Result<&TechnologyResearchState, ResearchError> {
+        self.research
+            .technologies
+            .get(technology_id.index())
+            .filter(|state| state.technology_id == technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))
     }
 }

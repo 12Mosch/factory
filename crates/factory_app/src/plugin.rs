@@ -31,7 +31,8 @@ use crate::rendering::resources::{
 };
 use crate::rendering::world::spawn_world_tiles;
 use crate::resources::{
-    BuildPlacementState, OpenContainer, RenderSyncStats, SimProfileStats, SimResource, UpsStats,
+    BuildPlacementState, OpenContainer, RenderSyncStats, SimProfileStats, SimResource,
+    TechnologyWindowState, UpsStats,
 };
 use crate::simulation::tick_sim;
 use crate::ui::assembler_panel::{
@@ -46,8 +47,18 @@ use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{setup_debug_overlay, update_debug_overlay, update_ups_stats};
 use crate::ui::inventory_panel::{handle_container_slot_clicks, update_container_slot_text};
 use crate::ui::machine_indicators::update_burner_drill_indicators;
+use crate::ui::technology_panel::{
+    ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
+    sync_technology_panel,
+};
 
 pub struct FactoryAppPlugin;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SystemSet)]
+enum AppInputSet {
+    TechnologyWindow,
+    WorldInput,
+}
 
 impl Plugin for FactoryAppPlugin {
     fn build(&self, app: &mut App) {
@@ -80,6 +91,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<ResourceRenderCache>()
             .init_resource::<BuildPlacementState>()
             .init_resource::<OpenContainer>()
+            .init_resource::<TechnologyWindowState>()
             .add_systems(
                 Startup,
                 (
@@ -105,6 +117,18 @@ impl Plugin for FactoryAppPlugin {
             .add_systems(
                 Update,
                 (
+                    handle_technology_window_input,
+                    ensure_selected_technology,
+                    handle_technology_panel_buttons,
+                    sync_technology_panel,
+                )
+                    .chain()
+                    .in_set(AppInputSet::TechnologyWindow)
+                    .before(AppInputSet::WorldInput),
+            )
+            .add_systems(
+                Update,
+                (
                     zoom_camera,
                     measured_sync_player_sprite,
                     follow_player_camera,
@@ -118,7 +142,8 @@ impl Plugin for FactoryAppPlugin {
                     handle_build_world_click,
                     handle_container_close_input,
                     update_build_preview,
-                ),
+                )
+                    .in_set(AppInputSet::WorldInput),
             )
             .add_systems(
                 Update,

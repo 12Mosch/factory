@@ -3378,6 +3378,300 @@ fn research_progress_participates_in_state_hash_deterministically() {
 }
 
 #[test]
+fn selecting_research_requires_completed_prerequisites() {
+    let mut sim = Simulation::new_test_world(123);
+    let logistics_2 = technology_id(&sim.world.prototypes, "logistics_2");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+
+    assert_eq!(
+        sim.select_research(logistics_2),
+        Err(ResearchError::PrerequisiteLocked {
+            technology_id: logistics_2,
+            prerequisite_id: logistics,
+        })
+    );
+}
+
+#[test]
+fn research_queue_allows_prerequisites_before_dependents() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    let logistic_science_pack = technology_id(&sim.world.prototypes, "logistic_science_pack");
+    let logistics_2 = technology_id(&sim.world.prototypes, "logistics_2");
+
+    sim.enqueue_research(automation)
+        .expect("automation should enqueue and start");
+    sim.enqueue_research(logistics)
+        .expect("logistics should queue behind automation");
+    sim.enqueue_research(logistic_science_pack)
+        .expect("logistic science should queue behind prerequisites");
+    sim.enqueue_research(logistics_2)
+        .expect("logistics 2 should queue behind prerequisites");
+
+    assert_eq!(sim.active_research(), Some(automation));
+    assert_eq!(
+        sim.research_queue(),
+        &[logistics, logistic_science_pack, logistics_2]
+    );
+}
+
+#[test]
+fn research_queue_auto_starts_next_technology_after_completion() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+
+    sim.enqueue_research(automation)
+        .expect("automation should enqueue and start");
+    sim.enqueue_research(logistics)
+        .expect("logistics should queue");
+    sim.add_research_units(10)
+        .expect("automation should complete");
+
+    assert!(sim.is_technology_unlocked(automation));
+    assert_eq!(sim.active_research(), Some(logistics));
+    assert!(sim.research_queue().is_empty());
+}
+
+#[test]
+fn removing_queued_prerequisite_removes_dependent_technologies() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    let logistic_science_pack = technology_id(&sim.world.prototypes, "logistic_science_pack");
+    let logistics_2 = technology_id(&sim.world.prototypes, "logistics_2");
+
+    sim.enqueue_research(automation).unwrap();
+    sim.enqueue_research(logistics).unwrap();
+    sim.enqueue_research(logistic_science_pack).unwrap();
+    sim.enqueue_research(logistics_2).unwrap();
+
+    assert_eq!(
+        sim.remove_queued_research(0),
+        Ok(vec![logistics, logistic_science_pack, logistics_2])
+    );
+    assert_eq!(sim.active_research(), Some(automation));
+    assert!(sim.research_queue().is_empty());
+}
+
+#[test]
+fn moving_queued_research_rejects_invalid_prerequisite_order() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    let logistic_science_pack = technology_id(&sim.world.prototypes, "logistic_science_pack");
+    let logistics_2 = technology_id(&sim.world.prototypes, "logistics_2");
+
+    sim.enqueue_research(automation).unwrap();
+    sim.enqueue_research(logistics).unwrap();
+    sim.enqueue_research(logistic_science_pack).unwrap();
+    sim.enqueue_research(logistics_2).unwrap();
+
+    assert_eq!(
+        sim.move_queued_research(0, 1),
+        Err(ResearchError::PrerequisiteLocked {
+            technology_id: logistic_science_pack,
+            prerequisite_id: logistics,
+        })
+    );
+    assert_eq!(
+        sim.research_queue(),
+        &[logistics, logistic_science_pack, logistics_2]
+    );
+}
+
+#[test]
+fn labs_with_only_red_packs_cannot_progress_red_green_research() {
+    let mut sim = Simulation::new_test_world(123);
+    complete_research_by_name(&mut sim, "automation");
+    complete_research_by_name(&mut sim, "logistics");
+    complete_research_by_name(&mut sim, "logistic_science_pack");
+    let logistics_2 = technology_id(&sim.world.prototypes, "logistics_2");
+    let red = item_id(&sim.world.prototypes, "automation_science_pack");
+    let lab_id = place_lab(&mut sim);
+    sim.select_research(logistics_2)
+        .expect("logistics 2 prerequisites should be complete");
+    sim.entity_inventory_mut(lab_id)
+        .expect("lab should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: red,
+        count: 1,
+    });
+
+    for _ in 0..600 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.technology_progress(logistics_2), Some(0));
+    assert_eq!(
+        sim.entity_inventory(lab_id).unwrap().count(red),
+        1,
+        "red pack should not be consumed without green"
+    );
+}
+
+#[test]
+fn labs_consume_exact_required_red_and_green_packs_per_unit() {
+    let mut sim = Simulation::new_test_world(123);
+    complete_research_by_name(&mut sim, "automation");
+    complete_research_by_name(&mut sim, "logistics");
+    complete_research_by_name(&mut sim, "logistic_science_pack");
+    let logistics_2 = technology_id(&sim.world.prototypes, "logistics_2");
+    let red = item_id(&sim.world.prototypes, "automation_science_pack");
+    let green = item_id(&sim.world.prototypes, "logistic_science_pack");
+    let lab_id = place_lab(&mut sim);
+    sim.select_research(logistics_2)
+        .expect("logistics 2 prerequisites should be complete");
+    sim.entity_inventory_mut(lab_id)
+        .expect("lab should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: red,
+        count: 1,
+    });
+    sim.entity_inventory_mut(lab_id).unwrap().slots[1] = Some(ItemStack {
+        item_id: green,
+        count: 1,
+    });
+
+    for _ in 0..600 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.technology_progress(logistics_2), Some(1));
+    let inventory = sim.entity_inventory(lab_id).unwrap();
+    assert_eq!(inventory.count(red), 0);
+    assert_eq!(inventory.count(green), 0);
+}
+
+#[test]
+fn red_only_research_does_not_consume_green_packs() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let red = item_id(&sim.world.prototypes, "automation_science_pack");
+    let green = item_id(&sim.world.prototypes, "logistic_science_pack");
+    let lab_id = place_lab(&mut sim);
+    sim.select_research(automation)
+        .expect("automation should be selectable");
+    sim.entity_inventory_mut(lab_id).unwrap().slots[0] = Some(ItemStack {
+        item_id: red,
+        count: 1,
+    });
+    sim.entity_inventory_mut(lab_id).unwrap().slots[1] = Some(ItemStack {
+        item_id: green,
+        count: 1,
+    });
+
+    for _ in 0..600 {
+        sim.tick();
+    }
+
+    let inventory = sim.entity_inventory(lab_id).unwrap();
+    assert_eq!(sim.technology_progress(automation), Some(1));
+    assert_eq!(inventory.count(red), 0);
+    assert_eq!(inventory.count(green), 1);
+}
+
+#[test]
+fn research_progress_and_queue_survive_save_load() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    sim.enqueue_research(automation)
+        .expect("automation should start");
+    sim.enqueue_research(logistics)
+        .expect("logistics should queue");
+    sim.add_research_units(4)
+        .expect("partial research should be recorded");
+    let before_hash = sim.state_hash();
+
+    let bytes = save_to_bytes(&sim).expect("save should serialize");
+    let loaded = load_from_bytes(&bytes).expect("save should load");
+
+    assert_eq!(loaded.active_research(), Some(automation));
+    assert_eq!(loaded.research_queue(), &[logistics]);
+    assert_eq!(loaded.technology_progress(automation), Some(4));
+    assert_eq!(loaded.state_hash(), before_hash);
+}
+
+#[test]
+fn completing_research_unlocks_recipe_and_derived_entity() {
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let assembler_recipe = recipe_id(&sim.world.prototypes, "assembling_machine");
+    let assembler_entity = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+
+    assert!(!sim.is_recipe_unlocked(assembler_recipe));
+    assert!(!sim.is_entity_unlocked(assembler_entity));
+    sim.select_research(automation)
+        .expect("automation should be selectable");
+    sim.add_research_units(10)
+        .expect("automation should complete");
+
+    assert!(sim.is_recipe_unlocked(assembler_recipe));
+    assert!(sim.is_entity_unlocked(assembler_entity));
+}
+
+#[test]
+fn player_cannot_place_locked_entity_even_with_inventory_item() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_entity = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let assembler_item = item_id(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = first_placeable_entity_tile(&sim, assembler_entity, Direction::North);
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, assembler_item, 1)
+        .expect("test inventory should accept assembler");
+
+    assert_eq!(
+        sim.place_entity_from_player_inventory(
+            assembler_entity,
+            assembler_item,
+            x,
+            y,
+            Direction::North,
+        ),
+        Err(PlayerBuildError::EntityLocked {
+            prototype_id: assembler_entity,
+        })
+    );
+    assert_eq!(sim.player_inventory.count(assembler_item), 1);
+}
+
+#[test]
+fn locked_smelting_recipes_are_not_selected_by_furnaces() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let stone_brick = recipe_id(&catalog, "stone_brick");
+    catalog.technologies[0]
+        .effects
+        .push(TechnologyEffect::UnlockRecipe(stone_brick));
+    let mut sim = Simulation::new(123, catalog);
+    let furnace_id = place_stone_furnace(&mut sim);
+    let stone = item_id(&sim.world.prototypes, "stone");
+    sim.entities
+        .furnace_state_mut(furnace_id)
+        .expect("furnace should expose state")
+        .input_slot = Some(ItemStack {
+        item_id: stone,
+        count: 1,
+    });
+
+    for _ in 0..240 {
+        sim.tick();
+    }
+
+    let furnace = sim
+        .furnace_state(furnace_id)
+        .expect("furnace should expose state");
+    assert_eq!(furnace.active_recipe, None);
+    assert_eq!(furnace.input_slot.unwrap().count, 1);
+    assert_eq!(
+        sim.technology_progress(technology_id(&sim.world.prototypes, "automation")),
+        Some(0)
+    );
+}
+
+#[test]
 fn crafting_consumes_ingredients_and_outputs_product() {
     let mut sim = Simulation::new_test_world(123);
     let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
@@ -4750,6 +5044,16 @@ fn place_assembling_machine(sim: &mut Simulation) -> EntityId {
     let (x, y) = place_powered_fixture_origin(sim, 3, 3, (3, 1));
     sim.place_entity(assembler, x, y, Direction::North)
         .expect("assembling machine should be placeable")
+}
+
+fn complete_research_by_name(sim: &mut Simulation, technology_name: &str) {
+    let technology_id = technology_id(&sim.world.prototypes, technology_name);
+    let required_units = sim.world.prototypes.technologies[technology_id.index()].required_units;
+
+    sim.select_research(technology_id)
+        .unwrap_or_else(|_| panic!("{technology_name} should be selectable"));
+    sim.add_research_units(required_units)
+        .unwrap_or_else(|_| panic!("{technology_name} should complete"));
 }
 
 fn add_furnace_input_and_fuel(
