@@ -5,6 +5,9 @@ pub mod placement;
 pub mod reservation;
 pub mod store;
 
-pub use crate::simulation::{
-    BuildError, Direction, EntityFootprint, EntityStore, OccupancyGrid, PlacedEntity, SimEntity,
-};
+pub use self::direction::Direction;
+pub use self::footprint::EntityFootprint;
+pub use self::occupancy::OccupancyGrid;
+pub use self::placement::{BuildError, EntityDestroyError, PlayerBuildError};
+pub(crate) use self::reservation::EntityReservation;
+pub use self::store::{EntityStore, PlacedEntity, SimEntity};
