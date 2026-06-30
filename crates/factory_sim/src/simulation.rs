@@ -75,6 +75,47 @@ pub enum InserterState {
     Dropping { ticks_left: u32 },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MachineStatus {
+    NoFuel,
+    NoPower,
+    NoInput,
+    OutputFull,
+    Working,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InserterTransferPreview {
+    pub pickup_tile: (i32, i32),
+    pub drop_tile: (i32, i32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FluidConnectionPreviewState {
+    Open,
+    Compatible,
+    Incompatible,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FluidConnectionPreview {
+    pub tile: (i32, i32),
+    pub side: factory_data::FluidConnectionSide,
+    pub state: FluidConnectionPreviewState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UndergroundBeltLinkPreview {
+    Entrance {
+        max_distance: u8,
+        matched_exit_tile: Option<(i32, i32)>,
+    },
+    Exit {
+        max_distance: u8,
+        matched_entrance_tile: Option<(i32, i32)>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InventoryError {
     UnknownItem,
