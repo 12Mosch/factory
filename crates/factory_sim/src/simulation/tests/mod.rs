@@ -1,0 +1,17 @@
+mod support;
+
+mod assemblers;
+mod belts;
+mod burner_drills;
+mod fluids;
+mod furnaces;
+mod inserters;
+mod inventory;
+mod manual_crafting;
+mod manual_mining;
+mod placement;
+mod player;
+mod power;
+mod research;
+mod statistics;
+mod world_generation;
