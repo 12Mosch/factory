@@ -1,0 +1,314 @@
+use super::super::*;
+use super::support::*;
+
+#[test]
+fn unpowered_assembler_does_not_craft() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 3);
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..90 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.input_inventory.count(iron_plate), 2);
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
+    assert_eq!(state.crafting_progress_ticks, 0);
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+}
+
+#[test]
+fn powered_assembler_crafts() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
+}
+
+#[test]
+fn insufficient_power_slows_machine_progress() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let assembler = entity_id_by_name(&catalog, "assembling_machine");
+    catalog.entities[assembler.index()]
+        .electric_energy_source
+        .as_mut()
+        .expect("assembler should have electric energy source")
+        .energy_usage_watts = 1_797_500;
+    let mut sim = Simulation::new(123, catalog);
+    let assembler_id = place_assembling_machine(&mut sim);
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.crafting_progress_ticks, 30);
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .satisfaction_permyriad,
+        5_000
+    );
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
+}
+
+#[test]
+fn disconnected_networks_do_not_share_power() {
+    let mut sim = Simulation::new_test_world(123);
+    let _ = place_powered_fixture_origin(&mut sim, 1, 1, (1, 2));
+    let assembler_id = place_disconnected_assembler_network(&mut sim);
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
+
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("crafting recipe should be accepted by assembler");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory.slots[0] = Some(ItemStack {
+        item_id: iron_plate,
+        count: 2,
+    });
+    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+        .expect("assembler should accept gear ingredients");
+
+    for _ in 0..90 {
+        sim.tick();
+    }
+
+    let state = sim
+        .assembler_state(assembler_id)
+        .expect("assembler should expose state");
+    assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+    assert!(sim.power_summary().network_count >= 2);
+}
+
+#[test]
+fn small_pole_coverage_connects_nearby_machine_and_wire_reach_connects_networks() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+
+    sim.tick();
+
+    let status = sim
+        .entity_power_status(assembler_id)
+        .expect("assembler should report power status");
+    assert_eq!(status.network_id, Some(0));
+    assert_eq!(sim.power_networks().len(), 1);
+    assert_eq!(sim.power_networks()[0].pole_count, 2);
+}
+
+#[test]
+fn pole_networks_outside_reach_do_not_connect() {
+    let mut sim = Simulation::new_test_world(123);
+    let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+    sim.place_entity(pole, x, y, Direction::North)
+        .expect("first pole should be placeable");
+
+    for (candidate_x, candidate_y) in all_tile_coords(&sim.world) {
+        if !poles_within_small_pole_reach((x, y), (candidate_x, candidate_y))
+            && sim
+                .can_place_entity(pole, candidate_x, candidate_y, Direction::North)
+                .is_ok()
+        {
+            sim.place_entity(pole, candidate_x, candidate_y, Direction::North)
+                .expect("second pole should be placeable");
+            sim.tick();
+            assert_eq!(sim.power_summary().network_count, 2);
+            return;
+        }
+    }
+
+    panic!("expected a second pole location outside wire reach");
+}
+
+#[test]
+fn steam_engine_produces_only_with_connected_pole_and_adjacent_fueled_boiler() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+
+    let summary = sim.power_summary();
+    assert_eq!(summary.available_production_watts, 79_200);
+    assert_eq!(summary.production_watts, 77_500);
+    assert_eq!(summary.consumption_watts, 77_500);
+    assert_eq!(summary.satisfaction_permyriad, 10_000);
+}
+
+#[test]
+fn inserter_does_not_move_without_electricity() {
+    let mut sim = Simulation::new_test_world(123);
+    let (chest_id, inserter_id, furnace_id) = place_unpowered_chest_inserter_furnace_line(&mut sim);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.entity_inventory_mut(chest_id)
+        .expect("chest should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: iron_ore,
+        count: 1,
+    });
+
+    for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) * 2 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.entity_inventory(chest_id).unwrap().count(iron_ore), 1);
+    assert_eq!(sim.furnace_state(furnace_id).unwrap().input_slot, None);
+    assert_eq!(
+        sim.entity_power_status(inserter_id)
+            .expect("inserter should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+}
+
+#[test]
+fn lab_does_not_research_without_electricity() {
+    let mut sim = Simulation::new_test_world(123);
+    let lab = entity_id_by_name(&sim.world.prototypes, "lab");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 3);
+    let lab_id = sim
+        .place_entity(lab, x, y, Direction::North)
+        .expect("lab should be placeable");
+    sim.select_research(logistics)
+        .expect("logistics should be selectable");
+    sim.entity_inventory_mut(lab_id)
+        .expect("lab should expose inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: science_pack,
+        count: 10,
+    });
+
+    for _ in 0..1_200 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.technology_progress(logistics), Some(0));
+    assert_eq!(
+        sim.entity_power_status(lab_id)
+            .expect("lab should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+}
+
+#[test]
+fn power_summary_reports_production_consumption_and_satisfaction() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+
+    assert_eq!(
+        sim.power_summary(),
+        PowerSummary {
+            production_watts: 77_500,
+            available_production_watts: 79_200,
+            consumption_watts: 77_500,
+            satisfaction_permyriad: 10_000,
+            network_count: 1,
+        }
+    );
+}
+
+#[test]
+fn save_load_preserves_state_hash_after_electricity_entities_exist() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+    for _ in 0..17 {
+        sim.tick();
+    }
+
+    let before = sim.state_hash();
+    let bytes = save_to_bytes(&sim).expect("electricity sim should save");
+    let loaded = load_from_bytes(&bytes).expect("electricity sim should load");
+
+    assert_eq!(before, loaded.state_hash());
+}

@@ -1,0 +1,125 @@
+use super::super::super::*;
+use super::*;
+
+pub(in crate::simulation::tests) fn first_resource_tile(
+    world: &WorldSim,
+) -> (i32, i32, ResourceCell) {
+    for chunk in world.chunks.values() {
+        for (index, tile) in chunk.tiles.iter().enumerate() {
+            if let Some(resource) = tile.resource {
+                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                return (
+                    chunk.coord.x * CHUNK_SIZE + local_x,
+                    chunk.coord.y * CHUNK_SIZE + local_y,
+                    resource,
+                );
+            }
+        }
+    }
+
+    panic!("expected at least one resource tile");
+}
+
+pub(in crate::simulation::tests) fn first_resource_tile_for_item(
+    world: &WorldSim,
+    resource_item: ItemId,
+) -> (i32, i32, u32) {
+    for chunk in world.chunks.values() {
+        for (index, tile) in chunk.tiles.iter().enumerate() {
+            let Some(resource) = tile.resource else {
+                continue;
+            };
+
+            if resource.resource_item != resource_item {
+                continue;
+            }
+
+            let (x, y) = tile_coord(chunk, index);
+            return (x, y, resource.amount);
+        }
+    }
+
+    panic!("expected at least one resource tile for {resource_item:?}");
+}
+
+pub(in crate::simulation::tests) fn first_placeable_resource_tile(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+    resource_item: ItemId,
+) -> (i32, i32, u32) {
+    for (x, y) in all_tile_coords(&sim.world) {
+        let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
+            continue;
+        };
+        if resource.resource_item == resource_item
+            && sim
+                .can_place_entity(prototype_id, x, y, Direction::North)
+                .is_ok()
+        {
+            return (x, y, resource.amount);
+        }
+    }
+
+    panic!("expected at least one placeable resource tile");
+}
+
+pub(in crate::simulation::tests) fn resource_amount_at(
+    world: &WorldSim,
+    x: i32,
+    y: i32,
+) -> Option<u32> {
+    world
+        .tile_at(x, y)
+        .and_then(|tile| tile.resource.map(|resource| resource.amount))
+}
+
+pub(in crate::simulation::tests) fn nearby_resource_pair(
+    world: &WorldSim,
+) -> ((i32, i32), (i32, i32)) {
+    let resources = all_tile_coords(world)
+        .into_iter()
+        .filter(|(x, y)| {
+            world
+                .tile_at(*x, *y)
+                .and_then(|tile| tile.resource)
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+
+    for first in &resources {
+        for second in &resources {
+            if first == second {
+                continue;
+            }
+
+            let dx = first.0 - second.0;
+            let dy = first.1 - second.1;
+            if dx * dx + dy * dy <= 6 {
+                return (*first, *second);
+            }
+        }
+    }
+
+    panic!("expected two resource tiles close enough to mine from one position");
+}
+
+pub(in crate::simulation::tests) fn resource_tiles(
+    world: &WorldSim,
+) -> Vec<(i32, i32, ResourceCell)> {
+    world
+        .chunks
+        .values()
+        .flat_map(|chunk| {
+            chunk
+                .tiles
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, tile)| {
+                    let resource = tile.resource?;
+                    let (x, y) = tile_coord(chunk, index);
+                    Some((x, y, resource))
+                })
+        })
+        .collect()
+}
