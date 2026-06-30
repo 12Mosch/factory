@@ -14,7 +14,7 @@ pub struct ElectricConsumerState {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct SteamEngineState;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct BoilerState {
     pub energy: BurnerEnergy,
 }

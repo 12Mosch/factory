@@ -26,14 +26,14 @@ pub use crate::logistics::{
     UndergroundBeltSegment,
 };
 pub use crate::machines::{
-    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BoilerError, BoilerState,
-    BurnerDrillError, BurnerEnergy, BurnerMiningDrillState, FurnaceError, FurnaceState, LabError,
-    LabState, MachineStatus,
+    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BurnerDrillError,
+    BurnerEnergy, BurnerMiningDrillState, FurnaceError, FurnaceState, LabError, LabState,
+    MachineStatus,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
 pub use crate::power::{
-    ElectricConsumerState, ElectricPoleState, EntityPowerStatus, OffshorePumpState,
-    PowerNetworkSnapshot, PowerSummary, SteamEngineState,
+    BoilerError, BoilerState, ElectricConsumerState, ElectricPoleState, EntityPowerStatus,
+    OffshorePumpState, PowerNetworkSnapshot, PowerSummary, SteamEngineState,
 };
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
@@ -74,7 +74,7 @@ pub const BASIC_INSERTER_DROP_TICKS: u32 = 35;
 pub const POWER_SATISFACTION_FULL_PERMYRIAD: u32 = 10_000;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct Simulation {
     tick: u64,
     world: WorldSim,

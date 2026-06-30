@@ -5,7 +5,7 @@ use crate::player::ManualMiningTarget;
 use factory_data::ItemId;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct BurnerMiningDrillState {
     pub energy: BurnerEnergy,
     pub mining_progress_ticks: u32,

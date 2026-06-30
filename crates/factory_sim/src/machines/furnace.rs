@@ -4,7 +4,7 @@ use crate::machines::BurnerEnergy;
 use factory_data::{ItemId, RecipeId};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct FurnaceState {
     pub input_slot: Option<ItemStack>,
     pub energy: BurnerEnergy,
