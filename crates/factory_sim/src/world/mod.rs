@@ -3,6 +3,7 @@ pub mod collision;
 pub mod generation;
 pub mod resources;
 
-pub use crate::simulation::{
-    Chunk, ChunkCoord, MinedResource, ResourceCell, TileCell, TileCollision, WorldSim,
-};
+pub use self::chunk::{Chunk, ChunkCoord, TileCell};
+pub use self::collision::TileCollision;
+pub use self::generation::WorldSim;
+pub use self::resources::{MinedResource, ResourceCell, ResourceTileChange};

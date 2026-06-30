@@ -2,7 +2,9 @@ pub mod belt;
 pub mod inserter;
 pub mod transfer;
 
-pub use crate::simulation::{
-    BeltError, BeltItem, BeltLane, BeltSegment, ContainerError, InserterError, InserterState,
-    SplitterError, SplitterState,
+pub use self::belt::{
+    BeltError, BeltItem, BeltLane, BeltSegment, SplitterError, SplitterState,
+    UndergroundBeltLinkPreview, UndergroundBeltSegment,
 };
+pub use self::inserter::{InserterError, InserterState, InserterTransferPreview};
+pub use self::transfer::ContainerError;
