@@ -1,0 +1,221 @@
+use crate::catalog::PrototypeCatalog;
+
+const ITEM_NAMES: [&str; 36] = [
+    "iron_ore",
+    "copper_ore",
+    "coal",
+    "stone",
+    "iron_plate",
+    "copper_plate",
+    "steel_plate",
+    "iron_gear_wheel",
+    "copper_cable",
+    "electronic_circuit",
+    "inserter",
+    "transport_belt",
+    "assembling_machine",
+    "stone_furnace",
+    "burner_mining_drill",
+    "lab",
+    "automation_science_pack",
+    "chest",
+    "stone_brick",
+    "underground_belt",
+    "splitter",
+    "fast_transport_belt",
+    "express_transport_belt",
+    "fast_underground_belt",
+    "express_underground_belt",
+    "fast_splitter",
+    "express_splitter",
+    "fast_inserter",
+    "long_handed_inserter",
+    "small_electric_pole",
+    "steam_engine",
+    "boiler",
+    "offshore_pump",
+    "pipe",
+    "storage_tank",
+    "logistic_science_pack",
+];
+
+const FLUID_NAMES: [&str; 2] = ["water", "steam"];
+
+const RECIPE_NAMES: [&str; 32] = [
+    "iron_plate",
+    "copper_plate",
+    "steel_plate",
+    "iron_gear_wheel",
+    "copper_cable",
+    "electronic_circuit",
+    "inserter",
+    "transport_belt",
+    "assembling_machine",
+    "stone_furnace",
+    "burner_mining_drill",
+    "lab",
+    "automation_science_pack",
+    "chest",
+    "stone_brick",
+    "underground_belt",
+    "splitter",
+    "fast_inserter",
+    "long_handed_inserter",
+    "small_electric_pole",
+    "steam_engine",
+    "boiler",
+    "offshore_pump",
+    "pipe",
+    "storage_tank",
+    "logistic_science_pack",
+    "fast_transport_belt",
+    "fast_underground_belt",
+    "fast_splitter",
+    "express_transport_belt",
+    "express_underground_belt",
+    "express_splitter",
+];
+
+const ENTITY_NAMES: [&str; 30] = [
+    "iron_ore_patch",
+    "copper_ore_patch",
+    "coal_patch",
+    "stone_patch",
+    "stone_furnace",
+    "assembling_machine",
+    "inserter",
+    "transport_belt",
+    "burner_mining_drill",
+    "lab",
+    "chest",
+    "underground_belt_entrance",
+    "underground_belt_exit",
+    "splitter",
+    "fast_transport_belt",
+    "express_transport_belt",
+    "fast_underground_belt_entrance",
+    "fast_underground_belt_exit",
+    "express_underground_belt_entrance",
+    "express_underground_belt_exit",
+    "fast_splitter",
+    "express_splitter",
+    "fast_inserter",
+    "long_handed_inserter",
+    "small_electric_pole",
+    "steam_engine",
+    "boiler",
+    "offshore_pump",
+    "pipe",
+    "storage_tank",
+];
+
+const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
+const TECHNOLOGY_NAMES: [&str; 7] = [
+    "logistics",
+    "automation",
+    "electric_power",
+    "logistic_science_pack",
+    "logistics_2",
+    "fluid_handling",
+    "logistics_3",
+];
+
+#[test]
+fn base_catalog_loads_from_ron() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    assert_eq!(catalog.items.len(), 36);
+    assert_eq!(catalog.fluids.len(), 2);
+    assert_eq!(catalog.recipes.len(), 32);
+    assert_eq!(catalog.entities.len(), 30);
+    assert_eq!(catalog.tiles.len(), 3);
+    assert_eq!(catalog.technologies.len(), 7);
+}
+
+#[test]
+fn base_catalog_contains_expected_names() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    for name in ITEM_NAMES {
+        assert!(
+            catalog.items.iter().any(|prototype| prototype.name == name),
+            "missing item {name}"
+        );
+    }
+
+    for name in FLUID_NAMES {
+        assert!(
+            catalog
+                .fluids
+                .iter()
+                .any(|prototype| prototype.name == name),
+            "missing fluid {name}"
+        );
+    }
+
+    for name in RECIPE_NAMES {
+        assert!(
+            catalog
+                .recipes
+                .iter()
+                .any(|prototype| prototype.name == name),
+            "missing recipe {name}"
+        );
+    }
+
+    for name in ENTITY_NAMES {
+        assert!(
+            catalog
+                .entities
+                .iter()
+                .any(|prototype| prototype.name == name),
+            "missing entity {name}"
+        );
+    }
+
+    for name in TILE_NAMES {
+        assert!(
+            catalog.tiles.iter().any(|prototype| prototype.name == name),
+            "missing tile {name}"
+        );
+    }
+
+    for name in TECHNOLOGY_NAMES {
+        assert!(
+            catalog
+                .technologies
+                .iter()
+                .any(|prototype| prototype.name == name),
+            "missing technology {name}"
+        );
+    }
+}
+
+#[test]
+fn explicit_ids_are_sorted_and_stable() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    for (expected, item) in catalog.items.iter().enumerate() {
+        assert_eq!(item.id.index(), expected);
+    }
+
+    for (expected, fluid) in catalog.fluids.iter().enumerate() {
+        assert_eq!(fluid.id.index(), expected);
+    }
+
+    for (expected, recipe) in catalog.recipes.iter().enumerate() {
+        assert_eq!(recipe.id.index(), expected);
+    }
+
+    for (expected, entity) in catalog.entities.iter().enumerate() {
+        assert_eq!(entity.id.index(), expected);
+    }
+
+    for (expected, tile) in catalog.tiles.iter().enumerate() {
+        assert_eq!(tile.id.index(), expected);
+    }
+
+    for (expected, technology) in catalog.technologies.iter().enumerate() {
+        assert_eq!(technology.id.index(), expected);
+    }
+}
