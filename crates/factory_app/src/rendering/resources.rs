@@ -8,7 +8,7 @@ use std::time::Instant;
 use crate::constants::RESOURCE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color};
 use crate::rendering::transforms::tile_translation;
-use crate::resources::{RenderSyncStats, SimResource, VisibleChunks};
+use crate::resources::{RenderDetail, RenderSyncStats, SimResource, VisibleChunks};
 
 #[derive(Component)]
 pub(crate) struct ResourceSprite;
@@ -32,91 +32,87 @@ pub struct ResourceRenderCache {
 
 pub(crate) fn sync_resource_debug_rendering(
     mut commands: Commands,
-    sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
-    settings: Res<ResourceRenderSettings>,
-    mut cache: ResMut<ResourceRenderCache>,
-    mut sprites: Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    mut labels: Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
+    mut params: ResourceRenderParams,
 ) {
-    let resource_revision = sim.sim.world().resource_revision();
-    let initial_sync = cache.last_resource_revision.is_none();
-    let resources_changed = cache.last_resource_revision != Some(resource_revision);
-    let visibility_changed = cache.last_visible_revision != visible.revision;
-    let label_setting_changed = cache.show_amount_labels != settings.show_amount_labels;
+    let resource_revision = params.sim.sim.world().resource_revision();
+    let initial_sync = params.cache.last_resource_revision.is_none();
+    let resources_changed = params.cache.last_resource_revision != Some(resource_revision);
+    let visibility_changed = params.cache.last_visible_revision != params.visible.revision;
+    let show_amount_labels =
+        params.settings.show_amount_labels && params.detail.show_resource_amount_labels;
+    let label_setting_changed = params.cache.show_amount_labels != show_amount_labels;
 
     if !initial_sync && !resources_changed && !visibility_changed && !label_setting_changed {
         return;
     }
 
-    let ids = RenderPrototypeIds::from_catalog(sim.sim.catalog());
+    let ids = RenderPrototypeIds::from_catalog(params.sim.sim.catalog());
     if initial_sync || visibility_changed || label_setting_changed {
-        let resources = collect_resource_tiles(&sim.sim, &visible);
+        let resources = collect_resource_tiles(&params.sim.sim, &params.visible);
         reconcile_resource_tiles(
             &mut commands,
-            &mut cache,
-            &mut sprites,
-            &mut labels,
+            &mut params.cache,
+            &mut params.sprites,
+            &mut params.labels,
             &resources,
             ids,
-            settings.show_amount_labels,
+            show_amount_labels,
         );
-        cache.last_resource_revision = Some(resource_revision);
-        cache.last_visible_revision = visible.revision;
-        cache.show_amount_labels = settings.show_amount_labels;
+        params.cache.last_resource_revision = Some(resource_revision);
+        params.cache.last_visible_revision = params.visible.revision;
+        params.cache.show_amount_labels = show_amount_labels;
         return;
     }
 
     if resources_changed {
-        let last_revision = cache
+        let last_revision = params
+            .cache
             .last_resource_revision
             .expect("resource cache should be initialized before incremental sync");
-        if let Some(changes) = sim.sim.world().resource_dirty_tiles_since(last_revision) {
+        if let Some(changes) = params
+            .sim
+            .sim
+            .world()
+            .resource_dirty_tiles_since(last_revision)
+        {
             for change in changes {
                 apply_resource_tile_change(
                     &mut commands,
-                    &mut cache,
-                    &mut sprites,
-                    &mut labels,
+                    &mut params.cache,
+                    &mut params.sprites,
+                    &mut params.labels,
                     change,
                     ResourceTileChangeContext {
-                        visible: &visible,
+                        visible: &params.visible,
                         ids,
-                        show_amount_labels: settings.show_amount_labels,
+                        show_amount_labels,
                     },
                 );
             }
         } else {
-            let resources = collect_resource_tiles(&sim.sim, &visible);
+            let resources = collect_resource_tiles(&params.sim.sim, &params.visible);
             reconcile_resource_tiles(
                 &mut commands,
-                &mut cache,
-                &mut sprites,
-                &mut labels,
+                &mut params.cache,
+                &mut params.sprites,
+                &mut params.labels,
                 &resources,
                 ids,
-                settings.show_amount_labels,
+                show_amount_labels,
             );
         }
-        cache.last_resource_revision = Some(resource_revision);
+        params.cache.last_resource_revision = Some(resource_revision);
     }
 }
 
 pub(crate) fn measured_sync_resource_debug_rendering(
     commands: Commands,
-    mut params: ResourceRenderParams,
+    params: ResourceRenderParams,
+    mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_resource_debug_rendering(
-        commands,
-        params.sim,
-        params.visible,
-        params.settings,
-        params.cache,
-        params.sprites,
-        params.labels,
-    );
-    params.stats.record_resources(started.elapsed());
+    sync_resource_debug_rendering(commands, params);
+    stats.record_resources(started.elapsed());
 }
 
 #[derive(SystemParam)]
@@ -124,10 +120,10 @@ pub(crate) struct ResourceRenderParams<'w, 's> {
     sim: Res<'w, SimResource>,
     visible: Res<'w, VisibleChunks>,
     settings: Res<'w, ResourceRenderSettings>,
+    detail: Res<'w, RenderDetail>,
     cache: ResMut<'w, ResourceRenderCache>,
     sprites: Query<'w, 's, (Entity, &'static mut Sprite), With<ResourceSprite>>,
     labels: Query<'w, 's, (Entity, &'static mut Text2d), With<ResourceAmountLabel>>,
-    stats: ResMut<'w, RenderSyncStats>,
 }
 
 fn reconcile_resource_tiles(

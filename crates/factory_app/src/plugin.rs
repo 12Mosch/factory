@@ -21,7 +21,9 @@ use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
 };
 use crate::rendering::build_preview::{spawn_build_preview, update_build_preview};
-use crate::rendering::camera::{follow_player_camera, setup_camera, update_visible_chunks};
+use crate::rendering::camera::{
+    follow_player_camera, setup_camera, update_render_detail, update_visible_chunks,
+};
 use crate::rendering::entities::{
     measured_sync_placed_entity_rendering, update_visible_entity_ids,
 };
@@ -37,8 +39,8 @@ use crate::rendering::resources::{
 use crate::rendering::world::sync_visible_world_tiles;
 use crate::resources::{
     AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapTextureCache,
-    MapViewState, OpenContainer, ProductionStatsWindowState, RenderSyncStats, SimProfileStats,
-    SimResource, TechnologyWindowState, UpsStats, VisibleChunks, VisibleEntityIds,
+    MapViewState, OpenContainer, ProductionStatsWindowState, RenderDetail, RenderSyncStats,
+    SimProfileStats, SimResource, TechnologyWindowState, UpsStats, VisibleChunks, VisibleEntityIds,
     WorldRenderCache,
 };
 use crate::save_load::{
@@ -118,6 +120,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<MapTextureCache>()
             .init_resource::<VisibleChunks>()
             .init_resource::<VisibleEntityIds>()
+            .init_resource::<RenderDetail>()
             .init_resource::<WorldRenderCache>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<AppInputState>()
@@ -204,6 +207,7 @@ impl Plugin for FactoryAppPlugin {
                 Update,
                 (
                     update_map_texture,
+                    update_render_detail,
                     update_visible_chunks,
                     update_visible_entity_ids,
                     sync_visible_world_tiles,

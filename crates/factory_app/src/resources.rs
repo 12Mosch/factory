@@ -152,6 +152,25 @@ pub(crate) struct VisibleEntityIds {
     pub(crate) entity_signature: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Resource)]
+pub(crate) struct RenderDetail {
+    pub(crate) show_resource_amount_labels: bool,
+    pub(crate) show_belt_directions: bool,
+    pub(crate) show_belt_items: bool,
+    pub(crate) show_belt_item_labels: bool,
+}
+
+impl Default for RenderDetail {
+    fn default() -> Self {
+        Self {
+            show_resource_amount_labels: true,
+            show_belt_directions: true,
+            show_belt_items: true,
+            show_belt_item_labels: true,
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct WorldRenderCache {
     pub chunk_entities: BTreeMap<ChunkCoord, Entity>,

@@ -23,6 +23,13 @@ pub(crate) fn sync_visible_world_tiles(
         return;
     };
 
+    if cache.last_reload_token == token.value
+        && cache.last_visible_revision == visible.revision
+        && cache.last_chunk_revision == sim.sim.world().chunk_revision()
+    {
+        return;
+    }
+
     if cache.last_reload_token != token.value {
         for (_, entity) in std::mem::take(&mut cache.chunk_entities) {
             commands.entity(entity).despawn();
@@ -135,7 +142,7 @@ mod tests {
         ResourceAmountLabel, ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
         measured_sync_resource_debug_rendering, sync_resource_debug_rendering,
     };
-    use crate::resources::{MapTextureBounds, RenderSyncStats, VisibleEntityIds};
+    use crate::resources::{MapTextureBounds, RenderDetail, RenderSyncStats, VisibleEntityIds};
     use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
     use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation};
     use std::collections::BTreeSet;
@@ -176,6 +183,7 @@ mod tests {
             .init_resource::<WorldRenderCache>()
             .init_resource::<ResourceRenderCache>()
             .init_resource::<VisibleEntityIds>()
+            .init_resource::<RenderDetail>()
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: false,
             })
@@ -273,6 +281,7 @@ mod tests {
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: true,
             })
+            .init_resource::<RenderDetail>()
             .add_systems(Update, sync_resource_debug_rendering);
 
         app.update();
@@ -421,6 +430,7 @@ mod tests {
             .init_resource::<WorldRenderCache>()
             .init_resource::<ResourceRenderCache>()
             .init_resource::<VisibleEntityIds>()
+            .init_resource::<RenderDetail>()
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: false,
             })

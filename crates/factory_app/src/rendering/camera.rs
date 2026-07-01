@@ -5,10 +5,13 @@ use std::collections::BTreeSet;
 use crate::constants::{INITIAL_CAMERA_SCALE, TILE_SIZE};
 use crate::rendering::player::PlayerSprite;
 use crate::rendering::transforms::player_translation;
-use crate::resources::{MapTextureBounds, SimResource, VisibleChunks};
+use crate::resources::{MapTextureBounds, RenderDetail, SimResource, VisibleChunks};
 
 pub(crate) const RENDER_CHUNK_MARGIN: i32 = 1;
 pub(crate) const FALLBACK_VISIBLE_CHUNK_RADIUS: i32 = 2;
+pub(crate) const RESOURCE_AMOUNT_LABEL_MAX_SCALE: f32 = 2.75;
+pub(crate) const BELT_ITEM_LABEL_MAX_SCALE: f32 = 2.25;
+pub(crate) const BELT_DETAIL_MAX_SCALE: f32 = 5.0;
 
 pub(crate) fn setup_camera(mut commands: Commands) {
     commands.spawn((
@@ -59,6 +62,20 @@ pub(crate) fn update_visible_chunks(
         visible.chunks = chunks;
         visible.tile_bounds = tile_bounds;
         visible.revision = visible.revision.wrapping_add(1);
+    }
+}
+
+pub(crate) fn update_render_detail(
+    cameras: Query<&Projection, With<Camera2d>>,
+    mut detail: ResMut<RenderDetail>,
+) {
+    let Some(scale) = cameras.iter().find_map(orthographic_camera_scale) else {
+        return;
+    };
+    let next = render_detail_for_camera_scale(scale);
+
+    if *detail != next {
+        *detail = next;
     }
 }
 
@@ -120,6 +137,22 @@ fn world_pixel_to_tile(value: f32) -> i32 {
     (value / TILE_SIZE).floor() as i32
 }
 
+fn orthographic_camera_scale(projection: &Projection) -> Option<f32> {
+    let Projection::Orthographic(orthographic) = projection else {
+        return None;
+    };
+    Some(orthographic.scale)
+}
+
+pub(crate) fn render_detail_for_camera_scale(scale: f32) -> RenderDetail {
+    RenderDetail {
+        show_resource_amount_labels: scale <= RESOURCE_AMOUNT_LABEL_MAX_SCALE,
+        show_belt_directions: scale <= BELT_DETAIL_MAX_SCALE,
+        show_belt_items: scale <= BELT_DETAIL_MAX_SCALE,
+        show_belt_item_labels: scale <= BELT_ITEM_LABEL_MAX_SCALE,
+    }
+}
+
 fn tile_bounds_for_chunks(chunks: &BTreeSet<ChunkCoord>) -> Option<MapTextureBounds> {
     let min_chunk_x = chunks.iter().map(|coord| coord.x).min()?;
     let max_chunk_x = chunks.iter().map(|coord| coord.x).max()?;
@@ -145,5 +178,17 @@ mod tests {
 
         assert!(chunks.contains(&ChunkCoord { x: -2, y: -1 }));
         assert!(chunks.contains(&ChunkCoord { x: 0, y: 0 }));
+    }
+
+    #[test]
+    fn render_detail_hides_unreadable_overlays_when_zoomed_out() {
+        assert!(render_detail_for_camera_scale(2.0).show_belt_item_labels);
+
+        let detail = render_detail_for_camera_scale(6.0);
+
+        assert!(!detail.show_resource_amount_labels);
+        assert!(!detail.show_belt_directions);
+        assert!(!detail.show_belt_items);
+        assert!(!detail.show_belt_item_labels);
     }
 }
