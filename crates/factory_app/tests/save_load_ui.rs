@@ -168,6 +168,8 @@ fn load_invalidates_render_caches() {
     app.world_mut().insert_resource(MapTextureCache {
         handle: None,
         bounds: Some(Default::default()),
+        pixels: Some(Vec::new()),
+        painted_chunks: Default::default(),
         last_player_tile: Some((12, 34)),
         last_chunk_revision: 66,
         last_resource_revision: 99,

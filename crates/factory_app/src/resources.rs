@@ -123,12 +123,19 @@ pub struct MapTextureBounds {
 pub struct MapTextureCache {
     pub handle: Option<Handle<Image>>,
     pub bounds: Option<MapTextureBounds>,
+    pub pixels: Option<Vec<u8>>,
+    pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
     pub last_player_tile: Option<(i32, i32)>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
     pub last_entity_signature: u64,
     pub last_revealed_signature: u64,
     pub last_debug_flags: (bool, bool),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapChunkPaintState {
+    pub revealed: bool,
 }
 
 #[derive(Resource, Default)]
