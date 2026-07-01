@@ -3,7 +3,8 @@ use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
 use factory_app::rendering::resources::ResourceRenderCache;
 use factory_app::resources::{
-    BuildPlacementState, BuildSelection, MapTextureCache, OpenContainer, SimResource,
+    BuildPlacementState, BuildSelection, MapChunkPaintState, MapTextureCache, OpenContainer,
+    SimResource,
 };
 use factory_app::save_load::{
     LOAD_SAVE_SLOTS, MANUAL_SAVE_SLOTS, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig,
@@ -11,7 +12,7 @@ use factory_app::save_load::{
 };
 use factory_app::ui::save_load::{SaveSlotAction, SaveSlotButton};
 use factory_data::{EntityPrototypeId, ItemId};
-use factory_sim::{EntityId, SAVE_VERSION, load_from_bytes, save_to_bytes};
+use factory_sim::{ChunkCoord, EntityId, SAVE_VERSION, load_from_bytes, save_to_bytes};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -168,6 +169,12 @@ fn load_invalidates_render_caches() {
     app.world_mut().insert_resource(MapTextureCache {
         handle: None,
         bounds: Some(Default::default()),
+        pixels: Some(vec![1, 2, 3, 4]),
+        painted_chunks: [(
+            ChunkCoord { x: 9, y: -3 },
+            MapChunkPaintState { revealed: true },
+        )]
+        .into(),
         last_player_tile: Some((12, 34)),
         last_chunk_revision: 66,
         last_resource_revision: 99,
@@ -189,6 +196,8 @@ fn load_invalidates_render_caches() {
 
     let map_cache = app.world().resource::<MapTextureCache>();
     assert_eq!(map_cache.bounds, None);
+    assert_eq!(map_cache.pixels, None);
+    assert!(map_cache.painted_chunks.is_empty());
     assert_eq!(map_cache.last_player_tile, None);
     assert_eq!(map_cache.last_resource_revision, 0);
     assert_ne!(
