@@ -12,145 +12,41 @@ pub(super) fn validate_chart_state(sim: &Simulation) -> Result<(), SimValidation
 }
 
 pub(super) fn validate_item_statistics(sim: &Simulation) -> Result<(), SimValidationError> {
-    if sim.item_statistics.buckets.len() != ITEM_STATISTICS_WINDOW_TICKS as usize
-        || sim.item_statistics.last_advanced_tick != sim.tick
-    {
-        return Err(SimValidationError::InvalidItemStatistics(ItemId::new(0)));
-    }
-
-    let mut rolling_produced = BTreeMap::<ItemId, u64>::new();
-    let mut rolling_consumed = BTreeMap::<ItemId, u64>::new();
-
-    for bucket in &sim.item_statistics.buckets {
-        let in_window = bucket.tick <= sim.tick
-            && bucket.tick.saturating_add(ITEM_STATISTICS_WINDOW_TICKS) > sim.tick;
-        if (!bucket.produced.is_empty() || !bucket.consumed.is_empty()) && !in_window {
-            return Err(SimValidationError::InvalidItemStatistics(
-                bucket
-                    .produced
-                    .keys()
-                    .chain(bucket.consumed.keys())
-                    .copied()
-                    .next()
-                    .unwrap_or_else(|| ItemId::new(0)),
-            ));
-        }
-        for (item_id, amount) in bucket.produced.iter().chain(bucket.consumed.iter()) {
-            if *amount == 0 || !item_exists(&sim.world.prototypes, *item_id) {
-                return Err(SimValidationError::InvalidItemStatistics(*item_id));
-            }
-        }
-        if in_window {
-            for (item_id, amount) in &bucket.produced {
-                add_checked_stat(
-                    &mut rolling_produced,
-                    *item_id,
-                    *amount,
-                    SimValidationError::InvalidItemStatistics(*item_id),
-                )?;
-            }
-            for (item_id, amount) in &bucket.consumed {
-                add_checked_stat(
-                    &mut rolling_consumed,
-                    *item_id,
-                    *amount,
-                    SimValidationError::InvalidItemStatistics(*item_id),
-                )?;
-            }
-        }
-    }
-
-    if rolling_produced != sim.item_statistics.rolling_produced
-        || rolling_consumed != sim.item_statistics.rolling_consumed
-    {
-        return Err(SimValidationError::InvalidItemStatistics(ItemId::new(0)));
-    }
-
-    for (item_id, amount) in sim
-        .item_statistics
-        .rolling_produced
-        .iter()
-        .chain(sim.item_statistics.rolling_consumed.iter())
-        .chain(sim.item_statistics.total_produced.iter())
-        .chain(sim.item_statistics.total_consumed.iter())
-    {
-        if *amount == 0 || !item_exists(&sim.world.prototypes, *item_id) {
-            return Err(SimValidationError::InvalidItemStatistics(*item_id));
-        }
-    }
-
-    Ok(())
+    validate_rolling_statistics(
+        &sim.world.prototypes,
+        sim.tick,
+        &sim.item_statistics.buckets,
+        sim.item_statistics.last_advanced_tick,
+        &sim.item_statistics.rolling_produced,
+        &sim.item_statistics.rolling_consumed,
+        &sim.item_statistics.total_produced,
+        &sim.item_statistics.total_consumed,
+        |bucket| bucket.tick,
+        |bucket| &bucket.produced,
+        |bucket| &bucket.consumed,
+        item_exists,
+        SimValidationError::InvalidItemStatistics,
+        ItemId::new(0),
+    )
 }
 
 pub(super) fn validate_fluid_statistics(sim: &Simulation) -> Result<(), SimValidationError> {
-    if sim.fluid_statistics.buckets.len() != ITEM_STATISTICS_WINDOW_TICKS as usize
-        || sim.fluid_statistics.last_advanced_tick != sim.tick
-    {
-        return Err(SimValidationError::InvalidFluidStatistics(FluidId::new(0)));
-    }
-
-    let mut rolling_produced = BTreeMap::<FluidId, u64>::new();
-    let mut rolling_consumed = BTreeMap::<FluidId, u64>::new();
-
-    for bucket in &sim.fluid_statistics.buckets {
-        let in_window = bucket.tick <= sim.tick
-            && bucket.tick.saturating_add(ITEM_STATISTICS_WINDOW_TICKS) > sim.tick;
-        if (!bucket.produced.is_empty() || !bucket.consumed.is_empty()) && !in_window {
-            return Err(SimValidationError::InvalidFluidStatistics(
-                bucket
-                    .produced
-                    .keys()
-                    .chain(bucket.consumed.keys())
-                    .copied()
-                    .next()
-                    .unwrap_or_else(|| FluidId::new(0)),
-            ));
-        }
-        for (fluid_id, amount) in bucket.produced.iter().chain(bucket.consumed.iter()) {
-            if *amount == 0 || !fluid_exists(&sim.world.prototypes, *fluid_id) {
-                return Err(SimValidationError::InvalidFluidStatistics(*fluid_id));
-            }
-        }
-        if in_window {
-            for (fluid_id, amount) in &bucket.produced {
-                add_checked_stat(
-                    &mut rolling_produced,
-                    *fluid_id,
-                    *amount,
-                    SimValidationError::InvalidFluidStatistics(*fluid_id),
-                )?;
-            }
-            for (fluid_id, amount) in &bucket.consumed {
-                add_checked_stat(
-                    &mut rolling_consumed,
-                    *fluid_id,
-                    *amount,
-                    SimValidationError::InvalidFluidStatistics(*fluid_id),
-                )?;
-            }
-        }
-    }
-
-    if rolling_produced != sim.fluid_statistics.rolling_produced
-        || rolling_consumed != sim.fluid_statistics.rolling_consumed
-    {
-        return Err(SimValidationError::InvalidFluidStatistics(FluidId::new(0)));
-    }
-
-    for (fluid_id, amount) in sim
-        .fluid_statistics
-        .rolling_produced
-        .iter()
-        .chain(sim.fluid_statistics.rolling_consumed.iter())
-        .chain(sim.fluid_statistics.total_produced.iter())
-        .chain(sim.fluid_statistics.total_consumed.iter())
-    {
-        if *amount == 0 || !fluid_exists(&sim.world.prototypes, *fluid_id) {
-            return Err(SimValidationError::InvalidFluidStatistics(*fluid_id));
-        }
-    }
-
-    Ok(())
+    validate_rolling_statistics(
+        &sim.world.prototypes,
+        sim.tick,
+        &sim.fluid_statistics.buckets,
+        sim.fluid_statistics.last_advanced_tick,
+        &sim.fluid_statistics.rolling_produced,
+        &sim.fluid_statistics.rolling_consumed,
+        &sim.fluid_statistics.total_produced,
+        &sim.fluid_statistics.total_consumed,
+        |bucket| bucket.tick,
+        |bucket| &bucket.produced,
+        |bucket| &bucket.consumed,
+        fluid_exists,
+        SimValidationError::InvalidFluidStatistics,
+        FluidId::new(0),
+    )
 }
 
 pub(super) fn validate_power_statistics(sim: &Simulation) -> Result<(), SimValidationError> {
@@ -168,6 +64,84 @@ pub(super) fn validate_power_statistics(sim: &Simulation) -> Result<(), SimValid
         }
         if sample.satisfaction_permyriad > POWER_SATISFACTION_FULL_PERMYRIAD {
             return Err(SimValidationError::InvalidPowerStatistics);
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_rolling_statistics<K, B>(
+    catalog: &PrototypeCatalog,
+    tick: u64,
+    buckets: &[B],
+    last_advanced_tick: u64,
+    rolling_produced: &BTreeMap<K, u64>,
+    rolling_consumed: &BTreeMap<K, u64>,
+    total_produced: &BTreeMap<K, u64>,
+    total_consumed: &BTreeMap<K, u64>,
+    bucket_tick: impl Fn(&B) -> u64,
+    bucket_produced: impl Fn(&B) -> &BTreeMap<K, u64>,
+    bucket_consumed: impl Fn(&B) -> &BTreeMap<K, u64>,
+    exists: impl Fn(&PrototypeCatalog, K) -> bool,
+    error: impl Fn(K) -> SimValidationError,
+    fallback_key: K,
+) -> Result<(), SimValidationError>
+where
+    K: Copy + Ord,
+{
+    if buckets.len() != ITEM_STATISTICS_WINDOW_TICKS as usize || last_advanced_tick != tick {
+        return Err(error(fallback_key));
+    }
+
+    let mut computed_rolling_produced = BTreeMap::<K, u64>::new();
+    let mut computed_rolling_consumed = BTreeMap::<K, u64>::new();
+
+    for bucket in buckets {
+        let bucket_tick = bucket_tick(bucket);
+        let produced = bucket_produced(bucket);
+        let consumed = bucket_consumed(bucket);
+        let in_window =
+            bucket_tick <= tick && bucket_tick.saturating_add(ITEM_STATISTICS_WINDOW_TICKS) > tick;
+
+        if (!produced.is_empty() || !consumed.is_empty()) && !in_window {
+            let key = produced
+                .keys()
+                .chain(consumed.keys())
+                .copied()
+                .next()
+                .unwrap_or(fallback_key);
+            return Err(error(key));
+        }
+        for (key, amount) in produced.iter().chain(consumed.iter()) {
+            if *amount == 0 || !exists(catalog, *key) {
+                return Err(error(*key));
+            }
+        }
+        if in_window {
+            for (key, amount) in produced {
+                add_checked_stat(&mut computed_rolling_produced, *key, *amount, error(*key))?;
+            }
+            for (key, amount) in consumed {
+                add_checked_stat(&mut computed_rolling_consumed, *key, *amount, error(*key))?;
+            }
+        }
+    }
+
+    if &computed_rolling_produced != rolling_produced
+        || &computed_rolling_consumed != rolling_consumed
+    {
+        return Err(error(fallback_key));
+    }
+
+    for (key, amount) in rolling_produced
+        .iter()
+        .chain(rolling_consumed.iter())
+        .chain(total_produced.iter())
+        .chain(total_consumed.iter())
+    {
+        if *amount == 0 || !exists(catalog, *key) {
+            return Err(error(*key));
         }
     }
 

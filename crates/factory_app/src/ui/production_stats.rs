@@ -10,6 +10,8 @@ use crate::ui::debug_overlay::format_watts;
 use crate::ui::formatting::{format_fluid_display_name, format_item_display_name};
 
 const POWER_GRAPH_POINT_COUNT: usize = 40;
+const POWER_GRAPH_BAR_WIDTH_PX: f32 = 3.0;
+const POWER_GRAPH_BAR_GAP_PX: f32 = 1.0;
 
 #[derive(Component)]
 pub(crate) struct ProductionStatsRoot {
@@ -180,11 +182,7 @@ fn spawn_production_stats_contents(
 ) {
     spawn_tabs(root, snapshot.selected_tab);
     match snapshot.selected_tab {
-        StatsTab::Production => {
-            spawn_item_rows(root, &snapshot.item_rows, "Items", "/min", "Total");
-            spawn_item_rows(root, &snapshot.fluid_rows, "Fluids", "/min", "Total");
-        }
-        StatsTab::Consumption => {
+        StatsTab::Production | StatsTab::Consumption => {
             spawn_item_rows(root, &snapshot.item_rows, "Items", "/min", "Total");
             spawn_item_rows(root, &snapshot.fluid_rows, "Fluids", "/min", "Total");
         }
@@ -472,7 +470,7 @@ fn spawn_power_graph(
                 height: Val::Px(82.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::End,
-                column_gap: Val::Px(2.0),
+                column_gap: Val::Px(POWER_GRAPH_BAR_GAP_PX),
                 padding: UiRect::all(Val::Px(6.0)),
                 ..default()
             },
@@ -486,7 +484,7 @@ fn spawn_power_graph(
                     ((point.consumption_watts as f32 / max_watts as f32) * 68.0).max(1.0);
                 bars.spawn((
                     Node {
-                        width: Val::Px(4.0),
+                        width: Val::Px(POWER_GRAPH_BAR_WIDTH_PX),
                         height: Val::Px(production_height),
                         ..default()
                     },
@@ -494,7 +492,7 @@ fn spawn_power_graph(
                 ));
                 bars.spawn((
                     Node {
-                        width: Val::Px(4.0),
+                        width: Val::Px(POWER_GRAPH_BAR_WIDTH_PX),
                         height: Val::Px(consumption_height),
                         ..default()
                     },

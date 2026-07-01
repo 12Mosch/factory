@@ -4,6 +4,7 @@ impl Simulation {
     pub fn machine_statuses(&self) -> MachineStatusSnapshot {
         let mut groups = Vec::new();
         let mut total_by_status = BTreeMap::<MachineStatus, usize>::new();
+        let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
 
         self.push_status_group(
             &mut groups,
@@ -45,10 +46,9 @@ impl Simulation {
             &mut groups,
             &mut total_by_status,
             EntityKind::Boiler,
-            self.entities
-                .boilers
-                .iter()
-                .map(|(entity_id, state)| self.boiler_status(*entity_id, state)),
+            self.entities.boilers.iter().map(|(entity_id, state)| {
+                self.boiler_status(*entity_id, state, fluids.water, fluids.steam)
+            }),
         );
         self.push_status_group(
             &mut groups,
@@ -57,7 +57,7 @@ impl Simulation {
             self.entities
                 .steam_engines
                 .keys()
-                .map(|entity_id| self.steam_engine_status(*entity_id)),
+                .map(|entity_id| self.steam_engine_status(*entity_id, fluids.steam)),
         );
         self.push_status_group(
             &mut groups,
@@ -66,7 +66,7 @@ impl Simulation {
             self.entities
                 .offshore_pumps
                 .keys()
-                .map(|entity_id| self.offshore_pump_status(*entity_id)),
+                .map(|entity_id| self.offshore_pump_status(*entity_id, fluids.water)),
         );
 
         MachineStatusSnapshot {
@@ -344,8 +344,13 @@ impl Simulation {
         MachineStatus::Working
     }
 
-    fn boiler_status(&self, entity_id: EntityId, state: &BoilerState) -> MachineStatus {
-        let ids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
+    fn boiler_status(
+        &self,
+        entity_id: EntityId,
+        state: &BoilerState,
+        water: FluidId,
+        steam: FluidId,
+    ) -> MachineStatus {
         let Some(placed) = self.entities.placed_entity(entity_id) else {
             return MachineStatus::Idle;
         };
@@ -373,12 +378,10 @@ impl Simulation {
         }) else {
             return MachineStatus::NoFluid;
         };
-        if self.fluid_network_total_for_fluid(water_network_id, ids.fluids.water) < water_amount {
+        if self.fluid_network_total_for_fluid(water_network_id, water) < water_amount {
             return MachineStatus::NoFluid;
         }
-        if self.fluid_network_available_capacity_for_fluid(steam_network_id, ids.fluids.steam)
-            < steam_amount
-        {
+        if self.fluid_network_available_capacity_for_fluid(steam_network_id, steam) < steam_amount {
             return MachineStatus::OutputFull;
         }
         if state.energy.fuel_slot.is_none() && state.energy.energy_remaining_joules <= f64::EPSILON
@@ -388,13 +391,10 @@ impl Simulation {
         MachineStatus::Working
     }
 
-    fn steam_engine_status(&self, entity_id: EntityId) -> MachineStatus {
+    fn steam_engine_status(&self, entity_id: EntityId, steam: FluidId) -> MachineStatus {
         if self.power_summary.consumption_watts == 0 {
             return MachineStatus::Idle;
         }
-        let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
-            .fluids
-            .steam;
         let Some(engine) = self.steam_engine_prototype(entity_id) else {
             return MachineStatus::Idle;
         };
@@ -411,10 +411,7 @@ impl Simulation {
         MachineStatus::Working
     }
 
-    fn offshore_pump_status(&self, entity_id: EntityId) -> MachineStatus {
-        let water = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
-            .fluids
-            .water;
+    fn offshore_pump_status(&self, entity_id: EntityId, water: FluidId) -> MachineStatus {
         let Some(network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
             entity_id,
             box_index: 0,

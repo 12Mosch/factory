@@ -183,6 +183,13 @@ fn power_stat_formatting_uses_summary_and_network_rows() {
             ..Default::default()
         },
     ];
+    let passthrough_points = power_graph_points(&samples, 4);
+    assert_eq!(passthrough_points.len(), samples.len());
+    assert_eq!(passthrough_points[0].production_watts, 100);
+    assert_eq!(passthrough_points[0].consumption_watts, 50);
+    assert_eq!(passthrough_points[1].production_watts, 200);
+    assert_eq!(passthrough_points[1].consumption_watts, 150);
+
     let points = power_graph_points(&samples, 1);
     assert_eq!(points.len(), 1);
     assert_eq!(points[0].production_watts, 200);
