@@ -583,9 +583,26 @@ mod tests {
         refresh_painted_chunks(&sim, &settings, &mut cache);
 
         let target_chunk = ChunkCoord { x: 0, y: -9 };
+        let before_chunk_revision = sim.world().chunk_revision();
+        assert!(
+            !sim.world().chunks.contains_key(&target_chunk),
+            "target chunk should start outside the generated world"
+        );
         let target = first_walkable_tile_in_chunk(sim.seed(), target_chunk);
         move_player_to_tile(&mut sim, target);
         sim.tick();
+        assert!(
+            sim.world().chunks.contains_key(&target_chunk),
+            "moving to the target should stream the chunk"
+        );
+        assert!(
+            sim.world().chunk_revision() > before_chunk_revision,
+            "streaming the target chunk should advance chunk revision"
+        );
+        assert!(
+            sim.is_chunk_revealed(target_chunk),
+            "ticking at the target should reveal the streamed chunk"
+        );
 
         update_map_pixels_incremental(&sim, &settings, &mut cache);
 
