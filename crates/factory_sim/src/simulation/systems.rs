@@ -2,7 +2,6 @@ use super::*;
 
 impl Simulation {
     pub fn advance_transport_belts(&mut self) {
-        let tile_to_endpoint = transport_endpoint_map(&self.entities);
         let mut lane_keys = self
             .entities
             .transport_belts
@@ -44,7 +43,7 @@ impl Simulation {
                 },
             ]
         }));
-        let mut advancement = TransportBeltAdvancement::new(&mut self.entities, tile_to_endpoint);
+        let mut advancement = TransportBeltAdvancement::new(&mut self.entities);
 
         for key in lane_keys {
             advancement.process_lane(key);

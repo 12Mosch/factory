@@ -124,17 +124,21 @@ fn world_chunk_mesh(chunk: &factory_sim::Chunk, ids: RenderPrototypeIds) -> Mesh
 mod tests {
     use super::*;
     use crate::rendering::belts::{
-        BeltDirectionSprite, BeltItemSprite, sync_belt_direction_rendering,
-        sync_belt_item_rendering,
+        BeltDirectionSprite, BeltItemSprite, measured_sync_belt_direction_rendering,
+        measured_sync_belt_item_rendering, sync_belt_direction_rendering, sync_belt_item_rendering,
     };
-    use crate::rendering::entities::{PlacedEntitySprite, sync_placed_entity_rendering};
+    use crate::rendering::entities::{
+        PlacedEntitySprite, measured_sync_placed_entity_rendering, sync_placed_entity_rendering,
+    };
     use crate::rendering::resources::{
-        ResourceRenderCache, ResourceRenderSettings, ResourceSprite, sync_resource_debug_rendering,
+        ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
+        measured_sync_resource_debug_rendering, sync_resource_debug_rendering,
     };
     use crate::resources::{MapTextureBounds, RenderSyncStats};
-    use factory_data::{BasePrototypeIds, entity_prototype_id_by_name};
-    use factory_sim::{ChunkCoord, Direction, Simulation};
+    use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
+    use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation};
     use std::collections::BTreeSet;
+    use std::time::Duration;
 
     #[test]
     fn render_sync_counts_are_bounded_by_visible_chunks() {
@@ -226,6 +230,101 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore]
+    fn render_sync_small_benchmark() {
+        let sim = small_render_sync_fixture();
+        let visible = visible_window();
+        let mut app = render_sync_app(sim, visible);
+
+        app.update();
+        let mut samples = Vec::with_capacity(300);
+        for _ in 0..300 {
+            app.update();
+            samples.push(app.world().resource::<RenderSyncStats>().total);
+        }
+
+        samples.sort_unstable();
+        let average = Duration::from_nanos(
+            (samples.iter().map(Duration::as_nanos).sum::<u128>() / samples.len() as u128) as u64,
+        );
+        let p95 = samples[((samples.len() * 95).div_ceil(100)).saturating_sub(1)];
+        let max = *samples.last().expect("render sync samples should exist");
+        let visible_chunks = app.world().resource::<VisibleChunks>().chunks.len();
+        let visible_entities = placed_entity_sprite_count(&mut app);
+
+        println!(
+            "render_sync_small:\n  render sync: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  visible chunks: {}\n  visible entities: {}",
+            average.as_secs_f64() * 1000.0,
+            p95.as_secs_f64() * 1000.0,
+            max.as_secs_f64() * 1000.0,
+            visible_chunks,
+            visible_entities
+        );
+    }
+
+    fn small_render_sync_fixture() -> Simulation {
+        let mut sim = Simulation::new_test_world(123);
+        for y in -4..=4 {
+            for x in -4..=4 {
+                sim.ensure_chunk_generated(ChunkCoord { x, y });
+            }
+        }
+
+        place_entities(&mut sim, "assembling_machine", 100, Direction::North);
+        let belts = place_entities(&mut sim, "transport_belt", 1_000, Direction::East);
+        let iron_ore = item_id_by_name(sim.catalog(), "iron_ore");
+        for belt_id in belts {
+            let _ = sim.insert_item_onto_belt(belt_id, 0, iron_ore);
+            let _ = sim.insert_item_onto_belt(belt_id, 1, iron_ore);
+        }
+
+        sim
+    }
+
+    fn visible_window() -> VisibleChunks {
+        let visible_chunks = (-4..=-2)
+            .flat_map(|y| (-4..=-2).map(move |x| ChunkCoord { x, y }))
+            .collect::<BTreeSet<_>>();
+        VisibleChunks {
+            chunks: visible_chunks,
+            tile_bounds: Some(MapTextureBounds {
+                min_x: -4 * CHUNK_SIZE,
+                min_y: -4 * CHUNK_SIZE,
+                width: (CHUNK_SIZE * 3) as u32,
+                height: (CHUNK_SIZE * 3) as u32,
+            }),
+            revision: 1,
+        }
+    }
+
+    fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
+        let mut app = App::new();
+        app.insert_resource(SimResource { sim })
+            .insert_resource(visible)
+            .init_resource::<WorldRenderCache>()
+            .init_resource::<ResourceRenderCache>()
+            .insert_resource(ResourceRenderSettings {
+                show_amount_labels: false,
+            })
+            .init_resource::<RenderSyncStats>()
+            .init_resource::<PresentationReloadToken>()
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<ColorMaterial>::default())
+            .add_systems(
+                Update,
+                (
+                    sync_visible_world_tiles,
+                    measured_sync_resource_debug_rendering,
+                    measured_sync_placed_entity_rendering,
+                    measured_sync_belt_direction_rendering,
+                    measured_sync_belt_item_rendering,
+                )
+                    .chain(),
+            );
+        app
+    }
+
     fn place_belts_across_generated_world(sim: &mut Simulation) {
         let belt = entity_prototype_id_by_name(sim.catalog(), "transport_belt");
         let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
@@ -240,6 +339,52 @@ mod tests {
                 .expect("validated belt should place");
             let _ = sim.insert_item_onto_belt(entity_id, 0, iron_ore);
         }
+    }
+
+    fn place_entities(
+        sim: &mut Simulation,
+        prototype_name: &str,
+        count: usize,
+        direction: Direction,
+    ) -> Vec<factory_sim::EntityId> {
+        let prototype_id = entity_prototype_id_by_name(sim.catalog(), prototype_name);
+        let mut placed = Vec::with_capacity(count);
+
+        for (x, y) in deterministic_tile_coords(sim) {
+            if placed.len() == count {
+                return placed;
+            }
+            if sim.can_place_entity(prototype_id, x, y, direction).is_err() {
+                continue;
+            }
+            placed.push(
+                sim.place_entity(prototype_id, x, y, direction)
+                    .expect("validated render benchmark placement should succeed"),
+            );
+        }
+
+        panic!(
+            "could only place {} of {count} {prototype_name}",
+            placed.len()
+        );
+    }
+
+    fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
+        let mut chunks = sim.world().chunks.keys().copied().collect::<Vec<_>>();
+        chunks.sort_unstable();
+        chunks
+            .into_iter()
+            .flat_map(|coord| {
+                (0..CHUNK_SIZE * CHUNK_SIZE).map(move |index| {
+                    let local_x = index.rem_euclid(CHUNK_SIZE);
+                    let local_y = index.div_euclid(CHUNK_SIZE);
+                    (
+                        coord.x * CHUNK_SIZE + local_x,
+                        coord.y * CHUNK_SIZE + local_y,
+                    )
+                })
+            })
+            .collect()
     }
 
     fn first_placeable_tile_in_chunk(

@@ -210,6 +210,10 @@ impl SimulationSnapshot {
             power_summary: self.power_summary,
             power_networks: self.power_networks,
             entity_power_statuses: self.entity_power_statuses,
+            power_topology_dirty: true,
+            power_topology: PowerTopologyCache::default(),
+            #[cfg(test)]
+            power_topology_rebuilds: 0,
             fluid_networks: self.fluid_networks,
         }
     }

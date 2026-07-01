@@ -101,7 +101,7 @@ Machines: {}
 Inserters: {}
 Machines active/idle: {}/{}
 Power: production {}, consumption {}, satisfaction {:.1}%
-Phases: belts {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync {}",
+Phases: belts {}, fluids {}, power rebuild {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync {}",
         snapshot.tick,
         snapshot.ups,
         format_optional(snapshot.fps, "", 1),
@@ -119,6 +119,8 @@ Phases: belts {}, machines {}, inserters {}, inventory transfers {}, chunk looku
         format_watts(snapshot.power.consumption_watts),
         f64::from(snapshot.power.satisfaction_permyriad) / 100.0,
         format_duration_ms(snapshot.sim_profile.last_tick.belts),
+        format_duration_ms(snapshot.sim_profile.last_tick.fluids),
+        format_duration_ms(snapshot.sim_profile.last_tick.power_rebuild),
         format_duration_ms(snapshot.sim_profile.last_tick.machines),
         format_duration_ms(snapshot.sim_profile.last_tick.inserters),
         format_duration_ms(snapshot.sim_profile.last_tick.inventory_transfers),
@@ -158,10 +160,12 @@ mod tests {
         let sim_profile = SimProfileStats {
             last_tick: SimulationTickProfile {
                 belts: Duration::from_micros(100),
-                machines: Duration::from_micros(200),
-                inserters: Duration::from_micros(300),
-                inventory_transfers: Duration::from_micros(400),
-                chunk_lookup: Duration::from_micros(500),
+                fluids: Duration::from_micros(200),
+                power_rebuild: Duration::from_micros(300),
+                machines: Duration::from_micros(400),
+                inserters: Duration::from_micros(500),
+                inventory_transfers: Duration::from_micros(600),
+                chunk_lookup: Duration::from_micros(700),
                 ..default()
             },
             rolling_average_sim_tick_ms: 1.25,
@@ -210,6 +214,8 @@ mod tests {
             "Machines active/idle:",
             "Power:",
             "belts",
+            "fluids",
+            "power rebuild",
             "machines",
             "inserters",
             "inventory transfers",

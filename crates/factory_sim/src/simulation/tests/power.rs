@@ -298,6 +298,165 @@ fn power_summary_reports_production_consumption_and_satisfaction() {
 }
 
 #[test]
+fn initial_tick_builds_power_topology_once_and_preserves_power_summary() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    assert_eq!(sim.power_topology_rebuild_count(), 0);
+    sim.tick();
+
+    assert_eq!(sim.power_topology_rebuild_count(), 1);
+    assert_eq!(
+        sim.power_summary(),
+        PowerSummary {
+            production_watts: 77_500,
+            available_production_watts: 79_200,
+            consumption_watts: 77_500,
+            satisfaction_permyriad: 10_000,
+            network_count: 1,
+        }
+    );
+}
+
+#[test]
+fn repeated_ticks_without_topology_edits_do_not_rebuild_power_topology() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+    let rebuilds_after_initial_tick = sim.power_topology_rebuild_count();
+    for _ in 0..10 {
+        sim.tick();
+    }
+
+    assert_eq!(
+        sim.power_topology_rebuild_count(),
+        rebuilds_after_initial_tick
+    );
+}
+
+#[test]
+fn placing_electric_pole_dirties_and_rebuilds_power_topology() {
+    let mut sim = Simulation::new_test_world(123);
+    let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+
+    sim.tick();
+    let rebuilds_after_initial_tick = sim.power_topology_rebuild_count();
+    sim.place_entity(pole, x, y, Direction::North)
+        .expect("pole should be placeable");
+    sim.tick();
+
+    assert_eq!(
+        sim.power_topology_rebuild_count(),
+        rebuilds_after_initial_tick + 1
+    );
+}
+
+#[test]
+fn removing_electric_pole_dirties_and_rebuilds_power_topology() {
+    let mut sim = Simulation::new_test_world(123);
+    let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+    let pole_id = sim
+        .place_entity(pole, x, y, Direction::North)
+        .expect("pole should be placeable");
+
+    sim.tick();
+    let rebuilds_after_initial_tick = sim.power_topology_rebuild_count();
+    sim.remove_entity(pole_id)
+        .expect("pole should be removable");
+    sim.tick();
+
+    assert_eq!(
+        sim.power_topology_rebuild_count(),
+        rebuilds_after_initial_tick + 1
+    );
+}
+
+#[test]
+fn placing_and_removing_electric_consumer_updates_coverage_and_power_status() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+
+    sim.tick();
+    let rebuilds_after_fixture = sim.power_topology_rebuild_count();
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("covered assembler should be placeable");
+    sim.tick();
+
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .network_id,
+        Some(0)
+    );
+    assert_eq!(
+        sim.power_topology_rebuild_count(),
+        rebuilds_after_fixture + 1
+    );
+
+    sim.remove_entity(assembler_id)
+        .expect("assembler should be removable");
+    sim.tick();
+
+    assert!(sim.entity_power_status(assembler_id).is_none());
+    assert_eq!(
+        sim.power_topology_rebuild_count(),
+        rebuilds_after_fixture + 2
+    );
+}
+
+#[test]
+fn boiler_fuel_and_fluid_changes_update_power_without_rebuilding_topology() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 3, 3, (3, 1));
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+    assert!(sim.power_summary().available_production_watts > 0);
+    let rebuilds_after_initial_tick = sim.power_topology_rebuild_count();
+
+    {
+        let boiler = sim
+            .entities
+            .boiler_state_mut(boiler_id)
+            .expect("fixture boiler should expose state");
+        boiler.energy.fuel_slot = None;
+        boiler.energy.energy_remaining_joules = 0.0;
+    }
+    for boxes in sim.entities.fluid_boxes.values_mut() {
+        for fluid_box in boxes {
+            fluid_box.fluid_id = None;
+            fluid_box.amount_milliunits = 0;
+        }
+    }
+    sim.invalidate_fluid_state();
+    sim.invalidate_power_dynamic_state();
+    sim.tick();
+
+    assert_eq!(
+        sim.power_topology_rebuild_count(),
+        rebuilds_after_initial_tick
+    );
+    assert_eq!(sim.power_summary().available_production_watts, 0);
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should report power status")
+            .satisfaction_permyriad,
+        0
+    );
+}
+
+#[test]
 fn save_load_preserves_state_hash_after_electricity_entities_exist() {
     let mut sim = Simulation::new_test_world(123);
     let assembler_id = place_assembling_machine(&mut sim);

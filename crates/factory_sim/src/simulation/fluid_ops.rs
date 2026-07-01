@@ -67,10 +67,9 @@ impl Simulation {
             }
         }
 
-        self.fluid_networks = self
-            .build_fluid_networks()
-            .into_iter()
-            .map(|network| self.fluid_network_snapshot(&network))
+        self.fluid_networks = networks
+            .iter()
+            .map(|network| self.fluid_network_snapshot(network))
             .collect();
     }
 

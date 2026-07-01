@@ -38,7 +38,24 @@ struct UnionFind {
 }
 
 impl Simulation {
+    pub(super) fn prototype_affects_power_topology(
+        &self,
+        prototype: &factory_data::EntityPrototype,
+    ) -> bool {
+        prototype.electric_pole.is_some()
+            || prototype.electric_energy_source.is_some()
+            || prototype.steam_engine.is_some()
+            || prototype.boiler.is_some()
+            || prototype.offshore_pump.is_some()
+            || !prototype.fluid_boxes.is_empty()
+    }
+
     pub(super) fn invalidate_power_state(&mut self) {
+        self.power_topology_dirty = true;
+        self.invalidate_power_dynamic_state();
+    }
+
+    pub(super) fn invalidate_power_dynamic_state(&mut self) {
         self.power_summary = PowerSummary {
             satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
             ..PowerSummary::default()
@@ -47,12 +64,26 @@ impl Simulation {
         self.entity_power_statuses.clear();
     }
 
-    pub(super) fn rebuild_power_state(&mut self) {
-        let (network_ids_by_entity, mut networks) = self.build_pole_networks();
+    pub(super) fn refresh_power_state(&mut self) {
+        if self.power_topology_dirty {
+            self.power_topology = self.rebuild_power_topology();
+            self.power_topology_dirty = false;
+            #[cfg(test)]
+            {
+                self.power_topology_rebuilds += 1;
+            }
+        }
+
+        let mut networks = self.power_topology.network_accumulators();
         let consumer_demands = self.consumer_power_demands();
 
         for (entity_id, (active_usage_watts, drain_watts)) in &consumer_demands {
-            let Some(network_id) = network_ids_by_entity.get(entity_id).copied() else {
+            let Some(network_id) = self
+                .power_topology
+                .network_ids_by_entity
+                .get(entity_id)
+                .copied()
+            else {
                 continue;
             };
             let network = &mut networks[network_id as usize];
@@ -62,8 +93,10 @@ impl Simulation {
                 .saturating_add(active_usage_watts.saturating_add(*drain_watts));
         }
 
-        let engine_assignments =
-            self.assign_steam_engines_to_fluid_networks(&network_ids_by_entity, &networks);
+        let engine_assignments = self.assign_steam_engines_to_fluid_networks(
+            &self.power_topology.network_ids_by_entity,
+            &networks,
+        );
         for assignment in engine_assignments.values() {
             let network = &mut networks[assignment.network_id as usize];
             network.producer_count += 1;
@@ -86,14 +119,14 @@ impl Simulation {
         self.rebuild_fluid_networks_and_equalize();
         self.power_networks = network_snapshots(&networks);
         self.power_summary = aggregate_power_summary(&self.power_networks);
-        self.entity_power_statuses =
-            self.consumer_power_statuses(network_ids_by_entity, consumer_demands);
+        self.entity_power_statuses = self
+            .consumer_power_statuses(&self.power_topology.network_ids_by_entity, consumer_demands);
     }
 
-    fn build_pole_networks(&self) -> (BTreeMap<EntityId, u32>, Vec<NetworkAccumulator>) {
+    fn rebuild_power_topology(&self) -> PowerTopologyCache {
         let poles = self.pole_nodes();
         if poles.is_empty() {
-            return (BTreeMap::new(), Vec::new());
+            return PowerTopologyCache::default();
         }
 
         let mut union_find = UnionFind::new(poles.len());
@@ -113,18 +146,13 @@ impl Simulation {
             .enumerate()
             .map(|(network_id, root)| (*root, network_id as u32))
             .collect::<BTreeMap<_, _>>();
-        let mut networks = (0..root_network_ids.len())
-            .map(|_| NetworkAccumulator {
-                satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
-                ..NetworkAccumulator::default()
-            })
-            .collect::<Vec<_>>();
+        let mut pole_counts = vec![0; root_network_ids.len()];
         let mut coverage = BTreeMap::<(i32, i32), u32>::new();
 
         for (index, pole) in poles.iter().enumerate() {
             let root = union_find.find(index);
             let network_id = root_network_ids[&root];
-            networks[network_id as usize].pole_count += 1;
+            pole_counts[network_id as usize] += 1;
 
             for tile in pole_supply_tiles(pole.placed, pole.prototype) {
                 coverage
@@ -147,7 +175,10 @@ impl Simulation {
             }
         }
 
-        (network_ids_by_entity, networks)
+        PowerTopologyCache {
+            network_ids_by_entity,
+            pole_counts,
+        }
     }
 
     fn pole_nodes(&self) -> Vec<PoleNode<'_>> {
@@ -202,7 +233,7 @@ impl Simulation {
 
     fn consumer_power_statuses(
         &self,
-        network_ids_by_entity: BTreeMap<EntityId, u32>,
+        network_ids_by_entity: &BTreeMap<EntityId, u32>,
         consumer_demands: BTreeMap<EntityId, (u64, u64)>,
     ) -> BTreeMap<EntityId, EntityPowerStatus> {
         consumer_demands
@@ -473,6 +504,24 @@ impl Simulation {
         } else {
             false
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn power_topology_rebuild_count(&self) -> u64 {
+        self.power_topology_rebuilds
+    }
+}
+
+impl PowerTopologyCache {
+    fn network_accumulators(&self) -> Vec<NetworkAccumulator> {
+        self.pole_counts
+            .iter()
+            .map(|pole_count| NetworkAccumulator {
+                pole_count: *pole_count,
+                satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
+                ..NetworkAccumulator::default()
+            })
+            .collect()
     }
 }
 
