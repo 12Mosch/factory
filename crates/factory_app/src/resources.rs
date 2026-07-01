@@ -1,7 +1,7 @@
 use bevy::prelude::{ColorMaterial, Entity, Handle, Image, Resource};
 use factory_data::{EntityPrototypeId, ItemId, TechnologyId};
 use factory_sim::{ChunkCoord, Direction, EntityId, Simulation, SimulationTickProfile};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::Duration;
 
 #[derive(Resource)]
@@ -143,6 +143,13 @@ pub struct VisibleChunks {
     pub chunks: BTreeSet<ChunkCoord>,
     pub tile_bounds: Option<MapTextureBounds>,
     pub revision: u64,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct VisibleEntityIds {
+    pub(crate) ids: HashSet<EntityId>,
+    pub(crate) visible_revision: u64,
+    pub(crate) entity_signature: u64,
 }
 
 #[derive(Resource, Default)]

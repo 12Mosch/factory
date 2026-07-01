@@ -129,12 +129,13 @@ mod tests {
     };
     use crate::rendering::entities::{
         PlacedEntitySprite, measured_sync_placed_entity_rendering, sync_placed_entity_rendering,
+        update_visible_entity_ids,
     };
     use crate::rendering::resources::{
-        ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
+        ResourceAmountLabel, ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
         measured_sync_resource_debug_rendering, sync_resource_debug_rendering,
     };
-    use crate::resources::{MapTextureBounds, RenderSyncStats};
+    use crate::resources::{MapTextureBounds, RenderSyncStats, VisibleEntityIds};
     use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
     use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation};
     use std::collections::BTreeSet;
@@ -174,6 +175,7 @@ mod tests {
             .insert_resource(visible)
             .init_resource::<WorldRenderCache>()
             .init_resource::<ResourceRenderCache>()
+            .init_resource::<VisibleEntityIds>()
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: false,
             })
@@ -186,6 +188,7 @@ mod tests {
                 (
                     sync_visible_world_tiles,
                     sync_resource_debug_rendering,
+                    update_visible_entity_ids,
                     sync_placed_entity_rendering,
                     sync_belt_direction_rendering,
                     sync_belt_item_rendering,
@@ -228,6 +231,68 @@ mod tests {
             resource_sprite_count(&mut app)
                 <= visible_chunk_count * (CHUNK_SIZE * CHUNK_SIZE) as usize
         );
+    }
+
+    #[test]
+    fn resource_visibility_changes_reuse_overlapping_sprites_and_labels() {
+        let mut sim = Simulation::new_test_world(123);
+        for y in -10..=10 {
+            for x in -10..=10 {
+                sim.ensure_chunk_generated(ChunkCoord { x, y });
+            }
+        }
+
+        let (resource_chunk, resource_coord) = sim
+            .world()
+            .chunks
+            .iter()
+            .find_map(|(&coord, chunk)| {
+                resource_coord_in_chunk(coord, chunk).map(|tile| (coord, tile))
+            })
+            .expect("generated test world should include a resource chunk");
+        let first_visible = visible_for_chunks([
+            ChunkCoord {
+                x: resource_chunk.x - 1,
+                y: resource_chunk.y,
+            },
+            resource_chunk,
+        ]);
+        let mut second_visible = visible_for_chunks([
+            resource_chunk,
+            ChunkCoord {
+                x: resource_chunk.x + 1,
+                y: resource_chunk.y,
+            },
+        ]);
+        second_visible.revision = 2;
+
+        let mut app = App::new();
+        app.insert_resource(SimResource { sim })
+            .insert_resource(first_visible)
+            .init_resource::<ResourceRenderCache>()
+            .insert_resource(ResourceRenderSettings {
+                show_amount_labels: true,
+            })
+            .add_systems(Update, sync_resource_debug_rendering);
+
+        app.update();
+        let first_sprite = app
+            .world()
+            .resource::<ResourceRenderCache>()
+            .sprite_entities[&resource_coord];
+        let first_label =
+            app.world().resource::<ResourceRenderCache>().label_entities[&resource_coord];
+
+        *app.world_mut().resource_mut::<VisibleChunks>() = second_visible;
+        app.update();
+
+        let cache = app.world().resource::<ResourceRenderCache>();
+        assert_eq!(cache.sprite_entities[&resource_coord], first_sprite);
+        assert_eq!(cache.label_entities[&resource_coord], first_label);
+        let sprite_entities = cache.sprite_entities.len();
+        let label_entities = cache.label_entities.len();
+        assert_eq!(resource_sprite_count(&mut app), sprite_entities);
+        assert_eq!(resource_label_count(&mut app), label_entities);
     }
 
     #[test]
@@ -298,12 +363,64 @@ mod tests {
         }
     }
 
+    fn visible_for_chunks<const N: usize>(chunks: [ChunkCoord; N]) -> VisibleChunks {
+        let chunks = BTreeSet::from(chunks);
+        let min_chunk_x = chunks
+            .iter()
+            .map(|coord| coord.x)
+            .min()
+            .expect("visible chunks should not be empty");
+        let max_chunk_x = chunks
+            .iter()
+            .map(|coord| coord.x)
+            .max()
+            .expect("visible chunks should not be empty");
+        let min_chunk_y = chunks
+            .iter()
+            .map(|coord| coord.y)
+            .min()
+            .expect("visible chunks should not be empty");
+        let max_chunk_y = chunks
+            .iter()
+            .map(|coord| coord.y)
+            .max()
+            .expect("visible chunks should not be empty");
+
+        VisibleChunks {
+            chunks,
+            tile_bounds: Some(MapTextureBounds {
+                min_x: min_chunk_x * CHUNK_SIZE,
+                min_y: min_chunk_y * CHUNK_SIZE,
+                width: ((max_chunk_x - min_chunk_x + 1) * CHUNK_SIZE) as u32,
+                height: ((max_chunk_y - min_chunk_y + 1) * CHUNK_SIZE) as u32,
+            }),
+            revision: 1,
+        }
+    }
+
+    fn resource_coord_in_chunk(
+        coord: ChunkCoord,
+        chunk: &factory_sim::Chunk,
+    ) -> Option<(i32, i32)> {
+        chunk.tiles.iter().enumerate().find_map(|(index, tile)| {
+            tile.resource.map(|_| {
+                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                (
+                    coord.x * CHUNK_SIZE + local_x,
+                    coord.y * CHUNK_SIZE + local_y,
+                )
+            })
+        })
+    }
+
     fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
         let mut app = App::new();
         app.insert_resource(SimResource { sim })
             .insert_resource(visible)
             .init_resource::<WorldRenderCache>()
             .init_resource::<ResourceRenderCache>()
+            .init_resource::<VisibleEntityIds>()
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: false,
             })
@@ -316,6 +433,7 @@ mod tests {
                 (
                     sync_visible_world_tiles,
                     measured_sync_resource_debug_rendering,
+                    update_visible_entity_ids,
                     measured_sync_placed_entity_rendering,
                     measured_sync_belt_direction_rendering,
                     measured_sync_belt_item_rendering,
@@ -429,6 +547,13 @@ mod tests {
     fn resource_sprite_count(app: &mut App) -> usize {
         app.world_mut()
             .query_filtered::<Entity, With<ResourceSprite>>()
+            .iter(app.world())
+            .count()
+    }
+
+    fn resource_label_count(app: &mut App) -> usize {
+        app.world_mut()
+            .query_filtered::<Entity, With<ResourceAmountLabel>>()
             .iter(app.world())
             .count()
     }

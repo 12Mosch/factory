@@ -50,9 +50,9 @@ pub(crate) fn sync_resource_debug_rendering(
     }
 
     let ids = RenderPrototypeIds::from_catalog(sim.sim.catalog());
-    if initial_sync || visibility_changed {
+    if initial_sync || visibility_changed || label_setting_changed {
         let resources = collect_resource_tiles(&sim.sim, &visible);
-        full_sync_resources(
+        reconcile_resource_tiles(
             &mut commands,
             &mut cache,
             &mut sprites,
@@ -65,14 +65,6 @@ pub(crate) fn sync_resource_debug_rendering(
         cache.last_visible_revision = visible.revision;
         cache.show_amount_labels = settings.show_amount_labels;
         return;
-    }
-
-    if label_setting_changed && !settings.show_amount_labels {
-        for (entity, _) in &mut labels {
-            commands.entity(entity).despawn();
-        }
-        cache.label_entities.clear();
-        cache.show_amount_labels = false;
     }
 
     if resources_changed {
@@ -96,7 +88,7 @@ pub(crate) fn sync_resource_debug_rendering(
             }
         } else {
             let resources = collect_resource_tiles(&sim.sim, &visible);
-            full_sync_resources(
+            reconcile_resource_tiles(
                 &mut commands,
                 &mut cache,
                 &mut sprites,
@@ -107,12 +99,6 @@ pub(crate) fn sync_resource_debug_rendering(
             );
         }
         cache.last_resource_revision = Some(resource_revision);
-    }
-
-    if label_setting_changed && settings.show_amount_labels {
-        let resources = collect_resource_tiles(&sim.sim, &visible);
-        full_sync_resource_labels(&mut commands, &mut cache, &mut labels, &resources);
-        cache.show_amount_labels = true;
     }
 }
 
@@ -144,7 +130,7 @@ pub(crate) struct ResourceRenderParams<'w, 's> {
     stats: ResMut<'w, RenderSyncStats>,
 }
 
-fn full_sync_resources(
+fn reconcile_resource_tiles(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
     sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
@@ -153,43 +139,47 @@ fn full_sync_resources(
     ids: RenderPrototypeIds,
     show_amount_labels: bool,
 ) {
-    for (entity, _) in sprites.iter_mut() {
-        commands.entity(entity).despawn();
-    }
-    for (entity, _) in labels.iter_mut() {
-        commands.entity(entity).despawn();
-    }
-
-    cache.sprite_entities.clear();
-    cache.label_entities.clear();
-    cache.show_amount_labels = show_amount_labels;
-
-    for (&(x, y), &resource) in resources {
-        let entity = spawn_resource_sprite(commands, x, y, resource, ids);
-        cache.sprite_entities.insert((x, y), entity);
-
-        if show_amount_labels {
-            let entity = spawn_resource_label(commands, x, y, resource);
-            cache.label_entities.insert((x, y), entity);
+    let stale_sprites = cache
+        .sprite_entities
+        .keys()
+        .copied()
+        .filter(|coord| !resources.contains_key(coord))
+        .collect::<Vec<_>>();
+    for coord in stale_sprites {
+        if let Some(entity) = cache.sprite_entities.remove(&coord) {
+            commands.entity(entity).despawn();
         }
     }
-}
 
-fn full_sync_resource_labels(
-    commands: &mut Commands,
-    cache: &mut ResourceRenderCache,
-    labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    resources: &BTreeMap<(i32, i32), ResourceCell>,
-) {
-    for (entity, _) in labels.iter_mut() {
-        commands.entity(entity).despawn();
-    }
-
-    cache.label_entities.clear();
     for (&(x, y), &resource) in resources {
-        let entity = spawn_resource_label(commands, x, y, resource);
-        cache.label_entities.insert((x, y), entity);
+        sync_resource_sprite(commands, cache, sprites, x, y, resource, ids);
     }
+
+    if !show_amount_labels {
+        for (_, entity) in cache.label_entities.drain() {
+            commands.entity(entity).despawn();
+        }
+        cache.show_amount_labels = false;
+        return;
+    }
+
+    let stale_labels = cache
+        .label_entities
+        .keys()
+        .copied()
+        .filter(|coord| !resources.contains_key(coord))
+        .collect::<Vec<_>>();
+    for coord in stale_labels {
+        if let Some(entity) = cache.label_entities.remove(&coord) {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for (&(x, y), &resource) in resources {
+        sync_resource_label(commands, cache, labels, x, y, resource);
+    }
+
+    cache.show_amount_labels = true;
 }
 
 fn apply_resource_tile_change(

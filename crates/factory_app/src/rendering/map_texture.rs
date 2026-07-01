@@ -7,7 +7,7 @@ use factory_sim::{CHUNK_SIZE, ChunkCoord, Simulation};
 use std::hash::{Hash, Hasher};
 
 use crate::rendering::colors::{RenderPrototypeIds, resource_color, tile_color};
-use crate::rendering::entities::entity_prototype_render_style;
+use crate::rendering::entities::{entity_prototype_render_style, entity_signature};
 use crate::resources::{
     MapChunkPaintState, MapDisplaySettings, MapTextureBounds, MapTextureCache, SimResource,
 };
@@ -537,19 +537,6 @@ fn darkened(color: Color, factor: f32) -> [u8; 4] {
 
 fn color_to_pixel(color: Color) -> [u8; 4] {
     color.to_srgba().to_u8_array()
-}
-
-fn entity_signature(sim: &Simulation) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for placed in sim.entities().placed_entities() {
-        placed.id.raw().hash(&mut hasher);
-        placed.prototype_id.hash(&mut hasher);
-        placed.x.hash(&mut hasher);
-        placed.y.hash(&mut hasher);
-        placed.direction.hash(&mut hasher);
-        placed.footprint.hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 fn revealed_signature(sim: &Simulation) -> u64 {

@@ -9,9 +9,8 @@ use crate::constants::{
     BELT_DIRECTION_HEAD_SIZE, BELT_DIRECTION_SHAFT_LENGTH, BELT_DIRECTION_SHAFT_WIDTH,
     BELT_ITEM_LABEL_FONT_SIZE, BELT_ITEM_SPRITE_SIZE, TILE_SIZE,
 };
-use crate::rendering::entities::visible_entity_ids;
 use crate::rendering::transforms::{entity_translation, tile_translation};
-use crate::resources::{RenderSyncStats, SimResource, VisibleChunks};
+use crate::resources::{RenderSyncStats, SimResource, VisibleEntityIds};
 use crate::utils::compact_item_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,10 +44,10 @@ pub(crate) struct BeltItemLabel {
 pub(crate) fn sync_belt_direction_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
+    visible_entity_ids: Res<VisibleEntityIds>,
     mut sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
 ) {
-    let visible_ids = visible_entity_ids(&sim.sim, &visible);
+    let visible_ids = &visible_entity_ids.ids;
     let mut seen = HashSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
@@ -66,7 +65,7 @@ pub(crate) fn sync_belt_direction_rendering(
         }
     }
 
-    for entity_id in visible_ids {
+    for &entity_id in visible_ids {
         let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
             continue;
         };
@@ -101,19 +100,19 @@ pub(crate) fn sync_belt_direction_rendering(
 pub(crate) fn measured_sync_belt_direction_rendering(
     commands: Commands,
     sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
+    visible_entity_ids: Res<VisibleEntityIds>,
     sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_belt_direction_rendering(commands, sim, visible, sprites);
+    sync_belt_direction_rendering(commands, sim, visible_entity_ids, sprites);
     stats.record_belt_directions(started.elapsed());
 }
 
 pub(crate) fn sync_belt_item_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
+    visible_entity_ids: Res<VisibleEntityIds>,
     mut sprites: Query<
         (Entity, &BeltItemSprite, &mut Transform, &mut Sprite),
         Without<BeltItemLabel>,
@@ -124,7 +123,7 @@ pub(crate) fn sync_belt_item_rendering(
     >,
 ) {
     let ids = BasePrototypeIds::from_catalog(sim.sim.catalog());
-    let visible_ids = visible_entity_ids(&sim.sim, &visible);
+    let visible_ids = &visible_entity_ids.ids;
     let mut seen_sprites = HashSet::new();
     let mut seen_labels = HashSet::new();
 
@@ -178,7 +177,7 @@ pub(crate) fn sync_belt_item_rendering(
         }
     }
 
-    for entity_id in visible_ids {
+    for &entity_id in visible_ids {
         let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
             continue;
         };
@@ -245,13 +244,13 @@ pub(crate) fn sync_belt_item_rendering(
 pub(crate) fn measured_sync_belt_item_rendering(
     commands: Commands,
     sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
+    visible_entity_ids: Res<VisibleEntityIds>,
     sprites: Query<(Entity, &BeltItemSprite, &mut Transform, &mut Sprite), Without<BeltItemLabel>>,
     labels: Query<(Entity, &BeltItemLabel, &mut Transform, &mut Text2d), Without<BeltItemSprite>>,
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_belt_item_rendering(commands, sim, visible, sprites, labels);
+    sync_belt_item_rendering(commands, sim, visible_entity_ids, sprites, labels);
     stats.record_belt_items(started.elapsed());
 }
 
