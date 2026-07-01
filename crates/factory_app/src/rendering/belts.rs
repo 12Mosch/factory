@@ -10,7 +10,7 @@ use crate::constants::{
     BELT_ITEM_LABEL_FONT_SIZE, BELT_ITEM_SPRITE_SIZE, TILE_SIZE,
 };
 use crate::rendering::transforms::{entity_translation, tile_translation};
-use crate::resources::{RenderSyncStats, SimResource, VisibleEntityIds};
+use crate::resources::{RenderDetail, RenderSyncStats, SimResource, VisibleEntityIds};
 use crate::utils::compact_item_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,8 +45,19 @@ pub(crate) fn sync_belt_direction_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
+    detail: Res<RenderDetail>,
     mut sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
 ) {
+    if !detail.show_belt_directions {
+        for (entity, _, _, _) in &mut sprites {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+    if !visible_entity_ids.is_changed() && !detail.is_changed() {
+        return;
+    }
+
     let visible_ids = &visible_entity_ids.ids;
     let mut seen = HashSet::new();
 
@@ -101,11 +112,12 @@ pub(crate) fn measured_sync_belt_direction_rendering(
     commands: Commands,
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
+    detail: Res<RenderDetail>,
     sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_belt_direction_rendering(commands, sim, visible_entity_ids, sprites);
+    sync_belt_direction_rendering(commands, sim, visible_entity_ids, detail, sprites);
     stats.record_belt_directions(started.elapsed());
 }
 
@@ -113,6 +125,7 @@ pub(crate) fn sync_belt_item_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
+    detail: Res<RenderDetail>,
     mut sprites: Query<
         (Entity, &BeltItemSprite, &mut Transform, &mut Sprite),
         Without<BeltItemLabel>,
@@ -122,8 +135,19 @@ pub(crate) fn sync_belt_item_rendering(
         Without<BeltItemSprite>,
     >,
 ) {
+    if !detail.show_belt_items {
+        for (entity, _, _, _) in &mut sprites {
+            commands.entity(entity).despawn();
+        }
+        for (entity, _, _, _) in &mut labels {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+
     let ids = BasePrototypeIds::from_catalog(sim.sim.catalog());
     let visible_ids = &visible_entity_ids.ids;
+    let show_labels = detail.show_belt_item_labels;
     let mut seen_sprites = HashSet::new();
     let mut seen_labels = HashSet::new();
 
@@ -153,26 +177,32 @@ pub(crate) fn sync_belt_item_rendering(
         }
     }
 
-    for (entity, marker, mut transform, mut text) in &mut labels {
-        let key = (
-            marker.entity_id,
-            marker.input_port,
-            marker.lane_index,
-            marker.item_index,
-        );
-        if visible_ids.contains(&marker.entity_id)
-            && let Some((translation, label)) = transport_item_label_render_state(
-                &sim.sim,
+    if show_labels {
+        for (entity, marker, mut transform, mut text) in &mut labels {
+            let key = (
                 marker.entity_id,
                 marker.input_port,
                 marker.lane_index,
                 marker.item_index,
-            )
-        {
-            seen_labels.insert(key);
-            transform.translation = translation;
-            text.0 = label;
-        } else {
+            );
+            if visible_ids.contains(&marker.entity_id)
+                && let Some((translation, label)) = transport_item_label_render_state(
+                    &sim.sim,
+                    marker.entity_id,
+                    marker.input_port,
+                    marker.lane_index,
+                    marker.item_index,
+                )
+            {
+                seen_labels.insert(key);
+                transform.translation = translation;
+                text.0 = label;
+            } else {
+                commands.entity(entity).despawn();
+            }
+        }
+    } else {
+        for (entity, _, _, _) in &mut labels {
             commands.entity(entity).despawn();
         }
     }
@@ -187,6 +217,7 @@ pub(crate) fn sync_belt_item_rendering(
                 &sim.sim,
                 ids,
                 placed.id,
+                show_labels,
                 &seen_sprites,
                 &seen_labels,
             );
@@ -214,7 +245,7 @@ pub(crate) fn sync_belt_item_rendering(
                     ));
                 }
 
-                if !seen_labels.contains(&key) {
+                if show_labels && !seen_labels.contains(&key) {
                     let Some((translation, label)) = transport_item_label_render_state(
                         &sim.sim, placed.id, None, lane_index, item_index,
                     ) else {
@@ -245,12 +276,13 @@ pub(crate) fn measured_sync_belt_item_rendering(
     commands: Commands,
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
+    detail: Res<RenderDetail>,
     sprites: Query<(Entity, &BeltItemSprite, &mut Transform, &mut Sprite), Without<BeltItemLabel>>,
     labels: Query<(Entity, &BeltItemLabel, &mut Transform, &mut Text2d), Without<BeltItemSprite>>,
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_belt_item_rendering(commands, sim, visible_entity_ids, sprites, labels);
+    sync_belt_item_rendering(commands, sim, visible_entity_ids, detail, sprites, labels);
     stats.record_belt_items(started.elapsed());
 }
 
@@ -403,6 +435,7 @@ fn sync_splitter_item_rendering_for_entity(
     sim: &Simulation,
     ids: BasePrototypeIds,
     entity_id: EntityId,
+    show_labels: bool,
     seen_sprites: &HashSet<(EntityId, Option<usize>, usize, usize)>,
     seen_labels: &HashSet<(EntityId, Option<usize>, usize, usize)>,
 ) {
@@ -437,7 +470,7 @@ fn sync_splitter_item_rendering_for_entity(
                     ));
                 }
 
-                if !seen_labels.contains(&key) {
+                if show_labels && !seen_labels.contains(&key) {
                     let Some((translation, label)) = transport_item_label_render_state(
                         sim,
                         entity_id,

@@ -44,6 +44,10 @@ pub(crate) fn sync_placed_entity_rendering(
     visible_entity_ids: Res<VisibleEntityIds>,
     mut sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
 ) {
+    if !visible_entity_ids.is_changed() {
+        return;
+    }
+
     let visible_ids = &visible_entity_ids.ids;
     let mut seen = HashSet::new();
 
