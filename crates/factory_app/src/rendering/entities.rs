@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use factory_data::{EntityKind, EntityPrototypeId, PrototypeCatalog};
 use factory_sim::{Direction, EntityFootprint, EntityId, Simulation};
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use crate::constants::{
@@ -13,20 +14,37 @@ use crate::rendering::colors::{
     steam_engine_color, storage_tank_color, transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
-use crate::resources::{RenderSyncStats, SimResource, VisibleChunks};
+use crate::resources::{RenderSyncStats, SimResource, VisibleChunks, VisibleEntityIds};
 
 #[derive(Component)]
 pub(crate) struct PlacedEntitySprite {
     entity_id: EntityId,
 }
 
+pub(crate) fn update_visible_entity_ids(
+    sim: Res<SimResource>,
+    visible: Res<VisibleChunks>,
+    mut visible_entity_ids: ResMut<VisibleEntityIds>,
+) {
+    let entity_signature = entity_signature(&sim.sim);
+    if visible_entity_ids.visible_revision == visible.revision
+        && visible_entity_ids.entity_signature == entity_signature
+    {
+        return;
+    }
+
+    visible_entity_ids.ids = visible_entity_ids_for_chunks(&sim.sim, &visible);
+    visible_entity_ids.visible_revision = visible.revision;
+    visible_entity_ids.entity_signature = entity_signature;
+}
+
 pub(crate) fn sync_placed_entity_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
+    visible_entity_ids: Res<VisibleEntityIds>,
     mut sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
 ) {
-    let visible_ids = visible_entity_ids(&sim.sim, &visible);
+    let visible_ids = &visible_entity_ids.ids;
     let mut seen = HashSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
@@ -47,7 +65,7 @@ pub(crate) fn sync_placed_entity_rendering(
         }
     }
 
-    for entity_id in visible_ids {
+    for &entity_id in visible_ids {
         let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
             continue;
         };
@@ -71,16 +89,16 @@ pub(crate) fn sync_placed_entity_rendering(
 pub(crate) fn measured_sync_placed_entity_rendering(
     commands: Commands,
     sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
+    visible_entity_ids: Res<VisibleEntityIds>,
     sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_placed_entity_rendering(commands, sim, visible, sprites);
+    sync_placed_entity_rendering(commands, sim, visible_entity_ids, sprites);
     stats.record_placed_entities(started.elapsed());
 }
 
-pub(crate) fn visible_entity_ids(sim: &Simulation, visible: &VisibleChunks) -> HashSet<EntityId> {
+fn visible_entity_ids_for_chunks(sim: &Simulation, visible: &VisibleChunks) -> HashSet<EntityId> {
     let Some(bounds) = visible.tile_bounds else {
         return HashSet::new();
     };
@@ -91,6 +109,19 @@ pub(crate) fn visible_entity_ids(sim: &Simulation, visible: &VisibleChunks) -> H
         .entity_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y)
         .into_iter()
         .collect()
+}
+
+pub(crate) fn entity_signature(sim: &Simulation) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for placed in sim.entities().placed_entities() {
+        placed.id.raw().hash(&mut hasher);
+        placed.prototype_id.hash(&mut hasher);
+        placed.x.hash(&mut hasher);
+        placed.y.hash(&mut hasher);
+        placed.direction.hash(&mut hasher);
+        placed.footprint.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 pub(crate) fn renderable_entity_style(
