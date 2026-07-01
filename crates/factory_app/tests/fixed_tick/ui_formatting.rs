@@ -21,10 +21,12 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
     let sim_profile = SimProfileStats {
         last_tick: SimulationTickProfile {
             belts: Duration::from_micros(100),
-            machines: Duration::from_micros(200),
-            inserters: Duration::from_micros(300),
-            inventory_transfers: Duration::from_micros(400),
-            chunk_lookup: Duration::from_micros(500),
+            fluids: Duration::from_micros(200),
+            power_rebuild: Duration::from_micros(300),
+            machines: Duration::from_micros(400),
+            inserters: Duration::from_micros(500),
+            inventory_transfers: Duration::from_micros(600),
+            chunk_lookup: Duration::from_micros(700),
             ..Default::default()
         },
         rolling_average_sim_tick_ms: 1.25,
@@ -65,6 +67,8 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         "Sim tick:",
         "Entities:",
         "Power:",
+        "fluids",
+        "power rebuild",
         "render sync",
     ] {
         assert!(text.contains(label), "missing debug overlay label {label}");

@@ -89,7 +89,17 @@ pub struct Simulation {
     power_summary: PowerSummary,
     power_networks: Vec<PowerNetworkSnapshot>,
     entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
+    power_topology_dirty: bool,
+    power_topology: PowerTopologyCache,
+    #[cfg(test)]
+    power_topology_rebuilds: u64,
     fluid_networks: Vec<FluidNetworkSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+struct PowerTopologyCache {
+    network_ids_by_entity: BTreeMap<EntityId, u32>,
+    pole_counts: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]

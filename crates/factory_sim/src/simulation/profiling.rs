@@ -18,6 +18,8 @@ pub struct SimulationTickProfile {
     pub total: Duration,
     pub entity_motion: Duration,
     pub belts: Duration,
+    pub fluids: Duration,
+    pub power_rebuild: Duration,
     pub machines: Duration,
     pub inserters: Duration,
     pub inventory_transfers: Duration,
@@ -30,11 +32,14 @@ pub struct SimulationTickProfile {
 pub(crate) enum ProfilePhase {
     EntityMotion,
     Belts,
+    Fluids,
+    PowerRebuild,
     Machines,
     Inserters,
     InventoryTransfers,
     ChunkLookup,
     ManualCrafting,
+    #[cfg(debug_assertions)]
     Validation,
     Total,
 }
@@ -96,11 +101,14 @@ impl TickProfiler for TickProfileCollector {
         match phase {
             ProfilePhase::EntityMotion => self.profile.entity_motion += elapsed,
             ProfilePhase::Belts => self.profile.belts += elapsed,
+            ProfilePhase::Fluids => self.profile.fluids += elapsed,
+            ProfilePhase::PowerRebuild => self.profile.power_rebuild += elapsed,
             ProfilePhase::Machines => self.profile.machines += elapsed,
             ProfilePhase::Inserters => self.profile.inserters += elapsed,
             ProfilePhase::InventoryTransfers => self.profile.inventory_transfers += elapsed,
             ProfilePhase::ChunkLookup => self.profile.chunk_lookup += elapsed,
             ProfilePhase::ManualCrafting => self.profile.manual_crafting += elapsed,
+            #[cfg(debug_assertions)]
             ProfilePhase::Validation => self.profile.validation += elapsed,
             ProfilePhase::Total => self.profile.total += elapsed,
         }
@@ -154,7 +162,7 @@ impl Simulation {
     pub fn profiled_tick(&mut self) -> SimulationTickProfile {
         let mut profiler = TickProfileCollector::default();
         let span = profiler.begin();
-        crate::tick::advance_simulation_profiled(self, &mut profiler);
+        self.advance_one_tick(&mut profiler);
         profiler.finish(ProfilePhase::Total, span);
         profiler.into_profile()
     }

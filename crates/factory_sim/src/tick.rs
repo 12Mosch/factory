@@ -1,4 +1,6 @@
-use crate::simulation::{NoopTickProfiler, ProfilePhase, Simulation, TickProfiler};
+#[cfg(debug_assertions)]
+use crate::simulation::ProfilePhase;
+use crate::simulation::{NoopTickProfiler, Simulation, TickProfiler};
 
 pub fn advance_simulation(sim: &mut Simulation) {
     let mut profiler = NoopTickProfiler;

@@ -34,6 +34,10 @@ impl Simulation {
             },
             power_networks: Vec::new(),
             entity_power_statuses: BTreeMap::new(),
+            power_topology_dirty: true,
+            power_topology: PowerTopologyCache::default(),
+            #[cfg(test)]
+            power_topology_rebuilds: 0,
             fluid_networks: Vec::new(),
         };
         sim.reveal_chunks_around_player();
@@ -63,8 +67,8 @@ impl Simulation {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
-        self.advance_fluids_before_power();
-        self.rebuild_power_state();
+        profiler.measure(ProfilePhase::Fluids, || self.advance_fluids_before_power());
+        profiler.measure(ProfilePhase::PowerRebuild, || self.refresh_power_state());
 
         let machines = profiler.begin();
         self.advance_burner_mining_drills(profiler);

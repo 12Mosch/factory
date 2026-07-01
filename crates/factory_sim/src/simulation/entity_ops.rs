@@ -135,7 +135,9 @@ impl Simulation {
             splitter,
             inserter,
         });
-        self.invalidate_power_state();
+        if self.prototype_affects_power_topology(prototype) {
+            self.invalidate_power_state();
+        }
         self.invalidate_fluid_state();
         Ok(entity_id)
     }
@@ -169,15 +171,26 @@ impl Simulation {
             .validate_available(&footprint, Some(entity_id))?;
         self.entities
             .update_entity_footprint(entity_id, direction, footprint)?;
-        self.invalidate_power_state();
+        if self.prototype_affects_power_topology(prototype) {
+            self.invalidate_power_state();
+        }
         self.invalidate_fluid_state();
         Ok(())
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId) -> Option<PlacedEntity> {
         let removed = self.entities.remove_placed_entity(entity_id);
-        if removed.is_some() {
-            self.invalidate_power_state();
+        if let Some(removed) = &removed {
+            if self
+                .world
+                .prototypes
+                .entities
+                .get(removed.prototype_id.index())
+                .filter(|prototype| prototype.id == removed.prototype_id)
+                .is_some_and(|prototype| self.prototype_affects_power_topology(prototype))
+            {
+                self.invalidate_power_state();
+            }
             self.invalidate_fluid_state();
         }
         removed
@@ -217,7 +230,16 @@ impl Simulation {
             .expect("validated placed entity should still be removable");
         self.player_inventory = player_inventory;
         self.manual_mining_progress = None;
-        self.invalidate_power_state();
+        if self
+            .world
+            .prototypes
+            .entities
+            .get(removed.prototype_id.index())
+            .filter(|prototype| prototype.id == removed.prototype_id)
+            .is_some_and(|prototype| self.prototype_affects_power_topology(prototype))
+        {
+            self.invalidate_power_state();
+        }
         self.invalidate_fluid_state();
 
         Ok(removed)
@@ -674,7 +696,7 @@ impl Simulation {
         self.player_inventory.slots[player_slot_index] = None;
         let state = self.entities.boiler_state_mut(entity_id)?;
         insert_into_single_slot(&mut state.energy.fuel_slot, stack);
-        self.invalidate_power_state();
+        self.invalidate_power_dynamic_state();
 
         Ok(())
     }
@@ -702,7 +724,7 @@ impl Simulation {
         self.player_inventory
             .insert(&self.world.prototypes, stack.item_id, stack.count)
             .map_err(BoilerError::from)?;
-        self.invalidate_power_state();
+        self.invalidate_power_dynamic_state();
         Ok(())
     }
 
