@@ -268,7 +268,8 @@ impl Simulation {
             };
 
             let amount = per_tick_milliunits(pump.pumping_speed_per_second_milliunits);
-            self.add_fluid_to_network(network_id, water, amount);
+            let added = self.add_fluid_to_network(network_id, water, amount);
+            self.record_fluid_produced(water, added);
         }
     }
 
@@ -358,7 +359,9 @@ impl Simulation {
             if !self.consume_fluid_from_network(water_network_id, water, water_amount) {
                 continue;
             }
+            self.record_fluid_consumed(water, water_amount);
             let added = self.add_fluid_to_network(steam_network_id, steam, steam_amount);
+            self.record_fluid_produced(steam, added);
             debug_assert_eq!(added, steam_amount);
         }
     }

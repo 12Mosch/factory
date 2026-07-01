@@ -1,4 +1,4 @@
-use factory_data::{CraftingCategory, ItemId, PrototypeCatalog, RecipeId};
+use factory_data::{CraftingCategory, FluidId, ItemId, PrototypeCatalog, RecipeId};
 use factory_sim::{EntityId, ItemStack, Simulation};
 
 use crate::utils::compact_item_name;
@@ -122,6 +122,15 @@ pub(crate) fn format_item_display_name(catalog: &PrototypeCatalog, item_id: Item
         .get(item_id.index())
         .filter(|item| item.id == item_id)
         .map(|item| format_recipe_display_name(&item.name))
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+pub(crate) fn format_fluid_display_name(catalog: &PrototypeCatalog, fluid_id: FluidId) -> String {
+    catalog
+        .fluids
+        .get(fluid_id.index())
+        .filter(|fluid| fluid.id == fluid_id)
+        .map(|fluid| format_recipe_display_name(&fluid.name))
         .unwrap_or_else(|| "Unknown".to_string())
 }
 

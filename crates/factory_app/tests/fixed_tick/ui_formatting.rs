@@ -1,5 +1,5 @@
 use super::common::{
-    complete_research_by_name, entity_id_by_name, first_buildable_rect,
+    all_tile_coords, complete_research_by_name, entity_id_by_name, first_buildable_rect,
     first_resource_tile_for_app, format_item_name_for_test, item_id_by_name,
     place_powered_fixture_origin, recipe_id_by_name, technology_id_by_name,
 };
@@ -8,7 +8,10 @@ use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay}
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
 };
-use factory_app::ui::production_stats::{power_summary_lines, production_rows};
+use factory_app::ui::production_stats::{
+    bottleneck_lines, diagnostic_lines, fluid_consumption_rows, fluid_production_rows,
+    format_fluid_per_minute, power_graph_points, power_summary_lines, production_rows,
+};
 use factory_data::{CraftingCategory, PrototypeCatalog};
 use factory_sim::{
     Direction, Inventory, ItemStack, PowerSummary, Simulation, SimulationCounts,
@@ -100,6 +103,47 @@ fn production_stat_formatting_shows_per_minute_and_totals() {
 }
 
 #[test]
+fn fluid_stat_formatting_shows_per_minute_and_totals() {
+    let mut sim = Simulation::new_test_world(123);
+    let pump = entity_id_by_name(sim.catalog(), "offshore_pump");
+    let (x, y) = all_tile_coords(&sim)
+        .into_iter()
+        .find(|(x, y)| sim.can_place_entity(pump, *x, *y, Direction::North).is_ok())
+        .expect("expected placeable offshore pump");
+    sim.place_entity(pump, x, y, Direction::North)
+        .expect("offshore pump should place");
+    sim.tick();
+
+    let rows = fluid_production_rows(&sim);
+    let row = rows
+        .iter()
+        .find(|row| row.item_name == "Water")
+        .expect("water should appear in fluid production stats");
+
+    assert!(row.per_minute.ends_with("/min"));
+    assert_ne!(row.total, "0");
+    assert_eq!(format_fluid_per_minute(12_000), "12/min");
+    assert_eq!(format_fluid_per_minute(12_500), "12.5/min");
+}
+
+#[test]
+fn consumption_stat_formatting_includes_fluid_rows() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    let assembler = entity_id_by_name(sim.catalog(), "assembling_machine");
+    let assembler_id = sim
+        .place_entity(assembler, x, y, Direction::North)
+        .expect("assembler should be placeable");
+    let recipe = recipe_id_by_name(sim.catalog(), "iron_gear_wheel");
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("recipe should be selectable");
+    sim.tick();
+
+    let rows = fluid_consumption_rows(&sim);
+    assert!(rows.iter().any(|row| row.item_name == "Water"));
+}
+
+#[test]
 fn power_stat_formatting_uses_summary_and_network_rows() {
     let summary = PowerSummary {
         production_watts: 500,
@@ -124,6 +168,46 @@ fn power_stat_formatting_uses_summary_and_network_rows() {
     assert!(lines.iter().any(|line| line == "Production: 500 W"));
     assert!(lines.iter().any(|line| line.contains("Network 7")));
     assert!(lines.iter().any(|line| line.contains("poles 2")));
+
+    let samples = [
+        factory_sim::PowerStatisticsSample {
+            tick: 1,
+            production_watts: 100,
+            consumption_watts: 50,
+            ..Default::default()
+        },
+        factory_sim::PowerStatisticsSample {
+            tick: 2,
+            production_watts: 200,
+            consumption_watts: 150,
+            ..Default::default()
+        },
+    ];
+    let points = power_graph_points(&samples, 1);
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].production_watts, 200);
+    assert_eq!(points[0].consumption_watts, 150);
+}
+
+#[test]
+fn diagnostics_formatting_includes_status_counts_and_hints() {
+    let mut sim = Simulation::new_test_world(123);
+    let lab = entity_id_by_name(sim.catalog(), "lab");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    sim.place_entity(lab, x, y, Direction::North)
+        .expect("lab should be placeable");
+    sim.tick();
+
+    assert!(
+        diagnostic_lines(&sim)
+            .iter()
+            .any(|line| line.contains("No research"))
+    );
+    assert!(
+        bottleneck_lines(&sim)
+            .iter()
+            .any(|line| line == "No active research selected")
+    );
 }
 
 #[test]

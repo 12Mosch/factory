@@ -121,6 +121,7 @@ impl Simulation {
         self.power_summary = aggregate_power_summary(&self.power_networks);
         self.entity_power_statuses = self
             .consumer_power_statuses(&self.power_topology.network_ids_by_entity, consumer_demands);
+        self.record_power_sample();
     }
 
     fn rebuild_power_topology(&self) -> PowerTopologyCache {
@@ -432,7 +433,7 @@ impl Simulation {
         assignments
     }
 
-    fn steam_engine_prototype(
+    pub(super) fn steam_engine_prototype(
         &self,
         engine_id: EntityId,
     ) -> Option<&factory_data::SteamEnginePrototype> {
@@ -467,12 +468,14 @@ impl Simulation {
                 assignment.steam_consumption_per_tick_milliunits,
             )
             .min(assignment.steam_budget_milliunits);
-            if steam_to_consume > 0 {
-                self.consume_fluid_from_network(
+            if steam_to_consume > 0
+                && self.consume_fluid_from_network(
                     assignment.steam_network_id,
                     steam,
                     steam_to_consume,
-                );
+                )
+            {
+                self.record_fluid_consumed(steam, steam_to_consume);
             }
         }
     }

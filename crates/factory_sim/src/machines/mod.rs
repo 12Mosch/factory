@@ -12,11 +12,15 @@ pub use self::furnace::{FurnaceError, FurnaceState};
 pub use self::lab::{LabError, LabState};
 pub use self::mining_drill::{BurnerDrillError, BurnerMiningDrillState};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MachineStatus {
+    Working,
+    Idle,
+    NoRecipe,
+    NoResearch,
     NoFuel,
     NoPower,
     NoInput,
+    NoFluid,
     OutputFull,
-    Working,
 }

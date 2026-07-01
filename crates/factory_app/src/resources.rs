@@ -200,6 +200,7 @@ pub enum StatsTab {
     Production,
     Consumption,
     Power,
+    Diagnostics,
 }
 
 #[derive(Resource, Default)]

@@ -21,8 +21,8 @@ use self::machines::{
 };
 use self::research::validate_research_state;
 use self::world::{
-    validate_chart_state, validate_item_statistics, validate_placed_entities,
-    validate_world_resources,
+    validate_chart_state, validate_fluid_statistics, validate_item_statistics,
+    validate_placed_entities, validate_power_statistics, validate_world_resources,
 };
 
 pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
@@ -30,6 +30,8 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_world_resources(&sim.world)?;
     validate_chart_state(sim)?;
     validate_item_statistics(sim)?;
+    validate_fluid_statistics(sim)?;
+    validate_power_statistics(sim)?;
     validate_placed_entities(sim)?;
     validate_entity_occupancy(&sim.entities)?;
     validate_entity_state_ownership_and_kind(sim)?;
