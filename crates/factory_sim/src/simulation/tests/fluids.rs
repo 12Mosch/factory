@@ -155,6 +155,16 @@ fn offshore_pump_produces_water_into_its_fluid_network() {
             .iter()
             .any(|network| network.fluid_id == Some(water) && network.total_milliunits > 0)
     );
+
+    let row = sim
+        .fluid_statistics()
+        .rows
+        .into_iter()
+        .find(|row| row.fluid_id == water)
+        .expect("water production should be recorded");
+    assert!(row.produced_last_minute > 0);
+    assert_eq!(row.produced_last_minute, row.produced_total);
+    assert_eq!(row.consumed_total, 0);
 }
 
 #[test]
@@ -190,6 +200,19 @@ fn boiler_consumes_water_and_fuel_and_outputs_steam() {
         Some(steam)
     );
     assert!(sim.entities.fluid_boxes[&boiler_id][1].amount_milliunits > 0);
+
+    let rows = sim.fluid_statistics().rows;
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let water_row = rows
+        .iter()
+        .find(|row| row.fluid_id == water)
+        .expect("water stats should exist");
+    let steam_row = rows
+        .iter()
+        .find(|row| row.fluid_id == steam)
+        .expect("steam stats should exist");
+    assert!(water_row.consumed_total > 0);
+    assert!(steam_row.produced_total > 0);
 }
 
 #[test]
@@ -260,6 +283,14 @@ fn steam_engine_consumes_steam_and_produces_electricity_for_demand() {
     assert!(sim.entities.fluid_boxes[&engine_id][0].amount_milliunits > 0);
     assert!(sim.entities.fluid_boxes[&engine_id][0].amount_milliunits < 50_000);
     assert!(total_fluid_amount(&sim, steam) < 100_000);
+
+    let steam_row = sim
+        .fluid_statistics()
+        .rows
+        .into_iter()
+        .find(|row| row.fluid_id == steam)
+        .expect("steam stats should exist");
+    assert!(steam_row.consumed_total > 0);
 }
 
 #[test]
@@ -307,6 +338,7 @@ fn storage_tank_equalizes_with_connected_pipe_by_fill_percentage() {
         sim.entities.fluid_boxes[&pipe_id][0].amount_milliunits,
         50_000
     );
+    assert!(sim.fluid_statistics().rows.is_empty());
 }
 
 #[test]

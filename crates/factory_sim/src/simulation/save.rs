@@ -1,7 +1,7 @@
 use super::*;
 use bincode::Options;
 
-pub const SAVE_VERSION: u32 = 7;
+pub const SAVE_VERSION: u32 = 8;
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 6;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
@@ -49,6 +49,8 @@ struct SimulationSnapshot {
     chunks: BTreeMap<ChunkCoord, Chunk>,
     chart: ChartState,
     item_statistics: ItemStatistics,
+    fluid_statistics: FluidStatistics,
+    power_statistics: PowerStatistics,
     entities: EntityStore,
     player: PlayerState,
     player_inventory: Inventory,
@@ -175,6 +177,8 @@ impl SimulationSnapshot {
             chunks: sim.world.chunks.clone(),
             chart: sim.chart.clone(),
             item_statistics: sim.item_statistics.clone(),
+            fluid_statistics: sim.fluid_statistics.clone(),
+            power_statistics: sim.power_statistics.clone(),
             entities: sim.entities.clone(),
             player: sim.player,
             player_inventory: sim.player_inventory.clone(),
@@ -201,6 +205,8 @@ impl SimulationSnapshot {
             },
             chart: self.chart,
             item_statistics: self.item_statistics,
+            fluid_statistics: self.fluid_statistics,
+            power_statistics: self.power_statistics,
             entities: self.entities,
             player: self.player,
             player_inventory: self.player_inventory,

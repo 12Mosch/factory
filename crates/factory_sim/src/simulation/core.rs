@@ -22,6 +22,8 @@ impl Simulation {
             world,
             chart: ChartState::default(),
             item_statistics: ItemStatistics::default(),
+            fluid_statistics: FluidStatistics::default(),
+            power_statistics: PowerStatistics::default(),
             entities,
             player,
             player_inventory,
@@ -111,6 +113,8 @@ impl Simulation {
         self.world.chunks.hash(&mut hasher);
         self.chart.hash(&mut hasher);
         self.item_statistics.hash(&mut hasher);
+        self.fluid_statistics.hash(&mut hasher);
+        self.power_statistics.hash(&mut hasher);
         self.entities.hash(&mut hasher);
         self.player.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);

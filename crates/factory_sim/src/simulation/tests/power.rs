@@ -67,6 +67,31 @@ fn powered_assembler_crafts() {
         .assembler_state(assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
+
+    let history = sim.power_statistics();
+    assert!(history.samples.iter().any(|sample| {
+        sample.production_watts > 0
+            && sample.consumption_watts > 0
+            && sample.satisfaction_permyriad > 0
+    }));
+}
+
+#[test]
+fn power_history_drops_samples_older_than_one_minute() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    for _ in 0..(ITEM_STATISTICS_WINDOW_TICKS + 5) {
+        sim.tick();
+    }
+
+    let history = sim.power_statistics();
+    assert!(!history.samples.is_empty());
+    assert!(history.samples.iter().all(|sample| {
+        sample.tick.saturating_add(ITEM_STATISTICS_WINDOW_TICKS) > sim.tick_count()
+    }));
+    assert!(history.samples.iter().all(|sample| sample.tick > 5));
 }
 
 #[test]

@@ -80,6 +80,8 @@ pub struct Simulation {
     world: WorldSim,
     chart: ChartState,
     item_statistics: ItemStatistics,
+    fluid_statistics: FluidStatistics,
+    power_statistics: PowerStatistics,
     entities: EntityStore,
     player: PlayerState,
     player_inventory: Inventory,
@@ -136,6 +138,98 @@ pub struct ItemStatisticsRow {
     pub consumed_last_minute: u64,
     pub produced_total: u64,
     pub consumed_total: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidStatistics {
+    pub buckets: Vec<FluidStatisticsBucket>,
+    pub last_advanced_tick: u64,
+    pub rolling_produced: BTreeMap<FluidId, u64>,
+    pub rolling_consumed: BTreeMap<FluidId, u64>,
+    pub total_produced: BTreeMap<FluidId, u64>,
+    pub total_consumed: BTreeMap<FluidId, u64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidStatisticsBucket {
+    pub tick: u64,
+    pub produced: BTreeMap<FluidId, u64>,
+    pub consumed: BTreeMap<FluidId, u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FluidStatisticsSnapshot {
+    pub rows: Vec<FluidStatisticsRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FluidStatisticsRow {
+    pub fluid_id: FluidId,
+    pub produced_last_minute: u64,
+    pub consumed_last_minute: u64,
+    pub produced_total: u64,
+    pub consumed_total: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PowerStatistics {
+    pub samples: Vec<PowerStatisticsSample>,
+    pub last_advanced_tick: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PowerStatisticsSample {
+    pub tick: u64,
+    pub production_watts: u64,
+    pub available_production_watts: u64,
+    pub consumption_watts: u64,
+    pub satisfaction_permyriad: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PowerStatisticsSnapshot {
+    pub samples: Vec<PowerStatisticsSample>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MachineStatusCount {
+    pub status: MachineStatus,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MachineStatusGroup {
+    pub kind: EntityKind,
+    pub counts: Vec<MachineStatusCount>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MachineStatusSnapshot {
+    pub groups: Vec<MachineStatusGroup>,
+    pub total_by_status: Vec<MachineStatusCount>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BottleneckHintKind {
+    ItemDeficit,
+    ResearchMissingScience,
+    SteamStarved,
+    PowerShortage,
+    NoActiveResearch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BottleneckHint {
+    pub kind: BottleneckHintKind,
+    pub subject_item: Option<ItemId>,
+    pub subject_fluid: Option<FluidId>,
+    pub affected_count: usize,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BottleneckHintsSnapshot {
+    pub hints: Vec<BottleneckHint>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,10 +361,13 @@ pub enum SimValidationError {
     },
     InvalidChartChunk(ChunkCoord),
     InvalidItemStatistics(ItemId),
+    InvalidFluidStatistics(FluidId),
+    InvalidPowerStatistics,
 }
 
 mod belt_ops;
 mod core;
+mod diagnostics_ops;
 mod entity_ops;
 mod entity_store_ops;
 mod fluid_ops;
@@ -300,6 +397,7 @@ pub use self::save::{
     save_to_bytes,
 };
 pub use self::scripted::scripted_inputs_for_red_science_factory;
+use self::statistics_ops::power_sample_is_recorded;
 use self::world_ops::*;
 
 #[cfg(test)]
