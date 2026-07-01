@@ -1,3 +1,4 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
 use factory_sim::{CHUNK_SIZE, ResourceCell, ResourceTileChange, Simulation};
@@ -7,7 +8,7 @@ use std::time::Instant;
 use crate::constants::RESOURCE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color};
 use crate::rendering::transforms::tile_translation;
-use crate::resources::{RenderSyncStats, SimResource};
+use crate::resources::{RenderSyncStats, SimResource, VisibleChunks};
 
 #[derive(Component)]
 pub(crate) struct ResourceSprite;
@@ -23,6 +24,7 @@ pub(crate) struct ResourceRenderSettings {
 #[derive(Resource, Default)]
 pub struct ResourceRenderCache {
     pub last_resource_revision: Option<u64>,
+    pub last_visible_revision: u64,
     pub sprite_entities: HashMap<(i32, i32), Entity>,
     pub label_entities: HashMap<(i32, i32), Entity>,
     pub show_amount_labels: bool,
@@ -31,6 +33,7 @@ pub struct ResourceRenderCache {
 pub(crate) fn sync_resource_debug_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
+    visible: Res<VisibleChunks>,
     settings: Res<ResourceRenderSettings>,
     mut cache: ResMut<ResourceRenderCache>,
     mut sprites: Query<(Entity, &mut Sprite), With<ResourceSprite>>,
@@ -39,15 +42,16 @@ pub(crate) fn sync_resource_debug_rendering(
     let resource_revision = sim.sim.world().resource_revision();
     let initial_sync = cache.last_resource_revision.is_none();
     let resources_changed = cache.last_resource_revision != Some(resource_revision);
+    let visibility_changed = cache.last_visible_revision != visible.revision;
     let label_setting_changed = cache.show_amount_labels != settings.show_amount_labels;
 
-    if !initial_sync && !resources_changed && !label_setting_changed {
+    if !initial_sync && !resources_changed && !visibility_changed && !label_setting_changed {
         return;
     }
 
     let ids = RenderPrototypeIds::from_catalog(sim.sim.catalog());
-    if initial_sync {
-        let resources = collect_resource_tiles(&sim.sim);
+    if initial_sync || visibility_changed {
+        let resources = collect_resource_tiles(&sim.sim, &visible);
         full_sync_resources(
             &mut commands,
             &mut cache,
@@ -58,6 +62,7 @@ pub(crate) fn sync_resource_debug_rendering(
             settings.show_amount_labels,
         );
         cache.last_resource_revision = Some(resource_revision);
+        cache.last_visible_revision = visible.revision;
         cache.show_amount_labels = settings.show_amount_labels;
         return;
     }
@@ -82,12 +87,15 @@ pub(crate) fn sync_resource_debug_rendering(
                     &mut sprites,
                     &mut labels,
                     change,
-                    ids,
-                    settings.show_amount_labels,
+                    ResourceTileChangeContext {
+                        visible: &visible,
+                        ids,
+                        show_amount_labels: settings.show_amount_labels,
+                    },
                 );
             }
         } else {
-            let resources = collect_resource_tiles(&sim.sim);
+            let resources = collect_resource_tiles(&sim.sim, &visible);
             full_sync_resources(
                 &mut commands,
                 &mut cache,
@@ -102,7 +110,7 @@ pub(crate) fn sync_resource_debug_rendering(
     }
 
     if label_setting_changed && settings.show_amount_labels {
-        let resources = collect_resource_tiles(&sim.sim);
+        let resources = collect_resource_tiles(&sim.sim, &visible);
         full_sync_resource_labels(&mut commands, &mut cache, &mut labels, &resources);
         cache.show_amount_labels = true;
     }
@@ -110,16 +118,30 @@ pub(crate) fn sync_resource_debug_rendering(
 
 pub(crate) fn measured_sync_resource_debug_rendering(
     commands: Commands,
-    sim: Res<SimResource>,
-    settings: Res<ResourceRenderSettings>,
-    cache: ResMut<ResourceRenderCache>,
-    sprites: Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    labels: Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    mut stats: ResMut<RenderSyncStats>,
+    mut params: ResourceRenderParams,
 ) {
     let started = Instant::now();
-    sync_resource_debug_rendering(commands, sim, settings, cache, sprites, labels);
-    stats.record_resources(started.elapsed());
+    sync_resource_debug_rendering(
+        commands,
+        params.sim,
+        params.visible,
+        params.settings,
+        params.cache,
+        params.sprites,
+        params.labels,
+    );
+    params.stats.record_resources(started.elapsed());
+}
+
+#[derive(SystemParam)]
+pub(crate) struct ResourceRenderParams<'w, 's> {
+    sim: Res<'w, SimResource>,
+    visible: Res<'w, VisibleChunks>,
+    settings: Res<'w, ResourceRenderSettings>,
+    cache: ResMut<'w, ResourceRenderCache>,
+    sprites: Query<'w, 's, (Entity, &'static mut Sprite), With<ResourceSprite>>,
+    labels: Query<'w, 's, (Entity, &'static mut Text2d), With<ResourceAmountLabel>>,
+    stats: ResMut<'w, RenderSyncStats>,
 }
 
 fn full_sync_resources(
@@ -176,10 +198,23 @@ fn apply_resource_tile_change(
     sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
     change: ResourceTileChange,
-    ids: RenderPrototypeIds,
-    show_amount_labels: bool,
+    context: ResourceTileChangeContext,
 ) {
     let coord = (change.x, change.y);
+    let chunk_coord = factory_sim::ChunkCoord {
+        x: change.x.div_euclid(CHUNK_SIZE),
+        y: change.y.div_euclid(CHUNK_SIZE),
+    };
+    if !context.visible.chunks.contains(&chunk_coord) {
+        if let Some(entity) = cache.sprite_entities.remove(&coord) {
+            commands.entity(entity).despawn();
+        }
+        if let Some(entity) = cache.label_entities.remove(&coord) {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+
     let Some(resource) = change.resource else {
         if let Some(entity) = cache.sprite_entities.remove(&coord) {
             commands.entity(entity).despawn();
@@ -190,13 +225,28 @@ fn apply_resource_tile_change(
         return;
     };
 
-    sync_resource_sprite(commands, cache, sprites, change.x, change.y, resource, ids);
+    sync_resource_sprite(
+        commands,
+        cache,
+        sprites,
+        change.x,
+        change.y,
+        resource,
+        context.ids,
+    );
 
-    if show_amount_labels {
+    if context.show_amount_labels {
         sync_resource_label(commands, cache, labels, change.x, change.y, resource);
     } else if let Some(entity) = cache.label_entities.remove(&coord) {
         commands.entity(entity).despawn();
     }
+}
+
+#[derive(Clone, Copy)]
+struct ResourceTileChangeContext<'a> {
+    visible: &'a VisibleChunks,
+    ids: RenderPrototypeIds,
+    show_amount_labels: bool,
 }
 
 fn sync_resource_sprite(
@@ -271,10 +321,16 @@ fn spawn_resource_label(commands: &mut Commands, x: i32, y: i32, resource: Resou
         .id()
 }
 
-pub(crate) fn collect_resource_tiles(sim: &Simulation) -> BTreeMap<(i32, i32), ResourceCell> {
+pub(crate) fn collect_resource_tiles(
+    sim: &Simulation,
+    visible: &VisibleChunks,
+) -> BTreeMap<(i32, i32), ResourceCell> {
     let mut resources = BTreeMap::new();
 
-    for chunk in sim.world().chunks.values() {
+    for coord in &visible.chunks {
+        let Some(chunk) = sim.world().chunks.get(coord) else {
+            continue;
+        };
         for (index, tile) in chunk.tiles.iter().enumerate() {
             if let Some(resource) = tile.resource {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);

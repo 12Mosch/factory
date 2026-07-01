@@ -13,7 +13,7 @@ use crate::rendering::colors::{
     steam_engine_color, storage_tank_color, transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
-use crate::resources::{RenderSyncStats, SimResource};
+use crate::resources::{RenderSyncStats, SimResource, VisibleChunks};
 
 #[derive(Component)]
 pub(crate) struct PlacedEntitySprite {
@@ -23,12 +23,16 @@ pub(crate) struct PlacedEntitySprite {
 pub(crate) fn sync_placed_entity_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
+    visible: Res<VisibleChunks>,
     mut sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
 ) {
+    let visible_ids = visible_entity_ids(&sim.sim, &visible);
     let mut seen = HashSet::new();
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
-        if let Some((color, size)) = renderable_entity_style(&sim.sim, marker.entity_id) {
+        if visible_ids.contains(&marker.entity_id)
+            && let Some((color, size)) = renderable_entity_style(&sim.sim, marker.entity_id)
+        {
             let placed = sim
                 .sim
                 .entities()
@@ -43,7 +47,10 @@ pub(crate) fn sync_placed_entity_rendering(
         }
     }
 
-    for placed in sim.sim.entities().placed_entities() {
+    for entity_id in visible_ids {
+        let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
+            continue;
+        };
         let Some((color, size)) = renderable_entity_style(&sim.sim, placed.id) else {
             continue;
         };
@@ -64,12 +71,26 @@ pub(crate) fn sync_placed_entity_rendering(
 pub(crate) fn measured_sync_placed_entity_rendering(
     commands: Commands,
     sim: Res<SimResource>,
+    visible: Res<VisibleChunks>,
     sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_placed_entity_rendering(commands, sim, sprites);
+    sync_placed_entity_rendering(commands, sim, visible, sprites);
     stats.record_placed_entities(started.elapsed());
+}
+
+pub(crate) fn visible_entity_ids(sim: &Simulation, visible: &VisibleChunks) -> HashSet<EntityId> {
+    let Some(bounds) = visible.tile_bounds else {
+        return HashSet::new();
+    };
+    let max_x = bounds.min_x + bounds.width as i32 - 1;
+    let max_y = bounds.min_y + bounds.height as i32 - 1;
+    sim.entities()
+        .occupancy()
+        .entity_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y)
+        .into_iter()
+        .collect()
 }
 
 pub(crate) fn renderable_entity_style(

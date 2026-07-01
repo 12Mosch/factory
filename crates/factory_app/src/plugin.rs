@@ -21,7 +21,7 @@ use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
 };
 use crate::rendering::build_preview::{spawn_build_preview, update_build_preview};
-use crate::rendering::camera::{follow_player_camera, setup_camera};
+use crate::rendering::camera::{follow_player_camera, setup_camera, update_visible_chunks};
 use crate::rendering::entities::measured_sync_placed_entity_rendering;
 use crate::rendering::manual_mining::{
     spawn_cursor_tile_highlight, spawn_manual_mining_progress_bar, update_cursor_tile_highlight,
@@ -32,11 +32,11 @@ use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
 use crate::rendering::resources::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
-use crate::rendering::world::{rebuild_world_tiles_after_load, spawn_world_tiles};
+use crate::rendering::world::sync_visible_world_tiles;
 use crate::resources::{
     AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapTextureCache,
     MapViewState, OpenContainer, ProductionStatsWindowState, RenderSyncStats, SimProfileStats,
-    SimResource, TechnologyWindowState, UpsStats,
+    SimResource, TechnologyWindowState, UpsStats, VisibleChunks, WorldRenderCache,
 };
 use crate::save_load::{
     AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
@@ -113,6 +113,8 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<MapViewState>()
             .init_resource::<MapDisplaySettings>()
             .init_resource::<MapTextureCache>()
+            .init_resource::<VisibleChunks>()
+            .init_resource::<WorldRenderCache>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<AppInputState>()
             .init_resource::<SaveLoadConfig>()
@@ -125,7 +127,6 @@ impl Plugin for FactoryAppPlugin {
                 Startup,
                 (
                     setup_camera,
-                    spawn_world_tiles,
                     spawn_player,
                     spawn_cursor_tile_highlight,
                     spawn_manual_mining_progress_bar,
@@ -199,12 +200,14 @@ impl Plugin for FactoryAppPlugin {
                 Update,
                 (
                     update_map_texture,
-                    rebuild_world_tiles_after_load,
+                    update_visible_chunks,
+                    sync_visible_world_tiles,
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
                     measured_sync_belt_direction_rendering,
                     measured_sync_belt_item_rendering,
-                ),
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,

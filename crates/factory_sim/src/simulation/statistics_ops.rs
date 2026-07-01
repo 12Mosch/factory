@@ -1,5 +1,7 @@
 use super::*;
 
+const CHART_REVEAL_RADIUS_CHUNKS: i32 = 1;
+
 impl Default for ItemStatistics {
     fn default() -> Self {
         Self {
@@ -69,9 +71,15 @@ impl Simulation {
             x: tile_x.div_euclid(CHUNK_SIZE),
             y: tile_y.div_euclid(CHUNK_SIZE),
         };
+        self.world
+            .ensure_chunks_around_chunk(player_chunk, CHART_REVEAL_RADIUS_CHUNKS);
 
-        for y in player_chunk.y - 1..=player_chunk.y + 1 {
-            for x in player_chunk.x - 1..=player_chunk.x + 1 {
+        for y in player_chunk.y - CHART_REVEAL_RADIUS_CHUNKS
+            ..=player_chunk.y + CHART_REVEAL_RADIUS_CHUNKS
+        {
+            for x in player_chunk.x - CHART_REVEAL_RADIUS_CHUNKS
+                ..=player_chunk.x + CHART_REVEAL_RADIUS_CHUNKS
+            {
                 let coord = ChunkCoord { x, y };
                 if self.world.chunks.contains_key(&coord) {
                     self.chart.revealed_chunks.insert(coord);

@@ -50,15 +50,34 @@ fn player_cannot_move_into_water() {
 }
 
 #[test]
-fn player_cannot_move_into_unloaded_tiles() {
+fn player_generates_and_can_walk_into_streamed_walkable_chunk() {
     let mut sim = Simulation::new_test_world(123);
-    let (start, delta) = first_player_approach_to_unloaded_tile(&sim);
+    let (start, delta, streamed_chunk) = first_player_approach_to_streamed_walkable_tile(&sim);
     let before = PlayerState::centered_on_tile(start.0, start.1);
     sim.player = before;
 
     sim.move_player_by_tiles(delta.0, delta.1);
 
-    assert_eq!(sim.player, before);
+    assert_ne!(sim.player, before);
+    assert!(sim.world.chunks.contains_key(&streamed_chunk));
+}
+
+#[test]
+fn moving_or_ticking_far_from_origin_reveals_generated_chunks() {
+    let mut sim = Simulation::new_test_world(123);
+    let player_chunk = ChunkCoord { x: 20, y: -17 };
+    sim.player =
+        PlayerState::centered_on_tile(player_chunk.x * CHUNK_SIZE, player_chunk.y * CHUNK_SIZE);
+
+    sim.tick();
+
+    for y in player_chunk.y - 1..=player_chunk.y + 1 {
+        for x in player_chunk.x - 1..=player_chunk.x + 1 {
+            let coord = ChunkCoord { x, y };
+            assert!(sim.world.chunks.contains_key(&coord));
+            assert!(sim.is_chunk_revealed(coord));
+        }
+    }
 }
 
 #[test]

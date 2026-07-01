@@ -1,6 +1,7 @@
-use bevy::prelude::{Handle, Image, Resource};
+use bevy::prelude::{ColorMaterial, Entity, Handle, Image, Resource};
 use factory_data::{EntityPrototypeId, ItemId, TechnologyId};
-use factory_sim::{Direction, EntityId, Simulation, SimulationTickProfile};
+use factory_sim::{ChunkCoord, Direction, EntityId, Simulation, SimulationTickProfile};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 #[derive(Resource)]
@@ -123,10 +124,27 @@ pub struct MapTextureCache {
     pub handle: Option<Handle<Image>>,
     pub bounds: Option<MapTextureBounds>,
     pub last_player_tile: Option<(i32, i32)>,
+    pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
     pub last_entity_signature: u64,
     pub last_revealed_signature: u64,
     pub last_debug_flags: (bool, bool),
+}
+
+#[derive(Resource, Default)]
+pub struct VisibleChunks {
+    pub chunks: BTreeSet<ChunkCoord>,
+    pub tile_bounds: Option<MapTextureBounds>,
+    pub revision: u64,
+}
+
+#[derive(Resource, Default)]
+pub struct WorldRenderCache {
+    pub chunk_entities: BTreeMap<ChunkCoord, Entity>,
+    pub material: Option<Handle<ColorMaterial>>,
+    pub last_visible_revision: u64,
+    pub last_chunk_revision: u64,
+    pub last_reload_token: u64,
 }
 
 #[derive(Resource)]
