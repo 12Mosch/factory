@@ -169,6 +169,7 @@ fn load_invalidates_render_caches() {
         handle: None,
         bounds: Some(Default::default()),
         last_player_tile: Some((12, 34)),
+        last_chunk_revision: 66,
         last_resource_revision: 99,
         last_entity_signature: 88,
         last_revealed_signature: 77,
@@ -176,6 +177,7 @@ fn load_invalidates_render_caches() {
     });
     app.world_mut().insert_resource(ResourceRenderCache {
         last_resource_revision: Some(42),
+        last_visible_revision: 13,
         sprite_entities: Default::default(),
         label_entities: Default::default(),
         show_amount_labels: true,

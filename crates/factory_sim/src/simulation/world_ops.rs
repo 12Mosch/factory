@@ -9,6 +9,7 @@ impl WorldSim {
             seed,
             prototypes,
             chunks,
+            chunk_revision: 0,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
         }
@@ -27,6 +28,41 @@ impl WorldSim {
         self.chunks
             .get(&coord)
             .and_then(|chunk| chunk.tiles.get(index))
+    }
+
+    pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> bool {
+        if self.chunks.contains_key(&coord) {
+            return false;
+        }
+
+        let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
+        let chunk = generate_chunk(self.seed, coord, ids);
+        self.chunks.insert(coord, chunk);
+        self.chunk_revision = self.chunk_revision.wrapping_add(1);
+        true
+    }
+
+    pub fn ensure_chunks_around_chunk(&mut self, center: ChunkCoord, radius: i32) -> usize {
+        let radius = radius.max(0);
+        let mut generated = 0;
+
+        for y in center.y - radius..=center.y + radius {
+            for x in center.x - radius..=center.x + radius {
+                if self.ensure_chunk_generated(ChunkCoord { x, y }) {
+                    generated += 1;
+                }
+            }
+        }
+
+        generated
+    }
+
+    pub fn chunk_revision(&self) -> u64 {
+        self.chunk_revision
+    }
+
+    pub fn generated_chunk_count(&self) -> usize {
+        self.chunks.len()
     }
 
     pub(super) fn tile_at_profiled<P: TickProfiler>(

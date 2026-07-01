@@ -243,6 +243,11 @@ impl Simulation {
             y: self.player.y + delta_y,
         };
         let (tile_x, tile_y) = candidate.tile_position();
+        let candidate_chunk = ChunkCoord {
+            x: tile_x.div_euclid(CHUNK_SIZE),
+            y: tile_y.div_euclid(CHUNK_SIZE),
+        };
+        self.world.ensure_chunk_generated(candidate_chunk);
 
         if self.can_player_occupy_tile(tile_x, tile_y) {
             self.player = candidate;

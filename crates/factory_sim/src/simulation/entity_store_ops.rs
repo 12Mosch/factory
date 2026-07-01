@@ -467,6 +467,25 @@ impl OccupancyGrid {
         self.occupied_tiles.get(&(x, y)).copied()
     }
 
+    pub fn entity_ids_in_tile_rect(
+        &self,
+        min_x: i32,
+        max_x: i32,
+        min_y: i32,
+        max_y: i32,
+    ) -> BTreeSet<EntityId> {
+        if min_x > max_x || min_y > max_y {
+            return BTreeSet::new();
+        }
+
+        self.occupied_tiles
+            .range((min_x, i32::MIN)..=(max_x, i32::MAX))
+            .filter_map(|(&(x, y), &entity_id)| {
+                (x >= min_x && x <= max_x && y >= min_y && y <= max_y).then_some(entity_id)
+            })
+            .collect()
+    }
+
     pub fn validate_available(
         &self,
         footprint: &EntityFootprint,

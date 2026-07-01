@@ -70,7 +70,7 @@ fn multi_tile_entity_cannot_overlap_player_tile() {
 fn entity_cannot_be_placed_outside_generated_chunks() {
     let mut sim = Simulation::new_test_world(123);
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
-    let outside_x = (WORLD_MAX_CHUNK + 1) * CHUNK_SIZE;
+    let outside_x = (STARTING_MAX_CHUNK + 1) * CHUNK_SIZE;
 
     let error = sim
         .place_entity(inserter, outside_x, 0, Direction::North)

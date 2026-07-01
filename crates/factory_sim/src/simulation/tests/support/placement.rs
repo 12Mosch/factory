@@ -138,9 +138,9 @@ pub(in crate::simulation::tests) fn first_player_approach_to_water(
     panic!("expected a water tile with a walkable adjacent approach");
 }
 
-pub(in crate::simulation::tests) fn first_player_approach_to_unloaded_tile(
+pub(in crate::simulation::tests) fn first_player_approach_to_streamed_walkable_tile(
     sim: &Simulation,
-) -> ((i32, i32), (f32, f32)) {
+) -> ((i32, i32), (f32, f32), ChunkCoord) {
     for chunk in sim.world.chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
             let (x, y) = tile_coord(chunk, index);
@@ -149,14 +149,29 @@ pub(in crate::simulation::tests) fn first_player_approach_to_unloaded_tile(
             }
 
             for (dx, dy) in CARDINAL_DIRECTIONS {
-                if sim.world.tile_at(x + dx, y + dy).is_none() {
-                    return ((x, y), (dx as f32, dy as f32));
+                let target_x = x + dx;
+                let target_y = y + dy;
+                if sim.world.tile_at(target_x, target_y).is_some() {
+                    continue;
+                }
+
+                let target_chunk = ChunkCoord {
+                    x: target_x.div_euclid(CHUNK_SIZE),
+                    y: target_y.div_euclid(CHUNK_SIZE),
+                };
+                let mut world = sim.world.clone();
+                world.ensure_chunk_generated(target_chunk);
+                if world
+                    .tile_at(target_x, target_y)
+                    .is_some_and(|tile| tile.collision.walkable)
+                {
+                    return ((x, y), (dx as f32, dy as f32), target_chunk);
                 }
             }
         }
     }
 
-    panic!("expected a walkable boundary tile next to an unloaded chunk");
+    panic!("expected a walkable boundary tile next to a streamable walkable chunk");
 }
 
 pub(in crate::simulation::tests) fn first_player_approach_to_occupied_tile(

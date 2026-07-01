@@ -126,6 +126,10 @@ impl Simulation {
         &self.world
     }
 
+    pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> bool {
+        self.world.ensure_chunk_generated(coord)
+    }
+
     pub fn entities(&self) -> &EntityStore {
         &self.entities
     }

@@ -35,6 +35,7 @@ pub(crate) fn update_map_texture(
     let player_tile = sim.sim.player().tile_position();
     let needs_update = cache.handle.is_none()
         || cache.last_player_tile != Some(player_tile)
+        || cache.last_chunk_revision != sim.sim.world().chunk_revision()
         || cache.last_resource_revision != sim.sim.world().resource_revision()
         || cache.last_entity_signature != entity_signature
         || cache.last_revealed_signature != revealed_signature
@@ -70,6 +71,7 @@ pub(crate) fn update_map_texture(
     cache.handle = Some(handle);
     cache.bounds = Some(map.bounds);
     cache.last_player_tile = Some(player_tile);
+    cache.last_chunk_revision = sim.sim.world().chunk_revision();
     cache.last_resource_revision = sim.sim.world().resource_revision();
     cache.last_entity_signature = entity_signature;
     cache.last_revealed_signature = revealed_signature;

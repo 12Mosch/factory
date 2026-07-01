@@ -39,7 +39,7 @@ pub(super) fn generate_world_chunks(
     seed: u64,
     prototypes: &PrototypeCatalog,
 ) -> BTreeMap<ChunkCoord, Chunk> {
-    generate_chunks(seed, prototypes, WORLD_MIN_CHUNK, WORLD_MAX_CHUNK)
+    generate_chunks(seed, prototypes, STARTING_MIN_CHUNK, STARTING_MAX_CHUNK)
 }
 
 pub(super) fn generate_chunks(
@@ -49,12 +49,6 @@ pub(super) fn generate_chunks(
     max_chunk: i32,
 ) -> BTreeMap<ChunkCoord, Chunk> {
     let ids = WorldPrototypeIds::from_catalog(prototypes);
-    let resource_map = generate_resource_map(
-        seed,
-        ids,
-        min_chunk * CHUNK_SIZE,
-        max_chunk * CHUNK_SIZE + CHUNK_SIZE - 1,
-    );
     let mut chunks = BTreeMap::new();
 
     for chunk_y in min_chunk..=max_chunk {
@@ -63,26 +57,23 @@ pub(super) fn generate_chunks(
                 x: chunk_x,
                 y: chunk_y,
             };
-            chunks.insert(coord, generate_chunk(seed, coord, ids, &resource_map));
+            chunks.insert(coord, generate_chunk(seed, coord, ids));
         }
     }
 
     chunks
 }
 
-pub(super) fn generate_chunk(
-    seed: u64,
-    coord: ChunkCoord,
-    ids: WorldPrototypeIds,
-    resource_map: &BTreeMap<(i32, i32), ResourceCell>,
-) -> Chunk {
+pub(super) fn generate_chunk(seed: u64, coord: ChunkCoord, ids: WorldPrototypeIds) -> Chunk {
     let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+    let bounds = TileBounds::for_chunk(coord);
+    let centers = generate_resource_patch_centers(seed, ids, bounds);
 
     for local_y in 0..CHUNK_SIZE {
         for local_x in 0..CHUNK_SIZE {
             let x = coord.x * CHUNK_SIZE + local_x;
             let y = coord.y * CHUNK_SIZE + local_y;
-            tiles.push(generate_tile(seed, x, y, ids, resource_map));
+            tiles.push(generate_tile(seed, x, y, ids, &centers));
         }
     }
 
@@ -94,10 +85,14 @@ pub(super) fn generate_tile(
     x: i32,
     y: i32,
     ids: WorldPrototypeIds,
-    resource_map: &BTreeMap<(i32, i32), ResourceCell>,
+    centers: &[ResourcePatchCenter],
 ) -> TileCell {
     let (tile_id, mut collision) = generate_terrain(seed, x, y, ids);
-    let resource = resource_map.get(&(x, y)).copied();
+    let resource = if tile_id == ids.water {
+        None
+    } else {
+        resource_at_patch_tile(seed, x, y, centers)
+    };
 
     if resource.is_some() {
         collision = TileCollision {
@@ -158,36 +153,10 @@ pub(super) fn collision_for_tile(tile_id: TileId, ids: WorldPrototypeIds) -> Til
     }
 }
 
-pub(super) fn generate_resource_map(
-    seed: u64,
-    ids: WorldPrototypeIds,
-    min_tile: i32,
-    max_tile: i32,
-) -> BTreeMap<(i32, i32), ResourceCell> {
-    let centers = generate_resource_patch_centers(seed, ids, min_tile, max_tile);
-    let mut resources = BTreeMap::new();
-
-    for y in min_tile..=max_tile {
-        for x in min_tile..=max_tile {
-            let (tile_id, _) = generate_terrain(seed, x, y, ids);
-            if tile_id == ids.water {
-                continue;
-            }
-
-            if let Some(resource) = resource_at_patch_tile(seed, x, y, &centers) {
-                resources.insert((x, y), resource);
-            }
-        }
-    }
-
-    resources
-}
-
 pub(super) fn generate_resource_patch_centers(
     seed: u64,
     ids: WorldPrototypeIds,
-    min_tile: i32,
-    max_tile: i32,
+    bounds: TileBounds,
 ) -> Vec<ResourcePatchCenter> {
     let configs = resource_patch_configs(ids);
     let starting_offsets = [(-22, -14), (18, -12), (-16, 20), (20, 18)];
@@ -204,11 +173,20 @@ pub(super) fn generate_resource_patch_centers(
         });
     }
 
-    let min_grid = min_tile.div_euclid(RESOURCE_PATCH_GRID_SIZE) - 1;
-    let max_grid = max_tile.div_euclid(RESOURCE_PATCH_GRID_SIZE) + 1;
+    let max_reach = configs
+        .iter()
+        .map(|config| config.radius)
+        .max()
+        .unwrap_or(0)
+        + RESOURCE_PATCH_EDGE_NOISE
+        + RESOURCE_PATCH_GRID_JITTER;
+    let min_grid_x = (bounds.min_x - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) - 1;
+    let max_grid_x = (bounds.max_x + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) + 1;
+    let min_grid_y = (bounds.min_y - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) - 1;
+    let max_grid_y = (bounds.max_y + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) + 1;
 
-    for grid_y in min_grid..=max_grid {
-        for grid_x in min_grid..=max_grid {
+    for grid_y in min_grid_y..=max_grid_y {
+        for grid_x in min_grid_x..=max_grid_x {
             for config in configs {
                 let hash = hash_resource_center(seed, grid_x, grid_y, config.resource_item);
                 if hash % 100 >= u64::from(config.frequency_percent) {
@@ -232,6 +210,25 @@ pub(super) fn generate_resource_patch_centers(
     }
 
     centers
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TileBounds {
+    pub(super) min_x: i32,
+    pub(super) max_x: i32,
+    pub(super) min_y: i32,
+    pub(super) max_y: i32,
+}
+
+impl TileBounds {
+    pub(super) fn for_chunk(coord: ChunkCoord) -> Self {
+        Self {
+            min_x: coord.x * CHUNK_SIZE,
+            max_x: coord.x * CHUNK_SIZE + CHUNK_SIZE - 1,
+            min_y: coord.y * CHUNK_SIZE,
+            max_y: coord.y * CHUNK_SIZE + CHUNK_SIZE - 1,
+        }
+    }
 }
 
 pub(super) fn resource_at_patch_tile(

@@ -195,6 +195,7 @@ impl SimulationSnapshot {
                 seed: self.world_seed,
                 prototypes: self.prototypes,
                 chunks: self.chunks,
+                chunk_revision: 0,
                 resource_revision: 0,
                 resource_dirty_tiles: VecDeque::new(),
             },
@@ -217,6 +218,7 @@ impl SimulationSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn load_rejects_corrupt_bytes() {
@@ -264,5 +266,68 @@ mod tests {
         assert_eq!(sim.tick_count(), loaded.tick_count());
         assert_eq!(sim.seed(), loaded.seed());
         assert_eq!(before_hash, loaded.state_hash());
+    }
+
+    #[test]
+    fn save_load_preserves_generated_chunks_and_future_generation() {
+        let mut sim = Simulation::new_test_world(123);
+        let far = ChunkCoord { x: 30, y: -24 };
+        let future = ChunkCoord { x: -41, y: 37 };
+        sim.world.ensure_chunk_generated(far);
+        let before_hash = sim.state_hash();
+        let before_coords = sim.world.chunks.keys().copied().collect::<BTreeSet<_>>();
+
+        let bytes = save_to_bytes(&sim).unwrap();
+        let mut loaded = load_from_bytes(&bytes).unwrap();
+
+        assert_eq!(
+            sim.world.generated_chunk_count(),
+            loaded.world.generated_chunk_count()
+        );
+        assert_eq!(
+            before_coords,
+            loaded.world.chunks.keys().copied().collect::<BTreeSet<_>>()
+        );
+        assert_eq!(before_hash, loaded.state_hash());
+        sim.world.ensure_chunk_generated(future);
+        loaded.world.ensure_chunk_generated(future);
+        assert_eq!(
+            sim.world.chunks.get(&future),
+            loaded.world.chunks.get(&future)
+        );
+    }
+
+    #[test]
+    fn save_after_one_far_chunk_does_not_load_unrelated_far_chunks() {
+        let mut sim = Simulation::new_test_world(123);
+        let far = ChunkCoord { x: 80, y: 80 };
+        let unrelated = ChunkCoord { x: 81, y: 80 };
+        sim.world.ensure_chunk_generated(far);
+
+        let loaded = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+
+        assert!(loaded.world.chunks.contains_key(&far));
+        assert!(!loaded.world.chunks.contains_key(&unrelated));
+        assert_eq!(loaded.world.generated_chunk_count(), 26);
+    }
+
+    #[test]
+    fn generated_twenty_by_twenty_world_validates_and_round_trips() {
+        let mut sim = Simulation::new_test_world(123);
+        for y in -10..10 {
+            for x in -10..10 {
+                sim.world.ensure_chunk_generated(ChunkCoord { x, y });
+            }
+        }
+        sim.validate_state().unwrap();
+        let hash = sim.state_hash();
+
+        let loaded = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+
+        assert_eq!(
+            loaded.world.generated_chunk_count(),
+            sim.world.generated_chunk_count()
+        );
+        assert_eq!(hash, loaded.state_hash());
     }
 }
