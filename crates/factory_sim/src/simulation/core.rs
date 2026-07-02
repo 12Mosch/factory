@@ -41,6 +41,11 @@ impl Simulation {
             #[cfg(test)]
             power_topology_rebuilds: 0,
             fluid_networks: Vec::new(),
+            transport_lane_graph_dirty: true,
+            transport_lane_graph: TransportLaneGraph::default(),
+            transport_lane_visit_states: TransportLaneVisitStorage::default(),
+            #[cfg(test)]
+            transport_lane_graph_rebuilds: 0,
         };
         sim.reveal_chunks_around_player();
         sim

@@ -239,6 +239,7 @@ impl Simulation {
         if self.prototype_affects_power_topology(prototype) {
             self.invalidate_power_state();
         }
+        self.invalidate_transport_lane_graph();
         self.invalidate_fluid_state();
         Ok(entity_id)
     }
@@ -275,6 +276,7 @@ impl Simulation {
         if self.prototype_affects_power_topology(prototype) {
             self.invalidate_power_state();
         }
+        self.invalidate_transport_lane_graph();
         self.invalidate_fluid_state();
         Ok(())
     }
@@ -292,6 +294,7 @@ impl Simulation {
             {
                 self.invalidate_power_state();
             }
+            self.invalidate_transport_lane_graph();
             self.invalidate_fluid_state();
         }
         removed
@@ -341,6 +344,7 @@ impl Simulation {
         {
             self.invalidate_power_state();
         }
+        self.invalidate_transport_lane_graph();
         self.invalidate_fluid_state();
 
         Ok(removed)

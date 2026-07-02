@@ -2,52 +2,16 @@ use super::*;
 
 impl Simulation {
     pub fn advance_transport_belts(&mut self) {
-        let mut lane_keys = self
-            .entities
-            .transport_belts
-            .keys()
-            .flat_map(|entity_id| {
-                [
-                    TransportLaneKey::Belt {
-                        entity_id: *entity_id,
-                        lane_index: 0,
-                    },
-                    TransportLaneKey::Belt {
-                        entity_id: *entity_id,
-                        lane_index: 1,
-                    },
-                ]
-            })
-            .collect::<Vec<_>>();
-        lane_keys.extend(self.entities.splitters.keys().flat_map(|entity_id| {
-            [
-                TransportLaneKey::Splitter {
-                    entity_id: *entity_id,
-                    input_port: 0,
-                    lane_index: 0,
-                },
-                TransportLaneKey::Splitter {
-                    entity_id: *entity_id,
-                    input_port: 0,
-                    lane_index: 1,
-                },
-                TransportLaneKey::Splitter {
-                    entity_id: *entity_id,
-                    input_port: 1,
-                    lane_index: 0,
-                },
-                TransportLaneKey::Splitter {
-                    entity_id: *entity_id,
-                    input_port: 1,
-                    lane_index: 1,
-                },
-            ]
-        }));
-        let mut advancement = TransportBeltAdvancement::new(&mut self.entities);
+        self.refresh_transport_lane_graph();
+        self.transport_lane_visit_states
+            .begin_tick((self.entities.next_entity_id as usize).saturating_mul(4));
 
-        for key in lane_keys {
-            advancement.process_lane(key);
-        }
+        let mut advancement = TransportBeltAdvancement::new(
+            &mut self.entities,
+            &self.transport_lane_graph,
+            &mut self.transport_lane_visit_states,
+        );
+        advancement.process_all_lanes();
     }
 
     pub(super) fn advance_burner_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
