@@ -137,12 +137,18 @@ pub(crate) fn sync_belt_item_rendering(
     >,
 ) {
     if !detail.show_belt_items {
+        if !detail.is_changed() {
+            return;
+        }
         for (entity, _, _, _) in &mut sprites {
             commands.entity(entity).despawn();
         }
         for (entity, _, _, _) in &mut labels {
             commands.entity(entity).despawn();
         }
+        return;
+    }
+    if !sim.is_changed() && !visible_entity_ids.is_changed() && !detail.is_changed() {
         return;
     }
 
