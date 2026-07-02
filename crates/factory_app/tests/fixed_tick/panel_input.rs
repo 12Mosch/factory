@@ -1,8 +1,9 @@
 use super::common::{hotbar_key_for_slot, test_app};
 use bevy::prelude::*;
+use factory_app::audio::AudioSettingsWindowState;
 use factory_app::placement::build::buildable_prototypes;
 use factory_app::resources::{
-    BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapViewState,
+    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapViewState,
     ProductionStatsWindowState, SimResource, TechnologyWindowState,
 };
 use std::time::Duration;
@@ -70,6 +71,32 @@ fn crafting_screen_toggles_with_c() {
     app.update();
 
     assert!(!app.world().resource::<CraftingWindowState>().open);
+}
+
+#[test]
+fn audio_settings_panel_toggles_with_o() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyO);
+    app.update();
+
+    assert!(app.world().resource::<AudioSettingsWindowState>().open);
+
+    {
+        let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keyboard.clear_just_pressed(KeyCode::KeyO);
+        keyboard.release(KeyCode::KeyO);
+    }
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyO);
+    app.update();
+
+    assert!(!app.world().resource::<AudioSettingsWindowState>().open);
 }
 
 #[test]
@@ -141,4 +168,56 @@ fn open_crafting_suppresses_build_hotbar_selection() {
     app.update();
 
     assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+}
+
+#[test]
+fn open_settings_suppresses_build_hotbar_selection() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let slot = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        buildable_prototypes(sim.catalog())
+            .into_iter()
+            .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
+            .expect("starting inventory should include at least one buildable item")
+    };
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyO);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyO);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(hotbar_key_for_slot(slot.slot_index));
+    app.update();
+
+    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+}
+
+#[test]
+fn escape_closes_settings_panel() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyO);
+    app.update();
+    {
+        let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keyboard.clear_just_pressed(KeyCode::KeyO);
+        keyboard.release(KeyCode::KeyO);
+    }
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Escape);
+    app.update();
+
+    assert!(!app.world().resource::<AudioSettingsWindowState>().open);
+    assert!(app.world().resource::<AppInputState>().escape_consumed);
 }

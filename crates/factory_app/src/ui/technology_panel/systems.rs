@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::audio::SoundEvent;
 use crate::input::panels::escape_consumed;
 use crate::resources::{AppInputState, BuildPlacementState, SimResource, TechnologyWindowState};
 
@@ -99,6 +100,7 @@ pub(crate) fn handle_technology_panel_buttons(
     mut queue_buttons: TechnologyQueueInteractionQuery,
     mut sim: ResMut<SimResource>,
     mut window_state: ResMut<TechnologyWindowState>,
+    mut sounds: MessageWriter<SoundEvent>,
 ) {
     if !window_state.open {
         return;
@@ -106,6 +108,7 @@ pub(crate) fn handle_technology_panel_buttons(
 
     for (interaction, button) in &mut select_buttons {
         if *interaction == Interaction::Pressed {
+            sounds.write(SoundEvent::UiClick);
             window_state.selected = Some(button.technology_id);
         }
     }
@@ -123,7 +126,9 @@ pub(crate) fn handle_technology_panel_buttons(
             continue;
         }
 
-        let _ = sim.sim.enqueue_research(technology_id);
+        if sim.sim.enqueue_research(technology_id).is_ok() {
+            sounds.write(SoundEvent::UiClick);
+        }
     }
 
     for (interaction, button) in &mut queue_buttons {
@@ -133,15 +138,28 @@ pub(crate) fn handle_technology_panel_buttons(
 
         match button.action {
             TechnologyQueueAction::Remove => {
-                let _ = sim.sim.remove_queued_research(button.index);
+                if sim.sim.remove_queued_research(button.index).is_ok() {
+                    sounds.write(SoundEvent::UiClick);
+                }
             }
             TechnologyQueueAction::MoveUp => {
-                if button.index > 0 {
-                    let _ = sim.sim.move_queued_research(button.index, button.index - 1);
+                if button.index > 0
+                    && sim
+                        .sim
+                        .move_queued_research(button.index, button.index - 1)
+                        .is_ok()
+                {
+                    sounds.write(SoundEvent::UiClick);
                 }
             }
             TechnologyQueueAction::MoveDown => {
-                let _ = sim.sim.move_queued_research(button.index, button.index + 1);
+                if sim
+                    .sim
+                    .move_queued_research(button.index, button.index + 1)
+                    .is_ok()
+                {
+                    sounds.write(SoundEvent::UiClick);
+                }
             }
         }
     }

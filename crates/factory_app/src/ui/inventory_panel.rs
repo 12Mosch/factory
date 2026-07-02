@@ -6,6 +6,7 @@ use factory_sim::{
     FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX, FurnaceError,
 };
 
+use crate::audio::SoundEvent;
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
 use crate::interaction::slot_transfer::{ContainerSlotClickError, transfer_open_container_slot};
 use crate::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
@@ -153,6 +154,7 @@ pub(crate) fn handle_container_slot_clicks(
     mut sim: ResMut<SimResource>,
     open_container: Res<OpenContainer>,
     mut feedback: ResMut<InventoryTransferFeedback>,
+    mut sounds: MessageWriter<SoundEvent>,
 ) {
     for (interaction, button) in &mut interactions {
         if *interaction != Interaction::Pressed {
@@ -165,7 +167,10 @@ pub(crate) fn handle_container_slot_clicks(
             button.panel,
             button.slot_index,
         ) {
-            Ok(()) => feedback.message = None,
+            Ok(()) => {
+                feedback.message = None;
+                sounds.write(SoundEvent::UiClick);
+            }
             Err(error) => {
                 feedback.message =
                     Some(container_slot_click_error_message(sim.sim.catalog(), error));

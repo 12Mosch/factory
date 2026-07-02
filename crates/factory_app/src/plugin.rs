@@ -6,6 +6,14 @@ use bevy::time::Fixed;
 use factory_data::PrototypeCatalog;
 use factory_sim::Simulation;
 
+use crate::audio::{
+    AudioAssets, AudioEventDedupe, AudioSettings, AudioSettingsPersistenceState,
+    AudioSettingsWindowState, CraftingAudioObserver, MachineAudioLoops, ManualMiningAudioObserver,
+    ResearchAudioObserver, SoundEvent, apply_audio_settings_to_sinks, load_audio_assets,
+    load_persisted_audio_settings, observe_crafting_audio, observe_manual_mining_audio,
+    observe_research_audio, play_sound_events, save_audio_settings_if_changed,
+    sync_machine_audio_loops,
+};
 use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::input::build::{
     handle_build_hotbar_keys, handle_build_rotate_cancel_keys, handle_build_world_click,
@@ -55,6 +63,7 @@ use crate::ui::assembler_panel::{
     handle_assembler_recipe_button_clicks, update_assembler_detail_text,
     update_assembler_recipe_button_colors,
 };
+use crate::ui::audio_settings::{handle_audio_settings_buttons, sync_audio_settings_window};
 use crate::ui::build_bar::{
     handle_build_bar_button_clicks, setup_build_bar, update_build_bar_action_visuals,
     update_build_bar_visuals, update_build_status_text,
@@ -130,6 +139,15 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<RenderDetail>()
             .init_resource::<WorldRenderCache>()
             .init_resource::<ProductionStatsWindowState>()
+            .init_resource::<AudioSettings>()
+            .init_resource::<AudioSettingsWindowState>()
+            .init_resource::<AudioAssets>()
+            .init_resource::<MachineAudioLoops>()
+            .init_resource::<AudioEventDedupe>()
+            .init_resource::<ManualMiningAudioObserver>()
+            .init_resource::<CraftingAudioObserver>()
+            .init_resource::<ResearchAudioObserver>()
+            .init_resource::<AudioSettingsPersistenceState>()
             .init_resource::<AppInputState>()
             .init_resource::<SaveLoadConfig>()
             .init_resource::<SaveLoadWindowState>()
@@ -137,6 +155,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<PendingSaveJobs>()
             .init_resource::<AutosaveState>()
             .init_resource::<PresentationReloadToken>()
+            .add_message::<SoundEvent>()
             .add_systems(
                 Startup,
                 (
@@ -148,6 +167,8 @@ impl Plugin for FactoryAppPlugin {
                     setup_build_bar,
                     spawn_build_preview,
                     initialize_autosave_tick,
+                    load_persisted_audio_settings,
+                    load_audio_assets,
                 ),
             )
             .add_systems(
@@ -164,6 +185,12 @@ impl Plugin for FactoryAppPlugin {
                     move_player_from_input,
                     update_manual_mining_from_input,
                     tick_sim,
+                    (
+                        observe_manual_mining_audio,
+                        observe_crafting_audio,
+                        observe_research_audio,
+                        sync_machine_audio_loops,
+                    ),
                 )
                     .chain(),
             )
@@ -214,10 +241,22 @@ impl Plugin for FactoryAppPlugin {
             .add_systems(
                 Update,
                 (
+                    handle_audio_settings_buttons,
+                    save_audio_settings_if_changed,
+                    sync_audio_settings_window,
+                    apply_audio_settings_to_sinks,
+                )
+                    .chain()
+                    .before(update_map_texture),
+            )
+            .add_systems(
+                Update,
+                (
                     update_map_texture,
                     update_render_detail,
                     update_visible_chunks,
                     update_visible_entity_ids,
+                    sync_machine_audio_loops,
                     measured_sync_visible_world_tiles,
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
@@ -259,6 +298,20 @@ impl Plugin for FactoryAppPlugin {
                     update_assembler_detail_text.after(sync_container_window),
                     update_assembler_recipe_button_colors.after(sync_container_window),
                 ),
+            )
+            .add_systems(
+                Update,
+                play_sound_events
+                    .after(handle_build_bar_button_clicks)
+                    .after(handle_build_world_click)
+                    .after(handle_save_load_buttons)
+                    .after(handle_audio_settings_buttons)
+                    .after(handle_production_stats_buttons)
+                    .after(handle_manual_crafting_tab_buttons)
+                    .after(handle_manual_crafting_recipe_buttons)
+                    .after(handle_container_slot_clicks)
+                    .after(handle_assembler_recipe_button_clicks)
+                    .after(handle_technology_panel_buttons),
             );
     }
 }

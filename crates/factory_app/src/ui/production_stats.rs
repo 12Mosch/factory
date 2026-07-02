@@ -5,6 +5,7 @@ use factory_sim::{
     PowerStatisticsSample, PowerSummary, Simulation,
 };
 
+use crate::audio::SoundEvent;
 use crate::resources::{ProductionStatsWindowState, SimResource, StatsTab};
 use crate::ui::debug_overlay::format_watts;
 use crate::ui::formatting::{format_fluid_display_name, format_item_display_name};
@@ -57,6 +58,7 @@ pub struct PowerGraphPoint {
 pub(crate) fn handle_production_stats_buttons(
     mut buttons: StatsTabInteractionQuery,
     mut state: ResMut<ProductionStatsWindowState>,
+    mut sounds: MessageWriter<SoundEvent>,
 ) {
     if !state.open {
         return;
@@ -64,6 +66,7 @@ pub(crate) fn handle_production_stats_buttons(
 
     for (interaction, button) in &mut buttons {
         if *interaction == Interaction::Pressed {
+            sounds.write(SoundEvent::UiClick);
             state.selected_tab = button.tab;
         }
     }

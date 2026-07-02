@@ -78,6 +78,34 @@ impl Simulation {
         }
     }
 
+    pub fn machine_status_for_entity(&self, entity_id: EntityId) -> Option<MachineStatus> {
+        let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
+
+        if let Some(state) = self.entities.burner_mining_drills.get(&entity_id) {
+            return Some(self.burner_mining_drill_status(entity_id, state));
+        }
+        if let Some(state) = self.entities.furnaces.get(&entity_id) {
+            return Some(self.furnace_status(state));
+        }
+        if let Some(state) = self.entities.assembling_machines.get(&entity_id) {
+            return Some(self.assembler_status(entity_id, state));
+        }
+        if let Some(state) = self.entities.labs.get(&entity_id) {
+            return Some(self.lab_status(entity_id, state));
+        }
+        if let Some(state) = self.entities.boilers.get(&entity_id) {
+            return Some(self.boiler_status(entity_id, state, fluids.water, fluids.steam));
+        }
+        if self.entities.steam_engines.contains_key(&entity_id) {
+            return Some(self.steam_engine_status(entity_id, fluids.steam));
+        }
+        if self.entities.offshore_pumps.contains_key(&entity_id) {
+            return Some(self.offshore_pump_status(entity_id, fluids.water));
+        }
+
+        None
+    }
+
     pub fn bottleneck_hints(&self, max: usize) -> BottleneckHintsSnapshot {
         let mut candidates = Vec::<(u64, BottleneckHint)>::new();
 
