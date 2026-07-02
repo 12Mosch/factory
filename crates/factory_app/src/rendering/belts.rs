@@ -10,6 +10,7 @@ use crate::constants::{
     BELT_ITEM_LABEL_FONT_SIZE, BELT_ITEM_SPRITE_SIZE, TILE_SIZE,
 };
 use crate::rendering::transforms::{entity_translation, tile_translation};
+use crate::rendering::visuals::spawn_belt_item_visual;
 use crate::resources::{RenderDetail, RenderSyncStats, SimResource, VisibleEntityIds};
 use crate::utils::compact_item_name;
 
@@ -233,16 +234,18 @@ pub(crate) fn sync_belt_item_rendering(
                     ) else {
                         continue;
                     };
-                    commands.spawn((
-                        Sprite::from_color(color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
-                        Transform::from_translation(translation),
+                    spawn_belt_item_visual(
+                        &mut commands,
+                        color,
+                        Vec2::splat(BELT_ITEM_SPRITE_SIZE),
+                        translation,
                         BeltItemSprite {
                             entity_id: placed.id,
                             input_port: None,
                             lane_index,
                             item_index,
                         },
-                    ));
+                    );
                 }
 
                 if show_labels && !seen_labels.contains(&key) {
@@ -458,16 +461,18 @@ fn sync_splitter_item_rendering_for_entity(
                     ) else {
                         continue;
                     };
-                    commands.spawn((
-                        Sprite::from_color(color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
-                        Transform::from_translation(translation),
+                    spawn_belt_item_visual(
+                        commands,
+                        color,
+                        Vec2::splat(BELT_ITEM_SPRITE_SIZE),
+                        translation,
                         BeltItemSprite {
                             entity_id,
                             input_port: Some(input_port),
                             lane_index,
                             item_index,
                         },
-                    ));
+                    );
                 }
 
                 if show_labels && !seen_labels.contains(&key) {
@@ -530,20 +535,32 @@ pub(crate) fn direction_render_vector(direction: Direction) -> Vec2 {
 }
 
 pub(crate) fn belt_direction_color() -> Color {
-    Color::srgb(0.30, 0.22, 0.07)
+    Color::srgba(0.12, 0.08, 0.025, 0.86)
 }
 
 pub(crate) fn belt_item_color(item_id: ItemId, ids: BasePrototypeIds) -> Color {
     if item_id == ids.items.iron_ore {
-        Color::srgb(0.70, 0.66, 0.58)
+        Color::srgb(0.72, 0.67, 0.58)
     } else if item_id == ids.items.copper_ore {
         Color::srgb(0.86, 0.42, 0.20)
     } else if item_id == ids.items.coal {
-        Color::srgb(0.05, 0.05, 0.05)
+        Color::srgb(0.055, 0.055, 0.052)
     } else if item_id == ids.items.stone {
         Color::srgb(0.54, 0.51, 0.47)
+    } else if item_id == ids.items.iron_plate || item_id == ids.items.steel_plate {
+        Color::srgb(0.78, 0.82, 0.84)
+    } else if item_id == ids.items.copper_plate || item_id == ids.items.copper_cable {
+        Color::srgb(0.92, 0.54, 0.24)
+    } else if item_id == ids.items.iron_gear_wheel {
+        Color::srgb(0.66, 0.70, 0.74)
+    } else if item_id == ids.items.electronic_circuit {
+        Color::srgb(0.24, 0.70, 0.38)
+    } else if item_id == ids.items.automation_science_pack {
+        Color::srgb(0.88, 0.24, 0.20)
+    } else if item_id == ids.items.logistic_science_pack {
+        Color::srgb(0.32, 0.72, 0.36)
     } else {
-        Color::srgb(0.64, 0.82, 0.95)
+        Color::srgb(0.58, 0.78, 0.94)
     }
 }
 

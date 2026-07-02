@@ -14,6 +14,7 @@ use crate::rendering::colors::{
     steam_engine_color, storage_tank_color, transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
+use crate::rendering::visuals::{EntityVisualStyle, spawn_entity_visual};
 use crate::resources::{RenderSyncStats, SimResource, VisibleChunks, VisibleEntityIds};
 
 #[derive(Component)]
@@ -73,20 +74,21 @@ pub(crate) fn sync_placed_entity_rendering(
         let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
             continue;
         };
-        let Some((color, size)) = renderable_entity_style(&sim.sim, placed.id) else {
+        let Some(style) = renderable_entity_visual_style(&sim.sim, placed.id) else {
             continue;
         };
         if seen.contains(&placed.id) {
             continue;
         }
 
-        commands.spawn((
-            Sprite::from_color(color, size),
-            Transform::from_translation(entity_translation(&placed.footprint, 3.0)),
+        spawn_entity_visual(
+            &mut commands,
+            style,
+            entity_translation(&placed.footprint, 3.0),
             PlacedEntitySprite {
                 entity_id: placed.id,
             },
-        ));
+        );
     }
 }
 
@@ -132,8 +134,16 @@ pub(crate) fn renderable_entity_style(
     sim: &Simulation,
     entity_id: EntityId,
 ) -> Option<(Color, Vec2)> {
+    let style = renderable_entity_visual_style(sim, entity_id)?;
+    Some((style.base_color, style.size))
+}
+
+pub(crate) fn renderable_entity_visual_style(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<EntityVisualStyle> {
     let placed = sim.entities().placed_entity(entity_id)?;
-    entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
+    entity_prototype_visual_style(sim.catalog(), placed.prototype_id, placed.direction)
 }
 
 pub(crate) fn entity_prototype_render_style(
@@ -141,6 +151,15 @@ pub(crate) fn entity_prototype_render_style(
     prototype_id: EntityPrototypeId,
     direction: Direction,
 ) -> Option<(Color, Vec2)> {
+    let style = entity_prototype_visual_style(catalog, prototype_id, direction)?;
+    Some((style.base_color, style.size))
+}
+
+pub(crate) fn entity_prototype_visual_style(
+    catalog: &PrototypeCatalog,
+    prototype_id: EntityPrototypeId,
+    direction: Direction,
+) -> Option<EntityVisualStyle> {
     let prototype = catalog
         .entities
         .get(prototype_id.index())
@@ -154,37 +173,115 @@ pub(crate) fn entity_prototype_render_style(
     };
 
     match prototype.entity_kind {
-        EntityKind::TransportBelt => Some((
-            transport_belt_color(
+        EntityKind::TransportBelt => Some(EntityVisualStyle {
+            base_color: transport_belt_color(
                 prototype
                     .transport_belt
                     .as_ref()
                     .map(|belt| belt.speed_subtiles_per_tick),
             ),
-            Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
-        )),
-        EntityKind::Splitter => Some((
-            splitter_color(
+            size: Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
+            kind: prototype.entity_kind,
+            direction,
+        }),
+        EntityKind::Splitter => Some(EntityVisualStyle {
+            base_color: splitter_color(
                 prototype
                     .splitter
                     .as_ref()
                     .map(|splitter| splitter.speed_subtiles_per_tick),
             ),
-            machine_size(),
+            size: machine_size(),
+            kind: prototype.entity_kind,
+            direction,
+        }),
+        EntityKind::Chest => Some(entity_visual_style(
+            chest_color(),
+            Vec2::splat(CHEST_SPRITE_SIZE),
+            prototype.entity_kind,
+            direction,
         )),
-        EntityKind::Chest => Some((chest_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
-        EntityKind::MiningDrill => Some((burner_drill_color(), machine_size())),
-        EntityKind::Furnace => Some((furnace_color(), machine_size())),
-        EntityKind::AssemblingMachine => Some((assembler_color(), machine_size())),
-        EntityKind::Lab => Some((lab_color(), machine_size())),
-        EntityKind::Inserter => Some((inserter_color(prototype.inserter.as_ref()), machine_size())),
-        EntityKind::ElectricPole => Some((electric_pole_color(), Vec2::splat(CHEST_SPRITE_SIZE))),
-        EntityKind::SteamEngine => Some((steam_engine_color(), machine_size())),
-        EntityKind::Boiler => Some((boiler_color(), machine_size())),
-        EntityKind::OffshorePump => Some((offshore_pump_color(), machine_size())),
-        EntityKind::Pipe => Some((pipe_color(), Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE))),
-        EntityKind::StorageTank => Some((storage_tank_color(), machine_size())),
+        EntityKind::MiningDrill => Some(entity_visual_style(
+            burner_drill_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Furnace => Some(entity_visual_style(
+            furnace_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::AssemblingMachine => Some(entity_visual_style(
+            assembler_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Lab => Some(entity_visual_style(
+            lab_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Inserter => Some(entity_visual_style(
+            inserter_color(prototype.inserter.as_ref()),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::ElectricPole => Some(entity_visual_style(
+            electric_pole_color(),
+            Vec2::splat(CHEST_SPRITE_SIZE),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::SteamEngine => Some(entity_visual_style(
+            steam_engine_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Boiler => Some(entity_visual_style(
+            boiler_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::OffshorePump => Some(entity_visual_style(
+            offshore_pump_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Pipe => Some(entity_visual_style(
+            pipe_color(),
+            Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::StorageTank => Some(entity_visual_style(
+            storage_tank_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
         EntityKind::ResourcePatch => None,
+    }
+}
+
+fn entity_visual_style(
+    base_color: Color,
+    size: Vec2,
+    kind: EntityKind,
+    direction: Direction,
+) -> EntityVisualStyle {
+    EntityVisualStyle {
+        base_color,
+        size,
+        kind,
+        direction,
     }
 }
 

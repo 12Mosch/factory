@@ -8,6 +8,7 @@ use std::time::Instant;
 use crate::constants::RESOURCE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color};
 use crate::rendering::transforms::tile_translation;
+use crate::rendering::visuals::spawn_resource_visual;
 use crate::resources::{RenderDetail, RenderSyncStats, SimResource, VisibleChunks};
 
 #[derive(Component)]
@@ -283,13 +284,13 @@ fn spawn_resource_sprite(
     resource: ResourceCell,
     ids: RenderPrototypeIds,
 ) -> Entity {
-    commands
-        .spawn((
-            Sprite::from_color(resource_color(resource, ids), Vec2::splat(RESOURCE_SIZE)),
-            Transform::from_translation(tile_translation(x, y, 1.0)),
-            ResourceSprite,
-        ))
-        .id()
+    spawn_resource_visual(
+        commands,
+        resource_color(resource, ids),
+        Vec2::splat(RESOURCE_SIZE),
+        tile_translation(x, y, 1.0),
+        ResourceSprite,
+    )
 }
 
 fn spawn_resource_label(commands: &mut Commands, x: i32, y: i32, resource: ResourceCell) -> Entity {
