@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::audio::SoundEvent;
 use crate::resources::{CraftingWindowState, SimResource};
 
 use super::components::{
@@ -26,6 +27,7 @@ type CraftingRecipeInteractionQuery<'w, 's> = Query<
 pub(crate) fn handle_manual_crafting_tab_buttons(
     mut interactions: CraftingTabInteractionQuery,
     mut state: ResMut<CraftingWindowState>,
+    mut sounds: MessageWriter<SoundEvent>,
 ) {
     if !state.open {
         return;
@@ -33,6 +35,7 @@ pub(crate) fn handle_manual_crafting_tab_buttons(
 
     for (interaction, button) in &mut interactions {
         if *interaction == Interaction::Pressed {
+            sounds.write(SoundEvent::UiClick);
             state.selected_tab = button.tab;
         }
     }
@@ -42,6 +45,7 @@ pub(crate) fn handle_manual_crafting_recipe_buttons(
     mut interactions: CraftingRecipeInteractionQuery,
     mut sim: ResMut<SimResource>,
     state: Res<CraftingWindowState>,
+    mut sounds: MessageWriter<SoundEvent>,
 ) {
     if !state.open {
         return;
@@ -52,6 +56,7 @@ pub(crate) fn handle_manual_crafting_recipe_buttons(
             continue;
         }
         if craftable_for_player(&sim.sim, button.recipe_id) {
+            sounds.write(SoundEvent::UiClick);
             let _ = sim.sim.start_manual_craft(button.recipe_id);
         }
     }

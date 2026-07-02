@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::audio::SoundEvent;
 use crate::save_load::{
     LOAD_SAVE_SLOTS, LoadState, MANUAL_SAVE_SLOTS, PendingSaveJobs, SaveLoadConfig, SaveLoadStatus,
     SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState, SaveSlotKind, load_slot, request_save,
@@ -71,6 +72,7 @@ pub(crate) fn handle_save_load_buttons(
     mut pending_jobs: ResMut<PendingSaveJobs>,
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
+    mut sounds: MessageWriter<SoundEvent>,
 ) {
     if !load_state.window.open {
         return;
@@ -78,6 +80,7 @@ pub(crate) fn handle_save_load_buttons(
 
     for (interaction, button) in &mut tab_buttons {
         if *interaction == Interaction::Pressed {
+            sounds.write(SoundEvent::UiClick);
             load_state.window.tab = button.tab;
         }
     }
@@ -86,6 +89,7 @@ pub(crate) fn handle_save_load_buttons(
         if *interaction != Interaction::Pressed {
             continue;
         }
+        sounds.write(SoundEvent::UiClick);
         load_state.window.selected_slot = button.slot;
         match button.action {
             SaveSlotAction::Save => {

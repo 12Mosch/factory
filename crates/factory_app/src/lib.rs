@@ -1,4 +1,5 @@
 mod app;
+pub mod audio;
 mod plugin;
 pub mod save_load;
 mod simulation;

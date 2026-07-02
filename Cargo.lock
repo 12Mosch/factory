@@ -2455,6 +2455,8 @@ dependencies = [
  "bevy",
  "factory_data",
  "factory_sim",
+ "ron",
+ "serde",
 ]
 
 [[package]]

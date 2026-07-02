@@ -1,4 +1,5 @@
 mod fixed_tick {
+    mod audio_settings;
     mod build_selection;
     mod common;
     mod container_open;

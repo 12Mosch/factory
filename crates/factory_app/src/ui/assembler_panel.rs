@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use factory_data::{PrototypeCatalog, RecipeId};
 use factory_sim::AssemblingMachineState;
 
+use crate::audio::SoundEvent;
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::{OpenContainer, SimResource};
@@ -216,6 +217,7 @@ pub(crate) fn handle_assembler_recipe_button_clicks(
     mut interactions: AssemblerRecipeButtonInteractionQuery,
     mut sim: ResMut<SimResource>,
     open_container: Res<OpenContainer>,
+    mut sounds: MessageWriter<SoundEvent>,
 ) {
     let Some(entity_id) = open_container.entity_id else {
         return;
@@ -229,7 +231,13 @@ pub(crate) fn handle_assembler_recipe_button_clicks(
             continue;
         }
 
-        let _ = sim.sim.select_assembler_recipe(entity_id, button.recipe_id);
+        if sim
+            .sim
+            .select_assembler_recipe(entity_id, button.recipe_id)
+            .is_ok()
+        {
+            sounds.write(SoundEvent::UiClick);
+        }
     }
 }
 

@@ -1,7 +1,9 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use factory_data::{EntityPrototypeId, ItemId};
 use factory_sim::Direction;
 
+use crate::audio::SoundEvent;
 use crate::input::build::select_build_slot;
 use crate::input::panels::world_input_blocked;
 use crate::placement::build::{build_status_from_preview, buildable_prototypes, next_direction};
@@ -131,6 +133,15 @@ type BuildCancelButtonVisualQuery<'w, 's> = Query<
     ),
 >;
 
+#[derive(SystemParam)]
+pub(crate) struct BuildBarButtonState<'w> {
+    sim: Res<'w, SimResource>,
+    input_state: Option<Res<'w, AppInputState>>,
+    technology_window: Option<Res<'w, TechnologyWindowState>>,
+    build_state: ResMut<'w, BuildPlacementState>,
+    sounds: MessageWriter<'w, SoundEvent>,
+}
+
 pub(crate) fn setup_build_bar(mut commands: Commands, sim: Res<SimResource>) {
     let buildables = buildable_prototypes(sim.sim.catalog());
 
@@ -202,13 +213,11 @@ pub(crate) fn handle_build_bar_button_clicks(
     mut slot_interactions: BuildSlotInteractionQuery,
     mut rotate_interactions: BuildRotateInteractionQuery,
     mut cancel_interactions: BuildCancelInteractionQuery,
-    sim: Res<SimResource>,
-    input_state: Option<Res<AppInputState>>,
-    technology_window: Option<Res<TechnologyWindowState>>,
-    mut build_state: ResMut<BuildPlacementState>,
+    mut state: BuildBarButtonState,
 ) {
-    if world_input_blocked(input_state.as_deref())
-        || technology_window
+    if world_input_blocked(state.input_state.as_deref())
+        || state
+            .technology_window
             .as_deref()
             .is_some_and(|window| window.open)
     {
@@ -217,25 +226,28 @@ pub(crate) fn handle_build_bar_button_clicks(
 
     for (interaction, button) in &mut slot_interactions {
         if *interaction == Interaction::Pressed {
+            state.sounds.write(SoundEvent::UiClick);
             select_build_slot(
-                &sim.sim,
-                technology_window.as_deref(),
-                &mut build_state,
+                &state.sim.sim,
+                state.technology_window.as_deref(),
+                &mut state.build_state,
                 button.slot_index,
             );
         }
     }
 
     for interaction in &mut rotate_interactions {
-        if *interaction == Interaction::Pressed && build_state.selected.is_some() {
-            build_state.direction = next_direction(build_state.direction);
+        if *interaction == Interaction::Pressed && state.build_state.selected.is_some() {
+            state.sounds.write(SoundEvent::UiClick);
+            state.build_state.direction = next_direction(state.build_state.direction);
         }
     }
 
     for interaction in &mut cancel_interactions {
         if *interaction == Interaction::Pressed {
-            build_state.selected = None;
-            build_state.last_status = BuildPlacementStatus::Ready;
+            state.sounds.write(SoundEvent::UiClick);
+            state.build_state.selected = None;
+            state.build_state.last_status = BuildPlacementStatus::Ready;
         }
     }
 }

@@ -84,6 +84,39 @@ fn machine_statuses_classify_power_input_and_output_blocks() {
 }
 
 #[test]
+fn machine_status_for_entity_returns_working_for_active_machine() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+
+    assert_eq!(
+        sim.machine_status_for_entity(assembler_id),
+        Some(MachineStatus::Working)
+    );
+}
+
+#[test]
+fn machine_status_for_entity_returns_none_for_non_machine() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let (belt_x, belt_y) = first_placeable_entity_tile(&sim, belt);
+    let belt_id = sim
+        .place_entity(belt, belt_x, belt_y, Direction::North)
+        .expect("belt should be placeable");
+    let (chest_x, chest_y) = first_placeable_entity_tile(&sim, chest);
+    let chest_id = sim
+        .place_entity(chest, chest_x, chest_y, Direction::North)
+        .expect("chest should be placeable");
+
+    assert_eq!(sim.machine_status_for_entity(belt_id), None);
+    assert_eq!(sim.machine_status_for_entity(chest_id), None);
+    assert_eq!(sim.machine_status_for_entity(EntityId::new(u64::MAX)), None);
+}
+
+#[test]
 fn lab_missing_logistic_science_counts_as_no_input() {
     let mut sim = Simulation::new_test_world(123);
     complete_research_by_name(&mut sim, "logistics");
@@ -165,4 +198,14 @@ fn status_count(sim: &Simulation, status: MachineStatus) -> usize {
         .find(|count| count.status == status)
         .map(|count| count.count)
         .unwrap_or(0)
+}
+
+fn first_placeable_entity_tile(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i32, i32) {
+    all_tile_coords(&sim.world)
+        .into_iter()
+        .find(|(x, y)| {
+            sim.can_place_entity(prototype_id, *x, *y, Direction::North)
+                .is_ok()
+        })
+        .expect("expected placeable entity tile")
 }
