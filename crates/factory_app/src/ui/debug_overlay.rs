@@ -101,7 +101,7 @@ Machines: {}
 Inserters: {}
 Machines active/idle: {}/{}
 Power: production {}, consumption {}, satisfaction {:.1}%
-Phases: belts {}, fluids {}, power rebuild {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync {}",
+Phases: belts {}, fluids {}, power rebuild {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync total {} (player {}, world {}, resources {}, entities {}, belt dirs {}, belt items {})",
         snapshot.tick,
         snapshot.ups,
         format_optional(snapshot.fps, "", 1),
@@ -126,6 +126,12 @@ Phases: belts {}, fluids {}, power rebuild {}, machines {}, inserters {}, invent
         format_duration_ms(snapshot.sim_profile.last_tick.inventory_transfers),
         format_duration_ms(snapshot.sim_profile.last_tick.chunk_lookup),
         format_duration_ms(snapshot.render_sync.total),
+        format_duration_ms(snapshot.render_sync.player),
+        format_duration_ms(snapshot.render_sync.world_tiles),
+        format_duration_ms(snapshot.render_sync.resources),
+        format_duration_ms(snapshot.render_sync.placed_entities),
+        format_duration_ms(snapshot.render_sync.belt_directions),
+        format_duration_ms(snapshot.render_sync.belt_items),
     )
 }
 
@@ -170,10 +176,13 @@ mod tests {
             },
             rolling_average_sim_tick_ms: 1.25,
         };
-        let render_sync = RenderSyncStats {
-            total: Duration::from_micros(600),
-            ..default()
-        };
+        let mut render_sync = RenderSyncStats::default();
+        render_sync.record_player(Duration::from_micros(10));
+        render_sync.record_world_tiles(Duration::from_micros(20));
+        render_sync.record_resources(Duration::from_micros(30));
+        render_sync.record_placed_entities(Duration::from_micros(40));
+        render_sync.record_belt_directions(Duration::from_micros(50));
+        render_sync.record_belt_items(Duration::from_micros(450));
         let text = format_debug_overlay(DebugOverlaySnapshot {
             tick: 7,
             ups: 60.0,
@@ -220,7 +229,13 @@ mod tests {
             "inserters",
             "inventory transfers",
             "chunk lookup",
-            "render sync",
+            "render sync total",
+            "player",
+            "world",
+            "resources",
+            "entities",
+            "belt dirs",
+            "belt items",
         ] {
             assert!(text.contains(label), "missing debug overlay label {label}");
         }

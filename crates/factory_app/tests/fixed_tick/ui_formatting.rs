@@ -34,10 +34,13 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         },
         rolling_average_sim_tick_ms: 1.25,
     };
-    let render_sync = RenderSyncStats {
-        total: Duration::from_micros(600),
-        ..Default::default()
-    };
+    let mut render_sync = RenderSyncStats::default();
+    render_sync.record_player(Duration::from_micros(10));
+    render_sync.record_world_tiles(Duration::from_micros(20));
+    render_sync.record_resources(Duration::from_micros(30));
+    render_sync.record_placed_entities(Duration::from_micros(40));
+    render_sync.record_belt_directions(Duration::from_micros(50));
+    render_sync.record_belt_items(Duration::from_micros(450));
     let text = format_debug_overlay(DebugOverlaySnapshot {
         tick: 7,
         ups: 60.0,
@@ -72,7 +75,13 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         "Power:",
         "fluids",
         "power rebuild",
-        "render sync",
+        "render sync total",
+        "player",
+        "world",
+        "resources",
+        "entities",
+        "belt dirs",
+        "belt items",
     ] {
         assert!(text.contains(label), "missing debug overlay label {label}");
     }

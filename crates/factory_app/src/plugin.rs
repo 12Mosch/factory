@@ -38,7 +38,7 @@ use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
 use crate::rendering::resources::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
-use crate::rendering::world::sync_visible_world_tiles;
+use crate::rendering::world::measured_sync_visible_world_tiles;
 use crate::resources::{
     AppInputState, BuildPlacementPreviewState, BuildPlacementState, CraftingWindowState,
     InventoryTransferFeedback, MapDisplaySettings, MapTextureCache, MapViewState, OpenContainer,
@@ -218,7 +218,7 @@ impl Plugin for FactoryAppPlugin {
                     update_render_detail,
                     update_visible_chunks,
                     update_visible_entity_ids,
-                    sync_visible_world_tiles,
+                    measured_sync_visible_world_tiles,
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
                     measured_sync_belt_direction_rendering,

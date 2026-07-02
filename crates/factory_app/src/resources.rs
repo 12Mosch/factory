@@ -22,9 +22,10 @@ pub struct SimProfileStats {
     pub rolling_average_sim_tick_ms: f64,
 }
 
-#[derive(Resource, Default)]
+#[derive(Clone, Copy, Debug, Resource, Default)]
 pub struct RenderSyncStats {
     pub player: Duration,
+    pub world_tiles: Duration,
     pub resources: Duration,
     pub placed_entities: Duration,
     pub belt_directions: Duration,
@@ -35,6 +36,11 @@ pub struct RenderSyncStats {
 impl RenderSyncStats {
     pub fn record_player(&mut self, elapsed: Duration) {
         self.player = elapsed;
+        self.update_total();
+    }
+
+    pub fn record_world_tiles(&mut self, elapsed: Duration) {
+        self.world_tiles = elapsed;
         self.update_total();
     }
 
@@ -60,6 +66,7 @@ impl RenderSyncStats {
 
     fn update_total(&mut self) {
         self.total = self.player
+            + self.world_tiles
             + self.resources
             + self.placed_entities
             + self.belt_directions

@@ -1,24 +1,50 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use factory_sim::CHUNK_SIZE;
 
 use crate::constants::TILE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, tile_color};
-use crate::resources::{SimResource, VisibleChunks, WorldRenderCache};
+use crate::resources::{RenderSyncStats, SimResource, VisibleChunks, WorldRenderCache};
 use crate::save_load::PresentationReloadToken;
+use std::time::Instant;
 
 #[derive(Component)]
 pub struct WorldChunkMesh;
 
-pub(crate) fn sync_visible_world_tiles(
-    mut commands: Commands,
-    sim: Res<SimResource>,
-    visible: Res<VisibleChunks>,
-    token: Res<PresentationReloadToken>,
-    mut cache: ResMut<WorldRenderCache>,
-    meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<ColorMaterial>>>,
+pub(crate) fn measured_sync_visible_world_tiles(
+    commands: Commands,
+    params: WorldTilesRenderParams,
+    mut stats: ResMut<RenderSyncStats>,
 ) {
+    let started = Instant::now();
+    sync_visible_world_tiles(commands, params);
+    stats.record_world_tiles(started.elapsed());
+}
+
+pub(crate) fn sync_visible_world_tiles(mut commands: Commands, params: WorldTilesRenderParams) {
+    sync_visible_world_tiles_impl(&mut commands, params);
+}
+
+#[derive(SystemParam)]
+pub(crate) struct WorldTilesRenderParams<'w> {
+    sim: Res<'w, SimResource>,
+    visible: Res<'w, VisibleChunks>,
+    token: Res<'w, PresentationReloadToken>,
+    cache: ResMut<'w, WorldRenderCache>,
+    meshes: Option<ResMut<'w, Assets<Mesh>>>,
+    materials: Option<ResMut<'w, Assets<ColorMaterial>>>,
+}
+
+fn sync_visible_world_tiles_impl(commands: &mut Commands, params: WorldTilesRenderParams) {
+    let WorldTilesRenderParams {
+        sim,
+        visible,
+        token,
+        mut cache,
+        meshes,
+        materials,
+    } = params;
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         return;
     };
@@ -132,11 +158,10 @@ mod tests {
     use super::*;
     use crate::rendering::belts::{
         BeltDirectionSprite, BeltItemSprite, measured_sync_belt_direction_rendering,
-        measured_sync_belt_item_rendering, sync_belt_direction_rendering, sync_belt_item_rendering,
+        measured_sync_belt_item_rendering,
     };
     use crate::rendering::entities::{
-        PlacedEntitySprite, measured_sync_placed_entity_rendering, sync_placed_entity_rendering,
-        update_visible_entity_ids,
+        PlacedEntitySprite, measured_sync_placed_entity_rendering, update_visible_entity_ids,
     };
     use crate::rendering::resources::{
         ResourceAmountLabel, ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
@@ -147,6 +172,10 @@ mod tests {
     use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation};
     use std::collections::BTreeSet;
     use std::time::Duration;
+
+    const RENDER_SYNC_SMALL_MEASUREMENT_FRAMES: usize = 300;
+    const RENDER_SYNC_SMALL_TOTAL_P95_BUDGET: Duration = Duration::from_millis(4);
+    const RENDER_SYNC_SMALL_TOTAL_MAX_BUDGET: Duration = Duration::from_millis(8);
 
     #[test]
     fn render_sync_counts_are_bounded_by_visible_chunks() {
@@ -194,12 +223,12 @@ mod tests {
             .add_systems(
                 Update,
                 (
-                    sync_visible_world_tiles,
-                    sync_resource_debug_rendering,
+                    measured_sync_visible_world_tiles,
+                    measured_sync_resource_debug_rendering,
                     update_visible_entity_ids,
-                    sync_placed_entity_rendering,
-                    sync_belt_direction_rendering,
-                    sync_belt_item_rendering,
+                    measured_sync_placed_entity_rendering,
+                    measured_sync_belt_direction_rendering,
+                    measured_sync_belt_item_rendering,
                 )
                     .chain(),
             );
@@ -306,34 +335,27 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn render_sync_small_benchmark() {
+    fn render_sync_small_visual_load_budget() {
         let sim = small_render_sync_fixture();
         let visible = visible_window();
         let mut app = render_sync_app(sim, visible);
 
         app.update();
-        let mut samples = Vec::with_capacity(300);
-        for _ in 0..300 {
-            app.update();
-            samples.push(app.world().resource::<RenderSyncStats>().total);
-        }
+        let stats =
+            collect_render_sync_budget_stats(&mut app, RENDER_SYNC_SMALL_MEASUREMENT_FRAMES);
+        print_render_sync_budget_stats(&mut app, stats);
 
-        samples.sort_unstable();
-        let average = Duration::from_nanos(
-            (samples.iter().map(Duration::as_nanos).sum::<u128>() / samples.len() as u128) as u64,
+        assert!(
+            stats.p95.total <= RENDER_SYNC_SMALL_TOTAL_P95_BUDGET,
+            "render sync total p95 {:.3} ms exceeded budget {:.3} ms",
+            ms(stats.p95.total),
+            ms(RENDER_SYNC_SMALL_TOTAL_P95_BUDGET)
         );
-        let p95 = samples[((samples.len() * 95).div_ceil(100)).saturating_sub(1)];
-        let max = *samples.last().expect("render sync samples should exist");
-        let visible_chunks = app.world().resource::<VisibleChunks>().chunks.len();
-        let visible_entities = placed_entity_sprite_count(&mut app);
-
-        println!(
-            "render_sync_small:\n  render sync: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  visible chunks: {}\n  visible entities: {}",
-            average.as_secs_f64() * 1000.0,
-            p95.as_secs_f64() * 1000.0,
-            max.as_secs_f64() * 1000.0,
-            visible_chunks,
-            visible_entities
+        assert!(
+            stats.max.total <= RENDER_SYNC_SMALL_TOTAL_MAX_BUDGET,
+            "render sync total max {:.3} ms exceeded budget {:.3} ms",
+            ms(stats.max.total),
+            ms(RENDER_SYNC_SMALL_TOTAL_MAX_BUDGET)
         );
     }
 
@@ -432,7 +454,7 @@ mod tests {
             .init_resource::<VisibleEntityIds>()
             .init_resource::<RenderDetail>()
             .insert_resource(ResourceRenderSettings {
-                show_amount_labels: false,
+                show_amount_labels: true,
             })
             .init_resource::<RenderSyncStats>()
             .init_resource::<PresentationReloadToken>()
@@ -441,7 +463,7 @@ mod tests {
             .add_systems(
                 Update,
                 (
-                    sync_visible_world_tiles,
+                    measured_sync_visible_world_tiles,
                     measured_sync_resource_debug_rendering,
                     update_visible_entity_ids,
                     measured_sync_placed_entity_rendering,
@@ -451,6 +473,149 @@ mod tests {
                     .chain(),
             );
         app
+    }
+
+    #[derive(Clone, Copy)]
+    struct RenderSyncSample {
+        stats: RenderSyncStats,
+    }
+
+    #[derive(Clone, Copy)]
+    struct RenderSyncBudgetStats {
+        average: RenderSyncStats,
+        p95: RenderSyncStats,
+        max: RenderSyncStats,
+    }
+
+    fn collect_render_sync_budget_stats(app: &mut App, frames: usize) -> RenderSyncBudgetStats {
+        assert!(frames > 0);
+        let mut samples = Vec::with_capacity(frames);
+
+        for _ in 0..frames {
+            app.update();
+            samples.push(RenderSyncSample {
+                stats: *app.world().resource::<RenderSyncStats>(),
+            });
+        }
+
+        render_sync_budget_stats(samples.into_iter().map(|sample| sample.stats).collect())
+    }
+
+    fn render_sync_budget_stats(mut samples: Vec<RenderSyncStats>) -> RenderSyncBudgetStats {
+        assert!(!samples.is_empty());
+        samples.sort_by_key(|stats| stats.total);
+        let p95_index = ((samples.len() * 95).div_ceil(100)).saturating_sub(1);
+
+        RenderSyncBudgetStats {
+            average: average_render_sync_stats(&samples),
+            p95: percentile_render_sync_stats(&samples, p95_index),
+            max: max_render_sync_stats(&samples),
+        }
+    }
+
+    fn average_render_sync_stats(samples: &[RenderSyncStats]) -> RenderSyncStats {
+        RenderSyncStats {
+            player: average_duration(samples, |stats| stats.player),
+            world_tiles: average_duration(samples, |stats| stats.world_tiles),
+            resources: average_duration(samples, |stats| stats.resources),
+            placed_entities: average_duration(samples, |stats| stats.placed_entities),
+            belt_directions: average_duration(samples, |stats| stats.belt_directions),
+            belt_items: average_duration(samples, |stats| stats.belt_items),
+            total: average_duration(samples, |stats| stats.total),
+        }
+    }
+
+    fn percentile_render_sync_stats(samples: &[RenderSyncStats], index: usize) -> RenderSyncStats {
+        RenderSyncStats {
+            player: percentile_duration(samples, index, |stats| stats.player),
+            world_tiles: percentile_duration(samples, index, |stats| stats.world_tiles),
+            resources: percentile_duration(samples, index, |stats| stats.resources),
+            placed_entities: percentile_duration(samples, index, |stats| stats.placed_entities),
+            belt_directions: percentile_duration(samples, index, |stats| stats.belt_directions),
+            belt_items: percentile_duration(samples, index, |stats| stats.belt_items),
+            total: percentile_duration(samples, index, |stats| stats.total),
+        }
+    }
+
+    fn max_render_sync_stats(samples: &[RenderSyncStats]) -> RenderSyncStats {
+        RenderSyncStats {
+            player: max_duration(samples, |stats| stats.player),
+            world_tiles: max_duration(samples, |stats| stats.world_tiles),
+            resources: max_duration(samples, |stats| stats.resources),
+            placed_entities: max_duration(samples, |stats| stats.placed_entities),
+            belt_directions: max_duration(samples, |stats| stats.belt_directions),
+            belt_items: max_duration(samples, |stats| stats.belt_items),
+            total: max_duration(samples, |stats| stats.total),
+        }
+    }
+
+    fn average_duration(
+        samples: &[RenderSyncStats],
+        duration: impl Fn(RenderSyncStats) -> Duration,
+    ) -> Duration {
+        let nanos = samples
+            .iter()
+            .map(|sample| duration(*sample).as_nanos())
+            .sum::<u128>()
+            / samples.len() as u128;
+        Duration::from_nanos(nanos as u64)
+    }
+
+    fn percentile_duration(
+        samples: &[RenderSyncStats],
+        index: usize,
+        duration: impl Fn(RenderSyncStats) -> Duration,
+    ) -> Duration {
+        let mut durations = samples
+            .iter()
+            .map(|sample| duration(*sample))
+            .collect::<Vec<_>>();
+        durations.sort_unstable();
+        durations[index]
+    }
+
+    fn max_duration(
+        samples: &[RenderSyncStats],
+        duration: impl Fn(RenderSyncStats) -> Duration,
+    ) -> Duration {
+        samples
+            .iter()
+            .map(|sample| duration(*sample))
+            .max()
+            .expect("render sync samples should not be empty")
+    }
+
+    fn print_render_sync_budget_stats(app: &mut App, stats: RenderSyncBudgetStats) {
+        println!(
+            "render_sync_small_visual_load_budget:\n  total: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  world_tiles: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  resources: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  placed_entities: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belt_directions: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belt_items: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  player: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  visible chunks: {}\n  visible placed entity sprites: {}\n  belt direction sprites: {}\n  belt item sprites: {}\n  resource sprites: {}\n  resource labels: {}",
+            ms(stats.average.total),
+            ms(stats.p95.total),
+            ms(stats.max.total),
+            ms(stats.average.world_tiles),
+            ms(stats.p95.world_tiles),
+            ms(stats.max.world_tiles),
+            ms(stats.average.resources),
+            ms(stats.p95.resources),
+            ms(stats.max.resources),
+            ms(stats.average.placed_entities),
+            ms(stats.p95.placed_entities),
+            ms(stats.max.placed_entities),
+            ms(stats.average.belt_directions),
+            ms(stats.p95.belt_directions),
+            ms(stats.max.belt_directions),
+            ms(stats.average.belt_items),
+            ms(stats.p95.belt_items),
+            ms(stats.max.belt_items),
+            ms(stats.average.player),
+            ms(stats.p95.player),
+            ms(stats.max.player),
+            app.world().resource::<VisibleChunks>().chunks.len(),
+            placed_entity_sprite_count(app),
+            belt_direction_sprite_count(app),
+            belt_item_sprite_count(app),
+            resource_sprite_count(app),
+            resource_label_count(app),
+        );
     }
 
     fn place_belts_across_generated_world(sim: &mut Simulation) {
@@ -566,5 +731,9 @@ mod tests {
             .query_filtered::<Entity, With<ResourceAmountLabel>>()
             .iter(app.world())
             .count()
+    }
+
+    fn ms(duration: Duration) -> f64 {
+        duration.as_secs_f64() * 1000.0
     }
 }
