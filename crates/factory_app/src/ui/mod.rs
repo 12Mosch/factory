@@ -4,6 +4,7 @@ pub(crate) mod container_window;
 pub mod debug_overlay;
 pub mod formatting;
 pub mod inventory_panel;
+pub(crate) mod layout;
 pub(crate) mod machine_indicators;
 pub(crate) mod manual_crafting;
 pub mod map_view;

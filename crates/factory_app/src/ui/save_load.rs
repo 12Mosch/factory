@@ -5,6 +5,7 @@ use crate::save_load::{
     SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState, SaveSlotKind, load_slot, request_save,
     slot_display_name, slot_exists, slot_modified_label,
 };
+use crate::ui::layout::scroll_column;
 
 #[derive(Component)]
 pub struct SaveLoadRoot {
@@ -21,6 +22,12 @@ pub struct SaveSlotButton {
     pub slot: SaveSlotKind,
     pub action: SaveSlotAction,
 }
+
+#[derive(Component)]
+pub struct SaveLoadModal;
+
+#[derive(Component)]
+pub struct SaveLoadSlotList;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SaveSlotAction {
@@ -184,16 +191,19 @@ fn spawn_save_load_modal(
 ) {
     root.spawn((
         Node {
-            width: Val::Px(520.0),
-            min_height: Val::Px(360.0),
+            width: Val::Vw(92.0),
+            max_width: Val::Px(560.0),
+            max_height: Val::Vh(86.0),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(10.0),
             padding: UiRect::all(Val::Px(16.0)),
             border: UiRect::all(Val::Px(1.0)),
+            overflow: Overflow::clip(),
             ..default()
         },
         BackgroundColor(Color::srgba(0.030, 0.032, 0.034, 0.98)),
         BorderColor::all(Color::srgba(0.36, 0.39, 0.34, 0.95)),
+        SaveLoadModal,
     ))
     .with_children(|modal| {
         modal.spawn((
@@ -215,7 +225,9 @@ fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected:
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 column_gap: Val::Px(6.0),
+                row_gap: Val::Px(6.0),
                 ..default()
             },
             BackgroundColor(Color::NONE),
@@ -253,31 +265,42 @@ fn spawn_save_tab(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &SaveLoadSnapshot,
 ) {
-    for slot in MANUAL_SAVE_SLOTS {
-        let row = snapshot.row(slot);
-        spawn_slot_row(
-            parent,
-            row,
-            Some((SaveSlotAction::Save, "Save")),
-            row.pending,
-        );
-    }
+    spawn_slot_list(parent, |list| {
+        for slot in MANUAL_SAVE_SLOTS {
+            let row = snapshot.row(slot);
+            spawn_slot_row(list, row, Some((SaveSlotAction::Save, "Save")), row.pending);
+        }
 
-    for slot in [SaveSlotKind::Quick, SaveSlotKind::Auto] {
-        let row = snapshot.row(slot);
-        spawn_readonly_row(parent, row);
-    }
+        for slot in [SaveSlotKind::Quick, SaveSlotKind::Auto] {
+            let row = snapshot.row(slot);
+            spawn_readonly_row(list, row);
+        }
+    });
 }
 
 fn spawn_load_tab(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &SaveLoadSnapshot,
 ) {
-    for slot in LOAD_SAVE_SLOTS {
-        let row = snapshot.row(slot);
-        let action = row.exists.then_some((SaveSlotAction::Load, "Load"));
-        spawn_slot_row(parent, row, action, false);
-    }
+    spawn_slot_list(parent, |list| {
+        for slot in LOAD_SAVE_SLOTS {
+            let row = snapshot.row(slot);
+            let action = row.exists.then_some((SaveSlotAction::Load, "Load"));
+            spawn_slot_row(list, row, action, false);
+        }
+    });
+}
+
+fn spawn_slot_list(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    spawn_rows: impl FnOnce(&mut bevy::ecs::hierarchy::ChildSpawnerCommands),
+) {
+    let mut list_node = scroll_column();
+    list_node.row_gap = Val::Px(6.0);
+
+    parent
+        .spawn((list_node, BackgroundColor(Color::NONE), SaveLoadSlotList))
+        .with_children(spawn_rows);
 }
 
 fn spawn_slot_row(
@@ -290,9 +313,11 @@ fn spawn_slot_row(
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 min_height: Val::Px(38.0),
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(10.0),
+                row_gap: Val::Px(4.0),
                 padding: UiRect::horizontal(Val::Px(8.0)),
                 ..default()
             },
@@ -319,9 +344,11 @@ fn spawn_readonly_row(
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 min_height: Val::Px(34.0),
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(10.0),
+                row_gap: Val::Px(4.0),
                 padding: UiRect::horizontal(Val::Px(8.0)),
                 ..default()
             },
@@ -345,6 +372,7 @@ fn spawn_slot_name(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, labe
     parent.spawn((
         Node {
             width: Val::Px(120.0),
+            flex_shrink: 0.0,
             ..default()
         },
         Text::new(label.to_string()),
@@ -360,7 +388,10 @@ fn spawn_slot_meta(
 ) {
     parent.spawn((
         Node {
-            width: Val::Px(250.0),
+            flex_basis: Val::Px(220.0),
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            min_width: Val::Px(0.0),
             ..default()
         },
         Text::new(label.to_string()),
@@ -384,6 +415,7 @@ fn spawn_action_button(
             Button,
             Node {
                 width: Val::Px(78.0),
+                flex_shrink: 0.0,
                 height: Val::Px(28.0),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
@@ -405,6 +437,7 @@ fn spawn_label(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, label: &
     parent.spawn((
         Node {
             width: Val::Px(78.0),
+            flex_shrink: 0.0,
             justify_content: JustifyContent::Center,
             ..default()
         },

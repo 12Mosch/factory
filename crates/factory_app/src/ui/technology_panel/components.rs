@@ -27,6 +27,15 @@ pub(crate) struct TechnologyPanelRoot {
     pub(crate) snapshot: TechnologyPanelSnapshot,
 }
 
+#[derive(Component)]
+pub(crate) struct TechnologyPanelContentRoot;
+
+#[derive(Component)]
+pub(crate) struct TechnologyListRoot;
+
+#[derive(Component)]
+pub(crate) struct TechnologyDetailRoot;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TechnologyPanelSnapshot {
     pub(crate) selected: Option<TechnologyId>,
