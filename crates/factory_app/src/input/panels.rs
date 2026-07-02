@@ -1,12 +1,19 @@
 use bevy::ecs::system::SystemParam;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
 use crate::audio::AudioSettingsWindowState;
 use crate::resources::{
-    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapViewState,
-    OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
+    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapLayer,
+    MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState, SimResource,
+    TechnologyWindowState,
 };
 use crate::save_load::SaveLoadWindowState;
+use crate::ui::map_view::{
+    FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
+    fullscreen_map_image_size,
+};
 
 pub(crate) fn reset_app_input_state(
     map: Res<MapViewState>,
@@ -24,6 +31,7 @@ pub(crate) fn reset_app_input_state(
 #[derive(SystemParam)]
 pub(crate) struct PanelInputResources<'w> {
     input_state: ResMut<'w, AppInputState>,
+    sim: Res<'w, SimResource>,
     map: ResMut<'w, MapViewState>,
     settings: ResMut<'w, MapDisplaySettings>,
     stats: ResMut<'w, ProductionStatsWindowState>,
@@ -48,6 +56,10 @@ pub(crate) fn handle_panel_input(
         if resources.map.open {
             resources.build_state.selected = None;
             resources.open_container.entity_id = None;
+            if resources.map.follow_player {
+                let (x, y) = resources.sim.sim.player().position_tiles();
+                resources.map.center_tile = Vec2::new(x, y);
+            }
         }
     }
     if keyboard.just_pressed(KeyCode::KeyP) {
@@ -114,6 +126,96 @@ pub(crate) fn handle_panel_input(
         || resources.crafting.open
         || resources.audio_settings.open
         || resources.save_load.open;
+}
+
+#[derive(SystemParam)]
+pub(crate) struct FullscreenMapInputResources<'w, 's> {
+    keyboard: Option<Res<'w, ButtonInput<KeyCode>>>,
+    mouse_buttons: Option<Res<'w, ButtonInput<MouseButton>>>,
+    mouse_motion: Option<Res<'w, AccumulatedMouseMotion>>,
+    mouse_scroll: Option<Res<'w, AccumulatedMouseScroll>>,
+    sim: Res<'w, SimResource>,
+    cache: Res<'w, MapTextureCache>,
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    state: ResMut<'w, MapViewState>,
+}
+
+pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResources) {
+    if !resources.state.open {
+        return;
+    }
+
+    let (player_x, player_y) = resources.sim.sim.player().position_tiles();
+    let player_center = Vec2::new(player_x, player_y);
+    if resources.state.follow_player {
+        resources.state.center_tile = player_center;
+    }
+
+    if let Some(keyboard) = resources.keyboard.as_deref() {
+        if keyboard.just_pressed(KeyCode::KeyF) {
+            resources.state.center_tile = player_center;
+            resources.state.follow_player = true;
+        }
+        if keyboard.just_pressed(KeyCode::Digit1) {
+            resources.state.selected_layer = MapLayer::Surface;
+        }
+        if keyboard.just_pressed(KeyCode::Digit2) {
+            resources.state.selected_layer = MapLayer::Resources;
+        }
+        if keyboard.just_pressed(KeyCode::Digit3) {
+            resources.state.selected_layer = MapLayer::Entities;
+        }
+    }
+
+    let Some(map_bounds) = resources.cache.bounds else {
+        return;
+    };
+    let image_size = fullscreen_map_image_size(resources.windows.iter().next());
+
+    if let Some(mouse_scroll) = resources.mouse_scroll.as_deref() {
+        let scroll = mouse_scroll.delta.y;
+        if scroll != 0.0 {
+            let zoom_factor = (scroll * 0.12).exp();
+            resources.state.zoom =
+                (resources.state.zoom * zoom_factor).clamp(FULL_MAP_MIN_ZOOM, FULL_MAP_MAX_ZOOM);
+            resources.state.center_tile = clamp_map_center(
+                map_bounds,
+                resources.state.center_tile,
+                resources.state.zoom,
+                image_size,
+            );
+        }
+    }
+
+    let dragging = resources.mouse_buttons.as_deref().is_some_and(|buttons| {
+        buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Middle)
+    });
+    let motion = resources
+        .mouse_motion
+        .as_deref()
+        .map(|motion| motion.delta)
+        .unwrap_or(Vec2::ZERO);
+    if dragging && motion != Vec2::ZERO {
+        let crop = fullscreen_crop_bounds(
+            map_bounds,
+            resources.state.center_tile,
+            resources.state.zoom,
+            image_size,
+        );
+        let tiles_per_pixel = Vec2::new(
+            crop.width as f32 / image_size.x.max(1.0),
+            crop.height as f32 / image_size.y.max(1.0),
+        );
+        resources.state.center_tile.x -= motion.x * tiles_per_pixel.x;
+        resources.state.center_tile.y += motion.y * tiles_per_pixel.y;
+        resources.state.follow_player = false;
+        resources.state.center_tile = clamp_map_center(
+            map_bounds,
+            resources.state.center_tile,
+            resources.state.zoom,
+            image_size,
+        );
+    }
 }
 
 pub fn world_input_blocked(input_state: Option<&AppInputState>) -> bool {

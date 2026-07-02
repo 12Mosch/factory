@@ -1,4 +1,4 @@
-use bevy::prelude::{ColorMaterial, Entity, Handle, Image, Resource};
+use bevy::prelude::{ColorMaterial, Entity, Handle, Image, Resource, Vec2};
 use factory_data::{EntityPrototypeId, ItemId, TechnologyId};
 use factory_sim::{ChunkCoord, Direction, EntityId, Simulation, SimulationTickProfile};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -90,9 +90,39 @@ pub struct TechnologyWindowState {
     pub selected: Option<TechnologyId>,
 }
 
-#[derive(Resource, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MapLayer {
+    Surface,
+    Resources,
+    Entities,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for MapLayer {
+    fn default() -> Self {
+        Self::Surface
+    }
+}
+
+#[derive(Resource)]
 pub struct MapViewState {
     pub open: bool,
+    pub center_tile: Vec2,
+    pub zoom: f32,
+    pub follow_player: bool,
+    pub selected_layer: MapLayer,
+}
+
+impl Default for MapViewState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            center_tile: Vec2::ZERO,
+            zoom: 1.0,
+            follow_player: true,
+            selected_layer: MapLayer::Surface,
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -137,6 +167,20 @@ pub struct MapTextureCache {
     pub bounds: Option<MapTextureBounds>,
     pub pixels: Option<Vec<u8>>,
     pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
+    pub last_player_tile: Option<(i32, i32)>,
+    pub last_chunk_revision: u64,
+    pub last_resource_revision: u64,
+    pub last_entity_signature: u64,
+    pub last_revealed_signature: u64,
+    pub last_debug_flags: (bool, bool),
+    pub layer_caches: BTreeMap<MapLayer, MapLayerTextureCache>,
+}
+
+#[derive(Default)]
+pub struct MapLayerTextureCache {
+    pub handle: Option<Handle<Image>>,
+    pub bounds: Option<MapTextureBounds>,
+    pub pixels: Option<Vec<u8>>,
     pub last_player_tile: Option<(i32, i32)>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
