@@ -2,9 +2,12 @@ use bevy::prelude::*;
 use factory_sim::EntityId;
 
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
-use crate::resources::{OpenContainer, SimResource};
+use crate::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
 use crate::ui::assembler_panel::spawn_assembler_panel;
-use crate::ui::inventory_panel::{InventoryPanel, spawn_player_inventory_panel, spawn_slot_button};
+use crate::ui::inventory_panel::{
+    InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,
+    spawn_slot_button,
+};
 use crate::ui::machine_indicators::{
     spawn_boiler_panel, spawn_burner_drill_panel, spawn_furnace_panel,
 };
@@ -19,6 +22,7 @@ pub(crate) fn sync_container_window(
     mut commands: Commands,
     sim: Res<SimResource>,
     mut open_container: ResMut<OpenContainer>,
+    mut feedback: ResMut<InventoryTransferFeedback>,
     roots: Query<(Entity, &ContainerWindowRoot)>,
 ) {
     let open_kind = open_container
@@ -26,12 +30,14 @@ pub(crate) fn sync_container_window(
         .and_then(|entity_id| open_machine_kind(&sim.sim, entity_id));
     if open_container.entity_id.is_some() && open_kind.is_none() {
         open_container.entity_id = None;
+        feedback.message = None;
     }
 
     if open_container.entity_id.is_none() {
         for (entity, _) in &roots {
             commands.entity(entity).despawn();
         }
+        feedback.message = None;
         return;
     }
 
@@ -43,6 +49,7 @@ pub(crate) fn sync_container_window(
     for (entity, root) in &roots {
         if root.entity_id != entity_id || root.kind != kind {
             commands.entity(entity).despawn();
+            feedback.message = None;
         }
     }
 
@@ -92,6 +99,7 @@ pub(crate) fn sync_container_window(
                     spawn_lab_panel(root, slot_count);
                 }
             }
+            spawn_inventory_transfer_feedback(root);
         });
 }
 

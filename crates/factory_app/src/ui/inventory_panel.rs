@@ -1,14 +1,15 @@
 use bevy::prelude::*;
+use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
-    BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
-    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
-    FURNACE_OUTPUT_SLOT_INDEX,
+    AssemblerError, BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
+    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BoilerError, BurnerDrillError, ContainerError,
+    FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX, FurnaceError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
-use crate::interaction::slot_transfer::transfer_open_container_slot;
-use crate::resources::{OpenContainer, SimResource};
-use crate::ui::formatting::format_item_stack;
+use crate::interaction::slot_transfer::{ContainerSlotClickError, transfer_open_container_slot};
+use crate::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
+use crate::ui::formatting::{format_item_display_name, format_item_stack};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InventoryPanel {
@@ -35,6 +36,9 @@ pub(crate) struct ContainerSlotText {
     panel: InventoryPanel,
     slot_index: usize,
 }
+
+#[derive(Component)]
+pub(crate) struct InventoryTransferFeedbackText;
 
 pub(crate) type ContainerSlotInteractionQuery<'w, 's> = Query<
     'w,
@@ -75,6 +79,21 @@ pub(crate) fn spawn_player_inventory_panel(root: &mut bevy::ecs::hierarchy::Chil
                 }
             });
     });
+}
+
+pub(crate) fn spawn_inventory_transfer_feedback(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+) {
+    parent.spawn((
+        Text::new(""),
+        TextFont::from_font_size(12.0),
+        TextColor(Color::srgb(0.98, 0.72, 0.28)),
+        Node {
+            width: Val::Px(190.0),
+            ..default()
+        },
+        InventoryTransferFeedbackText,
+    ));
 }
 
 pub(crate) fn spawn_labeled_slot(
@@ -133,18 +152,39 @@ pub(crate) fn handle_container_slot_clicks(
     mut interactions: ContainerSlotInteractionQuery,
     mut sim: ResMut<SimResource>,
     open_container: Res<OpenContainer>,
+    mut feedback: ResMut<InventoryTransferFeedback>,
 ) {
     for (interaction, button) in &mut interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
 
-        let _ = transfer_open_container_slot(
+        match transfer_open_container_slot(
             &mut sim.sim,
             open_container.entity_id,
             button.panel,
             button.slot_index,
-        );
+        ) {
+            Ok(()) => feedback.message = None,
+            Err(error) => {
+                feedback.message =
+                    Some(container_slot_click_error_message(sim.sim.catalog(), error));
+            }
+        }
+    }
+}
+
+pub(crate) fn update_inventory_transfer_feedback_text(
+    feedback: Res<InventoryTransferFeedback>,
+    mut texts: Query<&mut Text, With<InventoryTransferFeedbackText>>,
+) {
+    if !feedback.is_changed() {
+        return;
+    }
+
+    let message = feedback.message.as_deref().unwrap_or_default();
+    for mut text in &mut texts {
+        text.0 = message.to_string();
     }
 }
 
@@ -220,5 +260,94 @@ pub(crate) fn update_container_slot_text(
         text.0 = stack
             .map(|stack| format_item_stack(stack, sim.sim.catalog()))
             .unwrap_or_default();
+    }
+}
+
+pub fn container_slot_click_error_message(
+    catalog: &PrototypeCatalog,
+    error: ContainerSlotClickError,
+) -> String {
+    match error {
+        ContainerSlotClickError::NoOpenContainer => "No open container".to_string(),
+        ContainerSlotClickError::Transfer(error) => container_error_message(catalog, error),
+        ContainerSlotClickError::BurnerDrill(error) => burner_drill_error_message(catalog, error),
+        ContainerSlotClickError::Furnace(error) => furnace_error_message(catalog, error),
+        ContainerSlotClickError::Boiler(error) => boiler_error_message(catalog, error),
+        ContainerSlotClickError::Assembler(error) => assembler_error_message(catalog, error),
+    }
+}
+
+fn wrong_item_message(catalog: &PrototypeCatalog, item_id: ItemId) -> String {
+    format!("Wrong item: {}", format_item_display_name(catalog, item_id))
+}
+
+fn container_error_message(catalog: &PrototypeCatalog, error: ContainerError) -> String {
+    match error {
+        ContainerError::MissingEntity(_) | ContainerError::NotContainer(_) => {
+            "Container unavailable".to_string()
+        }
+        ContainerError::InvalidItem(item_id) => wrong_item_message(catalog, item_id),
+        ContainerError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        ContainerError::EmptySlot { .. } => "Empty slot".to_string(),
+        ContainerError::InsufficientSpace => "No space".to_string(),
+        ContainerError::UnknownItem => "Unknown item".to_string(),
+    }
+}
+
+fn burner_drill_error_message(catalog: &PrototypeCatalog, error: BurnerDrillError) -> String {
+    match error {
+        BurnerDrillError::MissingEntity(_) | BurnerDrillError::NotBurnerDrill(_) => {
+            "Machine unavailable".to_string()
+        }
+        BurnerDrillError::InvalidFuel(item_id) => wrong_item_message(catalog, item_id),
+        BurnerDrillError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        BurnerDrillError::EmptySlot { .. } => "Empty slot".to_string(),
+        BurnerDrillError::InsufficientSpace => "No space".to_string(),
+        BurnerDrillError::UnknownItem => "Unknown item".to_string(),
+    }
+}
+
+fn furnace_error_message(catalog: &PrototypeCatalog, error: FurnaceError) -> String {
+    match error {
+        FurnaceError::MissingEntity(_) | FurnaceError::NotFurnace(_) => {
+            "Machine unavailable".to_string()
+        }
+        FurnaceError::InvalidInput(item_id) | FurnaceError::InvalidFuel(item_id) => {
+            wrong_item_message(catalog, item_id)
+        }
+        FurnaceError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        FurnaceError::EmptySlot { .. } => "Empty slot".to_string(),
+        FurnaceError::InsufficientSpace => "No space".to_string(),
+        FurnaceError::UnknownItem => "Unknown item".to_string(),
+    }
+}
+
+fn boiler_error_message(catalog: &PrototypeCatalog, error: BoilerError) -> String {
+    match error {
+        BoilerError::MissingEntity(_) | BoilerError::NotBoiler(_) => {
+            "Machine unavailable".to_string()
+        }
+        BoilerError::InvalidFuel(item_id) => wrong_item_message(catalog, item_id),
+        BoilerError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        BoilerError::EmptySlot { .. } => "Empty slot".to_string(),
+        BoilerError::InsufficientSpace => "No space".to_string(),
+        BoilerError::UnknownItem => "Unknown item".to_string(),
+    }
+}
+
+fn assembler_error_message(catalog: &PrototypeCatalog, error: AssemblerError) -> String {
+    match error {
+        AssemblerError::MissingEntity(_) | AssemblerError::NotAssembler(_) => {
+            "Machine unavailable".to_string()
+        }
+        AssemblerError::MissingRecipe(_)
+        | AssemblerError::InvalidRecipe(_)
+        | AssemblerError::RecipeLocked(_) => "Recipe unavailable".to_string(),
+        AssemblerError::RecipeChangeRequiresEmpty { .. } => "Empty assembler first".to_string(),
+        AssemblerError::InvalidInput(item_id) => wrong_item_message(catalog, item_id),
+        AssemblerError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        AssemblerError::EmptySlot { .. } => "Empty slot".to_string(),
+        AssemblerError::InsufficientSpace => "No space".to_string(),
+        AssemblerError::UnknownItem => "Unknown item".to_string(),
     }
 }
