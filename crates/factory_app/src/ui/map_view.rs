@@ -1,7 +1,5 @@
-use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::constants::TILE_SIZE;
 use crate::resources::{MapTextureBounds, MapTextureCache, MapViewState, SimResource};
 
 const MINIMAP_FRAME_SIZE: f32 = 184.0;
@@ -9,7 +7,6 @@ const MINIMAP_PADDING: f32 = 4.0;
 const MINIMAP_CONTENT_SIZE: f32 = MINIMAP_FRAME_SIZE - MINIMAP_PADDING * 2.0;
 const MINIMAP_VIEW_TILES: u32 = 128;
 const MINIMAP_PLAYER_MARKER_SIZE: f32 = 7.0;
-const MINIMAP_MIN_VIEWPORT_SIZE: f32 = 2.0;
 
 #[derive(Component)]
 pub(crate) struct MinimapRoot;
@@ -21,30 +18,15 @@ pub(crate) struct MinimapImage;
 pub(crate) struct MinimapPlayerMarker;
 
 #[derive(Component)]
-pub(crate) struct MinimapViewportMarker;
-
-#[derive(Component)]
 pub(crate) struct FullMapRoot;
-
-#[derive(SystemParam)]
-pub(crate) struct MinimapNodeQueries<'w, 's> {
-    images: Query<'w, 's, &'static mut ImageNode, With<MinimapImage>>,
-    player_markers: Query<'w, 's, &'static mut Node, With<MinimapPlayerMarker>>,
-    viewport_markers: Query<
-        'w,
-        's,
-        &'static mut Node,
-        (With<MinimapViewportMarker>, Without<MinimapPlayerMarker>),
-    >,
-}
 
 pub(crate) fn sync_minimap(
     mut commands: Commands,
     cache: Res<MapTextureCache>,
     sim: Res<SimResource>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     roots: Query<Entity, With<MinimapRoot>>,
-    mut minimap_nodes: MinimapNodeQueries,
+    mut images: Query<&mut ImageNode, With<MinimapImage>>,
+    mut player_markers: Query<&mut Node, With<MinimapPlayerMarker>>,
 ) {
     let Some(handle) = cache.handle.as_ref() else {
         return;
@@ -52,40 +34,33 @@ pub(crate) fn sync_minimap(
     let Some(map_bounds) = cache.bounds else {
         return;
     };
+    let player = sim.sim.player();
+    let (player_x, player_y) = player.position_tiles();
+    let crop_bounds = minimap_crop_bounds(map_bounds, Vec2::new(player_x, player_y));
+    let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
+
     let mut roots_iter = roots.iter();
     let Some(_root) = roots_iter.next() else {
-        spawn_minimap(&mut commands, handle.clone());
+        spawn_minimap(&mut commands, handle.clone(), texture_rect);
         return;
     };
     for duplicate in roots_iter {
         commands.entity(duplicate).despawn();
     }
 
-    let player = sim.sim.player();
-    let (player_x, player_y) = player.position_tiles();
-    let crop_bounds = minimap_crop_bounds(map_bounds, Vec2::new(player_x, player_y));
-    let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
-
-    for mut image in &mut minimap_nodes.images {
+    for mut image in &mut images {
         image.image = handle.clone();
         image.rect = Some(texture_rect);
     }
 
     update_player_marker(
-        &mut minimap_nodes.player_markers,
+        &mut player_markers,
         crop_bounds,
         Vec2::new(player_x, player_y),
     );
-
-    let camera_rect = camera_world_rect(&cameras);
-    update_viewport_marker(
-        &mut minimap_nodes.viewport_markers,
-        crop_bounds,
-        camera_rect,
-    );
 }
 
-fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>) {
+fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, texture_rect: Rect) {
     commands
         .spawn((
             Node {
@@ -118,6 +93,7 @@ fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>) {
                 map.spawn((
                     ImageNode {
                         image: handle,
+                        rect: Some(texture_rect),
                         image_mode: NodeImageMode::Stretch,
                         ..default()
                     },
@@ -134,6 +110,7 @@ fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>) {
                 map.spawn((
                     Node {
                         position_type: PositionType::Absolute,
+                        display: Display::None,
                         width: Val::Px(MINIMAP_PLAYER_MARKER_SIZE),
                         height: Val::Px(MINIMAP_PLAYER_MARKER_SIZE),
                         border: UiRect::all(Val::Px(1.0)),
@@ -142,16 +119,6 @@ fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>) {
                     BackgroundColor(Color::srgba(0.96, 0.94, 0.78, 0.96)),
                     BorderColor::all(Color::srgba(0.02, 0.02, 0.018, 0.92)),
                     MinimapPlayerMarker,
-                ));
-                map.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        border: UiRect::all(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
-                    BorderColor::all(Color::srgba(0.94, 0.96, 1.0, 0.9)),
-                    MinimapViewportMarker,
                 ));
             });
         });
@@ -234,28 +201,6 @@ fn update_player_marker(
     }
 }
 
-fn update_viewport_marker(
-    markers: &mut Query<&mut Node, (With<MinimapViewportMarker>, Without<MinimapPlayerMarker>)>,
-    crop_bounds: MapTextureBounds,
-    camera_rect: Option<WorldRect>,
-) {
-    let marker_rect = camera_rect.and_then(|rect| minimap_rect_for_world_rect(crop_bounds, rect));
-    let Some(marker_rect) = marker_rect else {
-        for mut marker in markers {
-            marker.display = Display::None;
-        }
-        return;
-    };
-
-    for mut marker in markers {
-        marker.display = Display::Flex;
-        marker.left = Val::Px(marker_rect.left);
-        marker.top = Val::Px(marker_rect.top);
-        marker.width = Val::Px(marker_rect.width.max(MINIMAP_MIN_VIEWPORT_SIZE));
-        marker.height = Val::Px(marker_rect.height.max(MINIMAP_MIN_VIEWPORT_SIZE));
-    }
-}
-
 fn minimap_crop_bounds(map_bounds: MapTextureBounds, center: Vec2) -> MapTextureBounds {
     let width = map_bounds.width.min(MINIMAP_VIEW_TILES);
     let height = map_bounds.height.min(MINIMAP_VIEW_TILES);
@@ -313,68 +258,6 @@ fn minimap_point_for_world_position(crop_bounds: MapTextureBounds, position: Vec
     ))
 }
 
-fn minimap_rect_for_world_rect(
-    crop_bounds: MapTextureBounds,
-    rect: WorldRect,
-) -> Option<UiPixelRect> {
-    let crop_min_x = crop_bounds.min_x as f32;
-    let crop_min_y = crop_bounds.min_y as f32;
-    let crop_max_x = crop_min_x + crop_bounds.width as f32;
-    let crop_max_y = crop_min_y + crop_bounds.height as f32;
-
-    let min_x = rect.min_x.max(crop_min_x);
-    let max_x = rect.max_x.min(crop_max_x);
-    let min_y = rect.min_y.max(crop_min_y);
-    let max_y = rect.max_y.min(crop_max_y);
-    if min_x >= max_x || min_y >= max_y {
-        return None;
-    }
-
-    let left = (min_x - crop_min_x) / crop_bounds.width as f32 * MINIMAP_CONTENT_SIZE;
-    let right = (max_x - crop_min_x) / crop_bounds.width as f32 * MINIMAP_CONTENT_SIZE;
-    let top = (crop_max_y - max_y) / crop_bounds.height as f32 * MINIMAP_CONTENT_SIZE;
-    let bottom = (crop_max_y - min_y) / crop_bounds.height as f32 * MINIMAP_CONTENT_SIZE;
-
-    Some(UiPixelRect {
-        left,
-        top,
-        width: right - left,
-        height: bottom - top,
-    })
-}
-
-fn camera_world_rect(
-    cameras: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-) -> Option<WorldRect> {
-    let (camera, transform) = cameras.iter().next()?;
-    let viewport_size = camera.logical_viewport_size()?;
-    let first = camera.viewport_to_world_2d(transform, Vec2::ZERO).ok()? / TILE_SIZE;
-    let second = camera.viewport_to_world_2d(transform, viewport_size).ok()? / TILE_SIZE;
-
-    Some(WorldRect {
-        min_x: first.x.min(second.x),
-        max_x: first.x.max(second.x),
-        min_y: first.y.min(second.y),
-        max_y: first.y.max(second.y),
-    })
-}
-
-#[derive(Clone, Copy, Debug)]
-struct WorldRect {
-    min_x: f32,
-    max_x: f32,
-    min_y: f32,
-    max_y: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct UiPixelRect {
-    left: f32,
-    top: f32,
-    width: f32,
-    height: f32,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,31 +298,5 @@ mod tests {
 
         assert_eq!(rect.min, Vec2::new(32.0, 48.0));
         assert_eq!(rect.max, Vec2::new(160.0, 176.0));
-    }
-
-    #[test]
-    fn minimap_viewport_overlay_is_clipped_to_crop() {
-        let crop = MapTextureBounds {
-            min_x: 0,
-            min_y: 0,
-            width: 128,
-            height: 128,
-        };
-
-        let rect = minimap_rect_for_world_rect(
-            crop,
-            WorldRect {
-                min_x: -8.0,
-                max_x: 40.0,
-                min_y: 24.0,
-                max_y: 72.0,
-            },
-        )
-        .expect("viewport should intersect minimap crop");
-
-        assert_eq!(rect.left, 0.0);
-        assert_eq!(rect.top, 77.0);
-        assert_eq!(rect.width, 55.0);
-        assert_eq!(rect.height, 66.0);
     }
 }
