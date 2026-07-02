@@ -41,9 +41,9 @@ use crate::rendering::resources::{
 use crate::rendering::world::sync_visible_world_tiles;
 use crate::resources::{
     AppInputState, BuildPlacementPreviewState, BuildPlacementState, CraftingWindowState,
-    MapDisplaySettings, MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState,
-    RenderDetail, RenderSyncStats, SimProfileStats, SimResource, TechnologyWindowState, UpsStats,
-    VisibleChunks, VisibleEntityIds, WorldRenderCache,
+    InventoryTransferFeedback, MapDisplaySettings, MapTextureCache, MapViewState, OpenContainer,
+    ProductionStatsWindowState, RenderDetail, RenderSyncStats, SimProfileStats, SimResource,
+    TechnologyWindowState, UpsStats, VisibleChunks, VisibleEntityIds, WorldRenderCache,
 };
 use crate::save_load::{
     AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
@@ -61,7 +61,10 @@ use crate::ui::build_bar::{
 };
 use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{setup_debug_overlay, update_debug_overlay, update_ups_stats};
-use crate::ui::inventory_panel::{handle_container_slot_clicks, update_container_slot_text};
+use crate::ui::inventory_panel::{
+    handle_container_slot_clicks, update_container_slot_text,
+    update_inventory_transfer_feedback_text,
+};
 use crate::ui::machine_indicators::update_burner_drill_indicators;
 use crate::ui::manual_crafting::{
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
@@ -116,6 +119,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<BuildPlacementState>()
             .init_resource::<BuildPlacementPreviewState>()
             .init_resource::<OpenContainer>()
+            .init_resource::<InventoryTransferFeedback>()
             .init_resource::<TechnologyWindowState>()
             .init_resource::<CraftingWindowState>()
             .init_resource::<MapViewState>()
@@ -229,6 +233,9 @@ impl Plugin for FactoryAppPlugin {
                     sync_container_window,
                     handle_container_slot_clicks,
                     update_container_slot_text,
+                    update_inventory_transfer_feedback_text
+                        .after(sync_container_window)
+                        .after(handle_container_slot_clicks),
                     update_build_bar_visuals,
                     update_build_bar_action_visuals,
                     update_build_status_text.after(update_build_placement_preview_state),

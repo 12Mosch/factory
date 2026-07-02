@@ -73,6 +73,11 @@ pub struct OpenContainer {
 }
 
 #[derive(Resource, Default)]
+pub struct InventoryTransferFeedback {
+    pub message: Option<String>,
+}
+
+#[derive(Resource, Default)]
 pub struct TechnologyWindowState {
     pub open: bool,
     pub selected: Option<TechnologyId>,

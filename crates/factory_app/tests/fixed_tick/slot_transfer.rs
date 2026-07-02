@@ -2,9 +2,11 @@ use super::common::{
     entity_id_by_name, first_buildable_rect, first_placeable_resource_rect, item_id_by_name,
     place_powered_fixture_origin, recipe_id_by_name,
 };
+use bevy::prelude::*;
 use factory_app::interaction::slot_transfer::transfer_open_container_slot;
-use factory_app::ui::inventory_panel::InventoryPanel;
-use factory_sim::{Direction, Inventory, ItemStack, Simulation};
+use factory_app::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
+use factory_app::ui::inventory_panel::{InventoryPanel, container_slot_click_error_message};
+use factory_sim::{ContainerError, Direction, FurnaceError, Inventory, ItemStack, Simulation};
 
 #[test]
 fn slot_click_transfer_delegates_to_sim_transfer_api() {
@@ -211,6 +213,81 @@ fn slot_click_rejects_invalid_furnace_input_without_mutation() {
 }
 
 #[test]
+fn slot_click_error_message_formats_typed_transfer_errors() {
+    let sim = Simulation::new_test_world(123);
+    let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
+
+    assert_eq!(
+        container_slot_click_error_message(
+            sim.catalog(),
+            factory_app::interaction::slot_transfer::ContainerSlotClickError::Transfer(
+                ContainerError::InvalidItem(iron_plate),
+            ),
+        ),
+        "Wrong item: Iron Plate"
+    );
+    assert_eq!(
+        container_slot_click_error_message(
+            sim.catalog(),
+            factory_app::interaction::slot_transfer::ContainerSlotClickError::Furnace(
+                FurnaceError::InsufficientSpace,
+            ),
+        ),
+        "No space"
+    );
+    assert_eq!(
+        container_slot_click_error_message(
+            sim.catalog(),
+            factory_app::interaction::slot_transfer::ContainerSlotClickError::Transfer(
+                ContainerError::EmptySlot { slot_index: 3 },
+            ),
+        ),
+        "Empty slot"
+    );
+}
+
+#[test]
+fn slot_click_failure_updates_inventory_transfer_feedback() {
+    let mut app = super::common::test_app(std::time::Duration::from_millis(16));
+    let furnace = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        entity_id_by_name(sim.catalog(), "stone_furnace")
+    };
+    let inserter = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        item_id_by_name(sim.catalog(), "inserter")
+    };
+    let entity_id = {
+        let mut sim = app.world_mut().resource_mut::<SimResource>();
+        let (x, y) = first_buildable_rect(&sim.sim, furnace);
+        let entity_id = sim
+            .sim
+            .place_entity(furnace, x, y, Direction::North)
+            .expect("furnace should be placeable");
+        *sim.sim.player_inventory_mut() = Inventory::player();
+        sim.sim.player_inventory_mut().slots[2] = Some(ItemStack {
+            item_id: inserter,
+            count: 1,
+        });
+        entity_id
+    };
+    app.world_mut().resource_mut::<OpenContainer>().entity_id = Some(entity_id);
+
+    app.update();
+    app.update();
+    press_button_with_child_text(&mut app, "I\n1");
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<InventoryTransferFeedback>()
+            .message
+            .as_deref(),
+        Some("Wrong item: Inserter")
+    );
+}
+
+#[test]
 fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
     let mut sim = Simulation::new_test_world(123);
     let drill = entity_id_by_name(sim.catalog(), "burner_mining_drill");
@@ -254,4 +331,44 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
             .output_slot,
         None
     );
+}
+
+fn press_button_with_child_text(app: &mut App, target_text: &str) {
+    let matching_button = {
+        let world = app.world_mut();
+        let mut buttons = world.query_filtered::<(Entity, &Children), With<Button>>();
+        let mut texts = world.query::<&Text>();
+        buttons
+            .iter(world)
+            .find_map(|(entity, children)| {
+                children
+                    .iter()
+                    .any(|child| {
+                        texts
+                            .get(world, child)
+                            .is_ok_and(|text| text.0 == target_text)
+                    })
+                    .then_some(entity)
+            })
+            .unwrap_or_else(|| {
+                let labels = buttons
+                    .iter(world)
+                    .map(|(_, children)| {
+                        children
+                            .iter()
+                            .filter_map(|child| texts.get(world, child).ok())
+                            .map(|text| text.0.clone())
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    })
+                    .collect::<Vec<_>>();
+                panic!("expected matching slot button; labels: {labels:?}");
+            })
+    };
+
+    let mut entity = app.world_mut().entity_mut(matching_button);
+    let mut interaction = entity
+        .get_mut::<Interaction>()
+        .expect("button should have interaction state");
+    *interaction = Interaction::Pressed;
 }
