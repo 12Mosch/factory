@@ -173,28 +173,28 @@ pub(crate) fn entity_prototype_visual_style(
     };
 
     match prototype.entity_kind {
-        EntityKind::TransportBelt => Some(EntityVisualStyle {
-            base_color: transport_belt_color(
+        EntityKind::TransportBelt => Some(entity_visual_style(
+            transport_belt_color(
                 prototype
                     .transport_belt
                     .as_ref()
                     .map(|belt| belt.speed_subtiles_per_tick),
             ),
-            size: Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
-            kind: prototype.entity_kind,
+            Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
+            prototype.entity_kind,
             direction,
-        }),
-        EntityKind::Splitter => Some(EntityVisualStyle {
-            base_color: splitter_color(
+        )),
+        EntityKind::Splitter => Some(entity_visual_style(
+            splitter_color(
                 prototype
                     .splitter
                     .as_ref()
                     .map(|splitter| splitter.speed_subtiles_per_tick),
             ),
-            size: machine_size(),
-            kind: prototype.entity_kind,
+            machine_size(),
+            prototype.entity_kind,
             direction,
-        }),
+        )),
         EntityKind::Chest => Some(entity_visual_style(
             chest_color(),
             Vec2::splat(CHEST_SPRITE_SIZE),

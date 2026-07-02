@@ -504,3 +504,77 @@ fn tinted(color: Color, amount: f32) -> Color {
         color.alpha,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_horizontal_identifies_east_and_west() {
+        assert!(!is_horizontal(Direction::North));
+        assert!(is_horizontal(Direction::East));
+        assert!(!is_horizontal(Direction::South));
+        assert!(is_horizontal(Direction::West));
+    }
+
+    #[test]
+    fn direction_vec_maps_cardinal_axes() {
+        assert_eq!(direction_vec(Direction::North), Vec2::Y);
+        assert_eq!(direction_vec(Direction::East), Vec2::X);
+        assert_eq!(direction_vec(Direction::South), Vec2::NEG_Y);
+        assert_eq!(direction_vec(Direction::West), Vec2::NEG_X);
+    }
+
+    #[test]
+    fn direction_offset_applies_axis_specific_size() {
+        let size = Vec2::new(3.0, 5.0);
+
+        assert_eq!(
+            direction_offset(Direction::North, size),
+            Vec2::new(0.0, 5.0)
+        );
+        assert_eq!(direction_offset(Direction::East, size), Vec2::new(3.0, 0.0));
+        assert_eq!(
+            direction_offset(Direction::South, size),
+            Vec2::new(0.0, -5.0)
+        );
+        assert_eq!(
+            direction_offset(Direction::West, size),
+            Vec2::new(-3.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn tinted_moves_color_toward_white_and_preserves_alpha() {
+        let original = Color::srgba(0.20, 0.40, 0.60, 0.70);
+        let tinted = tinted(original, 0.25).to_srgba();
+
+        assert_close(tinted.red, 0.40);
+        assert_close(tinted.green, 0.55);
+        assert_close(tinted.blue, 0.70);
+        assert_close(tinted.alpha, 0.70);
+    }
+
+    #[test]
+    fn tinted_handles_identity_and_full_white_edges() {
+        let original = Color::srgba(0.20, 0.40, 0.60, 0.70);
+        let unchanged = tinted(original, 0.0).to_srgba();
+        let white = tinted(original, 1.0).to_srgba();
+
+        assert_close(unchanged.red, 0.20);
+        assert_close(unchanged.green, 0.40);
+        assert_close(unchanged.blue, 0.60);
+        assert_close(unchanged.alpha, 0.70);
+        assert_close(white.red, 1.0);
+        assert_close(white.green, 1.0);
+        assert_close(white.blue, 1.0);
+        assert_close(white.alpha, 0.70);
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= f32::EPSILON,
+            "expected {actual} to equal {expected}"
+        );
+    }
+}
