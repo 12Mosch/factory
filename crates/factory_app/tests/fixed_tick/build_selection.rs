@@ -256,6 +256,9 @@ fn failed_selected_building_placement_keeps_inventory() {
         y,
     );
 
-    assert!(matches!(status, BuildPlacementStatus::CannotPlace(_)));
+    assert_eq!(
+        status,
+        BuildPlacementStatus::CannotPlace("Entity already there".to_string())
+    );
     assert_eq!(sim.player_inventory().count(belt_item), 1);
 }

@@ -11,8 +11,9 @@ pub(crate) use std::hash::{Hash, Hasher};
 pub use crate::crafting::{CraftingError, CraftingJob, CraftingQueue};
 pub(crate) use crate::entities::EntityReservation;
 pub use crate::entities::{
-    BuildError, Direction, EntityDestroyError, EntityFootprint, EntityStore, OccupancyGrid,
-    PlacedEntity, PlayerBuildError, SimEntity,
+    BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview, Direction,
+    EntityDestroyError, EntityFootprint, EntityStore, OccupancyGrid, PlacedEntity,
+    PlayerBuildError, SimEntity,
 };
 pub use crate::fluids::{
     FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState, FluidNetworkBoxSnapshot,

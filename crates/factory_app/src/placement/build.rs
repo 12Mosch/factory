@@ -1,5 +1,8 @@
 use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
-use factory_sim::{BuildError, Direction, PlayerBuildError, Simulation};
+use factory_sim::{
+    BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview, Direction,
+    PlayerBuildError, Simulation,
+};
 
 use crate::resources::{BuildPlacementStatus, BuildSelection};
 
@@ -101,18 +104,97 @@ fn build_status_from_error(
             "{} locked",
             entity_display_name(catalog, prototype_id).unwrap_or_else(|| "Building".to_string())
         )),
-        PlayerBuildError::Build(BuildError::EntityOccupied { .. })
-        | PlayerBuildError::Build(BuildError::TileBlocked { .. }) => {
-            BuildPlacementStatus::CannotPlace("Blocked".to_string())
+        PlayerBuildError::Build(BuildError::EntityOccupied { .. }) => {
+            BuildPlacementStatus::CannotPlace("Entity already there".to_string())
         }
-        PlayerBuildError::Build(_) => {
-            BuildPlacementStatus::CannotPlace("Cannot build here".to_string())
+        PlayerBuildError::Build(BuildError::TileBlocked { .. }) => {
+            BuildPlacementStatus::CannotPlace("Tile blocked".to_string())
+        }
+        PlayerBuildError::Build(BuildError::OutsideGeneratedChunks { .. }) => {
+            BuildPlacementStatus::CannotPlace("Outside generated area".to_string())
+        }
+        PlayerBuildError::Build(BuildError::InvalidFootprint { .. }) => {
+            BuildPlacementStatus::CannotPlace("Invalid building footprint".to_string())
         }
         PlayerBuildError::MissingPrototype(_)
         | PlayerBuildError::MissingBuildItem { .. }
-        | PlayerBuildError::ItemDoesNotBuildEntity { .. } => {
-            BuildPlacementStatus::CannotPlace("Cannot build here".to_string())
+        | PlayerBuildError::ItemDoesNotBuildEntity { .. }
+        | PlayerBuildError::Build(BuildError::MissingPrototype(_))
+        | PlayerBuildError::Build(BuildError::MissingEntity(_)) => {
+            BuildPlacementStatus::CannotPlace("Cannot build this item".to_string())
         }
+    }
+}
+
+pub(crate) fn build_status_from_preview(
+    catalog: &PrototypeCatalog,
+    preview: &BuildPlacementPreview,
+) -> Option<BuildPlacementStatus> {
+    preview
+        .issues
+        .iter()
+        .min_by_key(|issue| preview_issue_priority(issue))
+        .map(|issue| build_status_from_preview_issue(catalog, issue))
+}
+
+pub(crate) fn build_status_from_preview_issue(
+    catalog: &PrototypeCatalog,
+    issue: &BuildPlacementIssue,
+) -> BuildPlacementStatus {
+    match &issue.kind {
+        BuildPlacementIssueKind::EntityLocked { prototype_id } => {
+            BuildPlacementStatus::Locked(format!(
+                "{} locked",
+                entity_display_name(catalog, *prototype_id)
+                    .unwrap_or_else(|| "Building".to_string())
+            ))
+        }
+        BuildPlacementIssueKind::InsufficientInventory { item_id } => {
+            BuildPlacementStatus::MissingInventory(short_inventory_need(catalog, *item_id))
+        }
+        BuildPlacementIssueKind::ItemDoesNotBuildEntity { .. }
+        | BuildPlacementIssueKind::MissingBuildItem { .. }
+        | BuildPlacementIssueKind::MissingPrototype(_) => {
+            BuildPlacementStatus::CannotPlace("Cannot build this item".to_string())
+        }
+        BuildPlacementIssueKind::EntityOccupied { .. } => {
+            BuildPlacementStatus::CannotPlace("Entity already there".to_string())
+        }
+        BuildPlacementIssueKind::PlayerOccupied => {
+            BuildPlacementStatus::CannotPlace("Player in the way".to_string())
+        }
+        BuildPlacementIssueKind::TerrainBlocked => {
+            BuildPlacementStatus::CannotPlace("Tile blocked".to_string())
+        }
+        BuildPlacementIssueKind::OutsideGeneratedChunks => {
+            BuildPlacementStatus::CannotPlace("Outside generated area".to_string())
+        }
+        BuildPlacementIssueKind::MissingRequiredResource => {
+            BuildPlacementStatus::CannotPlace("Mining drill needs a resource patch".to_string())
+        }
+        BuildPlacementIssueKind::MissingAdjacentWater => {
+            BuildPlacementStatus::CannotPlace("Offshore pump needs adjacent water".to_string())
+        }
+        BuildPlacementIssueKind::InvalidFootprint { .. } => {
+            BuildPlacementStatus::CannotPlace("Invalid building footprint".to_string())
+        }
+    }
+}
+
+fn preview_issue_priority(issue: &BuildPlacementIssue) -> usize {
+    match issue.kind {
+        BuildPlacementIssueKind::EntityLocked { .. } => 0,
+        BuildPlacementIssueKind::InsufficientInventory { .. } => 1,
+        BuildPlacementIssueKind::ItemDoesNotBuildEntity { .. } => 2,
+        BuildPlacementIssueKind::MissingBuildItem { .. } => 3,
+        BuildPlacementIssueKind::MissingPrototype(_) => 4,
+        BuildPlacementIssueKind::EntityOccupied { .. } => 5,
+        BuildPlacementIssueKind::PlayerOccupied => 6,
+        BuildPlacementIssueKind::TerrainBlocked => 7,
+        BuildPlacementIssueKind::OutsideGeneratedChunks => 8,
+        BuildPlacementIssueKind::MissingRequiredResource => 9,
+        BuildPlacementIssueKind::MissingAdjacentWater => 10,
+        BuildPlacementIssueKind::InvalidFootprint { .. } => 11,
     }
 }
 
@@ -146,4 +228,80 @@ fn display_name(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use factory_sim::EntityId;
+
+    #[test]
+    fn preview_mapper_reports_occupied_entity() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let status = build_status_from_preview_issue(
+            &catalog,
+            &BuildPlacementIssue {
+                tile: Some((1, 2)),
+                kind: BuildPlacementIssueKind::EntityOccupied {
+                    entity_id: EntityId::new(1),
+                },
+            },
+        );
+
+        assert_eq!(
+            status,
+            BuildPlacementStatus::CannotPlace("Entity already there".to_string())
+        );
+    }
+
+    #[test]
+    fn preview_mapper_reports_player_collision() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let status = build_status_from_preview_issue(
+            &catalog,
+            &BuildPlacementIssue {
+                tile: Some((1, 2)),
+                kind: BuildPlacementIssueKind::PlayerOccupied,
+            },
+        );
+
+        assert_eq!(
+            status,
+            BuildPlacementStatus::CannotPlace("Player in the way".to_string())
+        );
+    }
+
+    #[test]
+    fn preview_mapper_reports_missing_drill_resource() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let status = build_status_from_preview_issue(
+            &catalog,
+            &BuildPlacementIssue {
+                tile: Some((1, 2)),
+                kind: BuildPlacementIssueKind::MissingRequiredResource,
+            },
+        );
+
+        assert_eq!(
+            status,
+            BuildPlacementStatus::CannotPlace("Mining drill needs a resource patch".to_string())
+        );
+    }
+
+    #[test]
+    fn preview_mapper_reports_missing_offshore_pump_water() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let status = build_status_from_preview_issue(
+            &catalog,
+            &BuildPlacementIssue {
+                tile: Some((1, 2)),
+                kind: BuildPlacementIssueKind::MissingAdjacentWater,
+            },
+        );
+
+        assert_eq!(
+            status,
+            BuildPlacementStatus::CannotPlace("Offshore pump needs adjacent water".to_string())
+        );
+    }
 }

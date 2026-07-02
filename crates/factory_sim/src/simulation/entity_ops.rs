@@ -1,6 +1,107 @@
 use super::*;
 
 impl Simulation {
+    pub fn preview_entity_placement_from_player_inventory(
+        &self,
+        prototype_id: EntityPrototypeId,
+        item_id: ItemId,
+        x: i32,
+        y: i32,
+        direction: Direction,
+    ) -> BuildPlacementPreview {
+        let mut preview = BuildPlacementPreview {
+            footprint: None,
+            issues: Vec::new(),
+        };
+        let Some(prototype) = self
+            .world
+            .prototypes
+            .entities
+            .get(prototype_id.index())
+            .filter(|prototype| prototype.id == prototype_id)
+        else {
+            preview.issues.push(BuildPlacementIssue {
+                tile: None,
+                kind: BuildPlacementIssueKind::MissingPrototype(prototype_id),
+            });
+            return preview;
+        };
+
+        let footprint =
+            EntityFootprint::from_size(x, y, prototype.size.x, prototype.size.y, direction);
+        match footprint.validate() {
+            Ok(()) => {
+                preview.footprint = Some(footprint);
+            }
+            Err(BuildError::InvalidFootprint { width, height }) => {
+                preview.issues.push(BuildPlacementIssue {
+                    tile: None,
+                    kind: BuildPlacementIssueKind::InvalidFootprint { width, height },
+                });
+            }
+            Err(_) => unreachable!("footprint validation only reports invalid dimensions"),
+        }
+
+        match prototype.build_item {
+            Some(build_item) => {
+                match self
+                    .world
+                    .prototypes
+                    .items
+                    .get(item_id.index())
+                    .filter(|item| item.id == item_id)
+                {
+                    Some(item) if item.id != build_item => {
+                        preview.issues.push(BuildPlacementIssue {
+                            tile: None,
+                            kind: BuildPlacementIssueKind::ItemDoesNotBuildEntity {
+                                item_id,
+                                prototype_id,
+                            },
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        preview.issues.push(BuildPlacementIssue {
+                            tile: None,
+                            kind: BuildPlacementIssueKind::MissingBuildItem { prototype_id },
+                        });
+                    }
+                }
+            }
+            None => {
+                preview.issues.push(BuildPlacementIssue {
+                    tile: None,
+                    kind: BuildPlacementIssueKind::MissingBuildItem { prototype_id },
+                });
+            }
+        }
+
+        if !self.is_entity_unlocked(prototype_id) {
+            preview.issues.push(BuildPlacementIssue {
+                tile: None,
+                kind: BuildPlacementIssueKind::EntityLocked { prototype_id },
+            });
+        }
+        if self.player_inventory.count(item_id) == 0 {
+            preview.issues.push(BuildPlacementIssue {
+                tile: None,
+                kind: BuildPlacementIssueKind::InsufficientInventory { item_id },
+            });
+        }
+
+        if let Some(footprint) = preview.footprint {
+            self.collect_placement_preview_issues_for_footprint(
+                prototype,
+                &footprint,
+                direction,
+                &mut preview.issues,
+            );
+        }
+
+        preview
+    }
+
     pub fn can_place_entity_from_player_inventory(
         &self,
         prototype_id: EntityPrototypeId,
@@ -340,6 +441,104 @@ impl Simulation {
         }
 
         Ok(())
+    }
+
+    fn collect_placement_preview_issues_for_footprint(
+        &self,
+        prototype: &factory_data::EntityPrototype,
+        footprint: &EntityFootprint,
+        direction: Direction,
+        issues: &mut Vec<BuildPlacementIssue>,
+    ) {
+        if prototype.entity_kind == EntityKind::MiningDrill && prototype.mining_drill.is_some() {
+            self.collect_mining_drill_preview_issues(prototype, footprint, issues);
+        } else {
+            for (x, y) in footprint.tiles() {
+                match self.world.tile_at(x, y) {
+                    Some(tile) if tile.collision.buildable => {}
+                    Some(_) => issues.push(BuildPlacementIssue {
+                        tile: Some((x, y)),
+                        kind: BuildPlacementIssueKind::TerrainBlocked,
+                    }),
+                    None => issues.push(BuildPlacementIssue {
+                        tile: Some((x, y)),
+                        kind: BuildPlacementIssueKind::OutsideGeneratedChunks,
+                    }),
+                }
+            }
+        }
+
+        if prototype.entity_kind == EntityKind::OffshorePump && prototype.offshore_pump.is_some() {
+            let water_tiles = offshore_pump_water_tiles(footprint, direction);
+            if !water_tiles
+                .iter()
+                .any(|(x, y)| self.world.tile_at(*x, *y).is_some_and(is_water_like_tile))
+            {
+                for tile in water_tiles {
+                    issues.push(BuildPlacementIssue {
+                        tile: Some(tile),
+                        kind: BuildPlacementIssueKind::MissingAdjacentWater,
+                    });
+                }
+            }
+        }
+
+        let player_tile = self.player.tile_position();
+        if footprint.contains_tile(player_tile.0, player_tile.1) {
+            issues.push(BuildPlacementIssue {
+                tile: Some(player_tile),
+                kind: BuildPlacementIssueKind::PlayerOccupied,
+            });
+        }
+
+        for (x, y) in footprint.tiles() {
+            if let Some(entity_id) = self.entities.occupancy.entity_at(x, y) {
+                issues.push(BuildPlacementIssue {
+                    tile: Some((x, y)),
+                    kind: BuildPlacementIssueKind::EntityOccupied { entity_id },
+                });
+            }
+        }
+    }
+
+    fn collect_mining_drill_preview_issues(
+        &self,
+        prototype: &factory_data::EntityPrototype,
+        footprint: &EntityFootprint,
+        issues: &mut Vec<BuildPlacementIssue>,
+    ) {
+        for (x, y) in footprint.tiles() {
+            match self.world.tile_at(x, y) {
+                Some(tile) if tile.collision.walkable => {}
+                Some(_) => issues.push(BuildPlacementIssue {
+                    tile: Some((x, y)),
+                    kind: BuildPlacementIssueKind::TerrainBlocked,
+                }),
+                None => issues.push(BuildPlacementIssue {
+                    tile: Some((x, y)),
+                    kind: BuildPlacementIssueKind::OutsideGeneratedChunks,
+                }),
+            }
+        }
+
+        let mining_drill = prototype
+            .mining_drill
+            .as_ref()
+            .expect("mining drill prototype should have mining metadata");
+        let mining_tiles = mining_area_tiles(footprint, mining_drill);
+        if mining_tiles.iter().all(|(x, y)| {
+            self.world
+                .tile_at(*x, *y)
+                .and_then(|tile| tile.resource)
+                .is_none()
+        }) {
+            for tile in mining_tiles {
+                issues.push(BuildPlacementIssue {
+                    tile: Some(tile),
+                    kind: BuildPlacementIssueKind::MissingRequiredResource,
+                });
+            }
+        }
     }
 
     pub fn entity_inventory(&self, entity_id: EntityId) -> Result<&Inventory, ContainerError> {

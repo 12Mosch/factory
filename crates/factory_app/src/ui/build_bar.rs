@@ -4,10 +4,10 @@ use factory_sim::Direction;
 
 use crate::input::build::select_build_slot;
 use crate::input::panels::world_input_blocked;
-use crate::placement::build::{buildable_prototypes, next_direction};
+use crate::placement::build::{build_status_from_preview, buildable_prototypes, next_direction};
 use crate::resources::{
-    AppInputState, BuildPlacementState, BuildPlacementStatus, BuildSelection, SimResource,
-    TechnologyWindowState,
+    AppInputState, BuildPlacementPreviewState, BuildPlacementState, BuildPlacementStatus,
+    BuildSelection, SimResource, TechnologyWindowState,
 };
 use crate::utils::compact_item_name;
 
@@ -315,9 +315,17 @@ pub(crate) fn update_build_bar_action_visuals(
 
 pub(crate) fn update_build_status_text(
     build_state: Res<BuildPlacementState>,
+    preview_state: Res<BuildPlacementPreviewState>,
+    sim: Res<SimResource>,
     mut texts: Query<(&mut Text, &mut TextColor), With<BuildStatusText>>,
 ) {
-    let (message, color) = match &build_state.last_status {
+    let live_status = build_state
+        .selected
+        .and(preview_state.preview.as_ref())
+        .and_then(|preview| build_status_from_preview(sim.sim.catalog(), preview));
+    let status = live_status.as_ref().unwrap_or(&build_state.last_status);
+
+    let (message, color) = match status {
         BuildPlacementStatus::Ready => ("Ready".to_string(), Color::srgb(0.78, 0.80, 0.76)),
         BuildPlacementStatus::Placed(message) => (message.clone(), Color::srgb(0.56, 0.92, 0.55)),
         BuildPlacementStatus::CannotPlace(message) => {
