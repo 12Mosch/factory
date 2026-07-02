@@ -56,6 +56,20 @@ fn transport_topology_edits_dirty_cached_lane_graph() {
 }
 
 #[test]
+fn destroying_transport_entity_dirties_cached_lane_graph() {
+    let mut sim = Simulation::new_test_world(123);
+    let belts = place_belt_line(&mut sim, 2);
+
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+
+    sim.destroy_entity_to_player_inventory(belts[0])
+        .expect("placed belt should be destroyable to player inventory");
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 2);
+}
+
+#[test]
 fn belt_does_not_duplicate_items() {
     let mut sim = Simulation::new_test_world(123);
     let belts = place_belt_line(&mut sim, 20);

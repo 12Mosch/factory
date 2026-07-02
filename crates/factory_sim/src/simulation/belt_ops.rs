@@ -141,6 +141,14 @@ impl TransportLaneVisitStorage {
 }
 
 impl Simulation {
+    pub(super) fn prototype_affects_transport_lane_graph(
+        &self,
+        prototype: &factory_data::EntityPrototype,
+    ) -> bool {
+        (prototype.entity_kind == EntityKind::TransportBelt && prototype.transport_belt.is_some())
+            || (prototype.entity_kind == EntityKind::Splitter && prototype.splitter.is_some())
+    }
+
     pub(super) fn invalidate_transport_lane_graph(&mut self) {
         self.transport_lane_graph_dirty = true;
     }
