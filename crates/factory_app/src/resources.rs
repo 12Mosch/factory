@@ -216,6 +216,12 @@ pub struct BuildPlacementState {
     pub last_status: BuildPlacementStatus,
 }
 
+#[derive(Resource, Default)]
+pub struct BuildPlacementPreviewState {
+    pub cursor_tile: Option<(i32, i32)>,
+    pub preview: Option<factory_sim::BuildPlacementPreview>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildSelection {
     pub prototype_id: EntityPrototypeId,

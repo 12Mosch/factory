@@ -37,6 +37,139 @@ fn entity_cannot_be_placed_on_water() {
 }
 
 #[test]
+fn placement_preview_reports_occupied_tiles() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
+    let belt_item = item_id_by_name(&sim.world.prototypes, "transport_belt");
+    let (x, y) = first_placeable_entity_tile(&sim, belt, Direction::North);
+    give_player_build_item(&mut sim, belt_item);
+    let blocker = sim
+        .place_entity(belt, x, y, Direction::North)
+        .expect("blocking belt should be placeable");
+
+    let preview =
+        sim.preview_entity_placement_from_player_inventory(belt, belt_item, x, y, Direction::North);
+
+    assert!(preview.issues.iter().any(|issue| {
+        issue.tile == Some((x, y))
+            && issue.kind == BuildPlacementIssueKind::EntityOccupied { entity_id: blocker }
+    }));
+}
+
+#[test]
+fn placement_preview_reports_player_tile() {
+    let mut sim = Simulation::new_test_world(123);
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let inserter_item = item_id_by_name(&sim.world.prototypes, "inserter");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+    sim.player = PlayerState::centered_on_tile(x, y);
+    give_player_build_item(&mut sim, inserter_item);
+
+    let preview = sim.preview_entity_placement_from_player_inventory(
+        inserter,
+        inserter_item,
+        x,
+        y,
+        Direction::North,
+    );
+
+    assert!(preview.issues.iter().any(|issue| {
+        issue.tile == Some((x, y)) && issue.kind == BuildPlacementIssueKind::PlayerOccupied
+    }));
+}
+
+#[test]
+fn placement_preview_reports_blocked_terrain() {
+    let mut sim = Simulation::new_test_world(123);
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let inserter_item = item_id_by_name(&sim.world.prototypes, "inserter");
+    let (x, y) = first_water_tile(&sim.world);
+    give_player_build_item(&mut sim, inserter_item);
+
+    let preview = sim.preview_entity_placement_from_player_inventory(
+        inserter,
+        inserter_item,
+        x,
+        y,
+        Direction::North,
+    );
+
+    assert!(preview.issues.iter().any(|issue| {
+        issue.tile == Some((x, y)) && issue.kind == BuildPlacementIssueKind::TerrainBlocked
+    }));
+}
+
+#[test]
+fn placement_preview_reports_outside_generated_chunks() {
+    let mut sim = Simulation::new_test_world(123);
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let inserter_item = item_id_by_name(&sim.world.prototypes, "inserter");
+    let outside_x = (STARTING_MAX_CHUNK + 1) * CHUNK_SIZE;
+    give_player_build_item(&mut sim, inserter_item);
+
+    let preview = sim.preview_entity_placement_from_player_inventory(
+        inserter,
+        inserter_item,
+        outside_x,
+        0,
+        Direction::North,
+    );
+
+    assert!(preview.issues.iter().any(|issue| {
+        issue.tile == Some((outside_x, 0))
+            && issue.kind == BuildPlacementIssueKind::OutsideGeneratedChunks
+    }));
+}
+
+#[test]
+fn placement_preview_reports_missing_drill_resource() {
+    let mut sim = Simulation::new_test_world(123);
+    let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+    let drill_item = item_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+    let prototype = &sim.world.prototypes.entities[drill.index()];
+    let (x, y) =
+        first_buildable_rect_without_resource(&sim.world, prototype.size.x, prototype.size.y);
+    give_player_build_item(&mut sim, drill_item);
+
+    let preview = sim.preview_entity_placement_from_player_inventory(
+        drill,
+        drill_item,
+        x,
+        y,
+        Direction::North,
+    );
+
+    assert!(preview.issues.iter().any(|issue| {
+        issue.kind == BuildPlacementIssueKind::MissingRequiredResource
+            && issue.tile.is_some_and(|tile| {
+                preview
+                    .footprint
+                    .expect("valid drill footprint should be previewed")
+                    .contains_tile(tile.0, tile.1)
+            })
+    }));
+}
+
+#[test]
+fn placement_preview_reports_missing_offshore_pump_water() {
+    let mut sim = Simulation::new_test_world(123);
+    let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
+    let pump_item = build_item_or_fallback_item(&sim, pump);
+    let (x, y) = first_buildable_offshore_pump_footprint_away_from_water(&sim, pump);
+    give_player_build_item(&mut sim, pump_item);
+
+    let preview =
+        sim.preview_entity_placement_from_player_inventory(pump, pump_item, x, y, Direction::North);
+
+    assert!(preview.issues.iter().any(|issue| {
+        issue.kind == BuildPlacementIssueKind::MissingAdjacentWater
+            && issue
+                .tile
+                .is_some_and(|(tile_x, tile_y)| tile_y == y - 1 && tile_x >= x)
+    }));
+}
+
+#[test]
 fn entity_cannot_be_placed_on_player_tile() {
     let mut sim = Simulation::new_test_world(123);
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
@@ -364,4 +497,17 @@ fn destroying_entity_keeps_world_unchanged_when_inventory_is_full() {
     assert!(sim.entities.placed_entity(entity_id).is_some());
     assert_eq!(sim.entities.occupancy().entity_at(x, y), Some(entity_id));
     assert_eq!(sim.player_inventory.count(chest_item), 0);
+}
+
+fn give_player_build_item(sim: &mut Simulation, item_id: ItemId) {
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, item_id, 1)
+        .expect("test inventory should accept build item");
+}
+
+fn build_item_or_fallback_item(sim: &Simulation, prototype_id: EntityPrototypeId) -> ItemId {
+    sim.world.prototypes.entities[prototype_id.index()]
+        .build_item
+        .unwrap_or_else(|| item_id_by_name(&sim.world.prototypes, "transport_belt"))
 }

@@ -5,16 +5,11 @@ pub(in crate::simulation) fn first_resource_in_mining_area(
     footprint: &EntityFootprint,
     mining_drill: &factory_data::MiningDrillPrototype,
 ) -> Option<(ManualMiningTarget, ItemId)> {
-    let width = mining_drill.mining_area.x.min(footprint.width).max(0);
-    let height = mining_drill.mining_area.y.min(footprint.height).max(0);
-
-    for y in footprint.y..footprint.y + height {
-        for x in footprint.x..footprint.x + width {
-            let Some(resource) = world.tile_at(x, y).and_then(|tile| tile.resource) else {
-                continue;
-            };
-            return Some((ManualMiningTarget { x, y }, resource.resource_item));
-        }
+    for (x, y) in mining_area_tiles(footprint, mining_drill) {
+        let Some(resource) = world.tile_at(x, y).and_then(|tile| tile.resource) else {
+            continue;
+        };
+        return Some((ManualMiningTarget { x, y }, resource.resource_item));
     }
 
     None
@@ -26,22 +21,34 @@ pub(in crate::simulation) fn first_resource_in_mining_area_profiled<P: TickProfi
     mining_drill: &factory_data::MiningDrillPrototype,
     profiler: &mut P,
 ) -> Option<(ManualMiningTarget, ItemId)> {
-    let width = mining_drill.mining_area.x.min(footprint.width).max(0);
-    let height = mining_drill.mining_area.y.min(footprint.height).max(0);
-
-    for y in footprint.y..footprint.y + height {
-        for x in footprint.x..footprint.x + width {
-            let Some(resource) = world
-                .tile_at_profiled(x, y, profiler)
-                .and_then(|tile| tile.resource)
-            else {
-                continue;
-            };
-            return Some((ManualMiningTarget { x, y }, resource.resource_item));
-        }
+    for (x, y) in mining_area_tiles(footprint, mining_drill) {
+        let Some(resource) = world
+            .tile_at_profiled(x, y, profiler)
+            .and_then(|tile| tile.resource)
+        else {
+            continue;
+        };
+        return Some((ManualMiningTarget { x, y }, resource.resource_item));
     }
 
     None
+}
+
+pub(in crate::simulation) fn mining_area_tiles(
+    footprint: &EntityFootprint,
+    mining_drill: &factory_data::MiningDrillPrototype,
+) -> Vec<(i32, i32)> {
+    let width = mining_drill.mining_area.x.min(footprint.width).max(0);
+    let height = mining_drill.mining_area.y.min(footprint.height).max(0);
+    let mut tiles = Vec::with_capacity((width * height) as usize);
+
+    for y in footprint.y..footprint.y + height {
+        for x in footprint.x..footprint.x + width {
+            tiles.push((x, y));
+        }
+    }
+
+    tiles
 }
 
 pub(in crate::simulation) fn drill_output_target(

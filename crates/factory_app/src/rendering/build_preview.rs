@@ -5,7 +5,7 @@ use crate::constants::TILE_SIZE;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::rendering::entities::entity_prototype_render_style;
 use crate::rendering::transforms::{entity_translation, tile_translation};
-use crate::resources::{BuildPlacementState, SimResource};
+use crate::resources::{BuildPlacementPreviewState, BuildPlacementState, SimResource};
 
 #[derive(Component)]
 pub(crate) struct BuildPreviewSprite;
@@ -45,10 +45,9 @@ pub(crate) fn spawn_build_preview(mut commands: Commands) {
 
 pub(crate) fn update_build_preview(
     mut commands: Commands,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     sim: Res<SimResource>,
     build_state: Res<BuildPlacementState>,
+    preview_state: Res<BuildPlacementPreviewState>,
     mut preview: BuildPreviewQuery,
     mut footprint_tiles: BuildPreviewFootprintTileQuery,
 ) {
@@ -61,27 +60,17 @@ pub(crate) fn update_build_preview(
         hide_footprint_tiles(&mut footprint_tiles);
         return;
     };
-    let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
+    if preview_state.cursor_tile.is_none() {
+        *visibility = Visibility::Hidden;
+        hide_footprint_tiles(&mut footprint_tiles);
+        return;
+    }
+    let Some(placement_preview) = preview_state.preview.as_ref() else {
         *visibility = Visibility::Hidden;
         hide_footprint_tiles(&mut footprint_tiles);
         return;
     };
-
-    let valid = sim
-        .sim
-        .can_place_entity_from_player_inventory(
-            selection.prototype_id,
-            selection.item_id,
-            x,
-            y,
-            build_state.direction,
-        )
-        .is_ok();
-    let Ok(footprint) =
-        sim.sim
-            .world()
-            .entity_footprint(selection.prototype_id, x, y, build_state.direction)
-    else {
+    let Some(footprint) = placement_preview.footprint else {
         *visibility = Visibility::Hidden;
         hide_footprint_tiles(&mut footprint_tiles);
         return;
@@ -96,25 +85,39 @@ pub(crate) fn update_build_preview(
 
     transform.translation = entity_translation(&footprint, 20.0);
     sprite.custom_size = Some(size);
-    sprite.color = if valid {
+    sprite.color = if placement_preview.is_valid() {
         Color::srgba(0.78, 1.0, 0.72, 0.42)
     } else {
         Color::srgba(1.0, 0.20, 0.16, 0.42)
     };
     *visibility = Visibility::Visible;
 
-    let footprint_color = if valid {
-        Color::srgba(0.55, 1.0, 0.50, 0.20)
-    } else {
-        Color::srgba(1.0, 0.10, 0.08, 0.24)
-    };
-    let tiles = footprint.tiles();
+    let footprint_tiles_to_draw = footprint.tiles();
+    let mut tiles =
+        Vec::with_capacity(footprint_tiles_to_draw.len() + placement_preview.issues.len());
+    for tile in &footprint_tiles_to_draw {
+        tiles.push((*tile, true));
+    }
+    for issue in &placement_preview.issues {
+        let Some(tile) = issue.tile else {
+            continue;
+        };
+        if !footprint_tiles_to_draw.contains(&tile)
+            && !tiles.iter().any(|(drawn, _)| *drawn == tile)
+        {
+            tiles.push((tile, false));
+        }
+    }
+
     let mut updated_count = 0;
-    for ((tile_x, tile_y), (mut tile_transform, mut tile_sprite, mut tile_visibility)) in
-        tiles.iter().copied().zip(footprint_tiles.iter_mut())
+    for (
+        ((tile_x, tile_y), is_footprint_tile),
+        (mut tile_transform, mut tile_sprite, mut tile_visibility),
+    ) in tiles.iter().copied().zip(footprint_tiles.iter_mut())
     {
         tile_transform.translation = tile_translation(tile_x, tile_y, 19.0);
-        tile_sprite.color = footprint_color;
+        tile_sprite.color =
+            preview_tile_color(placement_preview, (tile_x, tile_y), is_footprint_tile);
         tile_sprite.custom_size = Some(Vec2::splat(TILE_SIZE - 1.0));
         *tile_visibility = Visibility::Visible;
         updated_count += 1;
@@ -124,13 +127,60 @@ pub(crate) fn update_build_preview(
         *tile_visibility = Visibility::Hidden;
     }
 
-    for (tile_x, tile_y) in tiles.into_iter().skip(updated_count) {
+    for ((tile_x, tile_y), is_footprint_tile) in tiles.into_iter().skip(updated_count) {
         commands.spawn((
-            Sprite::from_color(footprint_color, Vec2::splat(TILE_SIZE - 1.0)),
+            Sprite::from_color(
+                preview_tile_color(placement_preview, (tile_x, tile_y), is_footprint_tile),
+                Vec2::splat(TILE_SIZE - 1.0),
+            ),
             Transform::from_translation(tile_translation(tile_x, tile_y, 19.0)),
             Visibility::Visible,
             BuildPreviewFootprintTile,
         ));
+    }
+}
+
+pub(crate) fn update_build_placement_preview_state(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
+    sim: Res<SimResource>,
+    build_state: Res<BuildPlacementState>,
+    mut preview_state: ResMut<BuildPlacementPreviewState>,
+) {
+    let Some(selection) = build_state.selected else {
+        preview_state.cursor_tile = None;
+        preview_state.preview = None;
+        return;
+    };
+    let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
+        preview_state.cursor_tile = None;
+        preview_state.preview = None;
+        return;
+    };
+
+    preview_state.cursor_tile = Some((x, y));
+    preview_state.preview = Some(sim.sim.preview_entity_placement_from_player_inventory(
+        selection.prototype_id,
+        selection.item_id,
+        x,
+        y,
+        build_state.direction,
+    ));
+}
+
+fn preview_tile_color(
+    preview: &factory_sim::BuildPlacementPreview,
+    tile: (i32, i32),
+    is_footprint_tile: bool,
+) -> Color {
+    if preview.issues.iter().any(|issue| issue.tile == Some(tile)) {
+        if is_footprint_tile {
+            Color::srgba(1.0, 0.08, 0.06, 0.34)
+        } else {
+            Color::srgba(1.0, 0.05, 0.04, 0.42)
+        }
+    } else {
+        Color::srgba(0.55, 1.0, 0.50, 0.20)
     }
 }
 

@@ -20,7 +20,9 @@ use crate::interaction::container_open::{
 use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
 };
-use crate::rendering::build_preview::{spawn_build_preview, update_build_preview};
+use crate::rendering::build_preview::{
+    spawn_build_preview, update_build_placement_preview_state, update_build_preview,
+};
 use crate::rendering::camera::{
     follow_player_camera, setup_camera, update_render_detail, update_visible_chunks,
 };
@@ -38,10 +40,10 @@ use crate::rendering::resources::{
 };
 use crate::rendering::world::sync_visible_world_tiles;
 use crate::resources::{
-    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapTextureCache,
-    MapViewState, OpenContainer, ProductionStatsWindowState, RenderDetail, RenderSyncStats,
-    SimProfileStats, SimResource, TechnologyWindowState, UpsStats, VisibleChunks, VisibleEntityIds,
-    WorldRenderCache,
+    AppInputState, BuildPlacementPreviewState, BuildPlacementState, CraftingWindowState,
+    MapDisplaySettings, MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState,
+    RenderDetail, RenderSyncStats, SimProfileStats, SimResource, TechnologyWindowState, UpsStats,
+    VisibleChunks, VisibleEntityIds, WorldRenderCache,
 };
 use crate::save_load::{
     AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
@@ -112,6 +114,7 @@ impl Plugin for FactoryAppPlugin {
             })
             .init_resource::<ResourceRenderCache>()
             .init_resource::<BuildPlacementState>()
+            .init_resource::<BuildPlacementPreviewState>()
             .init_resource::<OpenContainer>()
             .init_resource::<TechnologyWindowState>()
             .init_resource::<CraftingWindowState>()
@@ -187,6 +190,7 @@ impl Plugin for FactoryAppPlugin {
                     handle_container_open_input.before(handle_build_world_click),
                     handle_build_world_click,
                     handle_container_close_input,
+                    update_build_placement_preview_state.before(update_build_preview),
                     update_build_preview,
                 )
                     .in_set(AppInputSet::WorldInput),
@@ -227,7 +231,7 @@ impl Plugin for FactoryAppPlugin {
                     update_container_slot_text,
                     update_build_bar_visuals,
                     update_build_bar_action_visuals,
-                    update_build_status_text,
+                    update_build_status_text.after(update_build_placement_preview_state),
                     update_burner_drill_indicators,
                     sync_minimap.after(update_map_texture),
                     sync_full_map_view.after(update_map_texture),
