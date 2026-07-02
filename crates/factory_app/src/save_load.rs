@@ -9,7 +9,9 @@ use std::time::SystemTime;
 
 use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::rendering::resources::ResourceRenderCache;
-use crate::resources::{BuildPlacementState, MapTextureCache, OpenContainer, SimResource};
+use crate::resources::{
+    BuildPlacementState, MapTextureCache, MapViewState, OpenContainer, SimResource,
+};
 
 pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [
     SaveSlotKind::Manual(1),
@@ -298,6 +300,7 @@ pub(crate) struct LoadState<'w> {
     pub(crate) build_state: ResMut<'w, BuildPlacementState>,
     pub(crate) open_container: ResMut<'w, OpenContainer>,
     pub(crate) map_cache: ResMut<'w, MapTextureCache>,
+    pub(crate) map_view: ResMut<'w, MapViewState>,
     pub(crate) resource_cache: ResMut<'w, ResourceRenderCache>,
     pub(crate) reload_token: ResMut<'w, PresentationReloadToken>,
 }
@@ -342,6 +345,10 @@ pub(crate) fn load_slot(
             state.window.open = false;
             state.autosave.last_autosave_tick = tick;
             *state.map_cache = MapTextureCache::default();
+            let (player_x, player_y) = state.sim.sim.player().position_tiles();
+            state.map_view.center_tile = Vec2::new(player_x, player_y);
+            state.map_view.zoom = 1.0;
+            state.map_view.follow_player = true;
             *state.resource_cache = ResourceRenderCache::default();
             state.reload_token.value = state.reload_token.value.wrapping_add(1);
 

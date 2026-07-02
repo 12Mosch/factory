@@ -1,6 +1,6 @@
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::input::InputSystems;
-use bevy::input::mouse::AccumulatedMouseScroll;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use factory_data::PrototypeCatalog;
@@ -21,7 +21,9 @@ use crate::input::build::{
 use crate::input::camera::zoom_camera;
 use crate::input::mining::update_manual_mining_from_input;
 use crate::input::movement::move_player_from_input;
-use crate::input::panels::{handle_panel_input, reset_app_input_state};
+use crate::input::panels::{
+    handle_fullscreen_map_input, handle_panel_input, reset_app_input_state,
+};
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
@@ -79,7 +81,7 @@ use crate::ui::manual_crafting::{
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
     sync_manual_crafting_panel,
 };
-use crate::ui::map_view::{sync_full_map_view, sync_minimap};
+use crate::ui::map_view::{handle_full_map_buttons, sync_full_map_view, sync_minimap};
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
 use crate::ui::save_load::{handle_save_load_buttons, sync_save_load_window};
 use crate::ui::technology_panel::{
@@ -117,6 +119,7 @@ impl Plugin for FactoryAppPlugin {
             })
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<AccumulatedMouseMotion>()
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<UpsStats>()
             .init_resource::<SimProfileStats>()
@@ -177,6 +180,12 @@ impl Plugin for FactoryAppPlugin {
                     .chain()
                     .in_set(AppInputSet::PanelInput)
                     .after(InputSystems)
+                    .before(AppInputSet::TechnologyWindow),
+            )
+            .add_systems(
+                PreUpdate,
+                handle_fullscreen_map_input
+                    .after(AppInputSet::PanelInput)
                     .before(AppInputSet::TechnologyWindow),
             )
             .add_systems(
@@ -279,8 +288,11 @@ impl Plugin for FactoryAppPlugin {
                     update_build_bar_action_visuals,
                     update_build_status_text.after(update_build_placement_preview_state),
                     update_burner_drill_indicators,
+                    handle_full_map_buttons,
                     sync_minimap.after(update_map_texture),
-                    sync_full_map_view.after(update_map_texture),
+                    sync_full_map_view
+                        .after(update_map_texture)
+                        .after(handle_full_map_buttons),
                     handle_production_stats_buttons,
                     sync_production_stats_window.after(handle_production_stats_buttons),
                     handle_manual_crafting_tab_buttons,

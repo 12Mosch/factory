@@ -9,7 +9,8 @@ use std::hash::{Hash, Hasher};
 use crate::rendering::colors::{RenderPrototypeIds, resource_color, tile_color};
 use crate::rendering::entities::{entity_prototype_render_style, entity_signature};
 use crate::resources::{
-    MapChunkPaintState, MapDisplaySettings, MapTextureBounds, MapTextureCache, SimResource,
+    MapChunkPaintState, MapDisplaySettings, MapLayer, MapLayerTextureCache, MapTextureBounds,
+    MapTextureCache, MapViewState, SimResource,
 };
 
 pub const UNREVEALED_PIXEL: [u8; 4] = [6, 7, 8, 255];
@@ -25,6 +26,7 @@ pub struct MapPixels {
 pub(crate) fn update_map_texture(
     sim: Res<SimResource>,
     settings: Res<MapDisplaySettings>,
+    state: Res<MapViewState>,
     mut cache: ResMut<MapTextureCache>,
     images: Option<ResMut<Assets<Image>>>,
 ) {
@@ -43,59 +45,85 @@ pub(crate) fn update_map_texture(
         || cache.last_revealed_signature != revealed_signature
         || cache.last_debug_flags != debug_flags;
 
-    if !needs_update {
-        return;
-    }
+    if needs_update {
+        let full_rebuild = cache.handle.is_none()
+            || cache.bounds.is_none()
+            || cache.pixels.is_none()
+            || cache.last_debug_flags != debug_flags
+            || cache.last_entity_signature != entity_signature;
 
-    let full_rebuild = cache.handle.is_none()
-        || cache.bounds.is_none()
-        || cache.pixels.is_none()
-        || cache.last_debug_flags != debug_flags
-        || cache.last_entity_signature != entity_signature;
-
-    if full_rebuild {
-        let map = generate_map_pixels(&sim.sim, &settings);
-        cache.bounds = Some(map.bounds);
-        cache.pixels = Some(map.data);
-        refresh_painted_chunks(&sim.sim, &settings, &mut cache);
-    } else {
-        update_map_pixels_incremental(&sim.sim, &settings, &mut cache);
-    }
-
-    let bounds = cache.bounds.unwrap_or_default();
-    let image_data = cache.pixels.clone().unwrap_or_default();
-    let mut image = Image::new_fill(
-        Extent3d {
-            width: bounds.width,
-            height: bounds.height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &UNREVEALED_PIXEL,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    );
-    image.data = Some(image_data);
-    image.sampler = ImageSampler::nearest();
-
-    let handle = match cache.handle.as_ref() {
-        Some(handle) => {
-            let _ = images.insert(handle.id(), image);
-            handle.clone()
+        if full_rebuild {
+            let map = generate_map_pixels(&sim.sim, &settings);
+            cache.bounds = Some(map.bounds);
+            cache.pixels = Some(map.data);
+            refresh_painted_chunks(&sim.sim, &settings, &mut cache);
+        } else {
+            update_map_pixels_incremental(&sim.sim, &settings, &mut cache);
         }
-        None => images.add(image),
-    };
 
-    cache.handle = Some(handle);
-    cache.last_player_tile = Some(player_tile);
-    cache.last_chunk_revision = sim.sim.world().chunk_revision();
-    cache.last_resource_revision = sim.sim.world().resource_revision();
-    cache.last_entity_signature = entity_signature;
-    cache.last_revealed_signature = revealed_signature;
-    cache.last_debug_flags = debug_flags;
+        let bounds = cache.bounds.unwrap_or_default();
+        let image_data = cache.pixels.clone().unwrap_or_default();
+        let mut image = Image::new_fill(
+            Extent3d {
+                width: bounds.width,
+                height: bounds.height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &UNREVEALED_PIXEL,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        image.data = Some(image_data);
+        image.sampler = ImageSampler::nearest();
+
+        let handle = match cache.handle.as_ref() {
+            Some(handle) => {
+                let _ = images.insert(handle.id(), image);
+                handle.clone()
+            }
+            None => images.add(image),
+        };
+
+        cache.handle = Some(handle);
+        cache.last_player_tile = Some(player_tile);
+        cache.last_chunk_revision = sim.sim.world().chunk_revision();
+        cache.last_resource_revision = sim.sim.world().resource_revision();
+        cache.last_entity_signature = entity_signature;
+        cache.last_revealed_signature = revealed_signature;
+        cache.last_debug_flags = debug_flags;
+    }
+
+    if state.open {
+        let selected_layer = state.selected_layer;
+        if selected_layer == MapLayer::Surface {
+            sync_surface_layer_cache(&mut cache);
+        } else {
+            let layer_cache = cache.layer_caches.entry(selected_layer).or_default();
+            update_layer_map_texture(
+                &sim.sim,
+                &settings,
+                selected_layer,
+                layer_cache,
+                &mut images,
+                entity_signature,
+                revealed_signature,
+                debug_flags,
+                player_tile,
+            );
+        }
+    }
 }
 
 pub fn generate_map_pixels(sim: &Simulation, settings: &MapDisplaySettings) -> MapPixels {
+    generate_map_pixels_for_layer(sim, settings, MapLayer::Surface)
+}
+
+pub fn generate_map_pixels_for_layer(
+    sim: &Simulation,
+    settings: &MapDisplaySettings,
+    layer: MapLayer,
+) -> MapPixels {
     let bounds = map_texture_bounds(sim).unwrap_or_default();
     let len = bounds.width as usize * bounds.height as usize * 4;
     let mut data = vec![0; len];
@@ -109,10 +137,7 @@ pub fn generate_map_pixels(sim: &Simulation, settings: &MapDisplaySettings) -> M
             let world_x = chunk.coord.x * CHUNK_SIZE + local_x;
             let world_y = chunk.coord.y * CHUNK_SIZE + local_y;
             let color = if revealed {
-                let terrain = darkened(tile_color(tile.tile_id, ids), 0.58);
-                tile.resource
-                    .map(|resource| color_to_pixel(resource_color(resource, ids)))
-                    .unwrap_or(terrain)
+                revealed_tile_pixel(layer, ids, tile)
             } else {
                 UNREVEALED_PIXEL
             };
@@ -120,22 +145,24 @@ pub fn generate_map_pixels(sim: &Simulation, settings: &MapDisplaySettings) -> M
         }
     }
 
-    for placed in sim.entities().placed_entities() {
-        let Some((color, _)) =
-            entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
-        else {
-            continue;
-        };
-        let pixel = color_to_pixel(color);
-        for (x, y) in placed.footprint.tiles() {
-            let coord = ChunkCoord {
-                x: x.div_euclid(CHUNK_SIZE),
-                y: y.div_euclid(CHUNK_SIZE),
-            };
-            if !settings.debug_reveal_all && !sim.is_chunk_revealed(coord) {
+    if layer != MapLayer::Resources {
+        for placed in sim.entities().placed_entities() {
+            let Some((color, _)) =
+                entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
+            else {
                 continue;
+            };
+            let pixel = color_to_pixel(color);
+            for (x, y) in placed.footprint.tiles() {
+                let coord = ChunkCoord {
+                    x: x.div_euclid(CHUNK_SIZE),
+                    y: y.div_euclid(CHUNK_SIZE),
+                };
+                if !settings.debug_reveal_all && !sim.is_chunk_revealed(coord) {
+                    continue;
+                }
+                set_world_pixel(&mut data, bounds, x, y, pixel);
             }
-            set_world_pixel(&mut data, bounds, x, y, pixel);
         }
     }
 
@@ -147,6 +174,87 @@ pub fn generate_map_pixels(sim: &Simulation, settings: &MapDisplaySettings) -> M
     }
 
     MapPixels { bounds, data }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_layer_map_texture(
+    sim: &Simulation,
+    settings: &MapDisplaySettings,
+    layer: MapLayer,
+    cache: &mut MapLayerTextureCache,
+    images: &mut Assets<Image>,
+    entity_signature: u64,
+    revealed_signature: u64,
+    debug_flags: (bool, bool),
+    player_tile: (i32, i32),
+) {
+    let needs_update = cache.handle.is_none()
+        || cache.last_player_tile != Some(player_tile)
+        || cache.last_chunk_revision != sim.world().chunk_revision()
+        || cache.last_resource_revision != sim.world().resource_revision()
+        || cache.last_entity_signature != entity_signature
+        || cache.last_revealed_signature != revealed_signature
+        || cache.last_debug_flags != debug_flags;
+
+    if !needs_update {
+        return;
+    }
+
+    let map = generate_map_pixels_for_layer(sim, settings, layer);
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: map.bounds.width,
+            height: map.bounds.height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &UNREVEALED_PIXEL,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data = Some(map.data.clone());
+    image.sampler = ImageSampler::nearest();
+
+    let handle = match cache.handle.as_ref() {
+        Some(handle) => {
+            let _ = images.insert(handle.id(), image);
+            handle.clone()
+        }
+        None => images.add(image),
+    };
+
+    cache.handle = Some(handle);
+    cache.bounds = Some(map.bounds);
+    cache.pixels = Some(map.data);
+    cache.last_player_tile = Some(player_tile);
+    cache.last_chunk_revision = sim.world().chunk_revision();
+    cache.last_resource_revision = sim.world().resource_revision();
+    cache.last_entity_signature = entity_signature;
+    cache.last_revealed_signature = revealed_signature;
+    cache.last_debug_flags = debug_flags;
+}
+
+fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
+    let handle = cache.handle.clone();
+    let bounds = cache.bounds;
+    let pixels = cache.pixels.clone();
+    let last_player_tile = cache.last_player_tile;
+    let last_chunk_revision = cache.last_chunk_revision;
+    let last_resource_revision = cache.last_resource_revision;
+    let last_entity_signature = cache.last_entity_signature;
+    let last_revealed_signature = cache.last_revealed_signature;
+    let last_debug_flags = cache.last_debug_flags;
+
+    let layer_cache = cache.layer_caches.entry(MapLayer::Surface).or_default();
+    layer_cache.handle = handle;
+    layer_cache.bounds = bounds;
+    layer_cache.pixels = pixels;
+    layer_cache.last_player_tile = last_player_tile;
+    layer_cache.last_chunk_revision = last_chunk_revision;
+    layer_cache.last_resource_revision = last_resource_revision;
+    layer_cache.last_entity_signature = last_entity_signature;
+    layer_cache.last_revealed_signature = last_revealed_signature;
+    layer_cache.last_debug_flags = last_debug_flags;
 }
 
 fn update_map_pixels_incremental(
@@ -466,12 +574,29 @@ fn tile_pixel(
     tile: &factory_sim::TileCell,
 ) -> [u8; 4] {
     if settings.debug_reveal_all || sim.is_chunk_revealed(coord) {
-        let terrain = darkened(tile_color(tile.tile_id, ids), 0.58);
-        tile.resource
-            .map(|resource| color_to_pixel(resource_color(resource, ids)))
-            .unwrap_or(terrain)
+        revealed_tile_pixel(MapLayer::Surface, ids, tile)
     } else {
         UNREVEALED_PIXEL
+    }
+}
+
+fn revealed_tile_pixel(
+    layer: MapLayer,
+    ids: RenderPrototypeIds,
+    tile: &factory_sim::TileCell,
+) -> [u8; 4] {
+    match layer {
+        MapLayer::Surface => {
+            let terrain = darkened(tile_color(tile.tile_id, ids), 0.58);
+            tile.resource
+                .map(|resource| color_to_pixel(resource_color(resource, ids)))
+                .unwrap_or(terrain)
+        }
+        MapLayer::Resources => tile
+            .resource
+            .map(|resource| color_to_pixel(resource_color(resource, ids)))
+            .unwrap_or_else(|| darkened(tile_color(tile.tile_id, ids), 0.24)),
+        MapLayer::Entities => darkened(tile_color(tile.tile_id, ids), 0.30),
     }
 }
 
@@ -566,6 +691,7 @@ mod tests {
             last_entity_signature: entity_signature(&sim),
             last_revealed_signature: revealed_signature(&sim),
             last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
+            layer_caches: Default::default(),
         };
         refresh_painted_chunks(&sim, &settings, &mut cache);
 

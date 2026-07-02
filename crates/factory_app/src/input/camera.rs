@@ -2,11 +2,18 @@ use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 
 use crate::constants::{MAX_CAMERA_SCALE, MIN_CAMERA_SCALE};
+use crate::input::panels::world_input_blocked;
+use crate::resources::AppInputState;
 
 pub(crate) fn zoom_camera(
+    input_state: Option<Res<AppInputState>>,
     mouse_scroll: Option<Res<AccumulatedMouseScroll>>,
     mut camera: Query<&mut Projection, With<Camera2d>>,
 ) {
+    if world_input_blocked(input_state.as_deref()) {
+        return;
+    }
+
     let Some(mouse_scroll) = mouse_scroll else {
         return;
     };

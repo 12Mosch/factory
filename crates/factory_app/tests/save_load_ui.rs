@@ -181,6 +181,7 @@ fn load_invalidates_render_caches() {
         last_entity_signature: 88,
         last_revealed_signature: 77,
         last_debug_flags: (true, true),
+        layer_caches: Default::default(),
     });
     app.world_mut().insert_resource(ResourceRenderCache {
         last_resource_revision: Some(42),
