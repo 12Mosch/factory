@@ -335,7 +335,7 @@ fn update_player_marker(
 }
 
 fn spawn_layer_button(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
     layer: MapLayer,
     label: &'static str,
     selected_layer: MapLayer,
@@ -366,7 +366,7 @@ fn spawn_layer_button(
         ));
 }
 
-fn spawn_recenter_button(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+fn spawn_recenter_button(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>) {
     parent
         .spawn((
             Button,
@@ -530,7 +530,8 @@ pub(crate) fn fullscreen_map_image_size(window: Option<&Window>) -> Vec2 {
     let Some(window) = window else {
         return Vec2::splat(980.0);
     };
-    let size = window.resolution.size() * 0.84;
+    let content_size = (window.resolution.size() - Vec2::splat(56.0)).max(Vec2::splat(1.0));
+    let size = content_size * 0.84;
     Vec2::new(size.x.clamp(1.0, 980.0), size.y.clamp(1.0, 980.0))
 }
 

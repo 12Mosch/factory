@@ -137,6 +137,7 @@ pub(crate) struct FullscreenMapInputResources<'w, 's> {
     sim: Res<'w, SimResource>,
     cache: Res<'w, MapTextureCache>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    ui_buttons: Query<'w, 's, &'static Interaction, With<Button>>,
     state: ResMut<'w, MapViewState>,
 }
 
@@ -190,12 +191,16 @@ pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResou
     let dragging = resources.mouse_buttons.as_deref().is_some_and(|buttons| {
         buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Middle)
     });
+    let interacting_with_button = resources
+        .ui_buttons
+        .iter()
+        .any(|interaction| *interaction != Interaction::None);
     let motion = resources
         .mouse_motion
         .as_deref()
         .map(|motion| motion.delta)
         .unwrap_or(Vec2::ZERO);
-    if dragging && motion != Vec2::ZERO {
+    if dragging && !interacting_with_button && motion != Vec2::ZERO {
         let crop = fullscreen_crop_bounds(
             map_bounds,
             resources.state.center_tile,

@@ -96,18 +96,22 @@ pub(crate) fn update_map_texture(
 
     if state.open {
         let selected_layer = state.selected_layer;
-        let layer_cache = cache.layer_caches.entry(selected_layer).or_default();
-        update_layer_map_texture(
-            &sim.sim,
-            &settings,
-            selected_layer,
-            layer_cache,
-            &mut images,
-            entity_signature,
-            revealed_signature,
-            debug_flags,
-            player_tile,
-        );
+        if selected_layer == MapLayer::Surface {
+            sync_surface_layer_cache(&mut cache);
+        } else {
+            let layer_cache = cache.layer_caches.entry(selected_layer).or_default();
+            update_layer_map_texture(
+                &sim.sim,
+                &settings,
+                selected_layer,
+                layer_cache,
+                &mut images,
+                entity_signature,
+                revealed_signature,
+                debug_flags,
+                player_tile,
+            );
+        }
     }
 }
 
@@ -228,6 +232,29 @@ fn update_layer_map_texture(
     cache.last_entity_signature = entity_signature;
     cache.last_revealed_signature = revealed_signature;
     cache.last_debug_flags = debug_flags;
+}
+
+fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
+    let handle = cache.handle.clone();
+    let bounds = cache.bounds;
+    let pixels = cache.pixels.clone();
+    let last_player_tile = cache.last_player_tile;
+    let last_chunk_revision = cache.last_chunk_revision;
+    let last_resource_revision = cache.last_resource_revision;
+    let last_entity_signature = cache.last_entity_signature;
+    let last_revealed_signature = cache.last_revealed_signature;
+    let last_debug_flags = cache.last_debug_flags;
+
+    let layer_cache = cache.layer_caches.entry(MapLayer::Surface).or_default();
+    layer_cache.handle = handle;
+    layer_cache.bounds = bounds;
+    layer_cache.pixels = pixels;
+    layer_cache.last_player_tile = last_player_tile;
+    layer_cache.last_chunk_revision = last_chunk_revision;
+    layer_cache.last_resource_revision = last_resource_revision;
+    layer_cache.last_entity_signature = last_entity_signature;
+    layer_cache.last_revealed_signature = last_revealed_signature;
+    layer_cache.last_debug_flags = last_debug_flags;
 }
 
 fn update_map_pixels_incremental(

@@ -112,6 +112,30 @@ fn fullscreen_map_drag_pan_changes_center_and_disables_follow() {
 }
 
 #[test]
+fn fullscreen_map_drag_pan_ignores_hovered_ui_button() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    seed_map_bounds(&mut app);
+    app.update();
+    press_key(&mut app, KeyCode::KeyM);
+    app.update();
+    release_key(&mut app, KeyCode::KeyM);
+    let before = app.world().resource::<MapViewState>().center_tile;
+
+    app.world_mut().spawn((Button, Interaction::Hovered));
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    app.world_mut()
+        .resource_mut::<AccumulatedMouseMotion>()
+        .delta = Vec2::new(40.0, -20.0);
+    app.update();
+
+    let state = app.world().resource::<MapViewState>();
+    assert_eq!(state.center_tile, before);
+    assert!(state.follow_player);
+}
+
+#[test]
 fn fullscreen_map_wheel_zoom_updates_and_clamps() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     seed_map_bounds(&mut app);

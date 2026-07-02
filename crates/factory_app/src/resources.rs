@@ -90,18 +90,12 @@ pub struct TechnologyWindowState {
     pub selected: Option<TechnologyId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MapLayer {
+    #[default]
     Surface,
     Resources,
     Entities,
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for MapLayer {
-    fn default() -> Self {
-        Self::Surface
-    }
 }
 
 #[derive(Resource)]
