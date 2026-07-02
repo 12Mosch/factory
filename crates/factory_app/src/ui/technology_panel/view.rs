@@ -2,10 +2,12 @@ use bevy::prelude::*;
 use factory_data::TechnologyId;
 
 use crate::ui::formatting::format_recipe_display_name;
+use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 
 use super::components::{
-    TechnologyPanelRoot, TechnologyPanelSnapshot, TechnologyQueueAction, TechnologyQueueButton,
-    TechnologySelectButton, TechnologyStartQueueButton,
+    TechnologyDetailRoot, TechnologyListRoot, TechnologyPanelContentRoot, TechnologyPanelRoot,
+    TechnologyPanelSnapshot, TechnologyQueueAction, TechnologyQueueButton, TechnologySelectButton,
+    TechnologyStartQueueButton,
 };
 use super::helpers::{
     active_research_text, can_enqueue_for_ui, prerequisite_text, queue_text, science_cost_text,
@@ -23,13 +25,14 @@ pub(crate) fn spawn_technology_panel(
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
+                left: Val::Px(PANEL_MARGIN),
+                right: Val::Px(PANEL_MARGIN),
+                top: Val::Px(PANEL_MARGIN),
+                bottom: Val::Px(PANEL_MARGIN),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(10.0),
                 padding: UiRect::all(Val::Px(18.0)),
+                overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.025, 0.028, 0.030, 0.96)),
@@ -48,11 +51,19 @@ pub(crate) fn spawn_technology_panel_contents(
     root.spawn((
         Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            min_height: Val::Px(0.0),
             column_gap: Val::Px(12.0),
+            row_gap: Val::Px(12.0),
             align_items: AlignItems::Stretch,
+            align_content: AlignContent::Stretch,
+            overflow: Overflow::clip(),
             ..default()
         },
         BackgroundColor(Color::NONE),
+        TechnologyPanelContentRoot,
     ))
     .with_children(|content| {
         spawn_technology_list(content, sim, selected);
@@ -94,18 +105,21 @@ fn spawn_technology_list(
     sim: &factory_sim::Simulation,
     selected: Option<TechnologyId>,
 ) {
+    let mut list_node = scroll_column();
+    list_node.width = Val::Percent(32.0);
+    list_node.flex_basis = Val::Px(260.0);
+    list_node.min_width = Val::Px(220.0);
+    list_node.max_width = Val::Px(360.0);
+    list_node.row_gap = Val::Px(5.0);
+    list_node.padding = UiRect::all(Val::Px(8.0));
+    list_node.border = UiRect::all(Val::Px(1.0));
+
     parent
         .spawn((
-            Node {
-                width: Val::Px(300.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(5.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
+            list_node,
             BackgroundColor(Color::srgba(0.055, 0.058, 0.060, 0.96)),
             BorderColor::all(Color::srgba(0.30, 0.31, 0.30, 0.85)),
+            TechnologyListRoot,
         ))
         .with_children(|list| {
             list.spawn((
@@ -169,18 +183,21 @@ fn spawn_technology_detail(
     sim: &factory_sim::Simulation,
     selected: Option<TechnologyId>,
 ) {
+    let mut detail_node = scroll_column();
+    detail_node.flex_basis = Val::Px(460.0);
+    detail_node.width = Val::Percent(64.0);
+    detail_node.min_width = Val::Px(280.0);
+    detail_node.max_width = Val::Px(820.0);
+    detail_node.row_gap = Val::Px(10.0);
+    detail_node.padding = UiRect::all(Val::Px(10.0));
+    detail_node.border = UiRect::all(Val::Px(1.0));
+
     parent
         .spawn((
-            Node {
-                width: Val::Px(620.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
+            detail_node,
             BackgroundColor(Color::srgba(0.055, 0.058, 0.060, 0.96)),
             BorderColor::all(Color::srgba(0.30, 0.31, 0.30, 0.85)),
+            TechnologyDetailRoot,
         ))
         .with_children(|detail| {
             let Some(technology_id) = selected else {
@@ -285,6 +302,7 @@ fn spawn_queue_controls(
         .spawn((
             Node {
                 flex_direction: FlexDirection::Column,
+                flex_shrink: 0.0,
                 row_gap: Val::Px(5.0),
                 ..default()
             },
@@ -313,8 +331,10 @@ fn spawn_queue_controls(
                     .spawn((
                         Node {
                             flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
                             align_items: AlignItems::Center,
                             column_gap: Val::Px(6.0),
+                            row_gap: Val::Px(4.0),
                             ..default()
                         },
                         BackgroundColor(Color::NONE),

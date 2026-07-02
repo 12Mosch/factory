@@ -23,6 +23,9 @@ pub(crate) struct CraftingQueueRoot {
     pub(crate) lines: Vec<String>,
 }
 
+#[derive(Component)]
+pub(crate) struct CraftingRecipeListRoot;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CraftingPanelSnapshot {
     pub(crate) selected_tab: CraftingPanelTab,

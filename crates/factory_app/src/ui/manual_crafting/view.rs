@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 
 use crate::resources::CraftingPanelTab;
+use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 
 use super::components::{
     CraftingPanelRoot, CraftingPanelSnapshot, CraftingQueueRoot, CraftingRecipeButton,
-    CraftingTabButton, ManualCraftRecipeRow,
+    CraftingRecipeListRoot, CraftingTabButton, ManualCraftRecipeRow,
 };
 
 pub(crate) fn spawn_manual_crafting_panel(
@@ -16,13 +17,15 @@ pub(crate) fn spawn_manual_crafting_panel(
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(520.0),
+                right: Val::Px(PANEL_MARGIN),
+                top: Val::Px(PANEL_MARGIN),
+                bottom: Val::Px(PANEL_MARGIN),
+                width: Val::Vw(96.0),
+                max_width: Val::Px(540.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(10.0),
                 padding: UiRect::all(Val::Px(16.0)),
+                overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.028, 0.030, 0.032, 0.97)),
@@ -102,17 +105,14 @@ fn spawn_recipe_rows(
         TextColor(Color::srgb(0.92, 0.93, 0.88)),
     ));
 
+    let mut list_node = scroll_column();
+    list_node.row_gap = Val::Px(5.0);
+
     parent
         .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(5.0),
-                height: Val::Px(430.0),
-                overflow: Overflow::scroll_y(),
-                scrollbar_width: 10.0,
-                ..default()
-            },
+            list_node,
             BackgroundColor(Color::NONE),
+            CraftingRecipeListRoot,
         ))
         .with_children(|list| {
             if rows.is_empty() {
@@ -140,7 +140,9 @@ fn spawn_recipe_row(
                 width: Val::Percent(100.0),
                 min_height: Val::Px(58.0),
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 column_gap: Val::Px(8.0),
+                row_gap: Val::Px(6.0),
                 align_items: AlignItems::Center,
                 padding: UiRect::all(Val::Px(7.0)),
                 ..default()
@@ -155,7 +157,10 @@ fn spawn_recipe_row(
             row_node
                 .spawn((
                     Node {
-                        width: Val::Px(330.0),
+                        flex_basis: Val::Px(260.0),
+                        flex_grow: 1.0,
+                        flex_shrink: 1.0,
+                        min_width: Val::Px(0.0),
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(2.0),
                         ..default()
@@ -185,7 +190,8 @@ fn spawn_recipe_row(
                     .spawn((
                         Button,
                         Node {
-                            width: Val::Px(130.0),
+                            width: Val::Px(118.0),
+                            max_width: Val::Percent(100.0),
                             min_height: Val::Px(34.0),
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
@@ -208,7 +214,8 @@ fn spawn_recipe_row(
             } else {
                 row_node.spawn((
                     Node {
-                        width: Val::Px(130.0),
+                        width: Val::Px(118.0),
+                        max_width: Val::Percent(100.0),
                         min_height: Val::Px(34.0),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
