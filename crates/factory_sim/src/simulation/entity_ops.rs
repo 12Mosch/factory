@@ -215,6 +215,8 @@ impl Simulation {
         let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
         let splitter = splitter_state_for_prototype(prototype, direction);
         let inserter = inserter_state_for_prototype(prototype);
+        let affects_power_topology = self.prototype_affects_power_topology(prototype);
+        let affects_transport_lane_graph = self.prototype_affects_transport_lane_graph(prototype);
         let entity_id = self.entities.reserve_entity(EntityReservation {
             prototype_id,
             x,
@@ -236,8 +238,11 @@ impl Simulation {
             splitter,
             inserter,
         });
-        if self.prototype_affects_power_topology(prototype) {
+        if affects_power_topology {
             self.invalidate_power_state();
+        }
+        if affects_transport_lane_graph {
+            self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
         Ok(entity_id)
@@ -270,10 +275,15 @@ impl Simulation {
         self.entities
             .occupancy
             .validate_available(&footprint, Some(entity_id))?;
+        let affects_power_topology = self.prototype_affects_power_topology(prototype);
+        let affects_transport_lane_graph = self.prototype_affects_transport_lane_graph(prototype);
         self.entities
             .update_entity_footprint(entity_id, direction, footprint)?;
-        if self.prototype_affects_power_topology(prototype) {
+        if affects_power_topology {
             self.invalidate_power_state();
+        }
+        if affects_transport_lane_graph {
+            self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
         Ok(())
@@ -291,6 +301,16 @@ impl Simulation {
                 .is_some_and(|prototype| self.prototype_affects_power_topology(prototype))
             {
                 self.invalidate_power_state();
+            }
+            if self
+                .world
+                .prototypes
+                .entities
+                .get(removed.prototype_id.index())
+                .filter(|prototype| prototype.id == removed.prototype_id)
+                .is_some_and(|prototype| self.prototype_affects_transport_lane_graph(prototype))
+            {
+                self.invalidate_transport_lane_graph();
             }
             self.invalidate_fluid_state();
         }
@@ -340,6 +360,16 @@ impl Simulation {
             .is_some_and(|prototype| self.prototype_affects_power_topology(prototype))
         {
             self.invalidate_power_state();
+        }
+        if self
+            .world
+            .prototypes
+            .entities
+            .get(removed.prototype_id.index())
+            .filter(|prototype| prototype.id == removed.prototype_id)
+            .is_some_and(|prototype| self.prototype_affects_transport_lane_graph(prototype))
+        {
+            self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
 

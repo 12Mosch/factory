@@ -30,17 +30,170 @@ pub(super) enum BeltLaneVisitState {
     Done,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) struct TransportLaneGraph {
+    lane_keys: Vec<TransportLaneKey>,
+    downstream_by_index: Vec<TransportLaneDownstream>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+enum TransportLaneDownstream {
+    #[default]
+    Missing,
+    Belt {
+        downstream: Option<TransportLaneKey>,
+    },
+    Splitter {
+        outputs: [Option<TransportLaneKey>; 2],
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+struct TransportLaneVisitSlot {
+    generation: u32,
+    state: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) struct TransportLaneVisitStorage {
+    generation: u32,
+    states: Vec<TransportLaneVisitSlot>,
+}
+
+impl TransportLaneGraph {
+    pub(super) fn rebuild(&mut self, entities: &EntityStore) {
+        let lane_count = (entities.next_entity_id as usize).saturating_mul(4);
+        self.lane_keys.clear();
+        self.lane_keys.reserve(
+            entities
+                .transport_belts
+                .len()
+                .saturating_mul(2)
+                .saturating_add(entities.splitters.len().saturating_mul(4)),
+        );
+        self.downstream_by_index.clear();
+        self.downstream_by_index
+            .resize(lane_count, TransportLaneDownstream::Missing);
+
+        for &entity_id in entities.transport_belts.keys() {
+            for lane_index in 0..2 {
+                let key = TransportLaneKey::Belt {
+                    entity_id,
+                    lane_index,
+                };
+                self.lane_keys.push(key);
+                let Some(index) = visit_state_index(key) else {
+                    continue;
+                };
+                if let Some(slot) = self.downstream_by_index.get_mut(index) {
+                    *slot = TransportLaneDownstream::Belt {
+                        downstream: belt_downstream_lane_key(entities, entity_id, lane_index),
+                    };
+                }
+            }
+        }
+
+        for &entity_id in entities.splitters.keys() {
+            for input_port in 0..2 {
+                for lane_index in 0..2 {
+                    let key = TransportLaneKey::Splitter {
+                        entity_id,
+                        input_port,
+                        lane_index,
+                    };
+                    self.lane_keys.push(key);
+                    let Some(index) = visit_state_index(key) else {
+                        continue;
+                    };
+                    if let Some(slot) = self.downstream_by_index.get_mut(index) {
+                        *slot = TransportLaneDownstream::Splitter {
+                            outputs: [
+                                splitter_output_lane_key(entities, entity_id, 0, lane_index),
+                                splitter_output_lane_key(entities, entity_id, 1, lane_index),
+                            ],
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    fn downstream_for(&self, key: TransportLaneKey) -> TransportLaneDownstream {
+        visit_state_index(key)
+            .and_then(|index| self.downstream_by_index.get(index))
+            .copied()
+            .unwrap_or(TransportLaneDownstream::Missing)
+    }
+}
+
+impl TransportLaneVisitStorage {
+    pub(super) fn begin_tick(&mut self, required_len: usize) {
+        if self.states.len() < required_len {
+            self.states
+                .resize(required_len, TransportLaneVisitSlot::default());
+        }
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.states.fill(TransportLaneVisitSlot::default());
+            self.generation = 1;
+        }
+    }
+}
+
+impl Simulation {
+    pub(super) fn prototype_affects_transport_lane_graph(
+        &self,
+        prototype: &factory_data::EntityPrototype,
+    ) -> bool {
+        (prototype.entity_kind == EntityKind::TransportBelt && prototype.transport_belt.is_some())
+            || (prototype.entity_kind == EntityKind::Splitter && prototype.splitter.is_some())
+    }
+
+    pub(super) fn invalidate_transport_lane_graph(&mut self) {
+        self.transport_lane_graph_dirty = true;
+    }
+
+    pub(super) fn refresh_transport_lane_graph(&mut self) {
+        if !self.transport_lane_graph_dirty {
+            return;
+        }
+
+        self.transport_lane_graph.rebuild(&self.entities);
+        self.transport_lane_graph_dirty = false;
+        #[cfg(test)]
+        {
+            self.transport_lane_graph_rebuilds += 1;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn transport_lane_graph_rebuild_count(&self) -> u64 {
+        self.transport_lane_graph_rebuilds
+    }
+}
+
 pub(super) struct TransportBeltAdvancement<'a> {
     entities: &'a mut EntityStore,
-    visit_states: Vec<u8>,
+    graph: &'a TransportLaneGraph,
+    visit_states: &'a mut TransportLaneVisitStorage,
 }
 
 impl<'a> TransportBeltAdvancement<'a> {
-    pub(super) fn new(entities: &'a mut EntityStore) -> Self {
-        let visit_state_len = (entities.next_entity_id as usize).saturating_mul(4);
+    pub(super) fn new(
+        entities: &'a mut EntityStore,
+        graph: &'a TransportLaneGraph,
+        visit_states: &'a mut TransportLaneVisitStorage,
+    ) -> Self {
         Self {
             entities,
-            visit_states: vec![0; visit_state_len],
+            graph,
+            visit_states,
+        }
+    }
+
+    pub(super) fn process_all_lanes(&mut self) {
+        for index in 0..self.graph.lane_keys.len() {
+            self.process_lane(self.graph.lane_keys[index]);
         }
     }
 
@@ -71,112 +224,44 @@ impl<'a> TransportBeltAdvancement<'a> {
         &self,
         key: TransportLaneKey,
     ) -> SmallVec<[TransportLaneKey; 2]> {
-        match key {
-            TransportLaneKey::Belt {
-                entity_id,
-                lane_index,
-            } => {
+        match self.graph.downstream_for(key) {
+            TransportLaneDownstream::Missing => SmallVec::new(),
+            TransportLaneDownstream::Belt { downstream } => {
+                let mut downstream_keys = SmallVec::new();
+                if let Some(key) = downstream {
+                    downstream_keys.push(key);
+                }
+                downstream_keys
+            }
+            TransportLaneDownstream::Splitter { outputs } => {
+                let preferred = self.splitter_preferred_output_port(key);
                 let mut downstream = SmallVec::new();
-                if let Some(key) = self.belt_downstream_lane_key(entity_id, lane_index) {
-                    downstream.push(key);
+                for output_port in [preferred, 1 - preferred] {
+                    if let Some(key) = outputs[output_port] {
+                        downstream.push(key);
+                    }
                 }
                 downstream
             }
-            TransportLaneKey::Splitter {
-                entity_id,
-                lane_index,
-                ..
-            } => self.splitter_downstream_lane_keys(entity_id, lane_index),
         }
     }
 
-    fn belt_downstream_lane_key(
-        &self,
-        entity_id: EntityId,
-        lane_index: usize,
-    ) -> Option<TransportLaneKey> {
-        let placed = self.entities.placed_entities.get(&entity_id)?;
-        let segment = self.entities.transport_belts.get(&entity_id)?;
-
-        if underground_part(segment) == Some(UndergroundBeltPart::Entrance) {
-            return self.paired_underground_exit_lane_key(placed, segment, lane_index);
-        }
-
-        let (dx, dy) = direction_tile_delta(segment.dir);
-        let endpoint = self.transport_endpoint_at(placed.x + dx, placed.y + dy)?;
-
-        Some(endpoint_lane_key(endpoint, lane_index))
-    }
-
-    fn paired_underground_exit_lane_key(
-        &self,
-        entrance_placed: &PlacedEntity,
-        entrance_segment: &BeltSegment,
-        lane_index: usize,
-    ) -> Option<TransportLaneKey> {
-        let entrance_underground = entrance_segment.underground?;
-        let (dx, dy) = direction_tile_delta(entrance_segment.dir);
-        let max_offset = i32::from(entrance_underground.max_distance) + 1;
-
-        for offset in 1..=max_offset {
-            let Some(TransportEndpoint::Belt { entity_id }) = self.transport_endpoint_at(
-                entrance_placed.x + dx * offset,
-                entrance_placed.y + dy * offset,
-            ) else {
-                continue;
-            };
-            let Some(exit_segment) = self.entities.transport_belts.get(&entity_id) else {
-                continue;
-            };
-            let underground_distance = (offset - 1) as u8;
-
-            if is_valid_underground_pair(entrance_segment, exit_segment, underground_distance) {
-                return Some(TransportLaneKey::Belt {
-                    entity_id,
-                    lane_index,
-                });
-            }
-        }
-
-        None
-    }
-
-    fn splitter_downstream_lane_keys(
-        &self,
-        entity_id: EntityId,
-        lane_index: usize,
-    ) -> SmallVec<[TransportLaneKey; 2]> {
-        let preferred = self
-            .entities
+    fn splitter_preferred_output_port(&self, key: TransportLaneKey) -> usize {
+        let TransportLaneKey::Splitter {
+            entity_id,
+            lane_index,
+            ..
+        } = key
+        else {
+            return 0;
+        };
+        self.entities
             .splitters
             .get(&entity_id)
             .and_then(|state| state.next_output_by_lane.get(lane_index))
             .copied()
             .filter(|port| *port < 2)
-            .unwrap_or(0);
-
-        let mut downstream = SmallVec::new();
-        for output_port in [preferred, 1 - preferred] {
-            if let Some(key) = self.splitter_output_lane_key(entity_id, output_port, lane_index) {
-                downstream.push(key);
-            }
-        }
-        downstream
-    }
-
-    fn splitter_output_lane_key(
-        &self,
-        entity_id: EntityId,
-        output_port: usize,
-        lane_index: usize,
-    ) -> Option<TransportLaneKey> {
-        let placed = self.entities.placed_entities.get(&entity_id)?;
-        let state = self.entities.splitters.get(&entity_id)?;
-        let port_tile = splitter_port_tiles(placed)?[output_port];
-        let (dx, dy) = direction_tile_delta(state.dir);
-        let endpoint = self.transport_endpoint_at(port_tile.0 + dx, port_tile.1 + dy)?;
-
-        Some(endpoint_lane_key(endpoint, lane_index))
+            .unwrap_or(0)
     }
 
     pub(super) fn advance_lane_items(&mut self, key: TransportLaneKey) {
@@ -243,39 +328,54 @@ impl<'a> TransportBeltAdvancement<'a> {
             TransportLaneKey::Belt {
                 entity_id,
                 lane_index,
-            } => self
-                .belt_downstream_lane_key(entity_id, lane_index)
-                .is_some_and(|downstream| {
-                    self.try_insert_carried_item(downstream, item_id, position_subtile)
-                }),
+            } => {
+                let key = TransportLaneKey::Belt {
+                    entity_id,
+                    lane_index,
+                };
+                match self.graph.downstream_for(key) {
+                    TransportLaneDownstream::Belt {
+                        downstream: Some(downstream),
+                    } => self.try_insert_carried_item(downstream, item_id, position_subtile),
+                    _ => false,
+                }
+            }
             TransportLaneKey::Splitter {
                 entity_id,
                 lane_index,
-                ..
-            } => self.try_route_splitter_item(entity_id, lane_index, item_id, position_subtile),
+                input_port,
+            } => {
+                let key = TransportLaneKey::Splitter {
+                    entity_id,
+                    input_port,
+                    lane_index,
+                };
+                self.try_route_splitter_item(key, item_id, position_subtile)
+            }
         }
     }
 
     fn try_route_splitter_item(
         &mut self,
-        entity_id: EntityId,
-        lane_index: usize,
+        key: TransportLaneKey,
         item_id: ItemId,
         position_subtile: u16,
     ) -> bool {
-        let preferred = self
-            .entities
-            .splitters
-            .get(&entity_id)
-            .and_then(|state| state.next_output_by_lane.get(lane_index))
-            .copied()
-            .filter(|port| *port < 2)
-            .unwrap_or(0);
+        let TransportLaneKey::Splitter {
+            entity_id,
+            lane_index,
+            ..
+        } = key
+        else {
+            return false;
+        };
+        let preferred = self.splitter_preferred_output_port(key);
+        let TransportLaneDownstream::Splitter { outputs } = self.graph.downstream_for(key) else {
+            return false;
+        };
 
         for output_port in [preferred, 1 - preferred] {
-            let Some(downstream) =
-                self.splitter_output_lane_key(entity_id, output_port, lane_index)
-            else {
+            let Some(downstream) = outputs[output_port] else {
                 continue;
             };
 
@@ -408,8 +508,11 @@ impl<'a> TransportBeltAdvancement<'a> {
     }
 
     fn visit_state(&self, key: TransportLaneKey) -> Option<BeltLaneVisitState> {
-        let state = *self.visit_states.get(visit_state_index(key)?)?;
-        match state {
+        let state = self.visit_states.states.get(visit_state_index(key)?)?;
+        if state.generation != self.visit_states.generation {
+            return None;
+        }
+        match state.state {
             1 => Some(BeltLaneVisitState::Processing),
             2 => Some(BeltLaneVisitState::Done),
             _ => None,
@@ -420,33 +523,14 @@ impl<'a> TransportBeltAdvancement<'a> {
         let Some(index) = visit_state_index(key) else {
             return;
         };
-        let Some(slot) = self.visit_states.get_mut(index) else {
+        let Some(slot) = self.visit_states.states.get_mut(index) else {
             return;
         };
-        *slot = match state {
+        slot.generation = self.visit_states.generation;
+        slot.state = match state {
             BeltLaneVisitState::Processing => 1,
             BeltLaneVisitState::Done => 2,
         };
-    }
-
-    fn transport_endpoint_at(&self, x: i32, y: i32) -> Option<TransportEndpoint> {
-        let entity_id = self.entities.occupancy.entity_at(x, y)?;
-        if self.entities.transport_belts.contains_key(&entity_id) {
-            return Some(TransportEndpoint::Belt { entity_id });
-        }
-
-        let placed = self.entities.placed_entities.get(&entity_id)?;
-        if self.entities.splitters.contains_key(&entity_id) {
-            let input_port = splitter_port_tiles(placed)?
-                .into_iter()
-                .position(|tile| tile == (x, y))?;
-            return Some(TransportEndpoint::Splitter {
-                entity_id,
-                input_port,
-            });
-        }
-
-        None
     }
 }
 
@@ -500,6 +584,93 @@ fn endpoint_lane_key(endpoint: TransportEndpoint, lane_index: usize) -> Transpor
             lane_index,
         },
     }
+}
+
+fn belt_downstream_lane_key(
+    entities: &EntityStore,
+    entity_id: EntityId,
+    lane_index: usize,
+) -> Option<TransportLaneKey> {
+    let placed = entities.placed_entities.get(&entity_id)?;
+    let segment = entities.transport_belts.get(&entity_id)?;
+
+    if underground_part(segment) == Some(UndergroundBeltPart::Entrance) {
+        return paired_underground_exit_lane_key(entities, placed, segment, lane_index);
+    }
+
+    let (dx, dy) = direction_tile_delta(segment.dir);
+    let endpoint = transport_endpoint_at(entities, placed.x + dx, placed.y + dy)?;
+
+    Some(endpoint_lane_key(endpoint, lane_index))
+}
+
+fn paired_underground_exit_lane_key(
+    entities: &EntityStore,
+    entrance_placed: &PlacedEntity,
+    entrance_segment: &BeltSegment,
+    lane_index: usize,
+) -> Option<TransportLaneKey> {
+    let entrance_underground = entrance_segment.underground?;
+    let (dx, dy) = direction_tile_delta(entrance_segment.dir);
+    let max_offset = i32::from(entrance_underground.max_distance) + 1;
+
+    for offset in 1..=max_offset {
+        let Some(TransportEndpoint::Belt { entity_id }) = transport_endpoint_at(
+            entities,
+            entrance_placed.x + dx * offset,
+            entrance_placed.y + dy * offset,
+        ) else {
+            continue;
+        };
+        let Some(exit_segment) = entities.transport_belts.get(&entity_id) else {
+            continue;
+        };
+        let underground_distance = (offset - 1) as u8;
+
+        if is_valid_underground_pair(entrance_segment, exit_segment, underground_distance) {
+            return Some(TransportLaneKey::Belt {
+                entity_id,
+                lane_index,
+            });
+        }
+    }
+
+    None
+}
+
+fn splitter_output_lane_key(
+    entities: &EntityStore,
+    entity_id: EntityId,
+    output_port: usize,
+    lane_index: usize,
+) -> Option<TransportLaneKey> {
+    let placed = entities.placed_entities.get(&entity_id)?;
+    let state = entities.splitters.get(&entity_id)?;
+    let port_tile = splitter_port_tiles(placed)?.get(output_port).copied()?;
+    let (dx, dy) = direction_tile_delta(state.dir);
+    let endpoint = transport_endpoint_at(entities, port_tile.0 + dx, port_tile.1 + dy)?;
+
+    Some(endpoint_lane_key(endpoint, lane_index))
+}
+
+fn transport_endpoint_at(entities: &EntityStore, x: i32, y: i32) -> Option<TransportEndpoint> {
+    let entity_id = entities.occupancy.entity_at(x, y)?;
+    if entities.transport_belts.contains_key(&entity_id) {
+        return Some(TransportEndpoint::Belt { entity_id });
+    }
+
+    let placed = entities.placed_entities.get(&entity_id)?;
+    if entities.splitters.contains_key(&entity_id) {
+        let input_port = splitter_port_tiles(placed)?
+            .into_iter()
+            .position(|tile| tile == (x, y))?;
+        return Some(TransportEndpoint::Splitter {
+            entity_id,
+            input_port,
+        });
+    }
+
+    None
 }
 
 fn is_valid_underground_pair(

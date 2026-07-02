@@ -24,6 +24,52 @@ fn belt_moves_item_to_next_segment() {
 }
 
 #[test]
+fn repeated_belt_ticks_reuse_cached_lane_graph() {
+    let mut sim = Simulation::new_test_world(123);
+    place_belt_line(&mut sim, 8);
+
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+
+    sim.advance_transport_belts();
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+}
+
+#[test]
+fn transport_topology_edits_dirty_cached_lane_graph() {
+    let mut sim = Simulation::new_test_world(123);
+    let belts = place_belt_line(&mut sim, 2);
+
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+
+    sim.rotate_entity(belts[0], Direction::North)
+        .expect("placed belt should rotate");
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 2);
+
+    sim.remove_entity(belts[1])
+        .expect("placed belt should be removable");
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 3);
+}
+
+#[test]
+fn destroying_transport_entity_dirties_cached_lane_graph() {
+    let mut sim = Simulation::new_test_world(123);
+    let belts = place_belt_line(&mut sim, 2);
+
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+
+    sim.destroy_entity_to_player_inventory(belts[0])
+        .expect("placed belt should be destroyable to player inventory");
+    sim.advance_transport_belts();
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 2);
+}
+
+#[test]
 fn belt_does_not_duplicate_items() {
     let mut sim = Simulation::new_test_world(123);
     let belts = place_belt_line(&mut sim, 20);
