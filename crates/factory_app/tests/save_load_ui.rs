@@ -188,6 +188,7 @@ fn load_invalidates_render_caches() {
         sprite_entities: Default::default(),
         label_entities: Default::default(),
         show_amount_labels: true,
+        expand_resource_sprites: false,
     });
     let before_token = app.world().resource::<PresentationReloadToken>().value;
 

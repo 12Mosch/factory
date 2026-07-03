@@ -98,7 +98,7 @@ pub(crate) fn tile_color(tile_id: TileId, ids: RenderPrototypeIds) -> Color {
 }
 
 pub(crate) fn resource_color(resource: ResourceCell, ids: RenderPrototypeIds) -> Color {
-    if resource.resource_item == ids.iron_ore {
+    let base_color = if resource.resource_item == ids.iron_ore {
         Color::srgb(0.72, 0.66, 0.58)
     } else if resource.resource_item == ids.copper_ore {
         Color::srgb(0.86, 0.42, 0.20)
@@ -108,7 +108,26 @@ pub(crate) fn resource_color(resource: ResourceCell, ids: RenderPrototypeIds) ->
         Color::srgb(0.54, 0.51, 0.46)
     } else {
         Color::srgb(0.82, 0.78, 0.66)
-    }
+    };
+
+    resource_amount_tinted(base_color, resource.amount)
+}
+
+fn resource_amount_tinted(color: Color, amount: u32) -> Color {
+    const REFERENCE_AMOUNT: f32 = 1_200.0;
+    const MIN_BRIGHTNESS: f32 = 0.45;
+    const MAX_BRIGHTNESS: f32 = 1.25;
+
+    let richness = (amount as f32 / REFERENCE_AMOUNT).clamp(0.0, 1.0).sqrt();
+    let brightness = MIN_BRIGHTNESS + (MAX_BRIGHTNESS - MIN_BRIGHTNESS) * richness;
+    let srgba = color.to_srgba();
+
+    Color::srgba(
+        (srgba.red * brightness).clamp(0.0, 1.0),
+        (srgba.green * brightness).clamp(0.0, 1.0),
+        (srgba.blue * brightness).clamp(0.0, 1.0),
+        srgba.alpha,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -132,5 +151,42 @@ impl RenderPrototypeIds {
             coal: ids.items.coal,
             stone: ids.items.stone,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_color_gets_brighter_with_remaining_amount() {
+        let ids = RenderPrototypeIds {
+            dirt: TileId::new(0),
+            water: TileId::new(1),
+            iron_ore: ItemId::new(0),
+            copper_ore: ItemId::new(1),
+            coal: ItemId::new(2),
+            stone: ItemId::new(3),
+        };
+        let depleted = resource_color(
+            ResourceCell {
+                resource_item: ids.iron_ore,
+                amount: 1,
+            },
+            ids,
+        )
+        .to_srgba();
+        let rich = resource_color(
+            ResourceCell {
+                resource_item: ids.iron_ore,
+                amount: 1_200,
+            },
+            ids,
+        )
+        .to_srgba();
+
+        assert!(rich.red > depleted.red);
+        assert!(rich.green > depleted.green);
+        assert!(rich.blue > depleted.blue);
     }
 }

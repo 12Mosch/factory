@@ -147,6 +147,7 @@ fn orthographic_camera_scale(projection: &Projection) -> Option<f32> {
 pub(crate) fn render_detail_for_camera_scale(scale: f32) -> RenderDetail {
     RenderDetail {
         show_resource_amount_labels: scale <= RESOURCE_AMOUNT_LABEL_MAX_SCALE,
+        expand_resource_sprites: scale > RESOURCE_AMOUNT_LABEL_MAX_SCALE,
         show_belt_directions: scale <= BELT_DETAIL_MAX_SCALE,
         show_belt_items: scale <= BELT_DETAIL_MAX_SCALE,
         show_belt_item_labels: scale <= BELT_ITEM_LABEL_MAX_SCALE,
@@ -187,6 +188,7 @@ mod tests {
         let detail = render_detail_for_camera_scale(6.0);
 
         assert!(!detail.show_resource_amount_labels);
+        assert!(detail.expand_resource_sprites);
         assert!(!detail.show_belt_directions);
         assert!(!detail.show_belt_items);
         assert!(!detail.show_belt_item_labels);

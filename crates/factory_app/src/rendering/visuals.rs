@@ -72,15 +72,11 @@ pub(crate) fn spawn_resource_visual<B: Bundle>(
     commands: &mut Commands,
     color: Color,
     size: Vec2,
-    translation: Vec3,
+    transform: Transform,
     marker: B,
 ) -> Entity {
     commands
-        .spawn((
-            Sprite::from_color(color, size),
-            Transform::from_translation(translation),
-            marker,
-        ))
+        .spawn((Sprite::from_color(color, size), transform, marker))
         .with_children(|parent| {
             spawn_layer(
                 parent,

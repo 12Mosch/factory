@@ -5,7 +5,7 @@ use factory_sim::{CHUNK_SIZE, ResourceCell, ResourceTileChange, Simulation};
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
-use crate::constants::RESOURCE_SIZE;
+use crate::constants::{RESOURCE_SIZE, TILE_SIZE};
 use crate::rendering::colors::{RenderPrototypeIds, resource_color};
 use crate::rendering::transforms::tile_translation;
 use crate::rendering::visuals::spawn_resource_visual;
@@ -29,6 +29,7 @@ pub struct ResourceRenderCache {
     pub sprite_entities: HashMap<(i32, i32), Entity>,
     pub label_entities: HashMap<(i32, i32), Entity>,
     pub show_amount_labels: bool,
+    pub expand_resource_sprites: bool,
 }
 
 pub(crate) fn sync_resource_debug_rendering(
@@ -42,13 +43,20 @@ pub(crate) fn sync_resource_debug_rendering(
     let show_amount_labels =
         params.settings.show_amount_labels && params.detail.show_resource_amount_labels;
     let label_setting_changed = params.cache.show_amount_labels != show_amount_labels;
+    let expand_resource_sprites = params.detail.expand_resource_sprites;
+    let sprite_scale_changed = params.cache.expand_resource_sprites != expand_resource_sprites;
 
-    if !initial_sync && !resources_changed && !visibility_changed && !label_setting_changed {
+    if !initial_sync
+        && !resources_changed
+        && !visibility_changed
+        && !label_setting_changed
+        && !sprite_scale_changed
+    {
         return;
     }
 
     let ids = RenderPrototypeIds::from_catalog(params.sim.sim.catalog());
-    if initial_sync || visibility_changed || label_setting_changed {
+    if initial_sync || visibility_changed || label_setting_changed || sprite_scale_changed {
         let resources = collect_resource_tiles(&params.sim.sim, &params.visible);
         reconcile_resource_tiles(
             &mut commands,
@@ -56,12 +64,16 @@ pub(crate) fn sync_resource_debug_rendering(
             &mut params.sprites,
             &mut params.labels,
             &resources,
-            ids,
-            show_amount_labels,
+            ResourceRenderContext {
+                ids,
+                show_amount_labels,
+                expand_resource_sprites,
+            },
         );
         params.cache.last_resource_revision = Some(resource_revision);
         params.cache.last_visible_revision = params.visible.revision;
         params.cache.show_amount_labels = show_amount_labels;
+        params.cache.expand_resource_sprites = expand_resource_sprites;
         return;
     }
 
@@ -87,6 +99,7 @@ pub(crate) fn sync_resource_debug_rendering(
                         visible: &params.visible,
                         ids,
                         show_amount_labels,
+                        expand_resource_sprites,
                     },
                 );
             }
@@ -98,11 +111,15 @@ pub(crate) fn sync_resource_debug_rendering(
                 &mut params.sprites,
                 &mut params.labels,
                 &resources,
-                ids,
-                show_amount_labels,
+                ResourceRenderContext {
+                    ids,
+                    show_amount_labels,
+                    expand_resource_sprites,
+                },
             );
         }
         params.cache.last_resource_revision = Some(resource_revision);
+        params.cache.expand_resource_sprites = expand_resource_sprites;
     }
 }
 
@@ -123,18 +140,18 @@ pub(crate) struct ResourceRenderParams<'w, 's> {
     settings: Res<'w, ResourceRenderSettings>,
     detail: Res<'w, RenderDetail>,
     cache: ResMut<'w, ResourceRenderCache>,
-    sprites: Query<'w, 's, (Entity, &'static mut Sprite), With<ResourceSprite>>,
+    sprites:
+        Query<'w, 's, (Entity, &'static mut Sprite, &'static mut Transform), With<ResourceSprite>>,
     labels: Query<'w, 's, (Entity, &'static mut Text2d), With<ResourceAmountLabel>>,
 }
 
 fn reconcile_resource_tiles(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
+    sprites: &mut Query<(Entity, &mut Sprite, &mut Transform), With<ResourceSprite>>,
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
     resources: &BTreeMap<(i32, i32), ResourceCell>,
-    ids: RenderPrototypeIds,
-    show_amount_labels: bool,
+    context: ResourceRenderContext,
 ) {
     let stale_sprites = cache
         .sprite_entities
@@ -149,10 +166,21 @@ fn reconcile_resource_tiles(
     }
 
     for (&(x, y), &resource) in resources {
-        sync_resource_sprite(commands, cache, sprites, x, y, resource, ids);
+        sync_resource_sprite(
+            commands,
+            cache,
+            sprites,
+            ResourceSpriteSync {
+                x,
+                y,
+                resource,
+                ids: context.ids,
+                expand_resource_sprites: context.expand_resource_sprites,
+            },
+        );
     }
 
-    if !show_amount_labels {
+    if !context.show_amount_labels {
         for (_, entity) in cache.label_entities.drain() {
             commands.entity(entity).despawn();
         }
@@ -182,7 +210,7 @@ fn reconcile_resource_tiles(
 fn apply_resource_tile_change(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
+    sprites: &mut Query<(Entity, &mut Sprite, &mut Transform), With<ResourceSprite>>,
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
     change: ResourceTileChange,
     context: ResourceTileChangeContext,
@@ -216,10 +244,13 @@ fn apply_resource_tile_change(
         commands,
         cache,
         sprites,
-        change.x,
-        change.y,
-        resource,
-        context.ids,
+        ResourceSpriteSync {
+            x: change.x,
+            y: change.y,
+            resource,
+            ids: context.ids,
+            expand_resource_sprites: context.expand_resource_sprites,
+        },
     );
 
     if context.show_amount_labels {
@@ -234,26 +265,41 @@ struct ResourceTileChangeContext<'a> {
     visible: &'a VisibleChunks,
     ids: RenderPrototypeIds,
     show_amount_labels: bool,
+    expand_resource_sprites: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ResourceRenderContext {
+    ids: RenderPrototypeIds,
+    show_amount_labels: bool,
+    expand_resource_sprites: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ResourceSpriteSync {
+    x: i32,
+    y: i32,
+    resource: ResourceCell,
+    ids: RenderPrototypeIds,
+    expand_resource_sprites: bool,
 }
 
 fn sync_resource_sprite(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    x: i32,
-    y: i32,
-    resource: ResourceCell,
-    ids: RenderPrototypeIds,
+    sprites: &mut Query<(Entity, &mut Sprite, &mut Transform), With<ResourceSprite>>,
+    sync: ResourceSpriteSync,
 ) {
-    let coord = (x, y);
+    let coord = (sync.x, sync.y);
     if let Some(&entity) = cache.sprite_entities.get(&coord)
-        && let Ok((_, mut sprite)) = sprites.get_mut(entity)
+        && let Ok((_, mut sprite, mut transform)) = sprites.get_mut(entity)
     {
-        sprite.color = resource_color(resource, ids);
+        sprite.color = resource_color(sync.resource, sync.ids);
+        transform.scale = resource_sprite_scale(sync.expand_resource_sprites);
         return;
     }
 
-    let entity = spawn_resource_sprite(commands, x, y, resource, ids);
+    let entity = spawn_resource_sprite(commands, sync);
     cache.sprite_entities.insert(coord, entity);
 }
 
@@ -277,20 +323,25 @@ fn sync_resource_label(
     cache.label_entities.insert(coord, entity);
 }
 
-fn spawn_resource_sprite(
-    commands: &mut Commands,
-    x: i32,
-    y: i32,
-    resource: ResourceCell,
-    ids: RenderPrototypeIds,
-) -> Entity {
+fn spawn_resource_sprite(commands: &mut Commands, sync: ResourceSpriteSync) -> Entity {
+    let mut transform = Transform::from_translation(tile_translation(sync.x, sync.y, 1.0));
+    transform.scale = resource_sprite_scale(sync.expand_resource_sprites);
+
     spawn_resource_visual(
         commands,
-        resource_color(resource, ids),
+        resource_color(sync.resource, sync.ids),
         Vec2::splat(RESOURCE_SIZE),
-        tile_translation(x, y, 1.0),
+        transform,
         ResourceSprite,
     )
+}
+
+fn resource_sprite_scale(expand_resource_sprites: bool) -> Vec3 {
+    if expand_resource_sprites {
+        Vec3::splat(TILE_SIZE / RESOURCE_SIZE * 1.08)
+    } else {
+        Vec3::ONE
+    }
 }
 
 fn spawn_resource_label(commands: &mut Commands, x: i32, y: i32, resource: ResourceCell) -> Entity {
