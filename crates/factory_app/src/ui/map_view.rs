@@ -1,11 +1,13 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use factory_sim::{CHUNK_SIZE, ChunkCoord};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, EntityFootprint, Simulation};
 
 use crate::constants::TILE_SIZE;
+use crate::rendering::entities::entity_prototype_render_style;
 use crate::resources::{
-    MapLayer, MapOverlayMarkers, MapTextureBounds, MapTextureCache, MapViewState, SimResource,
+    MapDisplaySettings, MapLayer, MapOverlayMarkers, MapTextureBounds, MapTextureCache,
+    MapViewState, SimResource,
 };
 
 const MINIMAP_FRAME_SIZE: f32 = 184.0;
@@ -96,6 +98,7 @@ pub(crate) fn handle_full_map_buttons(
 pub(crate) struct MinimapSyncParams<'w, 's> {
     cache: Res<'w, MapTextureCache>,
     sim: Res<'w, SimResource>,
+    settings: Res<'w, MapDisplaySettings>,
     markers: Res<'w, MapOverlayMarkers>,
     roots: Query<'w, 's, Entity, With<MinimapRoot>>,
     images: Query<'w, 's, &'static mut ImageNode, With<MinimapImage>>,
@@ -138,6 +141,9 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
                 crop_bounds,
                 image_size: Vec2::splat(MINIMAP_CONTENT_SIZE),
                 player_position: Vec2::new(player_x, player_y),
+                sim: &params.sim.sim,
+                settings: &params.settings,
+                layer: MapLayer::Surface,
                 camera_rect,
                 chunk_cursor: None,
                 markers: &params.markers,
@@ -182,6 +188,9 @@ struct MapOverlayContext<'a> {
     crop_bounds: MapTextureBounds,
     image_size: Vec2,
     player_position: Vec2,
+    sim: &'a Simulation,
+    settings: &'a MapDisplaySettings,
+    layer: MapLayer,
     camera_rect: Option<MapTileRect>,
     chunk_cursor: Option<ChunkCoord>,
     markers: &'a MapOverlayMarkers,
@@ -217,6 +226,8 @@ fn rebuild_map_overlay(commands: &mut Commands, overlay_root: Entity, context: M
                 );
             }
 
+            spawn_entity_overlays(overlay, &context);
+
             spawn_point_overlay(
                 overlay,
                 context.crop_bounds,
@@ -251,6 +262,91 @@ fn rebuild_map_overlay(commands: &mut Commands, overlay_root: Entity, context: M
                 );
             }
         });
+}
+
+fn spawn_entity_overlays(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    context: &MapOverlayContext,
+) {
+    if context.layer == MapLayer::Resources
+        || context.crop_bounds.width == 0
+        || context.crop_bounds.height == 0
+    {
+        return;
+    }
+
+    let max_x = context.crop_bounds.min_x + context.crop_bounds.width as i32 - 1;
+    let max_y = context.crop_bounds.min_y + context.crop_bounds.height as i32 - 1;
+    for entity_id in context.sim.entities().occupancy().entity_ids_in_tile_rect(
+        context.crop_bounds.min_x,
+        max_x,
+        context.crop_bounds.min_y,
+        max_y,
+    ) {
+        let Some(placed) = context.sim.entities().placed_entity(entity_id) else {
+            continue;
+        };
+        if !entity_footprint_is_visible(context.sim, context.settings, placed.footprint) {
+            continue;
+        }
+        let Some((color, _)) = entity_prototype_render_style(
+            context.sim.catalog(),
+            placed.prototype_id,
+            placed.direction,
+        ) else {
+            continue;
+        };
+        let Some(rect) =
+            map_rect_for_footprint(context.crop_bounds, context.image_size, placed.footprint)
+        else {
+            continue;
+        };
+
+        spawn_rect_overlay(
+            parent,
+            rect,
+            map_color_with_alpha(color, 0.96),
+            map_color_with_alpha(color, 0.38),
+            1.0,
+        );
+    }
+}
+
+fn entity_footprint_is_visible(
+    sim: &Simulation,
+    settings: &MapDisplaySettings,
+    footprint: EntityFootprint,
+) -> bool {
+    settings.debug_reveal_all
+        || footprint.tiles().into_iter().any(|(x, y)| {
+            sim.is_chunk_revealed(ChunkCoord {
+                x: x.div_euclid(CHUNK_SIZE),
+                y: y.div_euclid(CHUNK_SIZE),
+            })
+        })
+}
+
+fn map_rect_for_footprint(
+    crop_bounds: MapTextureBounds,
+    image_size: Vec2,
+    footprint: EntityFootprint,
+) -> Option<MapUiRect> {
+    map_rect_for_world_rect(
+        crop_bounds,
+        image_size,
+        MapTileRect {
+            min: Vec2::new(footprint.x as f32, footprint.y as f32),
+            max: Vec2::new(
+                (footprint.x + footprint.width) as f32,
+                (footprint.y + footprint.height) as f32,
+            ),
+        },
+    )
+}
+
+fn map_color_with_alpha(color: Color, alpha: f32) -> Color {
+    let srgba = color.to_srgba();
+    Color::srgba(srgba.red, srgba.green, srgba.blue, alpha)
 }
 
 fn spawn_point_overlay(
@@ -408,6 +504,7 @@ pub(crate) struct FullMapSyncParams<'w, 's> {
     cache: Res<'w, MapTextureCache>,
     state: Res<'w, MapViewState>,
     sim: Res<'w, SimResource>,
+    settings: Res<'w, MapDisplaySettings>,
     markers: Res<'w, MapOverlayMarkers>,
     roots: Query<'w, 's, Entity, With<FullMapRoot>>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
@@ -493,6 +590,9 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
                 crop_bounds,
                 image_size,
                 player_position: Vec2::new(player_x, player_y),
+                sim: &params.sim.sim,
+                settings: &params.settings,
+                layer: params.state.selected_layer,
                 camera_rect,
                 chunk_cursor,
                 markers: &params.markers,

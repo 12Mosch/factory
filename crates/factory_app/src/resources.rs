@@ -192,9 +192,9 @@ pub struct MapTextureCache {
     pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
-    pub last_entity_signature: u64,
     pub last_revealed_signature: u64,
     pub last_debug_flags: (bool, bool),
+    pub last_texture_update_tick: u64,
     pub layer_caches: BTreeMap<MapLayer, MapLayerTextureCache>,
 }
 
@@ -205,9 +205,9 @@ pub struct MapLayerTextureCache {
     pub pixels: Option<Vec<u8>>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
-    pub last_entity_signature: u64,
     pub last_revealed_signature: u64,
     pub last_debug_flags: (bool, bool),
+    pub last_texture_update_tick: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

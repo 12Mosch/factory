@@ -7,7 +7,6 @@ use factory_sim::{CHUNK_SIZE, ChunkCoord, Simulation};
 use std::hash::{Hash, Hasher};
 
 use crate::rendering::colors::{RenderPrototypeIds, resource_color, tile_color};
-use crate::rendering::entities::{entity_prototype_render_style, entity_signature};
 use crate::resources::{
     MapChunkPaintState, MapDisplaySettings, MapLayer, MapLayerTextureCache, MapTextureBounds,
     MapTextureCache, MapViewState, SimResource,
@@ -15,6 +14,7 @@ use crate::resources::{
 
 pub const UNREVEALED_PIXEL: [u8; 4] = [6, 7, 8, 255];
 pub const GRID_PIXEL: [u8; 4] = [188, 139, 54, 255];
+const RESOURCE_TEXTURE_REFRESH_INTERVAL_TICKS: u64 = 15;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MapPixels {
@@ -32,22 +32,24 @@ pub(crate) fn update_map_texture(
     let Some(mut images) = images else {
         return;
     };
-    let entity_signature = entity_signature(&sim.sim);
     let revealed_signature = revealed_signature(&sim.sim);
     let debug_flags = (settings.debug_reveal_all, settings.show_chunk_grid);
+    let tick_count = sim.sim.tick_count();
+    let chunk_changed = cache.last_chunk_revision != sim.sim.world().chunk_revision();
+    let resource_changed = cache.last_resource_revision != sim.sim.world().resource_revision();
+    let revealed_changed = cache.last_revealed_signature != revealed_signature;
+    let debug_changed = cache.last_debug_flags != debug_flags;
     let needs_update = cache.handle.is_none()
-        || cache.last_chunk_revision != sim.sim.world().chunk_revision()
-        || cache.last_resource_revision != sim.sim.world().resource_revision()
-        || cache.last_entity_signature != entity_signature
-        || cache.last_revealed_signature != revealed_signature
-        || cache.last_debug_flags != debug_flags;
+        || chunk_changed
+        || revealed_changed
+        || debug_changed
+        || (resource_changed && should_refresh_texture(cache.last_texture_update_tick, tick_count));
 
     if needs_update {
         let full_rebuild = cache.handle.is_none()
             || cache.bounds.is_none()
             || cache.pixels.is_none()
-            || cache.last_debug_flags != debug_flags
-            || cache.last_entity_signature != entity_signature;
+            || debug_changed;
 
         if full_rebuild {
             let map = generate_map_pixels(&sim.sim, &settings);
@@ -85,9 +87,9 @@ pub(crate) fn update_map_texture(
         cache.handle = Some(handle);
         cache.last_chunk_revision = sim.sim.world().chunk_revision();
         cache.last_resource_revision = sim.sim.world().resource_revision();
-        cache.last_entity_signature = entity_signature;
         cache.last_revealed_signature = revealed_signature;
         cache.last_debug_flags = debug_flags;
+        cache.last_texture_update_tick = tick_count;
     }
 
     if state.open {
@@ -102,9 +104,9 @@ pub(crate) fn update_map_texture(
                 selected_layer,
                 layer_cache,
                 &mut images,
-                entity_signature,
                 revealed_signature,
                 debug_flags,
+                tick_count,
             );
         }
     }
@@ -140,27 +142,6 @@ pub fn generate_map_pixels_for_layer(
         }
     }
 
-    if layer != MapLayer::Resources {
-        for placed in sim.entities().placed_entities() {
-            let Some((color, _)) =
-                entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
-            else {
-                continue;
-            };
-            let pixel = color_to_pixel(color);
-            for (x, y) in placed.footprint.tiles() {
-                let coord = ChunkCoord {
-                    x: x.div_euclid(CHUNK_SIZE),
-                    y: y.div_euclid(CHUNK_SIZE),
-                };
-                if !settings.debug_reveal_all && !sim.is_chunk_revealed(coord) {
-                    continue;
-                }
-                set_world_pixel(&mut data, bounds, x, y, pixel);
-            }
-        }
-    }
-
     if settings.show_chunk_grid {
         draw_chunk_grid(&mut data, bounds);
     }
@@ -175,16 +156,19 @@ fn update_layer_map_texture(
     layer: MapLayer,
     cache: &mut MapLayerTextureCache,
     images: &mut Assets<Image>,
-    entity_signature: u64,
     revealed_signature: u64,
     debug_flags: (bool, bool),
+    tick_count: u64,
 ) {
+    let chunk_changed = cache.last_chunk_revision != sim.world().chunk_revision();
+    let resource_changed = cache.last_resource_revision != sim.world().resource_revision();
+    let revealed_changed = cache.last_revealed_signature != revealed_signature;
+    let debug_changed = cache.last_debug_flags != debug_flags;
     let needs_update = cache.handle.is_none()
-        || cache.last_chunk_revision != sim.world().chunk_revision()
-        || cache.last_resource_revision != sim.world().resource_revision()
-        || cache.last_entity_signature != entity_signature
-        || cache.last_revealed_signature != revealed_signature
-        || cache.last_debug_flags != debug_flags;
+        || chunk_changed
+        || revealed_changed
+        || debug_changed
+        || (resource_changed && should_refresh_texture(cache.last_texture_update_tick, tick_count));
 
     if !needs_update {
         return;
@@ -218,9 +202,9 @@ fn update_layer_map_texture(
     cache.pixels = Some(map.data);
     cache.last_chunk_revision = sim.world().chunk_revision();
     cache.last_resource_revision = sim.world().resource_revision();
-    cache.last_entity_signature = entity_signature;
     cache.last_revealed_signature = revealed_signature;
     cache.last_debug_flags = debug_flags;
+    cache.last_texture_update_tick = tick_count;
 }
 
 fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
@@ -229,9 +213,9 @@ fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
     let pixels = cache.pixels.clone();
     let last_chunk_revision = cache.last_chunk_revision;
     let last_resource_revision = cache.last_resource_revision;
-    let last_entity_signature = cache.last_entity_signature;
     let last_revealed_signature = cache.last_revealed_signature;
     let last_debug_flags = cache.last_debug_flags;
+    let last_texture_update_tick = cache.last_texture_update_tick;
 
     let layer_cache = cache.layer_caches.entry(MapLayer::Surface).or_default();
     layer_cache.handle = handle;
@@ -239,9 +223,13 @@ fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
     layer_cache.pixels = pixels;
     layer_cache.last_chunk_revision = last_chunk_revision;
     layer_cache.last_resource_revision = last_resource_revision;
-    layer_cache.last_entity_signature = last_entity_signature;
     layer_cache.last_revealed_signature = last_revealed_signature;
     layer_cache.last_debug_flags = last_debug_flags;
+    layer_cache.last_texture_update_tick = last_texture_update_tick;
+}
+
+fn should_refresh_texture(last_texture_update_tick: u64, tick_count: u64) -> bool {
+    tick_count.saturating_sub(last_texture_update_tick) >= RESOURCE_TEXTURE_REFRESH_INTERVAL_TICKS
 }
 
 fn update_map_pixels_incremental(
@@ -478,22 +466,6 @@ fn paint_chunk(
         set_world_pixel(data, bounds, world_x, world_y, color);
     }
 
-    if settings.debug_reveal_all || sim.is_chunk_revealed(coord) {
-        for placed in sim.entities().placed_entities() {
-            let Some((color, _)) =
-                entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
-            else {
-                continue;
-            };
-            let pixel = color_to_pixel(color);
-            for (x, y) in placed.footprint.tiles() {
-                if x.div_euclid(CHUNK_SIZE) == coord.x && y.div_euclid(CHUNK_SIZE) == coord.y {
-                    set_world_pixel(data, bounds, x, y, pixel);
-                }
-            }
-        }
-    }
-
     if settings.show_chunk_grid {
         draw_chunk_grid_for_chunk(data, bounds, coord);
     }
@@ -515,20 +487,6 @@ fn paint_tile(
     if let Some(tile) = sim.world().tile_at(x, y) {
         let color = tile_pixel(sim, settings, ids, coord, tile);
         set_world_pixel(data, bounds, x, y, color);
-    }
-
-    if settings.debug_reveal_all || sim.is_chunk_revealed(coord) {
-        for placed in sim.entities().placed_entities() {
-            if !placed.footprint.contains_tile(x, y) {
-                continue;
-            }
-            let Some((color, _)) =
-                entity_prototype_render_style(sim.catalog(), placed.prototype_id, placed.direction)
-            else {
-                continue;
-            };
-            set_world_pixel(data, bounds, x, y, color_to_pixel(color));
-        }
     }
 
     if settings.show_chunk_grid && (x.rem_euclid(CHUNK_SIZE) == 0 || y.rem_euclid(CHUNK_SIZE) == 0)
@@ -658,9 +616,9 @@ mod tests {
             painted_chunks: Default::default(),
             last_chunk_revision: sim.world().chunk_revision(),
             last_resource_revision: sim.world().resource_revision(),
-            last_entity_signature: entity_signature(&sim),
             last_revealed_signature: revealed_signature(&sim),
             last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
+            last_texture_update_tick: sim.tick_count(),
             layer_caches: Default::default(),
         };
         refresh_painted_chunks(&sim, &settings, &mut cache);
