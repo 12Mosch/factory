@@ -1,13 +1,20 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use factory_sim::{CHUNK_SIZE, ChunkCoord};
 
-use crate::resources::{MapLayer, MapTextureBounds, MapTextureCache, MapViewState, SimResource};
+use crate::constants::TILE_SIZE;
+use crate::resources::{
+    MapLayer, MapOverlayMarkers, MapTextureBounds, MapTextureCache, MapViewState, SimResource,
+};
 
 const MINIMAP_FRAME_SIZE: f32 = 184.0;
 const MINIMAP_PADDING: f32 = 4.0;
 const MINIMAP_CONTENT_SIZE: f32 = MINIMAP_FRAME_SIZE - MINIMAP_PADDING * 2.0;
 const MINIMAP_VIEW_TILES: u32 = 128;
-const MINIMAP_PLAYER_MARKER_SIZE: f32 = 7.0;
+const MAP_PLAYER_MARKER_SIZE: f32 = 9.0;
+const MAP_PING_MARKER_SIZE: f32 = 13.0;
+const MAP_WAYPOINT_MARKER_SIZE: f32 = 9.0;
 pub const FULL_MAP_BASELINE_VIEW_HEIGHT: f32 = 256.0;
 pub const FULL_MAP_MIN_ZOOM: f32 = 0.25;
 pub const FULL_MAP_MAX_ZOOM: f32 = 8.0;
@@ -19,13 +26,16 @@ pub(crate) struct MinimapRoot;
 pub(crate) struct MinimapImage;
 
 #[derive(Component)]
-pub(crate) struct MinimapPlayerMarker;
+pub(crate) struct MinimapOverlayRoot;
 
 #[derive(Component)]
 pub(crate) struct FullMapRoot;
 
 #[derive(Component)]
 pub(crate) struct FullMapImage;
+
+#[derive(Component)]
+pub(crate) struct FullMapOverlayRoot;
 
 #[derive(Component)]
 pub(crate) struct FullMapLayerButton {
@@ -82,26 +92,30 @@ pub(crate) fn handle_full_map_buttons(
     }
 }
 
-pub(crate) fn sync_minimap(
-    mut commands: Commands,
-    cache: Res<MapTextureCache>,
-    sim: Res<SimResource>,
-    roots: Query<Entity, With<MinimapRoot>>,
-    mut images: Query<&mut ImageNode, With<MinimapImage>>,
-    mut player_markers: Query<&mut Node, With<MinimapPlayerMarker>>,
-) {
-    let Some(handle) = cache.handle.as_ref() else {
+#[derive(SystemParam)]
+pub(crate) struct MinimapSyncParams<'w, 's> {
+    cache: Res<'w, MapTextureCache>,
+    sim: Res<'w, SimResource>,
+    markers: Res<'w, MapOverlayMarkers>,
+    roots: Query<'w, 's, Entity, With<MinimapRoot>>,
+    images: Query<'w, 's, &'static mut ImageNode, With<MinimapImage>>,
+    overlay_roots: Query<'w, 's, Entity, With<MinimapOverlayRoot>>,
+    cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera2d>>,
+}
+
+pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams) {
+    let Some(handle) = params.cache.handle.as_ref() else {
         return;
     };
-    let Some(map_bounds) = cache.bounds else {
+    let Some(map_bounds) = params.cache.bounds else {
         return;
     };
-    let player = sim.sim.player();
+    let player = params.sim.sim.player();
     let (player_x, player_y) = player.position_tiles();
     let crop_bounds = minimap_crop_bounds(map_bounds, Vec2::new(player_x, player_y));
     let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
 
-    let mut roots_iter = roots.iter();
+    let mut roots_iter = params.roots.iter();
     let Some(_root) = roots_iter.next() else {
         spawn_minimap(&mut commands, handle.clone(), texture_rect);
         return;
@@ -110,16 +124,231 @@ pub(crate) fn sync_minimap(
         commands.entity(duplicate).despawn();
     }
 
-    for mut image in &mut images {
+    for mut image in &mut params.images {
         image.image = handle.clone();
         image.rect = Some(texture_rect);
     }
 
-    update_player_marker(
-        &mut player_markers,
+    let camera_rect = camera_tile_rect(&params.cameras);
+    for overlay_root in &params.overlay_roots {
+        rebuild_map_overlay(
+            &mut commands,
+            overlay_root,
+            MapOverlayContext {
+                crop_bounds,
+                image_size: Vec2::splat(MINIMAP_CONTENT_SIZE),
+                player_position: Vec2::new(player_x, player_y),
+                camera_rect,
+                chunk_cursor: None,
+                markers: &params.markers,
+            },
+        );
+    }
+}
+
+fn spawn_overlay_root(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    marker: impl Bundle,
+) {
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        marker,
+    ));
+}
+
+#[derive(Clone, Copy)]
+struct MapTileRect {
+    min: Vec2,
+    max: Vec2,
+}
+
+#[derive(Clone, Copy)]
+struct MapUiRect {
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+}
+
+struct MapOverlayContext<'a> {
+    crop_bounds: MapTextureBounds,
+    image_size: Vec2,
+    player_position: Vec2,
+    camera_rect: Option<MapTileRect>,
+    chunk_cursor: Option<ChunkCoord>,
+    markers: &'a MapOverlayMarkers,
+}
+
+fn rebuild_map_overlay(commands: &mut Commands, overlay_root: Entity, context: MapOverlayContext) {
+    commands
+        .entity(overlay_root)
+        .despawn_related::<Children>()
+        .with_children(|overlay| {
+            if let Some(rect) = context.camera_rect.and_then(|rect| {
+                map_rect_for_world_rect(context.crop_bounds, context.image_size, rect)
+            }) {
+                spawn_rect_overlay(
+                    overlay,
+                    rect,
+                    Color::srgba(0.98, 0.92, 0.55, 0.96),
+                    Color::srgba(0.98, 0.92, 0.55, 0.10),
+                    2.0,
+                );
+            }
+
+            if let Some(coord) = context.chunk_cursor
+                && let Some(rect) =
+                    map_rect_for_chunk(context.crop_bounds, context.image_size, coord)
+            {
+                spawn_rect_overlay(
+                    overlay,
+                    rect,
+                    Color::srgba(0.42, 0.88, 1.0, 0.95),
+                    Color::srgba(0.20, 0.66, 0.82, 0.16),
+                    2.0,
+                );
+            }
+
+            spawn_point_overlay(
+                overlay,
+                context.crop_bounds,
+                context.image_size,
+                context.player_position,
+                MAP_PLAYER_MARKER_SIZE,
+                Color::srgba(0.98, 0.96, 0.74, 0.98),
+                Color::srgba(0.02, 0.02, 0.018, 0.95),
+            );
+
+            for marker in &context.markers.pings {
+                spawn_point_overlay(
+                    overlay,
+                    context.crop_bounds,
+                    context.image_size,
+                    marker.position,
+                    MAP_PING_MARKER_SIZE,
+                    Color::NONE,
+                    marker.color,
+                );
+            }
+
+            for marker in &context.markers.waypoints {
+                spawn_point_overlay(
+                    overlay,
+                    context.crop_bounds,
+                    context.image_size,
+                    marker.position,
+                    MAP_WAYPOINT_MARKER_SIZE,
+                    marker.color,
+                    Color::srgba(0.02, 0.02, 0.018, 0.92),
+                );
+            }
+        });
+}
+
+fn spawn_point_overlay(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    crop_bounds: MapTextureBounds,
+    image_size: Vec2,
+    position: Vec2,
+    size: f32,
+    fill: Color,
+    border: Color,
+) {
+    let Some(position) = map_point_for_world_position(crop_bounds, image_size, position) else {
+        return;
+    };
+
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(position.x - size * 0.5),
+            top: Val::Px(position.y - size * 0.5),
+            width: Val::Px(size),
+            height: Val::Px(size),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(fill),
+        BorderColor::all(border),
+    ));
+}
+
+fn spawn_rect_overlay(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    rect: MapUiRect,
+    border: Color,
+    fill: Color,
+    border_width: f32,
+) {
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(rect.left),
+            top: Val::Px(rect.top),
+            width: Val::Px(rect.width.max(border_width)),
+            height: Val::Px(rect.height.max(border_width)),
+            border: UiRect::all(Val::Px(border_width)),
+            ..default()
+        },
+        BackgroundColor(fill),
+        BorderColor::all(border),
+    ));
+}
+
+fn map_rect_for_chunk(
+    crop_bounds: MapTextureBounds,
+    image_size: Vec2,
+    coord: ChunkCoord,
+) -> Option<MapUiRect> {
+    let min = Vec2::new((coord.x * CHUNK_SIZE) as f32, (coord.y * CHUNK_SIZE) as f32);
+    map_rect_for_world_rect(
         crop_bounds,
-        Vec2::new(player_x, player_y),
-    );
+        image_size,
+        MapTileRect {
+            min,
+            max: min + Vec2::splat(CHUNK_SIZE as f32),
+        },
+    )
+}
+
+fn map_rect_for_world_rect(
+    crop_bounds: MapTextureBounds,
+    image_size: Vec2,
+    rect: MapTileRect,
+) -> Option<MapUiRect> {
+    if crop_bounds.width == 0 || crop_bounds.height == 0 {
+        return None;
+    }
+
+    let crop_min = Vec2::new(crop_bounds.min_x as f32, crop_bounds.min_y as f32);
+    let crop_max = crop_min + Vec2::new(crop_bounds.width as f32, crop_bounds.height as f32);
+    let min_x = rect.min.x.max(crop_min.x);
+    let max_x = rect.max.x.min(crop_max.x);
+    let min_y = rect.min.y.max(crop_min.y);
+    let max_y = rect.max.y.min(crop_max.y);
+    if min_x >= max_x || min_y >= max_y {
+        return None;
+    }
+
+    let left = (min_x - crop_min.x) / crop_bounds.width as f32 * image_size.x;
+    let right = (max_x - crop_min.x) / crop_bounds.width as f32 * image_size.x;
+    let top = (crop_max.y - max_y) / crop_bounds.height as f32 * image_size.y;
+    let bottom = (crop_max.y - min_y) / crop_bounds.height as f32 * image_size.y;
+
+    Some(MapUiRect {
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
+    })
 }
 
 fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, texture_rect: Rect) {
@@ -169,48 +398,46 @@ fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, texture_rect: R
                     },
                     MinimapImage,
                 ));
-                map.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        display: Display::None,
-                        width: Val::Px(MINIMAP_PLAYER_MARKER_SIZE),
-                        height: Val::Px(MINIMAP_PLAYER_MARKER_SIZE),
-                        border: UiRect::all(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.96, 0.94, 0.78, 0.96)),
-                    BorderColor::all(Color::srgba(0.02, 0.02, 0.018, 0.92)),
-                    MinimapPlayerMarker,
-                ));
+                spawn_overlay_root(map, MinimapOverlayRoot);
             });
         });
 }
 
-pub(crate) fn sync_full_map_view(
-    mut commands: Commands,
-    cache: Res<MapTextureCache>,
-    state: Res<MapViewState>,
-    roots: Query<Entity, With<FullMapRoot>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    mut images: Query<&mut ImageNode, With<FullMapImage>>,
-    mut layer_buttons: Query<
+#[derive(SystemParam)]
+pub(crate) struct FullMapSyncParams<'w, 's> {
+    cache: Res<'w, MapTextureCache>,
+    state: Res<'w, MapViewState>,
+    sim: Res<'w, SimResource>,
+    markers: Res<'w, MapOverlayMarkers>,
+    roots: Query<'w, 's, Entity, With<FullMapRoot>>,
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    images: Query<'w, 's, &'static mut ImageNode, With<FullMapImage>>,
+    image_layout:
+        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<FullMapImage>>,
+    overlay_roots: Query<'w, 's, Entity, With<FullMapOverlayRoot>>,
+    cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera2d>>,
+    layer_buttons: Query<
+        'w,
+        's,
         (
-            &FullMapLayerButton,
-            &Interaction,
-            &mut BackgroundColor,
-            &mut BorderColor,
+            &'static FullMapLayerButton,
+            &'static Interaction,
+            &'static mut BackgroundColor,
+            &'static mut BorderColor,
         ),
         With<Button>,
     >,
-) {
-    if !state.open {
-        for entity in &roots {
+}
+
+pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSyncParams) {
+    if !params.state.open {
+        for entity in &params.roots {
             commands.entity(entity).despawn();
         }
         return;
     }
 
-    let Some(layer_cache) = cache.layer_caches.get(&state.selected_layer) else {
+    let Some(layer_cache) = params.cache.layer_caches.get(&params.state.selected_layer) else {
         return;
     };
     let Some(handle) = layer_cache.handle.as_ref() else {
@@ -219,22 +446,25 @@ pub(crate) fn sync_full_map_view(
     let Some(map_bounds) = layer_cache.bounds else {
         return;
     };
-    let image_size = fullscreen_map_image_size(windows.iter().next());
+    let image_size = fullscreen_map_image_size(params.windows.iter().next());
     let crop_bounds = fullscreen_crop_bounds(
         map_bounds,
-        state.center_tile,
-        state.zoom.clamp(FULL_MAP_MIN_ZOOM, FULL_MAP_MAX_ZOOM),
+        params.state.center_tile,
+        params
+            .state
+            .zoom
+            .clamp(FULL_MAP_MIN_ZOOM, FULL_MAP_MAX_ZOOM),
         image_size,
     );
     let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
 
-    let mut roots_iter = roots.iter();
+    let mut roots_iter = params.roots.iter();
     let Some(_root) = roots_iter.next() else {
         spawn_full_map(
             &mut commands,
             handle.clone(),
             texture_rect,
-            state.selected_layer,
+            params.state.selected_layer,
         );
         return;
     };
@@ -242,14 +472,32 @@ pub(crate) fn sync_full_map_view(
         commands.entity(duplicate).despawn();
     }
 
-    for mut image in &mut images {
+    for mut image in &mut params.images {
         image.image = handle.clone();
         image.rect = Some(texture_rect);
     }
-    for (button, interaction, mut background, mut border) in &mut layer_buttons {
-        let selected = button.layer == state.selected_layer;
+    for (button, interaction, mut background, mut border) in &mut params.layer_buttons {
+        let selected = button.layer == params.state.selected_layer;
         *background = BackgroundColor(layer_button_color(*interaction, selected));
         *border = BorderColor::all(layer_button_border_color(selected));
+    }
+
+    let (player_x, player_y) = params.sim.sim.player().position_tiles();
+    let camera_rect = camera_tile_rect(&params.cameras);
+    let chunk_cursor = fullscreen_cursor_chunk(crop_bounds, &params.windows, &params.image_layout);
+    for overlay_root in &params.overlay_roots {
+        rebuild_map_overlay(
+            &mut commands,
+            overlay_root,
+            MapOverlayContext {
+                crop_bounds,
+                image_size,
+                player_position: Vec2::new(player_x, player_y),
+                camera_rect,
+                chunk_cursor,
+                markers: &params.markers,
+            },
+        );
     }
 }
 
@@ -294,7 +542,10 @@ fn spawn_full_map(
                 },
                 BorderColor::all(Color::srgba(0.42, 0.43, 0.39, 0.9)),
                 FullMapImage,
-            ));
+            ))
+            .with_children(|image| {
+                spawn_overlay_root(image, FullMapOverlayRoot);
+            });
             root.spawn((
                 Node {
                     position_type: PositionType::Absolute,
@@ -313,25 +564,6 @@ fn spawn_full_map(
                 spawn_recenter_button(bar);
             });
         });
-}
-
-fn update_player_marker(
-    markers: &mut Query<&mut Node, With<MinimapPlayerMarker>>,
-    crop_bounds: MapTextureBounds,
-    player_position: Vec2,
-) {
-    let Some(position) = minimap_point_for_world_position(crop_bounds, player_position) else {
-        for mut marker in markers {
-            marker.display = Display::None;
-        }
-        return;
-    };
-
-    for mut marker in markers {
-        marker.display = Display::Flex;
-        marker.left = Val::Px(position.x - MINIMAP_PLAYER_MARKER_SIZE * 0.5);
-        marker.top = Val::Px(position.y - MINIMAP_PLAYER_MARKER_SIZE * 0.5);
-    }
 }
 
 fn spawn_layer_button(
@@ -535,7 +767,63 @@ pub(crate) fn fullscreen_map_image_size(window: Option<&Window>) -> Vec2 {
     Vec2::new(size.x.clamp(1.0, 980.0), size.y.clamp(1.0, 980.0))
 }
 
-fn minimap_point_for_world_position(crop_bounds: MapTextureBounds, position: Vec2) -> Option<Vec2> {
+fn camera_tile_rect(
+    cameras: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+) -> Option<MapTileRect> {
+    let (camera, transform) = cameras.iter().next()?;
+    let viewport_size = camera.logical_viewport_size()?;
+    let first = camera.viewport_to_world_2d(transform, Vec2::ZERO).ok()?;
+    let second = camera.viewport_to_world_2d(transform, viewport_size).ok()?;
+    Some(MapTileRect {
+        min: Vec2::new(first.x.min(second.x), first.y.min(second.y)) / TILE_SIZE,
+        max: Vec2::new(first.x.max(second.x), first.y.max(second.y)) / TILE_SIZE,
+    })
+}
+
+fn fullscreen_cursor_chunk(
+    crop_bounds: MapTextureBounds,
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    image_layout: &Query<(&ComputedNode, &UiGlobalTransform), With<FullMapImage>>,
+) -> Option<ChunkCoord> {
+    let cursor_position = windows.single().ok()?.physical_cursor_position()?;
+    let crop_max_y = crop_bounds.min_y as f32 + crop_bounds.height as f32;
+
+    for (node, transform) in image_layout {
+        let size = node.size();
+        if size.x <= 0.0 || size.y <= 0.0 {
+            continue;
+        }
+        let local_position = transform.try_inverse()?.transform_point2(cursor_position);
+        let half_size = size * 0.5;
+        if local_position.x < -half_size.x
+            || local_position.x > half_size.x
+            || local_position.y < -half_size.y
+            || local_position.y > half_size.y
+        {
+            continue;
+        }
+
+        let normalized = (local_position + half_size) / size;
+        let tile_x = crop_bounds.min_x as f32 + normalized.x * crop_bounds.width as f32;
+        let tile_y = crop_max_y - normalized.y * crop_bounds.height as f32;
+        return Some(ChunkCoord {
+            x: (tile_x.floor() as i32).div_euclid(CHUNK_SIZE),
+            y: (tile_y.floor() as i32).div_euclid(CHUNK_SIZE),
+        });
+    }
+
+    None
+}
+
+fn map_point_for_world_position(
+    crop_bounds: MapTextureBounds,
+    image_size: Vec2,
+    position: Vec2,
+) -> Option<Vec2> {
+    if crop_bounds.width == 0 || crop_bounds.height == 0 {
+        return None;
+    }
+
     let crop_min_x = crop_bounds.min_x as f32;
     let crop_min_y = crop_bounds.min_y as f32;
     let crop_max_x = crop_min_x + crop_bounds.width as f32;
@@ -549,8 +837,8 @@ fn minimap_point_for_world_position(crop_bounds: MapTextureBounds, position: Vec
     }
 
     Some(Vec2::new(
-        (position.x - crop_min_x) / crop_bounds.width as f32 * MINIMAP_CONTENT_SIZE,
-        (crop_max_y - position.y) / crop_bounds.height as f32 * MINIMAP_CONTENT_SIZE,
+        (position.x - crop_min_x) / crop_bounds.width as f32 * image_size.x,
+        (crop_max_y - position.y) / crop_bounds.height as f32 * image_size.y,
     ))
 }
 
@@ -594,5 +882,21 @@ mod tests {
 
         assert_eq!(rect.min, Vec2::new(32.0, 48.0));
         assert_eq!(rect.max, Vec2::new(160.0, 176.0));
+    }
+
+    #[test]
+    fn map_overlay_point_flips_world_y_to_ui_space() {
+        let crop = MapTextureBounds {
+            min_x: -32,
+            min_y: 16,
+            width: 128,
+            height: 64,
+        };
+
+        let point =
+            map_point_for_world_position(crop, Vec2::new(256.0, 128.0), Vec2::new(32.0, 64.0))
+                .expect("point should be inside crop");
+
+        assert_eq!(point, Vec2::new(128.0, 32.0));
     }
 }

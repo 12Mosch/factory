@@ -1,20 +1,19 @@
 use super::common::{entity_id_by_name, pixel_at};
 use bevy::prelude::Vec2;
 use factory_app::rendering::map_texture::{
-    GRID_PIXEL, MapPixels, PLAYER_PIXEL, UNREVEALED_PIXEL, generate_map_pixels,
-    generate_map_pixels_for_layer,
+    GRID_PIXEL, MapPixels, UNREVEALED_PIXEL, generate_map_pixels, generate_map_pixels_for_layer,
 };
 use factory_app::resources::{MapDisplaySettings, MapLayer, MapTextureBounds};
 use factory_app::ui::map_view::fullscreen_crop_bounds;
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation, WorldSim};
 
 #[test]
-fn map_pixel_generation_draws_reveal_player_and_debug_grid() {
+fn map_pixel_generation_draws_revealed_tiles_and_debug_grid() {
     let sim = Simulation::new_test_world(123);
     let normal = generate_map_pixels(&sim, &MapDisplaySettings::default());
     let player_tile = sim.player().tile_position();
 
-    assert_eq!(pixel_at(&normal, player_tile), PLAYER_PIXEL);
+    assert_ne!(pixel_at(&normal, player_tile), UNREVEALED_PIXEL);
 
     let unrevealed_chunk = sim
         .world()

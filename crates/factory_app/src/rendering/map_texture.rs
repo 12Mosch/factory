@@ -14,7 +14,6 @@ use crate::resources::{
 };
 
 pub const UNREVEALED_PIXEL: [u8; 4] = [6, 7, 8, 255];
-pub const PLAYER_PIXEL: [u8; 4] = [245, 245, 240, 255];
 pub const GRID_PIXEL: [u8; 4] = [188, 139, 54, 255];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,9 +35,7 @@ pub(crate) fn update_map_texture(
     let entity_signature = entity_signature(&sim.sim);
     let revealed_signature = revealed_signature(&sim.sim);
     let debug_flags = (settings.debug_reveal_all, settings.show_chunk_grid);
-    let player_tile = sim.sim.player().tile_position();
     let needs_update = cache.handle.is_none()
-        || cache.last_player_tile != Some(player_tile)
         || cache.last_chunk_revision != sim.sim.world().chunk_revision()
         || cache.last_resource_revision != sim.sim.world().resource_revision()
         || cache.last_entity_signature != entity_signature
@@ -86,7 +83,6 @@ pub(crate) fn update_map_texture(
         };
 
         cache.handle = Some(handle);
-        cache.last_player_tile = Some(player_tile);
         cache.last_chunk_revision = sim.sim.world().chunk_revision();
         cache.last_resource_revision = sim.sim.world().resource_revision();
         cache.last_entity_signature = entity_signature;
@@ -109,7 +105,6 @@ pub(crate) fn update_map_texture(
                 entity_signature,
                 revealed_signature,
                 debug_flags,
-                player_tile,
             );
         }
     }
@@ -166,9 +161,6 @@ pub fn generate_map_pixels_for_layer(
         }
     }
 
-    let (player_x, player_y) = sim.player().tile_position();
-    set_world_pixel(&mut data, bounds, player_x, player_y, PLAYER_PIXEL);
-
     if settings.show_chunk_grid {
         draw_chunk_grid(&mut data, bounds);
     }
@@ -186,10 +178,8 @@ fn update_layer_map_texture(
     entity_signature: u64,
     revealed_signature: u64,
     debug_flags: (bool, bool),
-    player_tile: (i32, i32),
 ) {
     let needs_update = cache.handle.is_none()
-        || cache.last_player_tile != Some(player_tile)
         || cache.last_chunk_revision != sim.world().chunk_revision()
         || cache.last_resource_revision != sim.world().resource_revision()
         || cache.last_entity_signature != entity_signature
@@ -226,7 +216,6 @@ fn update_layer_map_texture(
     cache.handle = Some(handle);
     cache.bounds = Some(map.bounds);
     cache.pixels = Some(map.data);
-    cache.last_player_tile = Some(player_tile);
     cache.last_chunk_revision = sim.world().chunk_revision();
     cache.last_resource_revision = sim.world().resource_revision();
     cache.last_entity_signature = entity_signature;
@@ -238,7 +227,6 @@ fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
     let handle = cache.handle.clone();
     let bounds = cache.bounds;
     let pixels = cache.pixels.clone();
-    let last_player_tile = cache.last_player_tile;
     let last_chunk_revision = cache.last_chunk_revision;
     let last_resource_revision = cache.last_resource_revision;
     let last_entity_signature = cache.last_entity_signature;
@@ -249,7 +237,6 @@ fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
     layer_cache.handle = handle;
     layer_cache.bounds = bounds;
     layer_cache.pixels = pixels;
-    layer_cache.last_player_tile = last_player_tile;
     layer_cache.last_chunk_revision = last_chunk_revision;
     layer_cache.last_resource_revision = last_resource_revision;
     layer_cache.last_entity_signature = last_entity_signature;
@@ -271,7 +258,6 @@ fn update_map_pixels_incremental(
     } else {
         repaint_changed_chunks(sim, settings, cache);
         repaint_dirty_resource_tiles(sim, settings, cache);
-        repaint_player_tiles(sim, settings, cache);
     }
 
     if bounds_changed && settings.show_chunk_grid {
@@ -382,38 +368,6 @@ fn repaint_dirty_resource_tiles(
     for change in changes {
         paint_tile(data, bounds, sim, settings, ids, change.x, change.y);
     }
-}
-
-fn repaint_player_tiles(
-    sim: &Simulation,
-    settings: &MapDisplaySettings,
-    cache: &mut MapTextureCache,
-) {
-    let player_tile = sim.player().tile_position();
-    if cache.last_player_tile == Some(player_tile) {
-        return;
-    }
-
-    let Some(bounds) = cache.bounds else {
-        return;
-    };
-    let ids = RenderPrototypeIds::from_catalog(sim.catalog());
-    let Some(data) = cache.pixels.as_mut() else {
-        return;
-    };
-
-    if let Some((x, y)) = cache.last_player_tile {
-        paint_tile(data, bounds, sim, settings, ids, x, y);
-    }
-    paint_tile(
-        data,
-        bounds,
-        sim,
-        settings,
-        ids,
-        player_tile.0,
-        player_tile.1,
-    );
 }
 
 fn repaint_all_chunks(
@@ -540,13 +494,6 @@ fn paint_chunk(
         }
     }
 
-    let player_tile = sim.player().tile_position();
-    if player_tile.0.div_euclid(CHUNK_SIZE) == coord.x
-        && player_tile.1.div_euclid(CHUNK_SIZE) == coord.y
-    {
-        set_world_pixel(data, bounds, player_tile.0, player_tile.1, PLAYER_PIXEL);
-    }
-
     if settings.show_chunk_grid {
         draw_chunk_grid_for_chunk(data, bounds, coord);
     }
@@ -582,10 +529,6 @@ fn paint_tile(
             };
             set_world_pixel(data, bounds, x, y, color_to_pixel(color));
         }
-    }
-
-    if sim.player().tile_position() == (x, y) {
-        set_world_pixel(data, bounds, x, y, PLAYER_PIXEL);
     }
 
     if settings.show_chunk_grid && (x.rem_euclid(CHUNK_SIZE) == 0 || y.rem_euclid(CHUNK_SIZE) == 0)
@@ -713,7 +656,6 @@ mod tests {
             bounds: Some(initial.bounds),
             pixels: Some(initial.data),
             painted_chunks: Default::default(),
-            last_player_tile: Some(sim.player().tile_position()),
             last_chunk_revision: sim.world().chunk_revision(),
             last_resource_revision: sim.world().resource_revision(),
             last_entity_signature: entity_signature(&sim),
