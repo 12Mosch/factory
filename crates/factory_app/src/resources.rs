@@ -1,4 +1,4 @@
-use bevy::prelude::{ColorMaterial, Entity, Handle, Image, Resource, Vec2};
+use bevy::prelude::{Color, ColorMaterial, Entity, Handle, Image, Resource, Vec2};
 use factory_data::{EntityPrototypeId, ItemId, TechnologyId};
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, Simulation, SimulationTickProfile};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -119,6 +119,18 @@ impl Default for MapViewState {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapPointMarker {
+    pub position: Vec2,
+    pub color: Color,
+}
+
+#[derive(Resource, Default)]
+pub struct MapOverlayMarkers {
+    pub pings: Vec<MapPointMarker>,
+    pub waypoints: Vec<MapPointMarker>,
+}
+
 #[derive(Resource)]
 pub struct CraftingWindowState {
     pub open: bool,
@@ -178,7 +190,6 @@ pub struct MapTextureCache {
     pub bounds: Option<MapTextureBounds>,
     pub pixels: Option<Vec<u8>>,
     pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
-    pub last_player_tile: Option<(i32, i32)>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
     pub last_entity_signature: u64,
@@ -192,7 +203,6 @@ pub struct MapLayerTextureCache {
     pub handle: Option<Handle<Image>>,
     pub bounds: Option<MapTextureBounds>,
     pub pixels: Option<Vec<u8>>,
-    pub last_player_tile: Option<(i32, i32)>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
     pub last_entity_signature: u64,

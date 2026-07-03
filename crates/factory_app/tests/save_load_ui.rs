@@ -175,7 +175,6 @@ fn load_invalidates_render_caches() {
             MapChunkPaintState { revealed: true },
         )]
         .into(),
-        last_player_tile: Some((12, 34)),
         last_chunk_revision: 66,
         last_resource_revision: 99,
         last_entity_signature: 88,
@@ -199,7 +198,6 @@ fn load_invalidates_render_caches() {
     assert_eq!(map_cache.bounds, None);
     assert_eq!(map_cache.pixels, None);
     assert!(map_cache.painted_chunks.is_empty());
-    assert_eq!(map_cache.last_player_tile, None);
     assert_eq!(map_cache.last_resource_revision, 0);
     assert_ne!(
         app.world()
