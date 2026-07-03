@@ -124,7 +124,7 @@ pub fn generate_map_pixels_for_layer(
     settings: &MapDisplaySettings,
     layer: MapLayer,
 ) -> MapPixels {
-    let bounds = map_texture_bounds(sim).unwrap_or_default();
+    let bounds = map_texture_bounds(sim, settings).unwrap_or_default();
     let len = bounds.width as usize * bounds.height as usize * 4;
     let mut data = vec![0; len];
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
@@ -263,15 +263,16 @@ fn update_map_pixels_incremental(
     cache: &mut MapTextureCache,
 ) {
     let old_bounds = cache.bounds.unwrap_or_default();
-    let new_bounds = map_texture_bounds(sim).unwrap_or_default();
+    let new_bounds = map_texture_bounds(sim, settings).unwrap_or_default();
     let bounds_changed = old_bounds != new_bounds;
     if bounds_changed {
         resize_cached_pixels(cache, old_bounds, new_bounds);
+        repaint_all_chunks(sim, settings, cache);
+    } else {
+        repaint_changed_chunks(sim, settings, cache);
+        repaint_dirty_resource_tiles(sim, settings, cache);
+        repaint_player_tiles(sim, settings, cache);
     }
-
-    repaint_changed_chunks(sim, settings, cache);
-    repaint_dirty_resource_tiles(sim, settings, cache);
-    repaint_player_tiles(sim, settings, cache);
 
     if bounds_changed && settings.show_chunk_grid {
         let Some(bounds) = cache.bounds else {
@@ -461,11 +462,38 @@ fn refresh_painted_chunks(
         .collect();
 }
 
-pub fn map_texture_bounds(sim: &Simulation) -> Option<MapTextureBounds> {
-    let min_chunk_x = sim.world().chunks.keys().map(|coord| coord.x).min()?;
-    let max_chunk_x = sim.world().chunks.keys().map(|coord| coord.x).max()?;
-    let min_chunk_y = sim.world().chunks.keys().map(|coord| coord.y).min()?;
-    let max_chunk_y = sim.world().chunks.keys().map(|coord| coord.y).max()?;
+pub fn map_texture_bounds(
+    sim: &Simulation,
+    settings: &MapDisplaySettings,
+) -> Option<MapTextureBounds> {
+    if settings.debug_reveal_all {
+        chunk_texture_bounds(sim.world().chunks.keys().copied())
+    } else {
+        chunk_texture_bounds(
+            sim.revealed_chunks()
+                .iter()
+                .copied()
+                .filter(|coord| sim.world().chunks.contains_key(coord)),
+        )
+    }
+}
+
+fn chunk_texture_bounds(
+    chunk_coords: impl IntoIterator<Item = ChunkCoord>,
+) -> Option<MapTextureBounds> {
+    let mut chunk_coords = chunk_coords.into_iter();
+    let first = chunk_coords.next()?;
+    let mut min_chunk_x = first.x;
+    let mut max_chunk_x = first.x;
+    let mut min_chunk_y = first.y;
+    let mut max_chunk_y = first.y;
+
+    for coord in chunk_coords {
+        min_chunk_x = min_chunk_x.min(coord.x);
+        max_chunk_x = max_chunk_x.max(coord.x);
+        min_chunk_y = min_chunk_y.min(coord.y);
+        max_chunk_y = max_chunk_y.max(coord.y);
+    }
 
     Some(MapTextureBounds {
         min_x: min_chunk_x * CHUNK_SIZE,
