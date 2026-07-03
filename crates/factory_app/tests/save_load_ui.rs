@@ -177,9 +177,9 @@ fn load_invalidates_render_caches() {
         .into(),
         last_chunk_revision: 66,
         last_resource_revision: 99,
-        last_entity_signature: 88,
         last_revealed_signature: 77,
         last_debug_flags: (true, true),
+        last_texture_update_tick: 44,
         layer_caches: Default::default(),
     });
     app.world_mut().insert_resource(ResourceRenderCache {

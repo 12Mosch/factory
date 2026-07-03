@@ -117,6 +117,10 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
     let mut sim = Simulation::new_test_world(123);
     let chest = entity_id_by_name(sim.catalog(), "chest");
     let (entity_x, entity_y) = revealed_buildable_tile(&sim, chest);
+    let surface_before =
+        generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Surface);
+    let entities_before =
+        generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Entities);
     sim.place_entity(chest, entity_x, entity_y, Direction::North)
         .expect("test chest should be placeable");
     let resource_tile = revealed_resource_tile(&sim);
@@ -137,13 +141,13 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
         pixel_at(&resources, resource_tile),
         pixel_at(&entities, resource_tile)
     );
-    assert_ne!(
-        pixel_at(&resources, (entity_x, entity_y)),
-        pixel_at(&entities, (entity_x, entity_y))
-    );
     assert_eq!(
         pixel_at(&surface, (entity_x, entity_y)),
-        pixel_at(&entities, (entity_x, entity_y))
+        pixel_at(&surface_before, (entity_x, entity_y))
+    );
+    assert_eq!(
+        pixel_at(&entities, (entity_x, entity_y)),
+        pixel_at(&entities_before, (entity_x, entity_y))
     );
 
     assert!(!sim.is_chunk_revealed(concealed_chunk));
