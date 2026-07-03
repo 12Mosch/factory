@@ -1,6 +1,6 @@
 use bevy::prelude::{ColorMaterial, Entity, Handle, Image, Resource, Vec2};
 use factory_data::{EntityPrototypeId, ItemId, TechnologyId};
-use factory_sim::{ChunkCoord, Direction, EntityId, Simulation, SimulationTickProfile};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, Simulation, SimulationTickProfile};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::Duration;
 
@@ -153,6 +153,23 @@ pub struct MapTextureBounds {
     pub min_y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+impl MapTextureBounds {
+    pub fn contains_tile(self, tile: (i32, i32)) -> bool {
+        tile.0 >= self.min_x
+            && tile.0 < self.min_x + self.width as i32
+            && tile.1 >= self.min_y
+            && tile.1 < self.min_y + self.height as i32
+    }
+
+    pub fn contains_chunk(self, coord: ChunkCoord) -> bool {
+        self.contains_tile((coord.x * CHUNK_SIZE, coord.y * CHUNK_SIZE))
+            && self.contains_tile((
+                (coord.x + 1) * CHUNK_SIZE - 1,
+                (coord.y + 1) * CHUNK_SIZE - 1,
+            ))
+    }
 }
 
 #[derive(Resource, Default)]

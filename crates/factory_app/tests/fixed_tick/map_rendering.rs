@@ -1,7 +1,8 @@
 use super::common::{entity_id_by_name, pixel_at};
 use bevy::prelude::Vec2;
 use factory_app::rendering::map_texture::{
-    GRID_PIXEL, PLAYER_PIXEL, UNREVEALED_PIXEL, generate_map_pixels, generate_map_pixels_for_layer,
+    GRID_PIXEL, MapPixels, PLAYER_PIXEL, UNREVEALED_PIXEL, generate_map_pixels,
+    generate_map_pixels_for_layer,
 };
 use factory_app::resources::{MapDisplaySettings, MapLayer, MapTextureBounds};
 use factory_app::ui::map_view::fullscreen_crop_bounds;
@@ -22,7 +23,7 @@ fn map_pixel_generation_draws_reveal_player_and_debug_grid() {
         .copied()
         .find(|coord| !sim.is_chunk_revealed(*coord))
         .expect("initial chart should leave distant chunks unrevealed");
-    assert!(!bounds_contains_chunk(normal.bounds, unrevealed_chunk));
+    assert!(!normal.bounds.contains_chunk(unrevealed_chunk));
 
     let debug = generate_map_pixels(
         &sim,
@@ -31,7 +32,7 @@ fn map_pixel_generation_draws_reveal_player_and_debug_grid() {
             show_chunk_grid: true,
         },
     );
-    assert!(bounds_contains_chunk(debug.bounds, unrevealed_chunk));
+    assert!(debug.bounds.contains_chunk(unrevealed_chunk));
     assert_eq!(pixel_at(&debug, (0, 0)), GRID_PIXEL);
 }
 
@@ -61,7 +62,7 @@ fn generated_unrevealed_streamed_chunks_remain_hidden_until_revealed() {
 
     let map = generate_map_pixels(&sim, &MapDisplaySettings::default());
 
-    assert!(!bounds_contains_tile(map.bounds, sample));
+    assert!(!map.bounds.contains_tile(sample));
 }
 
 #[test]
@@ -120,6 +121,11 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
     sim.place_entity(chest, entity_x, entity_y, Direction::North)
         .expect("test chest should be placeable");
     let resource_tile = revealed_resource_tile(&sim);
+    let concealed_chunk = ChunkCoord { x: 2, y: 0 };
+    let far_revealed_chunk = ChunkCoord { x: 4, y: 0 };
+    let target = first_walkable_tile_in_chunk(sim.seed(), far_revealed_chunk);
+    move_player_to_tile(&mut sim, target);
+    sim.tick();
 
     let surface =
         generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Surface);
@@ -141,46 +147,18 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
         pixel_at(&entities, (entity_x, entity_y))
     );
 
-    let unrevealed_chunk = sim
-        .world()
-        .chunks
-        .keys()
-        .copied()
-        .find(|coord| !sim.is_chunk_revealed(*coord))
-        .expect("initial chart should leave distant chunks unrevealed");
+    assert!(!sim.is_chunk_revealed(concealed_chunk));
     let hidden_tile = (
-        unrevealed_chunk.x * CHUNK_SIZE + 1,
-        unrevealed_chunk.y * CHUNK_SIZE + 1,
+        concealed_chunk.x * CHUNK_SIZE + 1,
+        concealed_chunk.y * CHUNK_SIZE + 1,
     );
-    assert_hidden_or_outside(&resources, hidden_tile);
-    assert_hidden_or_outside(&entities, hidden_tile);
+    assert_hidden_pixel(&resources, hidden_tile);
+    assert_hidden_pixel(&entities, hidden_tile);
 }
 
-fn assert_hidden_or_outside(
-    map: &factory_app::rendering::map_texture::MapPixels,
-    tile: (i32, i32),
-) {
-    if bounds_contains_tile(map.bounds, tile) {
-        assert_eq!(pixel_at(map, tile), UNREVEALED_PIXEL);
-    }
-}
-
-fn bounds_contains_chunk(bounds: MapTextureBounds, coord: ChunkCoord) -> bool {
-    bounds_contains_tile(bounds, (coord.x * CHUNK_SIZE, coord.y * CHUNK_SIZE))
-        && bounds_contains_tile(
-            bounds,
-            (
-                (coord.x + 1) * CHUNK_SIZE - 1,
-                (coord.y + 1) * CHUNK_SIZE - 1,
-            ),
-        )
-}
-
-fn bounds_contains_tile(bounds: MapTextureBounds, tile: (i32, i32)) -> bool {
-    tile.0 >= bounds.min_x
-        && tile.0 < bounds.min_x + bounds.width as i32
-        && tile.1 >= bounds.min_y
-        && tile.1 < bounds.min_y + bounds.height as i32
+fn assert_hidden_pixel(map: &MapPixels, tile: (i32, i32)) {
+    assert!(map.bounds.contains_tile(tile));
+    assert_eq!(pixel_at(map, tile), UNREVEALED_PIXEL);
 }
 
 fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i32, i32) {
