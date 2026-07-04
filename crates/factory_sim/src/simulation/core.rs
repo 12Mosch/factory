@@ -19,6 +19,7 @@ impl Simulation {
 
         let mut sim = Self {
             tick: 0,
+            entity_topology_revision: 0,
             world,
             chart: ChartState::default(),
             item_statistics: ItemStatistics::default(),
@@ -95,6 +96,14 @@ impl Simulation {
 
     pub fn tick_count(&self) -> u64 {
         self.tick
+    }
+
+    pub fn entity_topology_revision(&self) -> u64 {
+        self.entity_topology_revision
+    }
+
+    pub(crate) fn bump_entity_topology_revision(&mut self) {
+        self.entity_topology_revision = self.entity_topology_revision.wrapping_add(1);
     }
 
     pub fn current_tick(&self) -> Tick {

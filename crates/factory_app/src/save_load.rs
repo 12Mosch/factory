@@ -11,6 +11,7 @@ use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::rendering::resources::ResourceRenderCache;
 use crate::resources::{
     BuildPlacementState, MapTextureCache, MapViewState, OpenContainer, SimResource,
+    VisibleEntityIds,
 };
 
 pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [
@@ -302,6 +303,7 @@ pub(crate) struct LoadState<'w> {
     pub(crate) map_cache: ResMut<'w, MapTextureCache>,
     pub(crate) map_view: ResMut<'w, MapViewState>,
     pub(crate) resource_cache: ResMut<'w, ResourceRenderCache>,
+    pub(crate) visible_entity_ids: ResMut<'w, VisibleEntityIds>,
     pub(crate) reload_token: ResMut<'w, PresentationReloadToken>,
 }
 
@@ -350,6 +352,7 @@ pub(crate) fn load_slot(
             state.map_view.zoom = 1.0;
             state.map_view.follow_player = true;
             *state.resource_cache = ResourceRenderCache::default();
+            *state.visible_entity_ids = VisibleEntityIds::default();
             state.reload_token.value = state.reload_token.value.wrapping_add(1);
 
             status.message = Some(format!("{} loaded.", slot_display_name(slot)));

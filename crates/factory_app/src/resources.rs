@@ -222,11 +222,21 @@ pub struct VisibleChunks {
     pub revision: u64,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub(crate) struct VisibleEntityIds {
     pub(crate) ids: HashSet<EntityId>,
     pub(crate) visible_revision: u64,
-    pub(crate) entity_signature: u64,
+    pub(crate) entity_topology_revision: u64,
+}
+
+impl Default for VisibleEntityIds {
+    fn default() -> Self {
+        Self {
+            ids: HashSet::new(),
+            visible_revision: u64::MAX,
+            entity_topology_revision: u64::MAX,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Resource)]

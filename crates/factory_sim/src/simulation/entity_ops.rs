@@ -245,6 +245,7 @@ impl Simulation {
             self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
+        self.bump_entity_topology_revision();
         Ok(entity_id)
     }
 
@@ -258,6 +259,9 @@ impl Simulation {
             .placed_entity(entity_id)
             .cloned()
             .ok_or(BuildError::MissingEntity(entity_id))?;
+        if entity.direction == direction {
+            return Ok(());
+        }
         let footprint =
             self.world
                 .entity_footprint(entity.prototype_id, entity.x, entity.y, direction)?;
@@ -286,6 +290,7 @@ impl Simulation {
             self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
+        self.bump_entity_topology_revision();
         Ok(())
     }
 
@@ -313,6 +318,7 @@ impl Simulation {
                 self.invalidate_transport_lane_graph();
             }
             self.invalidate_fluid_state();
+            self.bump_entity_topology_revision();
         }
         removed
     }
@@ -372,6 +378,7 @@ impl Simulation {
             self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
+        self.bump_entity_topology_revision();
 
         Ok(removed)
     }

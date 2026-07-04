@@ -195,6 +195,7 @@ impl SimulationSnapshot {
     fn into_simulation(self) -> Simulation {
         Simulation {
             tick: self.tick,
+            entity_topology_revision: 0,
             world: WorldSim {
                 seed: self.world_seed,
                 prototypes: self.prototypes,
