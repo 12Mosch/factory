@@ -37,6 +37,47 @@ fn entity_cannot_be_placed_on_water() {
 }
 
 #[test]
+fn entity_topology_revision_changes_only_for_successful_topology_edits() {
+    let mut sim = Simulation::new_test_world(123);
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+
+    let initial_revision = sim.entity_topology_revision();
+    sim.tick();
+    assert_eq!(sim.entity_topology_revision(), initial_revision);
+
+    let water = first_water_tile(&sim.world);
+    sim.place_entity(inserter, water.0, water.1, Direction::North)
+        .expect_err("water should block entity placement");
+    assert_eq!(sim.entity_topology_revision(), initial_revision);
+
+    let entity_id = sim
+        .place_entity(inserter, x, y, Direction::North)
+        .expect("inserter should be placeable");
+    let placed_revision = initial_revision + 1;
+    assert_eq!(sim.entity_topology_revision(), placed_revision);
+
+    sim.tick();
+    assert_eq!(sim.entity_topology_revision(), placed_revision);
+
+    sim.rotate_entity(entity_id, Direction::North)
+        .expect("same direction rotate should be a no-op");
+    assert_eq!(sim.entity_topology_revision(), placed_revision);
+
+    sim.rotate_entity(entity_id, Direction::East)
+        .expect("direction change should be valid");
+    let rotated_revision = placed_revision + 1;
+    assert_eq!(sim.entity_topology_revision(), rotated_revision);
+
+    assert!(sim.remove_entity(EntityId::new(999_999)).is_none());
+    assert_eq!(sim.entity_topology_revision(), rotated_revision);
+
+    sim.remove_entity(entity_id)
+        .expect("placed entity should be removable");
+    assert_eq!(sim.entity_topology_revision(), rotated_revision + 1);
+}
+
+#[test]
 fn placement_preview_reports_occupied_tiles() {
     let mut sim = Simulation::new_test_world(123);
     let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");

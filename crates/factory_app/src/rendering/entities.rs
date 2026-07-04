@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use factory_data::{EntityKind, EntityPrototypeId, PrototypeCatalog};
 use factory_sim::{Direction, EntityFootprint, EntityId, Simulation};
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use crate::constants::{
@@ -27,16 +26,16 @@ pub(crate) fn update_visible_entity_ids(
     visible: Res<VisibleChunks>,
     mut visible_entity_ids: ResMut<VisibleEntityIds>,
 ) {
-    let entity_signature = entity_signature(&sim.sim);
+    let entity_topology_revision = sim.sim.entity_topology_revision();
     if visible_entity_ids.visible_revision == visible.revision
-        && visible_entity_ids.entity_signature == entity_signature
+        && visible_entity_ids.entity_topology_revision == entity_topology_revision
     {
         return;
     }
 
     visible_entity_ids.ids = visible_entity_ids_for_chunks(&sim.sim, &visible);
     visible_entity_ids.visible_revision = visible.revision;
-    visible_entity_ids.entity_signature = entity_signature;
+    visible_entity_ids.entity_topology_revision = entity_topology_revision;
 }
 
 pub(crate) fn sync_placed_entity_rendering(
@@ -115,19 +114,6 @@ fn visible_entity_ids_for_chunks(sim: &Simulation, visible: &VisibleChunks) -> H
         .entity_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y)
         .into_iter()
         .collect()
-}
-
-pub(crate) fn entity_signature(sim: &Simulation) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for placed in sim.entities().placed_entities() {
-        placed.id.raw().hash(&mut hasher);
-        placed.prototype_id.hash(&mut hasher);
-        placed.x.hash(&mut hasher);
-        placed.y.hash(&mut hasher);
-        placed.direction.hash(&mut hasher);
-        placed.footprint.hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 pub(crate) fn renderable_entity_style(

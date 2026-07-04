@@ -245,6 +245,7 @@ impl Simulation {
             self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
+        self.bump_entity_topology_revision();
         Ok(entity_id)
     }
 
@@ -258,6 +259,9 @@ impl Simulation {
             .placed_entity(entity_id)
             .cloned()
             .ok_or(BuildError::MissingEntity(entity_id))?;
+        if entity.direction == direction {
+            return Ok(());
+        }
         let footprint =
             self.world
                 .entity_footprint(entity.prototype_id, entity.x, entity.y, direction)?;
@@ -286,33 +290,14 @@ impl Simulation {
             self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
+        self.bump_entity_topology_revision();
         Ok(())
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId) -> Option<PlacedEntity> {
         let removed = self.entities.remove_placed_entity(entity_id);
         if let Some(removed) = &removed {
-            if self
-                .world
-                .prototypes
-                .entities
-                .get(removed.prototype_id.index())
-                .filter(|prototype| prototype.id == removed.prototype_id)
-                .is_some_and(|prototype| self.prototype_affects_power_topology(prototype))
-            {
-                self.invalidate_power_state();
-            }
-            if self
-                .world
-                .prototypes
-                .entities
-                .get(removed.prototype_id.index())
-                .filter(|prototype| prototype.id == removed.prototype_id)
-                .is_some_and(|prototype| self.prototype_affects_transport_lane_graph(prototype))
-            {
-                self.invalidate_transport_lane_graph();
-            }
-            self.invalidate_fluid_state();
+            self.invalidate_after_entity_removal(removed);
         }
         removed
     }
@@ -351,6 +336,12 @@ impl Simulation {
             .expect("validated placed entity should still be removable");
         self.player_inventory = player_inventory;
         self.manual_mining_progress = None;
+        self.invalidate_after_entity_removal(&removed);
+
+        Ok(removed)
+    }
+
+    fn invalidate_after_entity_removal(&mut self, removed: &PlacedEntity) {
         if self
             .world
             .prototypes
@@ -372,8 +363,7 @@ impl Simulation {
             self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
-
-        Ok(removed)
+        self.bump_entity_topology_revision();
     }
 
     fn entity_recovery_stacks(

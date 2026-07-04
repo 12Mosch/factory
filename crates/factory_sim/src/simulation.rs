@@ -78,6 +78,8 @@ const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct Simulation {
     tick: u64,
+    #[serde(skip, default)]
+    entity_topology_revision: u64,
     world: WorldSim,
     chart: ChartState,
     item_statistics: ItemStatistics,
