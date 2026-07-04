@@ -881,7 +881,10 @@ pub(crate) fn fullscreen_map_image_size(window: Option<&Window>) -> Vec2 {
     Vec2::new(size.x.clamp(1.0, 980.0), size.y.clamp(1.0, 980.0))
 }
 
-pub fn fullscreen_map_display_size(available_size: Vec2, crop_bounds: MapTextureBounds) -> Vec2 {
+pub(crate) fn fullscreen_map_display_size(
+    available_size: Vec2,
+    crop_bounds: MapTextureBounds,
+) -> Vec2 {
     if crop_bounds.width == 0 || crop_bounds.height == 0 {
         return available_size.max(Vec2::splat(1.0));
     }
