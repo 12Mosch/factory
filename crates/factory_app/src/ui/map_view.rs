@@ -509,6 +509,7 @@ pub(crate) struct FullMapSyncParams<'w, 's> {
     roots: Query<'w, 's, Entity, With<FullMapRoot>>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     images: Query<'w, 's, &'static mut ImageNode, With<FullMapImage>>,
+    image_nodes: Query<'w, 's, &'static mut Node, With<FullMapImage>>,
     image_layout:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<FullMapImage>>,
     overlay_roots: Query<'w, 's, Entity, With<FullMapOverlayRoot>>,
@@ -553,6 +554,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
             .clamp(FULL_MAP_MIN_ZOOM, FULL_MAP_MAX_ZOOM),
         image_size,
     );
+    let display_size = fullscreen_map_display_size(image_size, crop_bounds);
     let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
 
     let mut roots_iter = params.roots.iter();
@@ -561,6 +563,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
             &mut commands,
             handle.clone(),
             texture_rect,
+            display_size,
             params.state.selected_layer,
         );
         return;
@@ -572,6 +575,9 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
     for mut image in &mut params.images {
         image.image = handle.clone();
         image.rect = Some(texture_rect);
+    }
+    for mut node in &mut params.image_nodes {
+        set_full_map_image_node_size(&mut node, display_size);
     }
     for (button, interaction, mut background, mut border) in &mut params.layer_buttons {
         let selected = button.layer == params.state.selected_layer;
@@ -588,7 +594,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
             overlay_root,
             MapOverlayContext {
                 crop_bounds,
-                image_size,
+                image_size: display_size,
                 player_position: Vec2::new(player_x, player_y),
                 sim: &params.sim.sim,
                 settings: &params.settings,
@@ -605,6 +611,7 @@ fn spawn_full_map(
     commands: &mut Commands,
     handle: Handle<Image>,
     texture_rect: Rect,
+    display_size: Vec2,
     selected_layer: MapLayer,
 ) {
     commands
@@ -632,14 +639,7 @@ fn spawn_full_map(
                     image_mode: NodeImageMode::Stretch,
                     ..default()
                 },
-                Node {
-                    width: Val::Percent(84.0),
-                    height: Val::Percent(84.0),
-                    max_width: Val::Px(980.0),
-                    max_height: Val::Px(980.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    ..default()
-                },
+                full_map_image_node(display_size),
                 BorderColor::all(Color::srgba(0.42, 0.43, 0.39, 0.9)),
                 FullMapImage,
             ))
@@ -664,6 +664,20 @@ fn spawn_full_map(
                 spawn_recenter_button(bar);
             });
         });
+}
+
+fn set_full_map_image_node_size(node: &mut Node, display_size: Vec2) {
+    node.width = Val::Px(display_size.x);
+    node.height = Val::Px(display_size.y);
+}
+
+fn full_map_image_node(display_size: Vec2) -> Node {
+    Node {
+        width: Val::Px(display_size.x),
+        height: Val::Px(display_size.y),
+        border: UiRect::all(Val::Px(1.0)),
+        ..default()
+    }
 }
 
 fn spawn_layer_button(
@@ -867,6 +881,24 @@ pub(crate) fn fullscreen_map_image_size(window: Option<&Window>) -> Vec2 {
     Vec2::new(size.x.clamp(1.0, 980.0), size.y.clamp(1.0, 980.0))
 }
 
+pub(crate) fn fullscreen_map_display_size(
+    available_size: Vec2,
+    crop_bounds: MapTextureBounds,
+) -> Vec2 {
+    if crop_bounds.width == 0 || crop_bounds.height == 0 {
+        return available_size.max(Vec2::splat(1.0));
+    }
+
+    let available_size = available_size.max(Vec2::splat(1.0));
+    let crop_aspect = (crop_bounds.width as f32 / crop_bounds.height as f32).max(0.1);
+    let available_aspect = available_size.x / available_size.y;
+    if available_aspect > crop_aspect {
+        Vec2::new(available_size.y * crop_aspect, available_size.y)
+    } else {
+        Vec2::new(available_size.x, available_size.x / crop_aspect)
+    }
+}
+
 fn camera_tile_rect(
     cameras: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
 ) -> Option<MapTileRect> {
@@ -998,5 +1030,33 @@ mod tests {
                 .expect("point should be inside crop");
 
         assert_eq!(point, Vec2::new(128.0, 32.0));
+    }
+
+    #[test]
+    fn fullscreen_map_display_size_keeps_square_crop_square() {
+        let crop = MapTextureBounds {
+            min_x: -256,
+            min_y: -256,
+            width: 512,
+            height: 512,
+        };
+
+        let display_size = fullscreen_map_display_size(Vec2::new(980.0, 860.0), crop);
+
+        assert_eq!(display_size, Vec2::splat(860.0));
+    }
+
+    #[test]
+    fn fullscreen_map_display_size_fits_wide_crop_inside_available_area() {
+        let crop = MapTextureBounds {
+            min_x: 0,
+            min_y: 0,
+            width: 300,
+            height: 100,
+        };
+
+        let display_size = fullscreen_map_display_size(Vec2::new(980.0, 860.0), crop);
+
+        assert_eq!(display_size, Vec2::new(980.0, 980.0 / 3.0));
     }
 }

@@ -12,7 +12,7 @@ use crate::resources::{
 use crate::save_load::SaveLoadWindowState;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
-    fullscreen_map_image_size,
+    fullscreen_map_display_size, fullscreen_map_image_size,
 };
 
 pub(crate) fn reset_app_input_state(
@@ -207,9 +207,10 @@ pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResou
             resources.state.zoom,
             image_size,
         );
+        let display_size = fullscreen_map_display_size(image_size, crop);
         let tiles_per_pixel = Vec2::new(
-            crop.width as f32 / image_size.x.max(1.0),
-            crop.height as f32 / image_size.y.max(1.0),
+            crop.width as f32 / display_size.x.max(1.0),
+            crop.height as f32 / display_size.y.max(1.0),
         );
         resources.state.center_tile.x -= motion.x * tiles_per_pixel.x;
         resources.state.center_tile.y += motion.y * tiles_per_pixel.y;
