@@ -5,9 +5,9 @@ use bevy::window::PrimaryWindow;
 
 use crate::audio::AudioSettingsWindowState;
 use crate::resources::{
-    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapLayer,
-    MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState, SimResource,
-    TechnologyWindowState,
+    AppInputState, BuildMenuState, BuildPlacementState, CraftingWindowState, MapDisplaySettings,
+    MapLayer, MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState,
+    SimResource, TechnologyWindowState,
 };
 use crate::save_load::SaveLoadWindowState;
 use crate::ui::map_view::{
@@ -21,10 +21,15 @@ pub(crate) fn reset_app_input_state(
     crafting: Res<CraftingWindowState>,
     audio_settings: Res<AudioSettingsWindowState>,
     save_load: Res<SaveLoadWindowState>,
+    build_menu: Res<BuildMenuState>,
     mut input_state: ResMut<AppInputState>,
 ) {
-    input_state.world_blocked =
-        map.open || stats.open || crafting.open || audio_settings.open || save_load.open;
+    input_state.world_blocked = map.open
+        || stats.open
+        || crafting.open
+        || audio_settings.open
+        || save_load.open
+        || build_menu.open;
     input_state.escape_consumed = false;
 }
 
@@ -39,6 +44,7 @@ pub(crate) struct PanelInputResources<'w> {
     audio_settings: ResMut<'w, AudioSettingsWindowState>,
     technology: ResMut<'w, TechnologyWindowState>,
     save_load: ResMut<'w, SaveLoadWindowState>,
+    build_menu: ResMut<'w, BuildMenuState>,
     open_container: ResMut<'w, OpenContainer>,
     build_state: ResMut<'w, BuildPlacementState>,
 }
@@ -83,6 +89,14 @@ pub(crate) fn handle_panel_input(
             resources.open_container.entity_id = None;
         }
     }
+    if keyboard.just_pressed(KeyCode::KeyB) {
+        resources.build_menu.open = !resources.build_menu.open;
+        resources.build_menu.message = None;
+        if resources.build_menu.open {
+            resources.build_state.selected = None;
+            resources.open_container.entity_id = None;
+        }
+    }
     if keyboard.just_pressed(KeyCode::F3) {
         resources.settings.debug_reveal_all = !resources.settings.debug_reveal_all;
         resources.settings.show_chunk_grid = resources.settings.debug_reveal_all;
@@ -103,6 +117,10 @@ pub(crate) fn handle_panel_input(
             resources.input_state.escape_consumed = true;
         } else if resources.technology.open {
             resources.technology.open = false;
+            resources.input_state.escape_consumed = true;
+        } else if resources.build_menu.open {
+            resources.build_menu.open = false;
+            resources.build_menu.message = None;
             resources.input_state.escape_consumed = true;
         } else if resources.open_container.entity_id.is_some() {
             resources.open_container.entity_id = None;
@@ -125,7 +143,8 @@ pub(crate) fn handle_panel_input(
         || resources.stats.open
         || resources.crafting.open
         || resources.audio_settings.open
-        || resources.save_load.open;
+        || resources.save_load.open
+        || resources.build_menu.open;
 }
 
 #[derive(SystemParam)]

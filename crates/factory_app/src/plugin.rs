@@ -27,6 +27,7 @@ use crate::input::panels::{
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
+use crate::placement::build::default_hotbar_slots;
 use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
 };
@@ -51,11 +52,11 @@ use crate::rendering::resources::{
 use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
 use crate::resources::{
-    AppInputState, BeltItemRenderPool, BuildPlacementPreviewState, BuildPlacementState,
-    CraftingWindowState, InventoryTransferFeedback, MapDisplaySettings, MapOverlayMarkers,
-    MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState, RenderDetail,
-    RenderSyncStats, SimProfileStats, SimResource, TechnologyWindowState, UpsStats, VisibleChunks,
-    VisibleEntityIds, WorldRenderCache,
+    AppInputState, BeltItemRenderPool, BuildMenuState, BuildPlacementPreviewState,
+    BuildPlacementState, CraftingWindowState, HotbarState, InventoryTransferFeedback,
+    MapDisplaySettings, MapOverlayMarkers, MapTextureCache, MapViewState, OpenContainer,
+    ProductionStatsWindowState, RenderDetail, RenderSyncStats, SimProfileStats, SimResource,
+    TechnologyWindowState, UpsStats, VisibleChunks, VisibleEntityIds, WorldRenderCache,
 };
 use crate::save_load::{
     AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
@@ -72,6 +73,7 @@ use crate::ui::build_bar::{
     handle_build_bar_button_clicks, setup_build_bar, update_build_bar_action_visuals,
     update_build_bar_visuals, update_build_status_text,
 };
+use crate::ui::build_menu::{handle_build_menu_buttons, sync_build_menu};
 use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{setup_debug_overlay, update_debug_overlay, update_ups_stats};
 use crate::ui::inventory_panel::{
@@ -112,13 +114,17 @@ impl Plugin for FactoryAppPlugin {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
 
+        let sim = Simulation::new(
+            123,
+            PrototypeCatalog::load_base().expect("base prototype catalog should load"),
+        );
+        let hotbar = HotbarState {
+            slots: default_hotbar_slots(sim.catalog()),
+        };
+
         app.insert_resource(Time::<Fixed>::from_hz(SIM_TICKS_PER_SECOND))
-            .insert_resource(SimResource {
-                sim: Simulation::new(
-                    123,
-                    PrototypeCatalog::load_base().expect("base prototype catalog should load"),
-                ),
-            })
+            .insert_resource(SimResource { sim })
+            .insert_resource(hotbar)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<AccumulatedMouseMotion>()
@@ -132,6 +138,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<ResourceRenderCache>()
             .init_resource::<BuildPlacementState>()
             .init_resource::<BuildPlacementPreviewState>()
+            .init_resource::<BuildMenuState>()
             .init_resource::<OpenContainer>()
             .init_resource::<InventoryTransferFeedback>()
             .init_resource::<TechnologyWindowState>()
@@ -292,6 +299,8 @@ impl Plugin for FactoryAppPlugin {
                     update_build_bar_visuals,
                     update_build_bar_action_visuals,
                     update_build_status_text.after(update_build_placement_preview_state),
+                    handle_build_menu_buttons,
+                    sync_build_menu.after(handle_build_menu_buttons),
                     update_burner_drill_indicators,
                     handle_full_map_buttons,
                     sync_minimap.after(update_map_texture),
@@ -328,6 +337,7 @@ impl Plugin for FactoryAppPlugin {
                     .after(handle_manual_crafting_recipe_buttons)
                     .after(handle_container_slot_clicks)
                     .after(handle_assembler_recipe_button_clicks)
+                    .after(handle_build_menu_buttons)
                     .after(handle_technology_panel_buttons),
             );
     }

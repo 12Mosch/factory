@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
 use factory_app::placement::build::buildable_prototypes;
-use factory_app::resources::{BuildSelection, SimResource};
+use factory_app::resources::{BuildSelection, HotbarState, SimResource};
 use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
 use std::time::Duration;
@@ -89,10 +89,21 @@ pub fn first_available_build_selection(app: &App) -> BuildSelection {
         .into_iter()
         .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
         .expect("starting inventory should include at least one buildable item");
-    BuildSelection {
-        prototype_id: buildable.prototype_id,
-        item_id: buildable.item_id,
-    }
+    buildable.selection()
+}
+
+pub fn first_available_hotbar_slot(app: &App) -> (usize, BuildSelection) {
+    let sim = &app.world().resource::<SimResource>().sim;
+    let hotbar = app.world().resource::<HotbarState>();
+    hotbar
+        .slots
+        .iter()
+        .enumerate()
+        .find_map(|(slot_index, slot)| {
+            let selection = (*slot)?;
+            (sim.player_inventory().count(selection.item_id) > 0).then_some((slot_index, selection))
+        })
+        .expect("default hotbar should include at least one item from the starting inventory")
 }
 
 pub fn hotbar_key_for_slot(slot_index: usize) -> KeyCode {
@@ -106,6 +117,7 @@ pub fn hotbar_key_for_slot(slot_index: usize) -> KeyCode {
         6 => KeyCode::Digit7,
         7 => KeyCode::Digit8,
         8 => KeyCode::Digit9,
+        9 => KeyCode::Digit0,
         _ => panic!("test hotbar slot should be addressable by number key"),
     }
 }
