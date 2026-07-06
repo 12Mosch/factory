@@ -197,6 +197,10 @@ impl MapTextureCache {
     pub fn surface(&self) -> Option<&MapLayerTextureCache> {
         self.layer(MapLayer::Surface)
     }
+
+    pub fn layer_mut(&mut self, layer: MapLayer) -> &mut MapLayerTextureCache {
+        self.layers.entry(layer).or_default()
+    }
 }
 
 #[derive(Default)]

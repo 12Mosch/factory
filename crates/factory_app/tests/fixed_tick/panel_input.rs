@@ -425,9 +425,7 @@ fn escape_closes_settings_panel() {
 fn seed_map_bounds(app: &mut App) {
     app.world_mut()
         .resource_mut::<MapTextureCache>()
-        .layers
-        .entry(MapLayer::Surface)
-        .or_default()
+        .layer_mut(MapLayer::Surface)
         .bounds = Some(MapTextureBounds {
         min_x: -128,
         min_y: -128,

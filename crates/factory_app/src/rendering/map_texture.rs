@@ -34,7 +34,7 @@ pub(crate) fn update_map_texture(
 
     // The surface layer also backs the minimap, so it stays fresh even while
     // the fullscreen map is closed. Other layers only update while displayed.
-    let surface_cache = cache.layers.entry(MapLayer::Surface).or_default();
+    let surface_cache = cache.layer_mut(MapLayer::Surface);
     update_layer_map_texture(
         &sim.sim,
         &settings,
@@ -44,7 +44,7 @@ pub(crate) fn update_map_texture(
     );
 
     if state.open && state.selected_layer != MapLayer::Surface {
-        let layer_cache = cache.layers.entry(state.selected_layer).or_default();
+        let layer_cache = cache.layer_mut(state.selected_layer);
         update_layer_map_texture(
             &sim.sim,
             &settings,
