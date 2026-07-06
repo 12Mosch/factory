@@ -107,22 +107,58 @@ fn sync_visible_world_tiles_impl(commands: &mut Commands, params: WorldTilesRend
 }
 
 fn world_chunk_mesh(chunk: &factory_sim::Chunk, ids: RenderPrototypeIds) -> Mesh {
-    let tile_count = chunk.tiles.len();
-    let mut positions = Vec::with_capacity(tile_count * 4);
-    let mut uvs = Vec::with_capacity(tile_count * 4);
-    let mut colors = Vec::with_capacity(tile_count * 4);
-    let mut indices = Vec::with_capacity(tile_count * 6);
+    let size = CHUNK_SIZE as usize;
+    let tile_colors = chunk
+        .tiles
+        .iter()
+        .map(|tile| tile_color(tile.tile_id, ids).to_linear().to_f32_array())
+        .collect::<Vec<_>>();
 
-    for (index, tile) in chunk.tiles.iter().enumerate() {
-        let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
-        let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-        let world_x = chunk.coord.x * CHUNK_SIZE + local_x;
-        let world_y = chunk.coord.y * CHUNK_SIZE + local_y;
+    let mut positions = Vec::new();
+    let mut uvs = Vec::new();
+    let mut colors = Vec::new();
+    let mut indices = Vec::new();
+
+    // Greedy meshing: merge runs of same-colored tiles into maximal rectangles
+    // so mostly-uniform terrain emits a few quads instead of one per tile.
+    let mut merged = vec![false; chunk.tiles.len()];
+    for start in 0..chunk.tiles.len() {
+        if merged[start] {
+            continue;
+        }
+        let color = tile_colors[start];
+        let local_x = start % size;
+        let local_y = start / size;
+
+        let mut width = 1;
+        while local_x + width < size
+            && !merged[start + width]
+            && tile_colors[start + width] == color
+        {
+            width += 1;
+        }
+
+        let mut height = 1;
+        'grow: while local_y + height < size {
+            let row = start + height * size;
+            for dx in 0..width {
+                if merged[row + dx] || tile_colors[row + dx] != color {
+                    break 'grow;
+                }
+            }
+            height += 1;
+        }
+
+        for dy in 0..height {
+            merged[start + dy * size..start + dy * size + width].fill(true);
+        }
+
+        let world_x = chunk.coord.x * CHUNK_SIZE + local_x as i32;
+        let world_y = chunk.coord.y * CHUNK_SIZE + local_y as i32;
         let min_x = world_x as f32 * TILE_SIZE;
         let min_y = world_y as f32 * TILE_SIZE;
-        let max_x = min_x + TILE_SIZE;
-        let max_y = min_y + TILE_SIZE;
-        let color = tile_color(tile.tile_id, ids).to_linear().to_f32_array();
+        let max_x = min_x + width as f32 * TILE_SIZE;
+        let max_y = min_y + height as f32 * TILE_SIZE;
         let base_index = positions.len() as u32;
 
         positions.extend_from_slice(&[
@@ -178,6 +214,77 @@ mod tests {
     const RENDER_SYNC_SMALL_MEASUREMENT_FRAMES: usize = 300;
     const RENDER_SYNC_SMALL_TOTAL_P95_BUDGET: Duration = Duration::from_millis(4);
     const RENDER_SYNC_SMALL_TOTAL_MAX_BUDGET: Duration = Duration::from_millis(8);
+
+    #[test]
+    fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
+        let mut sim = Simulation::new_test_world(123);
+        sim.ensure_chunk_generated(ChunkCoord { x: 0, y: 0 });
+        let chunk = sim.world().chunks[&ChunkCoord { x: 0, y: 0 }].clone();
+        let ids = RenderPrototypeIds::from_catalog(sim.catalog());
+
+        let mesh = world_chunk_mesh(&chunk, ids);
+        let (positions, colors) = mesh_quads(&mesh);
+        let quad_count = positions.len() / 4;
+        let tile_count = chunk.tiles.len();
+        assert!(
+            quad_count < tile_count,
+            "greedy meshing should emit fewer quads ({quad_count}) than tiles ({tile_count})"
+        );
+
+        let size = CHUNK_SIZE as usize;
+        let mut painted = vec![None; tile_count];
+        for quad in 0..quad_count {
+            let min = positions[quad * 4];
+            let max = positions[quad * 4 + 2];
+            let color = colors[quad * 4];
+            let min_tile_x = (min[0] / TILE_SIZE).round() as i32 - chunk.coord.x * CHUNK_SIZE;
+            let min_tile_y = (min[1] / TILE_SIZE).round() as i32 - chunk.coord.y * CHUNK_SIZE;
+            let max_tile_x = (max[0] / TILE_SIZE).round() as i32 - chunk.coord.x * CHUNK_SIZE;
+            let max_tile_y = (max[1] / TILE_SIZE).round() as i32 - chunk.coord.y * CHUNK_SIZE;
+            for tile_y in min_tile_y..max_tile_y {
+                for tile_x in min_tile_x..max_tile_x {
+                    let index = tile_y as usize * size + tile_x as usize;
+                    assert!(painted[index].is_none(), "quads must not overlap");
+                    painted[index] = Some(color);
+                }
+            }
+        }
+
+        for (index, tile) in chunk.tiles.iter().enumerate() {
+            let expected = tile_color(tile.tile_id, ids).to_linear().to_f32_array();
+            assert_eq!(painted[index], Some(expected), "tile {index} coverage");
+        }
+    }
+
+    #[test]
+    fn world_chunk_mesh_collapses_uniform_chunk_to_single_quad() {
+        let mut sim = Simulation::new_test_world(123);
+        sim.ensure_chunk_generated(ChunkCoord { x: 0, y: 0 });
+        let mut chunk = sim.world().chunks[&ChunkCoord { x: 0, y: 0 }].clone();
+        let uniform_id = chunk.tiles[0].tile_id;
+        for tile in &mut chunk.tiles {
+            tile.tile_id = uniform_id;
+        }
+        let ids = RenderPrototypeIds::from_catalog(sim.catalog());
+
+        let mesh = world_chunk_mesh(&chunk, ids);
+        let (positions, _) = mesh_quads(&mesh);
+        assert_eq!(positions.len(), 4);
+    }
+
+    fn mesh_quads(mesh: &Mesh) -> (Vec<[f32; 3]>, Vec<[f32; 4]>) {
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("world chunk mesh should have Float32x3 positions");
+        };
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("world chunk mesh should have Float32x4 colors");
+        };
+        (positions.clone(), colors.clone())
+    }
 
     #[test]
     fn render_sync_counts_are_bounded_by_visible_chunks() {
