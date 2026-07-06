@@ -196,6 +196,7 @@ impl SimulationSnapshot {
         Simulation {
             tick: self.tick,
             entity_topology_revision: 0,
+            revealed_revision: 0,
             world: WorldSim {
                 seed: self.world_seed,
                 prototypes: self.prototypes,

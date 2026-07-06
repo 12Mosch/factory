@@ -168,7 +168,7 @@ pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResou
         }
     }
 
-    let Some(map_bounds) = resources.cache.bounds else {
+    let Some(map_bounds) = resources.cache.surface().and_then(|cache| cache.bounds) else {
         return;
     };
     let image_size = fullscreen_map_image_size(resources.windows.iter().next());
