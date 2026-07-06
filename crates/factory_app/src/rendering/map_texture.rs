@@ -195,7 +195,7 @@ fn update_map_pixels_incremental(
         // The resize only preserves pixels inside both bounds; drop the paint
         // state of clipped chunks so they get repainted at their new position.
         cache.painted_chunks.retain(|coord, _| {
-            chunk_inside_bounds(*coord, old_bounds) && chunk_inside_bounds(*coord, new_bounds)
+            old_bounds.contains_chunk(*coord) && new_bounds.contains_chunk(*coord)
         });
     }
     repaint_changed_chunks(sim, settings, layer, cache);
@@ -511,16 +511,6 @@ fn pixel_offset(bounds: MapTextureBounds, x: i32, y: i32) -> usize {
     let local_y = (y - bounds.min_y) as u32;
     let flipped_y = bounds.height - 1 - local_y;
     ((flipped_y * bounds.width + local_x) * 4) as usize
-}
-
-fn chunk_inside_bounds(coord: ChunkCoord, bounds: MapTextureBounds) -> bool {
-    let min_x = coord.x * CHUNK_SIZE;
-    let min_y = coord.y * CHUNK_SIZE;
-
-    min_x >= bounds.min_x
-        && min_y >= bounds.min_y
-        && min_x + CHUNK_SIZE <= bounds.min_x + bounds.width as i32
-        && min_y + CHUNK_SIZE <= bounds.min_y + bounds.height as i32
 }
 
 fn next_chunk_boundary_at_or_after(value: i32) -> i32 {
