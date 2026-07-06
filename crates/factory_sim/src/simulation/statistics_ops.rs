@@ -153,6 +153,7 @@ impl Simulation {
         self.world
             .ensure_chunks_around_chunk(player_chunk, CHART_REVEAL_RADIUS_CHUNKS);
 
+        let mut revealed_any = false;
         for y in player_chunk.y - CHART_REVEAL_RADIUS_CHUNKS
             ..=player_chunk.y + CHART_REVEAL_RADIUS_CHUNKS
         {
@@ -161,9 +162,12 @@ impl Simulation {
             {
                 let coord = ChunkCoord { x, y };
                 if self.world.chunks.contains_key(&coord) {
-                    self.chart.revealed_chunks.insert(coord);
+                    revealed_any |= self.chart.revealed_chunks.insert(coord);
                 }
             }
+        }
+        if revealed_any {
+            self.revealed_revision = self.revealed_revision.wrapping_add(1);
         }
     }
 

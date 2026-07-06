@@ -107,10 +107,13 @@ pub(crate) struct MinimapSyncParams<'w, 's> {
 }
 
 pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams) {
-    let Some(handle) = params.cache.handle.as_ref() else {
+    let Some(surface_cache) = params.cache.surface() else {
         return;
     };
-    let Some(map_bounds) = params.cache.bounds else {
+    let Some(handle) = surface_cache.handle.as_ref() else {
+        return;
+    };
+    let Some(map_bounds) = surface_cache.bounds else {
         return;
     };
     let player = params.sim.sim.player();
@@ -535,7 +538,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
         return;
     }
 
-    let Some(layer_cache) = params.cache.layer_caches.get(&params.state.selected_layer) else {
+    let Some(layer_cache) = params.cache.layer(params.state.selected_layer) else {
         return;
     };
     let Some(handle) = layer_cache.handle.as_ref() else {

@@ -3,8 +3,8 @@ use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
 use factory_app::rendering::resources::ResourceRenderCache;
 use factory_app::resources::{
-    BuildPlacementState, BuildSelection, MapChunkPaintState, MapTextureCache, OpenContainer,
-    SimResource,
+    BuildPlacementState, BuildSelection, MapChunkPaintState, MapLayer, MapLayerTextureCache,
+    MapTextureCache, OpenContainer, SimResource,
 };
 use factory_app::save_load::{
     LOAD_SAVE_SLOTS, MANUAL_SAVE_SLOTS, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig,
@@ -167,20 +167,25 @@ fn load_invalidates_render_caches() {
     let mut app = test_app(Duration::ZERO, "load_invalidates_caches");
     write_slot_save(&app, SaveSlotKind::Quick);
     app.world_mut().insert_resource(MapTextureCache {
-        handle: None,
-        bounds: Some(Default::default()),
-        pixels: Some(vec![1, 2, 3, 4]),
-        painted_chunks: [(
-            ChunkCoord { x: 9, y: -3 },
-            MapChunkPaintState { revealed: true },
+        layers: [(
+            MapLayer::Surface,
+            MapLayerTextureCache {
+                handle: None,
+                bounds: Some(Default::default()),
+                pixels: Some(vec![1, 2, 3, 4]),
+                painted_chunks: [(
+                    ChunkCoord { x: 9, y: -3 },
+                    MapChunkPaintState { revealed: true },
+                )]
+                .into(),
+                last_chunk_revision: 66,
+                last_resource_revision: 99,
+                last_revealed_revision: 77,
+                last_debug_flags: (true, true),
+                last_texture_update_tick: 44,
+            },
         )]
         .into(),
-        last_chunk_revision: 66,
-        last_resource_revision: 99,
-        last_revealed_signature: 77,
-        last_debug_flags: (true, true),
-        last_texture_update_tick: 44,
-        layer_caches: Default::default(),
     });
     app.world_mut().insert_resource(ResourceRenderCache {
         last_resource_revision: Some(42),
@@ -195,10 +200,7 @@ fn load_invalidates_render_caches() {
     app.update();
 
     let map_cache = app.world().resource::<MapTextureCache>();
-    assert_eq!(map_cache.bounds, None);
-    assert_eq!(map_cache.pixels, None);
-    assert!(map_cache.painted_chunks.is_empty());
-    assert_eq!(map_cache.last_resource_revision, 0);
+    assert!(map_cache.layers.is_empty());
     assert_ne!(
         app.world()
             .resource::<ResourceRenderCache>()

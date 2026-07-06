@@ -4,7 +4,6 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Simulation};
-use std::hash::{Hash, Hasher};
 
 use crate::rendering::colors::{RenderPrototypeIds, resource_color, tile_color};
 use crate::resources::{
@@ -32,83 +31,27 @@ pub(crate) fn update_map_texture(
     let Some(mut images) = images else {
         return;
     };
-    let revealed_signature = revealed_signature(&sim.sim);
-    let debug_flags = (settings.debug_reveal_all, settings.show_chunk_grid);
-    let tick_count = sim.sim.tick_count();
-    let chunk_changed = cache.last_chunk_revision != sim.sim.world().chunk_revision();
-    let resource_changed = cache.last_resource_revision != sim.sim.world().resource_revision();
-    let revealed_changed = cache.last_revealed_signature != revealed_signature;
-    let debug_changed = cache.last_debug_flags != debug_flags;
-    let needs_update = cache.handle.is_none()
-        || chunk_changed
-        || revealed_changed
-        || debug_changed
-        || (resource_changed && should_refresh_texture(cache.last_texture_update_tick, tick_count));
 
-    if needs_update {
-        let full_rebuild = cache.handle.is_none()
-            || cache.bounds.is_none()
-            || cache.pixels.is_none()
-            || debug_changed;
+    // The surface layer also backs the minimap, so it stays fresh even while
+    // the fullscreen map is closed. Other layers only update while displayed.
+    let surface_cache = cache.layer_mut(MapLayer::Surface);
+    update_layer_map_texture(
+        &sim.sim,
+        &settings,
+        MapLayer::Surface,
+        surface_cache,
+        &mut images,
+    );
 
-        if full_rebuild {
-            let map = generate_map_pixels(&sim.sim, &settings);
-            cache.bounds = Some(map.bounds);
-            cache.pixels = Some(map.data);
-            refresh_painted_chunks(&sim.sim, &settings, &mut cache);
-        } else {
-            update_map_pixels_incremental(&sim.sim, &settings, &mut cache);
-        }
-
-        let bounds = cache.bounds.unwrap_or_default();
-        let image_data = cache.pixels.clone().unwrap_or_default();
-        let mut image = Image::new_fill(
-            Extent3d {
-                width: bounds.width,
-                height: bounds.height,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            &UNREVEALED_PIXEL,
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    if state.open && state.selected_layer != MapLayer::Surface {
+        let layer_cache = cache.layer_mut(state.selected_layer);
+        update_layer_map_texture(
+            &sim.sim,
+            &settings,
+            state.selected_layer,
+            layer_cache,
+            &mut images,
         );
-        image.data = Some(image_data);
-        image.sampler = ImageSampler::nearest();
-
-        let handle = match cache.handle.as_ref() {
-            Some(handle) => {
-                let _ = images.insert(handle.id(), image);
-                handle.clone()
-            }
-            None => images.add(image),
-        };
-
-        cache.handle = Some(handle);
-        cache.last_chunk_revision = sim.sim.world().chunk_revision();
-        cache.last_resource_revision = sim.sim.world().resource_revision();
-        cache.last_revealed_signature = revealed_signature;
-        cache.last_debug_flags = debug_flags;
-        cache.last_texture_update_tick = tick_count;
-    }
-
-    if state.open {
-        let selected_layer = state.selected_layer;
-        if selected_layer == MapLayer::Surface {
-            sync_surface_layer_cache(&mut cache);
-        } else {
-            let layer_cache = cache.layer_caches.entry(selected_layer).or_default();
-            update_layer_map_texture(
-                &sim.sim,
-                &settings,
-                selected_layer,
-                layer_cache,
-                &mut images,
-                revealed_signature,
-                debug_flags,
-                tick_count,
-            );
-        }
     }
 }
 
@@ -149,20 +92,19 @@ pub fn generate_map_pixels_for_layer(
     MapPixels { bounds, data }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn update_layer_map_texture(
     sim: &Simulation,
     settings: &MapDisplaySettings,
     layer: MapLayer,
     cache: &mut MapLayerTextureCache,
     images: &mut Assets<Image>,
-    revealed_signature: u64,
-    debug_flags: (bool, bool),
-    tick_count: u64,
 ) {
+    let revealed_revision = sim.revealed_revision();
+    let debug_flags = (settings.debug_reveal_all, settings.show_chunk_grid);
+    let tick_count = sim.tick_count();
     let chunk_changed = cache.last_chunk_revision != sim.world().chunk_revision();
     let resource_changed = cache.last_resource_revision != sim.world().resource_revision();
-    let revealed_changed = cache.last_revealed_signature != revealed_signature;
+    let revealed_changed = cache.last_revealed_revision != revealed_revision;
     let debug_changed = cache.last_debug_flags != debug_flags;
     let needs_update = cache.handle.is_none()
         || chunk_changed
@@ -174,11 +116,47 @@ fn update_layer_map_texture(
         return;
     }
 
-    let map = generate_map_pixels_for_layer(sim, settings, layer);
+    let full_rebuild = cache.bounds.is_none() || cache.pixels.is_none() || debug_changed;
+    if full_rebuild {
+        let map = generate_map_pixels_for_layer(sim, settings, layer);
+        cache.bounds = Some(map.bounds);
+        cache.pixels = Some(map.data);
+        refresh_painted_chunks(sim, settings, cache);
+    } else {
+        update_map_pixels_incremental(sim, settings, layer, cache);
+    }
+
+    upload_layer_texture(cache, images);
+
+    cache.last_chunk_revision = sim.world().chunk_revision();
+    cache.last_resource_revision = sim.world().resource_revision();
+    cache.last_revealed_revision = revealed_revision;
+    cache.last_debug_flags = debug_flags;
+    cache.last_texture_update_tick = tick_count;
+}
+
+fn upload_layer_texture(cache: &mut MapLayerTextureCache, images: &mut Assets<Image>) {
+    let bounds = cache.bounds.unwrap_or_default();
+    let Some(pixels) = cache.pixels.as_ref() else {
+        return;
+    };
+
+    if let Some(handle) = cache.handle.as_ref()
+        && let Some(mut image) = images.get_mut(handle.id())
+        && image.width() == bounds.width
+        && image.height() == bounds.height
+    {
+        match image.data.as_mut() {
+            Some(data) => data.clone_from(pixels),
+            None => image.data = Some(pixels.clone()),
+        }
+        return;
+    }
+
     let mut image = Image::new_fill(
         Extent3d {
-            width: map.bounds.width,
-            height: map.bounds.height,
+            width: bounds.width,
+            height: bounds.height,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
@@ -186,7 +164,7 @@ fn update_layer_map_texture(
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    image.data = Some(map.data.clone());
+    image.data = Some(pixels.clone());
     image.sampler = ImageSampler::nearest();
 
     let handle = match cache.handle.as_ref() {
@@ -196,36 +174,7 @@ fn update_layer_map_texture(
         }
         None => images.add(image),
     };
-
     cache.handle = Some(handle);
-    cache.bounds = Some(map.bounds);
-    cache.pixels = Some(map.data);
-    cache.last_chunk_revision = sim.world().chunk_revision();
-    cache.last_resource_revision = sim.world().resource_revision();
-    cache.last_revealed_signature = revealed_signature;
-    cache.last_debug_flags = debug_flags;
-    cache.last_texture_update_tick = tick_count;
-}
-
-fn sync_surface_layer_cache(cache: &mut MapTextureCache) {
-    let handle = cache.handle.clone();
-    let bounds = cache.bounds;
-    let pixels = cache.pixels.clone();
-    let last_chunk_revision = cache.last_chunk_revision;
-    let last_resource_revision = cache.last_resource_revision;
-    let last_revealed_signature = cache.last_revealed_signature;
-    let last_debug_flags = cache.last_debug_flags;
-    let last_texture_update_tick = cache.last_texture_update_tick;
-
-    let layer_cache = cache.layer_caches.entry(MapLayer::Surface).or_default();
-    layer_cache.handle = handle;
-    layer_cache.bounds = bounds;
-    layer_cache.pixels = pixels;
-    layer_cache.last_chunk_revision = last_chunk_revision;
-    layer_cache.last_resource_revision = last_resource_revision;
-    layer_cache.last_revealed_signature = last_revealed_signature;
-    layer_cache.last_debug_flags = last_debug_flags;
-    layer_cache.last_texture_update_tick = last_texture_update_tick;
 }
 
 fn should_refresh_texture(last_texture_update_tick: u64, tick_count: u64) -> bool {
@@ -235,17 +184,18 @@ fn should_refresh_texture(last_texture_update_tick: u64, tick_count: u64) -> boo
 fn update_map_pixels_incremental(
     sim: &Simulation,
     settings: &MapDisplaySettings,
-    cache: &mut MapTextureCache,
+    layer: MapLayer,
+    cache: &mut MapLayerTextureCache,
 ) {
     let old_bounds = cache.bounds.unwrap_or_default();
     let new_bounds = map_texture_bounds(sim, settings).unwrap_or_default();
     let bounds_changed = old_bounds != new_bounds;
     if bounds_changed {
         resize_cached_pixels(cache, old_bounds, new_bounds);
-        repaint_all_chunks(sim, settings, cache);
+        repaint_all_chunks(sim, settings, layer, cache);
     } else {
-        repaint_changed_chunks(sim, settings, cache);
-        repaint_dirty_resource_tiles(sim, settings, cache);
+        repaint_changed_chunks(sim, settings, layer, cache);
+        repaint_dirty_resource_tiles(sim, settings, layer, cache);
     }
 
     if bounds_changed && settings.show_chunk_grid {
@@ -260,7 +210,7 @@ fn update_map_pixels_incremental(
 }
 
 fn resize_cached_pixels(
-    cache: &mut MapTextureCache,
+    cache: &mut MapLayerTextureCache,
     old_bounds: MapTextureBounds,
     new_bounds: MapTextureBounds,
 ) {
@@ -302,7 +252,8 @@ fn resize_cached_pixels(
 fn repaint_changed_chunks(
     sim: &Simulation,
     settings: &MapDisplaySettings,
-    cache: &mut MapTextureCache,
+    layer: MapLayer,
+    cache: &mut MapLayerTextureCache,
 ) {
     let Some(bounds) = cache.bounds else {
         return;
@@ -323,7 +274,7 @@ fn repaint_changed_chunks(
         if cache.painted_chunks.get(&chunk.coord) == Some(&state) {
             continue;
         }
-        paint_chunk(data, bounds, sim, settings, ids, chunk.coord);
+        paint_chunk(data, bounds, sim, settings, ids, layer, chunk.coord);
         cache.painted_chunks.insert(chunk.coord, state);
     }
 }
@@ -331,13 +282,14 @@ fn repaint_changed_chunks(
 fn repaint_dirty_resource_tiles(
     sim: &Simulation,
     settings: &MapDisplaySettings,
-    cache: &mut MapTextureCache,
+    layer: MapLayer,
+    cache: &mut MapLayerTextureCache,
 ) {
     let Some(changes) = sim
         .world()
         .resource_dirty_tiles_since(cache.last_resource_revision)
     else {
-        repaint_all_chunks(sim, settings, cache);
+        repaint_all_chunks(sim, settings, layer, cache);
         return;
     };
     let changes = changes.collect::<Vec<_>>();
@@ -354,14 +306,15 @@ fn repaint_dirty_resource_tiles(
     };
 
     for change in changes {
-        paint_tile(data, bounds, sim, settings, ids, change.x, change.y);
+        paint_tile(data, bounds, sim, settings, ids, layer, change.x, change.y);
     }
 }
 
 fn repaint_all_chunks(
     sim: &Simulation,
     settings: &MapDisplaySettings,
-    cache: &mut MapTextureCache,
+    layer: MapLayer,
+    cache: &mut MapLayerTextureCache,
 ) {
     let Some(bounds) = cache.bounds else {
         return;
@@ -373,7 +326,7 @@ fn repaint_all_chunks(
 
     cache.painted_chunks.clear();
     for chunk in sim.world().chunks.values() {
-        paint_chunk(data, bounds, sim, settings, ids, chunk.coord);
+        paint_chunk(data, bounds, sim, settings, ids, layer, chunk.coord);
         cache.painted_chunks.insert(
             chunk.coord,
             MapChunkPaintState {
@@ -386,7 +339,7 @@ fn repaint_all_chunks(
 fn refresh_painted_chunks(
     sim: &Simulation,
     settings: &MapDisplaySettings,
-    cache: &mut MapTextureCache,
+    cache: &mut MapLayerTextureCache,
 ) {
     cache.painted_chunks = sim
         .world()
@@ -451,6 +404,7 @@ fn paint_chunk(
     sim: &Simulation,
     settings: &MapDisplaySettings,
     ids: RenderPrototypeIds,
+    layer: MapLayer,
     coord: ChunkCoord,
 ) {
     let Some(chunk) = sim.world().chunks.get(&coord) else {
@@ -462,7 +416,7 @@ fn paint_chunk(
         let local_y = (index as i32).div_euclid(CHUNK_SIZE);
         let world_x = chunk.coord.x * CHUNK_SIZE + local_x;
         let world_y = chunk.coord.y * CHUNK_SIZE + local_y;
-        let color = tile_pixel(sim, settings, ids, coord, tile);
+        let color = tile_pixel(sim, settings, ids, layer, coord, tile);
         set_world_pixel(data, bounds, world_x, world_y, color);
     }
 
@@ -471,12 +425,14 @@ fn paint_chunk(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_tile(
     data: &mut [u8],
     bounds: MapTextureBounds,
     sim: &Simulation,
     settings: &MapDisplaySettings,
     ids: RenderPrototypeIds,
+    layer: MapLayer,
     x: i32,
     y: i32,
 ) {
@@ -485,7 +441,7 @@ fn paint_tile(
         y: y.div_euclid(CHUNK_SIZE),
     };
     if let Some(tile) = sim.world().tile_at(x, y) {
-        let color = tile_pixel(sim, settings, ids, coord, tile);
+        let color = tile_pixel(sim, settings, ids, layer, coord, tile);
         set_world_pixel(data, bounds, x, y, color);
     }
 
@@ -499,11 +455,12 @@ fn tile_pixel(
     sim: &Simulation,
     settings: &MapDisplaySettings,
     ids: RenderPrototypeIds,
+    layer: MapLayer,
     coord: ChunkCoord,
     tile: &factory_sim::TileCell,
 ) -> [u8; 4] {
     if settings.debug_reveal_all || sim.is_chunk_revealed(coord) {
-        revealed_tile_pixel(MapLayer::Surface, ids, tile)
+        revealed_tile_pixel(layer, ids, tile)
     } else {
         UNREVEALED_PIXEL
     }
@@ -593,12 +550,6 @@ fn color_to_pixel(color: Color) -> [u8; 4] {
     color.to_srgba().to_u8_array()
 }
 
-fn revealed_signature(sim: &Simulation) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    sim.revealed_chunks().hash(&mut hasher);
-    hasher.finish()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,25 +557,29 @@ mod tests {
 
     #[test]
     fn incremental_update_matches_full_render_after_streaming_chunk() {
+        let layers = [MapLayer::Surface, MapLayer::Resources, MapLayer::Entities];
         let mut sim = Simulation::new_test_world(123);
         let settings = MapDisplaySettings::default();
-        let initial = generate_map_pixels(&sim, &settings);
-        let mut cache = MapTextureCache {
-            handle: Some(Handle::default()),
-            bounds: Some(initial.bounds),
-            pixels: Some(initial.data),
-            painted_chunks: Default::default(),
-            last_chunk_revision: sim.world().chunk_revision(),
-            last_resource_revision: sim.world().resource_revision(),
-            last_revealed_signature: revealed_signature(&sim),
-            last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
-            last_texture_update_tick: sim.tick_count(),
-            layer_caches: Default::default(),
-        };
-        refresh_painted_chunks(&sim, &settings, &mut cache);
+        let mut caches = layers.map(|layer| {
+            let initial = generate_map_pixels_for_layer(&sim, &settings, layer);
+            let mut cache = MapLayerTextureCache {
+                handle: Some(Handle::default()),
+                bounds: Some(initial.bounds),
+                pixels: Some(initial.data),
+                painted_chunks: Default::default(),
+                last_chunk_revision: sim.world().chunk_revision(),
+                last_resource_revision: sim.world().resource_revision(),
+                last_revealed_revision: sim.revealed_revision(),
+                last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
+                last_texture_update_tick: sim.tick_count(),
+            };
+            refresh_painted_chunks(&sim, &settings, &mut cache);
+            cache
+        });
 
         let target_chunk = ChunkCoord { x: 0, y: -9 };
         let before_chunk_revision = sim.world().chunk_revision();
+        let before_revealed_revision = sim.revealed_revision();
         assert!(
             !sim.world().chunks.contains_key(&target_chunk),
             "target chunk should start outside the generated world"
@@ -644,12 +599,22 @@ mod tests {
             sim.is_chunk_revealed(target_chunk),
             "ticking at the target should reveal the streamed chunk"
         );
+        assert!(
+            sim.revealed_revision() != before_revealed_revision,
+            "revealing new chunks should advance the revealed revision"
+        );
 
-        update_map_pixels_incremental(&sim, &settings, &mut cache);
+        for (layer, cache) in layers.iter().zip(caches.iter_mut()) {
+            update_map_pixels_incremental(&sim, &settings, *layer, cache);
 
-        let full = generate_map_pixels(&sim, &settings);
-        assert_eq!(cache.bounds, Some(full.bounds));
-        assert_eq!(cache.pixels.as_deref(), Some(full.data.as_slice()));
+            let full = generate_map_pixels_for_layer(&sim, &settings, *layer);
+            assert_eq!(cache.bounds, Some(full.bounds), "bounds for {layer:?}");
+            assert_eq!(
+                cache.pixels.as_deref(),
+                Some(full.data.as_slice()),
+                "pixels for {layer:?}"
+            );
+        }
     }
 
     fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i32, i32) {

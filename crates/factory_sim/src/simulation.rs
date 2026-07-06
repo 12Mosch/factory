@@ -80,6 +80,8 @@ pub struct Simulation {
     tick: u64,
     #[serde(skip, default)]
     entity_topology_revision: u64,
+    #[serde(skip, default)]
+    revealed_revision: u64,
     world: WorldSim,
     chart: ChartState,
     item_statistics: ItemStatistics,

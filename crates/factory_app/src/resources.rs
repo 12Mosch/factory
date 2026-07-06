@@ -186,16 +186,21 @@ impl MapTextureBounds {
 
 #[derive(Resource, Default)]
 pub struct MapTextureCache {
-    pub handle: Option<Handle<Image>>,
-    pub bounds: Option<MapTextureBounds>,
-    pub pixels: Option<Vec<u8>>,
-    pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
-    pub last_chunk_revision: u64,
-    pub last_resource_revision: u64,
-    pub last_revealed_signature: u64,
-    pub last_debug_flags: (bool, bool),
-    pub last_texture_update_tick: u64,
-    pub layer_caches: BTreeMap<MapLayer, MapLayerTextureCache>,
+    pub layers: BTreeMap<MapLayer, MapLayerTextureCache>,
+}
+
+impl MapTextureCache {
+    pub fn layer(&self, layer: MapLayer) -> Option<&MapLayerTextureCache> {
+        self.layers.get(&layer)
+    }
+
+    pub fn surface(&self) -> Option<&MapLayerTextureCache> {
+        self.layer(MapLayer::Surface)
+    }
+
+    pub fn layer_mut(&mut self, layer: MapLayer) -> &mut MapLayerTextureCache {
+        self.layers.entry(layer).or_default()
+    }
 }
 
 #[derive(Default)]
@@ -203,9 +208,10 @@ pub struct MapLayerTextureCache {
     pub handle: Option<Handle<Image>>,
     pub bounds: Option<MapTextureBounds>,
     pub pixels: Option<Vec<u8>>,
+    pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
-    pub last_revealed_signature: u64,
+    pub last_revealed_revision: u64,
     pub last_debug_flags: (bool, bool),
     pub last_texture_update_tick: u64,
 }
