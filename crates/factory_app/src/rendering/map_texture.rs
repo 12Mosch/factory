@@ -192,11 +192,14 @@ fn update_map_pixels_incremental(
     let bounds_changed = old_bounds != new_bounds;
     if bounds_changed {
         resize_cached_pixels(cache, old_bounds, new_bounds);
-        repaint_all_chunks(sim, settings, layer, cache);
-    } else {
-        repaint_changed_chunks(sim, settings, layer, cache);
-        repaint_dirty_resource_tiles(sim, settings, layer, cache);
+        // The resize only preserves pixels inside both bounds; drop the paint
+        // state of clipped chunks so they get repainted at their new position.
+        cache.painted_chunks.retain(|coord, _| {
+            chunk_inside_bounds(*coord, old_bounds) && chunk_inside_bounds(*coord, new_bounds)
+        });
     }
+    repaint_changed_chunks(sim, settings, layer, cache);
+    repaint_dirty_resource_tiles(sim, settings, layer, cache);
 
     if bounds_changed && settings.show_chunk_grid {
         let Some(bounds) = cache.bounds else {
@@ -222,6 +225,7 @@ fn resize_cached_pixels(
                 * new_bounds.height as usize
                 * 4
         ]);
+        cache.painted_chunks.clear();
         return;
     };
 
@@ -509,15 +513,43 @@ fn pixel_offset(bounds: MapTextureBounds, x: i32, y: i32) -> usize {
     ((flipped_y * bounds.width + local_x) * 4) as usize
 }
 
-fn draw_chunk_grid(data: &mut [u8], bounds: MapTextureBounds) {
-    for y in 0..bounds.height {
-        for x in 0..bounds.width {
-            let world_x = bounds.min_x + x as i32;
-            let world_y = bounds.min_y + y as i32;
-            if world_x.rem_euclid(CHUNK_SIZE) == 0 || world_y.rem_euclid(CHUNK_SIZE) == 0 {
-                set_world_pixel(data, bounds, world_x, world_y, GRID_PIXEL);
-            }
+fn chunk_inside_bounds(coord: ChunkCoord, bounds: MapTextureBounds) -> bool {
+    let min_x = coord.x * CHUNK_SIZE;
+    let min_y = coord.y * CHUNK_SIZE;
+
+    min_x >= bounds.min_x
+        && min_y >= bounds.min_y
+        && min_x + CHUNK_SIZE <= bounds.min_x + bounds.width as i32
+        && min_y + CHUNK_SIZE <= bounds.min_y + bounds.height as i32
+}
+
+fn next_chunk_boundary_at_or_after(value: i32) -> i32 {
+    value.div_euclid(CHUNK_SIZE) * CHUNK_SIZE
+        + if value.rem_euclid(CHUNK_SIZE) == 0 {
+            0
+        } else {
+            CHUNK_SIZE
         }
+}
+
+fn draw_chunk_grid(data: &mut [u8], bounds: MapTextureBounds) {
+    let max_x = bounds.min_x + bounds.width as i32 - 1;
+    let max_y = bounds.min_y + bounds.height as i32 - 1;
+
+    let mut world_x = next_chunk_boundary_at_or_after(bounds.min_x);
+    while world_x <= max_x {
+        for world_y in bounds.min_y..=max_y {
+            set_world_pixel(data, bounds, world_x, world_y, GRID_PIXEL);
+        }
+        world_x += CHUNK_SIZE;
+    }
+
+    let mut world_y = next_chunk_boundary_at_or_after(bounds.min_y);
+    while world_y <= max_y {
+        for world_x in bounds.min_x..=max_x {
+            set_world_pixel(data, bounds, world_x, world_y, GRID_PIXEL);
+        }
+        world_y += CHUNK_SIZE;
     }
 }
 
@@ -557,9 +589,27 @@ mod tests {
 
     #[test]
     fn incremental_update_matches_full_render_after_streaming_chunk() {
+        let settings_variants = [
+            MapDisplaySettings::default(),
+            MapDisplaySettings {
+                debug_reveal_all: false,
+                show_chunk_grid: true,
+            },
+            MapDisplaySettings {
+                debug_reveal_all: true,
+                show_chunk_grid: true,
+            },
+        ];
+        for settings in settings_variants {
+            assert_incremental_update_matches_full_render_after_streaming_chunk(settings);
+        }
+    }
+
+    fn assert_incremental_update_matches_full_render_after_streaming_chunk(
+        settings: MapDisplaySettings,
+    ) {
         let layers = [MapLayer::Surface, MapLayer::Resources, MapLayer::Entities];
         let mut sim = Simulation::new_test_world(123);
-        let settings = MapDisplaySettings::default();
         let mut caches = layers.map(|layer| {
             let initial = generate_map_pixels_for_layer(&sim, &settings, layer);
             let mut cache = MapLayerTextureCache {
@@ -608,13 +658,88 @@ mod tests {
             update_map_pixels_incremental(&sim, &settings, *layer, cache);
 
             let full = generate_map_pixels_for_layer(&sim, &settings, *layer);
-            assert_eq!(cache.bounds, Some(full.bounds), "bounds for {layer:?}");
+            assert_eq!(
+                cache.bounds,
+                Some(full.bounds),
+                "bounds for {layer:?} with {settings:?}"
+            );
             assert_eq!(
                 cache.pixels.as_deref(),
                 Some(full.data.as_slice()),
-                "pixels for {layer:?}"
+                "pixels for {layer:?} with {settings:?}"
             );
         }
+    }
+
+    #[test]
+    fn draw_chunk_grid_paints_exactly_the_chunk_boundary_pixels() {
+        let bounds = MapTextureBounds {
+            min_x: -CHUNK_SIZE * 2,
+            min_y: -CHUNK_SIZE,
+            width: (CHUNK_SIZE * 3) as u32,
+            height: (CHUNK_SIZE * 2) as u32,
+        };
+        let mut data = vec![0; bounds.width as usize * bounds.height as usize * 4];
+
+        draw_chunk_grid(&mut data, bounds);
+
+        for world_y in bounds.min_y..bounds.min_y + bounds.height as i32 {
+            for world_x in bounds.min_x..bounds.min_x + bounds.width as i32 {
+                let offset = pixel_offset(bounds, world_x, world_y);
+                let expected =
+                    if world_x.rem_euclid(CHUNK_SIZE) == 0 || world_y.rem_euclid(CHUNK_SIZE) == 0 {
+                        GRID_PIXEL
+                    } else {
+                        [0; 4]
+                    };
+                assert_eq!(
+                    data[offset..offset + 4],
+                    expected,
+                    "pixel at ({world_x}, {world_y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_incremental_update_on_bounds_growth() {
+        let mut sim = Simulation::new_test_world(123);
+        for y in -15..=15 {
+            for x in -15..=15 {
+                sim.ensure_chunk_generated(ChunkCoord { x, y });
+            }
+        }
+        let settings = MapDisplaySettings {
+            debug_reveal_all: true,
+            show_chunk_grid: false,
+        };
+
+        let initial = generate_map_pixels_for_layer(&sim, &settings, MapLayer::Surface);
+        let mut cache = MapLayerTextureCache {
+            handle: Some(Handle::default()),
+            bounds: Some(initial.bounds),
+            pixels: Some(initial.data),
+            painted_chunks: Default::default(),
+            last_chunk_revision: sim.world().chunk_revision(),
+            last_resource_revision: sim.world().resource_revision(),
+            last_revealed_revision: sim.revealed_revision(),
+            last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
+            last_texture_update_tick: sim.tick_count(),
+        };
+        refresh_painted_chunks(&sim, &settings, &mut cache);
+
+        // Frontier chunk grows the texture bounds by one chunk column.
+        sim.ensure_chunk_generated(ChunkCoord { x: 16, y: 0 });
+
+        let started = std::time::Instant::now();
+        update_map_pixels_incremental(&sim, &settings, MapLayer::Surface, &mut cache);
+        let elapsed = started.elapsed();
+        println!("incremental update after bounds growth: {elapsed:?}");
+
+        let full = generate_map_pixels_for_layer(&sim, &settings, MapLayer::Surface);
+        assert_eq!(cache.bounds, Some(full.bounds));
+        assert_eq!(cache.pixels.as_deref(), Some(full.data.as_slice()));
     }
 
     fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i32, i32) {

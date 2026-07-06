@@ -153,7 +153,7 @@ pub enum CraftingPanelTab {
     Assembling,
 }
 
-#[derive(Resource, Default)]
+#[derive(Clone, Copy, Debug, Resource, Default)]
 pub struct MapDisplaySettings {
     pub debug_reveal_all: bool,
     pub show_chunk_grid: bool,
