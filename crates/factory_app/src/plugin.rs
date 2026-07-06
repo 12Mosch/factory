@@ -290,7 +290,9 @@ impl Plugin for FactoryAppPlugin {
                 Update,
                 (
                     update_debug_overlay,
-                    sync_container_window,
+                    // The menu clears `open_container` when it opens; sync after
+                    // it so the container window hides on the same frame.
+                    sync_container_window.after(handle_build_menu_buttons),
                     handle_container_slot_clicks,
                     update_container_slot_text,
                     update_inventory_transfer_feedback_text

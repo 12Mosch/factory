@@ -134,6 +134,26 @@ fn number_key_selects_hotbar_slot_without_placing() {
 }
 
 #[test]
+fn empty_hotbar_slot_selection_clears_stale_status() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let slot_index = 0;
+    app.world_mut().resource_mut::<HotbarState>().slots[slot_index] = None;
+    app.world_mut()
+        .resource_mut::<BuildPlacementState>()
+        .last_status = BuildPlacementStatus::Locked("Assembler locked".to_string());
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(hotbar_key_for_slot(slot_index));
+    app.update();
+
+    let build_state = app.world().resource::<BuildPlacementState>();
+    assert_eq!(build_state.selected, None);
+    assert_eq!(build_state.last_status, BuildPlacementStatus::Ready);
+}
+
+#[test]
 fn rotate_key_updates_build_direction() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();

@@ -396,6 +396,11 @@ pub(crate) fn update_build_status_text(
     }
 }
 
+const _: () = assert!(
+    HOTBAR_SLOT_COUNT == 10,
+    "slot_key_label assumes 10 hotbar slots mapped to keys 1-9, 0"
+);
+
 pub(crate) fn slot_key_label(slot_index: usize) -> String {
     ((slot_index + 1) % 10).to_string()
 }

@@ -2,7 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::audio::SoundEvent;
-use crate::input::build::select_build_selection;
+use crate::input::build::{select_build_selection, technology_window_open};
 use crate::placement::build::buildable_prototypes;
 use crate::resources::{
     BuildMenuState, BuildPlacementState, BuildPlacementStatus, BuildSelection, HotbarState,
@@ -101,6 +101,12 @@ pub(crate) fn handle_build_menu_buttons(
     mut hotbar_toggle_interactions: BuildMenuHotbarToggleInteractionQuery,
     mut state: BuildMenuButtonState,
 ) {
+    // The build menu itself blocks world input, so unlike the build bar this
+    // only guards against the technology window layering on top of the menu.
+    if technology_window_open(state.technology_window.as_deref()) {
+        return;
+    }
+
     let toggle_pressed = toggle_interactions
         .iter_mut()
         .any(|interaction| *interaction == Interaction::Pressed);

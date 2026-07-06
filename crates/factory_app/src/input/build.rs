@@ -143,6 +143,7 @@ pub fn select_build_slot(
 
     let Some(selection) = hotbar.slot(slot_index) else {
         build_state.selected = None;
+        build_state.last_status = Default::default();
         return;
     };
 
@@ -200,6 +201,6 @@ fn hotbar_keys() -> [KeyCode; HOTBAR_SLOT_COUNT] {
     ]
 }
 
-fn technology_window_open(window: Option<&TechnologyWindowState>) -> bool {
+pub(crate) fn technology_window_open(window: Option<&TechnologyWindowState>) -> bool {
     window.is_some_and(|state| state.open)
 }
