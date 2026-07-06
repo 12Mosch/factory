@@ -220,7 +220,6 @@ pub(crate) fn sync_belt_item_rendering(
         &mut sprites,
         &mut labels,
     );
-    sync_belt_item_transforms(&sim.sim, ids, &mut sprites, &mut labels);
 }
 
 pub(crate) fn measured_sync_belt_item_rendering(
@@ -322,22 +321,24 @@ fn sync_belt_item_entity_pool(
     let mut seen_sprites = HashSet::with_capacity(visible_items.len());
     let mut seen_labels = HashSet::with_capacity(visible_items.len());
 
-    for (entity, mut marker, _, mut sprite, mut visibility) in &mut *sprites {
+    let item_size = Some(Vec2::splat(BELT_ITEM_SPRITE_SIZE));
+    for (entity, mut marker, mut transform, mut sprite, mut visibility) in &mut *sprites {
         if marker.active
             && let Some(item) = visible_by_key.get(&marker.key)
         {
             seen_sprites.insert(marker.key);
+            transform.translation = item.translation;
             if marker.item_id != item.item_id {
                 marker.item_id = item.item_id;
                 sprite.color = item.color;
             }
-            sprite.custom_size = Some(Vec2::splat(BELT_ITEM_SPRITE_SIZE));
+            if sprite.custom_size != item_size {
+                sprite.custom_size = item_size;
+            }
             *visibility = Visibility::Visible;
         } else if marker.active {
             marker.active = false;
             *visibility = Visibility::Hidden;
-            push_unique(&mut pool.sprites, entity);
-        } else {
             push_unique(&mut pool.sprites, entity);
         }
     }
@@ -350,11 +351,12 @@ fn sync_belt_item_entity_pool(
     }
 
     if show_labels {
-        for (entity, mut marker, _, mut text, mut visibility) in &mut *labels {
+        for (entity, mut marker, mut transform, mut text, mut visibility) in &mut *labels {
             if marker.active
                 && let Some(item) = visible_by_key.get(&marker.key)
             {
                 seen_labels.insert(marker.key);
+                transform.translation = label_translation(item.translation);
                 if marker.item_id != item.item_id {
                     marker.item_id = item.item_id;
                     text.0 = belt_item_label(sim, item.item_id);
@@ -363,8 +365,6 @@ fn sync_belt_item_entity_pool(
             } else if marker.active {
                 marker.active = false;
                 *visibility = Visibility::Hidden;
-                push_unique(&mut pool.labels, entity);
-            } else {
                 push_unique(&mut pool.labels, entity);
             }
         }
@@ -381,70 +381,8 @@ fn sync_belt_item_entity_pool(
                 marker.active = false;
                 *visibility = Visibility::Hidden;
                 push_unique(&mut pool.labels, entity);
-            } else {
-                push_unique(&mut pool.labels, entity);
             }
         }
-    }
-}
-
-fn sync_belt_item_transforms(
-    sim: &Simulation,
-    ids: BasePrototypeIds,
-    sprites: &mut Query<
-        (
-            Entity,
-            &mut BeltItemSprite,
-            &mut Transform,
-            &mut Sprite,
-            &mut Visibility,
-        ),
-        Without<BeltItemLabel>,
-    >,
-    labels: &mut Query<
-        (
-            Entity,
-            &mut BeltItemLabel,
-            &mut Transform,
-            &mut Text2d,
-            &mut Visibility,
-        ),
-        Without<BeltItemSprite>,
-    >,
-) {
-    for (_, marker, mut transform, _, visibility) in sprites {
-        if !marker.active || *visibility != Visibility::Visible {
-            continue;
-        }
-        let Some((translation, _)) = transport_item_render_state_with_ids(
-            sim,
-            ids,
-            marker.key.entity_id,
-            marker.key.input_port,
-            marker.key.lane_index,
-            marker.key.item_index,
-        ) else {
-            continue;
-        };
-        transform.translation = translation;
-    }
-
-    for (_, marker, mut transform, _, visibility) in labels {
-        if !marker.active || *visibility != Visibility::Visible {
-            continue;
-        }
-        let Some((mut translation, _)) = transport_item_render_state_with_ids(
-            sim,
-            ids,
-            marker.key.entity_id,
-            marker.key.input_port,
-            marker.key.lane_index,
-            marker.key.item_index,
-        ) else {
-            continue;
-        };
-        translation.z += 0.2;
-        transform.translation = translation;
     }
 }
 
@@ -678,6 +616,7 @@ pub(crate) fn belt_item_render_state(
     )
 }
 
+#[cfg(test)]
 fn transport_item_render_state_with_ids(
     sim: &Simulation,
     ids: BasePrototypeIds,
