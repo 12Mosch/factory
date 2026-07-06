@@ -50,11 +50,11 @@ use crate::rendering::resources::{
 };
 use crate::rendering::world::measured_sync_visible_world_tiles;
 use crate::resources::{
-    AppInputState, BuildPlacementPreviewState, BuildPlacementState, CraftingWindowState,
-    InventoryTransferFeedback, MapDisplaySettings, MapOverlayMarkers, MapTextureCache,
-    MapViewState, OpenContainer, ProductionStatsWindowState, RenderDetail, RenderSyncStats,
-    SimProfileStats, SimResource, TechnologyWindowState, UpsStats, VisibleChunks, VisibleEntityIds,
-    WorldRenderCache,
+    AppInputState, BeltItemRenderPool, BuildPlacementPreviewState, BuildPlacementState,
+    CraftingWindowState, InventoryTransferFeedback, MapDisplaySettings, MapOverlayMarkers,
+    MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState, RenderDetail,
+    RenderSyncStats, SimProfileStats, SimResource, TechnologyWindowState, UpsStats, VisibleChunks,
+    VisibleEntityIds, WorldRenderCache,
 };
 use crate::save_load::{
     AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
@@ -143,6 +143,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<VisibleEntityIds>()
             .init_resource::<RenderDetail>()
             .init_resource::<WorldRenderCache>()
+            .init_resource::<BeltItemRenderPool>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<AudioSettings>()
             .init_resource::<AudioSettingsWindowState>()

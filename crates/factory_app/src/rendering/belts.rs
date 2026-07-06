@@ -1,8 +1,9 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
 use factory_data::{BasePrototypeIds, ItemId};
 use factory_sim::{BELT_SUBTILES_PER_TILE, Direction, EntityId, Simulation};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::constants::{
@@ -11,7 +12,9 @@ use crate::constants::{
 };
 use crate::rendering::transforms::{entity_translation, tile_translation};
 use crate::rendering::visuals::spawn_belt_item_visual;
-use crate::resources::{RenderDetail, RenderSyncStats, SimResource, VisibleEntityIds};
+use crate::resources::{
+    BeltItemRenderPool, RenderDetail, RenderSyncStats, SimResource, VisibleEntityIds,
+};
 use crate::utils::compact_item_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -28,18 +31,65 @@ pub(crate) struct BeltDirectionSprite {
 
 #[derive(Component)]
 pub(crate) struct BeltItemSprite {
+    key: BeltItemKey,
+    item_id: ItemId,
+    active: bool,
+}
+
+#[derive(Component)]
+pub(crate) struct BeltItemLabel {
+    key: BeltItemKey,
+    item_id: ItemId,
+    active: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BeltItemKey {
     entity_id: EntityId,
     input_port: Option<usize>,
     lane_index: usize,
     item_index: usize,
 }
 
-#[derive(Component)]
-pub(crate) struct BeltItemLabel {
-    entity_id: EntityId,
-    input_port: Option<usize>,
-    lane_index: usize,
-    item_index: usize,
+#[derive(Clone, Copy)]
+struct VisibleBeltItemRenderState {
+    key: BeltItemKey,
+    item_id: ItemId,
+    translation: Vec3,
+    color: Color,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct BeltItemRenderParams<'w, 's> {
+    commands: Commands<'w, 's>,
+    sim: Res<'w, SimResource>,
+    visible_entity_ids: Res<'w, VisibleEntityIds>,
+    detail: Res<'w, RenderDetail>,
+    pool: ResMut<'w, BeltItemRenderPool>,
+    sprites: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static mut BeltItemSprite,
+            &'static mut Transform,
+            &'static mut Sprite,
+            &'static mut Visibility,
+        ),
+        Without<BeltItemLabel>,
+    >,
+    labels: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static mut BeltItemLabel,
+            &'static mut Transform,
+            &'static mut Text2d,
+            &'static mut Visibility,
+        ),
+        Without<BeltItemSprite>,
+    >,
 }
 
 pub(crate) fn sync_belt_direction_rendering(
@@ -127,24 +177,31 @@ pub(crate) fn sync_belt_item_rendering(
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
     detail: Res<RenderDetail>,
+    mut pool: ResMut<BeltItemRenderPool>,
     mut sprites: Query<
-        (Entity, &BeltItemSprite, &mut Transform, &mut Sprite),
+        (
+            Entity,
+            &mut BeltItemSprite,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
         Without<BeltItemLabel>,
     >,
     mut labels: Query<
-        (Entity, &BeltItemLabel, &mut Transform, &mut Text2d),
+        (
+            Entity,
+            &mut BeltItemLabel,
+            &mut Transform,
+            &mut Text2d,
+            &mut Visibility,
+        ),
         Without<BeltItemSprite>,
     >,
 ) {
     if !detail.show_belt_items {
-        if !detail.is_changed() {
-            return;
-        }
-        for (entity, _, _, _) in &mut sprites {
-            commands.entity(entity).despawn();
-        }
-        for (entity, _, _, _) in &mut labels {
-            commands.entity(entity).despawn();
+        if detail.is_changed() {
+            pool_all_belt_items(&mut pool, &mut sprites, &mut labels);
         }
         return;
     }
@@ -153,146 +210,423 @@ pub(crate) fn sync_belt_item_rendering(
     }
 
     let ids = BasePrototypeIds::from_catalog(sim.sim.catalog());
-    let visible_ids = &visible_entity_ids.ids;
-    let show_labels = detail.show_belt_item_labels;
-    let mut seen_sprites = HashSet::new();
-    let mut seen_labels = HashSet::new();
+    let visible_items = collect_visible_belt_items(&sim.sim, ids, &visible_entity_ids.ids);
+    sync_belt_item_entity_pool(
+        &mut commands,
+        &sim.sim,
+        &mut pool,
+        detail.show_belt_item_labels,
+        &visible_items,
+        &mut sprites,
+        &mut labels,
+    );
+    sync_belt_item_transforms(&sim.sim, ids, &mut sprites, &mut labels);
+}
 
-    for (entity, marker, mut transform, mut sprite) in &mut sprites {
-        let key = (
-            marker.entity_id,
-            marker.input_port,
-            marker.lane_index,
-            marker.item_index,
-        );
-        if visible_ids.contains(&marker.entity_id)
-            && let Some((translation, color)) = transport_item_render_state_with_ids(
-                &sim.sim,
-                ids,
-                marker.entity_id,
-                marker.input_port,
-                marker.lane_index,
-                marker.item_index,
-            )
-        {
-            seen_sprites.insert(key);
-            transform.translation = translation;
-            sprite.color = color;
-            sprite.custom_size = Some(Vec2::splat(BELT_ITEM_SPRITE_SIZE));
-        } else {
-            commands.entity(entity).despawn();
+pub(crate) fn measured_sync_belt_item_rendering(
+    params: BeltItemRenderParams,
+    mut stats: ResMut<RenderSyncStats>,
+) {
+    let started = Instant::now();
+    let BeltItemRenderParams {
+        commands,
+        sim,
+        visible_entity_ids,
+        detail,
+        pool,
+        sprites,
+        labels,
+    } = params;
+    sync_belt_item_rendering(
+        commands,
+        sim,
+        visible_entity_ids,
+        detail,
+        pool,
+        sprites,
+        labels,
+    );
+    stats.record_belt_items(started.elapsed());
+}
+
+fn pool_all_belt_items(
+    pool: &mut BeltItemRenderPool,
+    sprites: &mut Query<
+        (
+            Entity,
+            &mut BeltItemSprite,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
+        Without<BeltItemLabel>,
+    >,
+    labels: &mut Query<
+        (
+            Entity,
+            &mut BeltItemLabel,
+            &mut Transform,
+            &mut Text2d,
+            &mut Visibility,
+        ),
+        Without<BeltItemSprite>,
+    >,
+) {
+    for (entity, mut marker, _, _, mut visibility) in sprites {
+        if marker.active {
+            marker.active = false;
+            *visibility = Visibility::Hidden;
+            push_unique(&mut pool.sprites, entity);
         }
+    }
+    for (entity, mut marker, _, _, mut visibility) in labels {
+        if marker.active {
+            marker.active = false;
+            *visibility = Visibility::Hidden;
+            push_unique(&mut pool.labels, entity);
+        }
+    }
+}
+
+fn sync_belt_item_entity_pool(
+    commands: &mut Commands,
+    sim: &Simulation,
+    pool: &mut BeltItemRenderPool,
+    show_labels: bool,
+    visible_items: &[VisibleBeltItemRenderState],
+    sprites: &mut Query<
+        (
+            Entity,
+            &mut BeltItemSprite,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
+        Without<BeltItemLabel>,
+    >,
+    labels: &mut Query<
+        (
+            Entity,
+            &mut BeltItemLabel,
+            &mut Transform,
+            &mut Text2d,
+            &mut Visibility,
+        ),
+        Without<BeltItemSprite>,
+    >,
+) {
+    let visible_by_key = visible_items
+        .iter()
+        .map(|item| (item.key, *item))
+        .collect::<HashMap<_, _>>();
+    let mut seen_sprites = HashSet::with_capacity(visible_items.len());
+    let mut seen_labels = HashSet::with_capacity(visible_items.len());
+
+    for (entity, mut marker, _, mut sprite, mut visibility) in &mut *sprites {
+        if marker.active
+            && let Some(item) = visible_by_key.get(&marker.key)
+        {
+            seen_sprites.insert(marker.key);
+            if marker.item_id != item.item_id {
+                marker.item_id = item.item_id;
+                sprite.color = item.color;
+            }
+            sprite.custom_size = Some(Vec2::splat(BELT_ITEM_SPRITE_SIZE));
+            *visibility = Visibility::Visible;
+        } else if marker.active {
+            marker.active = false;
+            *visibility = Visibility::Hidden;
+            push_unique(&mut pool.sprites, entity);
+        } else {
+            push_unique(&mut pool.sprites, entity);
+        }
+    }
+
+    for item in visible_items {
+        if seen_sprites.contains(&item.key) {
+            continue;
+        }
+        spawn_or_reuse_belt_item_sprite(commands, pool, *item);
     }
 
     if show_labels {
-        for (entity, marker, mut transform, mut text) in &mut labels {
-            let key = (
-                marker.entity_id,
-                marker.input_port,
-                marker.lane_index,
-                marker.item_index,
-            );
-            if visible_ids.contains(&marker.entity_id)
-                && let Some((translation, label)) = transport_item_label_render_state(
-                    &sim.sim,
-                    marker.entity_id,
-                    marker.input_port,
-                    marker.lane_index,
-                    marker.item_index,
-                )
+        for (entity, mut marker, _, mut text, mut visibility) in &mut *labels {
+            if marker.active
+                && let Some(item) = visible_by_key.get(&marker.key)
             {
-                seen_labels.insert(key);
-                transform.translation = translation;
-                text.0 = label;
+                seen_labels.insert(marker.key);
+                if marker.item_id != item.item_id {
+                    marker.item_id = item.item_id;
+                    text.0 = belt_item_label(sim, item.item_id);
+                }
+                *visibility = Visibility::Visible;
+            } else if marker.active {
+                marker.active = false;
+                *visibility = Visibility::Hidden;
+                push_unique(&mut pool.labels, entity);
             } else {
-                commands.entity(entity).despawn();
+                push_unique(&mut pool.labels, entity);
             }
         }
-    } else {
-        for (entity, _, _, _) in &mut labels {
-            commands.entity(entity).despawn();
+
+        for item in visible_items {
+            if seen_labels.contains(&item.key) {
+                continue;
+            }
+            spawn_or_reuse_belt_item_label(commands, sim, pool, *item);
         }
-    }
-
-    for &entity_id in visible_ids {
-        let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
-            continue;
-        };
-        let Ok(segment) = sim.sim.belt_segment(placed.id) else {
-            sync_splitter_item_rendering_for_entity(
-                &mut commands,
-                &sim.sim,
-                ids,
-                placed.id,
-                show_labels,
-                &seen_sprites,
-                &seen_labels,
-            );
-            continue;
-        };
-
-        for (lane_index, lane) in segment.lanes.iter().enumerate() {
-            for item_index in 0..lane.items.len() {
-                let key = (placed.id, None, lane_index, item_index);
-                if !seen_sprites.contains(&key) {
-                    let Some((translation, color)) = transport_item_render_state_with_ids(
-                        &sim.sim, ids, placed.id, None, lane_index, item_index,
-                    ) else {
-                        continue;
-                    };
-                    spawn_belt_item_visual(
-                        &mut commands,
-                        color,
-                        Vec2::splat(BELT_ITEM_SPRITE_SIZE),
-                        translation,
-                        BeltItemSprite {
-                            entity_id: placed.id,
-                            input_port: None,
-                            lane_index,
-                            item_index,
-                        },
-                    );
-                }
-
-                if show_labels && !seen_labels.contains(&key) {
-                    let Some((translation, label)) = transport_item_label_render_state(
-                        &sim.sim, placed.id, None, lane_index, item_index,
-                    ) else {
-                        continue;
-                    };
-                    commands.spawn((
-                        Text2d::new(label),
-                        TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),
-                        TextColor(Color::WHITE),
-                        TextLayout::justify(Justify::Center),
-                        Transform::from_translation(translation),
-                        Anchor::CENTER,
-                        Text2dShadow::default(),
-                        BeltItemLabel {
-                            entity_id: placed.id,
-                            input_port: None,
-                            lane_index,
-                            item_index,
-                        },
-                    ));
-                }
+    } else {
+        for (entity, mut marker, _, _, mut visibility) in &mut *labels {
+            if marker.active {
+                marker.active = false;
+                *visibility = Visibility::Hidden;
+                push_unique(&mut pool.labels, entity);
+            } else {
+                push_unique(&mut pool.labels, entity);
             }
         }
     }
 }
 
-pub(crate) fn measured_sync_belt_item_rendering(
-    commands: Commands,
-    sim: Res<SimResource>,
-    visible_entity_ids: Res<VisibleEntityIds>,
-    detail: Res<RenderDetail>,
-    sprites: Query<(Entity, &BeltItemSprite, &mut Transform, &mut Sprite), Without<BeltItemLabel>>,
-    labels: Query<(Entity, &BeltItemLabel, &mut Transform, &mut Text2d), Without<BeltItemSprite>>,
-    mut stats: ResMut<RenderSyncStats>,
+fn sync_belt_item_transforms(
+    sim: &Simulation,
+    ids: BasePrototypeIds,
+    sprites: &mut Query<
+        (
+            Entity,
+            &mut BeltItemSprite,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
+        Without<BeltItemLabel>,
+    >,
+    labels: &mut Query<
+        (
+            Entity,
+            &mut BeltItemLabel,
+            &mut Transform,
+            &mut Text2d,
+            &mut Visibility,
+        ),
+        Without<BeltItemSprite>,
+    >,
 ) {
-    let started = Instant::now();
-    sync_belt_item_rendering(commands, sim, visible_entity_ids, detail, sprites, labels);
-    stats.record_belt_items(started.elapsed());
+    for (_, marker, mut transform, _, visibility) in sprites {
+        if !marker.active || *visibility != Visibility::Visible {
+            continue;
+        }
+        let Some((translation, _)) = transport_item_render_state_with_ids(
+            sim,
+            ids,
+            marker.key.entity_id,
+            marker.key.input_port,
+            marker.key.lane_index,
+            marker.key.item_index,
+        ) else {
+            continue;
+        };
+        transform.translation = translation;
+    }
+
+    for (_, marker, mut transform, _, visibility) in labels {
+        if !marker.active || *visibility != Visibility::Visible {
+            continue;
+        }
+        let Some((mut translation, _)) = transport_item_render_state_with_ids(
+            sim,
+            ids,
+            marker.key.entity_id,
+            marker.key.input_port,
+            marker.key.lane_index,
+            marker.key.item_index,
+        ) else {
+            continue;
+        };
+        translation.z += 0.2;
+        transform.translation = translation;
+    }
+}
+
+fn spawn_or_reuse_belt_item_sprite(
+    commands: &mut Commands,
+    pool: &mut BeltItemRenderPool,
+    item: VisibleBeltItemRenderState,
+) {
+    let marker = BeltItemSprite {
+        key: item.key,
+        item_id: item.item_id,
+        active: true,
+    };
+
+    if let Some(entity) = pool.sprites.pop() {
+        commands.entity(entity).insert((
+            Sprite::from_color(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
+            Transform::from_translation(item.translation),
+            Visibility::Visible,
+            marker,
+        ));
+        return;
+    }
+
+    spawn_belt_item_visual(
+        commands,
+        item.color,
+        Vec2::splat(BELT_ITEM_SPRITE_SIZE),
+        item.translation,
+        (marker, Visibility::Visible),
+    );
+}
+
+fn spawn_or_reuse_belt_item_label(
+    commands: &mut Commands,
+    sim: &Simulation,
+    pool: &mut BeltItemRenderPool,
+    item: VisibleBeltItemRenderState,
+) {
+    let marker = BeltItemLabel {
+        key: item.key,
+        item_id: item.item_id,
+        active: true,
+    };
+    let translation = label_translation(item.translation);
+    let label = belt_item_label(sim, item.item_id);
+
+    if let Some(entity) = pool.labels.pop() {
+        commands.entity(entity).insert((
+            Text2d::new(label),
+            TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),
+            TextColor(Color::WHITE),
+            TextLayout::justify(Justify::Center),
+            Transform::from_translation(translation),
+            Anchor::CENTER,
+            Text2dShadow::default(),
+            Visibility::Visible,
+            marker,
+        ));
+        return;
+    }
+
+    commands.spawn((
+        Text2d::new(label),
+        TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),
+        TextColor(Color::WHITE),
+        TextLayout::justify(Justify::Center),
+        Transform::from_translation(translation),
+        Anchor::CENTER,
+        Text2dShadow::default(),
+        Visibility::Visible,
+        marker,
+    ));
+}
+
+fn collect_visible_belt_items(
+    sim: &Simulation,
+    ids: BasePrototypeIds,
+    visible_ids: &HashSet<EntityId>,
+) -> Vec<VisibleBeltItemRenderState> {
+    let mut items = Vec::new();
+    for &entity_id in visible_ids {
+        let Some(placed) = sim.entities().placed_entity(entity_id) else {
+            continue;
+        };
+        if let Ok(segment) = sim.belt_segment(placed.id) {
+            let center = tile_translation(placed.x, placed.y, 4.0);
+            for (lane_index, lane) in segment.lanes.iter().enumerate() {
+                for (item_index, item) in lane.items.iter().enumerate() {
+                    let key = BeltItemKey {
+                        entity_id: placed.id,
+                        input_port: None,
+                        lane_index,
+                        item_index,
+                    };
+                    items.push(transport_item_render_state_from_parts(
+                        ids,
+                        key,
+                        segment.dir,
+                        center,
+                        item.item_id,
+                        item.position_subtile,
+                    ));
+                }
+            }
+            continue;
+        }
+
+        let Ok(state) = sim.splitter_state(placed.id) else {
+            continue;
+        };
+        let Some(port_tiles) = splitter_port_tiles_for_render(&placed.footprint) else {
+            continue;
+        };
+        for (input_port, input_lanes) in state.input_lanes.iter().enumerate() {
+            let port_tile = port_tiles[input_port];
+            let center = tile_translation(port_tile.0, port_tile.1, 4.0);
+            for (lane_index, lane) in input_lanes.iter().enumerate() {
+                for (item_index, item) in lane.items.iter().enumerate() {
+                    let key = BeltItemKey {
+                        entity_id: placed.id,
+                        input_port: Some(input_port),
+                        lane_index,
+                        item_index,
+                    };
+                    items.push(transport_item_render_state_from_parts(
+                        ids,
+                        key,
+                        state.dir,
+                        center,
+                        item.item_id,
+                        item.position_subtile,
+                    ));
+                }
+            }
+        }
+    }
+    items
+}
+
+fn transport_item_render_state_from_parts(
+    ids: BasePrototypeIds,
+    key: BeltItemKey,
+    dir: Direction,
+    center: Vec3,
+    item_id: ItemId,
+    position_subtile: u16,
+) -> VisibleBeltItemRenderState {
+    let along = direction_render_vector(dir);
+    let perpendicular = Vec2::new(-along.y, along.x);
+    let progress = f32::from(position_subtile) / f32::from(BELT_SUBTILES_PER_TILE) - 0.5;
+    let lane_offset = if key.lane_index == 0 { -0.18 } else { 0.18 };
+    let offset = (along * progress + perpendicular * lane_offset) * TILE_SIZE;
+    let translation = Vec3::new(center.x + offset.x, center.y + offset.y, 4.0);
+
+    VisibleBeltItemRenderState {
+        key,
+        item_id,
+        translation,
+        color: belt_item_color(item_id, ids),
+    }
+}
+
+fn label_translation(mut translation: Vec3) -> Vec3 {
+    translation.z += 0.2;
+    translation
+}
+
+fn belt_item_label(sim: &Simulation, item_id: ItemId) -> String {
+    let name = sim
+        .catalog()
+        .items
+        .get(item_id.index())
+        .map(|item| item.name.as_str())
+        .unwrap_or("?");
+    compact_item_name(name)
+}
+
+fn push_unique(pool: &mut Vec<Entity>, entity: Entity) {
+    if !pool.contains(&entity) {
+        pool.push(entity);
+    }
 }
 
 pub(crate) fn belt_direction_render_state(
@@ -395,6 +729,7 @@ pub(crate) fn belt_item_label_render_state(
     transport_item_label_render_state(sim, entity_id, None, lane_index, item_index)
 }
 
+#[cfg(test)]
 fn transport_item_label_render_state(
     sim: &Simulation,
     entity_id: EntityId,
@@ -437,79 +772,6 @@ fn transport_item_label_render_state(
 
     translation.z += 0.2;
     Some((translation, compact_item_name(name)))
-}
-
-fn sync_splitter_item_rendering_for_entity(
-    commands: &mut Commands,
-    sim: &Simulation,
-    ids: BasePrototypeIds,
-    entity_id: EntityId,
-    show_labels: bool,
-    seen_sprites: &HashSet<(EntityId, Option<usize>, usize, usize)>,
-    seen_labels: &HashSet<(EntityId, Option<usize>, usize, usize)>,
-) {
-    let Ok(state) = sim.splitter_state(entity_id) else {
-        return;
-    };
-
-    for (input_port, input_lanes) in state.input_lanes.iter().enumerate() {
-        for (lane_index, lane) in input_lanes.iter().enumerate() {
-            for item_index in 0..lane.items.len() {
-                let key = (entity_id, Some(input_port), lane_index, item_index);
-                if !seen_sprites.contains(&key) {
-                    let Some((translation, color)) = transport_item_render_state_with_ids(
-                        sim,
-                        ids,
-                        entity_id,
-                        Some(input_port),
-                        lane_index,
-                        item_index,
-                    ) else {
-                        continue;
-                    };
-                    spawn_belt_item_visual(
-                        commands,
-                        color,
-                        Vec2::splat(BELT_ITEM_SPRITE_SIZE),
-                        translation,
-                        BeltItemSprite {
-                            entity_id,
-                            input_port: Some(input_port),
-                            lane_index,
-                            item_index,
-                        },
-                    );
-                }
-
-                if show_labels && !seen_labels.contains(&key) {
-                    let Some((translation, label)) = transport_item_label_render_state(
-                        sim,
-                        entity_id,
-                        Some(input_port),
-                        lane_index,
-                        item_index,
-                    ) else {
-                        continue;
-                    };
-                    commands.spawn((
-                        Text2d::new(label),
-                        TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),
-                        TextColor(Color::WHITE),
-                        TextLayout::justify(Justify::Center),
-                        Transform::from_translation(translation),
-                        Anchor::CENTER,
-                        Text2dShadow::default(),
-                        BeltItemLabel {
-                            entity_id,
-                            input_port: Some(input_port),
-                            lane_index,
-                            item_index,
-                        },
-                    ));
-                }
-            }
-        }
-    }
 }
 
 fn transport_flow_direction(sim: &Simulation, entity_id: EntityId) -> Option<Direction> {
@@ -648,6 +910,79 @@ mod tests {
         let (_, label) = belt_item_label_render_state(&sim, belt_id, 0, 0)
             .expect("inserted belt item should have label render state");
         assert_eq!(label, "CO");
+    }
+
+    #[test]
+    fn belt_item_rendering_reuses_pooled_sprite_and_label_entities() {
+        let mut sim = Simulation::new_test_world(123);
+        let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
+        let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
+        let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
+        let belt_id = sim
+            .place_entity(belt, x, y, Direction::East)
+            .expect("belt should be placeable");
+        sim.insert_item_onto_belt(belt_id, 0, iron_ore)
+            .expect("empty belt should accept item");
+
+        let mut app = App::new();
+        app.insert_resource(SimResource { sim })
+            .insert_resource(visible_entity_ids([belt_id]))
+            .init_resource::<RenderDetail>()
+            .init_resource::<BeltItemRenderPool>()
+            .add_systems(Update, sync_belt_item_rendering);
+
+        app.update();
+        let first_sprite = active_belt_item_sprite(&mut app).expect("sprite should spawn");
+        let first_label = active_belt_item_label(&mut app).expect("label should spawn");
+
+        *app.world_mut().resource_mut::<VisibleEntityIds>() = visible_entity_ids([]);
+        app.update();
+        assert_eq!(active_belt_item_sprite(&mut app), None);
+        assert_eq!(active_belt_item_label(&mut app), None);
+        assert!(
+            app.world()
+                .resource::<BeltItemRenderPool>()
+                .sprites
+                .contains(&first_sprite)
+        );
+        assert!(
+            app.world()
+                .resource::<BeltItemRenderPool>()
+                .labels
+                .contains(&first_label)
+        );
+
+        *app.world_mut().resource_mut::<VisibleEntityIds>() = visible_entity_ids([belt_id]);
+        app.update();
+
+        assert_eq!(active_belt_item_sprite(&mut app), Some(first_sprite));
+        assert_eq!(active_belt_item_label(&mut app), Some(first_label));
+    }
+
+    fn visible_entity_ids<const N: usize>(ids: [EntityId; N]) -> VisibleEntityIds {
+        VisibleEntityIds {
+            ids: ids.into_iter().collect(),
+            visible_revision: 1,
+            entity_topology_revision: 1,
+        }
+    }
+
+    fn active_belt_item_sprite(app: &mut App) -> Option<Entity> {
+        app.world_mut()
+            .query::<(Entity, &BeltItemSprite, &Visibility)>()
+            .iter(app.world())
+            .find_map(|(entity, marker, visibility)| {
+                (marker.active && *visibility == Visibility::Visible).then_some(entity)
+            })
+    }
+
+    fn active_belt_item_label(app: &mut App) -> Option<Entity> {
+        app.world_mut()
+            .query::<(Entity, &BeltItemLabel, &Visibility)>()
+            .iter(app.world())
+            .find_map(|(entity, marker, visibility)| {
+                (marker.active && *visibility == Visibility::Visible).then_some(entity)
+            })
     }
 
     fn first_placeable_tile(
