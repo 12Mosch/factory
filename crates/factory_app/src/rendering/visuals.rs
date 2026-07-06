@@ -9,7 +9,10 @@ use std::collections::HashMap;
 
 use crate::constants::TILE_SIZE;
 
-const VISUAL_TEXTURE_PIXELS: u32 = 64;
+const VISUAL_TEXTURE_PIXELS_PER_TILE: f32 = 64.0;
+const MIN_VISUAL_TEXTURE_PIXELS: u32 = 16;
+const MAX_VISUAL_TEXTURE_PIXELS: u32 = 256;
+const MAX_VISUAL_CACHE_ENTRIES: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EntityVisualStyle {
@@ -21,7 +24,8 @@ pub(crate) struct EntityVisualStyle {
 
 #[derive(Default, Resource)]
 pub(crate) struct VisualAssetCache {
-    handles: HashMap<VisualCacheKey, Handle<Image>>,
+    entries: HashMap<VisualCacheKey, CachedVisual>,
+    access_tick: u64,
 }
 
 #[derive(SystemParam)]
@@ -59,18 +63,10 @@ impl VisualAssets<'_> {
         };
 
         let key = VisualCacheKey::new(template, color, size);
-        let handle = cache
-            .handles
-            .entry(key)
-            .or_insert_with(|| {
-                let visual = rasterize_visual(template, color, size);
-                images.add(visual.image)
-            })
-            .clone();
-        let visual_size = visual_sprite_size(template, color, size);
-        let mut sprite = Sprite::from_image(handle);
+        let cached = cache.get_or_create(key, images, || rasterize_visual(template, color, size));
+        let mut sprite = Sprite::from_image(cached.handle);
         sprite.color = Color::WHITE;
-        sprite.custom_size = Some(visual_size);
+        sprite.custom_size = Some(cached.visual_size);
         sprite
     }
 }
@@ -153,8 +149,16 @@ impl VisualCacheKey {
 }
 
 #[derive(Clone)]
+struct CachedVisual {
+    handle: Handle<Image>,
+    visual_size: Vec2,
+    last_used: u64,
+}
+
+#[derive(Clone)]
 struct RasterizedVisual {
     image: Image,
+    visual_size: Vec2,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -165,14 +169,60 @@ struct VisualLayer {
     color: Color,
 }
 
+impl VisualAssetCache {
+    fn get_or_create(
+        &mut self,
+        key: VisualCacheKey,
+        images: &mut Assets<Image>,
+        create: impl FnOnce() -> RasterizedVisual,
+    ) -> CachedVisual {
+        self.access_tick = self.access_tick.wrapping_add(1);
+        if self.access_tick == 0 {
+            for entry in self.entries.values_mut() {
+                entry.last_used = 0;
+            }
+            self.access_tick = 1;
+        }
+
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.last_used = self.access_tick;
+            return entry.clone();
+        }
+
+        self.evict_lru_if_full(images);
+
+        let visual = create();
+        let entry = CachedVisual {
+            handle: images.add(visual.image),
+            visual_size: visual.visual_size,
+            last_used: self.access_tick,
+        };
+        self.entries.insert(key, entry.clone());
+        entry
+    }
+
+    fn evict_lru_if_full(&mut self, images: &mut Assets<Image>) {
+        if self.entries.len() < MAX_VISUAL_CACHE_ENTRIES {
+            return;
+        }
+
+        let Some((&key, entry)) = self.entries.iter().min_by_key(|(_, entry)| entry.last_used)
+        else {
+            return;
+        };
+        let handle = entry.handle.clone();
+        self.entries.remove(&key);
+        let _ = images.remove(handle.id());
+    }
+}
+
 fn rasterize_visual(template: VisualTemplate, color: Color, size: Vec2) -> RasterizedVisual {
     let layers = visual_layers(template, color, size);
     let visual_size = visual_size_for_layers(&layers, size);
     let mut sorted_layers = layers;
     sorted_layers.sort_by(|a, b| a.z.total_cmp(&b.z));
 
-    let width = VISUAL_TEXTURE_PIXELS;
-    let height = VISUAL_TEXTURE_PIXELS;
+    let (width, height) = visual_texture_size(visual_size);
     let mut data = vec![0; width as usize * height as usize * 4];
     for layer in sorted_layers {
         paint_layer(&mut data, width, height, visual_size, layer);
@@ -191,11 +241,7 @@ fn rasterize_visual(template: VisualTemplate, color: Color, size: Vec2) -> Raste
     );
     image.data = Some(data);
     image.sampler = ImageSampler::nearest();
-    RasterizedVisual { image }
-}
-
-fn visual_sprite_size(template: VisualTemplate, color: Color, size: Vec2) -> Vec2 {
-    visual_size_for_layers(&visual_layers(template, color, size), size)
+    RasterizedVisual { image, visual_size }
 }
 
 fn visual_layers(template: VisualTemplate, color: Color, size: Vec2) -> Vec<VisualLayer> {
@@ -640,6 +686,22 @@ fn visual_size_for_layers(layers: &[VisualLayer], fallback_size: Vec2) -> Vec2 {
         let half = layer.size * 0.5 + layer.offset.abs();
         size.max(half * 2.0)
     })
+}
+
+fn visual_texture_size(visual_size: Vec2) -> (u32, u32) {
+    let pixels_for_axis = |axis_size: f32| {
+        ((axis_size / TILE_SIZE) * VISUAL_TEXTURE_PIXELS_PER_TILE)
+            .ceil()
+            .clamp(
+                MIN_VISUAL_TEXTURE_PIXELS as f32,
+                MAX_VISUAL_TEXTURE_PIXELS as f32,
+            ) as u32
+    };
+
+    (
+        pixels_for_axis(visual_size.x),
+        pixels_for_axis(visual_size.y),
+    )
 }
 
 fn paint_layer(data: &mut [u8], width: u32, height: u32, visual_size: Vec2, layer: VisualLayer) {
