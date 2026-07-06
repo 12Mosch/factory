@@ -167,7 +167,9 @@ mod tests {
         ResourceAmountLabel, ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
         measured_sync_resource_debug_rendering, sync_resource_debug_rendering,
     };
-    use crate::resources::{MapTextureBounds, RenderDetail, RenderSyncStats, VisibleEntityIds};
+    use crate::resources::{
+        BeltItemRenderPool, MapTextureBounds, RenderDetail, RenderSyncStats, VisibleEntityIds,
+    };
     use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
     use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation};
     use std::collections::BTreeSet;
@@ -213,6 +215,7 @@ mod tests {
             .init_resource::<ResourceRenderCache>()
             .init_resource::<VisibleEntityIds>()
             .init_resource::<RenderDetail>()
+            .init_resource::<BeltItemRenderPool>()
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: false,
             })
@@ -453,6 +456,7 @@ mod tests {
             .init_resource::<ResourceRenderCache>()
             .init_resource::<VisibleEntityIds>()
             .init_resource::<RenderDetail>()
+            .init_resource::<BeltItemRenderPool>()
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: true,
             })

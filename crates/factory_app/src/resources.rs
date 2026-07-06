@@ -267,6 +267,12 @@ pub struct WorldRenderCache {
     pub last_reload_token: u64,
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct BeltItemRenderPool {
+    pub(crate) sprites: Vec<Entity>,
+    pub(crate) labels: Vec<Entity>,
+}
+
 #[derive(Resource)]
 pub struct ProductionStatsWindowState {
     pub open: bool,
