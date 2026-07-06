@@ -8,7 +8,7 @@ use std::time::Instant;
 use crate::constants::RESOURCE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color};
 use crate::rendering::transforms::tile_translation;
-use crate::rendering::visuals::spawn_resource_visual;
+use crate::rendering::visuals::{VisualAssets, spawn_resource_visual};
 use crate::resources::{RenderDetail, RenderSyncStats, SimResource, VisibleChunks};
 
 #[derive(Component)]
@@ -53,6 +53,7 @@ pub(crate) fn sync_resource_debug_rendering(
         reconcile_resource_tiles(
             &mut commands,
             &mut params.cache,
+            &mut params.visual_assets,
             &mut params.sprites,
             &mut params.labels,
             &resources,
@@ -80,6 +81,7 @@ pub(crate) fn sync_resource_debug_rendering(
                 apply_resource_tile_change(
                     &mut commands,
                     &mut params.cache,
+                    &mut params.visual_assets,
                     &mut params.sprites,
                     &mut params.labels,
                     change,
@@ -95,6 +97,7 @@ pub(crate) fn sync_resource_debug_rendering(
             reconcile_resource_tiles(
                 &mut commands,
                 &mut params.cache,
+                &mut params.visual_assets,
                 &mut params.sprites,
                 &mut params.labels,
                 &resources,
@@ -123,13 +126,16 @@ pub(crate) struct ResourceRenderParams<'w, 's> {
     settings: Res<'w, ResourceRenderSettings>,
     detail: Res<'w, RenderDetail>,
     cache: ResMut<'w, ResourceRenderCache>,
+    visual_assets: VisualAssets<'w>,
     sprites: Query<'w, 's, (Entity, &'static mut Sprite), With<ResourceSprite>>,
     labels: Query<'w, 's, (Entity, &'static mut Text2d), With<ResourceAmountLabel>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reconcile_resource_tiles(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
+    visual_assets: &mut VisualAssets,
     sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
     resources: &BTreeMap<(i32, i32), ResourceCell>,
@@ -149,7 +155,7 @@ fn reconcile_resource_tiles(
     }
 
     for (&(x, y), &resource) in resources {
-        sync_resource_sprite(commands, cache, sprites, x, y, resource, ids);
+        sync_resource_sprite(commands, cache, visual_assets, sprites, x, y, resource, ids);
     }
 
     if !show_amount_labels {
@@ -182,17 +188,18 @@ fn reconcile_resource_tiles(
 fn apply_resource_tile_change(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
+    visual_assets: &mut VisualAssets,
     sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
     change: ResourceTileChange,
-    context: ResourceTileChangeContext,
+    change_context: ResourceTileChangeContext,
 ) {
     let coord = (change.x, change.y);
     let chunk_coord = factory_sim::ChunkCoord {
         x: change.x.div_euclid(CHUNK_SIZE),
         y: change.y.div_euclid(CHUNK_SIZE),
     };
-    if !context.visible.chunks.contains(&chunk_coord) {
+    if !change_context.visible.chunks.contains(&chunk_coord) {
         if let Some(entity) = cache.sprite_entities.remove(&coord) {
             commands.entity(entity).despawn();
         }
@@ -215,14 +222,15 @@ fn apply_resource_tile_change(
     sync_resource_sprite(
         commands,
         cache,
+        visual_assets,
         sprites,
         change.x,
         change.y,
         resource,
-        context.ids,
+        change_context.ids,
     );
 
-    if context.show_amount_labels {
+    if change_context.show_amount_labels {
         sync_resource_label(commands, cache, labels, change.x, change.y, resource);
     } else if let Some(entity) = cache.label_entities.remove(&coord) {
         commands.entity(entity).despawn();
@@ -236,9 +244,11 @@ struct ResourceTileChangeContext<'a> {
     show_amount_labels: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_resource_sprite(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
+    visual_assets: &mut VisualAssets,
     sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
     x: i32,
     y: i32,
@@ -246,14 +256,15 @@ fn sync_resource_sprite(
     ids: RenderPrototypeIds,
 ) {
     let coord = (x, y);
+    let color = resource_color(resource, ids);
     if let Some(&entity) = cache.sprite_entities.get(&coord)
         && let Ok((_, mut sprite)) = sprites.get_mut(entity)
     {
-        sprite.color = resource_color(resource, ids);
+        *sprite = visual_assets.resource_sprite(color, Vec2::splat(RESOURCE_SIZE));
         return;
     }
 
-    let entity = spawn_resource_sprite(commands, x, y, resource, ids);
+    let entity = spawn_resource_sprite(commands, visual_assets, x, y, color);
     cache.sprite_entities.insert(coord, entity);
 }
 
@@ -279,14 +290,15 @@ fn sync_resource_label(
 
 fn spawn_resource_sprite(
     commands: &mut Commands,
+    visual_assets: &mut VisualAssets,
     x: i32,
     y: i32,
-    resource: ResourceCell,
-    ids: RenderPrototypeIds,
+    color: Color,
 ) -> Entity {
     spawn_resource_visual(
         commands,
-        resource_color(resource, ids),
+        visual_assets,
+        color,
         Vec2::splat(RESOURCE_SIZE),
         tile_translation(x, y, 1.0),
         ResourceSprite,

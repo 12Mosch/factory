@@ -48,6 +48,7 @@ use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
 use crate::rendering::resources::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
+use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
 use crate::resources::{
     AppInputState, BeltItemRenderPool, BuildPlacementPreviewState, BuildPlacementState,
@@ -142,6 +143,7 @@ impl Plugin for FactoryAppPlugin {
             .init_resource::<VisibleChunks>()
             .init_resource::<VisibleEntityIds>()
             .init_resource::<RenderDetail>()
+            .init_resource::<VisualAssetCache>()
             .init_resource::<WorldRenderCache>()
             .init_resource::<BeltItemRenderPool>()
             .init_resource::<ProductionStatsWindowState>()
