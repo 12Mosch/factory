@@ -11,7 +11,7 @@ use crate::constants::{
     BELT_ITEM_LABEL_FONT_SIZE, BELT_ITEM_SPRITE_SIZE, TILE_SIZE,
 };
 use crate::rendering::transforms::{entity_translation, tile_translation};
-use crate::rendering::visuals::spawn_belt_item_visual;
+use crate::rendering::visuals::{VisualAssets, spawn_belt_item_visual};
 use crate::resources::{
     BeltItemRenderPool, RenderDetail, RenderSyncStats, SimResource, VisibleEntityIds,
 };
@@ -66,6 +66,7 @@ pub(crate) struct BeltItemRenderParams<'w, 's> {
     visible_entity_ids: Res<'w, VisibleEntityIds>,
     detail: Res<'w, RenderDetail>,
     pool: ResMut<'w, BeltItemRenderPool>,
+    visual_assets: VisualAssets<'w>,
     sprites: Query<
         'w,
         's,
@@ -172,33 +173,18 @@ pub(crate) fn measured_sync_belt_direction_rendering(
     stats.record_belt_directions(started.elapsed());
 }
 
-pub(crate) fn sync_belt_item_rendering(
-    mut commands: Commands,
-    sim: Res<SimResource>,
-    visible_entity_ids: Res<VisibleEntityIds>,
-    detail: Res<RenderDetail>,
-    mut pool: ResMut<BeltItemRenderPool>,
-    mut sprites: Query<
-        (
-            Entity,
-            &mut BeltItemSprite,
-            &mut Transform,
-            &mut Sprite,
-            &mut Visibility,
-        ),
-        Without<BeltItemLabel>,
-    >,
-    mut labels: Query<
-        (
-            Entity,
-            &mut BeltItemLabel,
-            &mut Transform,
-            &mut Text2d,
-            &mut Visibility,
-        ),
-        Without<BeltItemSprite>,
-    >,
-) {
+pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
+    let BeltItemRenderParams {
+        mut commands,
+        sim,
+        visible_entity_ids,
+        detail,
+        mut pool,
+        mut visual_assets,
+        mut sprites,
+        mut labels,
+    } = params;
+
     if !detail.show_belt_items {
         if detail.is_changed() {
             pool_all_belt_items(&mut pool, &mut sprites, &mut labels);
@@ -215,6 +201,7 @@ pub(crate) fn sync_belt_item_rendering(
         &mut commands,
         &sim.sim,
         &mut pool,
+        &mut visual_assets,
         detail.show_belt_item_labels,
         &visible_items,
         &mut sprites,
@@ -227,24 +214,7 @@ pub(crate) fn measured_sync_belt_item_rendering(
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    let BeltItemRenderParams {
-        commands,
-        sim,
-        visible_entity_ids,
-        detail,
-        pool,
-        sprites,
-        labels,
-    } = params;
-    sync_belt_item_rendering(
-        commands,
-        sim,
-        visible_entity_ids,
-        detail,
-        pool,
-        sprites,
-        labels,
-    );
+    sync_belt_item_rendering(params);
     stats.record_belt_items(started.elapsed());
 }
 
@@ -287,10 +257,12 @@ fn pool_all_belt_items(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_belt_item_entity_pool(
     commands: &mut Commands,
     sim: &Simulation,
     pool: &mut BeltItemRenderPool,
+    visual_assets: &mut VisualAssets,
     show_labels: bool,
     visible_items: &[VisibleBeltItemRenderState],
     sprites: &mut Query<
@@ -321,7 +293,6 @@ fn sync_belt_item_entity_pool(
     let mut seen_sprites = HashSet::with_capacity(visible_items.len());
     let mut seen_labels = HashSet::with_capacity(visible_items.len());
 
-    let item_size = Some(Vec2::splat(BELT_ITEM_SPRITE_SIZE));
     for (entity, mut marker, mut transform, mut sprite, mut visibility) in &mut *sprites {
         if marker.active
             && let Some(item) = visible_by_key.get(&marker.key)
@@ -330,10 +301,8 @@ fn sync_belt_item_entity_pool(
             transform.translation = item.translation;
             if marker.item_id != item.item_id {
                 marker.item_id = item.item_id;
-                sprite.color = item.color;
-            }
-            if sprite.custom_size != item_size {
-                sprite.custom_size = item_size;
+                *sprite =
+                    visual_assets.belt_item_sprite(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE));
             }
             *visibility = Visibility::Visible;
         } else if marker.active {
@@ -347,7 +316,7 @@ fn sync_belt_item_entity_pool(
         if seen_sprites.contains(&item.key) {
             continue;
         }
-        spawn_or_reuse_belt_item_sprite(commands, pool, *item);
+        spawn_or_reuse_belt_item_sprite(commands, pool, visual_assets, *item);
     }
 
     if show_labels {
@@ -389,6 +358,7 @@ fn sync_belt_item_entity_pool(
 fn spawn_or_reuse_belt_item_sprite(
     commands: &mut Commands,
     pool: &mut BeltItemRenderPool,
+    visual_assets: &mut VisualAssets,
     item: VisibleBeltItemRenderState,
 ) {
     let marker = BeltItemSprite {
@@ -399,7 +369,7 @@ fn spawn_or_reuse_belt_item_sprite(
 
     if let Some(entity) = pool.sprites.pop() {
         commands.entity(entity).insert((
-            Sprite::from_color(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
+            visual_assets.belt_item_sprite(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
             Transform::from_translation(item.translation),
             Visibility::Visible,
             marker,
@@ -409,6 +379,7 @@ fn spawn_or_reuse_belt_item_sprite(
 
     spawn_belt_item_visual(
         commands,
+        visual_assets,
         item.color,
         Vec2::splat(BELT_ITEM_SPRITE_SIZE),
         item.translation,

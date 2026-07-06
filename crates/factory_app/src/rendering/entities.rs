@@ -13,7 +13,7 @@ use crate::rendering::colors::{
     steam_engine_color, storage_tank_color, transport_belt_color,
 };
 use crate::rendering::transforms::entity_translation;
-use crate::rendering::visuals::{EntityVisualStyle, spawn_entity_visual};
+use crate::rendering::visuals::{EntityVisualStyle, VisualAssets, spawn_entity_visual};
 use crate::resources::{RenderSyncStats, SimResource, VisibleChunks, VisibleEntityIds};
 
 #[derive(Component)]
@@ -42,6 +42,7 @@ pub(crate) fn sync_placed_entity_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
+    mut visual_assets: VisualAssets,
     mut sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
 ) {
     if !visible_entity_ids.is_changed() {
@@ -53,7 +54,7 @@ pub(crate) fn sync_placed_entity_rendering(
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
         if visible_ids.contains(&marker.entity_id)
-            && let Some((color, size)) = renderable_entity_style(&sim.sim, marker.entity_id)
+            && let Some(style) = renderable_entity_visual_style(&sim.sim, marker.entity_id)
         {
             let placed = sim
                 .sim
@@ -62,8 +63,7 @@ pub(crate) fn sync_placed_entity_rendering(
                 .expect("validated renderable entity should still be placed");
             seen.insert(marker.entity_id);
             transform.translation = entity_translation(&placed.footprint, transform.translation.z);
-            sprite.color = color;
-            sprite.custom_size = Some(size);
+            *sprite = visual_assets.entity_sprite(style);
         } else {
             commands.entity(entity).despawn();
         }
@@ -82,6 +82,7 @@ pub(crate) fn sync_placed_entity_rendering(
 
         spawn_entity_visual(
             &mut commands,
+            &mut visual_assets,
             style,
             entity_translation(&placed.footprint, 3.0),
             PlacedEntitySprite {
@@ -95,11 +96,12 @@ pub(crate) fn measured_sync_placed_entity_rendering(
     commands: Commands,
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
+    visual_assets: VisualAssets,
     sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
     mut stats: ResMut<RenderSyncStats>,
 ) {
     let started = Instant::now();
-    sync_placed_entity_rendering(commands, sim, visible_entity_ids, sprites);
+    sync_placed_entity_rendering(commands, sim, visible_entity_ids, visual_assets, sprites);
     stats.record_placed_entities(started.elapsed());
 }
 
@@ -114,14 +116,6 @@ fn visible_entity_ids_for_chunks(sim: &Simulation, visible: &VisibleChunks) -> H
         .entity_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y)
         .into_iter()
         .collect()
-}
-
-pub(crate) fn renderable_entity_style(
-    sim: &Simulation,
-    entity_id: EntityId,
-) -> Option<(Color, Vec2)> {
-    let style = renderable_entity_visual_style(sim, entity_id)?;
-    Some((style.base_color, style.size))
 }
 
 pub(crate) fn renderable_entity_visual_style(
