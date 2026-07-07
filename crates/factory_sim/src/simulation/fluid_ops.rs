@@ -48,7 +48,7 @@ struct UnionFind {
 
 impl Simulation {
     pub(super) fn invalidate_fluid_state(&mut self) {
-        self.fluid_networks.clear();
+        self.fluids.networks.clear();
     }
 
     pub(super) fn advance_fluids_before_power(&mut self) {
@@ -67,14 +67,15 @@ impl Simulation {
             }
         }
 
-        self.fluid_networks = networks
+        self.fluids.networks = networks
             .iter()
             .map(|network| self.fluid_network_snapshot(network))
             .collect();
     }
 
     pub(super) fn fluid_network_id_for_box_key(&self, key: FluidBoxKey) -> Option<u32> {
-        self.fluid_networks
+        self.fluids
+            .networks
             .iter()
             .find(|network| {
                 network.boxes.iter().any(|box_snapshot| {
@@ -553,7 +554,8 @@ impl Simulation {
     }
 
     fn fluid_network_by_id(&self, network_id: u32) -> Option<&FluidNetworkSnapshot> {
-        self.fluid_networks
+        self.fluids
+            .networks
             .get(network_id as usize)
             .filter(|network| network.network_id == network_id)
     }

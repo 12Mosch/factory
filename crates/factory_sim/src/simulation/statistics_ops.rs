@@ -48,10 +48,10 @@ impl Simulation {
 
     pub fn item_statistics(&self) -> ItemStatisticsSnapshot {
         let mut item_ids = BTreeSet::new();
-        item_ids.extend(self.item_statistics.rolling_produced.keys().copied());
-        item_ids.extend(self.item_statistics.rolling_consumed.keys().copied());
-        item_ids.extend(self.item_statistics.total_produced.keys().copied());
-        item_ids.extend(self.item_statistics.total_consumed.keys().copied());
+        item_ids.extend(self.statistics.items.rolling_produced.keys().copied());
+        item_ids.extend(self.statistics.items.rolling_consumed.keys().copied());
+        item_ids.extend(self.statistics.items.total_produced.keys().copied());
+        item_ids.extend(self.statistics.items.total_consumed.keys().copied());
 
         ItemStatisticsSnapshot {
             rows: item_ids
@@ -59,25 +59,29 @@ impl Simulation {
                 .map(|item_id| ItemStatisticsRow {
                     item_id,
                     produced_last_minute: self
-                        .item_statistics
+                        .statistics
+                        .items
                         .rolling_produced
                         .get(&item_id)
                         .copied()
                         .unwrap_or(0),
                     consumed_last_minute: self
-                        .item_statistics
+                        .statistics
+                        .items
                         .rolling_consumed
                         .get(&item_id)
                         .copied()
                         .unwrap_or(0),
                     produced_total: self
-                        .item_statistics
+                        .statistics
+                        .items
                         .total_produced
                         .get(&item_id)
                         .copied()
                         .unwrap_or(0),
                     consumed_total: self
-                        .item_statistics
+                        .statistics
+                        .items
                         .total_consumed
                         .get(&item_id)
                         .copied()
@@ -89,10 +93,10 @@ impl Simulation {
 
     pub fn fluid_statistics(&self) -> FluidStatisticsSnapshot {
         let mut fluid_ids = BTreeSet::new();
-        fluid_ids.extend(self.fluid_statistics.rolling_produced.keys().copied());
-        fluid_ids.extend(self.fluid_statistics.rolling_consumed.keys().copied());
-        fluid_ids.extend(self.fluid_statistics.total_produced.keys().copied());
-        fluid_ids.extend(self.fluid_statistics.total_consumed.keys().copied());
+        fluid_ids.extend(self.statistics.fluids.rolling_produced.keys().copied());
+        fluid_ids.extend(self.statistics.fluids.rolling_consumed.keys().copied());
+        fluid_ids.extend(self.statistics.fluids.total_produced.keys().copied());
+        fluid_ids.extend(self.statistics.fluids.total_consumed.keys().copied());
 
         FluidStatisticsSnapshot {
             rows: fluid_ids
@@ -100,25 +104,29 @@ impl Simulation {
                 .map(|fluid_id| FluidStatisticsRow {
                     fluid_id,
                     produced_last_minute: self
-                        .fluid_statistics
+                        .statistics
+                        .fluids
                         .rolling_produced
                         .get(&fluid_id)
                         .copied()
                         .unwrap_or(0),
                     consumed_last_minute: self
-                        .fluid_statistics
+                        .statistics
+                        .fluids
                         .rolling_consumed
                         .get(&fluid_id)
                         .copied()
                         .unwrap_or(0),
                     produced_total: self
-                        .fluid_statistics
+                        .statistics
+                        .fluids
                         .total_produced
                         .get(&fluid_id)
                         .copied()
                         .unwrap_or(0),
                     consumed_total: self
-                        .fluid_statistics
+                        .statistics
+                        .fluids
                         .total_consumed
                         .get(&fluid_id)
                         .copied()
@@ -130,7 +138,8 @@ impl Simulation {
 
     pub fn power_statistics(&self) -> PowerStatisticsSnapshot {
         let mut samples = self
-            .power_statistics
+            .statistics
+            .power
             .samples
             .iter()
             .copied()
@@ -172,17 +181,17 @@ impl Simulation {
     }
 
     pub(super) fn advance_statistics_to_current_tick(&mut self) {
-        while self.item_statistics.last_advanced_tick < self.tick {
-            self.item_statistics.last_advanced_tick += 1;
-            self.clear_item_statistics_bucket(self.item_statistics.last_advanced_tick);
+        while self.statistics.items.last_advanced_tick < self.tick {
+            self.statistics.items.last_advanced_tick += 1;
+            self.clear_item_statistics_bucket(self.statistics.items.last_advanced_tick);
         }
-        while self.fluid_statistics.last_advanced_tick < self.tick {
-            self.fluid_statistics.last_advanced_tick += 1;
-            self.clear_fluid_statistics_bucket(self.fluid_statistics.last_advanced_tick);
+        while self.statistics.fluids.last_advanced_tick < self.tick {
+            self.statistics.fluids.last_advanced_tick += 1;
+            self.clear_fluid_statistics_bucket(self.statistics.fluids.last_advanced_tick);
         }
-        while self.power_statistics.last_advanced_tick < self.tick {
-            self.power_statistics.last_advanced_tick += 1;
-            self.clear_power_statistics_sample(self.power_statistics.last_advanced_tick);
+        while self.statistics.power.last_advanced_tick < self.tick {
+            self.statistics.power.last_advanced_tick += 1;
+            self.clear_power_statistics_sample(self.statistics.power.last_advanced_tick);
         }
     }
 
@@ -207,17 +216,17 @@ impl Simulation {
         self.ensure_current_item_statistics_bucket();
 
         let index = self.current_statistics_bucket_index();
-        let bucket = &mut self.item_statistics.buckets[index];
+        let bucket = &mut self.statistics.items.buckets[index];
         match direction {
             ItemStatisticDirection::Produced => {
                 add_stat(&mut bucket.produced, item_id, amount);
-                add_stat(&mut self.item_statistics.rolling_produced, item_id, amount);
-                add_stat(&mut self.item_statistics.total_produced, item_id, amount);
+                add_stat(&mut self.statistics.items.rolling_produced, item_id, amount);
+                add_stat(&mut self.statistics.items.total_produced, item_id, amount);
             }
             ItemStatisticDirection::Consumed => {
                 add_stat(&mut bucket.consumed, item_id, amount);
-                add_stat(&mut self.item_statistics.rolling_consumed, item_id, amount);
-                add_stat(&mut self.item_statistics.total_consumed, item_id, amount);
+                add_stat(&mut self.statistics.items.rolling_consumed, item_id, amount);
+                add_stat(&mut self.statistics.items.total_consumed, item_id, amount);
             }
         }
     }
@@ -238,25 +247,25 @@ impl Simulation {
         self.ensure_current_fluid_statistics_bucket();
 
         let index = self.current_statistics_bucket_index();
-        let bucket = &mut self.fluid_statistics.buckets[index];
+        let bucket = &mut self.statistics.fluids.buckets[index];
         match direction {
             StatisticDirection::Produced => {
                 add_stat(&mut bucket.produced, fluid_id, amount);
                 add_stat(
-                    &mut self.fluid_statistics.rolling_produced,
+                    &mut self.statistics.fluids.rolling_produced,
                     fluid_id,
                     amount,
                 );
-                add_stat(&mut self.fluid_statistics.total_produced, fluid_id, amount);
+                add_stat(&mut self.statistics.fluids.total_produced, fluid_id, amount);
             }
             StatisticDirection::Consumed => {
                 add_stat(&mut bucket.consumed, fluid_id, amount);
                 add_stat(
-                    &mut self.fluid_statistics.rolling_consumed,
+                    &mut self.statistics.fluids.rolling_consumed,
                     fluid_id,
                     amount,
                 );
-                add_stat(&mut self.fluid_statistics.total_consumed, fluid_id, amount);
+                add_stat(&mut self.statistics.fluids.total_consumed, fluid_id, amount);
             }
         }
     }
@@ -264,54 +273,54 @@ impl Simulation {
     pub(super) fn record_power_sample(&mut self) {
         self.advance_statistics_to_current_tick();
         let index = self.current_statistics_bucket_index();
-        self.power_statistics.samples[index] = PowerStatisticsSample {
+        self.statistics.power.samples[index] = PowerStatisticsSample {
             tick: self.tick,
-            production_watts: self.power_summary.production_watts,
-            available_production_watts: self.power_summary.available_production_watts,
-            consumption_watts: self.power_summary.consumption_watts,
-            satisfaction_permyriad: self.power_summary.satisfaction_permyriad,
+            production_watts: self.power.summary.production_watts,
+            available_production_watts: self.power.summary.available_production_watts,
+            consumption_watts: self.power.summary.consumption_watts,
+            satisfaction_permyriad: self.power.summary.satisfaction_permyriad,
         };
     }
 
     fn ensure_current_item_statistics_bucket(&mut self) {
         let index = self.current_statistics_bucket_index();
-        if self.item_statistics.buckets[index].tick != self.tick {
+        if self.statistics.items.buckets[index].tick != self.tick {
             self.clear_item_statistics_bucket(self.tick);
         }
     }
 
     fn ensure_current_fluid_statistics_bucket(&mut self) {
         let index = self.current_statistics_bucket_index();
-        if self.fluid_statistics.buckets[index].tick != self.tick {
+        if self.statistics.fluids.buckets[index].tick != self.tick {
             self.clear_fluid_statistics_bucket(self.tick);
         }
     }
 
     fn clear_item_statistics_bucket(&mut self, tick: u64) {
         let index = (tick % ITEM_STATISTICS_WINDOW_TICKS) as usize;
-        let bucket = &mut self.item_statistics.buckets[index];
+        let bucket = &mut self.statistics.items.buckets[index];
         for (item_id, amount) in std::mem::take(&mut bucket.produced) {
-            subtract_stat(&mut self.item_statistics.rolling_produced, item_id, amount);
+            subtract_stat(&mut self.statistics.items.rolling_produced, item_id, amount);
         }
         for (item_id, amount) in std::mem::take(&mut bucket.consumed) {
-            subtract_stat(&mut self.item_statistics.rolling_consumed, item_id, amount);
+            subtract_stat(&mut self.statistics.items.rolling_consumed, item_id, amount);
         }
         bucket.tick = tick;
     }
 
     fn clear_fluid_statistics_bucket(&mut self, tick: u64) {
         let index = (tick % ITEM_STATISTICS_WINDOW_TICKS) as usize;
-        let bucket = &mut self.fluid_statistics.buckets[index];
+        let bucket = &mut self.statistics.fluids.buckets[index];
         for (fluid_id, amount) in std::mem::take(&mut bucket.produced) {
             subtract_stat(
-                &mut self.fluid_statistics.rolling_produced,
+                &mut self.statistics.fluids.rolling_produced,
                 fluid_id,
                 amount,
             );
         }
         for (fluid_id, amount) in std::mem::take(&mut bucket.consumed) {
             subtract_stat(
-                &mut self.fluid_statistics.rolling_consumed,
+                &mut self.statistics.fluids.rolling_consumed,
                 fluid_id,
                 amount,
             );
@@ -321,7 +330,7 @@ impl Simulation {
 
     fn clear_power_statistics_sample(&mut self, tick: u64) {
         let index = (tick % ITEM_STATISTICS_WINDOW_TICKS) as usize;
-        self.power_statistics.samples[index] = PowerStatisticsSample {
+        self.statistics.power.samples[index] = PowerStatisticsSample {
             tick,
             ..PowerStatisticsSample::default()
         };

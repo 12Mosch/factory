@@ -51,35 +51,36 @@ impl Simulation {
     }
 
     pub(super) fn invalidate_power_state(&mut self) {
-        self.power_topology_dirty = true;
+        self.power.topology_dirty = true;
         self.invalidate_power_dynamic_state();
     }
 
     pub(super) fn invalidate_power_dynamic_state(&mut self) {
-        self.power_summary = PowerSummary {
+        self.power.summary = PowerSummary {
             satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
             ..PowerSummary::default()
         };
-        self.power_networks.clear();
-        self.entity_power_statuses.clear();
+        self.power.networks.clear();
+        self.power.entity_statuses.clear();
     }
 
     pub(super) fn refresh_power_state(&mut self) {
-        if self.power_topology_dirty {
-            self.power_topology = self.rebuild_power_topology();
-            self.power_topology_dirty = false;
+        if self.power.topology_dirty {
+            self.power.topology = self.rebuild_power_topology();
+            self.power.topology_dirty = false;
             #[cfg(test)]
             {
-                self.power_topology_rebuilds += 1;
+                self.power.topology_rebuilds += 1;
             }
         }
 
-        let mut networks = self.power_topology.network_accumulators();
+        let mut networks = self.power.topology.network_accumulators();
         let consumer_demands = self.consumer_power_demands();
 
         for (entity_id, (active_usage_watts, drain_watts)) in &consumer_demands {
             let Some(network_id) = self
-                .power_topology
+                .power
+                .topology
                 .network_ids_by_entity
                 .get(entity_id)
                 .copied()
@@ -94,7 +95,7 @@ impl Simulation {
         }
 
         let engine_assignments = self.assign_steam_engines_to_fluid_networks(
-            &self.power_topology.network_ids_by_entity,
+            &self.power.topology.network_ids_by_entity,
             &networks,
         );
         for assignment in engine_assignments.values() {
@@ -117,10 +118,10 @@ impl Simulation {
         let engine_output_watts = actual_steam_engine_outputs(&networks, &engine_assignments);
         self.consume_steam_for_engine_output(engine_output_watts, &engine_assignments);
         self.rebuild_fluid_networks_and_equalize();
-        self.power_networks = network_snapshots(&networks);
-        self.power_summary = aggregate_power_summary(&self.power_networks);
-        self.entity_power_statuses = self
-            .consumer_power_statuses(&self.power_topology.network_ids_by_entity, consumer_demands);
+        self.power.networks = network_snapshots(&networks);
+        self.power.summary = aggregate_power_summary(&self.power.networks);
+        self.power.entity_statuses = self
+            .consumer_power_statuses(&self.power.topology.network_ids_by_entity, consumer_demands);
         self.record_power_sample();
     }
 
@@ -238,7 +239,7 @@ impl Simulation {
             .map(|(entity_id, (active_usage_watts, drain_watts))| {
                 let network_id = network_ids_by_entity.get(&entity_id).copied();
                 let satisfaction_permyriad = network_id
-                    .and_then(|network_id| self.power_networks.get(network_id as usize))
+                    .and_then(|network_id| self.power.networks.get(network_id as usize))
                     .map(|network| network.satisfaction_permyriad)
                     .unwrap_or(0);
                 (
@@ -344,7 +345,8 @@ impl Simulation {
             .map(|(network_id, network)| (network_id as u32, network.consumption_watts))
             .collect::<BTreeMap<_, _>>();
         let mut remaining_steam_by_network = self
-            .fluid_networks
+            .fluids
+            .networks
             .iter()
             .filter(|network| !network.blocked && network.fluid_id == Some(steam))
             .map(|network| (network.network_id, network.total_milliunits))
@@ -464,7 +466,8 @@ impl Simulation {
 
     pub(super) fn electric_work_allowed(&mut self, entity_id: EntityId) -> bool {
         let satisfaction_permyriad = self
-            .entity_power_statuses
+            .power
+            .entity_statuses
             .get(&entity_id)
             .map(|status| status.satisfaction_permyriad)
             .unwrap_or(0);
@@ -493,7 +496,7 @@ impl Simulation {
 
     #[cfg(test)]
     pub(super) fn power_topology_rebuild_count(&self) -> u64 {
-        self.power_topology_rebuilds
+        self.power.topology_rebuilds
     }
 }
 

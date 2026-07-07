@@ -15,12 +15,12 @@ pub(super) fn validate_item_statistics(sim: &Simulation) -> Result<(), SimValida
     validate_rolling_statistics(
         &sim.world.prototypes,
         sim.tick,
-        &sim.item_statistics.buckets,
-        sim.item_statistics.last_advanced_tick,
-        &sim.item_statistics.rolling_produced,
-        &sim.item_statistics.rolling_consumed,
-        &sim.item_statistics.total_produced,
-        &sim.item_statistics.total_consumed,
+        &sim.statistics.items.buckets,
+        sim.statistics.items.last_advanced_tick,
+        &sim.statistics.items.rolling_produced,
+        &sim.statistics.items.rolling_consumed,
+        &sim.statistics.items.total_produced,
+        &sim.statistics.items.total_consumed,
         |bucket| bucket.tick,
         |bucket| &bucket.produced,
         |bucket| &bucket.consumed,
@@ -34,12 +34,12 @@ pub(super) fn validate_fluid_statistics(sim: &Simulation) -> Result<(), SimValid
     validate_rolling_statistics(
         &sim.world.prototypes,
         sim.tick,
-        &sim.fluid_statistics.buckets,
-        sim.fluid_statistics.last_advanced_tick,
-        &sim.fluid_statistics.rolling_produced,
-        &sim.fluid_statistics.rolling_consumed,
-        &sim.fluid_statistics.total_produced,
-        &sim.fluid_statistics.total_consumed,
+        &sim.statistics.fluids.buckets,
+        sim.statistics.fluids.last_advanced_tick,
+        &sim.statistics.fluids.rolling_produced,
+        &sim.statistics.fluids.rolling_consumed,
+        &sim.statistics.fluids.total_produced,
+        &sim.statistics.fluids.total_consumed,
         |bucket| bucket.tick,
         |bucket| &bucket.produced,
         |bucket| &bucket.consumed,
@@ -50,13 +50,13 @@ pub(super) fn validate_fluid_statistics(sim: &Simulation) -> Result<(), SimValid
 }
 
 pub(super) fn validate_power_statistics(sim: &Simulation) -> Result<(), SimValidationError> {
-    if sim.power_statistics.samples.len() != ITEM_STATISTICS_WINDOW_TICKS as usize
-        || sim.power_statistics.last_advanced_tick != sim.tick
+    if sim.statistics.power.samples.len() != ITEM_STATISTICS_WINDOW_TICKS as usize
+        || sim.statistics.power.last_advanced_tick != sim.tick
     {
         return Err(SimValidationError::InvalidPowerStatistics);
     }
 
-    for sample in &sim.power_statistics.samples {
+    for sample in &sim.statistics.power.samples {
         let in_window = sample.tick <= sim.tick
             && sample.tick.saturating_add(ITEM_STATISTICS_WINDOW_TICKS) > sim.tick;
         if power_sample_is_recorded(*sample) && !in_window {

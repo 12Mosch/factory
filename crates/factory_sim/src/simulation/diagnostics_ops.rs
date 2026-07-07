@@ -172,13 +172,13 @@ impl Simulation {
             ));
         }
 
-        if self.power_summary.consumption_watts > 0
-            && self.power_summary.satisfaction_permyriad < POWER_SATISFACTION_FULL_PERMYRIAD
+        if self.power.summary.consumption_watts > 0
+            && self.power.summary.satisfaction_permyriad < POWER_SATISFACTION_FULL_PERMYRIAD
         {
             candidates.push((
                 u64::from(
                     POWER_SATISFACTION_FULL_PERMYRIAD
-                        .saturating_sub(self.power_summary.satisfaction_permyriad),
+                        .saturating_sub(self.power.summary.satisfaction_permyriad),
                 ),
                 BottleneckHint {
                     kind: BottleneckHintKind::PowerShortage,
@@ -322,7 +322,8 @@ impl Simulation {
             return MachineStatus::OutputFull;
         }
         if self
-            .entity_power_statuses
+            .power
+            .entity_statuses
             .get(&entity_id)
             .map(|status| status.satisfaction_permyriad)
             .unwrap_or(0)
@@ -344,7 +345,8 @@ impl Simulation {
             return MachineStatus::NoInput;
         }
         if self
-            .entity_power_statuses
+            .power
+            .entity_statuses
             .get(&entity_id)
             .map(|status| status.satisfaction_permyriad)
             .unwrap_or(0)
@@ -401,7 +403,7 @@ impl Simulation {
     }
 
     fn steam_engine_status(&self, entity_id: EntityId, steam: FluidId) -> MachineStatus {
-        if self.power_summary.consumption_watts == 0 {
+        if self.power.summary.consumption_watts == 0 {
             return MachineStatus::Idle;
         }
         let Some(engine) = self.steam_engine_prototype(entity_id) else {
@@ -435,8 +437,8 @@ impl Simulation {
 
     fn steam_engines_are_starved(&self) -> bool {
         if self.entities.steam_engines.is_empty()
-            || self.power_summary.consumption_watts == 0
-            || self.power_summary.available_production_watts >= self.power_summary.consumption_watts
+            || self.power.summary.consumption_watts == 0
+            || self.power.summary.available_production_watts >= self.power.summary.consumption_watts
         {
             return false;
         }

@@ -23,26 +23,15 @@ impl Simulation {
             revealed_revision: 0,
             world,
             chart: ChartState::default(),
-            item_statistics: ItemStatistics::default(),
-            fluid_statistics: FluidStatistics::default(),
-            power_statistics: PowerStatistics::default(),
             entities,
             player,
             player_inventory,
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
             research,
-            power_summary: PowerSummary {
-                satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
-                ..PowerSummary::default()
-            },
-            power_networks: Vec::new(),
-            entity_power_statuses: BTreeMap::new(),
-            power_topology_dirty: true,
-            power_topology: PowerTopologyCache::default(),
-            #[cfg(test)]
-            power_topology_rebuilds: 0,
-            fluid_networks: Vec::new(),
+            power: PowerSubsystem::default(),
+            fluids: FluidSubsystem::default(),
+            statistics: StatisticsSubsystem::default(),
             transport: TransportLaneCache::default(),
         };
         sim.reveal_chunks_around_player();
@@ -127,9 +116,9 @@ impl Simulation {
         prototype_hash(&self.world.prototypes).hash(&mut hasher);
         self.world.chunks.hash(&mut hasher);
         self.chart.hash(&mut hasher);
-        self.item_statistics.hash(&mut hasher);
-        self.fluid_statistics.hash(&mut hasher);
-        self.power_statistics.hash(&mut hasher);
+        self.statistics.items.hash(&mut hasher);
+        self.statistics.fluids.hash(&mut hasher);
+        self.statistics.power.hash(&mut hasher);
         self.entities.hash(&mut hasher);
         self.player.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);
@@ -138,10 +127,10 @@ impl Simulation {
         self.research.active.hash(&mut hasher);
         self.research.queue.hash(&mut hasher);
         self.research.technologies.hash(&mut hasher);
-        self.power_summary.hash(&mut hasher);
-        self.power_networks.hash(&mut hasher);
-        self.entity_power_statuses.hash(&mut hasher);
-        self.fluid_networks.hash(&mut hasher);
+        self.power.summary.hash(&mut hasher);
+        self.power.networks.hash(&mut hasher);
+        self.power.entity_statuses.hash(&mut hasher);
+        self.fluids.networks.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -158,19 +147,19 @@ impl Simulation {
     }
 
     pub fn power_summary(&self) -> PowerSummary {
-        self.power_summary
+        self.power.summary
     }
 
     pub fn power_networks(&self) -> &[PowerNetworkSnapshot] {
-        &self.power_networks
+        &self.power.networks
     }
 
     pub fn fluid_networks(&self) -> &[FluidNetworkSnapshot] {
-        &self.fluid_networks
+        &self.fluids.networks
     }
 
     pub fn entity_power_status(&self, entity_id: EntityId) -> Option<EntityPowerStatus> {
-        self.entity_power_statuses.get(&entity_id).copied()
+        self.power.entity_statuses.get(&entity_id).copied()
     }
 
     pub fn player(&self) -> PlayerState {
