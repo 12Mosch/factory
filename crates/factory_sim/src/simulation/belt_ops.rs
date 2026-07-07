@@ -60,6 +60,53 @@ pub(super) struct TransportLaneVisitStorage {
     states: Vec<TransportLaneVisitSlot>,
 }
 
+/// Subsystem-owned cache for belt/splitter transport.
+///
+/// This holds no authoritative simulation state: the durable belt/transport
+/// data (lanes, item positions, splitter cursors) lives in [`EntityStore`].
+/// The graph is a derived adjacency index rebuilt from `entities` whenever the
+/// transport topology changes, and `visit_states` is per-tick DFS scratch.
+/// All of it is `#[serde(skip)]` and reconstructed on load.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) struct TransportLaneCache {
+    dirty: bool,
+    pub(super) graph: TransportLaneGraph,
+    pub(super) visit_states: TransportLaneVisitStorage,
+    #[cfg(test)]
+    rebuilds: u64,
+}
+
+impl Default for TransportLaneCache {
+    fn default() -> Self {
+        Self {
+            dirty: true,
+            graph: TransportLaneGraph::default(),
+            visit_states: TransportLaneVisitStorage::default(),
+            #[cfg(test)]
+            rebuilds: 0,
+        }
+    }
+}
+
+impl TransportLaneCache {
+    fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    fn refresh(&mut self, entities: &EntityStore) {
+        if !self.dirty {
+            return;
+        }
+
+        self.graph.rebuild(entities);
+        self.dirty = false;
+        #[cfg(test)]
+        {
+            self.rebuilds += 1;
+        }
+    }
+}
+
 impl TransportLaneGraph {
     pub(super) fn rebuild(&mut self, entities: &EntityStore) {
         let lane_count = (entities.next_entity_id as usize).saturating_mul(4);
@@ -150,25 +197,16 @@ impl Simulation {
     }
 
     pub(super) fn invalidate_transport_lane_graph(&mut self) {
-        self.transport_lane_graph_dirty = true;
+        self.transport.invalidate();
     }
 
     pub(super) fn refresh_transport_lane_graph(&mut self) {
-        if !self.transport_lane_graph_dirty {
-            return;
-        }
-
-        self.transport_lane_graph.rebuild(&self.entities);
-        self.transport_lane_graph_dirty = false;
-        #[cfg(test)]
-        {
-            self.transport_lane_graph_rebuilds += 1;
-        }
+        self.transport.refresh(&self.entities);
     }
 
     #[cfg(test)]
     pub(super) fn transport_lane_graph_rebuild_count(&self) -> u64 {
-        self.transport_lane_graph_rebuilds
+        self.transport.rebuilds
     }
 }
 

@@ -102,25 +102,14 @@ pub struct Simulation {
     #[cfg(test)]
     power_topology_rebuilds: u64,
     fluid_networks: Vec<FluidNetworkSnapshot>,
-    #[serde(skip, default = "default_transport_lane_graph_dirty")]
-    transport_lane_graph_dirty: bool,
     #[serde(skip)]
-    transport_lane_graph: TransportLaneGraph,
-    #[serde(skip)]
-    transport_lane_visit_states: TransportLaneVisitStorage,
-    #[cfg(test)]
-    #[serde(skip)]
-    transport_lane_graph_rebuilds: u64,
+    transport: TransportLaneCache,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 struct PowerTopologyCache {
     network_ids_by_entity: BTreeMap<EntityId, u32>,
     pole_counts: Vec<usize>,
-}
-
-fn default_transport_lane_graph_dirty() -> bool {
-    true
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
