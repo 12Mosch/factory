@@ -13,13 +13,20 @@ fn completed_research_unlocks_recipe() {
     let science_pack = item_id_by_name(sim.catalog(), "automation_science_pack");
     let assembling_machine = recipe_id_by_name(sim.catalog(), "assembling_machine");
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    let lab_id = sim
-        .place_entity(lab, x, y, Direction::North)
-        .expect("lab should be placeable");
+    let lab_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: lab,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("lab should be placeable");
     complete_research_by_name(&mut sim, "logistics");
     sim.select_research(automation)
         .expect("automation should be selectable");
-    sim.entity_inventory_mut(lab_id)
+    factory_sim::entity_access::inventory_mut(&mut sim, lab_id)
         .expect("lab should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: science_pack,

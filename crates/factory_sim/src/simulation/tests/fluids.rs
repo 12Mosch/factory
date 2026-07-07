@@ -24,14 +24,19 @@ fn boiler_fills_steam_buffer_without_demand_then_stops_when_full() {
     }
 
     assert!(reached_capacity);
-    let stopped_state = sim.boiler_state(boiler_id).unwrap().clone();
+    let stopped_state = crate::entity_access::boiler_state(&sim, boiler_id)
+        .unwrap()
+        .clone();
     assert_eq!(sim.power_summary().production_watts, 0);
 
     for _ in 0..120 {
         sim.tick();
     }
 
-    assert_eq!(sim.boiler_state(boiler_id).unwrap(), &stopped_state);
+    assert_eq!(
+        crate::entity_access::boiler_state(&sim, boiler_id).unwrap(),
+        &stopped_state
+    );
     assert_eq!(sim.power_summary().production_watts, 0);
 }
 
@@ -40,9 +45,16 @@ fn boiler_clears_insufficient_residual_energy_without_fuel() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 3, 3, (3, 1));
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut sim, assembler_id);
     let state = sim
         .entities
@@ -53,7 +65,7 @@ fn boiler_clears_insufficient_residual_energy_without_fuel() {
 
     sim.tick();
 
-    let state = sim.boiler_state(boiler_id).unwrap();
+    let state = crate::entity_access::boiler_state(&sim, boiler_id).unwrap();
     assert_eq!(state.energy.fuel_slot, None);
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
 }
@@ -93,9 +105,16 @@ fn boiler_with_no_water_or_no_fuel_produces_no_steam_power() {
         .energy
         .fuel_slot = None;
     let assembler = entity_id_by_name(&no_fuel.world.prototypes, "assembling_machine");
-    let assembler_id = no_fuel
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut no_fuel,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut no_fuel, assembler_id);
     no_fuel.tick();
     assert_eq!(no_fuel.power_summary().available_production_watts, 0);
@@ -108,13 +127,19 @@ fn boiler_with_no_water_or_no_fuel_produces_no_steam_power() {
         .keys()
         .next()
         .expect("fixture should place an offshore pump");
-    no_water
-        .remove_entity(pump_id)
+    crate::entity_mutation::remove(&mut no_water, pump_id)
         .expect("offshore pump should be removable");
     let assembler = entity_id_by_name(&no_water.world.prototypes, "assembling_machine");
-    let assembler_id = no_water
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut no_water,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut no_water, assembler_id);
     no_water.tick();
     assert_eq!(no_water.power_summary().available_production_watts, 0);
@@ -125,12 +150,28 @@ fn offshore_pump_placement_succeeds_on_shoreline_and_fails_away_from_water() {
     let mut sim = Simulation::new_test_world(123);
     let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
     let (shore_x, shore_y) = first_placeable_offshore_pump(&sim, pump);
-    sim.place_entity(pump, shore_x, shore_y, Direction::North)
-        .expect("offshore pump should place on shoreline");
+    crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pump,
+            x: shore_x,
+            y: shore_y,
+            direction: Direction::North,
+        },
+    )
+    .expect("offshore pump should place on shoreline");
 
     let away = first_buildable_offshore_pump_footprint_away_from_water(&sim, pump);
     assert!(matches!(
-        sim.can_place_entity(pump, away.0, away.1, Direction::North),
+        crate::placement::validate(
+            &sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pump,
+                x: away.0,
+                y: away.1,
+                direction: Direction::North
+            }
+        ),
         Err(BuildError::TileBlocked { .. })
     ));
 }
@@ -141,9 +182,16 @@ fn offshore_pump_produces_water_into_its_fluid_network() {
     let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
     let water = fluid_id(&sim.world.prototypes, "water");
     let (x, y) = first_placeable_offshore_pump(&sim, pump);
-    let pump_id = sim
-        .place_entity(pump, x, y, Direction::North)
-        .expect("offshore pump should place on shoreline");
+    let pump_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pump,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("offshore pump should place on shoreline");
 
     sim.tick();
 
@@ -192,7 +240,7 @@ fn boiler_consumes_water_and_fuel_and_outputs_steam() {
 
     sim.tick();
 
-    let boiler = sim.boiler_state(boiler_id).expect("boiler should exist");
+    let boiler = crate::entity_access::boiler_state(&sim, boiler_id).expect("boiler should exist");
     assert_eq!(boiler.energy.fuel_slot.map(|stack| stack.count), Some(49));
     assert!(boiler.energy.energy_remaining_joules > 0.0);
     assert_eq!(
@@ -221,9 +269,16 @@ fn boiler_does_not_consume_fuel_without_water_or_when_steam_output_is_full() {
     let boiler = entity_id_by_name(&no_water.world.prototypes, "boiler");
     let coal = item_id(&no_water.world.prototypes, "coal");
     let (x, y) = first_buildable_rect(&no_water.world, 2, 3);
-    let boiler_id = no_water
-        .place_entity(boiler, x, y, Direction::North)
-        .expect("boiler should be placeable");
+    let boiler_id = crate::placement::place(
+        &mut no_water,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: boiler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("boiler should be placeable");
     no_water
         .entities
         .boiler_state_mut(boiler_id)
@@ -233,9 +288,14 @@ fn boiler_does_not_consume_fuel_without_water_or_when_steam_output_is_full() {
         item_id: coal,
         count: 1,
     });
-    let before = no_water.boiler_state(boiler_id).unwrap().clone();
+    let before = crate::entity_access::boiler_state(&no_water, boiler_id)
+        .unwrap()
+        .clone();
     no_water.tick();
-    assert_eq!(no_water.boiler_state(boiler_id).unwrap(), &before);
+    assert_eq!(
+        crate::entity_access::boiler_state(&no_water, boiler_id).unwrap(),
+        &before
+    );
 
     let mut steam_full = Simulation::new_test_world(123);
     let (_, _, boiler_id) = place_powered_fixture_origin_with_boiler(&mut steam_full, 1, 1, (1, 2));
@@ -248,11 +308,16 @@ fn boiler_does_not_consume_fuel_without_water_or_when_steam_output_is_full() {
         .expect("fixture should place a steam engine");
     set_fluid_box(&mut steam_full, boiler_id, 1, steam, 100_000);
     set_fluid_box(&mut steam_full, engine_id, 0, steam, 100_000);
-    let before = steam_full.boiler_state(boiler_id).unwrap().clone();
+    let before = crate::entity_access::boiler_state(&steam_full, boiler_id)
+        .unwrap()
+        .clone();
 
     steam_full.tick();
 
-    assert_eq!(steam_full.boiler_state(boiler_id).unwrap(), &before);
+    assert_eq!(
+        crate::entity_access::boiler_state(&steam_full, boiler_id).unwrap(),
+        &before
+    );
 }
 
 #[test]
@@ -260,9 +325,16 @@ fn steam_engine_consumes_steam_and_produces_electricity_for_demand() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 3, 3, (3, 1));
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut sim, assembler_id);
     for state in sim.entities.boilers.values_mut() {
         state.energy.fuel_slot = None;
@@ -298,9 +370,16 @@ fn steam_engine_cannot_produce_without_steam() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut sim, assembler_id);
     for state in sim.entities.boilers.values_mut() {
         state.energy.fuel_slot = None;
@@ -320,12 +399,26 @@ fn storage_tank_equalizes_with_connected_pipe_by_fill_percentage() {
     let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
     let water = fluid_id(&sim.world.prototypes, "water");
     let (x, y) = first_buildable_rect(&sim.world, 4, 3);
-    let tank_id = sim
-        .place_entity(tank, x, y, Direction::North)
-        .expect("storage tank should be placeable");
-    let pipe_id = sim
-        .place_entity(pipe, x + 3, y + 1, Direction::North)
-        .expect("pipe should connect to tank east port");
+    let tank_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: tank,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("storage tank should be placeable");
+    let pipe_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x: x + 3,
+            y: y + 1,
+            direction: Direction::North,
+        },
+    )
+    .expect("pipe should connect to tank east port");
     set_fluid_box(&mut sim, tank_id, 0, water, 12_550_000);
 
     sim.tick();
@@ -348,23 +441,43 @@ fn removing_pipe_splits_fluid_network_without_invalid_fluid_state() {
     let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
     let water = fluid_id(&sim.world.prototypes, "water");
     let (x, y) = first_buildable_rect(&sim.world, 8, 3);
-    let first_tank = sim
-        .place_entity(tank, x, y, Direction::North)
-        .expect("first tank should be placeable");
-    let pipe_id = sim
-        .place_entity(pipe, x + 3, y + 1, Direction::North)
-        .expect("pipe should be placeable");
-    let second_tank = sim
-        .place_entity(tank, x + 4, y, Direction::North)
-        .expect("second tank should be placeable");
+    let first_tank = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: tank,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("first tank should be placeable");
+    let pipe_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x: x + 3,
+            y: y + 1,
+            direction: Direction::North,
+        },
+    )
+    .expect("pipe should be placeable");
+    let second_tank = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: tank,
+            x: x + 4,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("second tank should be placeable");
     set_fluid_box(&mut sim, first_tank, 0, water, 10_000_000);
     set_fluid_box(&mut sim, second_tank, 0, water, 5_000_000);
     sim.tick();
     let total_before = total_fluid_amount(&sim, water);
     let removed_pipe_amount = sim.entities.fluid_boxes[&pipe_id][0].amount_milliunits;
 
-    sim.remove_entity(pipe_id)
-        .expect("pipe should be removable");
+    crate::entity_mutation::remove(&mut sim, pipe_id).expect("pipe should be removable");
     sim.tick();
 
     assert_eq!(
@@ -402,12 +515,26 @@ fn incompatible_water_and_steam_network_is_blocked_and_does_not_mix() {
         }];
     let mut sim = Simulation::new(123, catalog);
     let (x, y) = first_buildable_rect(&sim.world, 2, 1);
-    let pipe_id = sim
-        .place_entity(pipe, x, y, Direction::North)
-        .expect("pipe should be placeable");
-    let tank_id = sim
-        .place_entity(tank, x + 1, y, Direction::North)
-        .expect("tank should be placeable");
+    let pipe_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("pipe should be placeable");
+    let tank_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: tank,
+            x: x + 1,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("tank should be placeable");
     set_fluid_box(&mut sim, pipe_id, 0, water, 10_000);
     set_fluid_box(&mut sim, tank_id, 0, steam, 10_000);
 

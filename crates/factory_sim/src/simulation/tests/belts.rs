@@ -14,11 +14,16 @@ fn belt_moves_item_to_next_segment() {
     }
 
     assert!(
-        sim.belt_segment(belts[0]).unwrap().lanes[0]
+        crate::entity_access::belt_segment(&sim, belts[0])
+            .unwrap()
+            .lanes[0]
             .items
             .is_empty()
     );
-    let second_lane = &sim.belt_segment(belts[1]).unwrap().lanes[0].items;
+    let second_lane = &crate::entity_access::belt_segment(&sim, belts[1])
+        .unwrap()
+        .lanes[0]
+        .items;
     assert_eq!(second_lane.len(), 1);
     assert_eq!(second_lane[0].item_id, iron_ore);
 }
@@ -44,13 +49,12 @@ fn transport_topology_edits_dirty_cached_lane_graph() {
     sim.advance_transport_belts();
     assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
 
-    sim.rotate_entity(belts[0], Direction::North)
+    crate::entity_mutation::rotate(&mut sim, belts[0], Direction::North)
         .expect("placed belt should rotate");
     sim.advance_transport_belts();
     assert_eq!(sim.transport_lane_graph_rebuild_count(), 2);
 
-    sim.remove_entity(belts[1])
-        .expect("placed belt should be removable");
+    crate::entity_mutation::remove(&mut sim, belts[1]).expect("placed belt should be removable");
     sim.advance_transport_belts();
     assert_eq!(sim.transport_lane_graph_rebuild_count(), 3);
 }
@@ -63,7 +67,7 @@ fn destroying_transport_entity_dirties_cached_lane_graph() {
     sim.advance_transport_belts();
     assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
 
-    sim.destroy_entity_to_player_inventory(belts[0])
+    crate::entity_mutation::destroy_to_player_inventory(&mut sim, belts[0])
         .expect("placed belt should be destroyable to player inventory");
     sim.advance_transport_belts();
     assert_eq!(sim.transport_lane_graph_rebuild_count(), 2);
@@ -281,7 +285,10 @@ fn blocked_belt_preserves_item_order() {
         sim.tick();
     }
 
-    let lane = &sim.belt_segment(belts[0]).unwrap().lanes[0].items;
+    let lane = &crate::entity_access::belt_segment(&sim, belts[0])
+        .unwrap()
+        .lanes[0]
+        .items;
     let downstream_to_upstream = lane
         .iter()
         .rev()
@@ -320,11 +327,16 @@ fn underground_belt_pair_transfers_items_to_exit_preserving_order() {
     }
 
     assert!(
-        sim.belt_segment(entrance_id).unwrap().lanes[0]
+        crate::entity_access::belt_segment(&sim, entrance_id)
+            .unwrap()
+            .lanes[0]
             .items
             .is_empty()
     );
-    let lane = &sim.belt_segment(exit_id).unwrap().lanes[0].items;
+    let lane = &crate::entity_access::belt_segment(&sim, exit_id)
+        .unwrap()
+        .lanes[0]
+        .items;
     let downstream_to_upstream = lane
         .iter()
         .rev()
@@ -349,14 +361,23 @@ fn underground_belt_does_not_pair_beyond_max_distance() {
         sim.tick();
     }
 
-    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    let entrance_lane = &crate::entity_access::belt_segment(&sim, entrance_id)
+        .unwrap()
+        .lanes[0]
+        .items;
     assert_eq!(entrance_lane.len(), 1);
     assert_eq!(entrance_lane[0].item_id, iron_ore);
     assert_eq!(
         entrance_lane[0].position_subtile,
         BELT_SUBTILES_PER_TILE - 1
     );
-    assert!(sim.belt_segment(exit_id).unwrap().lanes[0].items.is_empty());
+    assert!(
+        crate::entity_access::belt_segment(&sim, exit_id)
+            .unwrap()
+            .lanes[0]
+            .items
+            .is_empty()
+    );
 }
 
 #[test]
@@ -375,10 +396,19 @@ fn underground_belt_requires_exit_to_face_same_direction() {
         sim.tick();
     }
 
-    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    let entrance_lane = &crate::entity_access::belt_segment(&sim, entrance_id)
+        .unwrap()
+        .lanes[0]
+        .items;
     assert_eq!(entrance_lane.len(), 1);
     assert_eq!(entrance_lane[0].item_id, iron_ore);
-    assert!(sim.belt_segment(exit_id).unwrap().lanes[0].items.is_empty());
+    assert!(
+        crate::entity_access::belt_segment(&sim, exit_id)
+            .unwrap()
+            .lanes[0]
+            .items
+            .is_empty()
+    );
 }
 
 #[test]
@@ -398,11 +428,16 @@ fn underground_belt_requires_exit_endpoint() {
         sim.tick();
     }
 
-    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    let entrance_lane = &crate::entity_access::belt_segment(&sim, entrance_id)
+        .unwrap()
+        .lanes[0]
+        .items;
     assert_eq!(entrance_lane.len(), 1);
     assert_eq!(entrance_lane[0].item_id, iron_ore);
     assert!(
-        sim.belt_segment(other_entrance_id).unwrap().lanes[0]
+        crate::entity_access::belt_segment(&sim, other_entrance_id)
+            .unwrap()
+            .lanes[0]
             .items
             .is_empty()
     );
@@ -436,7 +471,10 @@ fn underground_belt_blocks_when_exit_lane_is_full() {
         sim.tick();
     }
 
-    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    let entrance_lane = &crate::entity_access::belt_segment(&sim, entrance_id)
+        .unwrap()
+        .lanes[0]
+        .items;
     assert_eq!(entrance_lane.len(), 1);
     assert_eq!(entrance_lane[0].item_id, iron_ore);
     assert_eq!(total_belt_count_for_item(&sim, copper_ore), 4);
@@ -452,13 +490,16 @@ fn removing_underground_exit_invalidates_pair_without_losing_items() {
 
     sim.insert_item_onto_belt(entrance_id, 0, iron_ore)
         .expect("empty underground entrance should accept an item");
-    sim.remove_entity(exit_id)
+    crate::entity_mutation::remove(&mut sim, exit_id)
         .expect("placed underground exit should be removable");
     for _ in 0..100 {
         sim.tick();
     }
 
-    let entrance_lane = &sim.belt_segment(entrance_id).unwrap().lanes[0].items;
+    let entrance_lane = &crate::entity_access::belt_segment(&sim, entrance_id)
+        .unwrap()
+        .lanes[0]
+        .items;
     assert_eq!(entrance_lane.len(), 1);
     assert_eq!(entrance_lane[0].item_id, iron_ore);
     assert_eq!(
@@ -516,7 +557,7 @@ fn belt_line_moves_100_items_across_20_tiles() {
 
     assert_eq!(total_belt_item_count(&sim), 100);
     assert!(
-        sim.belt_segment(*belts.last().unwrap())
+        crate::entity_access::belt_segment(&sim, *belts.last().unwrap())
             .unwrap()
             .lanes
             .iter()

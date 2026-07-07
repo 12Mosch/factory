@@ -269,9 +269,7 @@ pub(crate) fn update_assembler_recipe_button_colors(
     let Some(entity_id) = open_container.entity_id else {
         return;
     };
-    let selected_recipe = sim
-        .sim
-        .assembler_state(entity_id)
+    let selected_recipe = factory_sim::entity_access::assembler_state(&sim.sim, entity_id)
         .ok()
         .and_then(|state| state.selected_recipe);
 

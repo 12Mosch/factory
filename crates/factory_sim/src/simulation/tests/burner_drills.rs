@@ -11,8 +11,7 @@ fn burner_drill_without_fuel_remains_idle() {
         sim.tick();
     }
 
-    let state = sim
-        .burner_drill_state(entity_id)
+    let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
     assert_eq!(state.mining_progress_ticks, 0);
@@ -31,15 +30,14 @@ fn burner_drill_with_coal_mines_output() {
         item_id: coal,
         count: 1,
     });
-    sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+    crate::entity_transfer::player_slot_to_burner_drill_fuel(&mut sim, entity_id, 0)
         .expect("coal should transfer to drill fuel");
 
     for _ in 0..240 {
         sim.tick();
     }
 
-    let state = sim
-        .burner_drill_state(entity_id)
+    let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
     assert_eq!(
         state.output_slot,
@@ -63,15 +61,14 @@ fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
         item_id: coal,
         count: 1,
     });
-    sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+    crate::entity_transfer::player_slot_to_burner_drill_fuel(&mut sim, entity_id, 0)
         .expect("coal should transfer to drill fuel");
 
     for _ in 0..1600 {
         sim.tick();
     }
 
-    let state = sim
-        .burner_drill_state(entity_id)
+    let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
     assert_eq!(state.energy.fuel_slot, None);
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
@@ -80,8 +77,7 @@ fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
 
     sim.tick();
 
-    let state = sim
-        .burner_drill_state(entity_id)
+    let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
     assert_eq!(state.mining_progress_ticks, 160);
@@ -110,8 +106,7 @@ fn blocked_burner_drill_output_pauses_without_consuming_fuel() {
         sim.tick();
     }
 
-    let state = sim
-        .burner_drill_state(entity_id)
+    let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
     assert_eq!(
         state.energy.fuel_slot,
@@ -137,11 +132,11 @@ fn invalid_burner_drill_fuel_is_rejected() {
     });
 
     assert_eq!(
-        sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0),
+        crate::entity_transfer::player_slot_to_burner_drill_fuel(&mut sim, entity_id, 0),
         Err(BurnerDrillError::InvalidFuel(iron_ore))
     );
     assert_eq!(
-        sim.burner_drill_state(entity_id)
+        crate::entity_access::burner_drill_state(&sim, entity_id)
             .expect("burner drill should expose state")
             .energy
             .fuel_slot,
@@ -169,7 +164,7 @@ fn burner_drill_outputs_ore_after_required_ticks() {
     }
 
     assert_eq!(
-        sim.burner_drill_state(entity_id)
+        crate::entity_access::burner_drill_state(&sim, entity_id)
             .expect("burner drill should expose state")
             .output_slot,
         Some(ItemStack {
@@ -207,13 +202,13 @@ fn burner_drill_outputs_ore_onto_belt() {
     }
 
     assert_eq!(
-        sim.burner_drill_state(drill_id)
+        crate::entity_access::burner_drill_state(&sim, drill_id)
             .expect("drill should expose state")
             .output_slot,
         None
     );
     assert!(
-        sim.belt_segment(belt_id)
+        crate::entity_access::belt_segment(&sim, belt_id)
             .expect("belt should expose state")
             .lanes
             .iter()
@@ -238,7 +233,7 @@ fn burner_drill_exports_stored_output_onto_belt_without_new_production() {
     sim.tick();
 
     assert_eq!(
-        sim.burner_drill_state(drill_id)
+        crate::entity_access::burner_drill_state(&sim, drill_id)
             .expect("burner drill should expose state")
             .output_slot,
         Some(ItemStack {
@@ -264,8 +259,7 @@ fn burner_drill_blocks_when_output_inventory_full() {
         sim.tick();
     }
 
-    let state = sim
-        .burner_drill_state(drill_id)
+    let state = crate::entity_access::burner_drill_state(&sim, drill_id)
         .expect("burner drill should expose state");
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
     assert_eq!(
@@ -278,7 +272,7 @@ fn burner_drill_blocks_when_output_inventory_full() {
     assert_eq!(state.mining_progress_ticks, 0);
     assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
     assert_eq!(
-        sim.entity_inventory(chest_id)
+        crate::entity_access::inventory(&sim, chest_id)
             .expect("chest should have inventory")
             .count(iron_ore),
         0
@@ -298,13 +292,13 @@ fn burner_drill_outputs_into_adjacent_chest() {
     }
 
     assert_eq!(
-        sim.entity_inventory(chest_id)
+        crate::entity_access::inventory(&sim, chest_id)
             .expect("chest should have inventory")
             .count(iron_ore),
         1
     );
     assert_eq!(
-        sim.burner_drill_state(drill_id)
+        crate::entity_access::burner_drill_state(&sim, drill_id)
             .expect("burner drill should expose state")
             .output_slot,
         None
@@ -323,7 +317,7 @@ fn burner_drill_placed_on_coal_produces_coal() {
     }
 
     assert_eq!(
-        sim.burner_drill_state(entity_id)
+        crate::entity_access::burner_drill_state(&sim, entity_id)
             .expect("burner drill should expose state")
             .output_slot,
         Some(ItemStack {
@@ -340,7 +334,15 @@ fn burner_drill_without_resource_in_mining_area_refuses_placement() {
     let (x, y) = first_buildable_rect_without_resource(&sim.world, 2, 2);
 
     assert!(matches!(
-        sim.can_place_entity(drill, x, y, Direction::North),
+        crate::placement::validate(
+            &sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: drill,
+                x,
+                y,
+                direction: Direction::North
+            }
+        ),
         Err(BuildError::TileBlocked { .. })
     ));
 }
@@ -359,7 +361,7 @@ fn burner_drill_hash_is_deterministic_for_same_seed_and_inputs() {
             item_id: coal,
             count: 2,
         });
-        sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+        crate::entity_transfer::player_slot_to_burner_drill_fuel(sim, entity_id, 0)
             .expect("coal should transfer to drill fuel");
     }
 

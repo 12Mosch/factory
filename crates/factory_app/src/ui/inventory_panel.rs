@@ -182,19 +182,19 @@ pub(crate) fn update_container_slot_text(
 ) {
     let container_inventory = open_container
         .entity_id
-        .and_then(|entity_id| sim.sim.entity_inventory(entity_id).ok());
-    let burner_drill_state = open_container
-        .entity_id
-        .and_then(|entity_id| sim.sim.burner_drill_state(entity_id).ok());
+        .and_then(|entity_id| factory_sim::entity_access::inventory(&sim.sim, entity_id).ok());
+    let burner_drill_state = open_container.entity_id.and_then(|entity_id| {
+        factory_sim::entity_access::burner_drill_state(&sim.sim, entity_id).ok()
+    });
     let furnace_state = open_container
         .entity_id
-        .and_then(|entity_id| sim.sim.furnace_state(entity_id).ok());
+        .and_then(|entity_id| factory_sim::entity_access::furnace_state(&sim.sim, entity_id).ok());
     let boiler_state = open_container
         .entity_id
-        .and_then(|entity_id| sim.sim.boiler_state(entity_id).ok());
-    let assembler_state = open_container
-        .entity_id
-        .and_then(|entity_id| sim.sim.assembler_state(entity_id).ok());
+        .and_then(|entity_id| factory_sim::entity_access::boiler_state(&sim.sim, entity_id).ok());
+    let assembler_state = open_container.entity_id.and_then(|entity_id| {
+        factory_sim::entity_access::assembler_state(&sim.sim, entity_id).ok()
+    });
 
     for (marker, mut text) in &mut texts {
         let stack = match marker.panel {

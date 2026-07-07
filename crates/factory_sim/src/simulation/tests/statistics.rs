@@ -50,9 +50,16 @@ fn machine_statuses_classify_power_input_and_output_blocks() {
     let mut no_power = Simulation::new_test_world(123);
     let assembler = entity_id_by_name(&no_power.world.prototypes, "assembling_machine");
     let (x, y) = first_buildable_rect(&no_power.world, 3, 3);
-    let assembler_id = no_power
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut no_power,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut no_power, assembler_id);
     no_power.tick();
     assert_eq!(status_count(&no_power, MachineStatus::NoPower), 1);
@@ -103,13 +110,27 @@ fn machine_status_for_entity_returns_none_for_non_machine() {
     let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let (belt_x, belt_y) = first_placeable_entity_tile(&sim, belt);
-    let belt_id = sim
-        .place_entity(belt, belt_x, belt_y, Direction::North)
-        .expect("belt should be placeable");
+    let belt_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: belt,
+            x: belt_x,
+            y: belt_y,
+            direction: Direction::North,
+        },
+    )
+    .expect("belt should be placeable");
     let (chest_x, chest_y) = first_placeable_entity_tile(&sim, chest);
-    let chest_id = sim
-        .place_entity(chest, chest_x, chest_y, Direction::North)
-        .expect("chest should be placeable");
+    let chest_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x: chest_x,
+            y: chest_y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
 
     assert_eq!(sim.machine_status_for_entity(belt_id), None);
     assert_eq!(sim.machine_status_for_entity(chest_id), None);
@@ -173,13 +194,18 @@ fn bottleneck_hints_report_item_science_and_steam_shortages() {
         .keys()
         .next()
         .expect("fixture should place an offshore pump");
-    steam
-        .remove_entity(pump_id)
-        .expect("offshore pump should be removable");
+    crate::entity_mutation::remove(&mut steam, pump_id).expect("offshore pump should be removable");
     let assembler = entity_id_by_name(&steam.world.prototypes, "assembling_machine");
-    let assembler_id = steam
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut steam,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut steam, assembler_id);
     steam.tick();
     let hints = steam.bottleneck_hints(5);
@@ -204,8 +230,16 @@ fn first_placeable_entity_tile(sim: &Simulation, prototype_id: EntityPrototypeId
     all_tile_coords(&sim.world)
         .into_iter()
         .find(|(x, y)| {
-            sim.can_place_entity(prototype_id, *x, *y, Direction::North)
-                .is_ok()
+            crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x: *x,
+                    y: *y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
         })
         .expect("expected placeable entity tile")
 }

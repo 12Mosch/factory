@@ -14,9 +14,8 @@ fn furnace_smelts_iron_ore_to_iron_plate() {
         sim.tick();
     }
 
-    let state = sim
-        .furnace_state(entity_id)
-        .expect("furnace should expose state");
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(state.input_slot, None);
     assert_eq!(
         state.output_slot,
@@ -39,16 +38,15 @@ fn furnace_does_not_smelts_without_fuel() {
         item_id: iron_ore,
         count: 1,
     });
-    sim.transfer_player_slot_to_furnace_input(entity_id, 0)
+    crate::entity_transfer::player_slot_to_furnace_input(&mut sim, entity_id, 0)
         .expect("ore should transfer to furnace input");
 
     for _ in 0..210 {
         sim.tick();
     }
 
-    let state = sim
-        .furnace_state(entity_id)
-        .expect("furnace should expose state");
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(
         state.input_slot,
         Some(ItemStack {
@@ -83,9 +81,8 @@ fn furnace_blocks_when_output_full() {
         sim.tick();
     }
 
-    let state = sim
-        .furnace_state(entity_id)
-        .expect("furnace should expose state");
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(
         state.input_slot,
         Some(ItemStack {
@@ -126,7 +123,7 @@ fn furnace_smelts_copper_ore_to_copper_plate() {
     }
 
     assert_eq!(
-        sim.furnace_state(entity_id)
+        crate::entity_access::furnace_state(&sim, entity_id)
             .expect("furnace should expose state")
             .output_slot,
         Some(ItemStack {
@@ -150,9 +147,8 @@ fn furnace_smelts_stone_to_stone_brick() {
         sim.tick();
     }
 
-    let state = sim
-        .furnace_state(entity_id)
-        .expect("furnace should expose state");
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(state.active_recipe, Some(recipe));
     assert_eq!(
         state.output_slot,
@@ -175,11 +171,11 @@ fn invalid_furnace_input_is_rejected() {
     });
 
     assert_eq!(
-        sim.transfer_player_slot_to_furnace_input(entity_id, 0),
+        crate::entity_transfer::player_slot_to_furnace_input(&mut sim, entity_id, 0),
         Err(FurnaceError::InvalidInput(coal))
     );
     assert_eq!(
-        sim.furnace_state(entity_id)
+        crate::entity_access::furnace_state(&sim, entity_id)
             .expect("furnace should expose state")
             .input_slot,
         None
@@ -215,9 +211,8 @@ fn locked_smelting_recipes_are_not_selected_by_furnaces() {
         sim.tick();
     }
 
-    let furnace = sim
-        .furnace_state(furnace_id)
-        .expect("furnace should expose state");
+    let furnace =
+        crate::entity_access::furnace_state(&sim, furnace_id).expect("furnace should expose state");
     assert_eq!(furnace.active_recipe, None);
     assert_eq!(furnace.input_slot.unwrap().count, 1);
     assert_eq!(

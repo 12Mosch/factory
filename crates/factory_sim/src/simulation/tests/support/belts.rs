@@ -118,13 +118,29 @@ pub(in crate::simulation::tests) fn place_named_belt_line(
     let belt = entity_id_by_name(&sim.world.prototypes, belt_name);
     for (x, y) in all_tile_coords(&sim.world) {
         if (0..length).all(|offset| {
-            sim.can_place_entity(belt, x + offset, y, Direction::East)
-                .is_ok()
+            crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: x + offset,
+                    y,
+                    direction: Direction::East,
+                },
+            )
+            .is_ok()
         }) {
             return (0..length)
                 .map(|offset| {
-                    sim.place_entity(belt, x + offset, y, Direction::East)
-                        .expect("validated belt line tile should be placeable")
+                    crate::placement::place(
+                        sim,
+                        crate::placement::EntityPlacementRequest {
+                            prototype_id: belt,
+                            x: x + offset,
+                            y,
+                            direction: Direction::East,
+                        },
+                    )
+                    .expect("validated belt line tile should be placeable")
                 })
                 .collect();
         }
@@ -156,17 +172,47 @@ pub(in crate::simulation::tests) fn place_throughput_underground_pair(
             .collect::<Vec<_>>();
 
         if input_tiles.iter().any(|(tile_x, tile_y)| {
-            sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
-                .is_err()
-        }) || sim
-            .can_place_entity(entrance, entrance_x, y, Direction::East)
+            crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: *tile_x,
+                    y: *tile_y,
+                    direction: Direction::East,
+                },
+            )
             .is_err()
-            || sim
-                .can_place_entity(exit, exit_x, y, Direction::East)
-                .is_err()
+        }) || crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: entrance,
+                x: entrance_x,
+                y,
+                direction: Direction::East,
+            },
+        )
+        .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: exit,
+                    x: exit_x,
+                    y,
+                    direction: Direction::East,
+                },
+            )
+            .is_err()
             || output_tiles.iter().any(|(tile_x, tile_y)| {
-                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .is_err()
+                crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .is_err()
             })
         {
             continue;
@@ -175,21 +221,53 @@ pub(in crate::simulation::tests) fn place_throughput_underground_pair(
         let mut seeded = input_tiles
             .iter()
             .map(|(tile_x, tile_y)| {
-                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .expect("validated throughput input belt should be placeable")
+                crate::placement::place(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .expect("validated throughput input belt should be placeable")
             })
             .collect::<Vec<_>>();
         seeded.push(
-            sim.place_entity(entrance, entrance_x, y, Direction::East)
-                .expect("validated throughput underground entrance should be placeable"),
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: entrance,
+                    x: entrance_x,
+                    y,
+                    direction: Direction::East,
+                },
+            )
+            .expect("validated throughput underground entrance should be placeable"),
         );
         let mut measured = vec![
-            sim.place_entity(exit, exit_x, y, Direction::East)
-                .expect("validated throughput underground exit should be placeable"),
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: exit,
+                    x: exit_x,
+                    y,
+                    direction: Direction::East,
+                },
+            )
+            .expect("validated throughput underground exit should be placeable"),
         ];
         measured.extend(output_tiles.iter().map(|(tile_x, tile_y)| {
-            sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
-                .expect("validated throughput output belt should be placeable")
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: *tile_x,
+                    y: *tile_y,
+                    direction: Direction::East,
+                },
+            )
+            .expect("validated throughput output belt should be placeable")
         }));
 
         return (seeded, measured);
@@ -219,18 +297,49 @@ pub(in crate::simulation::tests) fn place_throughput_splitter_fixture(
             .collect::<Vec<_>>();
 
         if input_tiles.iter().any(|(tile_x, tile_y)| {
-            sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
-                .is_err()
-        }) || sim
-            .can_place_entity(splitter, splitter_x, y, Direction::East)
+            crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: *tile_x,
+                    y: *tile_y,
+                    direction: Direction::East,
+                },
+            )
             .is_err()
+        }) || crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: splitter,
+                x: splitter_x,
+                y,
+                direction: Direction::East,
+            },
+        )
+        .is_err()
             || output0_tiles.iter().any(|(tile_x, tile_y)| {
-                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .is_err()
+                crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .is_err()
             })
             || output1_tiles.iter().any(|(tile_x, tile_y)| {
-                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .is_err()
+                crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .is_err()
             })
         {
             continue;
@@ -239,23 +348,54 @@ pub(in crate::simulation::tests) fn place_throughput_splitter_fixture(
         let input = input_tiles
             .iter()
             .map(|(tile_x, tile_y)| {
-                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .expect("validated splitter throughput input belt should be placeable")
+                crate::placement::place(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .expect("validated splitter throughput input belt should be placeable")
             })
             .collect::<Vec<_>>();
-        let splitter_id = sim
-            .place_entity(splitter, splitter_x, y, Direction::East)
-            .expect("validated throughput splitter should be placeable");
+        let splitter_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: splitter,
+                x: splitter_x,
+                y,
+                direction: Direction::East,
+            },
+        )
+        .expect("validated throughput splitter should be placeable");
         let mut outputs = output0_tiles
             .iter()
             .map(|(tile_x, tile_y)| {
-                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .expect("validated splitter throughput output belt should be placeable")
+                crate::placement::place(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .expect("validated splitter throughput output belt should be placeable")
             })
             .collect::<Vec<_>>();
         outputs.extend(output1_tiles.iter().map(|(tile_x, tile_y)| {
-            sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
-                .expect("validated splitter throughput output belt should be placeable")
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: *tile_x,
+                    y: *tile_y,
+                    direction: Direction::East,
+                },
+            )
+            .expect("validated splitter throughput output belt should be placeable")
         }));
 
         return (input, splitter_id, outputs);
@@ -346,48 +486,122 @@ pub(in crate::simulation::tests) fn place_splitter_fixture(
             Vec::new()
         };
 
-        if sim
-            .can_place_entity(belt, input0.0, input0.1, Direction::East)
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: belt,
+                x: input0.0,
+                y: input0.1,
+                direction: Direction::East,
+            },
+        )
+        .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: input1.0,
+                    y: input1.1,
+                    direction: Direction::East,
+                },
+            )
             .is_err()
-            || sim
-                .can_place_entity(belt, input1.0, input1.1, Direction::East)
-                .is_err()
-            || sim
-                .can_place_entity(splitter, splitter_tile.0, splitter_tile.1, Direction::East)
-                .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: splitter,
+                    x: splitter_tile.0,
+                    y: splitter_tile.1,
+                    direction: Direction::East,
+                },
+            )
+            .is_err()
             || output0_tiles.iter().any(|(tile_x, tile_y)| {
-                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .is_err()
+                crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .is_err()
             })
             || output1_tiles.iter().any(|(tile_x, tile_y)| {
-                sim.can_place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .is_err()
+                crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .is_err()
             })
         {
             continue;
         }
 
-        let input0_id = sim
-            .place_entity(belt, input0.0, input0.1, Direction::East)
-            .expect("validated splitter input belt should be placeable");
-        let input1_id = sim
-            .place_entity(belt, input1.0, input1.1, Direction::East)
-            .expect("validated splitter input belt should be placeable");
-        let splitter_id = sim
-            .place_entity(splitter, splitter_tile.0, splitter_tile.1, Direction::East)
-            .expect("validated splitter should be placeable");
+        let input0_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: belt,
+                x: input0.0,
+                y: input0.1,
+                direction: Direction::East,
+            },
+        )
+        .expect("validated splitter input belt should be placeable");
+        let input1_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: belt,
+                x: input1.0,
+                y: input1.1,
+                direction: Direction::East,
+            },
+        )
+        .expect("validated splitter input belt should be placeable");
+        let splitter_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: splitter,
+                x: splitter_tile.0,
+                y: splitter_tile.1,
+                direction: Direction::East,
+            },
+        )
+        .expect("validated splitter should be placeable");
         let output0 = output0_tiles
             .iter()
             .map(|(tile_x, tile_y)| {
-                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .expect("validated splitter output belt should be placeable")
+                crate::placement::place(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .expect("validated splitter output belt should be placeable")
             })
             .collect();
         let output1 = output1_tiles
             .iter()
             .map(|(tile_x, tile_y)| {
-                sim.place_entity(belt, *tile_x, *tile_y, Direction::East)
-                    .expect("validated splitter output belt should be placeable")
+                crate::placement::place(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: belt,
+                        x: *tile_x,
+                        y: *tile_y,
+                        direction: Direction::East,
+                    },
+                )
+                .expect("validated splitter output belt should be placeable")
             })
             .collect();
 
@@ -410,7 +624,7 @@ pub(in crate::simulation::tests) fn total_item_count_on_belts(
 ) -> u32 {
     belts
         .iter()
-        .filter_map(|entity_id| sim.belt_segment(*entity_id).ok())
+        .filter_map(|entity_id| crate::entity_access::belt_segment(sim, *entity_id).ok())
         .map(|segment| {
             segment
                 .lanes
@@ -441,19 +655,47 @@ pub(in crate::simulation::tests) fn place_underground_belt_endpoint_pair(
 
     for (x, y) in all_tile_coords(&sim.world) {
         let output_x = x + offset;
-        if sim
-            .can_place_entity(entrance, x, y, Direction::East)
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: entrance,
+                x,
+                y,
+                direction: Direction::East,
+            },
+        )
+        .is_ok()
+            && crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: output,
+                    x: output_x,
+                    y,
+                    direction: output_direction,
+                },
+            )
             .is_ok()
-            && sim
-                .can_place_entity(output, output_x, y, output_direction)
-                .is_ok()
         {
-            let entrance_id = sim
-                .place_entity(entrance, x, y, Direction::East)
-                .expect("validated underground entrance tile should be placeable");
-            let output_id = sim
-                .place_entity(output, output_x, y, output_direction)
-                .expect("validated underground endpoint tile should be placeable");
+            let entrance_id = crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: entrance,
+                    x,
+                    y,
+                    direction: Direction::East,
+                },
+            )
+            .expect("validated underground entrance tile should be placeable");
+            let output_id = crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: output,
+                    x: output_x,
+                    y,
+                    direction: output_direction,
+                },
+            )
+            .expect("validated underground endpoint tile should be placeable");
             return (entrance_id, output_id);
         }
     }
@@ -486,7 +728,7 @@ pub(in crate::simulation::tests) fn total_belt_item_count(sim: &Simulation) -> u
     let belt_items = sim
         .entities
         .placed_entities()
-        .filter_map(|placed| sim.belt_segment(placed.id).ok())
+        .filter_map(|placed| crate::entity_access::belt_segment(sim, placed.id).ok())
         .map(|segment| {
             segment
                 .lanes

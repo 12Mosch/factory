@@ -60,7 +60,7 @@ impl Simulation {
         }
 
         if let Some(entity_id) = self.entities.occupancy.entity_at(target.x, target.y) {
-            match self.destroy_entity_to_player_inventory(entity_id) {
+            match crate::entity_mutation::destroy_to_player_inventory(self, entity_id) {
                 Ok(_) => {
                     self.manual_mining_progress = if self.is_valid_manual_mining_target(target) {
                         Some(ManualMiningProgress {

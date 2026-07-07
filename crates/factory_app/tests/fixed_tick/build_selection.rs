@@ -296,8 +296,16 @@ fn failed_selected_building_placement_keeps_inventory() {
     sim.player_inventory_mut()
         .insert(&catalog, belt_item, 1)
         .expect("test inventory should accept belt");
-    sim.place_entity(belt, x, y, Direction::North)
-        .expect("blocking belt should be placeable");
+    factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: belt,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("blocking belt should be placeable");
 
     let status = place_selected_building_at_tile(
         &mut sim,

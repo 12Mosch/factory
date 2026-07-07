@@ -108,7 +108,7 @@ fn apply_command_select_assembler_recipe_routes_through_sim() {
     .expect("recipe should be selectable");
 
     assert_eq!(
-        sim.assembler_state(entity_id)
+        crate::entity_access::assembler_state(&sim, entity_id)
             .expect("assembler should expose state")
             .selected_recipe,
         Some(recipe)
@@ -144,9 +144,8 @@ fn apply_command_transfer_slot_routes_player_input_by_machine_kind() {
     })
     .expect("coal should route to furnace fuel");
 
-    let furnace_state = sim
-        .furnace_state(entity_id)
-        .expect("furnace should expose state");
+    let furnace_state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(
         furnace_state.input_slot,
         Some(ItemStack {
@@ -214,6 +213,6 @@ fn apply_command_place_entity_from_player_inventory_reports_entity_id() {
     let SimCommandEffect::EntityPlaced(entity_id) = effect else {
         panic!("placing an entity should report SimCommandEffect::EntityPlaced");
     };
-    assert!(sim.entity_inventory(entity_id).is_ok());
+    assert!(crate::entity_access::inventory(&sim, entity_id).is_ok());
     assert_eq!(sim.player_inventory.count(chest_item), 0);
 }

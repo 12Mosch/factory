@@ -132,7 +132,9 @@ pub(crate) fn sync_belt_direction_rendering(
         let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
             continue;
         };
-        if sim.sim.belt_segment(placed.id).is_err() && sim.sim.splitter_state(placed.id).is_err() {
+        if factory_sim::entity_access::belt_segment(&sim.sim, placed.id).is_err()
+            && factory_sim::entity_access::splitter_state(&sim.sim, placed.id).is_err()
+        {
             continue;
         }
 
@@ -439,7 +441,7 @@ fn collect_visible_belt_items(
         let Some(placed) = sim.entities().placed_entity(entity_id) else {
             continue;
         };
-        if let Ok(segment) = sim.belt_segment(placed.id) {
+        if let Ok(segment) = factory_sim::entity_access::belt_segment(sim, placed.id) {
             let center = tile_translation(placed.x, placed.y, 4.0);
             for (lane_index, lane) in segment.lanes.iter().enumerate() {
                 for (item_index, item) in lane.items.iter().enumerate() {
@@ -462,7 +464,7 @@ fn collect_visible_belt_items(
             continue;
         }
 
-        let Ok(state) = sim.splitter_state(placed.id) else {
+        let Ok(state) = factory_sim::entity_access::splitter_state(sim, placed.id) else {
             continue;
         };
         let Some(port_tiles) = splitter_port_tiles_for_render(&placed.footprint) else {
@@ -597,7 +599,7 @@ fn transport_item_render_state_with_ids(
 ) -> Option<(Vec3, Color)> {
     let placed = sim.entities().placed_entity(entity_id)?;
     let (dir, item, center) = if let Some(input_port) = input_port {
-        let state = sim.splitter_state(entity_id).ok()?;
+        let state = factory_sim::entity_access::splitter_state(sim, entity_id).ok()?;
         let item = state
             .input_lanes
             .get(input_port)?
@@ -611,7 +613,7 @@ fn transport_item_render_state_with_ids(
             tile_translation(port_tile.0, port_tile.1, 4.0),
         )
     } else {
-        let segment = sim.belt_segment(entity_id).ok()?;
+        let segment = factory_sim::entity_access::belt_segment(sim, entity_id).ok()?;
         let item = segment.lanes.get(lane_index)?.items.get(item_index)?;
         (segment.dir, item, tile_translation(placed.x, placed.y, 4.0))
     };
@@ -655,7 +657,7 @@ fn transport_item_label_render_state(
         item_index,
     )?;
     let item_id = if let Some(input_port) = input_port {
-        sim.splitter_state(entity_id)
+        factory_sim::entity_access::splitter_state(sim, entity_id)
             .ok()?
             .input_lanes
             .get(input_port)?
@@ -664,7 +666,7 @@ fn transport_item_label_render_state(
             .get(item_index)?
             .item_id
     } else {
-        sim.belt_segment(entity_id)
+        factory_sim::entity_access::belt_segment(sim, entity_id)
             .ok()?
             .lanes
             .get(lane_index)?
@@ -683,10 +685,14 @@ fn transport_item_label_render_state(
 }
 
 fn transport_flow_direction(sim: &Simulation, entity_id: EntityId) -> Option<Direction> {
-    sim.belt_segment(entity_id)
+    factory_sim::entity_access::belt_segment(sim, entity_id)
         .ok()
         .map(|segment| segment.dir)
-        .or_else(|| sim.splitter_state(entity_id).ok().map(|state| state.dir))
+        .or_else(|| {
+            factory_sim::entity_access::splitter_state(sim, entity_id)
+                .ok()
+                .map(|state| state.dir)
+        })
 }
 
 fn splitter_port_tiles_for_render(
@@ -754,9 +760,16 @@ mod tests {
         let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
         let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
         let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
-        let belt_id = sim
-            .place_entity(belt, x, y, Direction::East)
-            .expect("belt should be placeable");
+        let belt_id = factory_sim::placement::place(
+            &mut sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: belt,
+                x,
+                y,
+                direction: Direction::East,
+            },
+        )
+        .expect("belt should be placeable");
 
         sim.insert_item_onto_belt(belt_id, 0, iron_ore)
             .expect("empty belt should accept item");
@@ -784,9 +797,16 @@ mod tests {
         let mut sim = Simulation::new_test_world(123);
         let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
         let (x, y) = first_placeable_tile(&sim, belt, Direction::North);
-        let belt_id = sim
-            .place_entity(belt, x, y, Direction::North)
-            .expect("belt should be placeable");
+        let belt_id = factory_sim::placement::place(
+            &mut sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: belt,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("belt should be placeable");
 
         let (shaft_translation, shaft_size, _) =
             belt_direction_render_state(&sim, belt_id, BeltDirectionPart::Shaft)
@@ -808,9 +828,16 @@ mod tests {
             .items
             .copper_ore;
         let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
-        let belt_id = sim
-            .place_entity(belt, x, y, Direction::East)
-            .expect("belt should be placeable");
+        let belt_id = factory_sim::placement::place(
+            &mut sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: belt,
+                x,
+                y,
+                direction: Direction::East,
+            },
+        )
+        .expect("belt should be placeable");
 
         sim.insert_item_onto_belt(belt_id, 0, copper_ore)
             .expect("empty belt should accept item");
@@ -826,9 +853,16 @@ mod tests {
         let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
         let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
         let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
-        let belt_id = sim
-            .place_entity(belt, x, y, Direction::East)
-            .expect("belt should be placeable");
+        let belt_id = factory_sim::placement::place(
+            &mut sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: belt,
+                x,
+                y,
+                direction: Direction::East,
+            },
+        )
+        .expect("belt should be placeable");
         sim.insert_item_onto_belt(belt_id, 0, iron_ore)
             .expect("empty belt should accept item");
 
@@ -905,7 +939,17 @@ mod tests {
                 let x = chunk.coord.x * CHUNK_SIZE + local_x;
                 let y = chunk.coord.y * CHUNK_SIZE + local_y;
 
-                if sim.can_place_entity(prototype_id, x, y, direction).is_ok() {
+                if factory_sim::placement::validate(
+                    sim,
+                    factory_sim::placement::EntityPlacementRequest {
+                        prototype_id,
+                        x,
+                        y,
+                        direction,
+                    },
+                )
+                .is_ok()
+                {
                     return (x, y);
                 }
             }

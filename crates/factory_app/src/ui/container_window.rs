@@ -87,8 +87,7 @@ fn spawn_container_window_contents(
         OpenMachineKind::Furnace => spawn_furnace_panel(root),
         OpenMachineKind::Boiler => spawn_boiler_panel(root),
         OpenMachineKind::Assembler => {
-            let state = sim
-                .assembler_state(entity_id)
+            let state = factory_sim::entity_access::assembler_state(sim, entity_id)
                 .expect("open assembler should expose state");
             spawn_assembler_panel(root, sim.catalog(), state)
         }
@@ -97,7 +96,7 @@ fn spawn_container_window_contents(
 }
 
 fn container_slot_count(sim: &factory_sim::Simulation, entity_id: EntityId) -> usize {
-    sim.entity_inventory(entity_id)
+    factory_sim::entity_access::inventory(sim, entity_id)
         .expect("open container should expose inventory")
         .slots
         .len()

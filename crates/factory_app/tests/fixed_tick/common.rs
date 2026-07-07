@@ -148,41 +148,117 @@ pub fn place_powered_fixture_origin(
 
         if !fixture_is_clear_buildable(sim, &fixture)
             || !poles_within_small_pole_reach(source_pole, target_pole)
-            || sim.can_place_entity(pump, x, y, Direction::North).is_err()
-            || sim
-                .can_place_entity(boiler, x, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(steam_engine, x + 2, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(pole, source_pole.0, source_pole.1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(pole, target_pole.0, target_pole.1, Direction::North)
-                .is_err()
+            || factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: pump,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: boiler,
+                    x,
+                    y: y + 1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: steam_engine,
+                    x: x + 2,
+                    y: y + 1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: pole,
+                    x: source_pole.0,
+                    y: source_pole.1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: pole,
+                    x: target_pole.0,
+                    y: target_pole.1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
         {
             continue;
         }
 
-        sim.place_entity(pump, x, y, Direction::North)
-            .expect("validated offshore pump fixture should be placeable");
-        let boiler_id = sim
-            .place_entity(boiler, x, y + 1, Direction::North)
-            .expect("validated boiler fixture should be placeable");
-        sim.place_entity(steam_engine, x + 2, y + 1, Direction::North)
-            .expect("validated steam engine fixture should be placeable");
-        sim.place_entity(pole, source_pole.0, source_pole.1, Direction::North)
-            .expect("validated source pole fixture should be placeable");
-        sim.place_entity(pole, target_pole.0, target_pole.1, Direction::North)
-            .expect("validated target pole fixture should be placeable");
+        factory_sim::placement::place(
+            sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: pump,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated offshore pump fixture should be placeable");
+        let boiler_id = factory_sim::placement::place(
+            sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: boiler,
+                x,
+                y: y + 1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated boiler fixture should be placeable");
+        factory_sim::placement::place(
+            sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: steam_engine,
+                x: x + 2,
+                y: y + 1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated steam engine fixture should be placeable");
+        factory_sim::placement::place(
+            sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: pole,
+                x: source_pole.0,
+                y: source_pole.1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated source pole fixture should be placeable");
+        factory_sim::placement::place(
+            sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: pole,
+                x: target_pole.0,
+                y: target_pole.1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated target pole fixture should be placeable");
 
         *sim.player_inventory_mut() = Inventory::player();
         sim.player_inventory_mut().slots[0] = Some(ItemStack {
             item_id: coal,
             count: 50,
         });
-        sim.transfer_player_slot_to_boiler_fuel(boiler_id, 0)
+        factory_sim::entity_transfer::player_slot_to_boiler_fuel(sim, boiler_id, 0)
             .expect("boiler should accept coal fuel");
 
         return (fixture_x, fixture_y);
@@ -278,9 +354,16 @@ pub fn first_placeable_resource_rect(
             let x = chunk.coord.x * CHUNK_SIZE + local_x;
             let y = chunk.coord.y * CHUNK_SIZE + local_y;
 
-            if sim
-                .can_place_entity(prototype_id, x, y, Direction::North)
-                .is_ok()
+            if factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
             {
                 return (x, y);
             }

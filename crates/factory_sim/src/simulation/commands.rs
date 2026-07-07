@@ -138,7 +138,7 @@ impl Simulation {
                 panel,
                 slot_index,
             } => {
-                self.transfer_container_slot(entity_id, panel, slot_index)
+                entity_transfer::transfer_container_slot(self, entity_id, panel, slot_index)
                     .map_err(SimCommandError::Transfer)?;
                 Ok(SimCommandEffect::None)
             }
@@ -149,122 +149,23 @@ impl Simulation {
                 y,
                 direction,
             } => {
-                let entity_id = self
-                    .place_entity_from_player_inventory(prototype_id, item_id, x, y, direction)
-                    .map_err(SimCommandError::Build)?;
+                let entity_id = placement::place_from_player_inventory(
+                    self,
+                    placement::PlayerPlacementRequest {
+                        prototype_id,
+                        item_id,
+                        x,
+                        y,
+                        direction,
+                    },
+                )
+                .map_err(SimCommandError::Build)?;
                 Ok(SimCommandEffect::EntityPlaced(entity_id))
             }
             SimCommand::BuildRedScienceResearchFixture => {
                 self.build_red_science_research_fixture();
                 Ok(SimCommandEffect::None)
             }
-        }
-    }
-
-    /// Moves the clicked slot's stack between the player inventory and the
-    /// open entity, dispatching on the entity's machine kind for the
-    /// player-panel direction.
-    pub fn transfer_container_slot(
-        &mut self,
-        entity_id: EntityId,
-        panel: InventoryPanel,
-        slot_index: usize,
-    ) -> Result<(), SlotTransferError> {
-        match panel {
-            InventoryPanel::Player => {
-                match self.machine_kind(entity_id) {
-                    Some(EntityKind::MiningDrill) => {
-                        return self
-                            .transfer_player_slot_to_burner_drill_fuel(entity_id, slot_index)
-                            .map_err(SlotTransferError::BurnerDrill);
-                    }
-                    Some(EntityKind::Furnace) => {
-                        return self
-                            .transfer_player_slot_to_furnace(entity_id, slot_index)
-                            .map_err(SlotTransferError::Furnace);
-                    }
-                    Some(EntityKind::Boiler) => {
-                        return self
-                            .transfer_player_slot_to_boiler_fuel(entity_id, slot_index)
-                            .map_err(SlotTransferError::Boiler);
-                    }
-                    Some(EntityKind::AssemblingMachine) => {
-                        return self
-                            .transfer_player_slot_to_assembler_input(entity_id, slot_index)
-                            .map_err(SlotTransferError::Assembler);
-                    }
-                    _ => {}
-                }
-                self.transfer_player_slot_to_entity(entity_id, slot_index)
-            }
-            InventoryPanel::Container => self.transfer_entity_slot_to_player(entity_id, slot_index),
-            InventoryPanel::BurnerFuel => {
-                return self
-                    .transfer_burner_drill_fuel_to_player(entity_id)
-                    .map_err(SlotTransferError::BurnerDrill);
-            }
-            InventoryPanel::BurnerOutput => {
-                return self
-                    .transfer_burner_drill_output_to_player(entity_id)
-                    .map_err(SlotTransferError::BurnerDrill);
-            }
-            InventoryPanel::FurnaceInput => {
-                return self
-                    .transfer_furnace_input_to_player(entity_id)
-                    .map_err(SlotTransferError::Furnace);
-            }
-            InventoryPanel::FurnaceFuel => {
-                return self
-                    .transfer_furnace_fuel_to_player(entity_id)
-                    .map_err(SlotTransferError::Furnace);
-            }
-            InventoryPanel::FurnaceOutput => {
-                return self
-                    .transfer_furnace_output_to_player(entity_id)
-                    .map_err(SlotTransferError::Furnace);
-            }
-            InventoryPanel::BoilerFuel => {
-                return self
-                    .transfer_boiler_fuel_to_player(entity_id)
-                    .map_err(SlotTransferError::Boiler);
-            }
-            InventoryPanel::AssemblerInput => {
-                return self
-                    .transfer_assembler_input_slot_to_player(entity_id, slot_index)
-                    .map_err(SlotTransferError::Assembler);
-            }
-            InventoryPanel::AssemblerOutput => {
-                return self
-                    .transfer_assembler_output_slot_to_player(entity_id, slot_index)
-                    .map_err(SlotTransferError::Assembler);
-            }
-        }
-        .map_err(SlotTransferError::Transfer)
-    }
-
-    /// Routes a player stack to the furnace's fuel slot when the item is a
-    /// fuel and to its smelting input otherwise.
-    fn transfer_player_slot_to_furnace(
-        &mut self,
-        entity_id: EntityId,
-        slot_index: usize,
-    ) -> Result<(), FurnaceError> {
-        let stack = self
-            .player_inventory()
-            .slots
-            .get(slot_index)
-            .ok_or(FurnaceError::InvalidSlot { slot_index })?
-            .ok_or(FurnaceError::EmptySlot { slot_index })?;
-        let is_fuel = self
-            .catalog()
-            .item(stack.item_id)
-            .and_then(|prototype| prototype.fuel_value_joules)
-            .is_some();
-
-        if is_fuel {
-            self.transfer_player_slot_to_furnace_fuel(entity_id, slot_index)
-        } else {
-            self.transfer_player_slot_to_furnace_input(entity_id, slot_index)
         }
     }
 }
