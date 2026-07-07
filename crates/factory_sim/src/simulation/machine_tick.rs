@@ -1,6 +1,6 @@
 use super::*;
 
-impl Simulation {
+impl MachineTickContext<'_> {
     pub(super) fn advance_burner_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
         let drill_ids = self
             .entities
@@ -17,10 +17,10 @@ impl Simulation {
             let Some(mining_drill) = prototype.mining_drill.as_ref() else {
                 continue;
             };
-            let output_target = drill_output_target(&self.entities, &placed);
+            let output_target = drill_output_target(self.entities, &placed);
             profiler.measure(ProfilePhase::InventoryTransfers, || {
                 try_export_stored_drill_output(
-                    &mut self.entities,
+                    self.entities,
                     entity_id,
                     output_target,
                     &self.world.prototypes,
@@ -28,7 +28,7 @@ impl Simulation {
             });
 
             let target = first_resource_in_mining_area_profiled(
-                &self.world,
+                self.world,
                 &placed.footprint,
                 mining_drill,
                 profiler,
@@ -48,7 +48,7 @@ impl Simulation {
                         profiler.measure(ProfilePhase::InventoryTransfers, || {
                             drill_output_target_can_accept(
                                 &self.world.prototypes,
-                                &self.entities,
+                                self.entities,
                                 output_target,
                                 state.output_slot,
                                 resource_item,
@@ -119,7 +119,7 @@ impl Simulation {
             debug_assert_eq!(mined.amount, 1);
             profiler.measure(ProfilePhase::InventoryTransfers, || {
                 insert_drill_output(
-                    &mut self.entities,
+                    self.entities,
                     entity_id,
                     output_target,
                     mined.resource_item,
@@ -144,7 +144,7 @@ impl Simulation {
                 .furnace_state(entity_id)
                 .ok()
                 .and_then(|state| {
-                    furnace_work_selection(&self.world.prototypes, &self.research, state.input_slot)
+                    furnace_work_selection(&self.world.prototypes, self.research, state.input_slot)
                 })
             else {
                 if let Ok(state) = self.entities.furnace_state_mut(entity_id) {
@@ -262,7 +262,7 @@ impl Simulation {
                 .ok()
                 .and_then(|state| {
                     let recipe =
-                        selected_assembler_recipe(&self.world.prototypes, &self.research, state)?;
+                        selected_assembler_recipe(&self.world.prototypes, self.research, state)?;
                     Some((
                         recipe.ingredients.clone(),
                         recipe.products.clone(),
@@ -459,7 +459,7 @@ impl Simulation {
             let next_state = match state {
                 InserterState::WaitingForItem => {
                     let Some(item_id) = profiler.measure(ProfilePhase::InventoryTransfers, || {
-                        peek_inserter_source_item(&self.entities, pickup_tile)
+                        peek_inserter_source_item(self.entities, pickup_tile)
                     }) else {
                         continue;
                     };
@@ -467,8 +467,8 @@ impl Simulation {
                     if !profiler.measure(ProfilePhase::InventoryTransfers, || {
                         inserter_target_can_accept(
                             &self.world.prototypes,
-                            &self.research,
-                            &self.entities,
+                            self.research,
+                            self.entities,
                             drop_tile,
                             item,
                         )
@@ -492,15 +492,15 @@ impl Simulation {
                         }
                     } else if let Some(item_id) = profiler
                         .measure(ProfilePhase::InventoryTransfers, || {
-                            peek_inserter_source_item(&self.entities, pickup_tile)
+                            peek_inserter_source_item(self.entities, pickup_tile)
                         })
                     {
                         let item = ItemStack { item_id, count: 1 };
                         if !profiler.measure(ProfilePhase::InventoryTransfers, || {
                             inserter_target_can_accept(
                                 &self.world.prototypes,
-                                &self.research,
-                                &self.entities,
+                                self.research,
+                                self.entities,
                                 drop_tile,
                                 item,
                             )
@@ -510,7 +510,7 @@ impl Simulation {
                             profiler
                                 .measure(ProfilePhase::InventoryTransfers, || {
                                     try_take_inserter_source_item(
-                                        &mut self.entities,
+                                        self.entities,
                                         pickup_tile,
                                         item_id,
                                     )
@@ -528,8 +528,8 @@ impl Simulation {
                         profiler.measure(ProfilePhase::InventoryTransfers, || {
                             inserter_target_can_accept(
                                 &self.world.prototypes,
-                                &self.research,
-                                &self.entities,
+                                self.research,
+                                self.entities,
                                 drop_tile,
                                 item,
                             )
@@ -539,8 +539,8 @@ impl Simulation {
                     } else if profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_drop_inserter_item(
                             &self.world.prototypes,
-                            &self.research,
-                            &mut self.entities,
+                            self.research,
+                            self.entities,
                             drop_tile,
                             item,
                         )
@@ -569,5 +569,67 @@ impl Simulation {
                 *state = next_state;
             }
         }
+    }
+}
+
+impl Simulation {
+    pub(super) fn advance_burner_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
+        MachineTickContext::new(
+            self.tick,
+            &mut self.world,
+            &mut self.entities,
+            &mut self.research,
+            &mut self.power,
+            &mut self.statistics,
+        )
+        .advance_burner_mining_drills(profiler);
+    }
+
+    pub(super) fn advance_furnaces<P: TickProfiler>(&mut self, profiler: &mut P) {
+        MachineTickContext::new(
+            self.tick,
+            &mut self.world,
+            &mut self.entities,
+            &mut self.research,
+            &mut self.power,
+            &mut self.statistics,
+        )
+        .advance_furnaces(profiler);
+    }
+
+    pub(super) fn advance_assembling_machines<P: TickProfiler>(&mut self, profiler: &mut P) {
+        MachineTickContext::new(
+            self.tick,
+            &mut self.world,
+            &mut self.entities,
+            &mut self.research,
+            &mut self.power,
+            &mut self.statistics,
+        )
+        .advance_assembling_machines(profiler);
+    }
+
+    pub(super) fn advance_labs<P: TickProfiler>(&mut self, profiler: &mut P) {
+        MachineTickContext::new(
+            self.tick,
+            &mut self.world,
+            &mut self.entities,
+            &mut self.research,
+            &mut self.power,
+            &mut self.statistics,
+        )
+        .advance_labs(profiler);
+    }
+
+    pub(super) fn advance_inserters<P: TickProfiler>(&mut self, profiler: &mut P) {
+        MachineTickContext::new(
+            self.tick,
+            &mut self.world,
+            &mut self.entities,
+            &mut self.research,
+            &mut self.power,
+            &mut self.statistics,
+        )
+        .advance_inserters(profiler);
     }
 }

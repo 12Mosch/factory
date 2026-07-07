@@ -1,3 +1,7 @@
+use super::research_ops::{
+    add_research_units_to_state, can_select_research_in_state,
+    promote_next_queued_research_in_state,
+};
 use super::*;
 
 impl Simulation {
@@ -268,37 +272,7 @@ impl Simulation {
         &mut self,
         units: u32,
     ) -> Result<ResearchProgressResult, ResearchError> {
-        let technology_id = self
-            .research
-            .active
-            .ok_or(ResearchError::NoActiveResearch)?;
-        let technology = self
-            .world
-            .prototypes
-            .technology(technology_id)
-            .ok_or(ResearchError::MissingTechnology(technology_id))?;
-        let state = self
-            .research
-            .technology_state_mut(technology_id)
-            .ok_or(ResearchError::MissingTechnology(technology_id))?;
-
-        state.progress_units = state
-            .progress_units
-            .saturating_add(units)
-            .min(technology.required_units);
-
-        if state.progress_units >= technology.required_units {
-            state.unlocked = true;
-            self.research.active = None;
-            self.promote_next_queued_research()?;
-            Ok(ResearchProgressResult::Completed { technology_id })
-        } else {
-            Ok(ResearchProgressResult::InProgress {
-                technology_id,
-                progress_units: state.progress_units,
-                required_units: technology.required_units,
-            })
-        }
+        add_research_units_to_state(&self.world.prototypes, &mut self.research, units)
     }
 
     pub fn is_recipe_unlocked(&self, recipe_id: RecipeId) -> bool {
@@ -335,37 +309,11 @@ impl Simulation {
     }
 
     fn can_select_research(&self, technology_id: TechnologyId) -> Result<(), ResearchError> {
-        if self.research.active == Some(technology_id) {
-            return Err(ResearchError::AlreadyActive(technology_id));
-        }
-        let technology = self.technology_by_id(technology_id)?;
-        let state = self.technology_research_state(technology_id)?;
-        if state.unlocked {
-            return Err(ResearchError::AlreadyResearched(technology_id));
-        }
-
-        for prerequisite_id in &technology.prerequisites {
-            if !self.is_technology_unlocked(*prerequisite_id) {
-                return Err(ResearchError::PrerequisiteLocked {
-                    technology_id,
-                    prerequisite_id: *prerequisite_id,
-                });
-            }
-        }
-
-        Ok(())
+        can_select_research_in_state(&self.world.prototypes, &self.research, technology_id)
     }
 
     fn promote_next_queued_research(&mut self) -> Result<(), ResearchError> {
-        if self.research.active.is_some() || self.research.queue.is_empty() {
-            return Ok(());
-        }
-
-        let technology_id = self.research.queue[0];
-        self.can_select_research(technology_id)?;
-        self.research.queue.remove(0);
-        self.research.active = Some(technology_id);
-        Ok(())
+        promote_next_queued_research_in_state(&self.world.prototypes, &mut self.research)
     }
 
     fn validate_research_queue_order(&self, queue: &[TechnologyId]) -> Result<(), ResearchError> {

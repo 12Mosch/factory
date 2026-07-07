@@ -63,7 +63,9 @@ impl Simulation {
             }
         }
 
-        if !self.is_entity_unlocked(prototype_id) {
+        if !PlacementContext::new(&self.world, &self.entities, &self.player, &self.research)
+            .is_entity_unlocked(prototype_id)
+        {
             preview.issues.push(BuildPlacementIssue {
                 tile: None,
                 kind: BuildPlacementIssueKind::EntityLocked { prototype_id },
@@ -116,7 +118,9 @@ impl Simulation {
                 prototype_id,
             });
         }
-        if !self.is_entity_unlocked(prototype_id) {
+        if !PlacementContext::new(&self.world, &self.entities, &self.player, &self.research)
+            .is_entity_unlocked(prototype_id)
+        {
             return Err(PlayerBuildError::EntityLocked { prototype_id });
         }
         if self.player_inventory.count(item_id) == 0 {
@@ -154,20 +158,8 @@ impl Simulation {
         y: i32,
         direction: Direction,
     ) -> Result<EntityFootprint, BuildError> {
-        let footprint = self.world.entity_footprint(prototype_id, x, y, direction)?;
-        let prototype = self
-            .world
-            .prototypes
-            .entity(prototype_id)
-            .ok_or(BuildError::MissingPrototype(prototype_id))?;
-        self.world
-            .validate_entity_footprint_for_prototype(prototype, &footprint, direction)?;
-        self.validate_footprint_clear_of_player(&footprint)?;
-        self.entities
-            .occupancy
-            .validate_available(&footprint, None)?;
-
-        Ok(footprint)
+        PlacementContext::new(&self.world, &self.entities, &self.player, &self.research)
+            .can_place_entity(prototype_id, x, y, direction)
     }
 
     pub fn place_entity(
@@ -219,7 +211,8 @@ impl Simulation {
 
         self.world
             .validate_entity_footprint_for_prototype(prototype, &footprint, direction)?;
-        self.validate_footprint_clear_of_player(&footprint)?;
+        PlacementContext::new(&self.world, &self.entities, &self.player, &self.research)
+            .validate_footprint_clear_of_player(&footprint)?;
         self.entities
             .occupancy
             .validate_available(&footprint, Some(entity_id))?;
@@ -260,21 +253,6 @@ impl Simulation {
         }
         self.invalidate_fluid_state();
         self.bump_entity_topology_revision();
-    }
-
-    fn validate_footprint_clear_of_player(
-        &self,
-        footprint: &EntityFootprint,
-    ) -> Result<(), BuildError> {
-        let player_tile = self.player.tile_position();
-        if footprint.contains_tile(player_tile.0, player_tile.1) {
-            return Err(BuildError::TileBlocked {
-                x: player_tile.0,
-                y: player_tile.1,
-            });
-        }
-
-        Ok(())
     }
 
     fn collect_placement_preview_issues_for_footprint(

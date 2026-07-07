@@ -181,174 +181,43 @@ impl Simulation {
     }
 
     pub(super) fn advance_statistics_to_current_tick(&mut self) {
-        while self.statistics.items.last_advanced_tick < self.tick {
-            self.statistics.items.last_advanced_tick += 1;
-            self.clear_item_statistics_bucket(self.statistics.items.last_advanced_tick);
-        }
-        while self.statistics.fluids.last_advanced_tick < self.tick {
-            self.statistics.fluids.last_advanced_tick += 1;
-            self.clear_fluid_statistics_bucket(self.statistics.fluids.last_advanced_tick);
-        }
-        while self.statistics.power.last_advanced_tick < self.tick {
-            self.statistics.power.last_advanced_tick += 1;
-            self.clear_power_statistics_sample(self.statistics.power.last_advanced_tick);
-        }
+        StatisticsContext::new(self.tick, &mut self.statistics).advance_to_current_tick();
     }
 
     pub(super) fn record_item_produced(&mut self, item_id: ItemId, amount: u64) {
-        self.record_item_stat(item_id, amount, ItemStatisticDirection::Produced);
+        StatisticsContext::new(self.tick, &mut self.statistics)
+            .record_item_produced(item_id, amount);
     }
 
     pub(super) fn record_item_consumed(&mut self, item_id: ItemId, amount: u64) {
-        self.record_item_stat(item_id, amount, ItemStatisticDirection::Consumed);
-    }
-
-    fn record_item_stat(
-        &mut self,
-        item_id: ItemId,
-        amount: u64,
-        direction: ItemStatisticDirection,
-    ) {
-        if amount == 0 {
-            return;
-        }
-        self.advance_statistics_to_current_tick();
-        self.ensure_current_item_statistics_bucket();
-
-        let index = self.current_statistics_bucket_index();
-        let bucket = &mut self.statistics.items.buckets[index];
-        match direction {
-            ItemStatisticDirection::Produced => {
-                add_stat(&mut bucket.produced, item_id, amount);
-                add_stat(&mut self.statistics.items.rolling_produced, item_id, amount);
-                add_stat(&mut self.statistics.items.total_produced, item_id, amount);
-            }
-            ItemStatisticDirection::Consumed => {
-                add_stat(&mut bucket.consumed, item_id, amount);
-                add_stat(&mut self.statistics.items.rolling_consumed, item_id, amount);
-                add_stat(&mut self.statistics.items.total_consumed, item_id, amount);
-            }
-        }
+        StatisticsContext::new(self.tick, &mut self.statistics)
+            .record_item_consumed(item_id, amount);
     }
 
     pub(super) fn record_fluid_produced(&mut self, fluid_id: FluidId, amount: u64) {
-        self.record_fluid_stat(fluid_id, amount, StatisticDirection::Produced);
+        StatisticsContext::new(self.tick, &mut self.statistics)
+            .record_fluid_produced(fluid_id, amount);
     }
 
     pub(super) fn record_fluid_consumed(&mut self, fluid_id: FluidId, amount: u64) {
-        self.record_fluid_stat(fluid_id, amount, StatisticDirection::Consumed);
-    }
-
-    fn record_fluid_stat(&mut self, fluid_id: FluidId, amount: u64, direction: StatisticDirection) {
-        if amount == 0 {
-            return;
-        }
-        self.advance_statistics_to_current_tick();
-        self.ensure_current_fluid_statistics_bucket();
-
-        let index = self.current_statistics_bucket_index();
-        let bucket = &mut self.statistics.fluids.buckets[index];
-        match direction {
-            StatisticDirection::Produced => {
-                add_stat(&mut bucket.produced, fluid_id, amount);
-                add_stat(
-                    &mut self.statistics.fluids.rolling_produced,
-                    fluid_id,
-                    amount,
-                );
-                add_stat(&mut self.statistics.fluids.total_produced, fluid_id, amount);
-            }
-            StatisticDirection::Consumed => {
-                add_stat(&mut bucket.consumed, fluid_id, amount);
-                add_stat(
-                    &mut self.statistics.fluids.rolling_consumed,
-                    fluid_id,
-                    amount,
-                );
-                add_stat(&mut self.statistics.fluids.total_consumed, fluid_id, amount);
-            }
-        }
+        StatisticsContext::new(self.tick, &mut self.statistics)
+            .record_fluid_consumed(fluid_id, amount);
     }
 
     pub(super) fn record_power_sample(&mut self) {
-        self.advance_statistics_to_current_tick();
-        let index = self.current_statistics_bucket_index();
-        self.statistics.power.samples[index] = PowerStatisticsSample {
-            tick: self.tick,
-            production_watts: self.power.summary.production_watts,
-            available_production_watts: self.power.summary.available_production_watts,
-            consumption_watts: self.power.summary.consumption_watts,
-            satisfaction_permyriad: self.power.summary.satisfaction_permyriad,
-        };
-    }
-
-    fn ensure_current_item_statistics_bucket(&mut self) {
-        let index = self.current_statistics_bucket_index();
-        if self.statistics.items.buckets[index].tick != self.tick {
-            self.clear_item_statistics_bucket(self.tick);
-        }
-    }
-
-    fn ensure_current_fluid_statistics_bucket(&mut self) {
-        let index = self.current_statistics_bucket_index();
-        if self.statistics.fluids.buckets[index].tick != self.tick {
-            self.clear_fluid_statistics_bucket(self.tick);
-        }
-    }
-
-    fn clear_item_statistics_bucket(&mut self, tick: u64) {
-        let index = (tick % ITEM_STATISTICS_WINDOW_TICKS) as usize;
-        let bucket = &mut self.statistics.items.buckets[index];
-        for (item_id, amount) in std::mem::take(&mut bucket.produced) {
-            subtract_stat(&mut self.statistics.items.rolling_produced, item_id, amount);
-        }
-        for (item_id, amount) in std::mem::take(&mut bucket.consumed) {
-            subtract_stat(&mut self.statistics.items.rolling_consumed, item_id, amount);
-        }
-        bucket.tick = tick;
-    }
-
-    fn clear_fluid_statistics_bucket(&mut self, tick: u64) {
-        let index = (tick % ITEM_STATISTICS_WINDOW_TICKS) as usize;
-        let bucket = &mut self.statistics.fluids.buckets[index];
-        for (fluid_id, amount) in std::mem::take(&mut bucket.produced) {
-            subtract_stat(
-                &mut self.statistics.fluids.rolling_produced,
-                fluid_id,
-                amount,
-            );
-        }
-        for (fluid_id, amount) in std::mem::take(&mut bucket.consumed) {
-            subtract_stat(
-                &mut self.statistics.fluids.rolling_consumed,
-                fluid_id,
-                amount,
-            );
-        }
-        bucket.tick = tick;
-    }
-
-    fn clear_power_statistics_sample(&mut self, tick: u64) {
-        let index = (tick % ITEM_STATISTICS_WINDOW_TICKS) as usize;
-        self.statistics.power.samples[index] = PowerStatisticsSample {
-            tick,
-            ..PowerStatisticsSample::default()
-        };
-    }
-
-    fn current_statistics_bucket_index(&self) -> usize {
-        (self.tick % ITEM_STATISTICS_WINDOW_TICKS) as usize
+        let summary = self.power.summary;
+        StatisticsContext::new(self.tick, &mut self.statistics).record_power_sample(summary);
     }
 }
 
 #[derive(Clone, Copy)]
-enum ItemStatisticDirection {
+pub(super) enum ItemStatisticDirection {
     Produced,
     Consumed,
 }
 
 #[derive(Clone, Copy)]
-enum StatisticDirection {
+pub(super) enum StatisticDirection {
     Produced,
     Consumed,
 }
@@ -360,12 +229,12 @@ pub(super) fn power_sample_is_recorded(sample: PowerStatisticsSample) -> bool {
         || sample.consumption_watts != 0
 }
 
-fn add_stat<K: Ord>(stats: &mut BTreeMap<K, u64>, key: K, amount: u64) {
+pub(super) fn add_stat<K: Ord>(stats: &mut BTreeMap<K, u64>, key: K, amount: u64) {
     let current = stats.entry(key).or_default();
     *current = current.saturating_add(amount);
 }
 
-fn subtract_stat<K: Ord>(stats: &mut BTreeMap<K, u64>, key: K, amount: u64) {
+pub(super) fn subtract_stat<K: Ord>(stats: &mut BTreeMap<K, u64>, key: K, amount: u64) {
     let Some(current) = stats.get_mut(&key) else {
         return;
     };
