@@ -51,17 +51,11 @@ impl Simulation {
     }
 
     pub(super) fn invalidate_power_state(&mut self) {
-        self.power.topology_dirty = true;
-        self.invalidate_power_dynamic_state();
+        PowerContext::new(&mut self.power).invalidate_power_state();
     }
 
     pub(super) fn invalidate_power_dynamic_state(&mut self) {
-        self.power.summary = PowerSummary {
-            satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
-            ..PowerSummary::default()
-        };
-        self.power.networks.clear();
-        self.power.entity_statuses.clear();
+        PowerContext::new(&mut self.power).invalidate_power_dynamic_state();
     }
 
     pub(super) fn refresh_power_state(&mut self) {
@@ -461,36 +455,6 @@ impl Simulation {
             {
                 self.record_fluid_consumed(steam, steam_to_consume);
             }
-        }
-    }
-
-    pub(super) fn electric_work_allowed(&mut self, entity_id: EntityId) -> bool {
-        let satisfaction_permyriad = self
-            .power
-            .entity_statuses
-            .get(&entity_id)
-            .map(|status| status.satisfaction_permyriad)
-            .unwrap_or(0);
-        if satisfaction_permyriad == 0 {
-            return false;
-        }
-
-        let Some(state) = self.entities.electric_consumers.get_mut(&entity_id) else {
-            return true;
-        };
-        if satisfaction_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
-            state.work_remainder_permyriad = 0;
-            return true;
-        }
-
-        state.work_remainder_permyriad = state
-            .work_remainder_permyriad
-            .saturating_add(satisfaction_permyriad);
-        if state.work_remainder_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
-            state.work_remainder_permyriad -= POWER_SATISFACTION_FULL_PERMYRIAD;
-            true
-        } else {
-            false
         }
     }
 

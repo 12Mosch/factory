@@ -360,6 +360,7 @@ pub enum SimValidationError {
 
 mod belt_ops;
 mod commands;
+mod contexts;
 mod core;
 mod diagnostics_ops;
 mod entity_ops;
@@ -389,6 +390,7 @@ use self::belt_ops::*;
 pub use self::commands::{
     InventoryPanel, SimCommand, SimCommandEffect, SimCommandError, SlotTransferError,
 };
+use self::contexts::*;
 pub(crate) use self::entity_states::EntityStateBehavior;
 use self::fluid_ops::*;
 use self::fluid_state::FluidSubsystem;
