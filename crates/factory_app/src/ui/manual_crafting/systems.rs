@@ -4,12 +4,11 @@ use crate::audio::SoundEvent;
 use crate::resources::{CraftingWindowState, SimResource};
 
 use super::components::{
-    CraftingPanelRoot, CraftingQueueRoot, CraftingRecipeButton, CraftingTabButton,
+    CraftingPanelSnapshot, CraftingQueueSnapshot, CraftingRecipeButton, CraftingTabButton,
 };
 use super::helpers::{craftable_for_player, crafting_panel_snapshot, queue_snapshot};
-use super::view::{
-    spawn_manual_crafting_contents, spawn_manual_crafting_panel, spawn_queue_contents,
-};
+use super::view::{manual_crafting_root, spawn_manual_crafting_contents, spawn_queue_contents};
+use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_contents, sync_window};
 
 type CraftingTabInteractionQuery<'w, 's> = Query<
     'w,
@@ -66,67 +65,31 @@ pub(crate) fn sync_manual_crafting_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
     state: Res<CraftingWindowState>,
-    mut roots: Query<(Entity, &mut CraftingPanelRoot, Option<&Children>)>,
-    mut queue_roots: Query<(Entity, &mut CraftingQueueRoot, Option<&Children>)>,
+    mut roots: WindowRootQuery<CraftingPanelSnapshot>,
+    mut queue_roots: WindowRootQuery<CraftingQueueSnapshot>,
 ) {
-    if !state.open {
-        for (entity, _, _) in &roots {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let snapshot = crafting_panel_snapshot(&sim.sim, state.selected_tab);
-    let queue = queue_snapshot(&sim.sim);
-    let mut roots_iter = roots.iter_mut();
-    let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        spawn_manual_crafting_panel(&mut commands, snapshot, queue);
-        return;
+    let queue = if state.open {
+        queue_snapshot(&sim.sim)
+    } else {
+        Vec::new()
     };
-    for (duplicate_entity, _, _) in roots_iter {
-        commands.entity(duplicate_entity).despawn();
+    let result = sync_window(
+        &mut commands,
+        &mut roots,
+        state.open,
+        true,
+        || crafting_panel_snapshot(&sim.sim, state.selected_tab),
+        manual_crafting_root,
+        |root, snapshot| spawn_manual_crafting_contents(root, snapshot, queue.clone()),
+    );
+    // When the panel itself was rebuilt the queue root was respawned with
+    // fresh contents; only an unchanged panel needs the inner sync.
+    if result == WindowSync::Unchanged {
+        sync_contents(
+            &mut commands,
+            &mut queue_roots,
+            CraftingQueueSnapshot(queue),
+            |queue_node, snapshot| spawn_queue_contents(queue_node, &snapshot.0),
+        );
     }
-
-    if root.snapshot == snapshot {
-        sync_queue_contents(&mut commands, queue, &mut queue_roots);
-        return;
-    }
-
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-    root.snapshot = snapshot.clone();
-    commands
-        .entity(root_entity)
-        .with_children(|root| spawn_manual_crafting_contents(root, &snapshot, queue));
-}
-
-fn sync_queue_contents(
-    commands: &mut Commands,
-    queue: Vec<String>,
-    queue_roots: &mut Query<(Entity, &mut CraftingQueueRoot, Option<&Children>)>,
-) {
-    let mut roots_iter = queue_roots.iter_mut();
-    let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        return;
-    };
-    for (duplicate_entity, _, _) in roots_iter {
-        commands.entity(duplicate_entity).despawn();
-    }
-
-    if root.lines == queue {
-        return;
-    }
-
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-    root.lines = queue.clone();
-    commands
-        .entity(root_entity)
-        .with_children(|root| spawn_queue_contents(root, &queue));
 }

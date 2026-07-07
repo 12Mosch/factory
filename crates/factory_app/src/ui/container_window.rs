@@ -11,9 +11,10 @@ use crate::ui::inventory_panel::{
 use crate::ui::machine_indicators::{
     spawn_boiler_panel, spawn_burner_drill_panel, spawn_furnace_panel,
 };
+use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
 
-#[derive(Component)]
-pub(crate) struct ContainerWindowRoot {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ContainerWindowSnapshot {
     entity_id: EntityId,
     kind: OpenMachineKind,
 }
@@ -23,84 +24,76 @@ pub(crate) fn sync_container_window(
     sim: Res<SimResource>,
     mut open_container: ResMut<OpenContainer>,
     mut feedback: ResMut<InventoryTransferFeedback>,
-    roots: Query<(Entity, &ContainerWindowRoot)>,
+    mut roots: WindowRootQuery<ContainerWindowSnapshot>,
 ) {
     let open_kind = open_container
         .entity_id
         .and_then(|entity_id| open_machine_kind(&sim.sim, entity_id));
     if open_container.entity_id.is_some() && open_kind.is_none() {
         open_container.entity_id = None;
+    }
+    let open = open_container.entity_id.zip(open_kind);
+
+    let result = sync_window(
+        &mut commands,
+        &mut roots,
+        open.is_some(),
+        true,
+        || {
+            let (entity_id, kind) = open.expect("snapshot is only built while a container is open");
+            ContainerWindowSnapshot { entity_id, kind }
+        },
+        container_window_root,
+        |root, snapshot| spawn_container_window_contents(root, &sim.sim, snapshot),
+    );
+    // Transfer feedback belongs to the container it was produced in; drop it
+    // whenever the window closed or switched to another container.
+    if result != WindowSync::Unchanged {
         feedback.message = None;
     }
+}
 
-    if open_container.entity_id.is_none() {
-        for (entity, _) in &roots {
-            commands.entity(entity).despawn();
+fn container_window_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(12.0),
+            top: Val::Px(12.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            column_gap: Val::Px(10.0),
+            align_items: AlignItems::FlexStart,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.03, 0.03, 0.035, 0.88)),
+        GlobalZIndex(1100),
+    )
+}
+
+fn spawn_container_window_contents(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &factory_sim::Simulation,
+    snapshot: &ContainerWindowSnapshot,
+) {
+    let entity_id = snapshot.entity_id;
+    spawn_player_inventory_panel(root);
+    match snapshot.kind {
+        OpenMachineKind::Chest => {
+            spawn_container_inventory_panel(root, "Chest", container_slot_count(sim, entity_id))
         }
-        feedback.message = None;
-        return;
-    }
-
-    let entity_id = open_container
-        .entity_id
-        .expect("open container should be set after validation");
-    let kind = open_kind.expect("open machine kind should be known after validation");
-
-    for (entity, root) in &roots {
-        if root.entity_id != entity_id || root.kind != kind {
-            commands.entity(entity).despawn();
-            feedback.message = None;
+        OpenMachineKind::Lab => {
+            spawn_container_inventory_panel(root, "Lab", container_slot_count(sim, entity_id))
+        }
+        OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
+        OpenMachineKind::Furnace => spawn_furnace_panel(root),
+        OpenMachineKind::Boiler => spawn_boiler_panel(root),
+        OpenMachineKind::Assembler => {
+            let state = sim
+                .assembler_state(entity_id)
+                .expect("open assembler should expose state");
+            spawn_assembler_panel(root, sim.catalog(), state)
         }
     }
-
-    if roots
-        .iter()
-        .any(|(_, root)| root.entity_id == entity_id && root.kind == kind)
-    {
-        return;
-    }
-
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(12.0),
-                top: Val::Px(12.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                column_gap: Val::Px(10.0),
-                align_items: AlignItems::FlexStart,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.03, 0.03, 0.035, 0.88)),
-            GlobalZIndex(1100),
-            ContainerWindowRoot { entity_id, kind },
-        ))
-        .with_children(|root| {
-            spawn_player_inventory_panel(root);
-            match kind {
-                OpenMachineKind::Chest => spawn_container_inventory_panel(
-                    root,
-                    "Chest",
-                    container_slot_count(&sim.sim, entity_id),
-                ),
-                OpenMachineKind::Lab => spawn_container_inventory_panel(
-                    root,
-                    "Lab",
-                    container_slot_count(&sim.sim, entity_id),
-                ),
-                OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
-                OpenMachineKind::Furnace => spawn_furnace_panel(root),
-                OpenMachineKind::Boiler => spawn_boiler_panel(root),
-                OpenMachineKind::Assembler => {
-                    let state = sim
-                        .sim
-                        .assembler_state(entity_id)
-                        .expect("open assembler should expose state");
-                    spawn_assembler_panel(root, sim.sim.catalog(), state)
-                }
-            }
-            spawn_inventory_transfer_feedback(root);
-        });
+    spawn_inventory_transfer_feedback(root);
 }
 
 fn container_slot_count(sim: &factory_sim::Simulation, entity_id: EntityId) -> usize {

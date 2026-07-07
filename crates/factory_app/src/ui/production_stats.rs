@@ -9,18 +9,14 @@ use crate::audio::SoundEvent;
 use crate::resources::{ProductionStatsWindowState, SimResource, StatsTab};
 use crate::ui::debug_overlay::format_watts;
 use crate::ui::formatting::{format_fluid_display_name, format_item_display_name};
+use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 const POWER_GRAPH_POINT_COUNT: usize = 40;
 const POWER_GRAPH_BAR_WIDTH_PX: f32 = 3.0;
 const POWER_GRAPH_BAR_GAP_PX: f32 = 1.0;
 
-#[derive(Component)]
-pub(crate) struct ProductionStatsRoot {
-    snapshot: ProductionStatsSnapshot,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ProductionStatsSnapshot {
+pub(crate) struct ProductionStatsSnapshot {
     selected_tab: StatsTab,
     item_rows: Vec<ItemStatDisplayRow>,
     fluid_rows: Vec<ItemStatDisplayRow>,
@@ -76,63 +72,35 @@ pub(crate) fn sync_production_stats_window(
     mut commands: Commands,
     sim: Res<SimResource>,
     state: Res<ProductionStatsWindowState>,
-    mut roots: Query<(Entity, &mut ProductionStatsRoot, Option<&Children>)>,
+    mut roots: WindowRootQuery<ProductionStatsSnapshot>,
 ) {
-    if !state.open {
-        for (entity, _, _) in &roots {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let mut roots_iter = roots.iter_mut();
-    let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        let snapshot = production_stats_snapshot(&sim.sim, state.selected_tab);
-        spawn_production_stats_window(&mut commands, snapshot);
-        return;
-    };
-    for (duplicate, _, _) in roots_iter {
-        commands.entity(duplicate).despawn();
-    }
-    if !sim.is_changed() && !state.is_changed() {
-        return;
-    }
-    let snapshot = production_stats_snapshot(&sim.sim, state.selected_tab);
-    if root.snapshot == snapshot {
-        return;
-    }
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-    root.snapshot = snapshot.clone();
-    commands
-        .entity(root_entity)
-        .with_children(|root| spawn_production_stats_contents(root, &snapshot));
+    sync_window(
+        &mut commands,
+        &mut roots,
+        state.open,
+        sim.is_changed() || state.is_changed(),
+        || production_stats_snapshot(&sim.sim, state.selected_tab),
+        production_stats_root,
+        spawn_production_stats_contents,
+    );
 }
 
-fn spawn_production_stats_window(commands: &mut Commands, snapshot: ProductionStatsSnapshot) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(470.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(16.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.028, 0.030, 0.032, 0.97)),
-            GlobalZIndex(2300),
-            ProductionStatsRoot {
-                snapshot: snapshot.clone(),
-            },
-        ))
-        .with_children(|root| spawn_production_stats_contents(root, &snapshot));
+fn production_stats_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(0.0),
+            top: Val::Px(0.0),
+            bottom: Val::Px(0.0),
+            width: Val::Px(470.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            padding: UiRect::all(Val::Px(16.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.028, 0.030, 0.032, 0.97)),
+        GlobalZIndex(2300),
+    )
 }
 
 fn production_stats_snapshot(sim: &Simulation, selected_tab: StatsTab) -> ProductionStatsSnapshot {

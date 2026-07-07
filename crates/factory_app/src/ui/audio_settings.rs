@@ -1,11 +1,7 @@
 use bevy::prelude::*;
 
 use crate::audio::{AudioSettings, AudioSettingsWindowState, SoundEvent};
-
-#[derive(Component)]
-pub struct AudioSettingsRoot {
-    snapshot: AudioSettingsSnapshot,
-}
+use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 #[derive(Component)]
 pub struct AudioSettingsButton {
@@ -21,7 +17,7 @@ pub enum AudioSettingsAction {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct AudioSettingsSnapshot {
+pub(crate) struct AudioSettingsSnapshot {
     muted: bool,
     volume_percent: u32,
 }
@@ -62,36 +58,17 @@ pub(crate) fn sync_audio_settings_window(
     mut commands: Commands,
     window: Res<AudioSettingsWindowState>,
     settings: Res<AudioSettings>,
-    mut roots: Query<(Entity, &mut AudioSettingsRoot, Option<&Children>)>,
+    mut roots: WindowRootQuery<AudioSettingsSnapshot>,
 ) {
-    if !window.open {
-        for (entity, _, _) in &roots {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let snapshot = audio_settings_snapshot(&settings);
-    let mut roots_iter = roots.iter_mut();
-    let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        spawn_audio_settings_window(&mut commands, snapshot);
-        return;
-    };
-    for (duplicate, _, _) in roots_iter {
-        commands.entity(duplicate).despawn();
-    }
-    if root.snapshot == snapshot {
-        return;
-    }
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-    root.snapshot = snapshot.clone();
-    commands
-        .entity(root_entity)
-        .with_children(|root| spawn_audio_settings_modal(root, &snapshot));
+    sync_window(
+        &mut commands,
+        &mut roots,
+        window.open,
+        true,
+        || audio_settings_snapshot(&settings),
+        audio_settings_root,
+        spawn_audio_settings_modal,
+    );
 }
 
 fn audio_settings_snapshot(settings: &AudioSettings) -> AudioSettingsSnapshot {
@@ -101,26 +78,21 @@ fn audio_settings_snapshot(settings: &AudioSettings) -> AudioSettingsSnapshot {
     }
 }
 
-fn spawn_audio_settings_window(commands: &mut Commands, snapshot: AudioSettingsSnapshot) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.56)),
-            GlobalZIndex(2700),
-            AudioSettingsRoot {
-                snapshot: snapshot.clone(),
-            },
-        ))
-        .with_children(|root| spawn_audio_settings_modal(root, &snapshot));
+fn audio_settings_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            top: Val::Px(0.0),
+            bottom: Val::Px(0.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.56)),
+        GlobalZIndex(2700),
+    )
 }
 
 fn spawn_audio_settings_modal(

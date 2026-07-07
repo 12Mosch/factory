@@ -5,11 +5,12 @@ use crate::input::panels::escape_consumed;
 use crate::resources::{AppInputState, BuildPlacementState, SimResource, TechnologyWindowState};
 
 use super::components::{
-    TechnologyPanelRoot, TechnologyQueueAction, TechnologyQueueButton, TechnologySelectButton,
+    TechnologyPanelSnapshot, TechnologyQueueAction, TechnologyQueueButton, TechnologySelectButton,
     TechnologyStartQueueButton,
 };
 use super::helpers::technology_panel_snapshot;
-use super::view::{spawn_technology_panel, spawn_technology_panel_contents};
+use super::view::{spawn_technology_panel_contents, technology_panel_root};
+use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 type TechnologySelectInteractionQuery<'w, 's> = Query<
     'w,
@@ -169,36 +170,15 @@ pub(crate) fn sync_technology_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
     window_state: Res<TechnologyWindowState>,
-    mut roots: Query<(Entity, &mut TechnologyPanelRoot, Option<&Children>)>,
+    mut roots: WindowRootQuery<TechnologyPanelSnapshot>,
 ) {
-    if !window_state.open {
-        for (entity, _, _) in &roots {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let snapshot = technology_panel_snapshot(&sim.sim, &window_state);
-    let mut roots_iter = roots.iter_mut();
-    let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        spawn_technology_panel(&mut commands, &sim.sim, window_state.selected, snapshot);
-        return;
-    };
-    for (duplicate_entity, _, _) in roots_iter {
-        commands.entity(duplicate_entity).despawn();
-    }
-
-    if root.snapshot == snapshot {
-        return;
-    }
-
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-    root.snapshot = snapshot;
-    commands.entity(root_entity).with_children(|root| {
-        spawn_technology_panel_contents(root, &sim.sim, window_state.selected)
-    });
+    sync_window(
+        &mut commands,
+        &mut roots,
+        window_state.open,
+        true,
+        || technology_panel_snapshot(&sim.sim, &window_state),
+        technology_panel_root,
+        |root, _| spawn_technology_panel_contents(root, &sim.sim, window_state.selected),
+    );
 }
