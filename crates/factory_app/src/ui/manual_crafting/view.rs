@@ -4,37 +4,29 @@ use crate::resources::CraftingPanelTab;
 use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 
 use super::components::{
-    CraftingPanelRoot, CraftingPanelSnapshot, CraftingQueueRoot, CraftingRecipeButton,
-    CraftingRecipeListRoot, CraftingTabButton, ManualCraftRecipeRow,
+    CraftingPanelSnapshot, CraftingQueueSnapshot, CraftingRecipeButton, CraftingRecipeListRoot,
+    CraftingTabButton, ManualCraftRecipeRow,
 };
+use crate::ui::window_sync::WindowRoot;
 
-pub(crate) fn spawn_manual_crafting_panel(
-    commands: &mut Commands,
-    snapshot: CraftingPanelSnapshot,
-    queue: Vec<String>,
-) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(PANEL_MARGIN),
-                top: Val::Px(PANEL_MARGIN),
-                bottom: Val::Px(PANEL_MARGIN),
-                width: Val::Vw(96.0),
-                max_width: Val::Px(540.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(16.0)),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.028, 0.030, 0.032, 0.97)),
-            GlobalZIndex(2400),
-            CraftingPanelRoot {
-                snapshot: snapshot.clone(),
-            },
-        ))
-        .with_children(|root| spawn_manual_crafting_contents(root, &snapshot, queue));
+pub(crate) fn manual_crafting_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(PANEL_MARGIN),
+            top: Val::Px(PANEL_MARGIN),
+            bottom: Val::Px(PANEL_MARGIN),
+            width: Val::Vw(96.0),
+            max_width: Val::Px(540.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            padding: UiRect::all(Val::Px(16.0)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.028, 0.030, 0.032, 0.97)),
+        GlobalZIndex(2400),
+    )
 }
 
 pub(crate) fn spawn_manual_crafting_contents(
@@ -250,9 +242,7 @@ fn spawn_queue(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, queue: V
                 ..default()
             },
             BackgroundColor(Color::NONE),
-            CraftingQueueRoot {
-                lines: queue.clone(),
-            },
+            WindowRoot::new(CraftingQueueSnapshot(queue.clone())),
         ))
         .with_children(|queue_node| spawn_queue_contents(queue_node, &queue));
 }

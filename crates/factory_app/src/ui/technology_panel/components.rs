@@ -23,11 +23,6 @@ pub struct TechnologyQueueButton {
 }
 
 #[derive(Component)]
-pub(crate) struct TechnologyPanelRoot {
-    pub(crate) snapshot: TechnologyPanelSnapshot,
-}
-
-#[derive(Component)]
 pub(crate) struct TechnologyPanelContentRoot;
 
 #[derive(Component)]

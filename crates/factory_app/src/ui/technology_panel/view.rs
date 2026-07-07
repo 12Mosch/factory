@@ -5,9 +5,8 @@ use crate::ui::formatting::format_recipe_display_name;
 use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 
 use super::components::{
-    TechnologyDetailRoot, TechnologyListRoot, TechnologyPanelContentRoot, TechnologyPanelRoot,
-    TechnologyPanelSnapshot, TechnologyQueueAction, TechnologyQueueButton, TechnologySelectButton,
-    TechnologyStartQueueButton,
+    TechnologyDetailRoot, TechnologyListRoot, TechnologyPanelContentRoot, TechnologyQueueAction,
+    TechnologyQueueButton, TechnologySelectButton, TechnologyStartQueueButton,
 };
 use super::helpers::{
     active_research_text, can_enqueue_for_ui, prerequisite_text, queue_text, science_cost_text,
@@ -15,31 +14,23 @@ use super::helpers::{
     technology_state_label, technology_ui_state, unlock_text,
 };
 
-pub(crate) fn spawn_technology_panel(
-    commands: &mut Commands,
-    sim: &factory_sim::Simulation,
-    selected: Option<TechnologyId>,
-    snapshot: TechnologyPanelSnapshot,
-) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(PANEL_MARGIN),
-                right: Val::Px(PANEL_MARGIN),
-                top: Val::Px(PANEL_MARGIN),
-                bottom: Val::Px(PANEL_MARGIN),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(18.0)),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.028, 0.030, 0.96)),
-            GlobalZIndex(2100),
-            TechnologyPanelRoot { snapshot },
-        ))
-        .with_children(|root| spawn_technology_panel_contents(root, sim, selected));
+pub(crate) fn technology_panel_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(PANEL_MARGIN),
+            right: Val::Px(PANEL_MARGIN),
+            top: Val::Px(PANEL_MARGIN),
+            bottom: Val::Px(PANEL_MARGIN),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            padding: UiRect::all(Val::Px(18.0)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.025, 0.028, 0.030, 0.96)),
+        GlobalZIndex(2100),
+    )
 }
 
 pub(crate) fn spawn_technology_panel_contents(

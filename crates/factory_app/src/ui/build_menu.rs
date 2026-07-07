@@ -9,6 +9,7 @@ use crate::resources::{
     OpenContainer, SimResource, TechnologyWindowState,
 };
 use crate::ui::build_bar::{BuildMenuButton, slot_key_label};
+use crate::ui::window_sync::{WindowRootQuery, sync_window};
 use crate::utils::compact_item_name;
 use factory_sim::Simulation;
 
@@ -19,11 +20,6 @@ const GRID_COLUMNS: f32 = 5.0;
 // A definite grid width is required for correct flex-wrap sizing: without it
 // the wrapped height is under-measured and the panel collapses.
 const GRID_WIDTH: f32 = GRID_COLUMNS * CELL_WIDTH + (GRID_COLUMNS - 1.0) * CELL_GAP;
-
-#[derive(Component)]
-pub(crate) struct BuildMenuRoot {
-    snapshot: BuildMenuSnapshot,
-}
 
 #[derive(Component)]
 pub(crate) struct BuildMenuSelectButton {
@@ -39,7 +35,7 @@ pub(crate) struct BuildMenuHotbarToggleButton {
 pub(crate) struct BuildMenuCloseButton;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct BuildMenuSnapshot {
+pub(crate) struct BuildMenuSnapshot {
     entries: Vec<BuildMenuEntry>,
     message: Option<String>,
 }
@@ -183,40 +179,17 @@ pub(crate) fn sync_build_menu(
     sim: Res<SimResource>,
     hotbar: Res<HotbarState>,
     state: Res<BuildMenuState>,
-    mut roots: Query<(Entity, &mut BuildMenuRoot, Option<&Children>)>,
+    mut roots: WindowRootQuery<BuildMenuSnapshot>,
 ) {
-    if !state.open {
-        for (entity, _, _) in &roots {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let mut roots_iter = roots.iter_mut();
-    let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        let snapshot = build_menu_snapshot(&sim.sim, &hotbar, &state);
-        spawn_build_menu_window(&mut commands, snapshot);
-        return;
-    };
-    for (duplicate, _, _) in roots_iter {
-        commands.entity(duplicate).despawn();
-    }
-    if !sim.is_changed() && !hotbar.is_changed() && !state.is_changed() {
-        return;
-    }
-    let snapshot = build_menu_snapshot(&sim.sim, &hotbar, &state);
-    if root.snapshot == snapshot {
-        return;
-    }
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-    root.snapshot = snapshot.clone();
-    commands
-        .entity(root_entity)
-        .with_children(|root| spawn_build_menu_contents(root, &snapshot));
+    sync_window(
+        &mut commands,
+        &mut roots,
+        state.open,
+        sim.is_changed() || hotbar.is_changed() || state.is_changed(),
+        || build_menu_snapshot(&sim.sim, &hotbar, &state),
+        build_menu_root,
+        spawn_build_menu_contents,
+    );
 }
 
 fn build_menu_snapshot(
@@ -247,26 +220,21 @@ fn build_menu_snapshot(
     }
 }
 
-fn spawn_build_menu_window(commands: &mut Commands, snapshot: BuildMenuSnapshot) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.40)),
-            GlobalZIndex(2200),
-            BuildMenuRoot {
-                snapshot: snapshot.clone(),
-            },
-        ))
-        .with_children(|root| spawn_build_menu_contents(root, &snapshot));
+fn build_menu_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            top: Val::Px(0.0),
+            bottom: Val::Px(0.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.40)),
+        GlobalZIndex(2200),
+    )
 }
 
 fn spawn_build_menu_contents(

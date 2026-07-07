@@ -4,11 +4,6 @@ use factory_data::RecipeId;
 use crate::resources::CraftingPanelTab;
 
 #[derive(Component)]
-pub(crate) struct CraftingPanelRoot {
-    pub(crate) snapshot: CraftingPanelSnapshot,
-}
-
-#[derive(Component)]
 pub(crate) struct CraftingRecipeButton {
     pub(crate) recipe_id: RecipeId,
 }
@@ -18,10 +13,8 @@ pub(crate) struct CraftingTabButton {
     pub(crate) tab: CraftingPanelTab,
 }
 
-#[derive(Component)]
-pub(crate) struct CraftingQueueRoot {
-    pub(crate) lines: Vec<String>,
-}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CraftingQueueSnapshot(pub(crate) Vec<String>);
 
 #[derive(Component)]
 pub(crate) struct CraftingRecipeListRoot;

@@ -7,11 +7,7 @@ use crate::save_load::{
     slot_display_name, slot_exists, slot_modified_label,
 };
 use crate::ui::layout::scroll_column;
-
-#[derive(Component)]
-pub struct SaveLoadRoot {
-    snapshot: SaveLoadSnapshot,
-}
+use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 #[derive(Component)]
 pub struct SaveLoadTabButton {
@@ -37,7 +33,7 @@ pub enum SaveSlotAction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SaveLoadSnapshot {
+pub(crate) struct SaveLoadSnapshot {
     window: SaveLoadWindowState,
     status: SaveLoadStatus,
     rows: Vec<SlotRowSnapshot>,
@@ -114,36 +110,17 @@ pub(crate) fn sync_save_load_window(
     config: Res<SaveLoadConfig>,
     pending_jobs: Res<PendingSaveJobs>,
     status: Res<SaveLoadStatus>,
-    mut roots: Query<(Entity, &mut SaveLoadRoot, Option<&Children>)>,
+    mut roots: WindowRootQuery<SaveLoadSnapshot>,
 ) {
-    if !state.open {
-        for (entity, _, _) in &roots {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let snapshot = save_load_snapshot(&state, &config, &pending_jobs, &status);
-    let mut roots_iter = roots.iter_mut();
-    let Some((root_entity, mut root, children)) = roots_iter.next() else {
-        spawn_save_load_window(&mut commands, snapshot);
-        return;
-    };
-    for (duplicate, _, _) in roots_iter {
-        commands.entity(duplicate).despawn();
-    }
-    if root.snapshot == snapshot {
-        return;
-    }
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-    root.snapshot = snapshot.clone();
-    commands
-        .entity(root_entity)
-        .with_children(|root| spawn_save_load_modal(root, &snapshot));
+    sync_window(
+        &mut commands,
+        &mut roots,
+        state.open,
+        true,
+        || save_load_snapshot(&state, &config, &pending_jobs, &status),
+        save_load_root,
+        spawn_save_load_modal,
+    );
 }
 
 fn save_load_snapshot(
@@ -167,26 +144,21 @@ fn save_load_snapshot(
     }
 }
 
-fn spawn_save_load_window(commands: &mut Commands, snapshot: SaveLoadSnapshot) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.56)),
-            GlobalZIndex(2600),
-            SaveLoadRoot {
-                snapshot: snapshot.clone(),
-            },
-        ))
-        .with_children(|root| spawn_save_load_modal(root, &snapshot));
+fn save_load_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            top: Val::Px(0.0),
+            bottom: Val::Px(0.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.56)),
+        GlobalZIndex(2600),
+    )
 }
 
 fn spawn_save_load_modal(

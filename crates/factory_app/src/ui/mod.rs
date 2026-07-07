@@ -13,3 +13,4 @@ pub mod map_view;
 pub mod production_stats;
 pub mod save_load;
 pub mod technology_panel;
+pub(crate) mod window_sync;
