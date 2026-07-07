@@ -1,7 +1,9 @@
 use bevy::prelude::*;
+use factory_sim::SimCommand;
 
 use crate::audio::SoundEvent;
 use crate::resources::{CraftingWindowState, SimResource};
+use crate::simulation::SimCommandRequest;
 
 use super::components::{
     CraftingPanelSnapshot, CraftingQueueSnapshot, CraftingRecipeButton, CraftingTabButton,
@@ -42,9 +44,9 @@ pub(crate) fn handle_manual_crafting_tab_buttons(
 
 pub(crate) fn handle_manual_crafting_recipe_buttons(
     mut interactions: CraftingRecipeInteractionQuery,
-    mut sim: ResMut<SimResource>,
+    sim: Res<SimResource>,
     state: Res<CraftingWindowState>,
-    mut sounds: MessageWriter<SoundEvent>,
+    mut commands: MessageWriter<SimCommandRequest>,
 ) {
     if !state.open {
         return;
@@ -55,8 +57,9 @@ pub(crate) fn handle_manual_crafting_recipe_buttons(
             continue;
         }
         if craftable_for_player(&sim.sim, button.recipe_id) {
-            sounds.write(SoundEvent::UiClick);
-            let _ = sim.sim.start_manual_craft(button.recipe_id);
+            commands.write(SimCommandRequest(SimCommand::StartManualCraft(
+                button.recipe_id,
+            )));
         }
     }
 }

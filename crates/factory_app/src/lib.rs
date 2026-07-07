@@ -2,7 +2,7 @@ mod app;
 pub mod audio;
 mod plugin;
 pub mod save_load;
-mod simulation;
+pub mod simulation;
 mod utils;
 
 pub mod constants;

@@ -4,27 +4,15 @@ use factory_sim::{
     AssemblerError, BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
     BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BoilerError, BurnerDrillError, ContainerError,
     FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX, FurnaceError,
+    SimCommand, SlotTransferError,
 };
 
-use crate::audio::SoundEvent;
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
-use crate::interaction::slot_transfer::{ContainerSlotClickError, transfer_open_container_slot};
 use crate::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
+use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::{format_item_display_name, format_item_stack};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InventoryPanel {
-    Player,
-    Container,
-    BurnerFuel,
-    BurnerOutput,
-    FurnaceInput,
-    FurnaceFuel,
-    FurnaceOutput,
-    BoilerFuel,
-    AssemblerInput,
-    AssemblerOutput,
-}
+pub use factory_sim::InventoryPanel;
 
 #[derive(Component)]
 pub(crate) struct ContainerSlotButton {
@@ -151,31 +139,25 @@ pub(crate) fn spawn_slot_button(
 
 pub(crate) fn handle_container_slot_clicks(
     mut interactions: ContainerSlotInteractionQuery,
-    mut sim: ResMut<SimResource>,
     open_container: Res<OpenContainer>,
     mut feedback: ResMut<InventoryTransferFeedback>,
-    mut sounds: MessageWriter<SoundEvent>,
+    mut commands: MessageWriter<SimCommandRequest>,
 ) {
     for (interaction, button) in &mut interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
 
-        match transfer_open_container_slot(
-            &mut sim.sim,
-            open_container.entity_id,
-            button.panel,
-            button.slot_index,
-        ) {
-            Ok(()) => {
-                feedback.message = None;
-                sounds.write(SoundEvent::UiClick);
-            }
-            Err(error) => {
-                feedback.message =
-                    Some(container_slot_click_error_message(sim.sim.catalog(), error));
-            }
-        }
+        let Some(entity_id) = open_container.entity_id else {
+            feedback.message = Some("No open container".to_string());
+            continue;
+        };
+
+        commands.write(SimCommandRequest(SimCommand::TransferSlot {
+            entity_id,
+            panel: button.panel,
+            slot_index: button.slot_index,
+        }));
     }
 }
 
@@ -268,17 +250,13 @@ pub(crate) fn update_container_slot_text(
     }
 }
 
-pub fn container_slot_click_error_message(
-    catalog: &PrototypeCatalog,
-    error: ContainerSlotClickError,
-) -> String {
+pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransferError) -> String {
     match error {
-        ContainerSlotClickError::NoOpenContainer => "No open container".to_string(),
-        ContainerSlotClickError::Transfer(error) => container_error_message(catalog, error),
-        ContainerSlotClickError::BurnerDrill(error) => burner_drill_error_message(catalog, error),
-        ContainerSlotClickError::Furnace(error) => furnace_error_message(catalog, error),
-        ContainerSlotClickError::Boiler(error) => boiler_error_message(catalog, error),
-        ContainerSlotClickError::Assembler(error) => assembler_error_message(catalog, error),
+        SlotTransferError::Transfer(error) => container_error_message(catalog, error),
+        SlotTransferError::BurnerDrill(error) => burner_drill_error_message(catalog, error),
+        SlotTransferError::Furnace(error) => furnace_error_message(catalog, error),
+        SlotTransferError::Boiler(error) => boiler_error_message(catalog, error),
+        SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
     }
 }
 

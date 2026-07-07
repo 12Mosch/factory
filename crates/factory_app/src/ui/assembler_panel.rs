@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 use factory_data::{PrototypeCatalog, RecipeId};
-use factory_sim::AssemblingMachineState;
+use factory_sim::{AssemblingMachineState, SimCommand};
 
-use crate::audio::SoundEvent;
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::{OpenContainer, SimResource};
+use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::{
     AssemblerDetailText, crafting_recipe_choices, format_assembler_detail_text,
     format_recipe_display_name,
@@ -215,9 +215,9 @@ pub(crate) fn spawn_assembler_recipe_button(
 
 pub(crate) fn handle_assembler_recipe_button_clicks(
     mut interactions: AssemblerRecipeButtonInteractionQuery,
-    mut sim: ResMut<SimResource>,
+    sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
-    mut sounds: MessageWriter<SoundEvent>,
+    mut commands: MessageWriter<SimCommandRequest>,
 ) {
     let Some(entity_id) = open_container.entity_id else {
         return;
@@ -231,13 +231,10 @@ pub(crate) fn handle_assembler_recipe_button_clicks(
             continue;
         }
 
-        if sim
-            .sim
-            .select_assembler_recipe(entity_id, button.recipe_id)
-            .is_ok()
-        {
-            sounds.write(SoundEvent::UiClick);
-        }
+        commands.write(SimCommandRequest(SimCommand::SelectAssemblerRecipe {
+            entity_id,
+            recipe_id: button.recipe_id,
+        }));
     }
 }
 

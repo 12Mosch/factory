@@ -263,11 +263,6 @@ enum DrillOutputTarget {
     Blocked,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum SimulationInput {
-    BuildRedScienceResearchFixture,
-}
-
 pub type SimulationValidationError = SimValidationError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,6 +380,7 @@ pub enum SimValidationError {
 }
 
 mod belt_ops;
+mod commands;
 mod core;
 mod diagnostics_ops;
 mod entity_ops;
@@ -406,6 +402,9 @@ mod validation;
 mod world_ops;
 
 use self::belt_ops::*;
+pub use self::commands::{
+    InventoryPanel, SimCommand, SimCommandEffect, SimCommandError, SlotTransferError,
+};
 pub(crate) use self::entity_states::EntityStateBehavior;
 use self::fluid_ops::*;
 use self::generation::*;

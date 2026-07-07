@@ -19,10 +19,11 @@ pub(crate) enum AppSet {
     /// `PreUpdate`: panel open/close input; populates `AppInputState` for the
     /// rest of the frame.
     PanelInput,
-    /// `FixedUpdate`: frame-collected input applied to the simulation before
-    /// the tick.
+    /// `FixedUpdate`: systems that turn frame-collected input into queued
+    /// `SimCommandRequest`s for this tick.
     SimInput,
-    /// `FixedUpdate`: the simulation tick itself.
+    /// `FixedUpdate`: drains the queued commands into the simulation, then
+    /// runs the simulation tick itself.
     SimTick,
     /// `FixedUpdate`: systems that observe simulation state changes produced
     /// by the tick (e.g. audio observers).

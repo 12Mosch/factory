@@ -1,25 +1,20 @@
 use super::*;
 
-pub fn scripted_inputs_for_red_science_factory() -> Vec<SimulationInput> {
-    vec![SimulationInput::BuildRedScienceResearchFixture]
+pub fn scripted_inputs_for_red_science_factory() -> Vec<SimCommand> {
+    vec![SimCommand::BuildRedScienceResearchFixture]
 }
 
 impl Simulation {
     pub fn new_scripted_red_science_factory() -> Self {
         let mut sim = Self::new_seeded(123);
-        sim.apply_input(SimulationInput::BuildRedScienceResearchFixture);
+        for command in scripted_inputs_for_red_science_factory() {
+            sim.apply_command(&command)
+                .expect("scripted red science commands should apply");
+        }
         sim
     }
 
-    pub fn apply_input(&mut self, input: SimulationInput) {
-        match input {
-            SimulationInput::BuildRedScienceResearchFixture => {
-                self.build_red_science_research_fixture();
-            }
-        }
-    }
-
-    fn build_red_science_research_fixture(&mut self) {
+    pub(super) fn build_red_science_research_fixture(&mut self) {
         let logistics = factory_data::technology_id_by_name(&self.world.prototypes, "logistics");
         let automation = factory_data::technology_id_by_name(&self.world.prototypes, "automation");
         if !self.research.is_unlocked("logistics")

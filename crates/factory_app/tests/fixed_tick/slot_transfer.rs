@@ -3,10 +3,11 @@ use super::common::{
     place_powered_fixture_origin, recipe_id_by_name,
 };
 use bevy::prelude::*;
-use factory_app::interaction::slot_transfer::transfer_open_container_slot;
 use factory_app::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
-use factory_app::ui::inventory_panel::{InventoryPanel, container_slot_click_error_message};
-use factory_sim::{ContainerError, Direction, FurnaceError, Inventory, ItemStack, Simulation};
+use factory_app::ui::inventory_panel::{InventoryPanel, slot_transfer_error_message};
+use factory_sim::{
+    ContainerError, Direction, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
+};
 
 #[test]
 fn slot_click_transfer_delegates_to_sim_transfer_api() {
@@ -23,7 +24,7 @@ fn slot_click_transfer_delegates_to_sim_transfer_api() {
         count: 9,
     });
 
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
         .expect("slot click should transfer stack to chest");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
@@ -50,7 +51,7 @@ fn slot_click_transfer_routes_science_to_lab_inventory() {
         count: 3,
     });
 
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
         .expect("slot click should transfer science packs to lab");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
@@ -83,9 +84,9 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
         count: 1,
     });
 
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
         .expect("player ore should transfer to furnace input");
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 3)
+    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 3)
         .expect("player coal should transfer to furnace fuel");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
@@ -114,7 +115,7 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
         sim.tick();
     }
 
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::FurnaceOutput, 0)
+    sim.transfer_container_slot(entity_id, InventoryPanel::FurnaceOutput, 0)
         .expect("furnace output should transfer to player");
 
     assert_eq!(sim.player_inventory().count(iron_plate), 1);
@@ -145,7 +146,7 @@ fn slot_click_transfer_routes_assembler_input_and_output() {
         count: 2,
     });
 
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
         .expect("player ingredients should transfer to assembler input");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
@@ -161,13 +162,8 @@ fn slot_click_transfer_routes_assembler_input_and_output() {
         sim.tick();
     }
 
-    transfer_open_container_slot(
-        &mut sim,
-        Some(entity_id),
-        InventoryPanel::AssemblerOutput,
-        0,
-    )
-    .expect("assembler output should transfer to player");
+    sim.transfer_container_slot(entity_id, InventoryPanel::AssemblerOutput, 0)
+        .expect("assembler output should transfer to player");
 
     assert_eq!(sim.player_inventory().count(iron_gear_wheel), 1);
     assert_eq!(
@@ -195,7 +191,8 @@ fn slot_click_rejects_invalid_furnace_input_without_mutation() {
     });
 
     assert!(
-        transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2).is_err()
+        sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
+            .is_err()
     );
     assert_eq!(
         sim.player_inventory_mut().slots[2],
@@ -218,29 +215,23 @@ fn slot_click_error_message_formats_typed_transfer_errors() {
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
 
     assert_eq!(
-        container_slot_click_error_message(
+        slot_transfer_error_message(
             sim.catalog(),
-            factory_app::interaction::slot_transfer::ContainerSlotClickError::Transfer(
-                ContainerError::InvalidItem(iron_plate),
-            ),
+            SlotTransferError::Transfer(ContainerError::InvalidItem(iron_plate)),
         ),
         "Wrong item: Iron Plate"
     );
     assert_eq!(
-        container_slot_click_error_message(
+        slot_transfer_error_message(
             sim.catalog(),
-            factory_app::interaction::slot_transfer::ContainerSlotClickError::Furnace(
-                FurnaceError::InsufficientSpace,
-            ),
+            SlotTransferError::Furnace(FurnaceError::InsufficientSpace),
         ),
         "No space"
     );
     assert_eq!(
-        container_slot_click_error_message(
+        slot_transfer_error_message(
             sim.catalog(),
-            factory_app::interaction::slot_transfer::ContainerSlotClickError::Transfer(
-                ContainerError::EmptySlot { slot_index: 3 },
-            ),
+            SlotTransferError::Transfer(ContainerError::EmptySlot { slot_index: 3 }),
         ),
         "Empty slot"
     );
@@ -276,6 +267,10 @@ fn slot_click_failure_updates_inventory_transfer_feedback() {
     app.update();
     app.update();
     press_button_with_child_text(&mut app, "I\n1");
+    // The click queues a SimCommand in `Update`; the fixed tick that drains
+    // it runs before `Update` on a later frame, so the effect is only
+    // observable after a second `app.update()`.
+    app.update();
     app.update();
 
     assert_eq!(
@@ -302,7 +297,7 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
         count: 1,
     });
 
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::Player, 2)
+    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
         .expect("player coal should transfer to burner drill fuel");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
@@ -321,7 +316,7 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
         sim.tick();
     }
 
-    transfer_open_container_slot(&mut sim, Some(entity_id), InventoryPanel::BurnerOutput, 0)
+    sim.transfer_container_slot(entity_id, InventoryPanel::BurnerOutput, 0)
         .expect("drill output should transfer to player");
 
     assert_eq!(sim.player_inventory().count(coal), 1);

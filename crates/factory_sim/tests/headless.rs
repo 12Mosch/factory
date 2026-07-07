@@ -31,8 +31,8 @@ fn same_seed_same_inputs_same_hash() {
     let mut b = Simulation::new_seeded(123);
 
     for input in inputs {
-        a.apply_input(input.clone());
-        b.apply_input(input);
+        a.apply_command(&input).unwrap();
+        b.apply_command(&input).unwrap();
         a.tick();
         b.tick();
     }
