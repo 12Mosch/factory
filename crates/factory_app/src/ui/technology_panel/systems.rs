@@ -8,7 +8,7 @@ use super::components::{
     TechnologyPanelRoot, TechnologyQueueAction, TechnologyQueueButton, TechnologySelectButton,
     TechnologyStartQueueButton,
 };
-use super::helpers::{technology_by_id, technology_panel_snapshot};
+use super::helpers::technology_panel_snapshot;
 use super::view::{spawn_technology_panel, spawn_technology_panel_contents};
 
 type TechnologySelectInteractionQuery<'w, 's> = Query<
@@ -69,7 +69,7 @@ pub(crate) fn ensure_selected_technology(
 
     if window_state
         .selected
-        .is_some_and(|technology_id| technology_by_id(sim.sim.catalog(), technology_id).is_some())
+        .is_some_and(|technology_id| sim.sim.catalog().technology(technology_id).is_some())
     {
         return;
     }

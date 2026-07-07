@@ -47,7 +47,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
             }
         }
         for prerequisite_id in &technology.prerequisites {
-            if technology_by_id(catalog, *prerequisite_id).is_none() {
+            if catalog.technology(*prerequisite_id).is_none() {
                 return Err(SimValidationError::InvalidTechnologyPrerequisite {
                     technology_id: technology.id,
                     prerequisite_id: *prerequisite_id,
@@ -56,7 +56,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         }
         for effect in &technology.effects {
             let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
-            if recipe_by_id(catalog, recipe_id).is_none() {
+            if catalog.recipe(recipe_id).is_none() {
                 return Err(SimValidationError::InvalidTechnologyRecipe {
                     technology_id: technology.id,
                     recipe_id,

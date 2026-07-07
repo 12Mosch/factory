@@ -162,12 +162,7 @@ fn add_checked_stat<K: Ord>(
 pub(super) fn validate_world_resources(world: &WorldSim) -> Result<(), SimValidationError> {
     for chunk in world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
-            if world
-                .prototypes
-                .tiles
-                .get(tile.tile_id.index())
-                .is_none_or(|prototype| prototype.id != tile.tile_id)
-            {
+            if world.prototypes.tile(tile.tile_id).is_none() {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
                 return Err(SimValidationError::MissingTile {
@@ -189,7 +184,7 @@ pub(super) fn validate_world_resources(world: &WorldSim) -> Result<(), SimValida
 
 pub(super) fn validate_placed_entities(sim: &Simulation) -> Result<(), SimValidationError> {
     for placed in sim.entities.placed_entities.values() {
-        let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+        let prototype = sim.world.prototypes.entity(placed.prototype_id).ok_or(
             SimValidationError::InvalidEntityPrototype {
                 entity_id: placed.id,
                 prototype_id: placed.prototype_id,

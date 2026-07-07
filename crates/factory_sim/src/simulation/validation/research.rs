@@ -14,14 +14,11 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
     }
 
     for technology in &sim.world.prototypes.technologies {
-        let state = sim
-            .research
-            .technologies
-            .get(technology.id.index())
-            .filter(|state| state.technology_id == technology.id)
-            .ok_or(SimValidationError::InvalidResearchTechnology {
+        let state = sim.research.technology_state(technology.id).ok_or(
+            SimValidationError::InvalidResearchTechnology {
                 technology_id: technology.id,
-            })?;
+            },
+        )?;
 
         if state.progress_units > technology.required_units {
             return Err(SimValidationError::InvalidResearchProgress {
@@ -43,7 +40,12 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
     }
 
     for state in &sim.research.technologies {
-        if technology_by_id(&sim.world.prototypes, state.technology_id).is_none() {
+        if sim
+            .world
+            .prototypes
+            .technology(state.technology_id)
+            .is_none()
+        {
             return Err(SimValidationError::InvalidResearchTechnology {
                 technology_id: state.technology_id,
             });
@@ -51,13 +53,14 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
     }
 
     if let Some(technology_id) = sim.research.active {
-        let technology = technology_by_id(&sim.world.prototypes, technology_id)
+        let technology = sim
+            .world
+            .prototypes
+            .technology(technology_id)
             .ok_or(SimValidationError::InvalidActiveResearch { technology_id })?;
         let state = sim
             .research
-            .technologies
-            .get(technology_id.index())
-            .filter(|state| state.technology_id == technology_id)
+            .technology_state(technology_id)
             .ok_or(SimValidationError::InvalidActiveResearch { technology_id })?;
         if state.unlocked {
             return Err(SimValidationError::InvalidActiveResearch { technology_id });
@@ -81,19 +84,16 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
     }
     let mut queued = BTreeSet::new();
     for technology_id in &sim.research.queue {
-        let technology = technology_by_id(&sim.world.prototypes, *technology_id).ok_or(
+        let technology = sim.world.prototypes.technology(*technology_id).ok_or(
             SimValidationError::InvalidQueuedResearch {
                 technology_id: *technology_id,
             },
         )?;
-        let state = sim
-            .research
-            .technologies
-            .get(technology_id.index())
-            .filter(|state| state.technology_id == *technology_id)
-            .ok_or(SimValidationError::InvalidQueuedResearch {
+        let state = sim.research.technology_state(*technology_id).ok_or(
+            SimValidationError::InvalidQueuedResearch {
                 technology_id: *technology_id,
-            })?;
+            },
+        )?;
 
         if state.unlocked
             || Some(*technology_id) == sim.research.active

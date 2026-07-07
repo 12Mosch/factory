@@ -107,9 +107,7 @@ pub(crate) fn transfer_player_slot_to_furnace(
         .ok_or(FurnaceError::EmptySlot { slot_index })?;
     let is_fuel = sim
         .catalog()
-        .items
-        .get(stack.item_id.index())
-        .filter(|prototype| prototype.id == stack.item_id)
+        .item(stack.item_id)
         .and_then(|prototype| prototype.fuel_value_joules)
         .is_some();
 

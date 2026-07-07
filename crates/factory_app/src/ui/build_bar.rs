@@ -318,12 +318,7 @@ pub(crate) fn update_build_bar_visuals(
             text.0.clear();
             continue;
         };
-        let prototype = sim
-            .sim
-            .catalog()
-            .entities
-            .get(selection.prototype_id.index())
-            .filter(|prototype| prototype.id == selection.prototype_id);
+        let prototype = sim.sim.catalog().entity(selection.prototype_id);
         text.0 = prototype
             .map(|prototype| compact_item_name(&prototype.name))
             .unwrap_or_default();

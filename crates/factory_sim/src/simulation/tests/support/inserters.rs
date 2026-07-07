@@ -225,9 +225,7 @@ pub(in crate::simulation::tests) fn inserter_cycle_tick_budget(
     let prototype = sim
         .world
         .prototypes
-        .entities
-        .get(placed.prototype_id.index())
-        .filter(|prototype| prototype.id == placed.prototype_id)
+        .entity(placed.prototype_id)
         .expect("inserter prototype should exist");
     let inserter = prototype
         .inserter

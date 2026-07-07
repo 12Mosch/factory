@@ -208,12 +208,7 @@ impl Simulation {
         let Some(placed) = self.entities.placed_entity(entity_id) else {
             return false;
         };
-        let Some(prototype) = self
-            .world
-            .prototypes
-            .entities
-            .get(placed.prototype_id.index())
-        else {
+        let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
             return false;
         };
         let Some(mining_drill) = prototype.mining_drill.as_ref() else {
@@ -240,17 +235,10 @@ impl Simulation {
         let Some(recipe_id) = state.active_recipe else {
             return false;
         };
-        let Some(recipe) = self
-            .world
-            .prototypes
-            .recipes
-            .get(recipe_id.index())
-            .filter(|recipe| {
-                recipe.id == recipe_id
-                    && recipe.products.len() == 1
-                    && recipe_is_unlocked(&self.world.prototypes, &self.research, recipe.id)
-            })
-        else {
+        let Some(recipe) = self.world.prototypes.recipe(recipe_id).filter(|recipe| {
+            recipe.products.len() == 1
+                && recipe_is_unlocked(&self.world.prototypes, &self.research, recipe.id)
+        }) else {
             return false;
         };
         let product = &recipe.products[0];
@@ -281,13 +269,7 @@ impl Simulation {
         let Some(technology_id) = state.active_technology.or(self.research.active) else {
             return false;
         };
-        let Some(technology) = self
-            .world
-            .prototypes
-            .technologies
-            .get(technology_id.index())
-            .filter(|technology| technology.id == technology_id)
-        else {
+        let Some(technology) = self.world.prototypes.technology(technology_id) else {
             return false;
         };
 

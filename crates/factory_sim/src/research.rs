@@ -9,6 +9,25 @@ pub struct ResearchState {
     pub technologies: Vec<TechnologyResearchState>,
 }
 
+impl ResearchState {
+    /// Looks up the per-technology state by id, guarding against an id that
+    /// does not match the state stored at its index.
+    pub fn technology_state(&self, id: TechnologyId) -> Option<&TechnologyResearchState> {
+        self.technologies
+            .get(id.index())
+            .filter(|state| state.technology_id == id)
+    }
+
+    pub fn technology_state_mut(
+        &mut self,
+        id: TechnologyId,
+    ) -> Option<&mut TechnologyResearchState> {
+        self.technologies
+            .get_mut(id.index())
+            .filter(|state| state.technology_id == id)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TechnologyResearchState {
     pub technology_id: TechnologyId,

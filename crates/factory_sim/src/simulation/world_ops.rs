@@ -162,9 +162,7 @@ impl WorldSim {
     ) -> Result<EntityFootprint, BuildError> {
         let prototype = self
             .prototypes
-            .entities
-            .get(prototype_id.index())
-            .filter(|prototype| prototype.id == prototype_id)
+            .entity(prototype_id)
             .ok_or(BuildError::MissingPrototype(prototype_id))?;
 
         Ok(EntityFootprint::from_size(

@@ -140,10 +140,7 @@ pub(crate) fn entity_prototype_visual_style(
     prototype_id: EntityPrototypeId,
     direction: Direction,
 ) -> Option<EntityVisualStyle> {
-    let prototype = catalog
-        .entities
-        .get(prototype_id.index())
-        .filter(|prototype| prototype.id == prototype_id)?;
+    let prototype = catalog.entity(prototype_id)?;
     let footprint = EntityFootprint::from_size(0, 0, prototype.size.x, prototype.size.y, direction);
     let machine_size = || {
         Vec2::new(

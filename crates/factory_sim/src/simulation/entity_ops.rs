@@ -13,13 +13,7 @@ impl Simulation {
             footprint: None,
             issues: Vec::new(),
         };
-        let Some(prototype) = self
-            .world
-            .prototypes
-            .entities
-            .get(prototype_id.index())
-            .filter(|prototype| prototype.id == prototype_id)
-        else {
+        let Some(prototype) = self.world.prototypes.entity(prototype_id) else {
             preview.issues.push(BuildPlacementIssue {
                 tile: None,
                 kind: BuildPlacementIssueKind::MissingPrototype(prototype_id),
@@ -43,32 +37,24 @@ impl Simulation {
         }
 
         match prototype.build_item {
-            Some(build_item) => {
-                match self
-                    .world
-                    .prototypes
-                    .items
-                    .get(item_id.index())
-                    .filter(|item| item.id == item_id)
-                {
-                    Some(item) if item.id != build_item => {
-                        preview.issues.push(BuildPlacementIssue {
-                            tile: None,
-                            kind: BuildPlacementIssueKind::ItemDoesNotBuildEntity {
-                                item_id,
-                                prototype_id,
-                            },
-                        });
-                    }
-                    Some(_) => {}
-                    None => {
-                        preview.issues.push(BuildPlacementIssue {
-                            tile: None,
-                            kind: BuildPlacementIssueKind::MissingBuildItem { prototype_id },
-                        });
-                    }
+            Some(build_item) => match self.world.prototypes.item(item_id) {
+                Some(item) if item.id != build_item => {
+                    preview.issues.push(BuildPlacementIssue {
+                        tile: None,
+                        kind: BuildPlacementIssueKind::ItemDoesNotBuildEntity {
+                            item_id,
+                            prototype_id,
+                        },
+                    });
                 }
-            }
+                Some(_) => {}
+                None => {
+                    preview.issues.push(BuildPlacementIssue {
+                        tile: None,
+                        kind: BuildPlacementIssueKind::MissingBuildItem { prototype_id },
+                    });
+                }
+            },
             None => {
                 preview.issues.push(BuildPlacementIssue {
                     tile: None,
@@ -113,9 +99,7 @@ impl Simulation {
         let prototype = self
             .world
             .prototypes
-            .entities
-            .get(prototype_id.index())
-            .filter(|prototype| prototype.id == prototype_id)
+            .entity(prototype_id)
             .ok_or(PlayerBuildError::MissingPrototype(prototype_id))?;
         let build_item = prototype
             .build_item
@@ -124,9 +108,7 @@ impl Simulation {
         let item = self
             .world
             .prototypes
-            .items
-            .get(item_id.index())
-            .filter(|item| item.id == item_id)
+            .item(item_id)
             .ok_or(PlayerBuildError::MissingBuildItem { prototype_id })?;
         if item.id != build_item {
             return Err(PlayerBuildError::ItemDoesNotBuildEntity {
@@ -176,9 +158,7 @@ impl Simulation {
         let prototype = self
             .world
             .prototypes
-            .entities
-            .get(prototype_id.index())
-            .filter(|prototype| prototype.id == prototype_id)
+            .entity(prototype_id)
             .ok_or(BuildError::MissingPrototype(prototype_id))?;
         self.world
             .validate_entity_footprint_for_prototype(prototype, &footprint, direction)?;
@@ -234,9 +214,7 @@ impl Simulation {
         let prototype = self
             .world
             .prototypes
-            .entities
-            .get(entity.prototype_id.index())
-            .filter(|prototype| prototype.id == entity.prototype_id)
+            .entity(entity.prototype_id)
             .ok_or(BuildError::MissingPrototype(entity.prototype_id))?;
 
         self.world
@@ -308,24 +286,15 @@ impl Simulation {
     }
 
     fn invalidate_after_entity_removal(&mut self, removed: &PlacedEntity) {
-        if self
-            .world
-            .prototypes
-            .entities
-            .get(removed.prototype_id.index())
-            .filter(|prototype| prototype.id == removed.prototype_id)
-            .is_some_and(|prototype| self.prototype_affects_power_topology(prototype))
-        {
+        let prototype = self.world.prototypes.entity(removed.prototype_id);
+        let affects_power =
+            prototype.is_some_and(|prototype| self.prototype_affects_power_topology(prototype));
+        let affects_lanes = prototype
+            .is_some_and(|prototype| self.prototype_affects_transport_lane_graph(prototype));
+        if affects_power {
             self.invalidate_power_state();
         }
-        if self
-            .world
-            .prototypes
-            .entities
-            .get(removed.prototype_id.index())
-            .filter(|prototype| prototype.id == removed.prototype_id)
-            .is_some_and(|prototype| self.prototype_affects_transport_lane_graph(prototype))
-        {
+        if affects_lanes {
             self.invalidate_transport_lane_graph();
         }
         self.invalidate_fluid_state();
@@ -353,9 +322,7 @@ impl Simulation {
         let prototype = self
             .world
             .prototypes
-            .entities
-            .get(prototype_id.index())
-            .filter(|prototype| prototype.id == prototype_id)
+            .entity(prototype_id)
             .ok_or(EntityDestroyError::MissingBuildItem { prototype_id })?;
 
         let build_item = prototype
@@ -364,9 +331,7 @@ impl Simulation {
 
         self.world
             .prototypes
-            .items
-            .get(build_item.index())
-            .filter(|item| item.id == build_item)
+            .item(build_item)
             .map(|item| item.id)
             .ok_or(EntityDestroyError::MissingBuildItem { prototype_id })
     }
@@ -892,9 +857,7 @@ impl Simulation {
         let recipe = self
             .world
             .prototypes
-            .recipes
-            .get(recipe_id.index())
-            .filter(|recipe| recipe.id == recipe_id)
+            .recipe(recipe_id)
             .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
         if recipe.category != CraftingCategory::Crafting {
             return Err(AssemblerError::InvalidRecipe(recipe_id));
@@ -930,9 +893,7 @@ impl Simulation {
         let recipe = self
             .world
             .prototypes
-            .recipes
-            .get(recipe_id.index())
-            .filter(|recipe| recipe.id == recipe_id)
+            .recipe(recipe_id)
             .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
         if recipe.category != CraftingCategory::Crafting {
             return Err(AssemblerError::InvalidRecipe(recipe_id));

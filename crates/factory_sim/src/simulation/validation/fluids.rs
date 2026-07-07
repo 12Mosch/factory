@@ -3,7 +3,7 @@ use super::ids::*;
 
 pub(super) fn validate_fluid_box_states(sim: &Simulation) -> Result<(), SimValidationError> {
     for placed in sim.entities.placed_entities.values() {
-        let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+        let prototype = sim.world.prototypes.entity(placed.prototype_id).ok_or(
             SimValidationError::InvalidEntityPrototype {
                 entity_id: placed.id,
                 prototype_id: placed.prototype_id,
@@ -108,10 +108,11 @@ pub(super) fn validate_fluid_network_snapshots(sim: &Simulation) -> Result<(), S
                     network_id: network.network_id,
                 },
             )?;
-            let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id)
-                .ok_or(SimValidationError::InvalidFluidNetwork {
+            let prototype = sim.world.prototypes.entity(placed.prototype_id).ok_or(
+                SimValidationError::InvalidFluidNetwork {
                     network_id: network.network_id,
-                })?;
+                },
+            )?;
             let fluid_box = prototype.fluid_boxes.get(box_snapshot.box_index).ok_or(
                 SimValidationError::InvalidFluidNetwork {
                     network_id: network.network_id,

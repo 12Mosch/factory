@@ -191,9 +191,7 @@ impl Simulation {
                 let prototype = self
                     .world
                     .prototypes
-                    .entities
-                    .get(placed.prototype_id.index())
-                    .filter(|prototype| prototype.id == placed.prototype_id)?
+                    .entity(placed.prototype_id)?
                     .electric_pole
                     .as_ref()?;
                 let (center_x2, center_y2) = footprint_center_x2(&placed.footprint);
@@ -217,9 +215,7 @@ impl Simulation {
                 let energy_source = self
                     .world
                     .prototypes
-                    .entities
-                    .get(placed.prototype_id.index())
-                    .filter(|prototype| prototype.id == placed.prototype_id)?
+                    .entity(placed.prototype_id)?
                     .electric_energy_source
                     .as_ref()?;
                 let active_usage_watts = if self.electric_consumer_can_work(*entity_id) {
@@ -293,13 +289,7 @@ impl Simulation {
         let Some(technology_id) = state.active_technology.or(self.research.active) else {
             return false;
         };
-        let Some(technology) = self
-            .world
-            .prototypes
-            .technologies
-            .get(technology_id.index())
-            .filter(|technology| technology.id == technology_id)
-        else {
+        let Some(technology) = self.world.prototypes.technology(technology_id) else {
             return false;
         };
 
@@ -307,13 +297,7 @@ impl Simulation {
     }
 
     fn inserter_can_work(&self, placed: &PlacedEntity, state: &InserterState) -> bool {
-        let Some(prototype) = self
-            .world
-            .prototypes
-            .entities
-            .get(placed.prototype_id.index())
-            .filter(|prototype| prototype.id == placed.prototype_id)
-        else {
+        let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
             return false;
         };
         let Some(inserter) = prototype.inserter.as_ref() else {
@@ -440,9 +424,7 @@ impl Simulation {
         let placed = self.entities.placed_entity(engine_id)?;
         self.world
             .prototypes
-            .entities
-            .get(placed.prototype_id.index())
-            .filter(|prototype| prototype.id == placed.prototype_id)?
+            .entity(placed.prototype_id)?
             .steam_engine
             .as_ref()
     }

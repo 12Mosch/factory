@@ -1,13 +1,11 @@
-use factory_data::{CraftingCategory, FluidId, ItemId, PrototypeCatalog, RecipeId};
+use factory_data::{CraftingCategory, FluidId, ItemId, PrototypeCatalog};
 use factory_sim::{EntityId, ItemStack, Simulation};
 
 use crate::utils::compact_item_name;
 
 pub(crate) fn format_item_stack(stack: ItemStack, catalog: &PrototypeCatalog) -> String {
     let name = catalog
-        .items
-        .get(stack.item_id.index())
-        .filter(|item| item.id == stack.item_id)
+        .item(stack.item_id)
         .map(|item| item.name.as_str())
         .unwrap_or("unknown");
     format!("{}\n{}", compact_item_name(name), stack.count)
@@ -51,7 +49,7 @@ pub fn format_assembler_detail_text(
     let state = sim.assembler_state(entity_id).ok()?;
     let Some(recipe) = state
         .selected_recipe
-        .and_then(|recipe_id| recipe_by_id(sim.catalog(), recipe_id))
+        .and_then(|recipe_id| sim.catalog().recipe(recipe_id))
     else {
         return Some(AssemblerDetailText::empty());
     };
@@ -106,30 +104,16 @@ pub fn format_assembler_detail_text(
     })
 }
 
-pub(crate) fn recipe_by_id(
-    catalog: &PrototypeCatalog,
-    recipe_id: RecipeId,
-) -> Option<&factory_data::RecipePrototype> {
-    catalog
-        .recipes
-        .get(recipe_id.index())
-        .filter(|recipe| recipe.id == recipe_id)
-}
-
 pub(crate) fn format_item_display_name(catalog: &PrototypeCatalog, item_id: ItemId) -> String {
     catalog
-        .items
-        .get(item_id.index())
-        .filter(|item| item.id == item_id)
+        .item(item_id)
         .map(|item| format_recipe_display_name(&item.name))
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
 pub(crate) fn format_fluid_display_name(catalog: &PrototypeCatalog, fluid_id: FluidId) -> String {
     catalog
-        .fluids
-        .get(fluid_id.index())
-        .filter(|fluid| fluid.id == fluid_id)
+        .fluid(fluid_id)
         .map(|fluid| format_recipe_display_name(&fluid.name))
         .unwrap_or_else(|| "Unknown".to_string())
 }

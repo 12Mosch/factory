@@ -419,11 +419,7 @@ fn machine_loop_candidate(
         return None;
     }
     let placed = sim.entities().placed_entity(entity_id)?;
-    let prototype = sim
-        .catalog()
-        .entities
-        .get(placed.prototype_id.index())
-        .filter(|prototype| prototype.id == placed.prototype_id)?;
+    let prototype = sim.catalog().entity(placed.prototype_id)?;
     let loop_kind = match prototype.entity_kind {
         EntityKind::MiningDrill | EntityKind::Furnace | EntityKind::Boiler => {
             MachineLoopKind::Burner

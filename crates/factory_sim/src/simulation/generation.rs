@@ -395,17 +395,13 @@ pub(super) fn technology_id(prototypes: &PrototypeCatalog, name: &str) -> Techno
 
 pub(super) fn item_stack_size(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u16> {
     prototypes
-        .items
-        .get(item_id.index())
-        .filter(|prototype| prototype.id == item_id)
+        .item(item_id)
         .map(|prototype| prototype.stack_size)
 }
 
 pub(super) fn fuel_value_joules(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u64> {
     prototypes
-        .items
-        .get(item_id.index())
-        .filter(|prototype| prototype.id == item_id)
+        .item(item_id)
         .and_then(|prototype| prototype.fuel_value_joules)
 }
 

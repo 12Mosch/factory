@@ -32,12 +32,7 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
         let Some(item_id) = entity.build_item else {
             continue;
         };
-        if catalog
-            .items
-            .get(item_id.index())
-            .filter(|item| item.id == item_id)
-            .is_none()
-        {
+        if catalog.item(item_id).is_none() {
             continue;
         }
 
@@ -211,17 +206,13 @@ pub(crate) fn entity_display_name(
     prototype_id: EntityPrototypeId,
 ) -> Option<String> {
     catalog
-        .entities
-        .get(prototype_id.index())
-        .filter(|prototype| prototype.id == prototype_id)
+        .entity(prototype_id)
         .map(|prototype| display_name(&prototype.name))
 }
 
 fn item_display_name(catalog: &PrototypeCatalog, item_id: ItemId) -> Option<String> {
     catalog
-        .items
-        .get(item_id.index())
-        .filter(|prototype| prototype.id == item_id)
+        .item(item_id)
         .map(|prototype| display_name(&prototype.name))
 }
 

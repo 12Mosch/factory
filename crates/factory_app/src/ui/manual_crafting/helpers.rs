@@ -82,7 +82,7 @@ fn recipe_startable_for_tab(
 }
 
 pub(crate) fn craftable_for_player(sim: &Simulation, recipe_id: RecipeId) -> bool {
-    let Some(recipe) = recipe_by_id(sim.catalog(), recipe_id) else {
+    let Some(recipe) = sim.catalog().recipe(recipe_id) else {
         return false;
     };
     let ingredients = aggregate_amounts(&recipe.ingredients);
@@ -221,7 +221,9 @@ pub(crate) fn queue_snapshot(sim: &Simulation) -> Vec<String> {
         .iter()
         .enumerate()
         .map(|(index, job)| {
-            let recipe_name = recipe_by_id(sim.catalog(), job.recipe_id)
+            let recipe_name = sim
+                .catalog()
+                .recipe(job.recipe_id)
                 .map(|recipe| format_recipe_display_name(&recipe.name))
                 .unwrap_or_else(|| "Unknown".to_string());
             let mut line = format!("{recipe_name}: {} ticks remaining", job.remaining_ticks);
@@ -240,7 +242,7 @@ fn front_job_waiting_for_space(sim: &Simulation) -> bool {
     if job.remaining_ticks != 0 {
         return false;
     }
-    let Some(recipe) = recipe_by_id(sim.catalog(), job.recipe_id) else {
+    let Some(recipe) = sim.catalog().recipe(job.recipe_id) else {
         return false;
     };
 
@@ -254,13 +256,6 @@ fn front_job_waiting_for_space(sim: &Simulation) -> bool {
         }
     }
     false
-}
-
-fn recipe_by_id(catalog: &PrototypeCatalog, recipe_id: RecipeId) -> Option<&RecipePrototype> {
-    catalog
-        .recipes
-        .get(recipe_id.index())
-        .filter(|recipe| recipe.id == recipe_id)
 }
 
 #[cfg(test)]

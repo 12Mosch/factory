@@ -525,8 +525,7 @@ fn label_translation(mut translation: Vec3) -> Vec3 {
 fn belt_item_label(sim: &Simulation, item_id: ItemId) -> String {
     let name = sim
         .catalog()
-        .items
-        .get(item_id.index())
+        .item(item_id)
         .map(|item| item.name.as_str())
         .unwrap_or("?");
     compact_item_name(name)
@@ -675,8 +674,7 @@ fn transport_item_label_render_state(
     };
     let name = sim
         .catalog()
-        .items
-        .get(item_id.index())
+        .item(item_id)
         .map(|item| item.name.as_str())
         .unwrap_or("?");
 
