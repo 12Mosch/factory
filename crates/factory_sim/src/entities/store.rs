@@ -1,37 +1,95 @@
 use crate::entities::{Direction, EntityFootprint, OccupancyGrid};
-use crate::fluids::FluidBoxState;
 use crate::ids::EntityId;
-use crate::inventory::Inventory;
-use crate::logistics::{BeltSegment, InserterState, SplitterState};
-use crate::machines::{AssemblingMachineState, BurnerMiningDrillState, FurnaceState, LabState};
-use crate::power::{
-    BoilerState, ElectricConsumerState, ElectricPoleState, OffshorePumpState, SteamEngineState,
-};
-use factory_data::EntityPrototypeId;
+use factory_data::{EntityKind, EntityPrototypeId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
-pub struct EntityStore {
-    pub(crate) entities: Vec<SimEntity>,
-    pub(crate) placed_entities: BTreeMap<EntityId, PlacedEntity>,
-    pub(crate) entity_inventories: BTreeMap<EntityId, Inventory>,
-    pub(crate) burner_mining_drills: BTreeMap<EntityId, BurnerMiningDrillState>,
-    pub(crate) furnaces: BTreeMap<EntityId, FurnaceState>,
-    pub(crate) assembling_machines: BTreeMap<EntityId, AssemblingMachineState>,
-    pub(crate) labs: BTreeMap<EntityId, LabState>,
-    pub(crate) electric_poles: BTreeMap<EntityId, ElectricPoleState>,
-    pub(crate) electric_consumers: BTreeMap<EntityId, ElectricConsumerState>,
-    pub(crate) steam_engines: BTreeMap<EntityId, SteamEngineState>,
-    pub(crate) boilers: BTreeMap<EntityId, BoilerState>,
-    pub(crate) offshore_pumps: BTreeMap<EntityId, OffshorePumpState>,
-    pub(crate) fluid_boxes: BTreeMap<EntityId, Vec<FluidBoxState>>,
-    pub(crate) transport_belts: BTreeMap<EntityId, BeltSegment>,
-    pub(crate) splitters: BTreeMap<EntityId, SplitterState>,
-    pub(crate) inserters: BTreeMap<EntityId, InserterState>,
-    pub(crate) occupancy: OccupancyGrid,
-    pub(crate) next_entity_id: u64,
+/// Single source of truth for the per-kind entity state maps in [`EntityStore`].
+///
+/// Each entry is `map_field: StateType => OwnerTag`, where `OwnerTag` is the
+/// [`EntityKind`] variant that owns the state, or `_` for auxiliary state that
+/// several kinds share (electric consumers, fluid boxes). Entry order defines
+/// the save-file field order; append new entries and bump `SAVE_VERSION` when
+/// changing it.
+///
+/// Invoked with a callback macro, it expands the list wherever per-kind
+/// bookkeeping is needed: the store struct itself, `EntityReservation`,
+/// state insertion/removal, ownership validation, per-state validation, and
+/// destroy recovery. Adding a new machine kind means adding one entry here,
+/// implementing `EntityStateBehavior` for its state type, and giving it an
+/// initial state in `machine_ops/state.rs`; the compiler flags every other
+/// site that must react.
+macro_rules! for_each_entity_state_map {
+    ($callback:ident) => {
+        $callback! {
+            entity_inventories: crate::inventory::Inventory => Chest,
+            burner_mining_drills: crate::machines::BurnerMiningDrillState => MiningDrill,
+            furnaces: crate::machines::FurnaceState => Furnace,
+            assembling_machines: crate::machines::AssemblingMachineState => AssemblingMachine,
+            labs: crate::machines::LabState => Lab,
+            electric_poles: crate::power::ElectricPoleState => ElectricPole,
+            electric_consumers: crate::power::ElectricConsumerState => _,
+            steam_engines: crate::power::SteamEngineState => SteamEngine,
+            boilers: crate::power::BoilerState => Boiler,
+            offshore_pumps: crate::power::OffshorePumpState => OffshorePump,
+            fluid_boxes: Vec<crate::fluids::FluidBoxState> => _,
+            transport_belts: crate::logistics::BeltSegment => TransportBelt,
+            splitters: crate::logistics::SplitterState => Splitter,
+            inserters: crate::logistics::InserterState => Inserter,
+        }
+    };
 }
+pub(crate) use for_each_entity_state_map;
+
+macro_rules! machine_kind_check {
+    ($self:ident, $entity_id:ident, $field:ident, _) => {};
+    ($self:ident, $entity_id:ident, $field:ident, $kind:ident) => {
+        if $self.$field.contains_key(&$entity_id) {
+            return Some(EntityKind::$kind);
+        }
+    };
+}
+
+macro_rules! define_entity_store {
+    ($($field:ident : $ty:ty => $kind:tt),* $(,)?) => {
+        #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
+        pub struct EntityStore {
+            pub(crate) entities: Vec<SimEntity>,
+            pub(crate) placed_entities: BTreeMap<EntityId, PlacedEntity>,
+            $(pub(crate) $field: BTreeMap<EntityId, $ty>,)*
+            pub(crate) occupancy: OccupancyGrid,
+            pub(crate) next_entity_id: u64,
+        }
+
+        impl EntityStore {
+            /// Store without entities; `next_entity_id` seeds the id allocator.
+            pub(crate) fn empty(next_entity_id: u64) -> Self {
+                Self {
+                    entities: Vec::new(),
+                    placed_entities: BTreeMap::new(),
+                    $($field: BTreeMap::new(),)*
+                    occupancy: OccupancyGrid::default(),
+                    next_entity_id,
+                }
+            }
+
+            /// Removes every per-kind state entry owned by `entity_id`.
+            pub(crate) fn remove_entity_states(&mut self, entity_id: EntityId) {
+                $(self.$field.remove(&entity_id);)*
+            }
+
+            /// The machine kind backing `entity_id`, derived from which state
+            /// map owns it. Auxiliary state (electric consumers, fluid boxes)
+            /// never determines the kind. Returns `None` for entities without
+            /// per-kind state.
+            pub fn machine_kind(&self, entity_id: EntityId) -> Option<EntityKind> {
+                $(machine_kind_check!(self, entity_id, $field, $kind);)*
+                None
+            }
+        }
+    };
+}
+for_each_entity_state_map!(define_entity_store);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct SimEntity {
@@ -82,26 +140,7 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore {
-            entities: Vec::new(),
-            placed_entities: BTreeMap::new(),
-            entity_inventories: BTreeMap::new(),
-            burner_mining_drills: BTreeMap::new(),
-            furnaces: BTreeMap::new(),
-            assembling_machines: BTreeMap::new(),
-            labs: BTreeMap::new(),
-            electric_poles: BTreeMap::new(),
-            electric_consumers: BTreeMap::new(),
-            steam_engines: BTreeMap::new(),
-            boilers: BTreeMap::new(),
-            offshore_pumps: BTreeMap::new(),
-            fluid_boxes: BTreeMap::new(),
-            transport_belts: BTreeMap::new(),
-            splitters: BTreeMap::new(),
-            inserters: BTreeMap::new(),
-            occupancy: OccupancyGrid::default(),
-            next_entity_id: 15,
-        };
+        let mut store = EntityStore::empty(15);
 
         for raw in 1..=14 {
             let id = EntityId::new(raw);
