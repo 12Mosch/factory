@@ -24,6 +24,10 @@ fn technology_screen_start_button_updates_research_state() {
     for mut interaction in query.iter_mut(app.world_mut()) {
         *interaction = Interaction::Pressed;
     }
+    // The button click queues a SimCommand in `Update`; the fixed tick that
+    // drains it runs before `Update` on a later frame, so the effect is only
+    // observable after a second `app.update()`.
+    app.update();
     app.update();
 
     assert_eq!(

@@ -13,6 +13,7 @@ use crate::resources::{
     BuildPlacementState, MapTextureCache, MapViewState, OpenContainer, SimResource,
     VisibleEntityIds,
 };
+use crate::simulation::SimCommandRequest;
 
 pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [
     SaveSlotKind::Manual(1),
@@ -305,6 +306,7 @@ pub(crate) struct LoadState<'w> {
     pub(crate) resource_cache: ResMut<'w, ResourceRenderCache>,
     pub(crate) visible_entity_ids: ResMut<'w, VisibleEntityIds>,
     pub(crate) reload_token: ResMut<'w, PresentationReloadToken>,
+    pub(crate) pending_commands: ResMut<'w, Messages<SimCommandRequest>>,
 }
 
 pub(crate) fn load_slot(
@@ -341,6 +343,9 @@ pub(crate) fn load_slot(
         Ok(loaded) => {
             let tick = loaded.tick_count();
             state.sim.sim = loaded;
+            // Commands queued against the previous world must not apply to
+            // the loaded one.
+            state.pending_commands.clear();
             state.build_state.selected = None;
             state.build_state.last_status = Default::default();
             state.open_container.entity_id = None;

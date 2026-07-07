@@ -11,22 +11,6 @@ pub(crate) enum OpenMachineKind {
     Lab,
 }
 
-pub(crate) fn is_burner_drill_entity(sim: &Simulation, entity_id: EntityId) -> bool {
-    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::BurnerDrill)
-}
-
-pub(crate) fn is_furnace_entity(sim: &Simulation, entity_id: EntityId) -> bool {
-    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Furnace)
-}
-
-pub(crate) fn is_boiler_entity(sim: &Simulation, entity_id: EntityId) -> bool {
-    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Boiler)
-}
-
-pub(crate) fn is_assembler_entity(sim: &Simulation, entity_id: EntityId) -> bool {
-    open_machine_kind(sim, entity_id) == Some(OpenMachineKind::Assembler)
-}
-
 pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option<OpenMachineKind> {
     match sim.machine_kind(entity_id)? {
         EntityKind::Chest => Some(OpenMachineKind::Chest),

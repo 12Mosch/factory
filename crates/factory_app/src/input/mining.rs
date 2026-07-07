@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use factory_sim::ManualMiningTarget;
+use factory_sim::{ManualMiningTarget, SimCommand};
 
 use crate::input::panels::world_input_blocked;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
-use crate::resources::{AppInputState, SimResource, TechnologyWindowState};
+use crate::resources::{AppInputState, TechnologyWindowState};
+use crate::simulation::SimCommandRequest;
 
 pub(crate) fn update_manual_mining_from_input(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
@@ -12,19 +13,19 @@ pub(crate) fn update_manual_mining_from_input(
     technology_window: Option<Res<TechnologyWindowState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
-    mut sim: ResMut<SimResource>,
+    mut commands: MessageWriter<SimCommandRequest>,
 ) {
-    if world_input_blocked(input_state.as_deref())
-        || technology_window.as_deref().is_some_and(|state| state.open)
-    {
-        sim.sim.update_manual_mining(None);
-        return;
-    }
+    let blocked = world_input_blocked(input_state.as_deref())
+        || technology_window.as_deref().is_some_and(|state| state.open);
 
-    let target = mouse
-        .filter(|mouse| mouse.pressed(MouseButton::Right))
-        .and_then(|_| cursor_tile_from_window(&windows, &cameras))
-        .map(|(x, y)| ManualMiningTarget { x, y });
+    let target = if blocked {
+        None
+    } else {
+        mouse
+            .filter(|mouse| mouse.pressed(MouseButton::Right))
+            .and_then(|_| cursor_tile_from_window(&windows, &cameras))
+            .map(|(x, y)| ManualMiningTarget { x, y })
+    };
 
-    sim.sim.update_manual_mining(target);
+    commands.write(SimCommandRequest(SimCommand::SetManualMiningTarget(target)));
 }

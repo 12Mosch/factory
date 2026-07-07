@@ -95,7 +95,7 @@ pub fn short_inventory_need(catalog: &PrototypeCatalog, item_id: ItemId) -> Stri
     )
 }
 
-fn build_status_from_error(
+pub(crate) fn build_status_from_error(
     catalog: &PrototypeCatalog,
     error: PlayerBuildError,
 ) -> BuildPlacementStatus {

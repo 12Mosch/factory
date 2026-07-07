@@ -1,16 +1,15 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use factory_sim::SimCommand;
 
-use crate::audio::SoundEvent;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
-use crate::placement::build::{
-    entity_display_name, next_direction, place_selected_building_at_tile, short_inventory_need,
-};
+use crate::placement::build::{entity_display_name, next_direction, short_inventory_need};
 use crate::resources::{
     AppInputState, BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT,
     HotbarState, SimResource, TechnologyWindowState,
 };
+use crate::simulation::SimCommandRequest;
 
 use super::panels::{escape_consumed, world_input_blocked};
 
@@ -18,9 +17,8 @@ use super::panels::{escape_consumed, world_input_blocked};
 pub(crate) struct BuildWorldClickState<'w> {
     input_state: Option<Res<'w, AppInputState>>,
     technology_window: Option<Res<'w, TechnologyWindowState>>,
-    sim: ResMut<'w, SimResource>,
-    build_state: ResMut<'w, BuildPlacementState>,
-    sounds: MessageWriter<'w, SoundEvent>,
+    build_state: Res<'w, BuildPlacementState>,
+    commands: MessageWriter<'w, SimCommandRequest>,
 }
 
 pub(crate) fn handle_build_hotbar_keys(
@@ -111,23 +109,15 @@ pub(crate) fn handle_build_world_click(
         return;
     };
 
-    let direction = state.build_state.direction;
-    state.build_state.last_status =
-        place_selected_building_at_tile(&mut state.sim.sim, selection, direction, x, y);
-    match &state.build_state.last_status {
-        BuildPlacementStatus::Placed(_) => {
-            state.sounds.write(SoundEvent::Place);
-        }
-        BuildPlacementStatus::CannotPlace(_)
-        | BuildPlacementStatus::MissingInventory(_)
-        | BuildPlacementStatus::Locked(_) => {
-            state.sounds.write(SoundEvent::PlaceError);
-        }
-        BuildPlacementStatus::Ready => {}
-    }
-    if state.sim.sim.player_inventory().count(selection.item_id) == 0 {
-        state.build_state.selected = None;
-    }
+    state.commands.write(SimCommandRequest(
+        SimCommand::PlaceEntityFromPlayerInventory {
+            prototype_id: selection.prototype_id,
+            item_id: selection.item_id,
+            x,
+            y,
+            direction: state.build_state.direction,
+        },
+    ));
 }
 
 pub fn select_build_slot(

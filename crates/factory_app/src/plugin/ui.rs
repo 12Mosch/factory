@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use super::AppSet;
 use crate::input::build::handle_build_world_click;
+use crate::interaction::command_feedback::handle_sim_command_results;
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
@@ -72,10 +73,12 @@ impl Plugin for UiPlugin {
                     // it so the container window hides on the same frame.
                     sync_container_window.after(handle_build_menu_buttons),
                     handle_container_slot_clicks.in_set(AppSet::UiInteraction),
+                    handle_sim_command_results.in_set(AppSet::UiInteraction),
                     update_container_slot_text,
                     update_inventory_transfer_feedback_text
                         .after(sync_container_window)
-                        .after(handle_container_slot_clicks),
+                        .after(handle_container_slot_clicks)
+                        .after(handle_sim_command_results),
                     update_burner_drill_indicators,
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
