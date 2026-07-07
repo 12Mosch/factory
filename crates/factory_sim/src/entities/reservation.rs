@@ -7,6 +7,10 @@ macro_rules! define_entity_reservation {
     ($($field:ident : $ty:ty => $kind:tt),* $(,)?) => {
         /// Placement request for a new entity: its footprint plus the initial
         /// per-kind state entries to insert, one optional slot per state map.
+        ///
+        /// Deliberately has no constructor with defaults: construction sites
+        /// must write an exhaustive struct literal, so the compiler flags them
+        /// when the registry gains a new state map.
         pub(crate) struct EntityReservation {
             pub(crate) prototype_id: EntityPrototypeId,
             pub(crate) x: i32,
@@ -14,26 +18,6 @@ macro_rules! define_entity_reservation {
             pub(crate) direction: Direction,
             pub(crate) footprint: EntityFootprint,
             $(pub(crate) $field: Option<$ty>,)*
-        }
-
-        impl EntityReservation {
-            /// Reservation without any per-kind state.
-            pub(crate) fn new(
-                prototype_id: EntityPrototypeId,
-                x: i32,
-                y: i32,
-                direction: Direction,
-                footprint: EntityFootprint,
-            ) -> Self {
-                Self {
-                    prototype_id,
-                    x,
-                    y,
-                    direction,
-                    footprint,
-                    $($field: None,)*
-                }
-            }
         }
 
         impl EntityStore {

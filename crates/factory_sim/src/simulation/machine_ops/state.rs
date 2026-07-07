@@ -2,7 +2,9 @@ use crate::simulation::*;
 
 /// Builds the placement reservation for `prototype`, filling in the initial
 /// state for every state map the entity participates in. This is the single
-/// place that decides which per-kind state a freshly placed entity gets.
+/// place that decides which per-kind state a freshly placed entity gets; the
+/// exhaustive struct literal makes the compiler reject a registry entry
+/// without an initializer here.
 pub(in crate::simulation) fn reservation_for_prototype(
     prototype: &factory_data::EntityPrototype,
     prototype_id: EntityPrototypeId,
@@ -11,22 +13,27 @@ pub(in crate::simulation) fn reservation_for_prototype(
     direction: Direction,
     footprint: EntityFootprint,
 ) -> EntityReservation {
-    let mut reservation = EntityReservation::new(prototype_id, x, y, direction, footprint);
-    reservation.entity_inventories = chest_inventory_for_prototype(prototype);
-    reservation.burner_mining_drills = burner_mining_drill_state_for_prototype(prototype);
-    reservation.furnaces = furnace_state_for_prototype(prototype);
-    reservation.assembling_machines = assembling_machine_state_for_prototype(prototype);
-    reservation.labs = lab_state_for_prototype(prototype);
-    reservation.electric_poles = electric_pole_state_for_prototype(prototype);
-    reservation.electric_consumers = electric_consumer_state_for_prototype(prototype);
-    reservation.steam_engines = steam_engine_state_for_prototype(prototype);
-    reservation.boilers = boiler_state_for_prototype(prototype);
-    reservation.offshore_pumps = offshore_pump_state_for_prototype(prototype);
-    reservation.fluid_boxes = fluid_box_states_for_prototype(prototype);
-    reservation.transport_belts = transport_belt_segment_for_prototype(prototype, direction);
-    reservation.splitters = splitter_state_for_prototype(prototype, direction);
-    reservation.inserters = inserter_state_for_prototype(prototype);
-    reservation
+    EntityReservation {
+        prototype_id,
+        x,
+        y,
+        direction,
+        footprint,
+        entity_inventories: chest_inventory_for_prototype(prototype),
+        burner_mining_drills: burner_mining_drill_state_for_prototype(prototype),
+        furnaces: furnace_state_for_prototype(prototype),
+        assembling_machines: assembling_machine_state_for_prototype(prototype),
+        labs: lab_state_for_prototype(prototype),
+        electric_poles: electric_pole_state_for_prototype(prototype),
+        electric_consumers: electric_consumer_state_for_prototype(prototype),
+        steam_engines: steam_engine_state_for_prototype(prototype),
+        boilers: boiler_state_for_prototype(prototype),
+        offshore_pumps: offshore_pump_state_for_prototype(prototype),
+        fluid_boxes: fluid_box_states_for_prototype(prototype),
+        transport_belts: transport_belt_segment_for_prototype(prototype, direction),
+        splitters: splitter_state_for_prototype(prototype, direction),
+        inserters: inserter_state_for_prototype(prototype),
+    }
 }
 
 fn chest_inventory_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<Inventory> {
