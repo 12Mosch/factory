@@ -25,8 +25,16 @@ pub(super) fn validate_entity_occupancy(entities: &EntityStore) -> Result<(), Si
 }
 
 macro_rules! ownership_check {
-    // Auxiliary state maps (`_` entries) have dedicated owner checks below.
-    ($sim:ident, $field:ident, _) => {};
+    // Auxiliary state maps (`_` entries) are shared across kinds, so they
+    // only get a generic orphan check here; maps with kind-specific owner
+    // rules additionally need a dedicated check below.
+    ($sim:ident, $field:ident, _) => {
+        for entity_id in $sim.entities.$field.keys() {
+            if !$sim.entities.placed_entities.contains_key(entity_id) {
+                return Err(SimValidationError::OrphanEntityState(*entity_id));
+            }
+        }
+    };
     ($sim:ident, $field:ident, $kind:ident) => {
         for entity_id in $sim.entities.$field.keys() {
             validate_entity_state_kind($sim, *entity_id, EntityKind::$kind)?;

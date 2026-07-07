@@ -78,19 +78,16 @@ pub(crate) fn sync_container_window(
         .with_children(|root| {
             spawn_player_inventory_panel(root);
             match kind {
-                OpenMachineKind::Chest | OpenMachineKind::Lab => {
-                    let title = match kind {
-                        OpenMachineKind::Chest => "Chest",
-                        _ => "Lab",
-                    };
-                    let slot_count = sim
-                        .sim
-                        .entity_inventory(entity_id)
-                        .expect("open container should expose inventory")
-                        .slots
-                        .len();
-                    spawn_container_inventory_panel(root, title, slot_count);
-                }
+                OpenMachineKind::Chest => spawn_container_inventory_panel(
+                    root,
+                    "Chest",
+                    container_slot_count(&sim.sim, entity_id),
+                ),
+                OpenMachineKind::Lab => spawn_container_inventory_panel(
+                    root,
+                    "Lab",
+                    container_slot_count(&sim.sim, entity_id),
+                ),
                 OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
                 OpenMachineKind::Furnace => spawn_furnace_panel(root),
                 OpenMachineKind::Boiler => spawn_boiler_panel(root),
@@ -104,6 +101,13 @@ pub(crate) fn sync_container_window(
             }
             spawn_inventory_transfer_feedback(root);
         });
+}
+
+fn container_slot_count(sim: &factory_sim::Simulation, entity_id: EntityId) -> usize {
+    sim.entity_inventory(entity_id)
+        .expect("open container should expose inventory")
+        .slots
+        .len()
 }
 
 pub(crate) fn spawn_container_inventory_panel(

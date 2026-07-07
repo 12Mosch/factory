@@ -7,18 +7,20 @@ use super::*;
 /// Per-kind behavior of an entity state map value. Every state type listed in
 /// `for_each_entity_state_map!` must implement this; registry-generated code
 /// dispatches through it for destroy recovery and save validation.
+///
+/// Both methods are deliberately required: a state type that holds no items
+/// or needs no validation must say so with an explicit no-op body instead of
+/// silently inheriting one.
 pub(crate) trait EntityStateBehavior {
     /// Items handed back to the player when the owning entity is destroyed.
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>);
 
     /// Validates the state against the catalog and simulation invariants.
     fn validate_state(
         &self,
-        _sim: &Simulation,
-        _entity_id: EntityId,
-    ) -> Result<(), SimValidationError> {
-        Ok(())
-    }
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError>;
 }
 
 impl EntityStateBehavior for Inventory {
@@ -95,9 +97,21 @@ impl EntityStateBehavior for LabState {
     }
 }
 
-impl EntityStateBehavior for ElectricPoleState {}
+impl EntityStateBehavior for ElectricPoleState {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        _sim: &Simulation,
+        _entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        Ok(())
+    }
+}
 
 impl EntityStateBehavior for ElectricConsumerState {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
     fn validate_state(
         &self,
         _sim: &Simulation,
@@ -111,7 +125,17 @@ impl EntityStateBehavior for ElectricConsumerState {
     }
 }
 
-impl EntityStateBehavior for SteamEngineState {}
+impl EntityStateBehavior for SteamEngineState {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        _sim: &Simulation,
+        _entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        Ok(())
+    }
+}
 
 impl EntityStateBehavior for BoilerState {
     fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
@@ -127,11 +151,31 @@ impl EntityStateBehavior for BoilerState {
     }
 }
 
-impl EntityStateBehavior for OffshorePumpState {}
+impl EntityStateBehavior for OffshorePumpState {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        _sim: &Simulation,
+        _entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        Ok(())
+    }
+}
 
 // Fluid box contents are validated network-wide by `validate_fluid_box_states`
 // and hold no recoverable items.
-impl EntityStateBehavior for Vec<FluidBoxState> {}
+impl EntityStateBehavior for Vec<FluidBoxState> {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        _sim: &Simulation,
+        _entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        Ok(())
+    }
+}
 
 impl EntityStateBehavior for BeltSegment {
     fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {

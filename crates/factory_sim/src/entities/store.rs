@@ -80,9 +80,13 @@ macro_rules! define_entity_store {
 
             /// The machine kind backing `entity_id`, derived from which state
             /// map owns it. Auxiliary state (electric consumers, fluid boxes)
-            /// never determines the kind. Returns `None` for entities without
-            /// per-kind state.
+            /// never determines the kind. Returns `None` for entities that are
+            /// not placed or carry no per-kind state, so orphaned state
+            /// entries are never reported as a valid kind.
             pub fn machine_kind(&self, entity_id: EntityId) -> Option<EntityKind> {
+                if !self.placed_entities.contains_key(&entity_id) {
+                    return None;
+                }
                 $(machine_kind_check!(self, entity_id, $field, $kind);)*
                 None
             }
@@ -122,6 +126,29 @@ mod tests {
         BoilerState, ElectricConsumerState, ElectricPoleState, OffshorePumpState, SteamEngineState,
     };
     use factory_data::{FluidId, ItemId, RecipeId, TechnologyId};
+
+    #[test]
+    fn entity_store_serialized_layout_is_stable() {
+        // Golden fixture for the serialized `EntityStore` layout. A failure
+        // means the save format changed (field order, field types, or state
+        // added to the registry): update the constant and bump `SAVE_VERSION`
+        // only for intentional format changes.
+        const EXPECTED_LAYOUT_HASH: u64 = 0xb956_31cb_52d8_e310;
+
+        let bytes =
+            bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
+
+        assert_eq!(fnv1a_64(&bytes), EXPECTED_LAYOUT_HASH);
+    }
+
+    fn fnv1a_64(bytes: &[u8]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for &byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash
+    }
 
     #[test]
     fn entity_store_round_trip_preserves_populated_state() {
