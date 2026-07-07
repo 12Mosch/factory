@@ -24,54 +24,34 @@ pub(super) fn validate_entity_occupancy(entities: &EntityStore) -> Result<(), Si
     Ok(())
 }
 
-pub(super) fn validate_entity_state_ownership_and_kind(
-    sim: &Simulation,
-) -> Result<(), SimValidationError> {
-    for entity_id in sim.entities.entity_inventories.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::Chest)?;
-    }
-    for entity_id in sim.entities.burner_mining_drills.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::MiningDrill)?;
-    }
-    for entity_id in sim.entities.furnaces.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::Furnace)?;
-    }
-    for entity_id in sim.entities.assembling_machines.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::AssemblingMachine)?;
-    }
-    for entity_id in sim.entities.labs.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::Lab)?;
-    }
-    for entity_id in sim.entities.electric_poles.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::ElectricPole)?;
-    }
-    for entity_id in sim.entities.electric_consumers.keys() {
-        validate_electric_consumer_owner(sim, *entity_id)?;
-    }
-    for entity_id in sim.entities.steam_engines.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::SteamEngine)?;
-    }
-    for entity_id in sim.entities.boilers.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::Boiler)?;
-    }
-    for entity_id in sim.entities.offshore_pumps.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::OffshorePump)?;
-    }
-    for entity_id in sim.entities.fluid_boxes.keys() {
-        validate_fluid_box_owner(sim, *entity_id)?;
-    }
-    for entity_id in sim.entities.transport_belts.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::TransportBelt)?;
-    }
-    for entity_id in sim.entities.splitters.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::Splitter)?;
-    }
-    for entity_id in sim.entities.inserters.keys() {
-        validate_entity_state_kind(sim, *entity_id, EntityKind::Inserter)?;
-    }
-
-    Ok(())
+macro_rules! ownership_check {
+    // Auxiliary state maps (`_` entries) have dedicated owner checks below.
+    ($sim:ident, $field:ident, _) => {};
+    ($sim:ident, $field:ident, $kind:ident) => {
+        for entity_id in $sim.entities.$field.keys() {
+            validate_entity_state_kind($sim, *entity_id, EntityKind::$kind)?;
+        }
+    };
 }
+
+macro_rules! define_validate_entity_state_ownership {
+    ($($field:ident : $ty:ty => $kind:tt),* $(,)?) => {
+        pub(super) fn validate_entity_state_ownership_and_kind(
+            sim: &Simulation,
+        ) -> Result<(), SimValidationError> {
+            $(ownership_check!(sim, $field, $kind);)*
+            for entity_id in sim.entities.electric_consumers.keys() {
+                validate_electric_consumer_owner(sim, *entity_id)?;
+            }
+            for entity_id in sim.entities.fluid_boxes.keys() {
+                validate_fluid_box_owner(sim, *entity_id)?;
+            }
+
+            Ok(())
+        }
+    };
+}
+for_each_entity_state_map!(define_validate_entity_state_ownership);
 
 fn validate_fluid_box_owner(
     sim: &Simulation,

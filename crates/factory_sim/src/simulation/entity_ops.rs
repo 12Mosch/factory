@@ -199,45 +199,11 @@ impl Simulation {
     ) -> Result<EntityId, BuildError> {
         let footprint = self.can_place_entity(prototype_id, x, y, direction)?;
         let prototype = &self.world.prototypes.entities[prototype_id.index()];
-        let inventory_slot_count = (prototype.entity_kind == EntityKind::Chest)
-            .then_some(prototype.inventory_slot_count)
-            .flatten();
-        let burner_mining_drill = burner_mining_drill_state_for_prototype(prototype);
-        let furnace = furnace_state_for_prototype(prototype);
-        let assembling_machine = assembling_machine_state_for_prototype(prototype);
-        let lab = lab_state_for_prototype(prototype);
-        let electric_pole = electric_pole_state_for_prototype(prototype);
-        let electric_consumer = electric_consumer_state_for_prototype(prototype);
-        let steam_engine = steam_engine_state_for_prototype(prototype);
-        let boiler = boiler_state_for_prototype(prototype);
-        let offshore_pump = offshore_pump_state_for_prototype(prototype);
-        let fluid_boxes = fluid_box_states_for_prototype(prototype);
-        let transport_belt = transport_belt_segment_for_prototype(prototype, direction);
-        let splitter = splitter_state_for_prototype(prototype, direction);
-        let inserter = inserter_state_for_prototype(prototype);
+        let reservation =
+            reservation_for_prototype(prototype, prototype_id, x, y, direction, footprint);
         let affects_power_topology = self.prototype_affects_power_topology(prototype);
         let affects_transport_lane_graph = self.prototype_affects_transport_lane_graph(prototype);
-        let entity_id = self.entities.reserve_entity(EntityReservation {
-            prototype_id,
-            x,
-            y,
-            direction,
-            footprint,
-            inventory_slot_count,
-            burner_mining_drill,
-            furnace,
-            assembling_machine,
-            lab,
-            electric_pole,
-            electric_consumer,
-            steam_engine,
-            boiler,
-            offshore_pump,
-            fluid_boxes,
-            transport_belt,
-            splitter,
-            inserter,
-        });
+        let entity_id = self.entities.reserve_entity(reservation);
         if affects_power_topology {
             self.invalidate_power_state();
         }
@@ -375,50 +341,7 @@ impl Simulation {
             item_id: self.build_item_for_entity(placed.prototype_id)?,
             count: 1,
         });
-
-        if let Some(inventory) = self.entities.entity_inventories.get(&placed.id) {
-            push_inventory_stacks(&mut stacks, inventory);
-        }
-        if let Some(state) = self.entities.burner_mining_drills.get(&placed.id) {
-            push_optional_stack(&mut stacks, state.energy.fuel_slot);
-            push_optional_stack(&mut stacks, state.output_slot);
-        }
-        if let Some(state) = self.entities.furnaces.get(&placed.id) {
-            push_optional_stack(&mut stacks, state.input_slot);
-            push_optional_stack(&mut stacks, state.energy.fuel_slot);
-            push_optional_stack(&mut stacks, state.output_slot);
-        }
-        if let Some(state) = self.entities.boilers.get(&placed.id) {
-            push_optional_stack(&mut stacks, state.energy.fuel_slot);
-        }
-        if let Some(state) = self.entities.assembling_machines.get(&placed.id) {
-            push_inventory_stacks(&mut stacks, &state.input_inventory);
-            push_inventory_stacks(&mut stacks, &state.output_inventory);
-        }
-        if let Some(state) = self.entities.labs.get(&placed.id) {
-            push_inventory_stacks(&mut stacks, &state.inventory);
-        }
-        if let Some(segment) = self.entities.transport_belts.get(&placed.id) {
-            stacks.extend(segment.lanes.iter().flat_map(|lane| {
-                lane.items.iter().map(|item| ItemStack {
-                    item_id: item.item_id,
-                    count: 1,
-                })
-            }));
-        }
-        if let Some(state) = self.entities.splitters.get(&placed.id) {
-            stacks.extend(state.input_lanes.iter().flat_map(|input_lanes| {
-                input_lanes.iter().flat_map(|lane| {
-                    lane.items.iter().map(|item| ItemStack {
-                        item_id: item.item_id,
-                        count: 1,
-                    })
-                })
-            }));
-        }
-        if let Some(InserterState::Holding { item }) = self.entities.inserters.get(&placed.id) {
-            stacks.push(*item);
-        }
+        push_entity_state_recovery_stacks(&self.entities, placed.id, &mut stacks);
 
         Ok(stacks)
     }
@@ -559,6 +482,13 @@ impl Simulation {
                 });
             }
         }
+    }
+
+    /// The machine kind backing `entity_id`, derived from which state map
+    /// owns it. `None` when the entity does not exist or carries no per-kind
+    /// machine state.
+    pub fn machine_kind(&self, entity_id: EntityId) -> Option<EntityKind> {
+        self.entities.machine_kind(entity_id)
     }
 
     pub fn entity_inventory(&self, entity_id: EntityId) -> Result<&Inventory, ContainerError> {
@@ -1133,12 +1063,21 @@ impl Simulation {
     }
 }
 
-fn push_inventory_stacks(stacks: &mut Vec<ItemStack>, inventory: &Inventory) {
-    stacks.extend(inventory.slots.iter().flatten().copied());
+macro_rules! define_push_entity_state_recovery_stacks {
+    ($($field:ident : $ty:ty => $kind:tt),* $(,)?) => {
+        /// Collects the items recovered from every state entry owned by
+        /// `entity_id` when the entity is destroyed.
+        fn push_entity_state_recovery_stacks(
+            entities: &EntityStore,
+            entity_id: EntityId,
+            stacks: &mut Vec<ItemStack>,
+        ) {
+            $(
+                if let Some(state) = entities.$field.get(&entity_id) {
+                    EntityStateBehavior::push_recovery_stacks(state, stacks);
+                }
+            )*
+        }
+    };
 }
-
-fn push_optional_stack(stacks: &mut Vec<ItemStack>, stack: Option<ItemStack>) {
-    if let Some(stack) = stack {
-        stacks.push(stack);
-    }
-}
+for_each_entity_state_map!(define_push_entity_state_recovery_stacks);

@@ -26,30 +26,13 @@ impl EntityStore {
     }
 
     pub(super) fn new_test_entities(seed: u64) -> Self {
-        Self {
-            entities: vec![SimEntity {
-                id: EntityId::new(1),
-                x: (seed % 97) as i64,
-                y: (seed % 53) as i64,
-            }],
-            placed_entities: BTreeMap::new(),
-            entity_inventories: BTreeMap::new(),
-            burner_mining_drills: BTreeMap::new(),
-            furnaces: BTreeMap::new(),
-            assembling_machines: BTreeMap::new(),
-            labs: BTreeMap::new(),
-            electric_poles: BTreeMap::new(),
-            electric_consumers: BTreeMap::new(),
-            steam_engines: BTreeMap::new(),
-            boilers: BTreeMap::new(),
-            offshore_pumps: BTreeMap::new(),
-            fluid_boxes: BTreeMap::new(),
-            transport_belts: BTreeMap::new(),
-            splitters: BTreeMap::new(),
-            inserters: BTreeMap::new(),
-            occupancy: OccupancyGrid::default(),
-            next_entity_id: 2,
-        }
+        let mut store = Self::empty(2);
+        store.entities.push(SimEntity {
+            id: EntityId::new(1),
+            x: (seed % 97) as i64,
+            y: (seed % 53) as i64,
+        });
+        store
     }
 
     pub(super) fn entity_inventory(
@@ -304,49 +287,7 @@ impl EntityStore {
                 footprint: reservation.footprint,
             },
         );
-        if let Some(slot_count) = reservation.inventory_slot_count {
-            self.entity_inventories
-                .insert(id, Inventory::with_slot_count(slot_count));
-        }
-        if let Some(state) = reservation.burner_mining_drill {
-            self.burner_mining_drills.insert(id, state);
-        }
-        if let Some(state) = reservation.furnace {
-            self.furnaces.insert(id, state);
-        }
-        if let Some(state) = reservation.assembling_machine {
-            self.assembling_machines.insert(id, state);
-        }
-        if let Some(state) = reservation.lab {
-            self.labs.insert(id, state);
-        }
-        if let Some(state) = reservation.electric_pole {
-            self.electric_poles.insert(id, state);
-        }
-        if let Some(state) = reservation.electric_consumer {
-            self.electric_consumers.insert(id, state);
-        }
-        if let Some(state) = reservation.steam_engine {
-            self.steam_engines.insert(id, state);
-        }
-        if let Some(state) = reservation.boiler {
-            self.boilers.insert(id, state);
-        }
-        if let Some(state) = reservation.offshore_pump {
-            self.offshore_pumps.insert(id, state);
-        }
-        if let Some(fluid_boxes) = reservation.fluid_boxes {
-            self.fluid_boxes.insert(id, fluid_boxes);
-        }
-        if let Some(segment) = reservation.transport_belt {
-            self.transport_belts.insert(id, segment);
-        }
-        if let Some(state) = reservation.splitter {
-            self.splitters.insert(id, state);
-        }
-        if let Some(state) = reservation.inserter {
-            self.inserters.insert(id, state);
-        }
+        self.insert_reserved_states(id, reservation);
         id
     }
 
@@ -379,20 +320,7 @@ impl EntityStore {
 
     pub(super) fn remove_placed_entity(&mut self, entity_id: EntityId) -> Option<PlacedEntity> {
         let entity = self.placed_entities.remove(&entity_id)?;
-        self.entity_inventories.remove(&entity_id);
-        self.burner_mining_drills.remove(&entity_id);
-        self.furnaces.remove(&entity_id);
-        self.assembling_machines.remove(&entity_id);
-        self.labs.remove(&entity_id);
-        self.electric_poles.remove(&entity_id);
-        self.electric_consumers.remove(&entity_id);
-        self.steam_engines.remove(&entity_id);
-        self.boilers.remove(&entity_id);
-        self.offshore_pumps.remove(&entity_id);
-        self.fluid_boxes.remove(&entity_id);
-        self.transport_belts.remove(&entity_id);
-        self.splitters.remove(&entity_id);
-        self.inserters.remove(&entity_id);
+        self.remove_entity_states(entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);
         Some(entity)

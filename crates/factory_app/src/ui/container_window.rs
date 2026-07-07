@@ -78,7 +78,19 @@ pub(crate) fn sync_container_window(
         .with_children(|root| {
             spawn_player_inventory_panel(root);
             match kind {
-                OpenMachineKind::Chest => spawn_chest_panel(root),
+                OpenMachineKind::Chest | OpenMachineKind::Lab => {
+                    let title = match kind {
+                        OpenMachineKind::Chest => "Chest",
+                        _ => "Lab",
+                    };
+                    let slot_count = sim
+                        .sim
+                        .entity_inventory(entity_id)
+                        .expect("open container should expose inventory")
+                        .slots
+                        .len();
+                    spawn_container_inventory_panel(root, title, slot_count);
+                }
                 OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
                 OpenMachineKind::Furnace => spawn_furnace_panel(root),
                 OpenMachineKind::Boiler => spawn_boiler_panel(root),
@@ -89,56 +101,14 @@ pub(crate) fn sync_container_window(
                         .expect("open assembler should expose state");
                     spawn_assembler_panel(root, sim.sim.catalog(), state)
                 }
-                OpenMachineKind::Lab => {
-                    let slot_count = sim
-                        .sim
-                        .entity_inventory(entity_id)
-                        .expect("open lab should expose inventory")
-                        .slots
-                        .len();
-                    spawn_lab_panel(root, slot_count);
-                }
             }
             spawn_inventory_transfer_feedback(root);
         });
 }
 
-pub(crate) fn spawn_chest_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
-    root.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(6.0),
-            ..default()
-        },
-        BackgroundColor(Color::NONE),
-    ))
-    .with_children(|panel| {
-        panel.spawn((
-            Text::new("Chest"),
-            TextFont::from_font_size(14.0),
-            TextColor(Color::WHITE),
-        ));
-        panel
-            .spawn((
-                Node {
-                    width: Val::Px(244.0),
-                    flex_wrap: FlexWrap::Wrap,
-                    row_gap: Val::Px(4.0),
-                    column_gap: Val::Px(4.0),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|grid| {
-                for slot_index in 0..16 {
-                    spawn_slot_button(grid, InventoryPanel::Container, slot_index);
-                }
-            });
-    });
-}
-
-pub(crate) fn spawn_lab_panel(
+pub(crate) fn spawn_container_inventory_panel(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    title: &str,
     slot_count: usize,
 ) {
     root.spawn((
@@ -151,7 +121,7 @@ pub(crate) fn spawn_lab_panel(
     ))
     .with_children(|panel| {
         panel.spawn((
-            Text::new("Lab"),
+            Text::new(title.to_string()),
             TextFont::from_font_size(14.0),
             TextColor(Color::WHITE),
         ));

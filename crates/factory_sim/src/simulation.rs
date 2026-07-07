@@ -10,6 +10,7 @@ pub(crate) use std::hash::{Hash, Hasher};
 
 pub use crate::crafting::{CraftingError, CraftingJob, CraftingQueue};
 pub(crate) use crate::entities::EntityReservation;
+pub(crate) use crate::entities::store::for_each_entity_state_map;
 pub use crate::entities::{
     BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview, Direction,
     EntityDestroyError, EntityFootprint, EntityStore, OccupancyGrid, PlacedEntity,
@@ -387,6 +388,7 @@ mod belt_ops;
 mod core;
 mod diagnostics_ops;
 mod entity_ops;
+mod entity_states;
 mod entity_store_ops;
 mod fluid_ops;
 mod generation;
@@ -404,6 +406,7 @@ mod validation;
 mod world_ops;
 
 use self::belt_ops::*;
+pub(crate) use self::entity_states::EntityStateBehavior;
 use self::fluid_ops::*;
 use self::generation::*;
 use self::inventory_ops::*;

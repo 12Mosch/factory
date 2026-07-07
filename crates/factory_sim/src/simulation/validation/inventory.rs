@@ -1,6 +1,6 @@
 use super::super::*;
 
-pub(super) fn validate_inventory(
+pub(in crate::simulation) fn validate_inventory(
     catalog: &PrototypeCatalog,
     inventory: &Inventory,
 ) -> Result<(), SimValidationError> {

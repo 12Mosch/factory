@@ -1,6 +1,45 @@
 use crate::simulation::*;
 
-pub(in crate::simulation) fn burner_mining_drill_state_for_prototype(
+/// Builds the placement reservation for `prototype`, filling in the initial
+/// state for every state map the entity participates in. This is the single
+/// place that decides which per-kind state a freshly placed entity gets.
+pub(in crate::simulation) fn reservation_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+    prototype_id: EntityPrototypeId,
+    x: i32,
+    y: i32,
+    direction: Direction,
+    footprint: EntityFootprint,
+) -> EntityReservation {
+    let mut reservation = EntityReservation::new(prototype_id, x, y, direction, footprint);
+    reservation.entity_inventories = chest_inventory_for_prototype(prototype);
+    reservation.burner_mining_drills = burner_mining_drill_state_for_prototype(prototype);
+    reservation.furnaces = furnace_state_for_prototype(prototype);
+    reservation.assembling_machines = assembling_machine_state_for_prototype(prototype);
+    reservation.labs = lab_state_for_prototype(prototype);
+    reservation.electric_poles = electric_pole_state_for_prototype(prototype);
+    reservation.electric_consumers = electric_consumer_state_for_prototype(prototype);
+    reservation.steam_engines = steam_engine_state_for_prototype(prototype);
+    reservation.boilers = boiler_state_for_prototype(prototype);
+    reservation.offshore_pumps = offshore_pump_state_for_prototype(prototype);
+    reservation.fluid_boxes = fluid_box_states_for_prototype(prototype);
+    reservation.transport_belts = transport_belt_segment_for_prototype(prototype, direction);
+    reservation.splitters = splitter_state_for_prototype(prototype, direction);
+    reservation.inserters = inserter_state_for_prototype(prototype);
+    reservation
+}
+
+fn chest_inventory_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<Inventory> {
+    if prototype.entity_kind != EntityKind::Chest {
+        return None;
+    }
+
+    prototype
+        .inventory_slot_count
+        .map(Inventory::with_slot_count)
+}
+
+fn burner_mining_drill_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<BurnerMiningDrillState> {
     if prototype.entity_kind != EntityKind::MiningDrill {
@@ -23,9 +62,7 @@ pub(in crate::simulation) fn burner_mining_drill_state_for_prototype(
     })
 }
 
-pub(in crate::simulation) fn furnace_state_for_prototype(
-    prototype: &factory_data::EntityPrototype,
-) -> Option<FurnaceState> {
+fn furnace_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<FurnaceState> {
     if prototype.entity_kind != EntityKind::Furnace {
         return None;
     }
@@ -46,7 +83,7 @@ pub(in crate::simulation) fn furnace_state_for_prototype(
     })
 }
 
-pub(in crate::simulation) fn assembling_machine_state_for_prototype(
+fn assembling_machine_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<AssemblingMachineState> {
     if prototype.entity_kind != EntityKind::AssemblingMachine {
@@ -66,9 +103,7 @@ pub(in crate::simulation) fn assembling_machine_state_for_prototype(
     })
 }
 
-pub(in crate::simulation) fn lab_state_for_prototype(
-    prototype: &factory_data::EntityPrototype,
-) -> Option<LabState> {
+fn lab_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<LabState> {
     (prototype.entity_kind == EntityKind::Lab).then(|| LabState {
         inventory: Inventory::with_slot_count(
             prototype
@@ -81,14 +116,14 @@ pub(in crate::simulation) fn lab_state_for_prototype(
     })
 }
 
-pub(in crate::simulation) fn electric_pole_state_for_prototype(
+fn electric_pole_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<ElectricPoleState> {
     (prototype.entity_kind == EntityKind::ElectricPole && prototype.electric_pole.is_some())
         .then_some(ElectricPoleState)
 }
 
-pub(in crate::simulation) fn electric_consumer_state_for_prototype(
+fn electric_consumer_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<ElectricConsumerState> {
     prototype
@@ -97,16 +132,14 @@ pub(in crate::simulation) fn electric_consumer_state_for_prototype(
         .then_some(ElectricConsumerState::default())
 }
 
-pub(in crate::simulation) fn steam_engine_state_for_prototype(
+fn steam_engine_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<SteamEngineState> {
     (prototype.entity_kind == EntityKind::SteamEngine && prototype.steam_engine.is_some())
         .then_some(SteamEngineState)
 }
 
-pub(in crate::simulation) fn boiler_state_for_prototype(
-    prototype: &factory_data::EntityPrototype,
-) -> Option<BoilerState> {
+fn boiler_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<BoilerState> {
     if prototype.entity_kind != EntityKind::Boiler {
         return None;
     }
@@ -123,14 +156,14 @@ pub(in crate::simulation) fn boiler_state_for_prototype(
     })
 }
 
-pub(in crate::simulation) fn offshore_pump_state_for_prototype(
+fn offshore_pump_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<OffshorePumpState> {
     (prototype.entity_kind == EntityKind::OffshorePump && prototype.offshore_pump.is_some())
         .then_some(OffshorePumpState)
 }
 
-pub(in crate::simulation) fn fluid_box_states_for_prototype(
+fn fluid_box_states_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<Vec<FluidBoxState>> {
     (!prototype.fluid_boxes.is_empty()).then(|| {
@@ -142,7 +175,7 @@ pub(in crate::simulation) fn fluid_box_states_for_prototype(
     })
 }
 
-pub(in crate::simulation) fn transport_belt_segment_for_prototype(
+fn transport_belt_segment_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,
 ) -> Option<BeltSegment> {
@@ -166,7 +199,7 @@ pub(in crate::simulation) fn transport_belt_segment_for_prototype(
     ))
 }
 
-pub(in crate::simulation) fn splitter_state_for_prototype(
+fn splitter_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
     direction: Direction,
 ) -> Option<SplitterState> {
@@ -181,7 +214,7 @@ pub(in crate::simulation) fn splitter_state_for_prototype(
     ))
 }
 
-pub(in crate::simulation) fn inserter_state_for_prototype(
+fn inserter_state_for_prototype(
     prototype: &factory_data::EntityPrototype,
 ) -> Option<InserterState> {
     (prototype.entity_kind == EntityKind::Inserter && prototype.inserter.is_some())

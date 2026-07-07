@@ -5,8 +5,8 @@ mod crafting;
 mod entities;
 mod fluids;
 mod ids;
-mod inventory;
-mod machines;
+pub(in crate::simulation) mod inventory;
+pub(in crate::simulation) mod machines;
 mod research;
 mod world;
 
@@ -15,10 +15,6 @@ use self::crafting::validate_crafting_queue;
 use self::entities::{validate_entity_occupancy, validate_entity_state_ownership_and_kind};
 use self::fluids::{validate_fluid_box_states, validate_fluid_network_snapshots};
 use self::inventory::validate_inventory;
-use self::machines::{
-    validate_assembler, validate_belt_segment, validate_boiler, validate_burner_mining_drill,
-    validate_furnace, validate_inserter, validate_lab, validate_splitter_state,
-};
 use self::research::validate_research_state;
 use self::world::{
     validate_chart_state, validate_fluid_statistics, validate_item_statistics,
@@ -42,43 +38,25 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_crafting_queue(sim)?;
     validate_research_state(sim)?;
 
-    for inventory in sim.entities.entity_inventories.values() {
-        validate_inventory(&sim.world.prototypes, inventory)?;
-    }
-    for (entity_id, state) in &sim.entities.burner_mining_drills {
-        validate_burner_mining_drill(sim, *entity_id, state)?;
-    }
-    for (entity_id, state) in &sim.entities.furnaces {
-        validate_furnace(sim, *entity_id, state)?;
-    }
-    for (entity_id, state) in &sim.entities.assembling_machines {
-        validate_assembler(sim, *entity_id, state)?;
-    }
-    for (entity_id, state) in &sim.entities.labs {
-        validate_lab(sim, *entity_id, state)?;
-    }
-    for (entity_id, state) in &sim.entities.electric_consumers {
-        if state.work_remainder_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
-            return Err(SimValidationError::InvalidEntityState {
-                entity_id: *entity_id,
-            });
-        }
-    }
-    for (entity_id, state) in &sim.entities.boilers {
-        validate_boiler(sim, *entity_id, state)?;
-    }
-    for (entity_id, segment) in &sim.entities.transport_belts {
-        validate_belt_segment(sim, *entity_id, segment)?;
-    }
-    for (entity_id, state) in &sim.entities.splitters {
-        validate_splitter_state(sim, *entity_id, state)?;
-    }
-    for (entity_id, state) in &sim.entities.inserters {
-        validate_inserter(sim, *entity_id, state)?;
-    }
+    validate_entity_states(sim)?;
 
     Ok(())
 }
+
+macro_rules! define_validate_entity_states {
+    ($($field:ident : $ty:ty => $kind:tt),* $(,)?) => {
+        /// Validates every per-kind state entry via `EntityStateBehavior`.
+        fn validate_entity_states(sim: &Simulation) -> Result<(), SimValidationError> {
+            $(
+                for (entity_id, state) in &sim.entities.$field {
+                    EntityStateBehavior::validate_state(state, sim, *entity_id)?;
+                }
+            )*
+            Ok(())
+        }
+    };
+}
+for_each_entity_state_map!(define_validate_entity_states);
 
 impl Simulation {
     pub fn validate(&self) -> Result<(), SimValidationError> {

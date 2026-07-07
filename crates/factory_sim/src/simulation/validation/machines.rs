@@ -2,7 +2,7 @@ use super::super::*;
 use super::ids::*;
 use super::inventory::*;
 
-pub(super) fn validate_burner_mining_drill(
+pub(in crate::simulation) fn validate_burner_mining_drill(
     sim: &Simulation,
     entity_id: EntityId,
     state: &BurnerMiningDrillState,
@@ -22,7 +22,7 @@ pub(super) fn validate_burner_mining_drill(
     Ok(())
 }
 
-pub(super) fn validate_furnace(
+pub(in crate::simulation) fn validate_furnace(
     sim: &Simulation,
     entity_id: EntityId,
     state: &FurnaceState,
@@ -43,7 +43,7 @@ pub(super) fn validate_furnace(
     Ok(())
 }
 
-pub(super) fn validate_boiler(
+pub(in crate::simulation) fn validate_boiler(
     sim: &Simulation,
     entity_id: EntityId,
     state: &BoilerState,
@@ -62,7 +62,7 @@ pub(super) fn validate_boiler(
     Ok(())
 }
 
-pub(super) fn validate_assembler(
+pub(in crate::simulation) fn validate_assembler(
     sim: &Simulation,
     entity_id: EntityId,
     state: &AssemblingMachineState,
@@ -87,7 +87,7 @@ pub(super) fn validate_assembler(
     Ok(())
 }
 
-pub(super) fn validate_lab(
+pub(in crate::simulation) fn validate_lab(
     sim: &Simulation,
     entity_id: EntityId,
     state: &LabState,
@@ -111,7 +111,7 @@ pub(super) fn validate_lab(
     Ok(())
 }
 
-pub(super) fn validate_belt_segment(
+pub(in crate::simulation) fn validate_belt_segment(
     sim: &Simulation,
     entity_id: EntityId,
     segment: &BeltSegment,
@@ -148,7 +148,7 @@ pub(super) fn validate_belt_segment(
     Ok(())
 }
 
-pub(super) fn validate_splitter_state(
+pub(in crate::simulation) fn validate_splitter_state(
     sim: &Simulation,
     entity_id: EntityId,
     state: &SplitterState,
@@ -232,7 +232,7 @@ fn validate_transport_lane_items(
     Ok(())
 }
 
-pub(super) fn validate_inserter(
+pub(in crate::simulation) fn validate_inserter(
     sim: &Simulation,
     entity_id: EntityId,
     state: &InserterState,
