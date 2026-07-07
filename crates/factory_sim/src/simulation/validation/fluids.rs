@@ -81,7 +81,7 @@ pub(super) fn validate_fluid_network_snapshots(sim: &Simulation) -> Result<(), S
         .collect::<BTreeSet<_>>();
     let mut networked_boxes = BTreeSet::new();
 
-    for (expected_network_id, network) in sim.fluid_networks.iter().enumerate() {
+    for (expected_network_id, network) in sim.fluids.networks.iter().enumerate() {
         if network.network_id != expected_network_id as u32
             || network.box_count != network.boxes.len()
             || network.total_milliunits > network.capacity_milliunits

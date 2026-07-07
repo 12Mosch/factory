@@ -83,33 +83,23 @@ pub struct Simulation {
     entity_topology_revision: u64,
     #[serde(skip, default)]
     revealed_revision: u64,
+
     world: WorldSim,
     chart: ChartState,
-    item_statistics: ItemStatistics,
-    fluid_statistics: FluidStatistics,
-    power_statistics: PowerStatistics,
     entities: EntityStore,
+
     player: PlayerState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
     pub research: ResearchState,
-    power_summary: PowerSummary,
-    power_networks: Vec<PowerNetworkSnapshot>,
-    entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
-    power_topology_dirty: bool,
-    power_topology: PowerTopologyCache,
-    #[cfg(test)]
-    power_topology_rebuilds: u64,
-    fluid_networks: Vec<FluidNetworkSnapshot>,
+
+    power: PowerSubsystem,
+    fluids: FluidSubsystem,
+    statistics: StatisticsSubsystem,
+
     #[serde(skip)]
     transport: TransportLaneCache,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
-struct PowerTopologyCache {
-    network_ids_by_entity: BTreeMap<EntityId, u32>,
-    pole_counts: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -376,16 +366,21 @@ mod entity_ops;
 mod entity_states;
 mod entity_store_ops;
 mod fluid_ops;
+mod fluid_state;
 mod generation;
 mod inventory_ops;
 mod machine_ops;
+mod machine_tick;
+mod placement_ops;
 mod player_ops;
 mod power_ops;
+mod power_state;
 mod profiling;
 mod research_ops;
 mod save;
 mod scripted;
 mod statistics_ops;
+mod statistics_state;
 mod systems;
 mod validation;
 mod world_ops;
@@ -396,9 +391,11 @@ pub use self::commands::{
 };
 pub(crate) use self::entity_states::EntityStateBehavior;
 use self::fluid_ops::*;
+use self::fluid_state::FluidSubsystem;
 use self::generation::*;
 use self::inventory_ops::*;
 use self::machine_ops::*;
+use self::power_state::{PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
 pub use self::profiling::{SimulationCounts, SimulationTickProfile};
 pub use self::save::{
@@ -407,6 +404,7 @@ pub use self::save::{
 };
 pub use self::scripted::scripted_inputs_for_red_science_factory;
 use self::statistics_ops::power_sample_is_recorded;
+use self::statistics_state::StatisticsSubsystem;
 use self::world_ops::*;
 
 #[cfg(test)]
