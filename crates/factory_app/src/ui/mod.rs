@@ -1,6 +1,7 @@
 pub(crate) mod assembler_panel;
 pub mod audio_settings;
 pub(crate) mod build_bar;
+pub(crate) mod build_menu;
 pub(crate) mod container_window;
 pub mod debug_overlay;
 pub mod formatting;

@@ -1,12 +1,11 @@
-use super::common::{hotbar_key_for_slot, test_app};
+use super::common::{first_available_hotbar_slot, hotbar_key_for_slot, test_app};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use factory_app::audio::AudioSettingsWindowState;
-use factory_app::placement::build::buildable_prototypes;
 use factory_app::resources::{
-    AppInputState, BuildPlacementState, CraftingWindowState, MapDisplaySettings, MapLayer,
-    MapTextureBounds, MapTextureCache, MapViewState, ProductionStatsWindowState, SimResource,
-    TechnologyWindowState,
+    AppInputState, BuildMenuState, BuildPlacementState, CraftingWindowState, MapDisplaySettings,
+    MapLayer, MapTextureBounds, MapTextureCache, MapViewState, ProductionStatsWindowState,
+    SimResource, TechnologyWindowState,
 };
 use std::time::Duration;
 
@@ -318,13 +317,7 @@ fn f3_toggles_map_debug_flags() {
 fn open_map_suppresses_build_hotbar_selection() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
-    let slot = {
-        let sim = &app.world().resource::<SimResource>().sim;
-        buildable_prototypes(sim.catalog())
-            .into_iter()
-            .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
-            .expect("starting inventory should include at least one buildable item")
-    };
+    let (slot_index, _) = first_available_hotbar_slot(&app);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -336,7 +329,7 @@ fn open_map_suppresses_build_hotbar_selection() {
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot.slot_index));
+        .press(hotbar_key_for_slot(slot_index));
     app.update();
 
     assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
@@ -346,13 +339,7 @@ fn open_map_suppresses_build_hotbar_selection() {
 fn open_crafting_suppresses_build_hotbar_selection() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
-    let slot = {
-        let sim = &app.world().resource::<SimResource>().sim;
-        buildable_prototypes(sim.catalog())
-            .into_iter()
-            .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
-            .expect("starting inventory should include at least one buildable item")
-    };
+    let (slot_index, _) = first_available_hotbar_slot(&app);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -364,7 +351,7 @@ fn open_crafting_suppresses_build_hotbar_selection() {
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot.slot_index));
+        .press(hotbar_key_for_slot(slot_index));
     app.update();
 
     assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
@@ -374,13 +361,7 @@ fn open_crafting_suppresses_build_hotbar_selection() {
 fn open_settings_suppresses_build_hotbar_selection() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
-    let slot = {
-        let sim = &app.world().resource::<SimResource>().sim;
-        buildable_prototypes(sim.catalog())
-            .into_iter()
-            .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
-            .expect("starting inventory should include at least one buildable item")
-    };
+    let (slot_index, _) = first_available_hotbar_slot(&app);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -392,10 +373,83 @@ fn open_settings_suppresses_build_hotbar_selection() {
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot.slot_index));
+        .press(hotbar_key_for_slot(slot_index));
     app.update();
 
     assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+}
+
+#[test]
+fn b_toggles_build_menu_and_blocks_world_input() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyB);
+    app.update();
+
+    assert!(app.world().resource::<BuildMenuState>().open);
+    assert!(app.world().resource::<AppInputState>().world_blocked);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset(KeyCode::KeyB);
+    app.update();
+    assert!(app.world().resource::<BuildMenuState>().open);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyB);
+    app.update();
+
+    assert!(!app.world().resource::<BuildMenuState>().open);
+}
+
+#[test]
+fn open_build_menu_suppresses_build_hotbar_selection() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let (slot_index, _) = first_available_hotbar_slot(&app);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyB);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset(KeyCode::KeyB);
+    app.update();
+    assert!(app.world().resource::<BuildMenuState>().open);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(hotbar_key_for_slot(slot_index));
+    app.update();
+
+    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+}
+
+#[test]
+fn escape_closes_build_menu() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyB);
+    app.update();
+    assert!(app.world().resource::<BuildMenuState>().open);
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset(KeyCode::KeyB);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Escape);
+    app.update();
+
+    assert!(!app.world().resource::<BuildMenuState>().open);
 }
 
 #[test]

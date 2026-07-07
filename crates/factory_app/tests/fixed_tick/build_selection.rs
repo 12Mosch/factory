@@ -1,11 +1,15 @@
 use super::common::{
     complete_research_by_name, entity_id_by_name, first_available_build_selection,
-    first_buildable_rect, hotbar_key_for_slot, item_id_by_name, technology_id_by_name, test_app,
+    first_available_hotbar_slot, first_buildable_rect, hotbar_key_for_slot, item_id_by_name,
+    technology_id_by_name, test_app,
 };
 use bevy::prelude::*;
-use factory_app::placement::build::{buildable_prototypes, place_selected_building_at_tile};
+use factory_app::placement::build::{
+    buildable_prototypes, default_hotbar_slots, place_selected_building_at_tile,
+};
 use factory_app::resources::{
-    BuildPlacementState, BuildPlacementStatus, BuildSelection, SimResource,
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT, HotbarState,
+    SimResource,
 };
 use factory_data::{EntityKind, PrototypeCatalog};
 use factory_sim::{Direction, Inventory, Simulation};
@@ -59,6 +63,48 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
 }
 
 #[test]
+fn default_hotbar_holds_first_ten_buildables() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    let expected = {
+        let sim = &app.world().resource::<SimResource>().sim;
+        buildable_prototypes(sim.catalog())
+            .into_iter()
+            .take(HOTBAR_SLOT_COUNT)
+            .map(|buildable| Some(buildable.selection()))
+            .collect::<Vec<_>>()
+    };
+    let hotbar = app.world().resource::<HotbarState>();
+
+    assert_eq!(hotbar.slots.len(), HOTBAR_SLOT_COUNT);
+    assert_eq!(hotbar.slots.to_vec(), expected);
+}
+
+#[test]
+fn hotbar_add_and_remove_assigns_first_empty_slot() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let mut hotbar = HotbarState {
+        slots: default_hotbar_slots(&catalog),
+    };
+    let buildables = buildable_prototypes(&catalog);
+    assert!(
+        buildables.len() > HOTBAR_SLOT_COUNT,
+        "catalog should have more buildables than hotbar slots"
+    );
+    let extra = buildables[HOTBAR_SLOT_COUNT].selection();
+    let second = buildables[1].selection();
+
+    assert_eq!(hotbar.assign_to_first_empty(extra), None);
+    assert!(hotbar.remove(second));
+    assert_eq!(hotbar.slot(1), None);
+    assert_eq!(hotbar.assign_to_first_empty(extra), Some(1));
+    assert_eq!(hotbar.slot(1), Some(extra));
+    assert_eq!(hotbar.assign_to_first_empty(extra), Some(1));
+    assert!(!hotbar.remove(second));
+}
+
+#[test]
 fn number_key_selects_hotbar_slot_without_placing() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
@@ -68,27 +114,15 @@ fn number_key_selects_hotbar_slot_without_placing() {
         .sim
         .entities()
         .placed_len();
-    let slot = {
-        let sim = &app.world().resource::<SimResource>().sim;
-        buildable_prototypes(sim.catalog())
-            .into_iter()
-            .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
-            .expect("starting inventory should include at least one buildable item")
-    };
+    let (slot_index, selection) = first_available_hotbar_slot(&app);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot.slot_index));
+        .press(hotbar_key_for_slot(slot_index));
     app.update();
 
     let build_state = app.world().resource::<BuildPlacementState>();
-    assert_eq!(
-        build_state.selected,
-        Some(BuildSelection {
-            prototype_id: slot.prototype_id,
-            item_id: slot.item_id,
-        })
-    );
+    assert_eq!(build_state.selected, Some(selection));
     assert_eq!(
         app.world()
             .resource::<SimResource>()
@@ -97,6 +131,26 @@ fn number_key_selects_hotbar_slot_without_placing() {
             .placed_len(),
         before_entities
     );
+}
+
+#[test]
+fn empty_hotbar_slot_selection_clears_stale_status() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    let slot_index = 0;
+    app.world_mut().resource_mut::<HotbarState>().slots[slot_index] = None;
+    app.world_mut()
+        .resource_mut::<BuildPlacementState>()
+        .last_status = BuildPlacementStatus::Locked("Assembler locked".to_string());
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(hotbar_key_for_slot(slot_index));
+    app.update();
+
+    let build_state = app.world().resource::<BuildPlacementState>();
+    assert_eq!(build_state.selected, None);
+    assert_eq!(build_state.last_status, BuildPlacementStatus::Ready);
 }
 
 #[test]
@@ -140,18 +194,18 @@ fn escape_clears_build_selection() {
 fn build_bar_rejects_locked_buildable_and_allows_after_research() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
-    let (assembler_entity, assembler_item, automation, slot_index) = {
+    let (assembler_entity, assembler_item, automation) = {
         let sim = &app.world().resource::<SimResource>().sim;
         let assembler_entity = entity_id_by_name(sim.catalog(), "assembling_machine");
         let assembler_item = item_id_by_name(sim.catalog(), "assembling_machine");
         let automation = technology_id_by_name(sim.catalog(), "automation");
-        let slot_index = buildable_prototypes(sim.catalog())
-            .into_iter()
-            .find(|buildable| buildable.prototype_id == assembler_entity)
-            .expect("assembling machine should be buildable")
-            .slot_index;
-        (assembler_entity, assembler_item, automation, slot_index)
+        (assembler_entity, assembler_item, automation)
     };
+    let slot_index = 0;
+    app.world_mut().resource_mut::<HotbarState>().slots[slot_index] = Some(BuildSelection {
+        prototype_id: assembler_entity,
+        item_id: assembler_item,
+    });
     {
         let catalog = app.world().resource::<SimResource>().sim.catalog().clone();
         app.world_mut()

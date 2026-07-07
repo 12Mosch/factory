@@ -4,14 +4,22 @@ use factory_sim::{
     PlayerBuildError, Simulation,
 };
 
-use crate::resources::{BuildPlacementStatus, BuildSelection};
+use crate::resources::{BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildablePrototype {
-    pub slot_index: usize,
     pub prototype_id: EntityPrototypeId,
     pub item_id: ItemId,
     pub display_name: String,
+}
+
+impl BuildablePrototype {
+    pub fn selection(&self) -> BuildSelection {
+        BuildSelection {
+            prototype_id: self.prototype_id,
+            item_id: self.item_id,
+        }
+    }
 }
 
 pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototype> {
@@ -34,7 +42,6 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
         }
 
         buildables.push(BuildablePrototype {
-            slot_index: buildables.len(),
             prototype_id: entity.id,
             item_id,
             display_name: display_name(&entity.name),
@@ -44,13 +51,14 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
     buildables
 }
 
-pub fn buildable_prototype_at_slot(
+pub fn default_hotbar_slots(
     catalog: &PrototypeCatalog,
-    slot_index: usize,
-) -> Option<BuildablePrototype> {
-    buildable_prototypes(catalog)
-        .into_iter()
-        .find(|buildable| buildable.slot_index == slot_index)
+) -> [Option<BuildSelection>; HOTBAR_SLOT_COUNT] {
+    let mut slots = [None; HOTBAR_SLOT_COUNT];
+    for (slot, buildable) in slots.iter_mut().zip(buildable_prototypes(catalog)) {
+        *slot = Some(buildable.selection());
+    }
+    slots
 }
 
 pub fn next_direction(direction: Direction) -> Direction {
@@ -198,7 +206,7 @@ fn preview_issue_priority(issue: &BuildPlacementIssue) -> usize {
     }
 }
 
-fn entity_display_name(
+pub(crate) fn entity_display_name(
     catalog: &PrototypeCatalog,
     prototype_id: EntityPrototypeId,
 ) -> Option<String> {

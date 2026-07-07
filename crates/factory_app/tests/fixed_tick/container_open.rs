@@ -5,8 +5,8 @@ use super::common::{
 use factory_app::interaction::container_open::{
     container_open_input_allowed, opened_container_after_world_click,
 };
-use factory_app::placement::build::buildable_prototype_at_slot;
-use factory_app::resources::{BuildPlacementState, BuildSelection};
+use factory_app::placement::build::buildable_prototypes;
+use factory_app::resources::BuildPlacementState;
 use factory_data::PrototypeCatalog;
 use factory_sim::{Direction, Simulation};
 
@@ -16,11 +16,11 @@ fn container_open_ignores_click_when_building_selected() {
     assert!(container_open_input_allowed(&build_state));
 
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    let slot = buildable_prototype_at_slot(&catalog, 0).expect("slot 0 should be buildable");
-    build_state.selected = Some(BuildSelection {
-        prototype_id: slot.prototype_id,
-        item_id: slot.item_id,
-    });
+    let buildable = buildable_prototypes(&catalog)
+        .into_iter()
+        .next()
+        .expect("catalog should include at least one buildable");
+    build_state.selected = Some(buildable.selection());
 
     assert!(!container_open_input_allowed(&build_state));
 }

@@ -1,15 +1,14 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use factory_data::{EntityPrototypeId, ItemId};
 use factory_sim::Direction;
 
 use crate::audio::SoundEvent;
 use crate::input::build::select_build_slot;
 use crate::input::panels::world_input_blocked;
-use crate::placement::build::{build_status_from_preview, buildable_prototypes, next_direction};
+use crate::placement::build::{build_status_from_preview, next_direction};
 use crate::resources::{
     AppInputState, BuildPlacementPreviewState, BuildPlacementState, BuildPlacementStatus,
-    BuildSelection, SimResource, TechnologyWindowState,
+    HOTBAR_SLOT_COUNT, HotbarState, SimResource, TechnologyWindowState,
 };
 use crate::utils::compact_item_name;
 
@@ -19,20 +18,21 @@ pub(crate) struct BuildBarRoot;
 #[derive(Component)]
 pub(crate) struct BuildSlotButton {
     pub(crate) slot_index: usize,
-    pub(crate) prototype_id: EntityPrototypeId,
-    pub(crate) item_id: ItemId,
 }
 
 #[derive(Component)]
 pub(crate) struct BuildSlotCountText {
-    pub(crate) item_id: ItemId,
+    pub(crate) slot_index: usize,
 }
 
 #[derive(Component)]
 pub(crate) struct BuildSlotLabelText {
-    pub(crate) prototype_id: EntityPrototypeId,
-    pub(crate) item_id: ItemId,
+    pub(crate) slot_index: usize,
 }
+
+/// Button on the build bar that toggles the buildings menu.
+#[derive(Component)]
+pub(crate) struct BuildMenuButton;
 
 #[derive(Component)]
 pub(crate) struct BuildRotateButton;
@@ -101,7 +101,11 @@ type BuildCountTextQuery<'w, 's> = Query<
 type BuildLabelTextQuery<'w, 's> = Query<
     'w,
     's,
-    (&'static BuildSlotLabelText, &'static mut TextColor),
+    (
+        &'static BuildSlotLabelText,
+        &'static mut Text,
+        &'static mut TextColor,
+    ),
     Without<BuildSlotCountText>,
 >;
 type BuildRotateButtonVisualQuery<'w, 's> = Query<
@@ -115,6 +119,7 @@ type BuildRotateButtonVisualQuery<'w, 's> = Query<
     (
         With<BuildRotateButton>,
         Without<BuildCancelButton>,
+        Without<BuildMenuButton>,
         Without<BuildSlotButton>,
     ),
 >;
@@ -129,6 +134,22 @@ type BuildCancelButtonVisualQuery<'w, 's> = Query<
     (
         With<BuildCancelButton>,
         Without<BuildRotateButton>,
+        Without<BuildMenuButton>,
+        Without<BuildSlotButton>,
+    ),
+>;
+type BuildMenuButtonVisualQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        &'static mut BackgroundColor,
+        &'static mut BorderColor,
+    ),
+    (
+        With<BuildMenuButton>,
+        Without<BuildRotateButton>,
+        Without<BuildCancelButton>,
         Without<BuildSlotButton>,
     ),
 >;
@@ -138,13 +159,12 @@ pub(crate) struct BuildBarButtonState<'w> {
     sim: Res<'w, SimResource>,
     input_state: Option<Res<'w, AppInputState>>,
     technology_window: Option<Res<'w, TechnologyWindowState>>,
+    hotbar: Res<'w, HotbarState>,
     build_state: ResMut<'w, BuildPlacementState>,
     sounds: MessageWriter<'w, SoundEvent>,
 }
 
-pub(crate) fn setup_build_bar(mut commands: Commands, sim: Res<SimResource>) {
-    let buildables = buildable_prototypes(sim.sim.catalog());
-
+pub(crate) fn setup_build_bar(mut commands: Commands) {
     commands
         .spawn((
             Node {
@@ -189,8 +209,8 @@ pub(crate) fn setup_build_bar(mut commands: Commands, sim: Res<SimResource>) {
                         BackgroundColor(Color::NONE),
                     ))
                     .with_children(|toolbar| {
-                        for buildable in buildables {
-                            spawn_build_slot(toolbar, &buildable);
+                        for slot_index in 0..HOTBAR_SLOT_COUNT {
+                            spawn_build_slot(toolbar, slot_index);
                         }
 
                         toolbar.spawn((
@@ -202,6 +222,7 @@ pub(crate) fn setup_build_bar(mut commands: Commands, sim: Res<SimResource>) {
                             },
                             BackgroundColor(Color::srgba(0.48, 0.46, 0.40, 0.48)),
                         ));
+                        spawn_action_button(toolbar, "Buildings (B)", BuildMenuButton, false);
                         spawn_action_button(toolbar, "Rotate N", BuildRotateButton, true);
                         spawn_action_button(toolbar, "Cancel", BuildCancelButton, false);
                     });
@@ -230,6 +251,7 @@ pub(crate) fn handle_build_bar_button_clicks(
             select_build_slot(
                 &state.sim.sim,
                 state.technology_window.as_deref(),
+                &state.hotbar,
                 &mut state.build_state,
                 button.slot_index,
             );
@@ -254,19 +276,21 @@ pub(crate) fn handle_build_bar_button_clicks(
 
 pub(crate) fn update_build_bar_visuals(
     sim: Res<SimResource>,
+    hotbar: Res<HotbarState>,
     build_state: Res<BuildPlacementState>,
     mut slot_buttons: BuildSlotVisualQuery,
     mut count_texts: BuildCountTextQuery,
     mut label_texts: BuildLabelTextQuery,
 ) {
     for (button, interaction, mut background, mut border) in &mut slot_buttons {
-        let selected = build_state.selected
-            == Some(BuildSelection {
-                prototype_id: button.prototype_id,
-                item_id: button.item_id,
-            });
-        let unlocked = sim.sim.is_entity_unlocked(button.prototype_id);
-        let available = unlocked && sim.sim.player_inventory().count(button.item_id) > 0;
+        let Some(selection) = hotbar.slot(button.slot_index) else {
+            *background = BackgroundColor(Color::srgba(0.055, 0.055, 0.055, 0.80));
+            *border = BorderColor::all(Color::srgba(0.30, 0.30, 0.28, 0.50));
+            continue;
+        };
+        let selected = build_state.selected == Some(selection);
+        let unlocked = sim.sim.is_entity_unlocked(selection.prototype_id);
+        let available = unlocked && sim.sim.player_inventory().count(selection.item_id) > 0;
         *background = BackgroundColor(slot_background_color(*interaction, selected, available));
         *border = BorderColor::all(if selected {
             Color::srgb(0.94, 0.66, 0.20)
@@ -276,7 +300,11 @@ pub(crate) fn update_build_bar_visuals(
     }
 
     for (marker, mut text, mut color) in &mut count_texts {
-        let count = sim.sim.player_inventory().count(marker.item_id);
+        let Some(selection) = hotbar.slot(marker.slot_index) else {
+            text.0.clear();
+            continue;
+        };
+        let count = sim.sim.player_inventory().count(selection.item_id);
         text.0 = count.to_string();
         *color = TextColor(if count == 0 {
             Color::srgb(0.62, 0.58, 0.52)
@@ -285,16 +313,23 @@ pub(crate) fn update_build_bar_visuals(
         });
     }
 
-    for (marker, mut color) in &mut label_texts {
-        let prototype_exists = sim
+    for (marker, mut text, mut color) in &mut label_texts {
+        let Some(selection) = hotbar.slot(marker.slot_index) else {
+            text.0.clear();
+            continue;
+        };
+        let prototype = sim
             .sim
             .catalog()
             .entities
-            .get(marker.prototype_id.index())
-            .is_some_and(|prototype| prototype.id == marker.prototype_id);
-        let available = prototype_exists
-            && sim.sim.is_entity_unlocked(marker.prototype_id)
-            && sim.sim.player_inventory().count(marker.item_id) > 0;
+            .get(selection.prototype_id.index())
+            .filter(|prototype| prototype.id == selection.prototype_id);
+        text.0 = prototype
+            .map(|prototype| compact_item_name(&prototype.name))
+            .unwrap_or_default();
+        let available = prototype.is_some()
+            && sim.sim.is_entity_unlocked(selection.prototype_id)
+            && sim.sim.player_inventory().count(selection.item_id) > 0;
         *color = TextColor(if available {
             Color::WHITE
         } else {
@@ -308,7 +343,13 @@ pub(crate) fn update_build_bar_action_visuals(
     mut rotate_buttons: BuildRotateButtonVisualQuery,
     mut rotate_texts: Query<&mut Text, With<BuildRotateButtonText>>,
     mut cancel_buttons: BuildCancelButtonVisualQuery,
+    mut menu_buttons: BuildMenuButtonVisualQuery,
 ) {
+    for (interaction, mut background, mut border) in &mut menu_buttons {
+        *background = BackgroundColor(action_background_color(*interaction, true));
+        *border = BorderColor::all(action_border_color(true));
+    }
+
     for (interaction, mut background, mut border) in &mut rotate_buttons {
         let active = build_state.selected.is_some();
         *background = BackgroundColor(action_background_color(*interaction, active));
@@ -355,10 +396,16 @@ pub(crate) fn update_build_status_text(
     }
 }
 
-fn spawn_build_slot(
-    toolbar: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    buildable: &crate::placement::build::BuildablePrototype,
-) {
+const _: () = assert!(
+    HOTBAR_SLOT_COUNT == 10,
+    "slot_key_label assumes 10 hotbar slots mapped to keys 1-9, 0"
+);
+
+pub(crate) fn slot_key_label(slot_index: usize) -> String {
+    ((slot_index + 1) % 10).to_string()
+}
+
+fn spawn_build_slot(toolbar: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, slot_index: usize) {
     toolbar
         .spawn((
             Button,
@@ -373,37 +420,26 @@ fn spawn_build_slot(
             },
             BackgroundColor(Color::srgba(0.13, 0.13, 0.13, 0.95)),
             BorderColor::all(Color::srgba(0.44, 0.43, 0.39, 0.70)),
-            BuildSlotButton {
-                slot_index: buildable.slot_index,
-                prototype_id: buildable.prototype_id,
-                item_id: buildable.item_id,
-            },
+            BuildSlotButton { slot_index },
         ))
         .with_children(|slot| {
             slot.spawn((
-                Text::new((buildable.slot_index + 1).to_string()),
+                Text::new(slot_key_label(slot_index)),
                 TextFont::from_font_size(10.0),
                 TextColor(Color::srgb(0.72, 0.72, 0.68)),
             ));
             slot.spawn((
-                Text::new(compact_item_name(
-                    &buildable.display_name.to_lowercase().replace(' ', "_"),
-                )),
+                Text::new(""),
                 TextFont::from_font_size(15.0),
                 TextColor(Color::WHITE),
                 TextLayout::justify(Justify::Center),
-                BuildSlotLabelText {
-                    prototype_id: buildable.prototype_id,
-                    item_id: buildable.item_id,
-                },
+                BuildSlotLabelText { slot_index },
             ));
             slot.spawn((
-                Text::new("0"),
+                Text::new(""),
                 TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.91, 0.92, 0.86)),
-                BuildSlotCountText {
-                    item_id: buildable.item_id,
-                },
+                BuildSlotCountText { slot_index },
             ));
         });
 }

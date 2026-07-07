@@ -5,12 +5,11 @@ use bevy::window::PrimaryWindow;
 use crate::audio::SoundEvent;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::placement::build::{
-    buildable_prototype_at_slot, next_direction, place_selected_building_at_tile,
-    short_inventory_need,
+    entity_display_name, next_direction, place_selected_building_at_tile, short_inventory_need,
 };
 use crate::resources::{
-    AppInputState, BuildPlacementState, BuildPlacementStatus, BuildSelection, SimResource,
-    TechnologyWindowState,
+    AppInputState, BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT,
+    HotbarState, SimResource, TechnologyWindowState,
 };
 
 use super::panels::{escape_consumed, world_input_blocked};
@@ -29,6 +28,7 @@ pub(crate) fn handle_build_hotbar_keys(
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     sim: Res<SimResource>,
+    hotbar: Res<HotbarState>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
     if world_input_blocked(input_state.as_deref())
@@ -45,6 +45,7 @@ pub(crate) fn handle_build_hotbar_keys(
             select_build_slot(
                 &sim.sim,
                 technology_window.as_deref(),
+                &hotbar,
                 &mut build_state,
                 slot_index,
             );
@@ -132,6 +133,7 @@ pub(crate) fn handle_build_world_click(
 pub fn select_build_slot(
     sim: &factory_sim::Simulation,
     technology_window: Option<&TechnologyWindowState>,
+    hotbar: &HotbarState,
     build_state: &mut BuildPlacementState,
     slot_index: usize,
 ) {
@@ -139,35 +141,52 @@ pub fn select_build_slot(
         return;
     }
 
-    let Some(buildable) = buildable_prototype_at_slot(sim.catalog(), slot_index) else {
+    let Some(selection) = hotbar.slot(slot_index) else {
         build_state.selected = None;
+        build_state.last_status = Default::default();
         return;
     };
 
-    if !sim.is_entity_unlocked(buildable.prototype_id) {
-        build_state.selected = None;
-        build_state.last_status = crate::resources::BuildPlacementStatus::Locked(format!(
-            "{} locked",
-            buildable.display_name
-        ));
-        return;
-    }
-    if sim.player_inventory().count(buildable.item_id) == 0 {
-        build_state.selected = None;
-        build_state.last_status = crate::resources::BuildPlacementStatus::MissingInventory(
-            short_inventory_need(sim.catalog(), buildable.item_id),
-        );
-        return;
-    }
-
-    build_state.selected = Some(BuildSelection {
-        prototype_id: buildable.prototype_id,
-        item_id: buildable.item_id,
-    });
-    build_state.last_status = Default::default();
+    select_build_selection(sim, technology_window, build_state, selection);
 }
 
-fn hotbar_keys() -> [KeyCode; 9] {
+/// Validates and applies a build selection. Returns whether the selection is
+/// now active; on failure the selection is cleared and `last_status` explains
+/// why.
+pub fn select_build_selection(
+    sim: &factory_sim::Simulation,
+    technology_window: Option<&TechnologyWindowState>,
+    build_state: &mut BuildPlacementState,
+    selection: BuildSelection,
+) -> bool {
+    if technology_window_open(technology_window) {
+        return false;
+    }
+
+    if !sim.is_entity_unlocked(selection.prototype_id) {
+        build_state.selected = None;
+        build_state.last_status = BuildPlacementStatus::Locked(format!(
+            "{} locked",
+            entity_display_name(sim.catalog(), selection.prototype_id)
+                .unwrap_or_else(|| "Building".to_string())
+        ));
+        return false;
+    }
+    if sim.player_inventory().count(selection.item_id) == 0 {
+        build_state.selected = None;
+        build_state.last_status = BuildPlacementStatus::MissingInventory(short_inventory_need(
+            sim.catalog(),
+            selection.item_id,
+        ));
+        return false;
+    }
+
+    build_state.selected = Some(selection);
+    build_state.last_status = Default::default();
+    true
+}
+
+fn hotbar_keys() -> [KeyCode; HOTBAR_SLOT_COUNT] {
     [
         KeyCode::Digit1,
         KeyCode::Digit2,
@@ -178,9 +197,10 @@ fn hotbar_keys() -> [KeyCode; 9] {
         KeyCode::Digit7,
         KeyCode::Digit8,
         KeyCode::Digit9,
+        KeyCode::Digit0,
     ]
 }
 
-fn technology_window_open(window: Option<&TechnologyWindowState>) -> bool {
+pub(crate) fn technology_window_open(window: Option<&TechnologyWindowState>) -> bool {
     window.is_some_and(|state| state.open)
 }
