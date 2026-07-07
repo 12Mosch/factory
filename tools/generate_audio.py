@@ -23,6 +23,8 @@ OUT_DIR = os.path.join(
     "audio",
 )
 
+# Reseeded per sound from its name (see main()), so each generator's output
+# is independent of SOUNDS ordering and of rng usage in other generators.
 rng = np.random.default_rng(0xFAC70)
 
 
@@ -330,8 +332,10 @@ SOUNDS = {
 
 
 def main():
+    global rng
     print(f"Writing to {OUT_DIR}")
     for name, generator in SOUNDS.items():
+        rng = np.random.default_rng([0xFAC70, *name.encode()])
         write_wav(name, generator())
 
 
