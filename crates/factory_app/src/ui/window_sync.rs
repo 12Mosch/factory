@@ -151,3 +151,191 @@ fn rebuild_contents<S: WindowSnapshot>(
     root.snapshot = snapshot;
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct TestSnapshot(u32);
+
+    #[derive(Component)]
+    struct TestRootMarker;
+
+    #[derive(Component)]
+    struct TestChild(u32);
+
+    #[derive(Resource)]
+    struct TestWindowState {
+        open: bool,
+        inputs_changed: bool,
+        snapshot: u32,
+        result: Option<WindowSync>,
+    }
+
+    #[derive(Resource)]
+    struct TestContentsState {
+        snapshot: u32,
+    }
+
+    #[test]
+    fn sync_window_drives_closed_spawned_unchanged_and_rebuilt_states() {
+        let mut app = App::new();
+        app.insert_resource(TestWindowState {
+            open: false,
+            inputs_changed: true,
+            snapshot: 1,
+            result: None,
+        })
+        .add_systems(Update, sync_test_window);
+
+        app.update();
+        assert_eq!(window_result(&app), WindowSync::Closed);
+        assert_eq!(root_count(&mut app), 0);
+        assert_eq!(test_child_values(&mut app), Vec::<u32>::new());
+
+        {
+            let mut state = app.world_mut().resource_mut::<TestWindowState>();
+            state.open = true;
+            state.inputs_changed = true;
+            state.snapshot = 1;
+        }
+        app.update();
+        assert_eq!(window_result(&app), WindowSync::Spawned);
+        assert_eq!(root_count(&mut app), 1);
+        assert_eq!(root_child_counts(&mut app), vec![1]);
+        assert_eq!(test_child_values(&mut app), vec![1]);
+
+        app.world_mut()
+            .spawn((WindowRoot::new(TestSnapshot(99)), TestRootMarker))
+            .with_child((TestChild(99),));
+        assert_eq!(root_count(&mut app), 2);
+        assert_eq!(test_child_values(&mut app), vec![1, 99]);
+
+        {
+            let mut state = app.world_mut().resource_mut::<TestWindowState>();
+            state.inputs_changed = false;
+            state.snapshot = 2;
+        }
+        app.update();
+        assert_eq!(window_result(&app), WindowSync::Unchanged);
+        assert_eq!(root_count(&mut app), 1);
+        assert_eq!(root_child_counts(&mut app), vec![1]);
+        assert_eq!(test_child_values(&mut app), vec![1]);
+
+        app.world_mut()
+            .resource_mut::<TestWindowState>()
+            .inputs_changed = true;
+        app.update();
+        assert_eq!(window_result(&app), WindowSync::Rebuilt);
+        assert_eq!(root_count(&mut app), 1);
+        assert_eq!(root_child_counts(&mut app), vec![1]);
+        assert_eq!(test_child_values(&mut app), vec![2]);
+
+        app.world_mut().resource_mut::<TestWindowState>().open = false;
+        app.update();
+        assert_eq!(window_result(&app), WindowSync::Closed);
+        assert_eq!(root_count(&mut app), 0);
+        assert_eq!(test_child_values(&mut app), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn sync_contents_rebuilds_existing_root_and_removes_duplicates() {
+        let mut app = App::new();
+        app.insert_resource(TestContentsState { snapshot: 1 })
+            .add_systems(Update, sync_test_contents);
+
+        app.world_mut()
+            .spawn((WindowRoot::new(TestSnapshot(1)), TestRootMarker))
+            .with_child((TestChild(1),));
+        app.update();
+        assert_eq!(root_count(&mut app), 1);
+        assert_eq!(root_child_counts(&mut app), vec![1]);
+        assert_eq!(test_child_values(&mut app), vec![1]);
+
+        app.world_mut()
+            .spawn((WindowRoot::new(TestSnapshot(99)), TestRootMarker))
+            .with_child((TestChild(99),));
+        app.world_mut().resource_mut::<TestContentsState>().snapshot = 2;
+
+        app.update();
+        assert_eq!(root_count(&mut app), 1);
+        assert_eq!(root_child_counts(&mut app), vec![1]);
+        assert_eq!(test_child_values(&mut app), vec![2]);
+    }
+
+    fn sync_test_window(
+        mut commands: Commands,
+        mut state: ResMut<TestWindowState>,
+        mut roots: WindowRootQuery<TestSnapshot>,
+    ) {
+        let open = state.open;
+        let inputs_changed = state.inputs_changed;
+        let snapshot = state.snapshot;
+        let result = sync_window(
+            &mut commands,
+            &mut roots,
+            open,
+            inputs_changed,
+            || TestSnapshot(snapshot),
+            || (TestRootMarker,),
+            spawn_test_child,
+        );
+        state.result = Some(result);
+    }
+
+    fn sync_test_contents(
+        mut commands: Commands,
+        state: Res<TestContentsState>,
+        mut roots: WindowRootQuery<TestSnapshot>,
+    ) {
+        sync_contents(
+            &mut commands,
+            &mut roots,
+            TestSnapshot(state.snapshot),
+            spawn_test_child,
+        );
+    }
+
+    fn spawn_test_child(
+        root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+        snapshot: &TestSnapshot,
+    ) {
+        root.spawn((TestChild(snapshot.0),));
+    }
+
+    fn window_result(app: &App) -> WindowSync {
+        app.world()
+            .resource::<TestWindowState>()
+            .result
+            .expect("window system should store a sync result")
+    }
+
+    fn root_count(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut roots = world.query::<&WindowRoot<TestSnapshot>>();
+        roots.iter(world).count()
+    }
+
+    fn root_child_counts(app: &mut App) -> Vec<usize> {
+        let world = app.world_mut();
+        let mut roots = world.query::<(Option<&Children>, &WindowRoot<TestSnapshot>)>();
+        let mut counts = roots
+            .iter(world)
+            .map(|(children, _)| children.map_or(0, Children::len))
+            .collect::<Vec<_>>();
+        counts.sort_unstable();
+        counts
+    }
+
+    fn test_child_values(app: &mut App) -> Vec<u32> {
+        let world = app.world_mut();
+        let mut children = world.query::<&TestChild>();
+        let mut values = children
+            .iter(world)
+            .map(|child| child.0)
+            .collect::<Vec<_>>();
+        values.sort_unstable();
+        values
+    }
+}
