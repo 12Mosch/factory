@@ -11,8 +11,8 @@ use super::components::{
 };
 use super::helpers::{
     active_research_text, can_enqueue_for_ui, prerequisite_text, queue_text, science_cost_text,
-    start_queue_label, technology_by_id, technology_name, technology_progress_text,
-    technology_state_color, technology_state_label, technology_ui_state, unlock_text,
+    start_queue_label, technology_name, technology_progress_text, technology_state_color,
+    technology_state_label, technology_ui_state, unlock_text,
 };
 
 pub(crate) fn spawn_technology_panel(
@@ -139,7 +139,9 @@ fn spawn_technology_button(
     technology_id: TechnologyId,
     selected: bool,
 ) {
-    let technology = technology_by_id(sim.catalog(), technology_id)
+    let technology = sim
+        .catalog()
+        .technology(technology_id)
         .expect("technology list should contain valid ids");
     let state = technology_ui_state(sim, technology_id);
 
@@ -208,7 +210,7 @@ fn spawn_technology_detail(
                 ));
                 return;
             };
-            let Some(technology) = technology_by_id(sim.catalog(), technology_id) else {
+            let Some(technology) = sim.catalog().technology(technology_id) else {
                 detail.spawn((
                     Text::new("Unknown technology"),
                     TextFont::from_font_size(14.0),

@@ -76,9 +76,8 @@ pub(in crate::simulation) fn validate_assembler(
 
     sim.world
         .prototypes
-        .recipes
-        .get(recipe_id.index())
-        .filter(|recipe| recipe.id == recipe_id && recipe.category == CraftingCategory::Crafting)
+        .recipe(recipe_id)
+        .filter(|recipe| recipe.category == CraftingCategory::Crafting)
         .ok_or(SimValidationError::InvalidMachineRecipe {
             entity_id,
             recipe_id,
@@ -103,7 +102,7 @@ pub(in crate::simulation) fn validate_lab(
     }
 
     if let Some(technology_id) = state.active_technology
-        && technology_by_id(&sim.world.prototypes, technology_id).is_none()
+        && sim.world.prototypes.technology(technology_id).is_none()
     {
         return Err(SimValidationError::InvalidActiveResearch { technology_id });
     }
@@ -125,7 +124,7 @@ pub(in crate::simulation) fn validate_belt_segment(
         .entities
         .placed_entity(entity_id)
         .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
-    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+    let prototype = sim.world.prototypes.entity(placed.prototype_id).ok_or(
         SimValidationError::InvalidEntityPrototype {
             entity_id,
             prototype_id: placed.prototype_id,
@@ -162,7 +161,7 @@ pub(in crate::simulation) fn validate_splitter_state(
         .entities
         .placed_entity(entity_id)
         .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
-    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+    let prototype = sim.world.prototypes.entity(placed.prototype_id).ok_or(
         SimValidationError::InvalidEntityPrototype {
             entity_id,
             prototype_id: placed.prototype_id,

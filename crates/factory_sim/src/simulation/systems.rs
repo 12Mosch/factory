@@ -381,13 +381,7 @@ impl Simulation {
                 continue;
             };
 
-            let Some(technology) = self
-                .world
-                .prototypes
-                .technologies
-                .get(technology_id.index())
-                .filter(|technology| technology.id == technology_id)
-            else {
+            let Some(technology) = self.world.prototypes.technology(technology_id) else {
                 if let Ok(state) = self.entities.lab_state_mut(entity_id) {
                     state.active_technology = None;
                     state.progress_ticks = 0;
@@ -463,13 +457,7 @@ impl Simulation {
             let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
                 continue;
             };
-            let Some(prototype) = self
-                .world
-                .prototypes
-                .entities
-                .get(placed.prototype_id.index())
-                .filter(|prototype| prototype.id == placed.prototype_id)
-            else {
+            let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
                 continue;
             };
             let Some(inserter) = prototype.inserter.as_ref().cloned() else {

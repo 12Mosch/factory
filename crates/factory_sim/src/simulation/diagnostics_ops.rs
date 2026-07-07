@@ -129,12 +129,7 @@ impl Simulation {
         }
 
         if let Some(technology_id) = self.research.active
-            && let Some(technology) = self
-                .world
-                .prototypes
-                .technologies
-                .get(technology_id.index())
-                .filter(|technology| technology.id == technology_id)
+            && let Some(technology) = self.world.prototypes.technology(technology_id)
         {
             let mut missing_by_pack = BTreeMap::<ItemId, usize>::new();
             for state in self.entities.labs.values() {
@@ -254,13 +249,7 @@ impl Simulation {
         let Some(placed) = self.entities.placed_entity(entity_id) else {
             return MachineStatus::Idle;
         };
-        let Some(prototype) = self
-            .world
-            .prototypes
-            .entities
-            .get(placed.prototype_id.index())
-            .filter(|prototype| prototype.id == placed.prototype_id)
-        else {
+        let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
             return MachineStatus::Idle;
         };
         let Some(mining_drill) = prototype.mining_drill.as_ref() else {
@@ -348,13 +337,7 @@ impl Simulation {
         let Some(technology_id) = state.active_technology.or(self.research.active) else {
             return MachineStatus::NoResearch;
         };
-        let Some(technology) = self
-            .world
-            .prototypes
-            .technologies
-            .get(technology_id.index())
-            .filter(|technology| technology.id == technology_id)
-        else {
+        let Some(technology) = self.world.prototypes.technology(technology_id) else {
             return MachineStatus::NoResearch;
         };
         if !lab_has_science_packs(&state.inventory, &technology.science_packs) {
@@ -385,9 +368,7 @@ impl Simulation {
         let Some(boiler) = self
             .world
             .prototypes
-            .entities
-            .get(placed.prototype_id.index())
-            .filter(|prototype| prototype.id == placed.prototype_id)
+            .entity(placed.prototype_id)
             .and_then(|prototype| prototype.boiler.as_ref())
         else {
             return MachineStatus::Idle;
@@ -490,9 +471,7 @@ fn hint_kind_order(kind: BottleneckHintKind) -> u8 {
 
 fn item_display_name(catalog: &PrototypeCatalog, item_id: ItemId) -> String {
     catalog
-        .items
-        .get(item_id.index())
-        .filter(|item| item.id == item_id)
+        .item(item_id)
         .map(|item| title_case_identifier(&item.name))
         .unwrap_or_else(|| "Unknown".to_string())
 }

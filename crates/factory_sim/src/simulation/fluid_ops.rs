@@ -253,9 +253,7 @@ impl Simulation {
             let Some(pump) = self
                 .world
                 .prototypes
-                .entities
-                .get(placed.prototype_id.index())
-                .filter(|prototype| prototype.id == placed.prototype_id)
+                .entity(placed.prototype_id)
                 .and_then(|prototype| prototype.offshore_pump.as_ref())
             else {
                 continue;
@@ -283,13 +281,7 @@ impl Simulation {
             let Some(placed) = self.entities.placed_entity(entity_id) else {
                 continue;
             };
-            let Some(entity_prototype) = self
-                .world
-                .prototypes
-                .entities
-                .get(placed.prototype_id.index())
-                .filter(|prototype| prototype.id == placed.prototype_id)
-            else {
+            let Some(entity_prototype) = self.world.prototypes.entity(placed.prototype_id) else {
                 continue;
             };
             let Some(boiler) = entity_prototype.boiler.as_ref() else {
@@ -421,13 +413,7 @@ impl Simulation {
             let Some(entity_fluid_boxes) = self.entities.fluid_boxes.get(&placed.id) else {
                 continue;
             };
-            let Some(prototype) = self
-                .world
-                .prototypes
-                .entities
-                .get(placed.prototype_id.index())
-                .filter(|prototype| prototype.id == placed.prototype_id)
-            else {
+            let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
                 continue;
             };
 
@@ -524,9 +510,7 @@ impl Simulation {
         let placed = self.entities.placed_entity(key.entity_id)?;
         self.world
             .prototypes
-            .entities
-            .get(placed.prototype_id.index())
-            .filter(|prototype| prototype.id == placed.prototype_id)?
+            .entity(placed.prototype_id)?
             .fluid_boxes
             .get(key.box_index)
             .map(|fluid_box| fluid_box.capacity_milliunits)
@@ -550,12 +534,7 @@ impl Simulation {
 
     fn fluid_network_box_snapshot(&self, key: FluidBoxKey) -> Option<FluidNetworkBoxSnapshot> {
         let placed = self.entities.placed_entity(key.entity_id)?;
-        let prototype = self
-            .world
-            .prototypes
-            .entities
-            .get(placed.prototype_id.index())
-            .filter(|prototype| prototype.id == placed.prototype_id)?;
+        let prototype = self.world.prototypes.entity(placed.prototype_id)?;
         let fluid_box = prototype.fluid_boxes.get(key.box_index)?;
         let state = self
             .entities

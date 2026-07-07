@@ -4,10 +4,7 @@ pub(in crate::simulation) fn inserter_transfer_tiles(
     catalog: &PrototypeCatalog,
     placed: &PlacedEntity,
 ) -> Option<((i32, i32), (i32, i32))> {
-    let prototype = catalog
-        .entities
-        .get(placed.prototype_id.index())
-        .filter(|prototype| prototype.id == placed.prototype_id)?;
+    let prototype = catalog.entity(placed.prototype_id)?;
     let inserter = prototype.inserter.as_ref()?;
 
     Some(inserter_transfer_tiles_for_prototype(placed, inserter))

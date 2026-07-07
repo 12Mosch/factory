@@ -7,11 +7,7 @@ pub(super) fn recipe_by_id(
     catalog: &PrototypeCatalog,
     recipe_id: RecipeId,
 ) -> &crate::RecipePrototype {
-    catalog
-        .recipes
-        .get(recipe_id.index())
-        .filter(|recipe| recipe.id == recipe_id)
-        .expect("recipe id should resolve")
+    catalog.recipe(recipe_id).expect("recipe id should resolve")
 }
 
 pub(super) fn researchable_technology_ids(catalog: &PrototypeCatalog) -> BTreeSet<TechnologyId> {

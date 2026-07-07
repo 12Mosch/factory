@@ -61,7 +61,9 @@ pub(crate) fn technology_progress_text(
     technology_id: TechnologyId,
 ) -> String {
     let progress = sim.technology_progress(technology_id).unwrap_or(0);
-    let required = technology_by_id(sim.catalog(), technology_id)
+    let required = sim
+        .catalog()
+        .technology(technology_id)
         .map(|technology| technology.required_units)
         .unwrap_or(0);
     format!("{progress}/{required}")
@@ -152,9 +154,7 @@ pub(crate) fn unlock_text(
         .iter()
         .map(|effect| match *effect {
             TechnologyEffect::UnlockRecipe(recipe_id) => catalog
-                .recipes
-                .get(recipe_id.index())
-                .filter(|recipe| recipe.id == recipe_id)
+                .recipe(recipe_id)
                 .map(|recipe| format_recipe_display_name(&recipe.name))
                 .unwrap_or_else(|| "Unknown".to_string()),
         })
@@ -184,19 +184,10 @@ pub(crate) fn start_queue_label(
 }
 
 pub(crate) fn technology_name(catalog: &PrototypeCatalog, technology_id: TechnologyId) -> String {
-    technology_by_id(catalog, technology_id)
+    catalog
+        .technology(technology_id)
         .map(|technology| format_recipe_display_name(&technology.name))
         .unwrap_or_else(|| "Unknown".to_string())
-}
-
-pub(crate) fn technology_by_id(
-    catalog: &PrototypeCatalog,
-    technology_id: TechnologyId,
-) -> Option<&factory_data::TechnologyPrototype> {
-    catalog
-        .technologies
-        .get(technology_id.index())
-        .filter(|technology| technology.id == technology_id)
 }
 
 pub(crate) fn can_enqueue_for_ui(
@@ -209,10 +200,12 @@ pub(crate) fn can_enqueue_for_ui(
 }
 
 fn prerequisites_researched(sim: &factory_sim::Simulation, technology_id: TechnologyId) -> bool {
-    technology_by_id(sim.catalog(), technology_id).is_some_and(|technology| {
-        technology
-            .prerequisites
-            .iter()
-            .all(|prerequisite_id| sim.is_technology_unlocked(*prerequisite_id))
-    })
+    sim.catalog()
+        .technology(technology_id)
+        .is_some_and(|technology| {
+            technology
+                .prerequisites
+                .iter()
+                .all(|prerequisite_id| sim.is_technology_unlocked(*prerequisite_id))
+        })
 }

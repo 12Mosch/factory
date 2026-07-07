@@ -25,9 +25,7 @@ pub(in crate::simulation) fn recipe_is_unlocked(
 
     catalog.technologies.iter().any(|technology| {
         research
-            .technologies
-            .get(technology.id.index())
-            .filter(|state| state.technology_id == technology.id)
+            .technology_state(technology.id)
             .is_some_and(|state| state.unlocked)
             && technology.effects.iter().any(|effect| {
                 matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
@@ -111,9 +109,8 @@ pub(in crate::simulation) fn selected_assembler_recipe<'a>(
 ) -> Option<&'a factory_data::RecipePrototype> {
     let recipe_id = state.selected_recipe?;
     catalog
-        .recipes
-        .get(recipe_id.index())
-        .filter(|recipe| recipe.id == recipe_id && recipe_is_unlocked(catalog, research, recipe.id))
+        .recipe(recipe_id)
+        .filter(|recipe| recipe_is_unlocked(catalog, research, recipe.id))
 }
 
 pub(in crate::simulation) fn assembler_input_can_accept(
@@ -126,9 +123,8 @@ pub(in crate::simulation) fn assembler_input_can_accept(
         return false;
     };
     let Some(recipe) = catalog
-        .recipes
-        .get(recipe_id.index())
-        .filter(|recipe| recipe.id == recipe_id && recipe.category == CraftingCategory::Crafting)
+        .recipe(recipe_id)
+        .filter(|recipe| recipe.category == CraftingCategory::Crafting)
     else {
         return false;
     };

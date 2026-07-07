@@ -203,17 +203,13 @@ impl Simulation {
 
     pub fn is_technology_unlocked(&self, technology_id: TechnologyId) -> bool {
         self.research
-            .technologies
-            .get(technology_id.index())
-            .filter(|state| state.technology_id == technology_id)
+            .technology_state(technology_id)
             .is_some_and(|state| state.unlocked)
     }
 
     pub fn technology_progress(&self, technology_id: TechnologyId) -> Option<u32> {
         self.research
-            .technologies
-            .get(technology_id.index())
-            .filter(|state| state.technology_id == technology_id)
+            .technology_state(technology_id)
             .map(|state| state.progress_units)
     }
 
@@ -294,15 +290,11 @@ impl Simulation {
         let technology = self
             .world
             .prototypes
-            .technologies
-            .get(technology_id.index())
-            .filter(|technology| technology.id == technology_id)
+            .technology(technology_id)
             .ok_or(ResearchError::MissingTechnology(technology_id))?;
         let state = self
             .research
-            .technologies
-            .get_mut(technology_id.index())
-            .filter(|state| state.technology_id == technology_id)
+            .technology_state_mut(technology_id)
             .ok_or(ResearchError::MissingTechnology(technology_id))?;
 
         state.progress_units = state
@@ -329,13 +321,7 @@ impl Simulation {
     }
 
     pub fn is_entity_unlocked(&self, prototype_id: EntityPrototypeId) -> bool {
-        let Some(prototype) = self
-            .world
-            .prototypes
-            .entities
-            .get(prototype_id.index())
-            .filter(|prototype| prototype.id == prototype_id)
-        else {
+        let Some(prototype) = self.world.prototypes.entity(prototype_id) else {
             return false;
         };
         let Some(build_item) = prototype.build_item else {
@@ -517,9 +503,7 @@ impl Simulation {
     ) -> Result<&factory_data::TechnologyPrototype, ResearchError> {
         self.world
             .prototypes
-            .technologies
-            .get(technology_id.index())
-            .filter(|technology| technology.id == technology_id)
+            .technology(technology_id)
             .ok_or(ResearchError::MissingTechnology(technology_id))
     }
 
@@ -528,9 +512,7 @@ impl Simulation {
         technology_id: TechnologyId,
     ) -> Result<&TechnologyResearchState, ResearchError> {
         self.research
-            .technologies
-            .get(technology_id.index())
-            .filter(|state| state.technology_id == technology_id)
+            .technology_state(technology_id)
             .ok_or(ResearchError::MissingTechnology(technology_id))
     }
 }

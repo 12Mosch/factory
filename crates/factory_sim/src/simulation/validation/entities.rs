@@ -1,5 +1,4 @@
 use super::super::*;
-use super::ids::*;
 
 pub(super) fn validate_entity_occupancy(entities: &EntityStore) -> Result<(), SimValidationError> {
     let mut expected = BTreeMap::new();
@@ -61,21 +60,28 @@ macro_rules! define_validate_entity_state_ownership {
 }
 for_each_entity_state_map!(define_validate_entity_state_ownership);
 
-fn validate_fluid_box_owner(
+fn owner_prototype(
     sim: &Simulation,
     entity_id: EntityId,
-) -> Result<(), SimValidationError> {
+) -> Result<&factory_data::EntityPrototype, SimValidationError> {
     let placed = sim
         .entities
         .placed_entities
         .get(&entity_id)
         .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
-    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
+    sim.world.prototypes.entity(placed.prototype_id).ok_or(
         SimValidationError::InvalidEntityPrototype {
             entity_id,
             prototype_id: placed.prototype_id,
         },
-    )?;
+    )
+}
+
+fn validate_fluid_box_owner(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<(), SimValidationError> {
+    let prototype = owner_prototype(sim, entity_id)?;
 
     if prototype.fluid_boxes.is_empty() {
         return Err(SimValidationError::InvalidEntityState { entity_id });
@@ -88,17 +94,7 @@ fn validate_electric_consumer_owner(
     sim: &Simulation,
     entity_id: EntityId,
 ) -> Result<(), SimValidationError> {
-    let placed = sim
-        .entities
-        .placed_entities
-        .get(&entity_id)
-        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
-    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
-        SimValidationError::InvalidEntityPrototype {
-            entity_id,
-            prototype_id: placed.prototype_id,
-        },
-    )?;
+    let prototype = owner_prototype(sim, entity_id)?;
 
     if prototype.electric_energy_source.is_none() {
         return Err(SimValidationError::InvalidEntityState { entity_id });
@@ -112,17 +108,7 @@ fn validate_entity_state_kind(
     entity_id: EntityId,
     expected_kind: EntityKind,
 ) -> Result<(), SimValidationError> {
-    let placed = sim
-        .entities
-        .placed_entities
-        .get(&entity_id)
-        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
-    let prototype = entity_prototype_by_id(&sim.world.prototypes, placed.prototype_id).ok_or(
-        SimValidationError::InvalidEntityPrototype {
-            entity_id,
-            prototype_id: placed.prototype_id,
-        },
-    )?;
+    let prototype = owner_prototype(sim, entity_id)?;
 
     if prototype.entity_kind != expected_kind {
         return Err(SimValidationError::InvalidEntityState { entity_id });

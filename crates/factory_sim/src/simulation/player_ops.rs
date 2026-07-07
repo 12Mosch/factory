@@ -127,9 +127,7 @@ impl Simulation {
         let recipe = self
             .world
             .prototypes
-            .recipes
-            .get(recipe_id.index())
-            .filter(|recipe| recipe.id == recipe_id)
+            .recipe(recipe_id)
             .ok_or(CraftingError::MissingRecipe(recipe_id))?;
 
         if !matches!(
@@ -188,9 +186,7 @@ impl Simulation {
         let recipe = self
             .world
             .prototypes
-            .recipes
-            .get(recipe_id.index())
-            .filter(|recipe| recipe.id == recipe_id)
+            .recipe(recipe_id)
             .expect("queued manual craft should reference an existing recipe");
         let products = recipe.products.clone();
         let mut inventory = self.player_inventory.clone();
