@@ -69,6 +69,8 @@ impl MachineTickContext<'_> {
                         .expect("assembler checked output capacity before completion");
                 }
             });
+            // Recipe slices borrow prototypes here, so record through the field
+            // instead of taking a mutable borrow of the whole tick context.
             for ingredient in ingredients {
                 self.statistics
                     .record_item_consumed(ingredient.item, u64::from(ingredient.amount));

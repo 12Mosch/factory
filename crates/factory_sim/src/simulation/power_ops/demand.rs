@@ -5,18 +5,34 @@ pub(super) fn consumer_power_demand_for(
     entities: &EntityStore,
     research: &ResearchState,
     entity_id: EntityId,
-) -> Option<(Option<u32>, u64, u64)> {
-    let placed = entities.placed_entity(entity_id)?;
-    let energy_source = catalog
-        .entity(placed.prototype_id)?
-        .electric_energy_source
-        .as_ref()?;
+) -> Option<(u64, u64)> {
+    let energy_source = electric_consumer_power_source(catalog, entities, entity_id)?;
     let active_usage_watts = if electric_consumer_can_work(catalog, entities, research, entity_id) {
         energy_source.energy_usage_watts
     } else {
         0
     };
-    Some((None, active_usage_watts, energy_source.drain_watts))
+    Some((active_usage_watts, energy_source.drain_watts))
+}
+
+pub(super) fn electric_consumer_has_power_source(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    entity_id: EntityId,
+) -> bool {
+    electric_consumer_power_source(catalog, entities, entity_id).is_some()
+}
+
+fn electric_consumer_power_source<'a>(
+    catalog: &'a PrototypeCatalog,
+    entities: &EntityStore,
+    entity_id: EntityId,
+) -> Option<&'a factory_data::ElectricEnergySourcePrototype> {
+    let placed = entities.placed_entity(entity_id)?;
+    catalog
+        .entity(placed.prototype_id)?
+        .electric_energy_source
+        .as_ref()
 }
 
 fn electric_consumer_can_work(

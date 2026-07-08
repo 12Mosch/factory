@@ -54,11 +54,11 @@ impl Simulation {
         let network_ids_by_entity = &self.power.topology.network_ids_by_entity;
         self.power.entity_statuses.retain(|entity_id, _| {
             entities.electric_consumers.contains_key(entity_id)
-                && consumer_power_demand_for(catalog, entities, research, *entity_id).is_some()
+                && electric_consumer_has_power_source(catalog, entities, *entity_id)
         });
 
         for &entity_id in entities.electric_consumers.keys() {
-            let Some((_, active_usage_watts, drain_watts)) =
+            let Some((active_usage_watts, drain_watts)) =
                 consumer_power_demand_for(catalog, entities, research, entity_id)
             else {
                 continue;

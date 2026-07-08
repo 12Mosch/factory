@@ -61,6 +61,8 @@ impl MachineTickContext<'_> {
                         .expect("lab checked science packs before completion");
                 }
             });
+            // Science-pack slices borrow prototypes here, so record through the field
+            // instead of taking a mutable borrow of the whole tick context.
             for science_pack in science_packs {
                 self.statistics
                     .record_item_consumed(science_pack.item, u64::from(science_pack.amount));
