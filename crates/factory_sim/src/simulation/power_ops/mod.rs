@@ -47,23 +47,35 @@ impl Simulation {
 
         self.ensure_fluid_network_topology();
         let mut networks = self.power.topology.network_accumulators();
-        let consumer_demands = self.consumer_power_demands();
 
-        for (entity_id, (active_usage_watts, drain_watts)) in &consumer_demands {
-            let Some(network_id) = self
-                .power
-                .topology
-                .network_ids_by_entity
-                .get(entity_id)
-                .copied()
+        let catalog = &self.world.prototypes;
+        let entities = &self.entities;
+        let research = &self.research;
+        let network_ids_by_entity = &self.power.topology.network_ids_by_entity;
+        self.power.entity_statuses.retain(|entity_id, _| {
+            entities.electric_consumers.contains_key(entity_id)
+                && consumer_power_demand_for(catalog, entities, research, *entity_id).is_some()
+        });
+
+        for &entity_id in entities.electric_consumers.keys() {
+            let Some((_, active_usage_watts, drain_watts)) =
+                consumer_power_demand_for(catalog, entities, research, entity_id)
             else {
                 continue;
             };
-            let network = &mut networks[network_id as usize];
-            network.consumer_count += 1;
-            network.consumption_watts = network
-                .consumption_watts
-                .saturating_add(active_usage_watts.saturating_add(*drain_watts));
+            let network_id = network_ids_by_entity.get(&entity_id).copied();
+            let status = self.power.entity_statuses.entry(entity_id).or_default();
+            status.network_id = network_id;
+            status.active_usage_watts = active_usage_watts;
+            status.drain_watts = drain_watts;
+
+            if let Some(network_id) = network_id {
+                let network = &mut networks[network_id as usize];
+                network.consumer_count += 1;
+                network.consumption_watts = network
+                    .consumption_watts
+                    .saturating_add(active_usage_watts.saturating_add(drain_watts));
+            }
         }
 
         let engine_assignments = self.assign_steam_engines_to_fluid_networks(
@@ -92,8 +104,13 @@ impl Simulation {
         self.refresh_fluid_networks_after_dynamic_changes();
         self.power.networks = network_snapshots(&networks);
         self.power.summary = aggregate_power_summary(&self.power.networks);
-        self.power.entity_statuses = self
-            .consumer_power_statuses(&self.power.topology.network_ids_by_entity, consumer_demands);
+        for status in self.power.entity_statuses.values_mut() {
+            status.satisfaction_permyriad = status
+                .network_id
+                .and_then(|network_id| self.power.networks.get(network_id as usize))
+                .map(|network| network.satisfaction_permyriad)
+                .unwrap_or(0);
+        }
         self.record_power_sample();
     }
 

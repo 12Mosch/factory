@@ -200,33 +200,7 @@ impl<'a> MachineTickContext<'a> {
     }
 
     pub(super) fn electric_work_allowed(&mut self, entity_id: EntityId) -> bool {
-        let satisfaction_permyriad = self
-            .power
-            .entity_statuses
-            .get(&entity_id)
-            .map(|status| status.satisfaction_permyriad)
-            .unwrap_or(0);
-        if satisfaction_permyriad == 0 {
-            return false;
-        }
-
-        let Some(state) = self.entities.electric_consumers.get_mut(&entity_id) else {
-            return true;
-        };
-        if satisfaction_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
-            state.work_remainder_permyriad = 0;
-            return true;
-        }
-
-        state.work_remainder_permyriad = state
-            .work_remainder_permyriad
-            .saturating_add(satisfaction_permyriad);
-        if state.work_remainder_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
-            state.work_remainder_permyriad -= POWER_SATISFACTION_FULL_PERMYRIAD;
-            true
-        } else {
-            false
-        }
+        electric_work_allowed_for(self.power, &mut self.entities.electric_consumers, entity_id)
     }
 
     pub(super) fn record_item_produced(&mut self, item_id: ItemId, amount: u64) {
@@ -242,6 +216,39 @@ impl<'a> MachineTickContext<'a> {
         units: u32,
     ) -> Result<ResearchProgressResult, ResearchError> {
         add_research_units_to_state(&self.world.prototypes, self.research, units)
+    }
+}
+
+pub(super) fn electric_work_allowed_for(
+    power: &PowerSubsystem,
+    electric_consumers: &mut BTreeMap<EntityId, ElectricConsumerState>,
+    entity_id: EntityId,
+) -> bool {
+    let satisfaction_permyriad = power
+        .entity_statuses
+        .get(&entity_id)
+        .map(|status| status.satisfaction_permyriad)
+        .unwrap_or(0);
+    if satisfaction_permyriad == 0 {
+        return false;
+    }
+
+    let Some(state) = electric_consumers.get_mut(&entity_id) else {
+        return true;
+    };
+    if satisfaction_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
+        state.work_remainder_permyriad = 0;
+        return true;
+    }
+
+    state.work_remainder_permyriad = state
+        .work_remainder_permyriad
+        .saturating_add(satisfaction_permyriad);
+    if state.work_remainder_permyriad >= POWER_SATISFACTION_FULL_PERMYRIAD {
+        state.work_remainder_permyriad -= POWER_SATISFACTION_FULL_PERMYRIAD;
+        true
+    } else {
+        false
     }
 }
 

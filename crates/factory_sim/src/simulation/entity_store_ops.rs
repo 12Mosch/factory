@@ -219,19 +219,6 @@ impl EntityStore {
             .ok_or(InserterError::NotInserter(entity_id))
     }
 
-    pub(super) fn inserter_state_mut(
-        &mut self,
-        entity_id: EntityId,
-    ) -> Result<&mut InserterState, InserterError> {
-        if !self.placed_entities.contains_key(&entity_id) {
-            return Err(InserterError::MissingEntity(entity_id));
-        }
-
-        self.inserters
-            .get_mut(&entity_id)
-            .ok_or(InserterError::NotInserter(entity_id))
-    }
-
     pub(super) fn splitter_state(
         &self,
         entity_id: EntityId,

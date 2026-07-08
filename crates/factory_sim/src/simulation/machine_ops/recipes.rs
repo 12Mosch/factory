@@ -142,14 +142,22 @@ pub(in crate::simulation) fn assembler_has_ingredients(
     input_inventory: &Inventory,
     ingredients: &[factory_data::ItemAmount],
 ) -> bool {
-    let mut required = BTreeMap::<ItemId, u32>::new();
-    for ingredient in ingredients {
-        *required.entry(ingredient.item).or_default() += u32::from(ingredient.amount);
-    }
-
-    required
-        .into_iter()
-        .all(|(item_id, count)| input_inventory.count(item_id) >= count)
+    ingredients
+        .iter()
+        .enumerate()
+        .filter(|(index, ingredient)| {
+            ingredients[..*index]
+                .iter()
+                .all(|previous| previous.item != ingredient.item)
+        })
+        .all(|(_, ingredient)| {
+            let required = ingredients
+                .iter()
+                .filter(|candidate| candidate.item == ingredient.item)
+                .map(|candidate| u32::from(candidate.amount))
+                .sum();
+            input_inventory.count(ingredient.item) >= required
+        })
 }
 
 pub(in crate::simulation) fn assembler_output_can_accept(
@@ -157,10 +165,45 @@ pub(in crate::simulation) fn assembler_output_can_accept(
     output_inventory: &Inventory,
     products: &[factory_data::ItemAmount],
 ) -> bool {
-    let mut output = output_inventory.clone();
-    products
+    let empty_slots = output_inventory
+        .slots
         .iter()
-        .all(|product| output.insert(catalog, product.item, product.amount).is_ok())
+        .filter(|slot| slot.is_none())
+        .count();
+    let mut needed_empty_slots = 0usize;
+
+    for (index, product) in products.iter().enumerate() {
+        if products[..index]
+            .iter()
+            .any(|previous| previous.item == product.item)
+        {
+            continue;
+        }
+
+        let Some(stack_size) = item_stack_size(catalog, product.item).map(u32::from) else {
+            return false;
+        };
+        let required = products
+            .iter()
+            .filter(|candidate| candidate.item == product.item)
+            .map(|candidate| u32::from(candidate.amount))
+            .sum::<u32>();
+        let existing_capacity = output_inventory
+            .slots
+            .iter()
+            .filter_map(|slot| slot.as_ref())
+            .filter(|stack| stack.item_id == product.item)
+            .map(|stack| stack_size.saturating_sub(u32::from(stack.count)))
+            .sum::<u32>();
+        let remaining = required.saturating_sub(existing_capacity);
+        needed_empty_slots =
+            needed_empty_slots.saturating_add(remaining.div_ceil(stack_size) as usize);
+        if needed_empty_slots > empty_slots {
+            return false;
+        }
+    }
+
+    true
 }
 
 pub(in crate::simulation) fn stack_in_assembler_inventory_slot(
@@ -262,5 +305,85 @@ impl Simulation {
                 }
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assembler_inventory_checks_aggregate_duplicate_items_without_temporary_maps() {
+        let sim = Simulation::new_test_world(123);
+        let iron = item_id(&sim.world.prototypes, "iron_plate");
+        let copper = item_id(&sim.world.prototypes, "copper_plate");
+        let iron_stack_size =
+            item_stack_size(&sim.world.prototypes, iron).expect("iron should have stack size");
+
+        let input_inventory = Inventory {
+            slots: vec![Some(ItemStack {
+                item_id: iron,
+                count: 3,
+            })],
+        };
+        let duplicate_ingredients = vec![
+            factory_data::ItemAmount {
+                item: iron,
+                amount: 2,
+            },
+            factory_data::ItemAmount {
+                item: iron,
+                amount: 2,
+            },
+        ];
+        assert!(!assembler_has_ingredients(
+            &input_inventory,
+            &duplicate_ingredients
+        ));
+
+        let output_inventory = Inventory {
+            slots: vec![
+                Some(ItemStack {
+                    item_id: iron,
+                    count: iron_stack_size - 1,
+                }),
+                None,
+            ],
+        };
+        let competing_products = vec![
+            factory_data::ItemAmount {
+                item: iron,
+                amount: 2,
+            },
+            factory_data::ItemAmount {
+                item: iron,
+                amount: 2,
+            },
+            factory_data::ItemAmount {
+                item: copper,
+                amount: 1,
+            },
+        ];
+        assert!(!assembler_output_can_accept(
+            &sim.world.prototypes,
+            &output_inventory,
+            &competing_products
+        ));
+
+        let duplicate_products = vec![
+            factory_data::ItemAmount {
+                item: iron,
+                amount: iron_stack_size,
+            },
+            factory_data::ItemAmount {
+                item: iron,
+                amount: 1,
+            },
+        ];
+        assert!(!assembler_output_can_accept(
+            &sim.world.prototypes,
+            &Inventory { slots: vec![None] },
+            &duplicate_products
+        ));
     }
 }
