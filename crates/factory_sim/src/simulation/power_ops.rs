@@ -1,4 +1,5 @@
 use super::*;
+use crate::simulation::disjoint_set::DisjointSet;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
@@ -29,12 +30,6 @@ struct NetworkAccumulator {
     consumption_watts: u64,
     production_watts: u64,
     satisfaction_permyriad: u32,
-}
-
-#[derive(Clone)]
-struct UnionFind {
-    parents: Vec<usize>,
-    ranks: Vec<u8>,
 }
 
 impl Simulation {
@@ -125,14 +120,14 @@ impl Simulation {
             return PowerTopologyCache::default();
         }
 
-        let mut union_find = UnionFind::new(poles.len());
-        connect_poles_within_wire_reach(&poles, &mut union_find);
+        let mut disjoint_set = DisjointSet::new(poles.len());
+        connect_poles_within_wire_reach(&poles, &mut disjoint_set);
 
         let mut roots_by_min_entity = BTreeMap::<EntityId, usize>::new();
         for (index, pole) in poles.iter().enumerate() {
-            let root = union_find.find(index);
+            let root = disjoint_set.find(index);
             roots_by_min_entity
-                .entry(component_min_entity_id(root, &poles, &mut union_find))
+                .entry(component_min_entity_id(root, &poles, &mut disjoint_set))
                 .or_insert(root);
             debug_assert_eq!(pole.entity_id, poles[index].entity_id);
         }
@@ -146,7 +141,7 @@ impl Simulation {
         let mut coverage = BTreeMap::<(i32, i32), u32>::new();
 
         for (index, pole) in poles.iter().enumerate() {
-            let root = union_find.find(index);
+            let root = disjoint_set.find(index);
             let network_id = root_network_ids[&root];
             pole_counts[network_id as usize] += 1;
 
@@ -477,7 +472,7 @@ impl PowerTopologyCache {
     }
 }
 
-fn connect_poles_within_wire_reach(poles: &[PoleNode<'_>], union_find: &mut UnionFind) {
+fn connect_poles_within_wire_reach(poles: &[PoleNode<'_>], disjoint_set: &mut DisjointSet) {
     let max_reach_x2 = poles
         .iter()
         .map(|pole| i32::from(pole.prototype.wire_reach_tiles_x2))
@@ -510,7 +505,7 @@ fn connect_poles_within_wire_reach(poles: &[PoleNode<'_>], union_find: &mut Unio
                         continue;
                     }
                     if poles_are_within_mutual_reach(pole, &poles[*candidate_index]) {
-                        union_find.union(index, *candidate_index);
+                        disjoint_set.union(index, *candidate_index);
                     }
                 }
             }
@@ -534,12 +529,12 @@ fn poles_are_within_mutual_reach(first: &PoleNode<'_>, second: &PoleNode<'_>) ->
 fn component_min_entity_id(
     root: usize,
     poles: &[PoleNode<'_>],
-    union_find: &mut UnionFind,
+    disjoint_set: &mut DisjointSet,
 ) -> EntityId {
     poles
         .iter()
         .enumerate()
-        .filter(|(index, _)| union_find.find(*index) == root)
+        .filter(|(index, _)| disjoint_set.find(*index) == root)
         .map(|(_, pole)| pole.entity_id)
         .min()
         .expect("component root should contain at least one pole")
@@ -684,38 +679,5 @@ fn aggregate_power_summary(networks: &[PowerNetworkSnapshot]) -> PowerSummary {
         consumption_watts,
         satisfaction_permyriad,
         network_count: networks.len(),
-    }
-}
-
-impl UnionFind {
-    fn new(size: usize) -> Self {
-        Self {
-            parents: (0..size).collect(),
-            ranks: vec![0; size],
-        }
-    }
-
-    fn find(&mut self, index: usize) -> usize {
-        if self.parents[index] != index {
-            self.parents[index] = self.find(self.parents[index]);
-        }
-        self.parents[index]
-    }
-
-    fn union(&mut self, first: usize, second: usize) {
-        let first_root = self.find(first);
-        let second_root = self.find(second);
-        if first_root == second_root {
-            return;
-        }
-
-        match self.ranks[first_root].cmp(&self.ranks[second_root]) {
-            std::cmp::Ordering::Less => self.parents[first_root] = second_root,
-            std::cmp::Ordering::Greater => self.parents[second_root] = first_root,
-            std::cmp::Ordering::Equal => {
-                self.parents[second_root] = first_root;
-                self.ranks[first_root] += 1;
-            }
-        }
     }
 }
