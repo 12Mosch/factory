@@ -69,10 +69,7 @@ impl Simulation {
         profiler.measure(ProfilePhase::PowerRebuild, || self.refresh_power_state());
 
         let machines = profiler.begin();
-        self.advance_burner_mining_drills(profiler);
-        self.advance_furnaces(profiler);
-        self.advance_assembling_machines(profiler);
-        self.advance_labs(profiler);
+        self.advance_machines(profiler);
         profiler.finish(ProfilePhase::Machines, machines);
 
         let inserters = profiler.begin();
