@@ -17,6 +17,7 @@ impl MachineTickContext<'_> {
             profiler.measure(ProfilePhase::InventoryTransfers, || {
                 try_export_stored_drill_output_from_state(
                     self.entities,
+                    self.transport,
                     state,
                     output_target,
                     &self.world.prototypes,
@@ -75,6 +76,7 @@ impl MachineTickContext<'_> {
             profiler.measure(ProfilePhase::InventoryTransfers, || {
                 insert_drill_output_from_state(
                     self.entities,
+                    self.transport,
                     state,
                     output_target,
                     mined.resource_item,
@@ -91,6 +93,7 @@ impl MachineTickContext<'_> {
 
 fn insert_drill_output_from_state(
     entities: &mut EntityStore,
+    transport: &mut TransportLaneCache,
     state: &mut BurnerMiningDrillState,
     output_target: DrillOutputTarget,
     item_id: ItemId,
@@ -116,13 +119,11 @@ fn insert_drill_output_from_state(
                 .expect("validated output belt should still exist");
             let lane_index = belt_output_lane_index(segment, item_id)
                 .expect("validated belt lane should accept");
-            segment.lanes[lane_index].items.insert(
-                0,
-                BeltItem {
-                    item_id,
-                    position_subtile: 0,
-                },
-            );
+            insert_lane_item_at_entry(&mut segment.lanes[lane_index], item_id, 0);
+            transport.mark_active(TransportLaneKey::Belt {
+                entity_id,
+                lane_index,
+            });
         }
         DrillOutputTarget::Splitter {
             entity_id,
@@ -134,13 +135,12 @@ fn insert_drill_output_from_state(
                 .expect("validated output splitter should still exist");
             let lane_index = splitter_output_lane_index(state, input_port, item_id)
                 .expect("validated splitter lane should accept");
-            state.input_lanes[input_port][lane_index].items.insert(
-                0,
-                BeltItem {
-                    item_id,
-                    position_subtile: 0,
-                },
-            );
+            insert_lane_item_at_entry(&mut state.input_lanes[input_port][lane_index], item_id, 0);
+            transport.mark_active(TransportLaneKey::Splitter {
+                entity_id,
+                input_port,
+                lane_index,
+            });
         }
         DrillOutputTarget::Blocked => {
             unreachable!("blocked drill output is checked before mining")
@@ -150,6 +150,7 @@ fn insert_drill_output_from_state(
 
 fn try_export_stored_drill_output_from_state(
     entities: &mut EntityStore,
+    transport: &mut TransportLaneCache,
     state: &mut BurnerMiningDrillState,
     output_target: DrillOutputTarget,
     catalog: &PrototypeCatalog,
@@ -171,7 +172,15 @@ fn try_export_stored_drill_output_from_state(
         return false;
     }
 
-    insert_drill_output_from_state(entities, state, output_target, stack.item_id, 1, catalog);
+    insert_drill_output_from_state(
+        entities,
+        transport,
+        state,
+        output_target,
+        stack.item_id,
+        1,
+        catalog,
+    );
     remove_from_single_slot(&mut state.output_slot, stack.item_id, 1)
         .expect("stored drill output should still contain exported item");
 

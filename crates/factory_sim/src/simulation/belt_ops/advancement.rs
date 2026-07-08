@@ -1,4 +1,6 @@
-use super::cache::{TransportLaneGraph, TransportLaneVisitStorage, visit_state_index};
+use super::cache::{
+    TransportLaneActiveStorage, TransportLaneGraph, TransportLaneVisitStorage, visit_state_index,
+};
 use super::lane_access::{
     belt_lane_can_accept_position, lane_exists, lane_is_empty, lane_mut,
     lane_speed_subtiles_per_tick, set_lane_items, take_lane_items,
@@ -10,6 +12,7 @@ pub(in crate::simulation) struct TransportBeltAdvancement<'a> {
     entities: &'a mut EntityStore,
     graph: &'a TransportLaneGraph,
     visit_states: &'a mut TransportLaneVisitStorage,
+    active_lanes: &'a mut TransportLaneActiveStorage,
 }
 
 impl<'a> TransportBeltAdvancement<'a> {
@@ -17,17 +20,19 @@ impl<'a> TransportBeltAdvancement<'a> {
         entities: &'a mut EntityStore,
         graph: &'a TransportLaneGraph,
         visit_states: &'a mut TransportLaneVisitStorage,
+        active_lanes: &'a mut TransportLaneActiveStorage,
     ) -> Self {
         Self {
             entities,
             graph,
             visit_states,
+            active_lanes,
         }
     }
 
-    pub(in crate::simulation) fn process_all_lanes(&mut self) {
-        for index in 0..self.graph.lane_keys.len() {
-            self.process_lane(self.graph.lane_keys[index]);
+    pub(in crate::simulation) fn process_active_lanes(&mut self) {
+        for index in 0..self.active_lanes.lanes.len() {
+            self.process_lane(self.active_lanes.lanes[index]);
         }
     }
 
@@ -50,7 +55,9 @@ impl<'a> TransportBeltAdvancement<'a> {
             }
         }
 
-        self.advance_lane_items(key);
+        if self.advance_lane_items(key) {
+            self.mark_upstream_lanes_active(key);
+        }
         self.set_visit_state(key, BeltLaneVisitState::Done);
     }
 
@@ -95,20 +102,22 @@ impl<'a> TransportBeltAdvancement<'a> {
             .unwrap_or(0)
     }
 
-    fn advance_lane_items(&mut self, key: TransportLaneKey) {
+    fn advance_lane_items(&mut self, key: TransportLaneKey) -> bool {
         let Some(speed_subtiles_per_tick) = lane_speed_subtiles_per_tick(self.entities, key) else {
-            return;
+            return false;
         };
         if lane_is_empty(self.entities, key) {
-            return;
+            return false;
         }
         let Some(mut items) = take_lane_items(self.entities, key) else {
-            return;
+            return false;
         };
         let mut advanced_descending = SmallVec::<[BeltItem; 8]>::new();
         let mut downstream_item_position: Option<u16> = None;
+        let mut lane_changed = false;
 
         while let Some(mut item) = items.pop() {
+            let previous_position = item.position_subtile;
             let mut next_position = item.position_subtile + speed_subtiles_per_tick;
             if let Some(ahead_position) = downstream_item_position {
                 next_position =
@@ -118,6 +127,7 @@ impl<'a> TransportBeltAdvancement<'a> {
             if next_position >= BELT_SUBTILES_PER_TILE {
                 let carried_position = next_position - BELT_SUBTILES_PER_TILE;
                 if self.try_route_carried_item(key, item.item_id, carried_position) {
+                    lane_changed = true;
                     continue;
                 }
 
@@ -126,12 +136,17 @@ impl<'a> TransportBeltAdvancement<'a> {
                 item.position_subtile = next_position;
             }
 
+            lane_changed |= item.position_subtile != previous_position;
             downstream_item_position = Some(item.position_subtile);
             advanced_descending.push(item);
         }
 
         advanced_descending.reverse();
+        if lane_changed && !advanced_descending.is_empty() {
+            self.active_lanes.mark_pending(key);
+        }
         set_lane_items(self.entities, key, advanced_descending);
+        lane_changed
     }
 
     fn try_route_carried_item(
@@ -209,14 +224,15 @@ impl<'a> TransportBeltAdvancement<'a> {
             return false;
         }
 
-        lane.items.insert(
-            0,
-            BeltItem {
-                item_id,
-                position_subtile,
-            },
-        );
+        insert_lane_item_at_entry(lane, item_id, position_subtile);
+        self.active_lanes.mark_pending(key);
         true
+    }
+
+    fn mark_upstream_lanes_active(&mut self, key: TransportLaneKey) {
+        for upstream in self.graph.upstream_for(key) {
+            self.active_lanes.mark_pending(*upstream);
+        }
     }
 
     fn visit_state(&self, key: TransportLaneKey) -> Option<BeltLaneVisitState> {
@@ -244,4 +260,20 @@ impl<'a> TransportBeltAdvancement<'a> {
             BeltLaneVisitState::Done => 2,
         };
     }
+}
+
+pub(in crate::simulation) fn insert_lane_item_at_entry(
+    lane: &mut BeltLane,
+    item_id: ItemId,
+    position_subtile: u16,
+) {
+    lane.items.push(BeltItem {
+        item_id,
+        position_subtile,
+    });
+    // Belt lanes keep items sorted from upstream to downstream position.
+    // Entry inserts are rare and lanes are short, so this keeps the invariant
+    // simple without reintroducing front insertion.
+    lane.items
+        .sort_unstable_by_key(|item| item.position_subtile);
 }

@@ -12,8 +12,8 @@ pub(in crate::simulation) fn belt_pickup_item(segment: &BeltSegment) -> Option<I
 pub(in crate::simulation) fn remove_one_item_from_belt(
     segment: &mut BeltSegment,
     item_id: ItemId,
-) -> bool {
-    let Some((lane_index, item_index, _)) = segment
+) -> Option<usize> {
+    let (lane_index, item_index, _) = segment
         .lanes
         .iter()
         .enumerate()
@@ -24,13 +24,10 @@ pub(in crate::simulation) fn remove_one_item_from_belt(
                 .map(move |(item_index, item)| (lane_index, item_index, item))
         })
         .filter(|(_, _, item)| item.item_id == item_id)
-        .max_by_key(|(_, _, item)| item.position_subtile)
-    else {
-        return false;
-    };
+        .max_by_key(|(_, _, item)| item.position_subtile)?;
 
     segment.lanes[lane_index].items.remove(item_index);
-    true
+    Some(lane_index)
 }
 
 pub(in crate::simulation) fn splitter_pickup_item(state: &SplitterState) -> Option<ItemId> {
@@ -46,8 +43,8 @@ pub(in crate::simulation) fn splitter_pickup_item(state: &SplitterState) -> Opti
 pub(in crate::simulation) fn remove_one_item_from_splitter(
     state: &mut SplitterState,
     item_id: ItemId,
-) -> bool {
-    let Some((input_port, lane_index, item_index, _)) = state
+) -> Option<(usize, usize)> {
+    let (input_port, lane_index, item_index, _) = state
         .input_lanes
         .iter()
         .enumerate()
@@ -63,15 +60,12 @@ pub(in crate::simulation) fn remove_one_item_from_splitter(
                 })
         })
         .filter(|(_, _, _, item)| item.item_id == item_id)
-        .max_by_key(|(_, _, _, item)| item.position_subtile)
-    else {
-        return false;
-    };
+        .max_by_key(|(_, _, _, item)| item.position_subtile)?;
 
     state.input_lanes[input_port][lane_index]
         .items
         .remove(item_index);
-    true
+    Some((input_port, lane_index))
 }
 
 pub(in crate::simulation) fn belt_output_lane_index(
