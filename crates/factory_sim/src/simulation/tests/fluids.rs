@@ -559,6 +559,71 @@ fn incompatible_water_and_steam_network_is_blocked_and_does_not_mix() {
 }
 
 #[test]
+fn filtered_empty_network_rejects_wrong_fluid_before_insert() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let water = fluid_id(&catalog, "water");
+    let steam = fluid_id(&catalog, "steam");
+    let pipe = entity_id_by_name(&catalog, "pipe");
+    let tank = entity_id_by_name(&catalog, "storage_tank");
+    let zero_offset = catalog.entities[pipe.index()].fluid_boxes[0].connections[0].local_offset;
+    catalog.entities[pipe.index()].fluid_boxes[0].filter = Some(water);
+    catalog.entities[tank.index()].size.x = 1;
+    catalog.entities[tank.index()].size.y = 1;
+    catalog.entities[tank.index()].fluid_boxes[0].filter = None;
+    catalog.entities[tank.index()].fluid_boxes[0].capacity_milliunits = 100_000;
+    catalog.entities[tank.index()].fluid_boxes[0].connections =
+        vec![factory_data::FluidConnectionPrototype {
+            local_offset: zero_offset,
+            side: factory_data::FluidConnectionSide::West,
+        }];
+    let mut sim = Simulation::new(123, catalog);
+    let (x, y) = first_buildable_rect(&sim.world, 2, 1);
+    let pipe_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("pipe should be placeable");
+    let tank_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: tank,
+            x: x + 1,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("tank should be placeable");
+    sim.ensure_fluid_network_topology();
+    let network_id = sim
+        .fluid_network_id_for_box_key(FluidBoxKey {
+            entity_id: tank_id,
+            box_index: 0,
+        })
+        .expect("tank should be in a fluid network");
+
+    assert_eq!(
+        sim.fluid_network_available_capacity_for_fluid(network_id, steam),
+        0
+    );
+    assert_eq!(sim.add_fluid_to_network(network_id, steam, 10_000), 0);
+    assert_eq!(
+        sim.entities.fluid_boxes[&pipe_id][0],
+        FluidBoxState::default()
+    );
+    assert_eq!(
+        sim.entities.fluid_boxes[&tank_id][0],
+        FluidBoxState::default()
+    );
+    assert!(sim.fluid_network_available_capacity_for_fluid(network_id, water) > 0);
+    assert_eq!(sim.add_fluid_to_network(network_id, water, 10_000), 10_000);
+}
+
+#[test]
 fn save_load_preserves_fluid_boxes_networks_and_state_hash() {
     let mut sim = Simulation::new_test_world(123);
     let (_pump_id, pipe_id, _boiler_id) = place_pump_pipe_boiler_fixture(&mut sim);

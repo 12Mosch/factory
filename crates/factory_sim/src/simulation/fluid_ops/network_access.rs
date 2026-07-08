@@ -49,7 +49,7 @@ impl Simulation {
         let Some(network) = self.fluid_network_topology_by_id(network_id) else {
             return 0;
         };
-        if self.fluid_network_blocked(network) {
+        if !self.fluid_network_accepts_fluid(network, fluid_id) {
             return 0;
         }
 
@@ -216,16 +216,24 @@ impl Simulation {
             );
         }
 
-        available_milliunits
+        if scan.accepts_fluid(fluid_id) {
+            available_milliunits
+        } else {
+            0
+        }
     }
 
-    fn fluid_network_blocked(&self, network: &FluidNetworkTopology) -> bool {
+    fn fluid_network_accepts_fluid(
+        &self,
+        network: &FluidNetworkTopology,
+        fluid_id: FluidId,
+    ) -> bool {
         let mut scan = FluidNetworkFluidScan::default();
 
         for box_topology in &network.boxes {
             scan.observe_filter(box_topology.filter);
             if scan.blocked() {
-                return true;
+                return false;
             }
 
             let Some(state) = self
@@ -238,11 +246,11 @@ impl Simulation {
             };
             scan.observe_fluid_state(state);
             if scan.blocked() {
-                return true;
+                return false;
             }
         }
 
-        false
+        scan.accepts_fluid(fluid_id)
     }
 
     pub(super) fn fluid_network_snapshot(
@@ -366,5 +374,12 @@ impl FluidNetworkFluidScan {
             self.nonempty_fluid
                 .or_else(|| (!self.multiple_filters).then_some(self.filter).flatten())
         }
+    }
+
+    fn accepts_fluid(&self, fluid_id: FluidId) -> bool {
+        !self.blocked()
+            && self
+                .fluid_id()
+                .is_none_or(|network_fluid_id| network_fluid_id == fluid_id)
     }
 }
