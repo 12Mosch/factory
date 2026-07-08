@@ -3,14 +3,14 @@ use bevy::prelude::*;
 use factory_sim::Direction;
 
 use crate::audio::SoundEvent;
-use crate::input::build::select_build_slot;
-use crate::input::panels::world_input_blocked;
-use crate::placement::build::{build_status_from_preview, next_direction};
 use crate::build::resources::{
     BuildPlacementPreviewState, BuildPlacementState, BuildPlacementStatus, HOTBAR_SLOT_COUNT,
     HotbarState,
 };
+use crate::input::build::select_build_slot;
+use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
+use crate::placement::build::{build_status_from_preview, next_direction};
 use crate::resources::SimResource;
 use crate::ui::resources::TechnologyWindowState;
 use crate::utils::compact_item_name;

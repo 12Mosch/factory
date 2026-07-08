@@ -7,11 +7,11 @@ use factory_app::map::resources::{
 };
 use factory_app::rendering::resource_cells::ResourceRenderCache;
 use factory_app::resources::SimResource;
-use factory_app::ui::resources::OpenContainer;
 use factory_app::save_load::{
     LOAD_SAVE_SLOTS, MANUAL_SAVE_SLOTS, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig,
     SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState, SaveSlotKind, slot_path,
 };
+use factory_app::ui::resources::OpenContainer;
 use factory_app::ui::save_load::{SaveSlotAction, SaveSlotButton};
 use factory_data::{EntityPrototypeId, ItemId};
 use factory_sim::{ChunkCoord, EntityId, SAVE_VERSION, load_from_bytes, save_to_bytes};

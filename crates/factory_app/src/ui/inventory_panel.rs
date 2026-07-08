@@ -9,9 +9,9 @@ use factory_sim::{
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
 use crate::resources::SimResource;
-use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::{format_item_display_name, format_item_stack};
+use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 
 pub use factory_sim::InventoryPanel;
 

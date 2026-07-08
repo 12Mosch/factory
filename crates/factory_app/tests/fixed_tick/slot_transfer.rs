@@ -4,8 +4,8 @@ use super::common::{
 };
 use bevy::prelude::*;
 use factory_app::resources::SimResource;
-use factory_app::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use factory_app::ui::inventory_panel::{InventoryPanel, slot_transfer_error_message};
+use factory_app::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use factory_sim::{
     ContainerError, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
 };

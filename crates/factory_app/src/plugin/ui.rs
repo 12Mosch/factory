@@ -7,10 +7,6 @@ use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
 use crate::resources::UpsStats;
-use crate::ui::resources::{
-    CraftingWindowState, InventoryTransferFeedback, OpenContainer, ProductionStatsWindowState,
-    TechnologyWindowState,
-};
 use crate::ui::assembler_panel::{
     handle_assembler_recipe_button_clicks, update_assembler_detail_text,
     update_assembler_recipe_button_colors,
@@ -28,6 +24,10 @@ use crate::ui::manual_crafting::{
     sync_manual_crafting_panel,
 };
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
+use crate::ui::resources::{
+    CraftingWindowState, InventoryTransferFeedback, OpenContainer, ProductionStatsWindowState,
+    TechnologyWindowState,
+};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,

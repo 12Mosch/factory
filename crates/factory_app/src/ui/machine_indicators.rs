@@ -8,8 +8,8 @@ use factory_sim::{
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
-use crate::ui::resources::OpenContainer;
 use crate::ui::inventory_panel::{InventoryPanel, spawn_labeled_slot};
+use crate::ui::resources::OpenContainer;
 
 #[derive(Component)]
 pub(crate) struct BurnerEnergyText;

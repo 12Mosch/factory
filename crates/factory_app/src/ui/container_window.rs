@@ -3,7 +3,6 @@ use factory_sim::EntityId;
 
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
-use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::ui::assembler_panel::spawn_assembler_panel;
 use crate::ui::inventory_panel::{
     InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,
@@ -12,6 +11,7 @@ use crate::ui::inventory_panel::{
 use crate::ui::machine_indicators::{
     spawn_boiler_panel, spawn_burner_drill_panel, spawn_furnace_panel,
 };
+use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

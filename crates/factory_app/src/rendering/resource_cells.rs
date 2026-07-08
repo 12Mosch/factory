@@ -6,11 +6,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 use crate::constants::RESOURCE_SIZE;
+use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color};
+use crate::rendering::resources::{RenderDetail, RenderSyncStats};
 use crate::rendering::transforms::tile_translation;
 use crate::rendering::visuals::{VisualAssets, spawn_resource_visual};
-use crate::map::resources::VisibleChunks;
-use crate::rendering::resources::{RenderDetail, RenderSyncStats};
 use crate::resources::SimResource;
 
 #[derive(Component)]

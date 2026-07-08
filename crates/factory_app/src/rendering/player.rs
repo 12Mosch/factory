@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use std::time::Instant;
 
 use crate::constants::PLAYER_SPRITE_SIZE;
-use crate::rendering::transforms::player_translation;
 use crate::rendering::resources::RenderSyncStats;
+use crate::rendering::transforms::player_translation;
 use crate::resources::SimResource;
 
 #[derive(Component)]

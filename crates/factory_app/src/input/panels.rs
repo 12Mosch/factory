@@ -8,13 +8,13 @@ use crate::build::resources::{BuildMenuState, BuildPlacementState};
 use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapLayer, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
-use crate::ui::resources::{
-    CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
-};
 use crate::save_load::SaveLoadWindowState;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
     fullscreen_map_display_size, fullscreen_map_image_size,
+};
+use crate::ui::resources::{
+    CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
 
 pub(crate) fn reset_app_input_state(

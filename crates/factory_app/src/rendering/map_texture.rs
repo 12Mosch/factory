@@ -5,11 +5,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Simulation};
 
-use crate::rendering::colors::{RenderPrototypeIds, resource_color, tile_color};
 use crate::map::resources::{
     MapChunkPaintState, MapDisplaySettings, MapLayer, MapLayerTextureCache, MapTextureBounds,
     MapTextureCache, MapViewState,
 };
+use crate::rendering::colors::{RenderPrototypeIds, resource_color, tile_color};
 use crate::resources::SimResource;
 
 pub const UNREVEALED_PIXEL: [u8; 4] = [6, 7, 8, 255];

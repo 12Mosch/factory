@@ -2,11 +2,11 @@ use super::common::{
     entity_id_by_name, first_buildable_rect, first_placeable_resource_rect, item_id_by_name,
     place_powered_fixture_origin,
 };
+use factory_app::build::resources::BuildPlacementState;
 use factory_app::interaction::container_open::{
     container_open_input_allowed, opened_container_after_world_click,
 };
 use factory_app::placement::build::buildable_prototypes;
-use factory_app::build::resources::BuildPlacementState;
 use factory_data::PrototypeCatalog;
 use factory_sim::{Direction, Simulation};
 
