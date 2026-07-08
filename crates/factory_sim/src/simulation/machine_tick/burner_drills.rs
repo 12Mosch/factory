@@ -3,14 +3,9 @@ use super::*;
 
 impl MachineTickContext<'_> {
     pub(super) fn advance_burner_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
-        let drill_ids = self
-            .entities
-            .burner_mining_drills
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
+        let mut burner_mining_drills = std::mem::take(&mut self.entities.burner_mining_drills);
 
-        for entity_id in drill_ids {
+        for (&entity_id, state) in &mut burner_mining_drills {
             let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
                 continue;
             };
@@ -20,12 +15,12 @@ impl MachineTickContext<'_> {
             };
             let output_target = drill_output_target(self.entities, &placed);
             profiler.measure(ProfilePhase::InventoryTransfers, || {
-                try_export_stored_drill_output(
+                try_export_stored_drill_output_from_state(
                     self.entities,
-                    entity_id,
+                    state,
                     output_target,
                     &self.world.prototypes,
-                )
+                );
             });
 
             let target = first_resource_in_mining_area_profiled(
@@ -35,49 +30,34 @@ impl MachineTickContext<'_> {
                 profiler,
             );
             let Some((target, resource_item)) = target else {
-                if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
-                    state.resource_target = None;
-                    state.mining_progress_ticks = 0;
-                }
+                state.resource_target = None;
+                state.mining_progress_ticks = 0;
                 continue;
             };
 
-            let output_can_accept =
-                self.entities
-                    .burner_drill_state(entity_id)
-                    .is_ok_and(|state| {
-                        profiler.measure(ProfilePhase::InventoryTransfers, || {
-                            drill_output_target_can_accept(
-                                &self.world.prototypes,
-                                self.entities,
-                                output_target,
-                                state.output_slot,
-                                resource_item,
-                                1,
-                            )
-                        })
-                    });
+            let output_can_accept = profiler.measure(ProfilePhase::InventoryTransfers, || {
+                drill_output_target_can_accept(
+                    &self.world.prototypes,
+                    self.entities,
+                    output_target,
+                    state.output_slot,
+                    resource_item,
+                    1,
+                )
+            });
             if !output_can_accept {
-                if let Ok(state) = self.entities.burner_drill_state_mut(entity_id) {
-                    state.resource_target = Some(target);
-                }
+                state.resource_target = Some(target);
                 continue;
             }
 
-            let advance = {
-                let state = self
-                    .entities
-                    .burner_drill_state_mut(entity_id)
-                    .expect("burner drill id came from burner drill state map");
-                state.resource_target = Some(target);
-                advance_burner_progress(
-                    &self.world.prototypes,
-                    &mut state.energy,
-                    &mut state.mining_progress_ticks,
-                    state.mining_required_ticks,
-                    profiler,
-                )
-            };
+            state.resource_target = Some(target);
+            let advance = advance_burner_progress(
+                &self.world.prototypes,
+                &mut state.energy,
+                &mut state.mining_progress_ticks,
+                state.mining_required_ticks,
+                profiler,
+            );
             if let Some(item_id) = advance.consumed_fuel {
                 self.record_item_consumed(item_id, 1);
             }
@@ -93,9 +73,9 @@ impl MachineTickContext<'_> {
             debug_assert_eq!(mined.resource_item, resource_item);
             debug_assert_eq!(mined.amount, 1);
             profiler.measure(ProfilePhase::InventoryTransfers, || {
-                insert_drill_output(
+                insert_drill_output_from_state(
                     self.entities,
-                    entity_id,
+                    state,
                     output_target,
                     mined.resource_item,
                     mined.amount as u16,
@@ -104,5 +84,96 @@ impl MachineTickContext<'_> {
             });
             self.record_item_produced(mined.resource_item, u64::from(mined.amount));
         }
+
+        self.entities.burner_mining_drills = burner_mining_drills;
     }
+}
+
+fn insert_drill_output_from_state(
+    entities: &mut EntityStore,
+    state: &mut BurnerMiningDrillState,
+    output_target: DrillOutputTarget,
+    item_id: ItemId,
+    count: u16,
+    catalog: &PrototypeCatalog,
+) {
+    match output_target {
+        DrillOutputTarget::InternalSlot => {
+            insert_output_item(&mut state.output_slot, item_id, count);
+        }
+        DrillOutputTarget::Inventory(entity_id) => {
+            entities
+                .entity_inventories
+                .get_mut(&entity_id)
+                .expect("validated output inventory should still exist")
+                .insert(catalog, item_id, count)
+                .expect("validated output inventory should accept drill product");
+        }
+        DrillOutputTarget::Belt(entity_id) => {
+            let segment = entities
+                .transport_belts
+                .get_mut(&entity_id)
+                .expect("validated output belt should still exist");
+            let lane_index = belt_output_lane_index(segment, item_id)
+                .expect("validated belt lane should accept");
+            segment.lanes[lane_index].items.insert(
+                0,
+                BeltItem {
+                    item_id,
+                    position_subtile: 0,
+                },
+            );
+        }
+        DrillOutputTarget::Splitter {
+            entity_id,
+            input_port,
+        } => {
+            let state = entities
+                .splitters
+                .get_mut(&entity_id)
+                .expect("validated output splitter should still exist");
+            let lane_index = splitter_output_lane_index(state, input_port, item_id)
+                .expect("validated splitter lane should accept");
+            state.input_lanes[input_port][lane_index].items.insert(
+                0,
+                BeltItem {
+                    item_id,
+                    position_subtile: 0,
+                },
+            );
+        }
+        DrillOutputTarget::Blocked => {
+            unreachable!("blocked drill output is checked before mining")
+        }
+    }
+}
+
+fn try_export_stored_drill_output_from_state(
+    entities: &mut EntityStore,
+    state: &mut BurnerMiningDrillState,
+    output_target: DrillOutputTarget,
+    catalog: &PrototypeCatalog,
+) -> bool {
+    if !matches!(
+        output_target,
+        DrillOutputTarget::Inventory(_)
+            | DrillOutputTarget::Belt(_)
+            | DrillOutputTarget::Splitter { .. }
+    ) {
+        return false;
+    }
+
+    let Some(stack) = state.output_slot else {
+        return false;
+    };
+
+    if !drill_output_target_can_accept(catalog, entities, output_target, None, stack.item_id, 1) {
+        return false;
+    }
+
+    insert_drill_output_from_state(entities, state, output_target, stack.item_id, 1, catalog);
+    remove_from_single_slot(&mut state.output_slot, stack.item_id, 1)
+        .expect("stored drill output should still contain exported item");
+
+    true
 }

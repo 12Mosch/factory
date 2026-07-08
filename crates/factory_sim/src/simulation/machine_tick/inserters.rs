@@ -2,25 +2,23 @@ use super::*;
 
 impl MachineTickContext<'_> {
     pub(super) fn advance_inserters<P: TickProfiler>(&mut self, profiler: &mut P) {
-        let inserter_ids = self.entities.inserters.keys().copied().collect::<Vec<_>>();
+        let mut inserters = std::mem::take(&mut self.entities.inserters);
 
-        for entity_id in inserter_ids {
+        for (&entity_id, state) in &mut inserters {
             let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
                 continue;
             };
             let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
                 continue;
             };
-            let Some(inserter) = prototype.inserter.as_ref().cloned() else {
+            let Some(inserter) = prototype.inserter.as_ref() else {
                 continue;
             };
-            let Ok(state) = self.entities.inserter_state(entity_id).cloned() else {
-                continue;
-            };
-            let (pickup_tile, drop_tile) =
-                inserter_transfer_tiles_for_prototype(&placed, &inserter);
+            let pickup_ticks = inserter.pickup_ticks;
+            let drop_ticks = inserter.drop_ticks;
+            let (pickup_tile, drop_tile) = inserter_transfer_tiles_for_prototype(&placed, inserter);
 
-            let next_state = match state {
+            let next_state = match *state {
                 InserterState::WaitingForItem => {
                     let Some(item_id) = profiler.measure(ProfilePhase::InventoryTransfers, || {
                         peek_inserter_source_item(self.entities, pickup_tile)
@@ -44,7 +42,7 @@ impl MachineTickContext<'_> {
                     }
 
                     InserterState::Picking {
-                        ticks_left: inserter.pickup_ticks,
+                        ticks_left: pickup_ticks,
                     }
                 }
                 InserterState::Picking { ticks_left } => {
@@ -110,7 +108,7 @@ impl MachineTickContext<'_> {
                         )
                     }) {
                         InserterState::Dropping {
-                            ticks_left: inserter.drop_ticks,
+                            ticks_left: drop_ticks,
                         }
                     } else {
                         InserterState::Holding { item }
@@ -129,9 +127,9 @@ impl MachineTickContext<'_> {
                 }
             };
 
-            if let Ok(state) = self.entities.inserter_state_mut(entity_id) {
-                *state = next_state;
-            }
+            *state = next_state;
         }
+
+        self.entities.inserters = inserters;
     }
 }
