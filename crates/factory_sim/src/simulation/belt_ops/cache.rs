@@ -226,11 +226,7 @@ impl TransportLaneVisitStorage {
 
 impl TransportLaneActiveStorage {
     fn rebuild_from_entities(&mut self, entities: &EntityStore) {
-        self.active_generation = self.active_generation.wrapping_add(1);
-        if self.active_generation == 0 {
-            self.marks.fill(TransportLaneActiveSlot::default());
-            self.active_generation = 1;
-        }
+        advance_active_generation(&mut self.active_generation, &mut self.marks);
         self.lanes.clear();
 
         let required_len = transport_lane_index_len(entities);
@@ -270,74 +266,93 @@ impl TransportLaneActiveStorage {
             self.marks
                 .resize(required_len, TransportLaneActiveSlot::default());
         }
-        self.pending_generation = self.pending_generation.wrapping_add(1);
-        if self.pending_generation == 0 {
-            for mark in &mut self.marks {
-                mark.pending_generation = 0;
-            }
-            self.pending_generation = 1;
-        }
+        advance_pending_generation(&mut self.pending_generation, &mut self.marks);
         self.pending_lanes.clear();
     }
 
     pub(in crate::simulation) fn finish_tick(&mut self) {
-        self.active_generation = self.active_generation.wrapping_add(1);
-        if self.active_generation == 0 {
-            for mark in &mut self.marks {
-                mark.active_generation = 0;
-            }
-            self.active_generation = 1;
-        }
+        advance_active_generation(&mut self.active_generation, &mut self.marks);
 
         self.lanes.clear();
         self.lanes.reserve(self.pending_lanes.len());
-        for key in self.pending_lanes.drain(..) {
-            let Some(index) = visit_state_index(key) else {
-                continue;
-            };
-            let Some(mark) = self.marks.get_mut(index) else {
-                continue;
-            };
-            mark.active_generation = self.active_generation;
-            self.lanes.push(key);
+        let mut pending_lanes = std::mem::take(&mut self.pending_lanes);
+        for key in pending_lanes.drain(..) {
+            self.mark_active(key);
         }
+        self.pending_lanes = pending_lanes;
     }
 
     pub(in crate::simulation::belt_ops) fn mark_pending(&mut self, key: TransportLaneKey) {
-        let Some(index) = visit_state_index(key) else {
-            return;
-        };
-        if self.marks.len() <= index {
-            self.marks
-                .resize(index + 1, TransportLaneActiveSlot::default());
-        }
-        let Some(mark) = self.marks.get_mut(index) else {
-            return;
-        };
-        if mark.pending_generation == self.pending_generation {
-            return;
-        }
-        mark.pending_generation = self.pending_generation;
-        self.pending_lanes.push(key);
+        mark_active_lane(
+            &mut self.marks,
+            self.pending_generation,
+            key,
+            &mut self.pending_lanes,
+            |mark| mark.pending_generation,
+            |mark, generation| mark.pending_generation = generation,
+        );
     }
 
     fn mark_active(&mut self, key: TransportLaneKey) {
-        let Some(index) = visit_state_index(key) else {
-            return;
-        };
-        if self.marks.len() <= index {
-            self.marks
-                .resize(index + 1, TransportLaneActiveSlot::default());
-        }
-        let Some(mark) = self.marks.get_mut(index) else {
-            return;
-        };
-        if mark.active_generation == self.active_generation {
-            return;
-        }
-        mark.active_generation = self.active_generation;
-        self.lanes.push(key);
+        mark_active_lane(
+            &mut self.marks,
+            self.active_generation,
+            key,
+            &mut self.lanes,
+            |mark| mark.active_generation,
+            |mark, generation| mark.active_generation = generation,
+        );
     }
+}
+
+fn advance_active_generation(generation: &mut u32, marks: &mut [TransportLaneActiveSlot]) {
+    advance_generation(generation, marks, |mark| {
+        mark.active_generation = 0;
+    });
+}
+
+fn advance_pending_generation(generation: &mut u32, marks: &mut [TransportLaneActiveSlot]) {
+    advance_generation(generation, marks, |mark| {
+        mark.pending_generation = 0;
+    });
+}
+
+fn advance_generation(
+    generation: &mut u32,
+    marks: &mut [TransportLaneActiveSlot],
+    reset_mark: impl Fn(&mut TransportLaneActiveSlot),
+) {
+    *generation = generation.wrapping_add(1);
+    if *generation == 0 {
+        for mark in marks {
+            reset_mark(mark);
+        }
+        *generation = 1;
+    }
+}
+
+fn mark_active_lane(
+    marks: &mut Vec<TransportLaneActiveSlot>,
+    generation: u32,
+    key: TransportLaneKey,
+    lanes: &mut Vec<TransportLaneKey>,
+    current_generation: impl Fn(&TransportLaneActiveSlot) -> u32,
+    set_generation: impl Fn(&mut TransportLaneActiveSlot, u32),
+) {
+    let Some(index) = visit_state_index(key) else {
+        return;
+    };
+    if marks.len() <= index {
+        marks.resize(index + 1, TransportLaneActiveSlot::default());
+    }
+    let Some(mark) = marks.get_mut(index) else {
+        return;
+    };
+    if current_generation(mark) == generation {
+        return;
+    }
+    set_generation(mark, generation);
+    lanes.push(key);
 }
 
 pub(in crate::simulation::belt_ops) fn visit_state_index(key: TransportLaneKey) -> Option<usize> {
