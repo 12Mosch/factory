@@ -112,7 +112,8 @@ pub(in crate::simulation) fn belt_lane_can_accept_position(
     lane: &BeltLane,
     position_subtile: u16,
 ) -> bool {
+    let minimum_front_position = position_subtile.saturating_add(BELT_ITEM_SPACING_SUBTILES);
     lane.items
         .first()
-        .is_none_or(|first| first.position_subtile >= position_subtile + BELT_ITEM_SPACING_SUBTILES)
+        .is_none_or(|first| first.position_subtile >= minimum_front_position)
 }

@@ -69,7 +69,7 @@ impl TransportLaneCache {
 
 impl TransportLaneGraph {
     fn rebuild(&mut self, entities: &EntityStore) {
-        let lane_count = (entities.next_entity_id as usize).saturating_mul(4);
+        let lane_count = transport_lane_index_len(entities);
         self.lane_keys.clear();
         self.lane_keys.reserve(
             entities
@@ -134,6 +134,18 @@ impl TransportLaneGraph {
             .copied()
             .unwrap_or(TransportLaneDownstream::Missing)
     }
+}
+
+fn transport_lane_index_len(entities: &EntityStore) -> usize {
+    entities
+        .transport_belts
+        .keys()
+        .chain(entities.splitters.keys())
+        .filter_map(|entity_id| usize::try_from(entity_id.raw()).ok())
+        .max()
+        .and_then(|entity_index| entity_index.checked_add(1))
+        .and_then(|entity_count| entity_count.checked_mul(4))
+        .unwrap_or(0)
 }
 
 impl TransportLaneVisitStorage {

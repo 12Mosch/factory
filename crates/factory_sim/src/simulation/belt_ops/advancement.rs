@@ -141,32 +141,14 @@ impl<'a> TransportBeltAdvancement<'a> {
         position_subtile: u16,
     ) -> bool {
         match source {
-            TransportLaneKey::Belt {
-                entity_id,
-                lane_index,
-            } => {
-                let key = TransportLaneKey::Belt {
-                    entity_id,
-                    lane_index,
-                };
-                match self.graph.downstream_for(key) {
-                    TransportLaneDownstream::Belt {
-                        downstream: Some(downstream),
-                    } => self.try_insert_carried_item(downstream, item_id, position_subtile),
-                    _ => false,
-                }
-            }
-            TransportLaneKey::Splitter {
-                entity_id,
-                lane_index,
-                input_port,
-            } => {
-                let key = TransportLaneKey::Splitter {
-                    entity_id,
-                    input_port,
-                    lane_index,
-                };
-                self.try_route_splitter_item(key, item_id, position_subtile)
+            TransportLaneKey::Belt { .. } => match self.graph.downstream_for(source) {
+                TransportLaneDownstream::Belt {
+                    downstream: Some(downstream),
+                } => self.try_insert_carried_item(downstream, item_id, position_subtile),
+                _ => false,
+            },
+            TransportLaneKey::Splitter { .. } => {
+                self.try_route_splitter_item(source, item_id, position_subtile)
             }
         }
     }
