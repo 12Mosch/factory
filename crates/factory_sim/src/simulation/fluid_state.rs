@@ -1,30 +1,65 @@
 use super::*;
+use crate::simulation::fluid_ops::{FluidBoxKey, FluidNetworkTopology};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct FluidSubsystem {
     pub(super) networks: Vec<FluidNetworkSnapshot>,
+    #[serde(skip, default = "default_topology_dirty")]
+    pub(super) topology_dirty: bool,
+    #[serde(skip, default)]
+    pub(super) topology_networks: Vec<FluidNetworkTopology>,
     #[serde(skip, default)]
     pub(super) network_ids_by_box: HashMap<FluidBoxKey, u32>,
+    #[cfg(test)]
+    #[serde(skip, default)]
+    pub(super) topology_rebuilds: u64,
+}
+
+impl Default for FluidSubsystem {
+    fn default() -> Self {
+        Self {
+            networks: Vec::new(),
+            topology_dirty: true,
+            topology_networks: Vec::new(),
+            network_ids_by_box: HashMap::new(),
+            #[cfg(test)]
+            topology_rebuilds: 0,
+        }
+    }
 }
 
 impl FluidSubsystem {
     pub(super) fn from_networks(networks: Vec<FluidNetworkSnapshot>) -> Self {
-        let network_ids_by_box = network_ids_by_box(&networks);
         Self {
             networks,
-            network_ids_by_box,
+            topology_dirty: true,
+            topology_networks: Vec::new(),
+            network_ids_by_box: HashMap::new(),
+            #[cfg(test)]
+            topology_rebuilds: 0,
         }
     }
 
     pub(super) fn replace_networks(&mut self, networks: Vec<FluidNetworkSnapshot>) {
-        self.network_ids_by_box = network_ids_by_box(&networks);
         self.networks = networks;
     }
 
     pub(super) fn clear_networks(&mut self) {
         self.networks.clear();
+        self.clear_topology();
+    }
+
+    pub(super) fn replace_topology(&mut self, topology_networks: Vec<FluidNetworkTopology>) {
+        self.network_ids_by_box = network_ids_by_box(&topology_networks);
+        self.topology_networks = topology_networks;
+        self.topology_dirty = false;
+    }
+
+    fn clear_topology(&mut self) {
+        self.topology_dirty = true;
+        self.topology_networks.clear();
         self.network_ids_by_box.clear();
     }
 }
@@ -35,18 +70,22 @@ impl Hash for FluidSubsystem {
     }
 }
 
-fn network_ids_by_box(networks: &[FluidNetworkSnapshot]) -> HashMap<FluidBoxKey, u32> {
+impl PartialEq for FluidSubsystem {
+    fn eq(&self, other: &Self) -> bool {
+        self.networks == other.networks
+    }
+}
+
+fn default_topology_dirty() -> bool {
+    true
+}
+
+fn network_ids_by_box(networks: &[FluidNetworkTopology]) -> HashMap<FluidBoxKey, u32> {
     let box_count = networks.iter().map(|network| network.boxes.len()).sum();
     let mut network_ids_by_box = HashMap::with_capacity(box_count);
     for network in networks {
-        for box_snapshot in &network.boxes {
-            network_ids_by_box.insert(
-                FluidBoxKey {
-                    entity_id: box_snapshot.entity_id,
-                    box_index: box_snapshot.box_index,
-                },
-                network.network_id,
-            );
+        for box_topology in &network.boxes {
+            network_ids_by_box.insert(box_topology.key, network.network_id);
         }
     }
     network_ids_by_box

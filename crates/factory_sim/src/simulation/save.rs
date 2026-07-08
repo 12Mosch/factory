@@ -193,7 +193,7 @@ impl SimulationSnapshot {
     }
 
     fn into_simulation(self) -> Simulation {
-        Simulation {
+        let mut sim = Simulation {
             tick: self.tick,
             entity_topology_revision: 0,
             revealed_revision: 0,
@@ -228,7 +228,9 @@ impl SimulationSnapshot {
                 power: self.power_statistics,
             },
             transport: TransportLaneCache::default(),
-        }
+        };
+        sim.ensure_fluid_network_topology();
+        sim
     }
 }
 

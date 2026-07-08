@@ -20,10 +20,13 @@ impl Simulation {
             .collect::<BTreeMap<_, _>>();
         let mut remaining_steam_by_network = self
             .fluids
-            .networks
+            .topology_networks
             .iter()
-            .filter(|network| !network.blocked && network.fluid_id == Some(steam))
-            .map(|network| (network.network_id, network.total_milliunits))
+            .filter_map(|network| {
+                let summary = self.fluid_network_dynamic_summary(network);
+                (!summary.blocked && summary.fluid_id == Some(steam))
+                    .then_some((network.network_id, summary.total_milliunits))
+            })
             .collect::<BTreeMap<_, _>>();
 
         for engine_id in self.entities.steam_engines.keys().copied() {

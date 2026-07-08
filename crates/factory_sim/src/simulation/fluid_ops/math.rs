@@ -20,11 +20,6 @@ pub(super) fn proportional_amount(total: u64, capacity: u64, total_capacity: u64
     ((u128::from(total) * u128::from(capacity)) / u128::from(total_capacity)) as u64
 }
 
-pub(super) fn single_fluid(mut fluids: impl Iterator<Item = FluidId>) -> Option<FluidId> {
-    let first = fluids.next()?;
-    fluids.next().is_none().then_some(first)
-}
-
 pub(super) fn fluid_filter_accepts(filter: Option<FluidId>, fluid_id: FluidId) -> bool {
     filter.is_none_or(|filter| filter == fluid_id)
 }

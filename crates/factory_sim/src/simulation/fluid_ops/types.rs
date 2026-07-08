@@ -11,9 +11,28 @@ pub(super) struct FluidBoxNode {
     pub(super) key: FluidBoxKey,
     pub(super) capacity_milliunits: u64,
     pub(super) filter: Option<FluidId>,
-    pub(super) amount_milliunits: u64,
-    pub(super) fluid_id: Option<FluidId>,
     pub(super) endpoints: Vec<FluidEndpoint>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::simulation) struct FluidNetworkBoxTopology {
+    pub(in crate::simulation) key: FluidBoxKey,
+    pub(in crate::simulation) capacity_milliunits: u64,
+    pub(in crate::simulation) filter: Option<FluidId>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(in crate::simulation) struct FluidNetworkTopology {
+    pub(in crate::simulation) network_id: u32,
+    pub(in crate::simulation) boxes: Vec<FluidNetworkBoxTopology>,
+    pub(in crate::simulation) capacity_milliunits: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::simulation) struct FluidNetworkDynamicSummary {
+    pub(in crate::simulation) total_milliunits: u64,
+    pub(in crate::simulation) fluid_id: Option<FluidId>,
+    pub(in crate::simulation) blocked: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -27,14 +46,4 @@ pub(super) struct FluidEndpoint {
 pub(super) enum FluidEndpointAxis {
     Horizontal,
     Vertical,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct BuiltFluidNetwork {
-    pub(super) network_id: u32,
-    pub(super) boxes: Vec<FluidBoxKey>,
-    pub(super) capacity_milliunits: u64,
-    pub(super) total_milliunits: u64,
-    pub(super) fluid_id: Option<FluidId>,
-    pub(super) blocked: bool,
 }
