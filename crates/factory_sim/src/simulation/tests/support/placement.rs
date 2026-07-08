@@ -300,5 +300,24 @@ pub(in crate::simulation::tests) fn first_placeable_entity_tile(
     panic!("expected at least one placeable entity tile");
 }
 
+pub(in crate::simulation::tests) fn place_at(
+    sim: &mut Simulation,
+    prototype_id: EntityPrototypeId,
+    x: i32,
+    y: i32,
+    direction: Direction,
+) -> EntityId {
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id,
+            x,
+            y,
+            direction,
+        },
+    )
+    .expect("test entity should be placeable")
+}
+
 pub(in crate::simulation::tests) const CARDINAL_DIRECTIONS: [(i32, i32); 4] =
     [(1, 0), (-1, 0), (0, 1), (0, -1)];

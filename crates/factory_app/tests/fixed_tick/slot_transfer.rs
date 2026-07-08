@@ -1,12 +1,12 @@
 use super::common::{
     entity_id_by_name, first_buildable_rect, first_placeable_resource_rect, item_id_by_name,
-    place_powered_fixture_origin, recipe_id_by_name,
+    place_powered_fixture_origin, place_test_entity, recipe_id_by_name,
 };
 use bevy::prelude::*;
 use factory_app::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
 use factory_app::ui::inventory_panel::{InventoryPanel, slot_transfer_error_message};
 use factory_sim::{
-    ContainerError, Direction, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
+    ContainerError, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
 };
 
 #[test]
@@ -15,16 +15,7 @@ fn slot_click_transfer_delegates_to_sim_transfer_api() {
     let chest = entity_id_by_name(sim.catalog(), "chest");
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let (x, y) = first_buildable_rect(&sim, chest);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: chest,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("chest should be placeable");
+    let entity_id = place_test_entity(&mut sim, chest, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: iron_plate,
@@ -54,16 +45,7 @@ fn slot_click_transfer_routes_science_to_lab_inventory() {
     let lab = entity_id_by_name(sim.catalog(), "lab");
     let science_pack = item_id_by_name(sim.catalog(), "automation_science_pack");
     let (x, y) = first_buildable_rect(&sim, lab);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: lab,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("lab should be placeable");
+    let entity_id = place_test_entity(&mut sim, lab, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: science_pack,
@@ -95,16 +77,7 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
     let coal = item_id_by_name(sim.catalog(), "coal");
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let (x, y) = first_buildable_rect(&sim, furnace);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: furnace,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("furnace should be placeable");
+    let entity_id = place_test_entity(&mut sim, furnace, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: iron_ore,
@@ -181,16 +154,7 @@ fn slot_click_transfer_routes_assembler_input_and_output() {
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let iron_gear_wheel = item_id_by_name(sim.catalog(), "iron_gear_wheel");
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: assembler,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("assembler should be placeable");
+    let entity_id = place_test_entity(&mut sim, assembler, x, y);
     sim.select_assembler_recipe(entity_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     *sim.player_inventory_mut() = Inventory::player();
@@ -244,16 +208,7 @@ fn slot_click_rejects_invalid_furnace_input_without_mutation() {
     let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
     let inserter = item_id_by_name(sim.catalog(), "inserter");
     let (x, y) = first_buildable_rect(&sim, furnace);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: furnace,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("furnace should be placeable");
+    let entity_id = place_test_entity(&mut sim, furnace, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: inserter,
@@ -326,16 +281,7 @@ fn slot_click_failure_updates_inventory_transfer_feedback() {
     let entity_id = {
         let mut sim = app.world_mut().resource_mut::<SimResource>();
         let (x, y) = first_buildable_rect(&sim.sim, furnace);
-        let entity_id = factory_sim::placement::place(
-            &mut sim.sim,
-            factory_sim::placement::EntityPlacementRequest {
-                prototype_id: furnace,
-                x,
-                y,
-                direction: Direction::North,
-            },
-        )
-        .expect("furnace should be placeable");
+        let entity_id = place_test_entity(&mut sim.sim, furnace, x, y);
         *sim.sim.player_inventory_mut() = Inventory::player();
         sim.sim.player_inventory_mut().slots[2] = Some(ItemStack {
             item_id: inserter,
@@ -369,16 +315,7 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
     let drill = entity_id_by_name(sim.catalog(), "burner_mining_drill");
     let coal = item_id_by_name(sim.catalog(), "coal");
     let (x, y) = first_placeable_resource_rect(&sim, drill, coal);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: drill,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("burner drill should be placeable over resources");
+    let entity_id = place_test_entity(&mut sim, drill, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: coal,

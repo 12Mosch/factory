@@ -174,20 +174,26 @@ pub(in crate::simulation) fn stack_in_assembler_inventory_slot(
         .ok_or(AssemblerError::EmptySlot { slot_index })
 }
 
+fn assembler_recipe(
+    catalog: &PrototypeCatalog,
+    recipe_id: RecipeId,
+) -> Result<&factory_data::RecipePrototype, AssemblerError> {
+    let recipe = catalog
+        .recipe(recipe_id)
+        .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
+    if recipe.category != CraftingCategory::Crafting {
+        return Err(AssemblerError::InvalidRecipe(recipe_id));
+    }
+    Ok(recipe)
+}
+
 impl Simulation {
     pub fn select_assembler_recipe(
         &mut self,
         entity_id: EntityId,
         recipe_id: RecipeId,
     ) -> Result<(), AssemblerError> {
-        let recipe = self
-            .world
-            .prototypes
-            .recipe(recipe_id)
-            .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
-        if recipe.category != CraftingCategory::Crafting {
-            return Err(AssemblerError::InvalidRecipe(recipe_id));
-        }
+        let recipe = assembler_recipe(&self.world.prototypes, recipe_id)?;
         if !self.is_recipe_unlocked(recipe_id) {
             return Err(AssemblerError::RecipeLocked(recipe_id));
         }
@@ -216,14 +222,7 @@ impl Simulation {
         entity_id: EntityId,
         recipe_id: RecipeId,
     ) -> Result<bool, AssemblerError> {
-        let recipe = self
-            .world
-            .prototypes
-            .recipe(recipe_id)
-            .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
-        if recipe.category != CraftingCategory::Crafting {
-            return Err(AssemblerError::InvalidRecipe(recipe_id));
-        }
+        assembler_recipe(&self.world.prototypes, recipe_id)?;
         if !self.is_recipe_unlocked(recipe_id) {
             return Ok(false);
         }

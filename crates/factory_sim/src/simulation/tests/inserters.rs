@@ -273,36 +273,9 @@ fn inserter_uses_rotated_direction_for_pickup_and_drop() {
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let (x, y) = place_powered_fixture_origin(&mut sim, 4, 2, (1, 2));
 
-    let chest_id = crate::placement::place(
-        &mut sim,
-        crate::placement::EntityPlacementRequest {
-            prototype_id: chest,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("chest should be placeable");
-    let inserter_id = crate::placement::place(
-        &mut sim,
-        crate::placement::EntityPlacementRequest {
-            prototype_id: inserter,
-            x: x + 1,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("inserter should be placeable");
-    let furnace_id = crate::placement::place(
-        &mut sim,
-        crate::placement::EntityPlacementRequest {
-            prototype_id: furnace,
-            x: x + 2,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("furnace should be placeable");
+    let chest_id = place_at(&mut sim, chest, x, y, Direction::North);
+    let inserter_id = place_at(&mut sim, inserter, x + 1, y, Direction::North);
+    let furnace_id = place_at(&mut sim, furnace, x + 2, y, Direction::North);
     crate::entity_access::inventory_mut(&mut sim, chest_id)
         .expect("chest should have inventory")
         .slots[0] = Some(ItemStack {
