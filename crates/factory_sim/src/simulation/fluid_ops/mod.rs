@@ -14,6 +14,6 @@ use super::*;
 
 impl Simulation {
     pub(super) fn invalidate_fluid_state(&mut self) {
-        self.fluids.networks.clear();
+        self.fluids.clear_networks();
     }
 }

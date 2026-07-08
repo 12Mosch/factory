@@ -123,15 +123,20 @@ impl Simulation {
         let mut disjoint_set = DisjointSet::new(poles.len());
         connect_poles_within_wire_reach(&poles, &mut disjoint_set);
 
-        let mut roots_by_min_entity = BTreeMap::<EntityId, usize>::new();
+        let mut min_entity_by_root = BTreeMap::<usize, EntityId>::new();
         for (index, pole) in poles.iter().enumerate() {
             let root = disjoint_set.find(index);
-            roots_by_min_entity
-                .entry(component_min_entity_id(root, &poles, &mut disjoint_set))
-                .or_insert(root);
+            min_entity_by_root
+                .entry(root)
+                .and_modify(|min_entity| *min_entity = (*min_entity).min(pole.entity_id))
+                .or_insert(pole.entity_id);
             debug_assert_eq!(pole.entity_id, poles[index].entity_id);
         }
 
+        let roots_by_min_entity = min_entity_by_root
+            .into_iter()
+            .map(|(root, min_entity)| (min_entity, root))
+            .collect::<BTreeMap<_, _>>();
         let root_network_ids = roots_by_min_entity
             .values()
             .enumerate()
@@ -524,20 +529,6 @@ fn poles_are_within_mutual_reach(first: &PoleNode<'_>, second: &PoleNode<'_>) ->
     let dy = i64::from(first.center_y2 - second.center_y2);
 
     dx * dx + dy * dy <= reach_x2 * reach_x2
-}
-
-fn component_min_entity_id(
-    root: usize,
-    poles: &[PoleNode<'_>],
-    disjoint_set: &mut DisjointSet,
-) -> EntityId {
-    poles
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| disjoint_set.find(*index) == root)
-        .map(|(_, pole)| pole.entity_id)
-        .min()
-        .expect("component root should contain at least one pole")
 }
 
 fn footprint_center_x2(footprint: &EntityFootprint) -> (i32, i32) {

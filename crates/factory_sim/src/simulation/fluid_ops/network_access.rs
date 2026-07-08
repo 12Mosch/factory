@@ -8,16 +8,7 @@ impl Simulation {
         &self,
         key: FluidBoxKey,
     ) -> Option<u32> {
-        self.fluids
-            .networks
-            .iter()
-            .find(|network| {
-                network.boxes.iter().any(|box_snapshot| {
-                    box_snapshot.entity_id == key.entity_id
-                        && box_snapshot.box_index == key.box_index
-                })
-            })
-            .map(|network| network.network_id)
+        self.fluids.network_ids_by_box.get(&key).copied()
     }
 
     pub(in crate::simulation) fn fluid_network_total_for_fluid(

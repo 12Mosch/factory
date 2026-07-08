@@ -221,9 +221,7 @@ impl SimulationSnapshot {
                 #[cfg(test)]
                 topology_rebuilds: 0,
             },
-            fluids: FluidSubsystem {
-                networks: self.fluid_networks,
-            },
+            fluids: FluidSubsystem::from_networks(self.fluid_networks),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,
                 fluids: self.fluid_statistics,

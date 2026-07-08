@@ -14,10 +14,11 @@ impl Simulation {
             }
         }
 
-        self.fluids.networks = networks
+        let network_snapshots = networks
             .iter()
             .map(|network| self.fluid_network_snapshot(network))
             .collect();
+        self.fluids.replace_networks(network_snapshots);
     }
 
     fn build_fluid_networks(&self) -> Vec<BuiltFluidNetwork> {
