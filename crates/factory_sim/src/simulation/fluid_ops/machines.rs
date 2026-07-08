@@ -5,11 +5,11 @@ use super::types::FluidBoxKey;
 
 impl Simulation {
     pub(in crate::simulation) fn advance_fluids_before_power(&mut self) {
-        self.rebuild_fluid_networks_and_equalize();
+        self.equalize_fluid_networks();
         self.advance_offshore_pumps();
-        self.rebuild_fluid_networks_and_equalize();
+        self.equalize_fluid_networks();
         self.advance_boilers();
-        self.rebuild_fluid_networks_and_equalize();
+        self.equalize_fluid_networks();
     }
 
     fn advance_offshore_pumps(&mut self) {

@@ -45,6 +45,7 @@ impl Simulation {
             }
         }
 
+        self.ensure_fluid_network_topology();
         let mut networks = self.power.topology.network_accumulators();
         let consumer_demands = self.consumer_power_demands();
 
@@ -88,7 +89,7 @@ impl Simulation {
 
         let engine_output_watts = actual_steam_engine_outputs(&networks, &engine_assignments);
         self.consume_steam_for_engine_output(engine_output_watts, &engine_assignments);
-        self.rebuild_fluid_networks_and_equalize();
+        self.refresh_fluid_networks_after_dynamic_changes();
         self.power.networks = network_snapshots(&networks);
         self.power.summary = aggregate_power_summary(&self.power.networks);
         self.power.entity_statuses = self

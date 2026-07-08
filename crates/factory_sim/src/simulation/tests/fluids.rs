@@ -576,3 +576,69 @@ fn save_load_preserves_fluid_boxes_networks_and_state_hash() {
     assert_eq!(loaded.entities.fluid_boxes[&pipe_id], before_box);
     assert_eq!(loaded.fluid_networks(), before_networks.as_slice());
 }
+
+#[test]
+fn fluid_topology_rebuilds_once_across_repeated_ticks_without_entity_changes() {
+    let mut sim = Simulation::new_test_world(123);
+    place_powered_fixture_origin_with_boiler(&mut sim, 1, 1, (1, 2));
+
+    sim.tick();
+    let rebuilds_after_first_tick = sim.fluid_topology_rebuild_count();
+    assert_eq!(rebuilds_after_first_tick, 1);
+
+    for _ in 0..10 {
+        sim.tick();
+    }
+
+    assert_eq!(
+        sim.fluid_topology_rebuild_count(),
+        rebuilds_after_first_tick
+    );
+}
+
+#[test]
+fn fluid_topology_rebuilds_after_fluid_entity_placement_or_removal() {
+    let mut sim = Simulation::new_test_world(123);
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+
+    sim.tick();
+    let rebuilds_after_first_tick = sim.fluid_topology_rebuild_count();
+
+    let pipe_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("pipe should be placeable");
+    sim.tick();
+
+    let rebuilds_after_placement = sim.fluid_topology_rebuild_count();
+    assert_eq!(rebuilds_after_placement, rebuilds_after_first_tick + 1);
+
+    crate::entity_mutation::remove(&mut sim, pipe_id).expect("pipe should be removable");
+    sim.tick();
+
+    assert_eq!(
+        sim.fluid_topology_rebuild_count(),
+        rebuilds_after_placement + 1
+    );
+}
+
+#[test]
+fn profiled_tick_preserves_hash_against_plain_tick_after_fluid_refactor() {
+    let mut profiled = Simulation::new_test_world(123);
+    let mut ticked = Simulation::new_test_world(123);
+    place_powered_fixture_origin_with_boiler(&mut profiled, 3, 3, (3, 1));
+    place_powered_fixture_origin_with_boiler(&mut ticked, 3, 3, (3, 1));
+
+    for _ in 0..16 {
+        profiled.profiled_tick();
+        ticked.tick();
+        assert_eq!(profiled.state_hash(), ticked.state_hash());
+    }
+}
