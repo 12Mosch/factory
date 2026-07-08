@@ -7,15 +7,15 @@ use std::time::Instant;
 use crate::constants::{
     BURNER_DRILL_SPRITE_PADDING, CHEST_SPRITE_SIZE, TILE_SIZE, TRANSPORT_BELT_SPRITE_SIZE,
 };
+use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{
     assembler_color, boiler_color, burner_drill_color, chest_color, electric_pole_color,
     furnace_color, inserter_color, lab_color, offshore_pump_color, pipe_color, splitter_color,
     steam_engine_color, storage_tank_color, transport_belt_color,
 };
+use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
 use crate::rendering::visuals::{EntityVisualStyle, VisualAssets, spawn_entity_visual};
-use crate::map::resources::VisibleChunks;
-use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::resources::SimResource;
 
 #[derive(Component)]

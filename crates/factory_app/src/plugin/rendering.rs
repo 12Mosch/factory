@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use super::AppSet;
+use crate::map::resources::VisibleChunks;
 use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
 };
@@ -23,7 +24,6 @@ use crate::rendering::resources::{
 };
 use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
-use crate::map::resources::VisibleChunks;
 
 /// World presentation: camera, player sprite, and the chained render-sync
 /// systems that mirror simulation state into render entities.

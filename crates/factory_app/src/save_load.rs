@@ -7,14 +7,14 @@ use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
 
-use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::build::resources::BuildPlacementState;
+use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::map::resources::{MapTextureCache, MapViewState};
 use crate::rendering::resource_cells::ResourceRenderCache;
 use crate::rendering::resources::VisibleEntityIds;
 use crate::resources::SimResource;
-use crate::ui::resources::OpenContainer;
 use crate::simulation::{SimCommandRequest, SimCommandResult};
+use crate::ui::resources::OpenContainer;
 
 pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [
     SaveSlotKind::Manual(1),

@@ -4,11 +4,11 @@ use super::common::{
     technology_id_by_name, test_app,
 };
 use bevy::prelude::*;
-use factory_app::placement::build::{
-    buildable_prototypes, default_hotbar_slots, place_selected_building_at_tile,
-};
 use factory_app::build::resources::{
     BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT, HotbarState,
+};
+use factory_app::placement::build::{
+    buildable_prototypes, default_hotbar_slots, place_selected_building_at_tile,
 };
 use factory_app::resources::SimResource;
 use factory_data::{EntityKind, PrototypeCatalog};

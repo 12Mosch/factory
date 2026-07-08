@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 
 use super::AppSet;
+use crate::build::resources::{
+    BuildMenuState, BuildPlacementPreviewState, BuildPlacementState, HotbarState,
+};
 use crate::input::build::{
     handle_build_hotbar_keys, handle_build_rotate_cancel_keys, handle_build_world_click,
 };
@@ -8,9 +11,6 @@ use crate::interaction::container_open::handle_container_close_input;
 use crate::placement::build::default_hotbar_slots;
 use crate::rendering::build_preview::{
     spawn_build_preview, update_build_placement_preview_state, update_build_preview,
-};
-use crate::build::resources::{
-    BuildMenuState, BuildPlacementPreviewState, BuildPlacementState, HotbarState,
 };
 use crate::resources::SimResource;
 use crate::ui::build_bar::{

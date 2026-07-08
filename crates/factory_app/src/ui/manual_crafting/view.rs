@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::ui::resources::CraftingPanelTab;
 use crate::ui::layout::{PANEL_MARGIN, scroll_column};
+use crate::ui::resources::CraftingPanelTab;
 
 use super::components::{
     CraftingPanelSnapshot, CraftingQueueSnapshot, CraftingRecipeButton, CraftingRecipeListRoot,

@@ -5,7 +5,6 @@ use factory_sim::{AssemblingMachineState, SimCommand};
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
-use crate::ui::resources::OpenContainer;
 use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::{
     AssemblerDetailText, crafting_recipe_choices, format_assembler_detail_text,
@@ -13,6 +12,7 @@ use crate::ui::formatting::{
 };
 use crate::ui::inventory_panel::{InventoryPanel, spawn_slot_button};
 use crate::ui::machine_indicators::BurnerProgressFill;
+use crate::ui::resources::OpenContainer;
 
 #[derive(Component)]
 pub(crate) struct AssemblerRecipeButton {
