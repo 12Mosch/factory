@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const SIXTY_UPS_TICK_BUDGET: Duration = Duration::from_nanos(16_667_000);
+const SMOKE_ALLOC_P95_BYTES_BUDGET: u64 = 64 * 1024;
+const SMOKE_ALLOC_P95_COUNT_BUDGET: u64 = 256;
 const SMALL_ALLOC_P95_BYTES_BUDGET: u64 = 1024 * 1024;
 const SMALL_ALLOC_P95_COUNT_BUDGET: u64 = 2_000;
 
@@ -43,6 +45,33 @@ unsafe impl GlobalAlloc for CountingAllocator {
         ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
         unsafe { System.realloc(ptr, layout, new_size) }
     }
+}
+
+#[test]
+fn scripted_red_science_tick_allocation_smoke_budget() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut sim = Simulation::new_scripted_red_science_factory();
+    run_warmup_ticks(&mut sim, 30);
+
+    let stats = collect_benchmark_stats(&mut sim, 60);
+    print_benchmark_stats("scripted_red_science_smoke", stats);
+
+    sim.validate_state()
+        .expect("smoke budget run should leave a valid simulation state");
+    assert!(
+        stats.alloc_p95_bytes <= SMOKE_ALLOC_P95_BYTES_BUDGET,
+        "allocation p95 {} bytes exceeded smoke budget {} bytes",
+        stats.alloc_p95_bytes,
+        SMOKE_ALLOC_P95_BYTES_BUDGET
+    );
+    assert!(
+        stats.alloc_p95_count <= SMOKE_ALLOC_P95_COUNT_BUDGET,
+        "allocation p95 {} allocs exceeded smoke budget {} allocs",
+        stats.alloc_p95_count,
+        SMOKE_ALLOC_P95_COUNT_BUDGET
+    );
 }
 
 #[test]
