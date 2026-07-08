@@ -247,13 +247,7 @@ impl EntityStore {
             return Err(BeltError::Blocked);
         }
 
-        lane.items.insert(
-            0,
-            BeltItem {
-                item_id,
-                position_subtile: 0,
-            },
-        );
+        insert_lane_item_at_entry(lane, item_id, 0);
         Ok(())
     }
 

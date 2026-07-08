@@ -539,7 +539,7 @@ fn belt_removal_uses_front_most_matching_item_across_lanes() {
         position_subtile: 200,
     });
 
-    assert!(remove_one_item_from_belt(&mut segment, iron_ore));
+    assert!(remove_one_item_from_belt(&mut segment, iron_ore).is_some());
     assert_eq!(segment.lanes[0].items.len(), 1);
     assert!(segment.lanes[1].items.is_empty());
 }

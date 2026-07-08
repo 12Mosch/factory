@@ -73,6 +73,7 @@ impl MachineTickContext<'_> {
                                 .measure(ProfilePhase::InventoryTransfers, || {
                                     try_take_inserter_source_item(
                                         self.entities,
+                                        self.transport,
                                         pickup_tile,
                                         item_id,
                                     )
@@ -103,6 +104,7 @@ impl MachineTickContext<'_> {
                             &self.world.prototypes,
                             self.research,
                             self.entities,
+                            self.transport,
                             drop_tile,
                             item,
                         )

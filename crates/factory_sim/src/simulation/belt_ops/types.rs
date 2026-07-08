@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::simulation::belt_ops) enum TransportLaneKey {
+pub(in crate::simulation) enum TransportLaneKey {
     Belt {
         entity_id: EntityId,
         lane_index: usize,

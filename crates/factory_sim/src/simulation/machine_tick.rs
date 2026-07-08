@@ -13,6 +13,7 @@ impl Simulation {
             self.tick,
             &mut self.world,
             &mut self.entities,
+            &mut self.transport,
             &mut self.research,
             &mut self.power,
             &mut self.statistics,

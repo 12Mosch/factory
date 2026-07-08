@@ -176,6 +176,7 @@ impl<'a> StatisticsContext<'a> {
 pub(super) struct MachineTickContext<'a> {
     pub(super) world: &'a mut WorldSim,
     pub(super) entities: &'a mut EntityStore,
+    pub(super) transport: &'a mut TransportLaneCache,
     pub(super) research: &'a mut ResearchState,
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) statistics: StatisticsContext<'a>,
@@ -186,6 +187,7 @@ impl<'a> MachineTickContext<'a> {
         tick: u64,
         world: &'a mut WorldSim,
         entities: &'a mut EntityStore,
+        transport: &'a mut TransportLaneCache,
         research: &'a mut ResearchState,
         power: &'a mut PowerSubsystem,
         statistics: &'a mut StatisticsSubsystem,
@@ -193,6 +195,7 @@ impl<'a> MachineTickContext<'a> {
         Self {
             world,
             entities,
+            transport,
             research,
             power,
             statistics: StatisticsContext::new(tick, statistics),

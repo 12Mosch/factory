@@ -144,6 +144,7 @@ pub(in crate::simulation) fn inserter_target_can_accept(
 
 pub(in crate::simulation) fn try_take_inserter_source_item(
     entities: &mut EntityStore,
+    transport: &mut TransportLaneCache,
     pickup_tile: (i32, i32),
     item_id: ItemId,
 ) -> Option<ItemStack> {
@@ -170,14 +171,23 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
     }
 
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id)
-        && remove_one_item_from_belt(segment, item_id)
+        && let Some(lane_index) = remove_one_item_from_belt(segment, item_id)
     {
+        transport.mark_active_with_upstreams(TransportLaneKey::Belt {
+            entity_id,
+            lane_index,
+        });
         return Some(ItemStack { item_id, count: 1 });
     }
 
     if let Some(state) = entities.splitters.get_mut(&entity_id)
-        && remove_one_item_from_splitter(state, item_id)
+        && let Some((input_port, lane_index)) = remove_one_item_from_splitter(state, item_id)
     {
+        transport.mark_active_with_upstreams(TransportLaneKey::Splitter {
+            entity_id,
+            input_port,
+            lane_index,
+        });
         return Some(ItemStack { item_id, count: 1 });
     }
 
@@ -188,6 +198,7 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     entities: &mut EntityStore,
+    transport: &mut TransportLaneCache,
     drop_tile: (i32, i32),
     item: ItemStack,
 ) -> bool {
@@ -252,13 +263,11 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         let Some(lane_index) = belt_output_lane_index(segment, item.item_id) else {
             return false;
         };
-        segment.lanes[lane_index].items.insert(
-            0,
-            BeltItem {
-                item_id: item.item_id,
-                position_subtile: 0,
-            },
-        );
+        insert_lane_item_at_entry(&mut segment.lanes[lane_index], item.item_id, 0);
+        transport.mark_active(TransportLaneKey::Belt {
+            entity_id,
+            lane_index,
+        });
         return true;
     }
 
@@ -274,13 +283,16 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         let Some(lane_index) = splitter_output_lane_index(state, input_port, item.item_id) else {
             return false;
         };
-        state.input_lanes[input_port][lane_index].items.insert(
+        insert_lane_item_at_entry(
+            &mut state.input_lanes[input_port][lane_index],
+            item.item_id,
             0,
-            BeltItem {
-                item_id: item.item_id,
-                position_subtile: 0,
-            },
         );
+        transport.mark_active(TransportLaneKey::Splitter {
+            entity_id,
+            input_port,
+            lane_index,
+        });
         return true;
     }
 
