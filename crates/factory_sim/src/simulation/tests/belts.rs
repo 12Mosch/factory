@@ -301,6 +301,58 @@ fn blocked_belt_preserves_item_order() {
 }
 
 #[test]
+fn unblocked_jam_wakes_upstream_one_lane_per_tick() {
+    let mut sim = Simulation::new_test_world(123);
+    let belts = place_belt_line(&mut sim, 3);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    for belt_id in &belts {
+        let segment = sim
+            .entities
+            .transport_belts
+            .get_mut(belt_id)
+            .expect("placed belt should have belt state");
+        seed_saturated_lane(&mut segment.lanes[0], iron_ore, &[0, 64, 128, 192]);
+    }
+
+    for _ in 0..64 {
+        sim.tick();
+    }
+    let upstream_before = belt_lane_positions(&sim, belts[0], 0);
+    let middle_before = belt_lane_positions(&sim, belts[1], 0);
+
+    let pickup_tile = {
+        let placed = sim
+            .entities
+            .placed_entity(belts[2])
+            .expect("terminal belt should remain placed");
+        (placed.x, placed.y)
+    };
+    try_take_inserter_source_item(&mut sim.entities, &mut sim.transport, pickup_tile, iron_ore)
+        .expect("pickup should remove the terminal belt item");
+
+    sim.tick();
+    assert_eq!(
+        belt_lane_positions(&sim, belts[0], 0),
+        upstream_before,
+        "the feeder behind the immediate upstream lane wakes on the following tick"
+    );
+    assert_ne!(
+        belt_lane_positions(&sim, belts[1], 0),
+        middle_before,
+        "the immediate upstream lane should advance after terminal space is freed"
+    );
+
+    sim.tick();
+    assert_ne!(
+        belt_lane_positions(&sim, belts[0], 0),
+        upstream_before,
+        "the second upstream lane should advance after the wake propagates"
+    );
+    sim.validate_state()
+        .expect("unblocked jam wake propagation should leave a valid state");
+}
+
+#[test]
 fn underground_belt_pair_transfers_items_to_exit_preserving_order() {
     let mut sim = Simulation::new_test_world(123);
     let (entrance_id, exit_id) =
@@ -542,6 +594,18 @@ fn belt_removal_uses_front_most_matching_item_across_lanes() {
     assert!(remove_one_item_from_belt(&mut segment, iron_ore).is_some());
     assert_eq!(segment.lanes[0].items.len(), 1);
     assert!(segment.lanes[1].items.is_empty());
+}
+
+fn belt_lane_positions(sim: &Simulation, entity_id: EntityId, lane_index: usize) -> Vec<u16> {
+    crate::entity_access::belt_segment(sim, entity_id)
+        .expect("belt should exist")
+        .lanes
+        .get(lane_index)
+        .expect("lane should exist")
+        .items
+        .iter()
+        .map(|item| item.position_subtile)
+        .collect()
 }
 
 #[test]

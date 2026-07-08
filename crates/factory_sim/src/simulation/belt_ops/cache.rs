@@ -31,6 +31,9 @@ pub(in crate::simulation::belt_ops) struct TransportLaneActiveSlot {
 pub(in crate::simulation) struct TransportLaneActiveStorage {
     active_generation: u32,
     pending_generation: u32,
+    /// Current belt-phase work queue. After `finish_tick`, this becomes the
+    /// next tick's queue and may receive producer/pickup wakeups via
+    /// `mark_active` until the next belt phase begins.
     pub(in crate::simulation::belt_ops) lanes: Vec<TransportLaneKey>,
     pending_lanes: Vec<TransportLaneKey>,
     marks: Vec<TransportLaneActiveSlot>,
@@ -304,6 +307,10 @@ impl TransportLaneActiveStorage {
         let Some(index) = visit_state_index(key) else {
             return;
         };
+        if self.marks.len() <= index {
+            self.marks
+                .resize(index + 1, TransportLaneActiveSlot::default());
+        }
         let Some(mark) = self.marks.get_mut(index) else {
             return;
         };

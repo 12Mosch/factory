@@ -271,6 +271,9 @@ pub(in crate::simulation) fn insert_lane_item_at_entry(
         item_id,
         position_subtile,
     });
+    // Belt lanes keep items sorted from upstream to downstream position.
+    // Entry inserts are rare and lanes are short, so this keeps the invariant
+    // simple without reintroducing front insertion.
     lane.items
         .sort_unstable_by_key(|item| item.position_subtile);
 }
