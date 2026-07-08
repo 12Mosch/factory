@@ -6,10 +6,13 @@ use crate::audio::SoundEvent;
 use crate::input::build::select_build_slot;
 use crate::input::panels::world_input_blocked;
 use crate::placement::build::{build_status_from_preview, next_direction};
-use crate::resources::{
-    AppInputState, BuildPlacementPreviewState, BuildPlacementState, BuildPlacementStatus,
-    HOTBAR_SLOT_COUNT, HotbarState, SimResource, TechnologyWindowState,
+use crate::build::resources::{
+    BuildPlacementPreviewState, BuildPlacementState, BuildPlacementStatus, HOTBAR_SLOT_COUNT,
+    HotbarState,
 };
+use crate::input::resources::AppInputState;
+use crate::resources::SimResource;
+use crate::ui::resources::TechnologyWindowState;
 use crate::utils::compact_item_name;
 
 #[derive(Component)]

@@ -1,11 +1,13 @@
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
-use factory_app::rendering::resources::ResourceRenderCache;
-use factory_app::resources::{
-    BuildPlacementState, BuildSelection, MapChunkPaintState, MapLayer, MapLayerTextureCache,
-    MapTextureCache, OpenContainer, SimResource,
+use factory_app::build::resources::{BuildPlacementState, BuildSelection};
+use factory_app::map::resources::{
+    MapChunkPaintState, MapLayer, MapLayerTextureCache, MapTextureCache,
 };
+use factory_app::rendering::resource_cells::ResourceRenderCache;
+use factory_app::resources::SimResource;
+use factory_app::ui::resources::OpenContainer;
 use factory_app::save_load::{
     LOAD_SAVE_SLOTS, MANUAL_SAVE_SLOTS, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig,
     SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState, SaveSlotKind, slot_path,

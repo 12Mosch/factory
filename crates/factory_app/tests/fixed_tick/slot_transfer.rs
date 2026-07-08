@@ -3,7 +3,8 @@ use super::common::{
     place_powered_fixture_origin, recipe_id_by_name,
 };
 use bevy::prelude::*;
-use factory_app::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
+use factory_app::resources::SimResource;
+use factory_app::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use factory_app::ui::inventory_panel::{InventoryPanel, slot_transfer_error_message};
 use factory_sim::{
     ContainerError, Direction, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,

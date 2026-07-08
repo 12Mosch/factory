@@ -8,7 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::rendering::transforms::entity_translation;
-use crate::resources::{SimResource, VisibleEntityIds};
+use crate::rendering::resources::VisibleEntityIds;
+use crate::resources::SimResource;
 use crate::save_load::SaveLoadConfig;
 
 const DEFAULT_VOLUME: f32 = 0.65;

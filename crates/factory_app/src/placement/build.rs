@@ -4,7 +4,7 @@ use factory_sim::{
     PlayerBuildError, Simulation,
 };
 
-use crate::resources::{BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT};
+use crate::build::resources::{BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildablePrototype {

@@ -5,7 +5,9 @@ use factory_sim::CHUNK_SIZE;
 
 use crate::constants::TILE_SIZE;
 use crate::rendering::colors::{RenderPrototypeIds, tile_color};
-use crate::resources::{RenderSyncStats, SimResource, VisibleChunks, WorldRenderCache};
+use crate::map::resources::VisibleChunks;
+use crate::rendering::resources::{RenderSyncStats, WorldRenderCache};
+use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 use std::time::Instant;
 
@@ -199,12 +201,13 @@ mod tests {
     use crate::rendering::entities::{
         PlacedEntitySprite, measured_sync_placed_entity_rendering, update_visible_entity_ids,
     };
-    use crate::rendering::resources::{
+    use crate::map::resources::MapTextureBounds;
+    use crate::rendering::resource_cells::{
         ResourceAmountLabel, ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
         measured_sync_resource_debug_rendering, sync_resource_debug_rendering,
     };
-    use crate::resources::{
-        BeltItemRenderPool, MapTextureBounds, RenderDetail, RenderSyncStats, VisibleEntityIds,
+    use crate::rendering::resources::{
+        BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds,
     };
     use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
     use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation};

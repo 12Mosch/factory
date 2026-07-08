@@ -4,10 +4,11 @@ use bevy::prelude::*;
 use crate::audio::SoundEvent;
 use crate::input::build::{select_build_selection, technology_window_open};
 use crate::placement::build::buildable_prototypes;
-use crate::resources::{
+use crate::build::resources::{
     BuildMenuState, BuildPlacementState, BuildPlacementStatus, BuildSelection, HotbarState,
-    OpenContainer, SimResource, TechnologyWindowState,
 };
+use crate::resources::SimResource;
+use crate::ui::resources::{OpenContainer, TechnologyWindowState};
 use crate::ui::build_bar::{BuildMenuButton, slot_key_label};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 use crate::utils::compact_item_name;

@@ -6,7 +6,7 @@ use factory_app::interaction::container_open::{
     container_open_input_allowed, opened_container_after_world_click,
 };
 use factory_app::placement::build::buildable_prototypes;
-use factory_app::resources::BuildPlacementState;
+use factory_app::build::resources::BuildPlacementState;
 use factory_data::PrototypeCatalog;
 use factory_sim::{Direction, Simulation};
 

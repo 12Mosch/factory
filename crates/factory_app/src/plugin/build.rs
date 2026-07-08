@@ -9,9 +9,10 @@ use crate::placement::build::default_hotbar_slots;
 use crate::rendering::build_preview::{
     spawn_build_preview, update_build_placement_preview_state, update_build_preview,
 };
-use crate::resources::{
-    BuildMenuState, BuildPlacementPreviewState, BuildPlacementState, HotbarState, SimResource,
+use crate::build::resources::{
+    BuildMenuState, BuildPlacementPreviewState, BuildPlacementState, HotbarState,
 };
+use crate::resources::SimResource;
 use crate::ui::build_bar::{
     handle_build_bar_button_clicks, setup_build_bar, update_build_bar_action_visuals,
     update_build_bar_visuals, update_build_status_text,

@@ -8,11 +8,12 @@ use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
 
 use crate::constants::SIM_TICKS_PER_SECOND;
-use crate::rendering::resources::ResourceRenderCache;
-use crate::resources::{
-    BuildPlacementState, MapTextureCache, MapViewState, OpenContainer, SimResource,
-    VisibleEntityIds,
-};
+use crate::build::resources::BuildPlacementState;
+use crate::map::resources::{MapTextureCache, MapViewState};
+use crate::rendering::resource_cells::ResourceRenderCache;
+use crate::rendering::resources::VisibleEntityIds;
+use crate::resources::SimResource;
+use crate::ui::resources::OpenContainer;
 use crate::simulation::{SimCommandRequest, SimCommandResult};
 
 pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [

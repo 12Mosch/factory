@@ -3,7 +3,7 @@ use bevy::prelude::Vec2;
 use factory_app::rendering::map_texture::{
     GRID_PIXEL, MapPixels, UNREVEALED_PIXEL, generate_map_pixels, generate_map_pixels_for_layer,
 };
-use factory_app::resources::{MapDisplaySettings, MapLayer, MapTextureBounds};
+use factory_app::map::resources::{MapDisplaySettings, MapLayer, MapTextureBounds};
 use factory_app::ui::map_view::fullscreen_crop_bounds;
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation, WorldSim};
 

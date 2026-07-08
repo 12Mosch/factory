@@ -3,7 +3,8 @@ use super::common::{
     first_resource_tile_for_app, format_item_name_for_test, item_id_by_name,
     place_powered_fixture_origin, recipe_id_by_name, technology_id_by_name,
 };
-use factory_app::resources::{RenderSyncStats, SimProfileStats};
+use factory_app::rendering::resources::RenderSyncStats;
+use factory_app::resources::SimProfileStats;
 use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,

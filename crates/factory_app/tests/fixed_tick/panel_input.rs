@@ -2,10 +2,14 @@ use super::common::{first_available_hotbar_slot, hotbar_key_for_slot, test_app};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use factory_app::audio::AudioSettingsWindowState;
-use factory_app::resources::{
-    AppInputState, BuildMenuState, BuildPlacementState, CraftingWindowState, MapDisplaySettings,
-    MapLayer, MapTextureBounds, MapTextureCache, MapViewState, ProductionStatsWindowState,
-    SimResource, TechnologyWindowState,
+use factory_app::build::resources::{BuildMenuState, BuildPlacementState};
+use factory_app::input::resources::AppInputState;
+use factory_app::map::resources::{
+    MapDisplaySettings, MapLayer, MapTextureBounds, MapTextureCache, MapViewState,
+};
+use factory_app::resources::SimResource;
+use factory_app::ui::resources::{
+    CraftingWindowState, ProductionStatsWindowState, TechnologyWindowState,
 };
 use std::time::Duration;
 

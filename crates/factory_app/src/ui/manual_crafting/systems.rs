@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use factory_sim::SimCommand;
 
 use crate::audio::SoundEvent;
-use crate::resources::{CraftingWindowState, SimResource};
+use crate::resources::SimResource;
+use crate::ui::resources::CraftingWindowState;
 use crate::simulation::SimCommandRequest;
 
 use super::components::{
