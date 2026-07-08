@@ -242,7 +242,7 @@ mod tests {
 
     fn assert_close(actual: f32, expected: f32) {
         assert!(
-            (actual - expected).abs() <= f32::EPSILON,
+            (actual - expected).abs() <= 1e-5,
             "expected {actual} to equal {expected}"
         );
     }

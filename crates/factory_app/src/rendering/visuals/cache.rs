@@ -57,7 +57,7 @@ impl VisualAssetCache {
             return entry.clone();
         }
 
-        self.evict_lru_if_full(images);
+        self.evict_lru_if_full();
 
         let visual = create();
         let entry = CachedVisual {
@@ -69,18 +69,16 @@ impl VisualAssetCache {
         entry
     }
 
-    fn evict_lru_if_full(&mut self, images: &mut Assets<Image>) {
+    fn evict_lru_if_full(&mut self) {
         if self.entries.len() < MAX_VISUAL_CACHE_ENTRIES {
             return;
         }
 
-        let Some((&key, entry)) = self.entries.iter().min_by_key(|(_, entry)| entry.last_used)
+        let Some((&key, _entry)) = self.entries.iter().min_by_key(|(_, entry)| entry.last_used)
         else {
             return;
         };
-        let handle = entry.handle.clone();
         self.entries.remove(&key);
-        let _ = images.remove(handle.id());
     }
 }
 

@@ -34,18 +34,17 @@ pub(super) fn rasterize_visual(
         paint_layer(&mut data, width, height, visual_size, layer);
     }
 
-    let mut image = Image::new_fill(
+    let mut image = Image::new(
         Extent3d {
             width,
             height,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        &[0, 0, 0, 0],
+        data,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    image.data = Some(data);
     image.sampler = ImageSampler::nearest();
     RasterizedVisual { image, visual_size }
 }

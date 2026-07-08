@@ -72,13 +72,8 @@ pub(crate) fn spawn_entity_visual<B: Bundle>(
     translation: Vec3,
     marker: B,
 ) -> Entity {
-    commands
-        .spawn((
-            visual_assets.entity_sprite(style),
-            Transform::from_translation(translation),
-            marker,
-        ))
-        .id()
+    let sprite = visual_assets.entity_sprite(style);
+    spawn_visual(commands, sprite, translation, marker)
 }
 
 pub(crate) fn spawn_belt_item_visual<B: Bundle>(
@@ -89,13 +84,8 @@ pub(crate) fn spawn_belt_item_visual<B: Bundle>(
     translation: Vec3,
     marker: B,
 ) -> Entity {
-    commands
-        .spawn((
-            visual_assets.belt_item_sprite(color, size),
-            Transform::from_translation(translation),
-            marker,
-        ))
-        .id()
+    let sprite = visual_assets.belt_item_sprite(color, size);
+    spawn_visual(commands, sprite, translation, marker)
 }
 
 pub(crate) fn spawn_resource_visual<B: Bundle>(
@@ -106,11 +96,17 @@ pub(crate) fn spawn_resource_visual<B: Bundle>(
     translation: Vec3,
     marker: B,
 ) -> Entity {
+    let sprite = visual_assets.resource_sprite(color, size);
+    spawn_visual(commands, sprite, translation, marker)
+}
+
+fn spawn_visual<B: Bundle>(
+    commands: &mut Commands,
+    sprite: Sprite,
+    translation: Vec3,
+    marker: B,
+) -> Entity {
     commands
-        .spawn((
-            visual_assets.resource_sprite(color, size),
-            Transform::from_translation(translation),
-            marker,
-        ))
+        .spawn((sprite, Transform::from_translation(translation), marker))
         .id()
 }
