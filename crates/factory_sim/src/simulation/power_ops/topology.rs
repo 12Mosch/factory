@@ -22,7 +22,6 @@ impl Simulation {
                 .entry(root)
                 .and_modify(|min_entity| *min_entity = (*min_entity).min(pole.entity_id))
                 .or_insert(pole.entity_id);
-            debug_assert_eq!(pole.entity_id, poles[index].entity_id);
         }
 
         let roots_by_min_entity = min_entity_by_root
