@@ -4,7 +4,9 @@ use factory_app::FactoryAppPlugin;
 use factory_app::placement::build::buildable_prototypes;
 use factory_app::resources::{BuildSelection, HotbarState, SimResource};
 use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog};
-use factory_sim::{CHUNK_SIZE, Direction, EntityFootprint, Inventory, ItemStack, Simulation};
+use factory_sim::{
+    CHUNK_SIZE, Direction, EntityFootprint, EntityId, Inventory, ItemStack, Simulation,
+};
 use std::time::Duration;
 
 pub fn run_to_tick_with_frame_rate(frame_rate: f64, target_tick: u64) -> (u64, u64) {
@@ -145,36 +147,38 @@ pub fn place_powered_fixture_origin(
             width: fixture_width,
             height: fixture_height,
         };
+        let pump_request = placement_request(pump, x, y, Direction::North);
+        let boiler_request = placement_request(boiler, x, y + 1, Direction::North);
+        let steam_engine_request = placement_request(steam_engine, x + 2, y + 1, Direction::North);
+        let source_pole_request =
+            placement_request(pole, source_pole.0, source_pole.1, Direction::North);
+        let target_pole_request =
+            placement_request(pole, target_pole.0, target_pole.1, Direction::North);
 
         if !fixture_is_clear_buildable(sim, &fixture)
             || !poles_within_small_pole_reach(source_pole, target_pole)
-            || sim.can_place_entity(pump, x, y, Direction::North).is_err()
-            || sim
-                .can_place_entity(boiler, x, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(steam_engine, x + 2, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(pole, source_pole.0, source_pole.1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(pole, target_pole.0, target_pole.1, Direction::North)
-                .is_err()
+            || [
+                pump_request,
+                boiler_request,
+                steam_engine_request,
+                source_pole_request,
+                target_pole_request,
+            ]
+            .into_iter()
+            .any(|request| factory_sim::placement::validate(sim, request).is_err())
         {
             continue;
         }
 
-        sim.place_entity(pump, x, y, Direction::North)
+        factory_sim::placement::place(sim, pump_request)
             .expect("validated offshore pump fixture should be placeable");
-        let boiler_id = sim
-            .place_entity(boiler, x, y + 1, Direction::North)
+        let boiler_id = factory_sim::placement::place(sim, boiler_request)
             .expect("validated boiler fixture should be placeable");
-        sim.place_entity(steam_engine, x + 2, y + 1, Direction::North)
+        factory_sim::placement::place(sim, steam_engine_request)
             .expect("validated steam engine fixture should be placeable");
-        sim.place_entity(pole, source_pole.0, source_pole.1, Direction::North)
+        factory_sim::placement::place(sim, source_pole_request)
             .expect("validated source pole fixture should be placeable");
-        sim.place_entity(pole, target_pole.0, target_pole.1, Direction::North)
+        factory_sim::placement::place(sim, target_pole_request)
             .expect("validated target pole fixture should be placeable");
 
         *sim.player_inventory_mut() = Inventory::player();
@@ -182,13 +186,37 @@ pub fn place_powered_fixture_origin(
             item_id: coal,
             count: 50,
         });
-        sim.transfer_player_slot_to_boiler_fuel(boiler_id, 0)
+        factory_sim::entity_transfer::player_slot_to_boiler_fuel(sim, boiler_id, 0)
             .expect("boiler should accept coal fuel");
 
         return (fixture_x, fixture_y);
     }
 
     panic!("expected powered fixture area");
+}
+
+pub fn place_test_entity(
+    sim: &mut Simulation,
+    prototype_id: EntityPrototypeId,
+    x: i32,
+    y: i32,
+) -> EntityId {
+    factory_sim::placement::place(sim, placement_request(prototype_id, x, y, Direction::North))
+        .expect("test entity should be placeable")
+}
+
+fn placement_request(
+    prototype_id: EntityPrototypeId,
+    x: i32,
+    y: i32,
+    direction: Direction,
+) -> factory_sim::placement::EntityPlacementRequest {
+    factory_sim::placement::EntityPlacementRequest {
+        prototype_id,
+        x,
+        y,
+        direction,
+    }
 }
 
 pub fn all_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
@@ -278,9 +306,16 @@ pub fn first_placeable_resource_rect(
             let x = chunk.coord.x * CHUNK_SIZE + local_x;
             let y = chunk.coord.y * CHUNK_SIZE + local_y;
 
-            if sim
-                .can_place_entity(prototype_id, x, y, Direction::North)
-                .is_ok()
+            if factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
             {
                 return (x, y);
             }

@@ -30,8 +30,7 @@ pub(in crate::simulation::tests) fn fill_inventory_with(
 ) {
     let stack_size = item_stack_size(&sim.world.prototypes, item_id)
         .expect("test item should have a stack size");
-    let inventory = sim
-        .entity_inventory_mut(entity_id)
+    let inventory = crate::entity_access::inventory_mut(sim, entity_id)
         .expect("test entity should have inventory");
     for slot in &mut inventory.slots {
         *slot = Some(ItemStack {
@@ -180,9 +179,16 @@ pub(in crate::simulation::tests) fn first_player_approach_to_occupied_tile(
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
 
     for (x, y) in all_tile_coords(&sim.world) {
-        if sim
-            .can_place_entity(inserter, x, y, Direction::North)
-            .is_err()
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: inserter,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .is_err()
         {
             continue;
         }
@@ -190,8 +196,16 @@ pub(in crate::simulation::tests) fn first_player_approach_to_occupied_tile(
         for (dx, dy) in CARDINAL_DIRECTIONS {
             let start = (x - dx, y - dy);
             if sim.can_player_occupy_tile(start.0, start.1) {
-                sim.place_entity(inserter, x, y, Direction::North)
-                    .expect("validated occupied target should be placeable");
+                crate::placement::place(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: inserter,
+                        x,
+                        y,
+                        direction: Direction::North,
+                    },
+                )
+                .expect("validated occupied target should be placeable");
                 return (start, (dx as f32, dy as f32));
             }
         }
@@ -209,14 +223,29 @@ pub(in crate::simulation::tests) fn first_player_slide_fixture(
         let start = (x - 1, y);
         let expected = (x - 1, y + 1);
 
-        if sim
-            .can_place_entity(inserter, x, y, Direction::North)
-            .is_ok()
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: inserter,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .is_ok()
             && sim.can_player_occupy_tile(start.0, start.1)
             && sim.can_player_occupy_tile(expected.0, expected.1)
         {
-            sim.place_entity(inserter, x, y, Direction::North)
-                .expect("validated slide blocker should be placeable");
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: inserter,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .expect("validated slide blocker should be placeable");
             return (start, expected);
         }
     }
@@ -253,12 +282,41 @@ pub(in crate::simulation::tests) fn first_placeable_entity_tile(
     direction: Direction,
 ) -> (i32, i32) {
     for (x, y) in all_tile_coords(&sim.world) {
-        if sim.can_place_entity(prototype_id, x, y, direction).is_ok() {
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id,
+                x,
+                y,
+                direction,
+            },
+        )
+        .is_ok()
+        {
             return (x, y);
         }
     }
 
     panic!("expected at least one placeable entity tile");
+}
+
+pub(in crate::simulation::tests) fn place_at(
+    sim: &mut Simulation,
+    prototype_id: EntityPrototypeId,
+    x: i32,
+    y: i32,
+    direction: Direction,
+) -> EntityId {
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id,
+            x,
+            y,
+            direction,
+        },
+    )
+    .expect("test entity should be placeable")
 }
 
 pub(in crate::simulation::tests) const CARDINAL_DIRECTIONS: [(i32, i32); 4] =

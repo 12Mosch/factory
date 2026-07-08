@@ -40,15 +40,14 @@ fn assembler_crafts_gears_from_iron_plates() {
         item_id: iron_plate,
         count: 2,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
     for _ in 0..60 {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.input_inventory.count(iron_plate), 0);
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
@@ -71,15 +70,14 @@ fn assembler_blocks_without_inputs() {
         item_id: iron_plate,
         count: 1,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept partial ingredients");
 
     for _ in 0..90 {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.input_inventory.count(iron_plate), 1);
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
@@ -103,7 +101,7 @@ fn assembler_blocks_when_output_full() {
         item_id: iron_plate,
         count: 2,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
     sim.entities
         .assembler_state_mut(assembler_id)
@@ -118,8 +116,7 @@ fn assembler_blocks_when_output_full() {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.input_inventory.count(iron_plate), 2);
     assert_eq!(
@@ -140,7 +137,7 @@ fn invalid_assembler_recipe_is_rejected() {
         Err(AssemblerError::InvalidRecipe(smelting_recipe))
     );
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state")
             .selected_recipe,
         None
@@ -159,8 +156,7 @@ fn selecting_different_assembler_recipe_on_empty_assembler_succeeds() {
     sim.select_assembler_recipe(assembler_id, cable_recipe)
         .expect("empty assembler should allow recipe changes");
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.selected_recipe, Some(cable_recipe));
     assert_eq!(state.crafting_progress_ticks, 0);
@@ -187,8 +183,7 @@ fn selecting_same_assembler_recipe_while_non_empty_preserves_progress() {
         });
         state.crafting_progress_ticks = 17;
     }
-    let before = sim
-        .assembler_state(assembler_id)
+    let before = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state")
         .clone();
 
@@ -196,7 +191,7 @@ fn selecting_same_assembler_recipe_while_non_empty_preserves_progress() {
         .expect("same recipe selection should be idempotent");
 
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state"),
         &before
     );
@@ -220,8 +215,7 @@ fn selecting_different_assembler_recipe_with_input_items_fails_without_mutation(
         item_id: iron_plate,
         count: 1,
     });
-    let before = sim
-        .assembler_state(assembler_id)
+    let before = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state")
         .clone();
 
@@ -232,7 +226,7 @@ fn selecting_different_assembler_recipe_with_input_items_fails_without_mutation(
         })
     );
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state"),
         &before
     );
@@ -256,8 +250,7 @@ fn selecting_different_assembler_recipe_with_output_items_fails_without_mutation
         item_id: iron_gear_wheel,
         count: 1,
     });
-    let before = sim
-        .assembler_state(assembler_id)
+    let before = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state")
         .clone();
 
@@ -268,7 +261,7 @@ fn selecting_different_assembler_recipe_with_output_items_fails_without_mutation
         })
     );
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state"),
         &before
     );
@@ -287,8 +280,7 @@ fn selecting_different_assembler_recipe_with_progress_fails_without_mutation() {
         .assembler_state_mut(assembler_id)
         .expect("assembler should expose mutable state")
         .crafting_progress_ticks = 1;
-    let before = sim
-        .assembler_state(assembler_id)
+    let before = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state")
         .clone();
 
@@ -299,7 +291,7 @@ fn selecting_different_assembler_recipe_with_progress_fails_without_mutation() {
         })
     );
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state"),
         &before
     );
@@ -343,7 +335,7 @@ fn inserter_moves_ingredients_from_chest_to_assembler() {
     let (chest_id, inserter_id, assembler_id) = place_chest_inserter_assembler_line(&mut sim);
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
-    sim.entity_inventory_mut(chest_id)
+    crate::entity_access::inventory_mut(&mut sim, chest_id)
         .expect("chest should have inventory")
         .slots[0] = Some(ItemStack {
         item_id: iron_plate,
@@ -353,13 +345,13 @@ fn inserter_moves_ingredients_from_chest_to_assembler() {
     run_inserter_until_idle(&mut sim, inserter_id);
 
     assert_eq!(
-        sim.entity_inventory(chest_id)
+        crate::entity_access::inventory(&sim, chest_id)
             .expect("chest should have inventory")
             .count(iron_plate),
         0
     );
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state")
             .input_inventory
             .count(iron_plate),
@@ -384,14 +376,14 @@ fn inserter_removes_assembler_output_to_chest() {
     run_inserter_until_idle(&mut sim, inserter_id);
 
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state")
             .output_inventory
             .count(iron_gear_wheel),
         0
     );
     assert_eq!(
-        sim.entity_inventory(chest_id)
+        crate::entity_access::inventory(&sim, chest_id)
             .expect("chest should have inventory")
             .count(iron_gear_wheel),
         1

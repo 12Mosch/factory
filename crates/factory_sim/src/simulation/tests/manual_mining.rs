@@ -258,9 +258,16 @@ fn manual_mining_right_click_destroys_building_before_mining_resource_under_it()
     let coal = item_id_by_name(&sim.world.prototypes, "coal");
     let (x, y, before_amount) = first_placeable_resource_tile(&sim, drill, coal);
     sim.player_inventory = Inventory::player();
-    let entity_id = sim
-        .place_entity(drill, x, y, Direction::North)
-        .expect("burner drill should be placeable over resources");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: drill,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("burner drill should be placeable over resources");
     let player_tile = first_manual_mining_reach_tile(&sim, x, y);
     sim.player = PlayerState::centered_on_tile(player_tile.0, player_tile.1);
 

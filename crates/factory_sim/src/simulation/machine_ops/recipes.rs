@@ -173,3 +173,94 @@ pub(in crate::simulation) fn stack_in_assembler_inventory_slot(
         .ok_or(AssemblerError::InvalidSlot { slot_index })?
         .ok_or(AssemblerError::EmptySlot { slot_index })
 }
+
+fn assembler_recipe(
+    catalog: &PrototypeCatalog,
+    recipe_id: RecipeId,
+) -> Result<&factory_data::RecipePrototype, AssemblerError> {
+    let recipe = catalog
+        .recipe(recipe_id)
+        .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
+    if recipe.category != CraftingCategory::Crafting {
+        return Err(AssemblerError::InvalidRecipe(recipe_id));
+    }
+    Ok(recipe)
+}
+
+impl Simulation {
+    pub fn select_assembler_recipe(
+        &mut self,
+        entity_id: EntityId,
+        recipe_id: RecipeId,
+    ) -> Result<(), AssemblerError> {
+        let recipe = assembler_recipe(&self.world.prototypes, recipe_id)?;
+        if !self.is_recipe_unlocked(recipe_id) {
+            return Err(AssemblerError::RecipeLocked(recipe_id));
+        }
+
+        let state = self.entities.assembler_state_mut(entity_id)?;
+        if state.selected_recipe == Some(recipe_id) {
+            return Ok(());
+        }
+        if !assembler_is_empty_for_recipe_change(state) {
+            return Err(AssemblerError::RecipeChangeRequiresEmpty { entity_id });
+        }
+
+        state.selected_recipe = Some(recipe_id);
+        state.crafting_progress_ticks = 0;
+        state.crafting_required_ticks = assembler_required_ticks(
+            recipe.crafting_time_ticks,
+            state.crafting_speed_numerator,
+            state.crafting_speed_denominator,
+        );
+
+        Ok(())
+    }
+
+    pub fn can_select_assembler_recipe(
+        &self,
+        entity_id: EntityId,
+        recipe_id: RecipeId,
+    ) -> Result<bool, AssemblerError> {
+        assembler_recipe(&self.world.prototypes, recipe_id)?;
+        if !self.is_recipe_unlocked(recipe_id) {
+            return Ok(false);
+        }
+
+        let state = self.entities.assembler_state(entity_id)?;
+        Ok(state.selected_recipe == Some(recipe_id) || assembler_is_empty_for_recipe_change(state))
+    }
+
+    pub fn assembler_ingredient_status(
+        &self,
+        entity_id: EntityId,
+    ) -> Result<Vec<AssemblerIngredientStatus>, AssemblerError> {
+        let state = self.entities.assembler_state(entity_id)?;
+        let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, &self.research, state)
+        else {
+            return if let Some(recipe_id) = state.selected_recipe {
+                Err(AssemblerError::MissingRecipe(recipe_id))
+            } else {
+                Ok(Vec::new())
+            };
+        };
+        if recipe.category != CraftingCategory::Crafting {
+            return Err(AssemblerError::InvalidRecipe(recipe.id));
+        }
+
+        Ok(recipe
+            .ingredients
+            .iter()
+            .map(|ingredient| {
+                let required = u32::from(ingredient.amount);
+                let available = state.input_inventory.count(ingredient.item);
+                AssemblerIngredientStatus {
+                    item: ingredient.item,
+                    required,
+                    available,
+                    missing: required.saturating_sub(available),
+                }
+            })
+            .collect())
+    }
+}

@@ -738,9 +738,16 @@ mod tests {
             let Some((x, y)) = first_placeable_tile_in_chunk(sim, coord, belt) else {
                 continue;
             };
-            let entity_id = sim
-                .place_entity(belt, x, y, Direction::East)
-                .expect("validated belt should place");
+            let entity_id = factory_sim::placement::place(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x,
+                    y,
+                    direction: Direction::East,
+                },
+            )
+            .expect("validated belt should place");
             let _ = sim.insert_item_onto_belt(entity_id, 0, iron_ore);
         }
     }
@@ -758,12 +765,30 @@ mod tests {
             if placed.len() == count {
                 return placed;
             }
-            if sim.can_place_entity(prototype_id, x, y, direction).is_err() {
+            if factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x,
+                    y,
+                    direction,
+                },
+            )
+            .is_err()
+            {
                 continue;
             }
             placed.push(
-                sim.place_entity(prototype_id, x, y, direction)
-                    .expect("validated render benchmark placement should succeed"),
+                factory_sim::placement::place(
+                    sim,
+                    factory_sim::placement::EntityPlacementRequest {
+                        prototype_id,
+                        x,
+                        y,
+                        direction,
+                    },
+                )
+                .expect("validated render benchmark placement should succeed"),
             );
         }
 
@@ -798,9 +823,16 @@ mod tests {
     ) -> Option<(i32, i32)> {
         for y in coord.y * CHUNK_SIZE..(coord.y + 1) * CHUNK_SIZE {
             for x in coord.x * CHUNK_SIZE..(coord.x + 1) * CHUNK_SIZE {
-                if sim
-                    .can_place_entity(prototype_id, x, y, Direction::East)
-                    .is_ok()
+                if factory_sim::placement::validate(
+                    sim,
+                    factory_sim::placement::EntityPlacementRequest {
+                        prototype_id,
+                        x,
+                        y,
+                        direction: Direction::East,
+                    },
+                )
+                .is_ok()
                 {
                     return Some((x, y));
                 }

@@ -60,8 +60,7 @@ fn locked_assembler_recipe_selection_fails_without_mutation() {
     let mut sim = Simulation::new_test_world(123);
     let assembler_id = place_assembling_machine(&mut sim);
     let recipe = recipe_id(&sim.world.prototypes, "assembling_machine");
-    let before = sim
-        .assembler_state(assembler_id)
+    let before = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state")
         .clone();
 
@@ -74,7 +73,7 @@ fn locked_assembler_recipe_selection_fails_without_mutation() {
         Ok(false)
     );
     assert_eq!(
-        sim.assembler_state(assembler_id)
+        crate::entity_access::assembler_state(&sim, assembler_id)
             .expect("assembler should expose state"),
         &before
     );
@@ -141,7 +140,7 @@ fn lab_consumes_science_and_increases_research_progress() {
     let (chest_id, inserter_id, lab_id) = place_chest_inserter_lab_line(&mut sim);
     sim.select_research(logistics)
         .expect("logistics should be selectable");
-    sim.entity_inventory_mut(chest_id)
+    crate::entity_access::inventory_mut(&mut sim, chest_id)
         .expect("chest should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: science_pack,
@@ -151,14 +150,13 @@ fn lab_consumes_science_and_increases_research_progress() {
     run_inserter_until_idle(&mut sim, inserter_id);
 
     assert_eq!(
-        sim.entity_inventory(lab_id)
+        crate::entity_access::inventory(&sim, lab_id)
             .expect("lab should expose inventory")
             .count(science_pack),
         1
     );
 
-    let progress_after_insert = sim
-        .lab_state(lab_id)
+    let progress_after_insert = crate::entity_access::lab_state(&sim, lab_id)
         .expect("lab should expose state")
         .progress_ticks;
     for _ in progress_after_insert..599 {
@@ -167,7 +165,7 @@ fn lab_consumes_science_and_increases_research_progress() {
 
     assert_eq!(sim.technology_progress(logistics), Some(0));
     assert_eq!(
-        sim.entity_inventory(lab_id)
+        crate::entity_access::inventory(&sim, lab_id)
             .expect("lab should expose inventory")
             .count(science_pack),
         1
@@ -176,7 +174,7 @@ fn lab_consumes_science_and_increases_research_progress() {
     sim.tick();
 
     assert_eq!(
-        sim.entity_inventory(lab_id)
+        crate::entity_access::inventory(&sim, lab_id)
             .expect("lab should expose inventory")
             .count(science_pack),
         0
@@ -195,7 +193,7 @@ fn multiple_labs_contribute_research_units_in_parallel() {
     sim.select_research(logistics)
         .expect("logistics should be selectable");
     for lab_id in [first_lab, second_lab] {
-        sim.entity_inventory_mut(lab_id)
+        crate::entity_access::inventory_mut(&mut sim, lab_id)
             .expect("lab should expose inventory")
             .slots[0] = Some(ItemStack {
             item_id: science_pack,
@@ -209,13 +207,13 @@ fn multiple_labs_contribute_research_units_in_parallel() {
 
     assert_eq!(sim.technology_progress(logistics), Some(2));
     assert_eq!(
-        sim.entity_inventory(first_lab)
+        crate::entity_access::inventory(&sim, first_lab)
             .expect("lab should expose inventory")
             .count(science_pack),
         0
     );
     assert_eq!(
-        sim.entity_inventory(second_lab)
+        crate::entity_access::inventory(&sim, second_lab)
             .expect("lab should expose inventory")
             .count(science_pack),
         0
@@ -228,7 +226,7 @@ fn no_active_research_leaves_labs_idle() {
     let automation = technology_id(&sim.world.prototypes, "automation");
     let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
     let lab_id = place_lab(&mut sim);
-    sim.entity_inventory_mut(lab_id)
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
         .expect("lab should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: science_pack,
@@ -239,7 +237,7 @@ fn no_active_research_leaves_labs_idle() {
         sim.tick();
     }
 
-    let lab = sim.lab_state(lab_id).expect("lab should expose state");
+    let lab = crate::entity_access::lab_state(&sim, lab_id).expect("lab should expose state");
     assert_eq!(lab.active_technology, None);
     assert_eq!(lab.progress_ticks, 0);
     assert_eq!(lab.required_ticks, 0);
@@ -257,7 +255,7 @@ fn lab_completed_research_unlocks_recipe() {
     complete_research_by_name(&mut sim, "logistics");
     sim.select_research(automation)
         .expect("automation should be selectable");
-    sim.entity_inventory_mut(lab_id)
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
         .expect("lab should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: science_pack,
@@ -273,7 +271,7 @@ fn lab_completed_research_unlocks_recipe() {
     assert_eq!(sim.research.active, None);
     assert_eq!(sim.technology_progress(automation), Some(20));
     assert_eq!(
-        sim.entity_inventory(lab_id)
+        crate::entity_access::inventory(&sim, lab_id)
             .expect("lab should expose inventory")
             .count(science_pack),
         0
@@ -523,7 +521,7 @@ fn labs_with_only_red_packs_cannot_progress_red_green_research() {
     let lab_id = place_lab(&mut sim);
     sim.select_research(logistics_2)
         .expect("logistics 2 prerequisites should be complete");
-    sim.entity_inventory_mut(lab_id)
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
         .expect("lab should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: red,
@@ -536,7 +534,9 @@ fn labs_with_only_red_packs_cannot_progress_red_green_research() {
 
     assert_eq!(sim.technology_progress(logistics_2), Some(0));
     assert_eq!(
-        sim.entity_inventory(lab_id).unwrap().count(red),
+        crate::entity_access::inventory(&sim, lab_id)
+            .unwrap()
+            .count(red),
         1,
         "red pack should not be consumed without green"
     );
@@ -555,13 +555,15 @@ fn labs_consume_exact_required_red_and_green_packs_per_unit() {
     let lab_id = place_lab(&mut sim);
     sim.select_research(logistics_2)
         .expect("logistics 2 prerequisites should be complete");
-    sim.entity_inventory_mut(lab_id)
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
         .expect("lab should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: red,
         count: 1,
     });
-    sim.entity_inventory_mut(lab_id).unwrap().slots[1] = Some(ItemStack {
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
+        .unwrap()
+        .slots[1] = Some(ItemStack {
         item_id: green,
         count: 1,
     });
@@ -571,7 +573,7 @@ fn labs_consume_exact_required_red_and_green_packs_per_unit() {
     }
 
     assert_eq!(sim.technology_progress(logistics_2), Some(1));
-    let inventory = sim.entity_inventory(lab_id).unwrap();
+    let inventory = crate::entity_access::inventory(&sim, lab_id).unwrap();
     assert_eq!(inventory.count(red), 0);
     assert_eq!(inventory.count(green), 0);
 }
@@ -585,11 +587,15 @@ fn red_only_research_does_not_consume_green_packs() {
     let lab_id = place_lab(&mut sim);
     sim.select_research(logistics)
         .expect("logistics should be selectable");
-    sim.entity_inventory_mut(lab_id).unwrap().slots[0] = Some(ItemStack {
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
+        .unwrap()
+        .slots[0] = Some(ItemStack {
         item_id: red,
         count: 1,
     });
-    sim.entity_inventory_mut(lab_id).unwrap().slots[1] = Some(ItemStack {
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
+        .unwrap()
+        .slots[1] = Some(ItemStack {
         item_id: green,
         count: 1,
     });
@@ -598,7 +604,7 @@ fn red_only_research_does_not_consume_green_packs() {
         sim.tick();
     }
 
-    let inventory = sim.entity_inventory(lab_id).unwrap();
+    let inventory = crate::entity_access::inventory(&sim, lab_id).unwrap();
     assert_eq!(sim.technology_progress(logistics), Some(1));
     assert_eq!(inventory.count(red), 0);
     assert_eq!(inventory.count(green), 1);

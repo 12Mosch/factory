@@ -159,12 +159,15 @@ pub(crate) fn update_build_placement_preview_state(
     };
 
     preview_state.cursor_tile = Some((x, y));
-    preview_state.preview = Some(sim.sim.preview_entity_placement_from_player_inventory(
-        selection.prototype_id,
-        selection.item_id,
-        x,
-        y,
-        build_state.direction,
+    preview_state.preview = Some(factory_sim::placement::preview_from_player_inventory(
+        &sim.sim,
+        factory_sim::placement::PlayerPlacementRequest {
+            prototype_id: selection.prototype_id,
+            item_id: selection.item_id,
+            x,
+            y,
+            direction: build_state.direction,
+        },
     ));
 }
 

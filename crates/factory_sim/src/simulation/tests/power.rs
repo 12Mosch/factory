@@ -6,9 +6,16 @@ fn unpowered_assembler_does_not_craft() {
     let mut sim = Simulation::new_test_world(123);
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
     let (x, y) = first_buildable_rect(&sim.world, 3, 3);
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
     let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
@@ -20,15 +27,14 @@ fn unpowered_assembler_does_not_craft() {
         item_id: iron_plate,
         count: 2,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
     for _ in 0..90 {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.input_inventory.count(iron_plate), 2);
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
@@ -56,15 +62,14 @@ fn powered_assembler_crafts() {
         item_id: iron_plate,
         count: 2,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
     for _ in 0..60 {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
 
@@ -116,15 +121,14 @@ fn insufficient_power_slows_machine_progress() {
         item_id: iron_plate,
         count: 2,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
     for _ in 0..60 {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.crafting_progress_ticks, 30);
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
@@ -139,8 +143,7 @@ fn insufficient_power_slows_machine_progress() {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 1);
 }
@@ -161,15 +164,14 @@ fn disconnected_networks_do_not_share_power() {
         item_id: iron_plate,
         count: 2,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
     for _ in 0..90 {
         sim.tick();
     }
 
-    let state = sim
-        .assembler_state(assembler_id)
+    let state = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state");
     assert_eq!(state.output_inventory.count(iron_gear_wheel), 0);
     assert_eq!(
@@ -186,9 +188,16 @@ fn small_pole_coverage_connects_nearby_machine_and_wire_reach_connects_networks(
     let mut sim = Simulation::new_test_world(123);
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
 
     sim.tick();
 
@@ -205,17 +214,40 @@ fn pole_networks_outside_reach_do_not_connect() {
     let mut sim = Simulation::new_test_world(123);
     let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
-    sim.place_entity(pole, x, y, Direction::North)
-        .expect("first pole should be placeable");
+    crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pole,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("first pole should be placeable");
 
     for (candidate_x, candidate_y) in all_tile_coords(&sim.world) {
         if !poles_within_small_pole_reach((x, y), (candidate_x, candidate_y))
-            && sim
-                .can_place_entity(pole, candidate_x, candidate_y, Direction::North)
-                .is_ok()
+            && crate::placement::validate(
+                &sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pole,
+                    x: candidate_x,
+                    y: candidate_y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
         {
-            sim.place_entity(pole, candidate_x, candidate_y, Direction::North)
-                .expect("second pole should be placeable");
+            crate::placement::place(
+                &mut sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pole,
+                    x: candidate_x,
+                    y: candidate_y,
+                    direction: Direction::North,
+                },
+            )
+            .expect("second pole should be placeable");
             sim.tick();
             assert_eq!(sim.power_summary().network_count, 2);
             return;
@@ -230,9 +262,16 @@ fn steam_engine_produces_only_with_connected_pole_and_adjacent_fueled_boiler() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut sim, assembler_id);
 
     sim.tick();
@@ -249,7 +288,7 @@ fn inserter_does_not_move_without_electricity() {
     let mut sim = Simulation::new_test_world(123);
     let (chest_id, inserter_id, furnace_id) = place_unpowered_chest_inserter_furnace_line(&mut sim);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
-    sim.entity_inventory_mut(chest_id)
+    crate::entity_access::inventory_mut(&mut sim, chest_id)
         .expect("chest should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: iron_ore,
@@ -260,8 +299,18 @@ fn inserter_does_not_move_without_electricity() {
         sim.tick();
     }
 
-    assert_eq!(sim.entity_inventory(chest_id).unwrap().count(iron_ore), 1);
-    assert_eq!(sim.furnace_state(furnace_id).unwrap().input_slot, None);
+    assert_eq!(
+        crate::entity_access::inventory(&sim, chest_id)
+            .unwrap()
+            .count(iron_ore),
+        1
+    );
+    assert_eq!(
+        crate::entity_access::furnace_state(&sim, furnace_id)
+            .unwrap()
+            .input_slot,
+        None
+    );
     assert_eq!(
         sim.entity_power_status(inserter_id)
             .expect("inserter should report power status")
@@ -277,12 +326,19 @@ fn lab_does_not_research_without_electricity() {
     let logistics = technology_id(&sim.world.prototypes, "logistics");
     let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
     let (x, y) = first_buildable_rect(&sim.world, 3, 3);
-    let lab_id = sim
-        .place_entity(lab, x, y, Direction::North)
-        .expect("lab should be placeable");
+    let lab_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: lab,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("lab should be placeable");
     sim.select_research(logistics)
         .expect("logistics should be selectable");
-    sim.entity_inventory_mut(lab_id)
+    crate::entity_access::inventory_mut(&mut sim, lab_id)
         .expect("lab should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: science_pack,
@@ -370,8 +426,16 @@ fn placing_electric_pole_dirties_and_rebuilds_power_topology() {
 
     sim.tick();
     let rebuilds_after_initial_tick = sim.power_topology_rebuild_count();
-    sim.place_entity(pole, x, y, Direction::North)
-        .expect("pole should be placeable");
+    crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pole,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("pole should be placeable");
     sim.tick();
 
     assert_eq!(
@@ -385,14 +449,20 @@ fn removing_electric_pole_dirties_and_rebuilds_power_topology() {
     let mut sim = Simulation::new_test_world(123);
     let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
-    let pole_id = sim
-        .place_entity(pole, x, y, Direction::North)
-        .expect("pole should be placeable");
+    let pole_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pole,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("pole should be placeable");
 
     sim.tick();
     let rebuilds_after_initial_tick = sim.power_topology_rebuild_count();
-    sim.remove_entity(pole_id)
-        .expect("pole should be removable");
+    crate::entity_mutation::remove(&mut sim, pole_id).expect("pole should be removable");
     sim.tick();
 
     assert_eq!(
@@ -409,9 +479,16 @@ fn placing_and_removing_electric_consumer_updates_coverage_and_power_status() {
 
     sim.tick();
     let rebuilds_after_fixture = sim.power_topology_rebuild_count();
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("covered assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("covered assembler should be placeable");
     sim.tick();
 
     assert_eq!(
@@ -425,8 +502,7 @@ fn placing_and_removing_electric_consumer_updates_coverage_and_power_status() {
         rebuilds_after_fixture + 1
     );
 
-    sim.remove_entity(assembler_id)
-        .expect("assembler should be removable");
+    crate::entity_mutation::remove(&mut sim, assembler_id).expect("assembler should be removable");
     sim.tick();
 
     assert!(sim.entity_power_status(assembler_id).is_none());
@@ -441,9 +517,16 @@ fn boiler_fuel_and_fluid_changes_update_power_without_rebuilding_topology() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 3, 3, (3, 1));
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     add_assembler_gear_job(&mut sim, assembler_id);
 
     sim.tick();

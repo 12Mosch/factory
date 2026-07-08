@@ -262,12 +262,12 @@ fn place_entities(
         if placed.len() == count {
             return placed;
         }
-        if sim.can_place_entity(prototype_id, x, y, direction).is_err() {
+        let request = benchmark_placement_request(prototype_id, x, y, direction);
+        let Some(entity_id) =
+            place_if_valid(sim, request, "validated benchmark placement should succeed")
+        else {
             continue;
-        }
-        let entity_id = sim
-            .place_entity(prototype_id, x, y, direction)
-            .expect("validated benchmark placement should succeed");
+        };
         placed.push(entity_id);
     }
 
@@ -275,6 +275,40 @@ fn place_entities(
         "could only place {} of {count} {prototype_name}",
         placed.len()
     );
+}
+
+fn benchmark_placement_request(
+    prototype_id: factory_data::EntityPrototypeId,
+    x: i32,
+    y: i32,
+    direction: Direction,
+) -> factory_sim::placement::EntityPlacementRequest {
+    factory_sim::placement::EntityPlacementRequest {
+        prototype_id,
+        x,
+        y,
+        direction,
+    }
+}
+
+fn can_place(sim: &Simulation, request: factory_sim::placement::EntityPlacementRequest) -> bool {
+    factory_sim::placement::validate(sim, request).is_ok()
+}
+
+fn place_validated(
+    sim: &mut Simulation,
+    request: factory_sim::placement::EntityPlacementRequest,
+    message: &str,
+) -> EntityId {
+    factory_sim::placement::place(sim, request).expect(message)
+}
+
+fn place_if_valid(
+    sim: &mut Simulation,
+    request: factory_sim::placement::EntityPlacementRequest,
+    message: &str,
+) -> Option<EntityId> {
+    can_place(sim, request).then(|| place_validated(sim, request, message))
 }
 
 fn seed_assemblers(sim: &mut Simulation, machine_ids: &[EntityId]) {
@@ -289,7 +323,7 @@ fn seed_assemblers(sim: &mut Simulation, machine_ids: &[EntityId]) {
             item_id: iron_plate,
             count: 100,
         });
-        sim.transfer_player_slot_to_assembler_input(*machine_id, 0)
+        factory_sim::entity_transfer::player_slot_to_assembler_input(sim, *machine_id, 0)
             .expect("benchmark assembler should accept seeded iron plates");
     }
     *sim.player_inventory_mut() = Inventory::player();
@@ -314,11 +348,16 @@ fn place_representative_power_poles(sim: &mut Simulation, spec: FactoryBenchmark
         if placed == pole_target {
             return;
         }
-        if sim.can_place_entity(pole, x, y, Direction::North).is_err() {
+        let request = benchmark_placement_request(pole, x, y, Direction::North);
+        if place_if_valid(
+            sim,
+            request,
+            "validated benchmark pole placement should succeed",
+        )
+        .is_none()
+        {
             continue;
         }
-        sim.place_entity(pole, x, y, Direction::North)
-            .expect("validated benchmark pole placement should succeed");
         placed += 1;
     }
 }
@@ -334,30 +373,34 @@ fn place_fluid_fixtures(sim: &mut Simulation, count: usize) {
         if placed == count {
             return;
         }
-        if sim.can_place_entity(pump, x, y, Direction::North).is_err()
-            || sim
-                .can_place_entity(boiler, x, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(steam_engine, x + 2, y + 1, Direction::North)
-                .is_err()
+        let pump_request = benchmark_placement_request(pump, x, y, Direction::North);
+        let boiler_request = benchmark_placement_request(boiler, x, y + 1, Direction::North);
+        let steam_engine_request =
+            benchmark_placement_request(steam_engine, x + 2, y + 1, Direction::North);
+        if [pump_request, boiler_request, steam_engine_request]
+            .into_iter()
+            .any(|request| !can_place(sim, request))
         {
             continue;
         }
 
-        sim.place_entity(pump, x, y, Direction::North)
-            .expect("validated benchmark pump should place");
-        let boiler_id = sim
-            .place_entity(boiler, x, y + 1, Direction::North)
-            .expect("validated benchmark boiler should place");
-        sim.place_entity(steam_engine, x + 2, y + 1, Direction::North)
-            .expect("validated benchmark engine should place");
+        place_validated(sim, pump_request, "validated benchmark pump should place");
+        let boiler_id = place_validated(
+            sim,
+            boiler_request,
+            "validated benchmark boiler should place",
+        );
+        place_validated(
+            sim,
+            steam_engine_request,
+            "validated benchmark engine should place",
+        );
         *sim.player_inventory_mut() = Inventory::player();
         sim.player_inventory_mut().slots[0] = Some(ItemStack {
             item_id: coal,
             count: 50,
         });
-        sim.transfer_player_slot_to_boiler_fuel(boiler_id, 0)
+        factory_sim::entity_transfer::player_slot_to_boiler_fuel(sim, boiler_id, 0)
             .expect("benchmark boiler should accept fuel");
         placed += 1;
     }

@@ -72,12 +72,15 @@ pub fn place_selected_building_at_tile(
     x: i32,
     y: i32,
 ) -> BuildPlacementStatus {
-    match sim.place_entity_from_player_inventory(
-        selection.prototype_id,
-        selection.item_id,
-        x,
-        y,
-        direction,
+    match factory_sim::placement::place_from_player_inventory(
+        sim,
+        factory_sim::placement::PlayerPlacementRequest {
+            prototype_id: selection.prototype_id,
+            item_id: selection.item_id,
+            x,
+            y,
+            direction,
+        },
     ) {
         Ok(_) => BuildPlacementStatus::Placed(format!(
             "Placed {}",

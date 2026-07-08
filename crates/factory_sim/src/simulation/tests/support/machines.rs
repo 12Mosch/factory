@@ -4,15 +4,31 @@ use super::*;
 pub(in crate::simulation::tests) fn place_stone_furnace(sim: &mut Simulation) -> EntityId {
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
     let (x, y) = first_buildable_rect(&sim.world, 2, 2);
-    sim.place_entity(furnace, x, y, Direction::North)
-        .expect("stone furnace should be placeable")
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: furnace,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("stone furnace should be placeable")
 }
 
 pub(in crate::simulation::tests) fn place_assembling_machine(sim: &mut Simulation) -> EntityId {
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
     let (x, y) = place_powered_fixture_origin(sim, 3, 3, (3, 1));
-    sim.place_entity(assembler, x, y, Direction::North)
-        .expect("assembling machine should be placeable")
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembling machine should be placeable")
 }
 
 pub(in crate::simulation::tests) fn complete_research_by_name(
@@ -43,9 +59,9 @@ pub(in crate::simulation::tests) fn add_furnace_input_and_fuel(
         item_id: fuel_item,
         count: 1,
     });
-    sim.transfer_player_slot_to_furnace_input(entity_id, 0)
+    crate::entity_transfer::player_slot_to_furnace_input(sim, entity_id, 0)
         .expect("input should transfer to furnace");
-    sim.transfer_player_slot_to_furnace_fuel(entity_id, 1)
+    crate::entity_transfer::player_slot_to_furnace_fuel(sim, entity_id, 1)
         .expect("fuel should transfer to furnace");
 }
 
@@ -53,8 +69,16 @@ pub(in crate::simulation::tests) fn place_lab(sim: &mut Simulation) -> EntityId 
     let lab = entity_id_by_name(&sim.world.prototypes, "lab");
     let (x, y) = place_powered_fixture_origin(sim, 3, 3, (3, 1));
 
-    sim.place_entity(lab, x, y, Direction::North)
-        .expect("lab should be placeable")
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: lab,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("lab should be placeable")
 }
 
 pub(in crate::simulation::tests) fn add_assembler_gear_job(
@@ -71,7 +95,7 @@ pub(in crate::simulation::tests) fn add_assembler_gear_job(
         item_id: iron_plate,
         count: 2,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 }
 
@@ -86,7 +110,7 @@ pub(in crate::simulation::tests) fn run_same_assembler_actions(sim: &mut Simulat
         item_id: iron_plate,
         count: 4,
     });
-    sim.transfer_player_slot_to_assembler_input(assembler_id, 0)
+    crate::entity_transfer::player_slot_to_assembler_input(sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
     for _ in 0..125 {
         sim.tick();

@@ -117,10 +117,29 @@ fn fluid_stat_formatting_shows_per_minute_and_totals() {
     let pump = entity_id_by_name(sim.catalog(), "offshore_pump");
     let (x, y) = all_tile_coords(&sim)
         .into_iter()
-        .find(|(x, y)| sim.can_place_entity(pump, *x, *y, Direction::North).is_ok())
+        .find(|(x, y)| {
+            factory_sim::placement::validate(
+                &sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: pump,
+                    x: *x,
+                    y: *y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
+        })
         .expect("expected placeable offshore pump");
-    sim.place_entity(pump, x, y, Direction::North)
-        .expect("offshore pump should place");
+    factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: pump,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("offshore pump should place");
     sim.tick();
 
     let rows = fluid_production_rows(&sim);
@@ -140,9 +159,16 @@ fn consumption_stat_formatting_includes_fluid_rows() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
     let assembler = entity_id_by_name(sim.catalog(), "assembling_machine");
-    let assembler_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let assembler_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     let recipe = recipe_id_by_name(sim.catalog(), "iron_gear_wheel");
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("recipe should be selectable");
@@ -210,8 +236,16 @@ fn diagnostics_formatting_includes_status_counts_and_hints() {
     let mut sim = Simulation::new_test_world(123);
     let lab = entity_id_by_name(sim.catalog(), "lab");
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    sim.place_entity(lab, x, y, Direction::North)
-        .expect("lab should be placeable");
+    factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: lab,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("lab should be placeable");
     sim.tick();
 
     assert!(
@@ -327,9 +361,16 @@ fn locked_assembler_recipe_buttons_are_unavailable_without_error() {
     let assembler = entity_id_by_name(sim.catalog(), "assembling_machine");
     let recipe = recipe_id_by_name(sim.catalog(), "assembling_machine");
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    let entity_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let entity_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
 
     assert_eq!(
         sim.can_select_assembler_recipe(entity_id, recipe),
@@ -344,9 +385,16 @@ fn assembler_detail_formatting_reports_partial_ingredients() {
     let recipe = recipe_id_by_name(sim.catalog(), "iron_gear_wheel");
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let (x, y) = first_buildable_rect(&sim, assembler);
-    let entity_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let entity_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
     sim.select_assembler_recipe(entity_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     *sim.player_inventory_mut() = Inventory::player();
@@ -354,7 +402,7 @@ fn assembler_detail_formatting_reports_partial_ingredients() {
         item_id: iron_plate,
         count: 1,
     });
-    sim.transfer_player_slot_to_assembler_input(entity_id, 2)
+    factory_sim::entity_transfer::player_slot_to_assembler_input(&mut sim, entity_id, 2)
         .expect("partial ingredients should transfer to assembler input");
 
     let details =

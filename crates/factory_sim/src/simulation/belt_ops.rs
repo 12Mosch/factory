@@ -188,6 +188,16 @@ impl TransportLaneVisitStorage {
 }
 
 impl Simulation {
+    pub fn insert_item_onto_belt(
+        &mut self,
+        entity_id: EntityId,
+        lane_index: usize,
+        item_id: ItemId,
+    ) -> Result<(), BeltError> {
+        self.entities
+            .insert_item_onto_belt(entity_id, lane_index, item_id)
+    }
+
     pub(super) fn prototype_affects_transport_lane_graph(
         &self,
         prototype: &factory_data::EntityPrototype,

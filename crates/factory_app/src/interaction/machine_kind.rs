@@ -12,7 +12,7 @@ pub(crate) enum OpenMachineKind {
 }
 
 pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option<OpenMachineKind> {
-    match sim.machine_kind(entity_id)? {
+    match factory_sim::entity_access::machine_kind(sim, entity_id)? {
         EntityKind::Chest => Some(OpenMachineKind::Chest),
         EntityKind::MiningDrill => Some(OpenMachineKind::BurnerDrill),
         EntityKind::Furnace => Some(OpenMachineKind::Furnace),

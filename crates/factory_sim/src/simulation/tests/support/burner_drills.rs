@@ -13,13 +13,30 @@ pub(in crate::simulation::tests) fn place_burner_drill_on_resource(
         if resource.resource_item != resource_item {
             continue;
         }
-        if sim.can_place_entity(drill, x, y, Direction::North).is_err() {
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: drill,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .is_err()
+        {
             continue;
         }
 
-        let entity_id = sim
-            .place_entity(drill, x, y, Direction::North)
-            .expect("validated drill target should be placeable");
+        let entity_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: drill,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated drill target should be placeable");
         return (entity_id, x, y, resource.amount);
     }
 
@@ -45,7 +62,17 @@ pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_chest(
             if resource.resource_item != resource_item {
                 continue;
             }
-            if sim.can_place_entity(drill, x, y, direction).is_err() {
+            if crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: drill,
+                    x,
+                    y,
+                    direction,
+                },
+            )
+            .is_err()
+            {
                 continue;
             }
 
@@ -62,19 +89,40 @@ pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_chest(
                 footprint,
             };
             let (output_x, output_y) = drill_output_tile(&placed);
-            if sim
-                .can_place_entity(chest, output_x, output_y, Direction::North)
-                .is_err()
+            if crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: chest,
+                    x: output_x,
+                    y: output_y,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
             {
                 continue;
             }
 
-            let drill_id = sim
-                .place_entity(drill, x, y, direction)
-                .expect("validated drill target should be placeable");
-            let chest_id = sim
-                .place_entity(chest, output_x, output_y, Direction::North)
-                .expect("validated chest output target should be placeable");
+            let drill_id = crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: drill,
+                    x,
+                    y,
+                    direction,
+                },
+            )
+            .expect("validated drill target should be placeable");
+            let chest_id = crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: chest,
+                    x: output_x,
+                    y: output_y,
+                    direction: Direction::North,
+                },
+            )
+            .expect("validated chest output target should be placeable");
             return (drill_id, chest_id, x, y, resource.amount);
         }
     }
@@ -101,7 +149,17 @@ pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_belt(
             if resource.resource_item != resource_item {
                 continue;
             }
-            if sim.can_place_entity(drill, x, y, direction).is_err() {
+            if crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: drill,
+                    x,
+                    y,
+                    direction,
+                },
+            )
+            .is_err()
+            {
                 continue;
             }
 
@@ -118,19 +176,40 @@ pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_belt(
                 footprint,
             };
             let (output_x, output_y) = drill_output_tile(&placed);
-            if sim
-                .can_place_entity(belt, output_x, output_y, direction)
-                .is_err()
+            if crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: output_x,
+                    y: output_y,
+                    direction,
+                },
+            )
+            .is_err()
             {
                 continue;
             }
 
-            let drill_id = sim
-                .place_entity(drill, x, y, direction)
-                .expect("validated drill target should be placeable");
-            let belt_id = sim
-                .place_entity(belt, output_x, output_y, direction)
-                .expect("validated belt output target should be placeable");
+            let drill_id = crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: drill,
+                    x,
+                    y,
+                    direction,
+                },
+            )
+            .expect("validated drill target should be placeable");
+            let belt_id = crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: belt,
+                    x: output_x,
+                    y: output_y,
+                    direction,
+                },
+            )
+            .expect("validated belt output target should be placeable");
             return (drill_id, belt_id, x, y, resource.amount);
         }
     }
@@ -149,6 +228,6 @@ pub(in crate::simulation::tests) fn add_fuel_to_burner_drill(
         item_id: fuel_item,
         count,
     });
-    sim.transfer_player_slot_to_burner_drill_fuel(entity_id, 0)
+    crate::entity_transfer::player_slot_to_burner_drill_fuel(sim, entity_id, 0)
         .expect("fuel should transfer to burner drill");
 }

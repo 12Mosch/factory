@@ -46,7 +46,7 @@ pub fn format_assembler_detail_text(
     sim: &Simulation,
     entity_id: EntityId,
 ) -> Option<AssemblerDetailText> {
-    let state = sim.assembler_state(entity_id).ok()?;
+    let state = factory_sim::entity_access::assembler_state(sim, entity_id).ok()?;
     let Some(recipe) = state
         .selected_recipe
         .and_then(|recipe_id| sim.catalog().recipe(recipe_id))

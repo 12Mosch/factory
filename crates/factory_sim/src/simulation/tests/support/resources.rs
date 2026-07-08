@@ -53,9 +53,16 @@ pub(in crate::simulation::tests) fn first_placeable_resource_tile(
             continue;
         };
         if resource.resource_item == resource_item
-            && sim
-                .can_place_entity(prototype_id, x, y, Direction::North)
-                .is_ok()
+            && crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
         {
             return (x, y, resource.amount);
         }

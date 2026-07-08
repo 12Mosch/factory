@@ -1,12 +1,12 @@
 use super::common::{
     entity_id_by_name, first_buildable_rect, first_placeable_resource_rect, item_id_by_name,
-    place_powered_fixture_origin, recipe_id_by_name,
+    place_powered_fixture_origin, place_test_entity, recipe_id_by_name,
 };
 use bevy::prelude::*;
 use factory_app::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
 use factory_app::ui::inventory_panel::{InventoryPanel, slot_transfer_error_message};
 use factory_sim::{
-    ContainerError, Direction, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
+    ContainerError, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
 };
 
 #[test]
@@ -15,21 +15,24 @@ fn slot_click_transfer_delegates_to_sim_transfer_api() {
     let chest = entity_id_by_name(sim.catalog(), "chest");
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let (x, y) = first_buildable_rect(&sim, chest);
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
+    let entity_id = place_test_entity(&mut sim, chest, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: iron_plate,
         count: 9,
     });
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
-        .expect("slot click should transfer stack to chest");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::Player,
+        2,
+    )
+    .expect("slot click should transfer stack to chest");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
     assert_eq!(
-        sim.entity_inventory(entity_id)
+        factory_sim::entity_access::inventory(&sim, entity_id)
             .expect("chest should have inventory")
             .count(iron_plate),
         9
@@ -42,21 +45,24 @@ fn slot_click_transfer_routes_science_to_lab_inventory() {
     let lab = entity_id_by_name(sim.catalog(), "lab");
     let science_pack = item_id_by_name(sim.catalog(), "automation_science_pack");
     let (x, y) = first_buildable_rect(&sim, lab);
-    let entity_id = sim
-        .place_entity(lab, x, y, Direction::North)
-        .expect("lab should be placeable");
+    let entity_id = place_test_entity(&mut sim, lab, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: science_pack,
         count: 3,
     });
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
-        .expect("slot click should transfer science packs to lab");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::Player,
+        2,
+    )
+    .expect("slot click should transfer science packs to lab");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
     assert_eq!(
-        sim.entity_inventory(entity_id)
+        factory_sim::entity_access::inventory(&sim, entity_id)
             .expect("lab should expose inventory")
             .count(science_pack),
         3
@@ -71,9 +77,7 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
     let coal = item_id_by_name(sim.catalog(), "coal");
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let (x, y) = first_buildable_rect(&sim, furnace);
-    let entity_id = sim
-        .place_entity(furnace, x, y, Direction::North)
-        .expect("furnace should be placeable");
+    let entity_id = place_test_entity(&mut sim, furnace, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: iron_ore,
@@ -84,15 +88,25 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
         count: 1,
     });
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
-        .expect("player ore should transfer to furnace input");
-    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 3)
-        .expect("player coal should transfer to furnace fuel");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::Player,
+        2,
+    )
+    .expect("player ore should transfer to furnace input");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::Player,
+        3,
+    )
+    .expect("player coal should transfer to furnace fuel");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
     assert_eq!(sim.player_inventory_mut().slots[3], None);
     assert_eq!(
-        sim.furnace_state(entity_id)
+        factory_sim::entity_access::furnace_state(&sim, entity_id)
             .expect("furnace should expose state")
             .input_slot,
         Some(ItemStack {
@@ -101,7 +115,7 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
         })
     );
     assert_eq!(
-        sim.furnace_state(entity_id)
+        factory_sim::entity_access::furnace_state(&sim, entity_id)
             .expect("furnace should expose state")
             .energy
             .fuel_slot,
@@ -115,12 +129,17 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
         sim.tick();
     }
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::FurnaceOutput, 0)
-        .expect("furnace output should transfer to player");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::FurnaceOutput,
+        0,
+    )
+    .expect("furnace output should transfer to player");
 
     assert_eq!(sim.player_inventory().count(iron_plate), 1);
     assert_eq!(
-        sim.furnace_state(entity_id)
+        factory_sim::entity_access::furnace_state(&sim, entity_id)
             .expect("furnace should expose state")
             .output_slot,
         None
@@ -135,9 +154,7 @@ fn slot_click_transfer_routes_assembler_input_and_output() {
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
     let iron_gear_wheel = item_id_by_name(sim.catalog(), "iron_gear_wheel");
     let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    let entity_id = sim
-        .place_entity(assembler, x, y, Direction::North)
-        .expect("assembler should be placeable");
+    let entity_id = place_test_entity(&mut sim, assembler, x, y);
     sim.select_assembler_recipe(entity_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     *sim.player_inventory_mut() = Inventory::player();
@@ -146,12 +163,17 @@ fn slot_click_transfer_routes_assembler_input_and_output() {
         count: 2,
     });
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
-        .expect("player ingredients should transfer to assembler input");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::Player,
+        2,
+    )
+    .expect("player ingredients should transfer to assembler input");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
     assert_eq!(
-        sim.assembler_state(entity_id)
+        factory_sim::entity_access::assembler_state(&sim, entity_id)
             .expect("assembler should expose state")
             .input_inventory
             .count(iron_plate),
@@ -162,12 +184,17 @@ fn slot_click_transfer_routes_assembler_input_and_output() {
         sim.tick();
     }
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::AssemblerOutput, 0)
-        .expect("assembler output should transfer to player");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::AssemblerOutput,
+        0,
+    )
+    .expect("assembler output should transfer to player");
 
     assert_eq!(sim.player_inventory().count(iron_gear_wheel), 1);
     assert_eq!(
-        sim.assembler_state(entity_id)
+        factory_sim::entity_access::assembler_state(&sim, entity_id)
             .expect("assembler should expose state")
             .output_inventory
             .count(iron_gear_wheel),
@@ -181,9 +208,7 @@ fn slot_click_rejects_invalid_furnace_input_without_mutation() {
     let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
     let inserter = item_id_by_name(sim.catalog(), "inserter");
     let (x, y) = first_buildable_rect(&sim, furnace);
-    let entity_id = sim
-        .place_entity(furnace, x, y, Direction::North)
-        .expect("furnace should be placeable");
+    let entity_id = place_test_entity(&mut sim, furnace, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: inserter,
@@ -191,8 +216,13 @@ fn slot_click_rejects_invalid_furnace_input_without_mutation() {
     });
 
     assert!(
-        sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
-            .is_err()
+        factory_sim::entity_transfer::transfer_container_slot(
+            &mut sim,
+            entity_id,
+            InventoryPanel::Player,
+            2
+        )
+        .is_err()
     );
     assert_eq!(
         sim.player_inventory_mut().slots[2],
@@ -202,7 +232,7 @@ fn slot_click_rejects_invalid_furnace_input_without_mutation() {
         })
     );
     assert_eq!(
-        sim.furnace_state(entity_id)
+        factory_sim::entity_access::furnace_state(&sim, entity_id)
             .expect("furnace should expose state")
             .input_slot,
         None
@@ -251,10 +281,7 @@ fn slot_click_failure_updates_inventory_transfer_feedback() {
     let entity_id = {
         let mut sim = app.world_mut().resource_mut::<SimResource>();
         let (x, y) = first_buildable_rect(&sim.sim, furnace);
-        let entity_id = sim
-            .sim
-            .place_entity(furnace, x, y, Direction::North)
-            .expect("furnace should be placeable");
+        let entity_id = place_test_entity(&mut sim.sim, furnace, x, y);
         *sim.sim.player_inventory_mut() = Inventory::player();
         sim.sim.player_inventory_mut().slots[2] = Some(ItemStack {
             item_id: inserter,
@@ -288,21 +315,24 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
     let drill = entity_id_by_name(sim.catalog(), "burner_mining_drill");
     let coal = item_id_by_name(sim.catalog(), "coal");
     let (x, y) = first_placeable_resource_rect(&sim, drill, coal);
-    let entity_id = sim
-        .place_entity(drill, x, y, Direction::North)
-        .expect("burner drill should be placeable over resources");
+    let entity_id = place_test_entity(&mut sim, drill, x, y);
     *sim.player_inventory_mut() = Inventory::player();
     sim.player_inventory_mut().slots[2] = Some(ItemStack {
         item_id: coal,
         count: 1,
     });
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::Player, 2)
-        .expect("player coal should transfer to burner drill fuel");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::Player,
+        2,
+    )
+    .expect("player coal should transfer to burner drill fuel");
 
     assert_eq!(sim.player_inventory_mut().slots[2], None);
     assert_eq!(
-        sim.burner_drill_state(entity_id)
+        factory_sim::entity_access::burner_drill_state(&sim, entity_id)
             .expect("burner drill should expose state")
             .energy
             .fuel_slot,
@@ -316,12 +346,17 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
         sim.tick();
     }
 
-    sim.transfer_container_slot(entity_id, InventoryPanel::BurnerOutput, 0)
-        .expect("drill output should transfer to player");
+    factory_sim::entity_transfer::transfer_container_slot(
+        &mut sim,
+        entity_id,
+        InventoryPanel::BurnerOutput,
+        0,
+    )
+    .expect("drill output should transfer to player");
 
     assert_eq!(sim.player_inventory().count(coal), 1);
     assert_eq!(
-        sim.burner_drill_state(entity_id)
+        factory_sim::entity_access::burner_drill_state(&sim, entity_id)
             .expect("burner drill should expose state")
             .output_slot,
         None

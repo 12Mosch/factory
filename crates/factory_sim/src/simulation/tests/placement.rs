@@ -7,12 +7,26 @@ fn two_by_two_entity_cannot_overlap_another_entity() {
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
     let (x, y) = first_buildable_rect(&sim.world, 4, 2);
 
-    let first = sim
-        .place_entity(furnace, x, y, Direction::North)
-        .expect("first furnace should be placeable");
-    let error = sim
-        .place_entity(furnace, x + 1, y, Direction::North)
-        .expect_err("second furnace should overlap the first");
+    let first = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: furnace,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("first furnace should be placeable");
+    let error = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: furnace,
+            x: x + 1,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect_err("second furnace should overlap the first");
 
     assert!(matches!(
         error,
@@ -29,9 +43,16 @@ fn entity_cannot_be_placed_on_water() {
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let (x, y) = first_water_tile(&sim.world);
 
-    let error = sim
-        .place_entity(inserter, x, y, Direction::North)
-        .expect_err("water should block entity placement");
+    let error = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect_err("water should block entity placement");
 
     assert!(matches!(error, BuildError::TileBlocked { x: bx, y: by } if bx == x && by == y));
 }
@@ -47,33 +68,47 @@ fn entity_topology_revision_changes_only_for_successful_topology_edits() {
     assert_eq!(sim.entity_topology_revision(), initial_revision);
 
     let water = first_water_tile(&sim.world);
-    sim.place_entity(inserter, water.0, water.1, Direction::North)
-        .expect_err("water should block entity placement");
+    crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x: water.0,
+            y: water.1,
+            direction: Direction::North,
+        },
+    )
+    .expect_err("water should block entity placement");
     assert_eq!(sim.entity_topology_revision(), initial_revision);
 
-    let entity_id = sim
-        .place_entity(inserter, x, y, Direction::North)
-        .expect("inserter should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("inserter should be placeable");
     let placed_revision = initial_revision + 1;
     assert_eq!(sim.entity_topology_revision(), placed_revision);
 
     sim.tick();
     assert_eq!(sim.entity_topology_revision(), placed_revision);
 
-    sim.rotate_entity(entity_id, Direction::North)
+    crate::entity_mutation::rotate(&mut sim, entity_id, Direction::North)
         .expect("same direction rotate should be a no-op");
     assert_eq!(sim.entity_topology_revision(), placed_revision);
 
-    sim.rotate_entity(entity_id, Direction::East)
+    crate::entity_mutation::rotate(&mut sim, entity_id, Direction::East)
         .expect("direction change should be valid");
     let rotated_revision = placed_revision + 1;
     assert_eq!(sim.entity_topology_revision(), rotated_revision);
 
-    assert!(sim.remove_entity(EntityId::new(999_999)).is_none());
+    assert!(crate::entity_mutation::remove(&mut sim, EntityId::new(999_999)).is_none());
     assert_eq!(sim.entity_topology_revision(), rotated_revision);
 
-    sim.remove_entity(entity_id)
-        .expect("placed entity should be removable");
+    crate::entity_mutation::remove(&mut sim, entity_id).expect("placed entity should be removable");
     assert_eq!(sim.entity_topology_revision(), rotated_revision + 1);
 }
 
@@ -84,12 +119,27 @@ fn placement_preview_reports_occupied_tiles() {
     let belt_item = item_id_by_name(&sim.world.prototypes, "transport_belt");
     let (x, y) = first_placeable_entity_tile(&sim, belt, Direction::North);
     give_player_build_item(&mut sim, belt_item);
-    let blocker = sim
-        .place_entity(belt, x, y, Direction::North)
-        .expect("blocking belt should be placeable");
+    let blocker = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: belt,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("blocking belt should be placeable");
 
-    let preview =
-        sim.preview_entity_placement_from_player_inventory(belt, belt_item, x, y, Direction::North);
+    let preview = crate::placement::preview_from_player_inventory(
+        &sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: belt,
+            item_id: belt_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    );
 
     assert!(preview.issues.iter().any(|issue| {
         issue.tile == Some((x, y))
@@ -106,12 +156,15 @@ fn placement_preview_reports_player_tile() {
     sim.player = PlayerState::centered_on_tile(x, y);
     give_player_build_item(&mut sim, inserter_item);
 
-    let preview = sim.preview_entity_placement_from_player_inventory(
-        inserter,
-        inserter_item,
-        x,
-        y,
-        Direction::North,
+    let preview = crate::placement::preview_from_player_inventory(
+        &sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: inserter,
+            item_id: inserter_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
     );
 
     assert!(preview.issues.iter().any(|issue| {
@@ -127,12 +180,15 @@ fn placement_preview_reports_blocked_terrain() {
     let (x, y) = first_water_tile(&sim.world);
     give_player_build_item(&mut sim, inserter_item);
 
-    let preview = sim.preview_entity_placement_from_player_inventory(
-        inserter,
-        inserter_item,
-        x,
-        y,
-        Direction::North,
+    let preview = crate::placement::preview_from_player_inventory(
+        &sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: inserter,
+            item_id: inserter_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
     );
 
     assert!(preview.issues.iter().any(|issue| {
@@ -148,12 +204,15 @@ fn placement_preview_reports_outside_generated_chunks() {
     let outside_x = (STARTING_MAX_CHUNK + 1) * CHUNK_SIZE;
     give_player_build_item(&mut sim, inserter_item);
 
-    let preview = sim.preview_entity_placement_from_player_inventory(
-        inserter,
-        inserter_item,
-        outside_x,
-        0,
-        Direction::North,
+    let preview = crate::placement::preview_from_player_inventory(
+        &sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: inserter,
+            item_id: inserter_item,
+            x: outside_x,
+            y: 0,
+            direction: Direction::North,
+        },
     );
 
     assert!(preview.issues.iter().any(|issue| {
@@ -172,12 +231,15 @@ fn placement_preview_reports_missing_drill_resource() {
         first_buildable_rect_without_resource(&sim.world, prototype.size.x, prototype.size.y);
     give_player_build_item(&mut sim, drill_item);
 
-    let preview = sim.preview_entity_placement_from_player_inventory(
-        drill,
-        drill_item,
-        x,
-        y,
-        Direction::North,
+    let preview = crate::placement::preview_from_player_inventory(
+        &sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: drill,
+            item_id: drill_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
     );
 
     assert!(preview.issues.iter().any(|issue| {
@@ -199,8 +261,16 @@ fn placement_preview_reports_missing_offshore_pump_water() {
     let (x, y) = first_buildable_offshore_pump_footprint_away_from_water(&sim, pump);
     give_player_build_item(&mut sim, pump_item);
 
-    let preview =
-        sim.preview_entity_placement_from_player_inventory(pump, pump_item, x, y, Direction::North);
+    let preview = crate::placement::preview_from_player_inventory(
+        &sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: pump,
+            item_id: pump_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    );
 
     assert!(preview.issues.iter().any(|issue| {
         issue.kind == BuildPlacementIssueKind::MissingAdjacentWater
@@ -217,9 +287,16 @@ fn entity_cannot_be_placed_on_player_tile() {
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
     sim.player = PlayerState::centered_on_tile(x, y);
 
-    let error = sim
-        .place_entity(inserter, x, y, Direction::North)
-        .expect_err("player tile should block entity placement");
+    let error = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect_err("player tile should block entity placement");
 
     assert!(matches!(error, BuildError::TileBlocked { x: bx, y: by } if bx == x && by == y));
 }
@@ -231,9 +308,16 @@ fn multi_tile_entity_cannot_overlap_player_tile() {
     let (x, y) = first_buildable_rect(&sim.world, 2, 2);
     sim.player = PlayerState::centered_on_tile(x + 1, y + 1);
 
-    let error = sim
-        .place_entity(furnace, x, y, Direction::North)
-        .expect_err("entity footprint should not overlap the player tile");
+    let error = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: furnace,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect_err("entity footprint should not overlap the player tile");
 
     assert!(
         matches!(error, BuildError::TileBlocked { x: bx, y: by } if bx == x + 1 && by == y + 1)
@@ -246,9 +330,16 @@ fn entity_cannot_be_placed_outside_generated_chunks() {
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let outside_x = (STARTING_MAX_CHUNK + 1) * CHUNK_SIZE;
 
-    let error = sim
-        .place_entity(inserter, outside_x, 0, Direction::North)
-        .expect_err("unloaded chunks should block entity placement");
+    let error = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x: outside_x,
+            y: 0,
+            direction: Direction::North,
+        },
+    )
+    .expect_err("unloaded chunks should block entity placement");
 
     assert!(matches!(
         error,
@@ -264,9 +355,16 @@ fn rotation_updates_entity_footprint() {
 
     let mut sim = Simulation::new(123, catalog);
     let (x, y) = first_buildable_rect(&sim.world, 2, 2);
-    let entity_id = sim
-        .place_entity(inserter, x, y, Direction::North)
-        .expect("rectangular entity should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("rectangular entity should be placeable");
 
     assert_eq!(sim.entities.occupancy().entity_at(x, y), Some(entity_id));
     assert_eq!(
@@ -275,7 +373,7 @@ fn rotation_updates_entity_footprint() {
     );
     assert_eq!(sim.entities.occupancy().entity_at(x + 1, y), None);
 
-    sim.rotate_entity(entity_id, Direction::East)
+    crate::entity_mutation::rotate(&mut sim, entity_id, Direction::East)
         .expect("rotated rectangular entity should still be placeable");
 
     let entity = sim
@@ -300,13 +398,19 @@ fn rotation_cannot_overlap_player_tile() {
 
     let mut sim = Simulation::new(123, catalog);
     let (x, y) = first_buildable_rect(&sim.world, 2, 2);
-    let entity_id = sim
-        .place_entity(inserter, x, y, Direction::North)
-        .expect("rectangular entity should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("rectangular entity should be placeable");
     sim.player = PlayerState::centered_on_tile(x + 1, y);
 
-    let error = sim
-        .rotate_entity(entity_id, Direction::East)
+    let error = crate::entity_mutation::rotate(&mut sim, entity_id, Direction::East)
         .expect_err("rotated footprint should not overlap the player tile");
 
     assert!(matches!(
@@ -321,12 +425,19 @@ fn chest_placement_creates_sixteen_inventory_slots() {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
 
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
 
     assert_eq!(
-        sim.entity_inventory(entity_id)
+        crate::entity_access::inventory(&sim, entity_id)
             .expect("chest should have an inventory")
             .slots
             .len(),
@@ -346,12 +457,15 @@ fn player_cannot_place_locked_entity_even_with_inventory_item() {
         .expect("test inventory should accept assembler");
 
     assert_eq!(
-        sim.place_entity_from_player_inventory(
-            assembler_entity,
-            assembler_item,
-            x,
-            y,
-            Direction::North,
+        crate::placement::place_from_player_inventory(
+            &mut sim,
+            crate::placement::PlayerPlacementRequest {
+                prototype_id: assembler_entity,
+                item_id: assembler_item,
+                x,
+                y,
+                direction: Direction::North
+            }
         ),
         Err(PlayerBuildError::EntityLocked {
             prototype_id: assembler_entity,
@@ -371,9 +485,17 @@ fn inventory_backed_placement_consumes_one_item() {
         .insert(&sim.world.prototypes, belt_item, 1)
         .expect("test inventory should accept belt");
 
-    let entity_id = sim
-        .place_entity_from_player_inventory(belt, belt_item, x, y, Direction::North)
-        .expect("inventory-backed belt placement should succeed");
+    let entity_id = crate::placement::place_from_player_inventory(
+        &mut sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: belt,
+            item_id: belt_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("inventory-backed belt placement should succeed");
 
     assert!(sim.entities.placed_entity(entity_id).is_some());
     assert_eq!(sim.player_inventory.count(belt_item), 0);
@@ -388,7 +510,16 @@ fn inventory_backed_placement_fails_without_item() {
     sim.player_inventory = Inventory::player();
     let before_entities = sim.entities.placed_len();
 
-    let result = sim.place_entity_from_player_inventory(belt, belt_item, x, y, Direction::North);
+    let result = crate::placement::place_from_player_inventory(
+        &mut sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: belt,
+            item_id: belt_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    );
 
     assert_eq!(
         result,
@@ -407,11 +538,27 @@ fn inventory_backed_placement_does_not_consume_on_blocked_tile() {
     sim.player_inventory
         .insert(&sim.world.prototypes, belt_item, 1)
         .expect("test inventory should accept belt");
-    let blocker = sim
-        .place_entity(belt, x, y, Direction::North)
-        .expect("blocking belt should be placeable");
+    let blocker = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: belt,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("blocking belt should be placeable");
 
-    let result = sim.place_entity_from_player_inventory(belt, belt_item, x, y, Direction::North);
+    let result = crate::placement::place_from_player_inventory(
+        &mut sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: belt,
+            item_id: belt_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    );
 
     assert_eq!(
         result,
@@ -436,7 +583,16 @@ fn inventory_backed_placement_rejects_item_entity_mismatch() {
         .expect("test inventory should accept chest");
     let before_entities = sim.entities.placed_len();
 
-    let result = sim.place_entity_from_player_inventory(belt, chest_item, x, y, Direction::North);
+    let result = crate::placement::place_from_player_inventory(
+        &mut sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: belt,
+            item_id: chest_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    );
 
     assert_eq!(
         result,
@@ -467,8 +623,16 @@ fn inventory_backed_placement_rejects_resource_patch() {
         .expect("test inventory should accept belt");
     let before_entities = sim.entities.placed_len();
 
-    let result =
-        sim.place_entity_from_player_inventory(resource_patch, belt_item, 0, 0, Direction::North);
+    let result = crate::placement::place_from_player_inventory(
+        &mut sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: resource_patch,
+            item_id: belt_item,
+            x: 0,
+            y: 0,
+            direction: Direction::North,
+        },
+    );
 
     assert_eq!(
         result,
@@ -487,10 +651,17 @@ fn destroying_entity_returns_building_and_contents_to_player() {
     let chest_item = item_id_by_name(&sim.world.prototypes, "chest");
     let iron_plate = item_id_by_name(&sim.world.prototypes, "iron_plate");
     let (x, y) = first_placeable_entity_tile(&sim, chest, Direction::North);
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
-    sim.entity_inventory_mut(entity_id)
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
+    crate::entity_access::inventory_mut(&mut sim, entity_id)
         .expect("chest should expose inventory")
         .slots[0] = Some(ItemStack {
         item_id: iron_plate,
@@ -498,8 +669,7 @@ fn destroying_entity_returns_building_and_contents_to_player() {
     });
     sim.player_inventory = Inventory::player();
 
-    let removed = sim
-        .destroy_entity_to_player_inventory(entity_id)
+    let removed = crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id)
         .expect("player should have room to recover entity");
 
     assert_eq!(removed.id, entity_id);
@@ -518,16 +688,23 @@ fn destroying_entity_keeps_world_unchanged_when_inventory_is_full() {
     let iron_stack_size =
         item_stack_size(&sim.world.prototypes, iron_plate).expect("iron plate should stack");
     let (x, y) = first_placeable_entity_tile(&sim, chest, Direction::North);
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
     sim.player_inventory = Inventory::with_slot_count(1);
     sim.player_inventory.slots[0] = Some(ItemStack {
         item_id: iron_plate,
         count: iron_stack_size,
     });
 
-    let result = sim.destroy_entity_to_player_inventory(entity_id);
+    let result = crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id);
 
     assert_eq!(
         result,

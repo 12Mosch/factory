@@ -38,34 +38,110 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin_with_boiler(
 
         if !fixture_is_clear_buildable(sim, &fixture)
             || !poles_within_small_pole_reach(source_pole, target_pole)
-            || sim.can_place_entity(pump, x, y, Direction::North).is_err()
-            || sim
-                .can_place_entity(boiler, x, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(steam_engine, x + 2, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(pole, source_pole.0, source_pole.1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(pole, target_pole.0, target_pole.1, Direction::North)
-                .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pump,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: boiler,
+                    x,
+                    y: y + 1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: steam_engine,
+                    x: x + 2,
+                    y: y + 1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pole,
+                    x: source_pole.0,
+                    y: source_pole.1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pole,
+                    x: target_pole.0,
+                    y: target_pole.1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
         {
             continue;
         }
 
-        sim.place_entity(pump, x, y, Direction::North)
-            .expect("validated offshore pump fixture should be placeable");
-        let boiler_id = sim
-            .place_entity(boiler, x, y + 1, Direction::North)
-            .expect("validated boiler fixture should be placeable");
-        sim.place_entity(steam_engine, x + 2, y + 1, Direction::North)
-            .expect("validated steam engine fixture should be placeable");
-        sim.place_entity(pole, source_pole.0, source_pole.1, Direction::North)
-            .expect("validated source pole fixture should be placeable");
-        sim.place_entity(pole, target_pole.0, target_pole.1, Direction::North)
-            .expect("validated target pole fixture should be placeable");
+        crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pump,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated offshore pump fixture should be placeable");
+        let boiler_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: boiler,
+                x,
+                y: y + 1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated boiler fixture should be placeable");
+        crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: steam_engine,
+                x: x + 2,
+                y: y + 1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated steam engine fixture should be placeable");
+        crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pole,
+                x: source_pole.0,
+                y: source_pole.1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated source pole fixture should be placeable");
+        crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pole,
+                x: target_pole.0,
+                y: target_pole.1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated target pole fixture should be placeable");
         sim.entities
             .boiler_state_mut(boiler_id)
             .expect("placed boiler should expose boiler state")
@@ -89,26 +165,70 @@ pub(in crate::simulation::tests) fn place_pump_pipe_boiler_fixture(
     let boiler = entity_id_by_name(&sim.world.prototypes, "boiler");
 
     for (x, y) in all_tile_coords(&sim.world) {
-        if sim.can_place_entity(pump, x, y, Direction::North).is_err()
-            || sim
-                .can_place_entity(pipe, x, y + 1, Direction::North)
-                .is_err()
-            || sim
-                .can_place_entity(boiler, x, y + 2, Direction::North)
-                .is_err()
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pump,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pipe,
+                    x,
+                    y: y + 1,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: boiler,
+                    x,
+                    y: y + 2,
+                    direction: Direction::North,
+                },
+            )
+            .is_err()
         {
             continue;
         }
 
-        let pump_id = sim
-            .place_entity(pump, x, y, Direction::North)
-            .expect("validated pump should be placeable");
-        let pipe_id = sim
-            .place_entity(pipe, x, y + 1, Direction::North)
-            .expect("validated pipe should be placeable");
-        let boiler_id = sim
-            .place_entity(boiler, x, y + 2, Direction::North)
-            .expect("validated boiler should be placeable");
+        let pump_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pump,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated pump should be placeable");
+        let pipe_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pipe,
+                x,
+                y: y + 1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated pipe should be placeable");
+        let boiler_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: boiler,
+                x,
+                y: y + 2,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated boiler should be placeable");
         return (pump_id, pipe_id, boiler_id);
     }
 
@@ -144,24 +264,52 @@ pub(in crate::simulation::tests) fn place_disconnected_assembler_network(
 
     for (x, y) in all_tile_coords(&sim.world) {
         let pole_pos = (x + 3, y + 1);
-        if sim
-            .can_place_entity(assembler, x, y, Direction::North)
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: assembler,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .is_err()
+            || crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pole,
+                    x: pole_pos.0,
+                    y: pole_pos.1,
+                    direction: Direction::North,
+                },
+            )
             .is_err()
-            || sim
-                .can_place_entity(pole, pole_pos.0, pole_pos.1, Direction::North)
-                .is_err()
             || !pole_is_disconnected_from_existing_poles(sim, pole_pos)
         {
             continue;
         }
 
-        let pole_id = sim
-            .place_entity(pole, pole_pos.0, pole_pos.1, Direction::North)
-            .expect("validated disconnected pole should be placeable");
+        let pole_id = crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pole,
+                x: pole_pos.0,
+                y: pole_pos.1,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated disconnected pole should be placeable");
         debug_assert!(sim.entities.electric_poles.contains_key(&pole_id));
-        return sim
-            .place_entity(assembler, x, y, Direction::North)
-            .expect("validated disconnected assembler should be placeable");
+        return crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: assembler,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated disconnected assembler should be placeable");
     }
 
     panic!("expected disconnected assembler network fixture");
@@ -173,7 +321,18 @@ pub(in crate::simulation::tests) fn first_placeable_offshore_pump(
 ) -> (i32, i32) {
     all_tile_coords(&sim.world)
         .into_iter()
-        .find(|(x, y)| sim.can_place_entity(pump, *x, *y, Direction::North).is_ok())
+        .find(|(x, y)| {
+            crate::placement::validate(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: pump,
+                    x: *x,
+                    y: *y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
+        })
         .expect("expected placeable offshore pump shoreline")
 }
 

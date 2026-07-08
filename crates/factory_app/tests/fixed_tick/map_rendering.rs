@@ -121,8 +121,16 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
         generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Surface);
     let entities_before =
         generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Entities);
-    sim.place_entity(chest, entity_x, entity_y, Direction::North)
-        .expect("test chest should be placeable");
+    factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x: entity_x,
+            y: entity_y,
+            direction: Direction::North,
+        },
+    )
+    .expect("test chest should be placeable");
     let resource_tile = revealed_resource_tile(&sim);
     let concealed_chunk = ChunkCoord { x: 2, y: 0 };
     let far_revealed_chunk = ChunkCoord { x: 4, y: 0 };
@@ -229,9 +237,16 @@ fn revealed_buildable_tile(
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
             let x = chunk.coord.x * CHUNK_SIZE + local_x;
             let y = chunk.coord.y * CHUNK_SIZE + local_y;
-            if sim
-                .can_place_entity(prototype_id, x, y, Direction::North)
-                .is_ok()
+            if factory_sim::placement::validate(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
             {
                 return (x, y);
             }

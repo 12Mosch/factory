@@ -7,18 +7,25 @@ fn chest_inventory_accepts_items() {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
     let catalog = sim.world.prototypes.clone();
 
-    sim.entity_inventory_mut(entity_id)
+    crate::entity_access::inventory_mut(&mut sim, entity_id)
         .expect("chest should expose mutable inventory")
         .insert(&catalog, iron_plate, 25)
         .expect("chest should accept iron plates");
 
     assert_eq!(
-        sim.entity_inventory(entity_id)
+        crate::entity_access::inventory(&sim, entity_id)
             .expect("chest should have inventory")
             .count(iron_plate),
         25
@@ -31,21 +38,28 @@ fn player_can_transfer_stack_to_chest() {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
     sim.player_inventory = Inventory::player();
     sim.player_inventory.slots[5] = Some(ItemStack {
         item_id: iron_plate,
         count: 42,
     });
 
-    sim.transfer_player_slot_to_entity(entity_id, 5)
+    crate::entity_transfer::player_slot_to_entity(&mut sim, entity_id, 5)
         .expect("stack should transfer to chest");
 
     assert_eq!(sim.player_inventory.slots[5], None);
     assert_eq!(
-        sim.entity_inventory(entity_id)
+        crate::entity_access::inventory(&sim, entity_id)
             .expect("chest should have inventory")
             .count(iron_plate),
         42
@@ -59,17 +73,23 @@ fn transfer_to_full_chest_fails_without_changing_player_inventory() {
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
     let coal = item_id(&sim.world.prototypes, "coal");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
     sim.player_inventory = Inventory::player();
     sim.player_inventory.slots[3] = Some(ItemStack {
         item_id: iron_plate,
         count: 12,
     });
     {
-        let inventory = sim
-            .entity_inventory_mut(entity_id)
+        let inventory = crate::entity_access::inventory_mut(&mut sim, entity_id)
             .expect("chest should expose inventory");
         for slot in &mut inventory.slots {
             *slot = Some(ItemStack {
@@ -79,14 +99,14 @@ fn transfer_to_full_chest_fails_without_changing_player_inventory() {
         }
     }
     assert!(
-        !sim.entity_inventory(entity_id)
+        !crate::entity_access::inventory(&sim, entity_id)
             .expect("chest should have inventory")
             .can_insert(&sim.world.prototypes, iron_plate, 12)
     );
     let player_before = sim.player_inventory.clone();
 
     assert_eq!(
-        sim.transfer_player_slot_to_entity(entity_id, 3),
+        crate::entity_transfer::player_slot_to_entity(&mut sim, entity_id, 3),
         Err(ContainerError::InsufficientSpace)
     );
     assert_eq!(sim.player_inventory, player_before);
@@ -99,31 +119,36 @@ fn transfer_from_chest_to_full_player_fails_without_changing_chest_inventory() {
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
     let coal = item_id(&sim.world.prototypes, "coal");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
-    let entity_id = sim
-        .place_entity(chest, x, y, Direction::North)
-        .expect("chest should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
     sim.player_inventory = Inventory::with_slot_count(1);
     sim.player_inventory
         .insert(&sim.world.prototypes, coal, 100)
         .expect("player inventory should accept blocking stack");
-    let inventory = sim
-        .entity_inventory_mut(entity_id)
+    let inventory = crate::entity_access::inventory_mut(&mut sim, entity_id)
         .expect("chest should expose inventory");
     inventory.slots[0] = Some(ItemStack {
         item_id: iron_plate,
         count: 8,
     });
-    let chest_before = sim
-        .entity_inventory(entity_id)
+    let chest_before = crate::entity_access::inventory(&sim, entity_id)
         .expect("chest should have inventory")
         .clone();
 
     assert_eq!(
-        sim.transfer_entity_slot_to_player(entity_id, 0),
+        crate::entity_transfer::entity_slot_to_player(&mut sim, entity_id, 0),
         Err(ContainerError::InsufficientSpace)
     );
     assert_eq!(
-        sim.entity_inventory(entity_id)
+        crate::entity_access::inventory(&sim, entity_id)
             .expect("chest should still have inventory"),
         &chest_before
     );
@@ -134,12 +159,19 @@ fn non_container_entities_reject_inventory_access() {
     let mut sim = Simulation::new_test_world(123);
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
-    let entity_id = sim
-        .place_entity(inserter, x, y, Direction::North)
-        .expect("inserter should be placeable");
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("inserter should be placeable");
 
     assert_eq!(
-        sim.entity_inventory(entity_id),
+        crate::entity_access::inventory(&sim, entity_id),
         Err(ContainerError::NotContainer(entity_id))
     );
 }
@@ -156,7 +188,7 @@ fn lab_rejects_non_science_pack_player_transfer_without_mutation() {
     });
 
     assert_eq!(
-        sim.transfer_player_slot_to_entity(lab_id, 0),
+        crate::entity_transfer::player_slot_to_entity(&mut sim, lab_id, 0),
         Err(ContainerError::InvalidItem(iron_plate))
     );
     assert_eq!(
@@ -167,7 +199,7 @@ fn lab_rejects_non_science_pack_player_transfer_without_mutation() {
         })
     );
     assert_eq!(
-        sim.entity_inventory(lab_id)
+        crate::entity_access::inventory(&sim, lab_id)
             .expect("lab should expose inventory")
             .count(iron_plate),
         0
