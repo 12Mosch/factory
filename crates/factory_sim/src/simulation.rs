@@ -363,6 +363,7 @@ mod commands;
 mod contexts;
 mod core;
 mod diagnostics_ops;
+mod disjoint_set;
 pub mod entity_access;
 pub mod entity_mutation;
 mod entity_recovery_ops;
