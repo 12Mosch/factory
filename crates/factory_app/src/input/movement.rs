@@ -3,7 +3,8 @@ use bevy::time::Fixed;
 use factory_sim::SimCommand;
 
 use crate::input::panels::world_input_blocked;
-use crate::resources::{AppInputState, TechnologyWindowState};
+use crate::input::resources::AppInputState;
+use crate::ui::resources::TechnologyWindowState;
 use crate::simulation::SimCommandRequest;
 
 pub(crate) fn move_player_from_input(

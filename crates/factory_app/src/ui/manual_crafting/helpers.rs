@@ -5,7 +5,7 @@ use factory_data::{
 use factory_sim::{Inventory, Simulation};
 use std::collections::BTreeMap;
 
-use crate::resources::CraftingPanelTab;
+use crate::ui::resources::CraftingPanelTab;
 use crate::ui::formatting::{format_item_display_name, format_recipe_display_name};
 
 use super::components::{CraftingPanelSnapshot, ManualCraftRecipeRow};

@@ -3,7 +3,8 @@ use bevy::prelude::*;
 use factory_sim::{PowerSummary, SimulationCounts};
 use std::time::Duration;
 
-use crate::resources::{RenderSyncStats, SimProfileStats, SimResource, UpsStats};
+use crate::rendering::resources::RenderSyncStats;
+use crate::resources::{SimProfileStats, SimResource, UpsStats};
 
 #[derive(Component)]
 pub struct DebugOverlayText;

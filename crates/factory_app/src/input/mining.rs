@@ -4,7 +4,8 @@ use factory_sim::{ManualMiningTarget, SimCommand};
 
 use crate::input::panels::world_input_blocked;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
-use crate::resources::{AppInputState, TechnologyWindowState};
+use crate::input::resources::AppInputState;
+use crate::ui::resources::TechnologyWindowState;
 use crate::simulation::SimCommandRequest;
 
 pub(crate) fn update_manual_mining_from_input(

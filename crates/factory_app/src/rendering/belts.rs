@@ -12,9 +12,10 @@ use crate::constants::{
 };
 use crate::rendering::transforms::{entity_translation, tile_translation};
 use crate::rendering::visuals::{VisualAssets, spawn_belt_item_visual};
-use crate::resources::{
-    BeltItemRenderPool, RenderDetail, RenderSyncStats, SimResource, VisibleEntityIds,
+use crate::rendering::resources::{
+    BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds,
 };
+use crate::resources::SimResource;
 use crate::utils::compact_item_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

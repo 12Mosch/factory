@@ -6,7 +6,8 @@ use factory_sim::{
 };
 
 use crate::audio::SoundEvent;
-use crate::resources::{ProductionStatsWindowState, SimResource, StatsTab};
+use crate::resources::SimResource;
+use crate::ui::resources::{ProductionStatsWindowState, StatsTab};
 use crate::ui::debug_overlay::format_watts;
 use crate::ui::formatting::{format_fluid_display_name, format_item_display_name};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};

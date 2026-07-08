@@ -3,9 +3,9 @@ use factory_sim::{SimCommand, SimCommandError};
 
 use crate::audio::SoundEvent;
 use crate::placement::build::{build_status_from_error, entity_display_name};
-use crate::resources::{
-    BuildPlacementState, BuildPlacementStatus, InventoryTransferFeedback, SimResource,
-};
+use crate::build::resources::{BuildPlacementState, BuildPlacementStatus};
+use crate::resources::SimResource;
+use crate::ui::resources::InventoryTransferFeedback;
 use crate::simulation::SimCommandResult;
 use crate::ui::inventory_panel::slot_transfer_error_message;
 

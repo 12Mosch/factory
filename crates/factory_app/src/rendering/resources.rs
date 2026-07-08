@@ -1,353 +1,107 @@
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
-use bevy::sprite::{Anchor, Text2dShadow};
-use factory_sim::{CHUNK_SIZE, ResourceCell, ResourceTileChange, Simulation};
-use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
+use bevy::prelude::{ColorMaterial, Entity, Handle, Resource};
+use factory_sim::{ChunkCoord, EntityId};
+use std::collections::{BTreeMap, HashSet};
+use std::time::Duration;
 
-use crate::constants::RESOURCE_SIZE;
-use crate::rendering::colors::{RenderPrototypeIds, resource_color};
-use crate::rendering::transforms::tile_translation;
-use crate::rendering::visuals::{VisualAssets, spawn_resource_visual};
-use crate::resources::{RenderDetail, RenderSyncStats, SimResource, VisibleChunks};
+#[derive(Clone, Copy, Debug, Resource, Default)]
+pub struct RenderSyncStats {
+    pub player: Duration,
+    pub world_tiles: Duration,
+    pub resources: Duration,
+    pub placed_entities: Duration,
+    pub belt_directions: Duration,
+    pub belt_items: Duration,
+    pub total: Duration,
+}
 
-#[derive(Component)]
-pub(crate) struct ResourceSprite;
+impl RenderSyncStats {
+    pub fn record_player(&mut self, elapsed: Duration) {
+        self.player = elapsed;
+        self.update_total();
+    }
 
-#[derive(Component)]
-pub(crate) struct ResourceAmountLabel;
+    pub fn record_world_tiles(&mut self, elapsed: Duration) {
+        self.world_tiles = elapsed;
+        self.update_total();
+    }
 
-#[derive(Resource, Default)]
-pub(crate) struct ResourceRenderSettings {
-    pub(crate) show_amount_labels: bool,
+    pub fn record_resources(&mut self, elapsed: Duration) {
+        self.resources = elapsed;
+        self.update_total();
+    }
+
+    pub fn record_placed_entities(&mut self, elapsed: Duration) {
+        self.placed_entities = elapsed;
+        self.update_total();
+    }
+
+    pub fn record_belt_directions(&mut self, elapsed: Duration) {
+        self.belt_directions = elapsed;
+        self.update_total();
+    }
+
+    pub fn record_belt_items(&mut self, elapsed: Duration) {
+        self.belt_items = elapsed;
+        self.update_total();
+    }
+
+    fn update_total(&mut self) {
+        self.total = self.player
+            + self.world_tiles
+            + self.resources
+            + self.placed_entities
+            + self.belt_directions
+            + self.belt_items;
+    }
+}
+
+#[derive(Resource)]
+pub(crate) struct VisibleEntityIds {
+    pub(crate) ids: HashSet<EntityId>,
+    pub(crate) visible_revision: u64,
+    pub(crate) entity_topology_revision: u64,
+}
+
+impl Default for VisibleEntityIds {
+    fn default() -> Self {
+        Self {
+            ids: HashSet::new(),
+            visible_revision: u64::MAX,
+            entity_topology_revision: u64::MAX,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Resource)]
+pub(crate) struct RenderDetail {
+    pub(crate) show_resource_amount_labels: bool,
+    pub(crate) show_belt_directions: bool,
+    pub(crate) show_belt_items: bool,
+    pub(crate) show_belt_item_labels: bool,
+}
+
+impl Default for RenderDetail {
+    fn default() -> Self {
+        Self {
+            show_resource_amount_labels: true,
+            show_belt_directions: true,
+            show_belt_items: true,
+            show_belt_item_labels: true,
+        }
+    }
 }
 
 #[derive(Resource, Default)]
-pub struct ResourceRenderCache {
-    pub last_resource_revision: Option<u64>,
+pub struct WorldRenderCache {
+    pub chunk_entities: BTreeMap<ChunkCoord, Entity>,
+    pub material: Option<Handle<ColorMaterial>>,
     pub last_visible_revision: u64,
-    pub sprite_entities: HashMap<(i32, i32), Entity>,
-    pub label_entities: HashMap<(i32, i32), Entity>,
-    pub show_amount_labels: bool,
+    pub last_chunk_revision: u64,
+    pub last_reload_token: u64,
 }
 
-pub(crate) fn sync_resource_debug_rendering(
-    mut commands: Commands,
-    mut params: ResourceRenderParams,
-) {
-    let resource_revision = params.sim.sim.world().resource_revision();
-    let initial_sync = params.cache.last_resource_revision.is_none();
-    let resources_changed = params.cache.last_resource_revision != Some(resource_revision);
-    let visibility_changed = params.cache.last_visible_revision != params.visible.revision;
-    let show_amount_labels =
-        params.settings.show_amount_labels && params.detail.show_resource_amount_labels;
-    let label_setting_changed = params.cache.show_amount_labels != show_amount_labels;
-
-    if !initial_sync && !resources_changed && !visibility_changed && !label_setting_changed {
-        return;
-    }
-
-    let ids = RenderPrototypeIds::from_catalog(params.sim.sim.catalog());
-    if initial_sync || visibility_changed || label_setting_changed {
-        let resources = collect_resource_tiles(&params.sim.sim, &params.visible);
-        reconcile_resource_tiles(
-            &mut commands,
-            &mut params.cache,
-            &mut params.visual_assets,
-            &mut params.sprites,
-            &mut params.labels,
-            &resources,
-            ids,
-            show_amount_labels,
-        );
-        params.cache.last_resource_revision = Some(resource_revision);
-        params.cache.last_visible_revision = params.visible.revision;
-        params.cache.show_amount_labels = show_amount_labels;
-        return;
-    }
-
-    if resources_changed {
-        let last_revision = params
-            .cache
-            .last_resource_revision
-            .expect("resource cache should be initialized before incremental sync");
-        if let Some(changes) = params
-            .sim
-            .sim
-            .world()
-            .resource_dirty_tiles_since(last_revision)
-        {
-            for change in changes {
-                apply_resource_tile_change(
-                    &mut commands,
-                    &mut params.cache,
-                    &mut params.visual_assets,
-                    &mut params.sprites,
-                    &mut params.labels,
-                    change,
-                    ResourceTileChangeContext {
-                        visible: &params.visible,
-                        ids,
-                        show_amount_labels,
-                    },
-                );
-            }
-        } else {
-            let resources = collect_resource_tiles(&params.sim.sim, &params.visible);
-            reconcile_resource_tiles(
-                &mut commands,
-                &mut params.cache,
-                &mut params.visual_assets,
-                &mut params.sprites,
-                &mut params.labels,
-                &resources,
-                ids,
-                show_amount_labels,
-            );
-        }
-        params.cache.last_resource_revision = Some(resource_revision);
-    }
-}
-
-pub(crate) fn measured_sync_resource_debug_rendering(
-    commands: Commands,
-    params: ResourceRenderParams,
-    mut stats: ResMut<RenderSyncStats>,
-) {
-    let started = Instant::now();
-    sync_resource_debug_rendering(commands, params);
-    stats.record_resources(started.elapsed());
-}
-
-#[derive(SystemParam)]
-pub(crate) struct ResourceRenderParams<'w, 's> {
-    sim: Res<'w, SimResource>,
-    visible: Res<'w, VisibleChunks>,
-    settings: Res<'w, ResourceRenderSettings>,
-    detail: Res<'w, RenderDetail>,
-    cache: ResMut<'w, ResourceRenderCache>,
-    visual_assets: VisualAssets<'w>,
-    sprites: Query<'w, 's, (Entity, &'static mut Sprite), With<ResourceSprite>>,
-    labels: Query<'w, 's, (Entity, &'static mut Text2d), With<ResourceAmountLabel>>,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn reconcile_resource_tiles(
-    commands: &mut Commands,
-    cache: &mut ResourceRenderCache,
-    visual_assets: &mut VisualAssets,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    resources: &BTreeMap<(i32, i32), ResourceCell>,
-    ids: RenderPrototypeIds,
-    show_amount_labels: bool,
-) {
-    let stale_sprites = cache
-        .sprite_entities
-        .keys()
-        .copied()
-        .filter(|coord| !resources.contains_key(coord))
-        .collect::<Vec<_>>();
-    for coord in stale_sprites {
-        if let Some(entity) = cache.sprite_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    for (&(x, y), &resource) in resources {
-        sync_resource_sprite(commands, cache, visual_assets, sprites, x, y, resource, ids);
-    }
-
-    if !show_amount_labels {
-        for (_, entity) in cache.label_entities.drain() {
-            commands.entity(entity).despawn();
-        }
-        cache.show_amount_labels = false;
-        return;
-    }
-
-    let stale_labels = cache
-        .label_entities
-        .keys()
-        .copied()
-        .filter(|coord| !resources.contains_key(coord))
-        .collect::<Vec<_>>();
-    for coord in stale_labels {
-        if let Some(entity) = cache.label_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    for (&(x, y), &resource) in resources {
-        sync_resource_label(commands, cache, labels, x, y, resource);
-    }
-
-    cache.show_amount_labels = true;
-}
-
-fn apply_resource_tile_change(
-    commands: &mut Commands,
-    cache: &mut ResourceRenderCache,
-    visual_assets: &mut VisualAssets,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    change: ResourceTileChange,
-    change_context: ResourceTileChangeContext,
-) {
-    let coord = (change.x, change.y);
-    let chunk_coord = factory_sim::ChunkCoord {
-        x: change.x.div_euclid(CHUNK_SIZE),
-        y: change.y.div_euclid(CHUNK_SIZE),
-    };
-    if !change_context.visible.chunks.contains(&chunk_coord) {
-        if let Some(entity) = cache.sprite_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        if let Some(entity) = cache.label_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let Some(resource) = change.resource else {
-        if let Some(entity) = cache.sprite_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        if let Some(entity) = cache.label_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        return;
-    };
-
-    sync_resource_sprite(
-        commands,
-        cache,
-        visual_assets,
-        sprites,
-        change.x,
-        change.y,
-        resource,
-        change_context.ids,
-    );
-
-    if change_context.show_amount_labels {
-        sync_resource_label(commands, cache, labels, change.x, change.y, resource);
-    } else if let Some(entity) = cache.label_entities.remove(&coord) {
-        commands.entity(entity).despawn();
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ResourceTileChangeContext<'a> {
-    visible: &'a VisibleChunks,
-    ids: RenderPrototypeIds,
-    show_amount_labels: bool,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn sync_resource_sprite(
-    commands: &mut Commands,
-    cache: &mut ResourceRenderCache,
-    visual_assets: &mut VisualAssets,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    x: i32,
-    y: i32,
-    resource: ResourceCell,
-    ids: RenderPrototypeIds,
-) {
-    let coord = (x, y);
-    let color = resource_color(resource, ids);
-    if let Some(&entity) = cache.sprite_entities.get(&coord)
-        && let Ok((_, mut sprite)) = sprites.get_mut(entity)
-    {
-        *sprite = visual_assets.resource_sprite(color, Vec2::splat(RESOURCE_SIZE));
-        return;
-    }
-
-    let entity = spawn_resource_sprite(commands, visual_assets, x, y, color);
-    cache.sprite_entities.insert(coord, entity);
-}
-
-fn sync_resource_label(
-    commands: &mut Commands,
-    cache: &mut ResourceRenderCache,
-    labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    x: i32,
-    y: i32,
-    resource: ResourceCell,
-) {
-    let coord = (x, y);
-    if let Some(&entity) = cache.label_entities.get(&coord)
-        && let Ok((_, mut text)) = labels.get_mut(entity)
-    {
-        text.0 = format_resource_amount(resource.amount);
-        return;
-    }
-
-    let entity = spawn_resource_label(commands, x, y, resource);
-    cache.label_entities.insert(coord, entity);
-}
-
-fn spawn_resource_sprite(
-    commands: &mut Commands,
-    visual_assets: &mut VisualAssets,
-    x: i32,
-    y: i32,
-    color: Color,
-) -> Entity {
-    spawn_resource_visual(
-        commands,
-        visual_assets,
-        color,
-        Vec2::splat(RESOURCE_SIZE),
-        tile_translation(x, y, 1.0),
-        ResourceSprite,
-    )
-}
-
-fn spawn_resource_label(commands: &mut Commands, x: i32, y: i32, resource: ResourceCell) -> Entity {
-    commands
-        .spawn((
-            Text2d::new(format_resource_amount(resource.amount)),
-            TextFont::from_font_size(4.0),
-            TextColor(Color::WHITE),
-            TextLayout::justify(Justify::Center),
-            Transform::from_translation(tile_translation(x, y, 2.0)),
-            Anchor::CENTER,
-            Text2dShadow::default(),
-            ResourceAmountLabel,
-        ))
-        .id()
-}
-
-pub(crate) fn collect_resource_tiles(
-    sim: &Simulation,
-    visible: &VisibleChunks,
-) -> BTreeMap<(i32, i32), ResourceCell> {
-    let mut resources = BTreeMap::new();
-
-    for coord in &visible.chunks {
-        let Some(chunk) = sim.world().chunks.get(coord) else {
-            continue;
-        };
-        for (index, tile) in chunk.tiles.iter().enumerate() {
-            if let Some(resource) = tile.resource {
-                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
-                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                resources.insert(
-                    (
-                        chunk.coord.x * CHUNK_SIZE + local_x,
-                        chunk.coord.y * CHUNK_SIZE + local_y,
-                    ),
-                    resource,
-                );
-            }
-        }
-    }
-
-    resources
-}
-
-pub(crate) fn format_resource_amount(amount: u32) -> String {
-    amount.to_string()
+#[derive(Resource, Default)]
+pub(crate) struct BeltItemRenderPool {
+    pub(crate) sprites: Vec<Entity>,
+    pub(crate) labels: Vec<Entity>,
 }

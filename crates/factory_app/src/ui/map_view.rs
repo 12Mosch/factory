@@ -5,10 +5,11 @@ use factory_sim::{CHUNK_SIZE, ChunkCoord, EntityFootprint, Simulation};
 
 use crate::constants::TILE_SIZE;
 use crate::rendering::entities::entity_prototype_render_style;
-use crate::resources::{
+use crate::map::resources::{
     MapDisplaySettings, MapLayer, MapOverlayMarkers, MapTextureBounds, MapTextureCache,
-    MapViewState, SimResource,
+    MapViewState,
 };
+use crate::resources::SimResource;
 
 const MINIMAP_FRAME_SIZE: f32 = 184.0;
 const MINIMAP_PADDING: f32 = 4.0;

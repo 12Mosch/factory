@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use factory_data::RecipeId;
 
-use crate::resources::CraftingPanelTab;
+use crate::ui::resources::CraftingPanelTab;
 
 #[derive(Component)]
 pub(crate) struct CraftingRecipeButton {

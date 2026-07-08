@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use factory_sim::EntityId;
 
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
-use crate::resources::{InventoryTransferFeedback, OpenContainer, SimResource};
+use crate::resources::SimResource;
+use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::ui::assembler_panel::spawn_assembler_panel;
 use crate::ui::inventory_panel::{
     InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,

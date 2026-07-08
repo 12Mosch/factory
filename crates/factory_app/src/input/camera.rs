@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use crate::constants::{MAX_CAMERA_SCALE, MIN_CAMERA_SCALE};
 use crate::input::panels::world_input_blocked;
-use crate::resources::AppInputState;
+use crate::input::resources::AppInputState;
 
 pub(crate) fn zoom_camera(
     input_state: Option<Res<AppInputState>>,

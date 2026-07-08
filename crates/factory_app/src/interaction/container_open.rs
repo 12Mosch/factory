@@ -6,9 +6,10 @@ use factory_sim::{EntityId, Simulation};
 use crate::input::panels::{escape_consumed, world_input_blocked};
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::interaction::machine_kind::open_machine_kind;
-use crate::resources::{
-    AppInputState, BuildPlacementState, OpenContainer, SimResource, TechnologyWindowState,
-};
+use crate::build::resources::BuildPlacementState;
+use crate::input::resources::AppInputState;
+use crate::resources::SimResource;
+use crate::ui::resources::{OpenContainer, TechnologyWindowState};
 
 #[derive(SystemParam)]
 pub(crate) struct ContainerOpenState<'w> {

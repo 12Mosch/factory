@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
 use factory_app::placement::build::buildable_prototypes;
-use factory_app::resources::{BuildSelection, HotbarState, SimResource};
+use factory_app::build::resources::{BuildSelection, HotbarState};
+use factory_app::resources::SimResource;
 use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{
     CHUNK_SIZE, Direction, EntityFootprint, EntityId, Inventory, ItemStack, Simulation,

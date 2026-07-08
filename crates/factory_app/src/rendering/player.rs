@@ -3,7 +3,8 @@ use std::time::Instant;
 
 use crate::constants::PLAYER_SPRITE_SIZE;
 use crate::rendering::transforms::player_translation;
-use crate::resources::{RenderSyncStats, SimResource};
+use crate::rendering::resources::RenderSyncStats;
+use crate::resources::SimResource;
 
 #[derive(Component)]
 pub(crate) struct PlayerSprite;

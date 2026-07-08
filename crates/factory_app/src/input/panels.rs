@@ -4,10 +4,12 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::audio::AudioSettingsWindowState;
-use crate::resources::{
-    AppInputState, BuildMenuState, BuildPlacementState, CraftingWindowState, MapDisplaySettings,
-    MapLayer, MapTextureCache, MapViewState, OpenContainer, ProductionStatsWindowState,
-    SimResource, TechnologyWindowState,
+use crate::build::resources::{BuildMenuState, BuildPlacementState};
+use crate::input::resources::AppInputState;
+use crate::map::resources::{MapDisplaySettings, MapLayer, MapTextureCache, MapViewState};
+use crate::resources::SimResource;
+use crate::ui::resources::{
+    CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
 use crate::save_load::SaveLoadWindowState;
 use crate::ui::map_view::{

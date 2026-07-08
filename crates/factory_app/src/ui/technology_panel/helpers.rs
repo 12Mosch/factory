@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use factory_data::{PrototypeCatalog, TechnologyEffect, TechnologyId};
 
-use crate::resources::TechnologyWindowState;
+use crate::ui::resources::TechnologyWindowState;
 use crate::ui::formatting::{format_item_display_name, format_recipe_display_name};
 
 use super::components::{TechnologyPanelSnapshot, TechnologyUiState};

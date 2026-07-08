@@ -15,15 +15,15 @@ use crate::rendering::manual_mining::{
     update_manual_mining_progress_bar,
 };
 use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
-use crate::rendering::resources::{
+use crate::rendering::resource_cells::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
+};
+use crate::rendering::resources::{
+    BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds, WorldRenderCache,
 };
 use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
-use crate::resources::{
-    BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleChunks, VisibleEntityIds,
-    WorldRenderCache,
-};
+use crate::map::resources::VisibleChunks;
 
 /// World presentation: camera, player sprite, and the chained render-sync
 /// systems that mirror simulation state into render entities.

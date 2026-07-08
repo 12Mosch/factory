@@ -6,9 +6,10 @@ use crate::interaction::command_feedback::handle_sim_command_results;
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
-use crate::resources::{
+use crate::resources::UpsStats;
+use crate::ui::resources::{
     CraftingWindowState, InventoryTransferFeedback, OpenContainer, ProductionStatsWindowState,
-    TechnologyWindowState, UpsStats,
+    TechnologyWindowState,
 };
 use crate::ui::assembler_panel::{
     handle_assembler_recipe_button_clicks, update_assembler_detail_text,

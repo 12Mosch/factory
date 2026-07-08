@@ -3,7 +3,10 @@ use factory_sim::SimCommand;
 
 use crate::audio::SoundEvent;
 use crate::input::panels::escape_consumed;
-use crate::resources::{AppInputState, BuildPlacementState, SimResource, TechnologyWindowState};
+use crate::build::resources::BuildPlacementState;
+use crate::input::resources::AppInputState;
+use crate::resources::SimResource;
+use crate::ui::resources::TechnologyWindowState;
 use crate::simulation::SimCommandRequest;
 
 use super::components::{

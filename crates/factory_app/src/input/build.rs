@@ -5,10 +5,12 @@ use factory_sim::SimCommand;
 
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::placement::build::{entity_display_name, next_direction, short_inventory_need};
-use crate::resources::{
-    AppInputState, BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT,
-    HotbarState, SimResource, TechnologyWindowState,
+use crate::build::resources::{
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT, HotbarState,
 };
+use crate::input::resources::AppInputState;
+use crate::resources::SimResource;
+use crate::ui::resources::TechnologyWindowState;
 use crate::simulation::SimCommandRequest;
 
 use super::panels::{escape_consumed, world_input_blocked};

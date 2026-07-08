@@ -5,9 +5,11 @@ pub mod save_load;
 pub mod simulation;
 mod utils;
 
+pub mod build;
 pub mod constants;
 pub mod input;
 pub mod interaction;
+pub mod map;
 pub mod placement;
 pub mod rendering;
 pub mod resources;

@@ -5,7 +5,8 @@ use crate::constants::TILE_SIZE;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::rendering::entities::entity_prototype_render_style;
 use crate::rendering::transforms::{entity_translation, tile_translation};
-use crate::resources::{BuildPlacementPreviewState, BuildPlacementState, SimResource};
+use crate::build::resources::{BuildPlacementPreviewState, BuildPlacementState};
+use crate::resources::SimResource;
 
 #[derive(Component)]
 pub(crate) struct BuildPreviewSprite;

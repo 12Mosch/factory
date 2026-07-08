@@ -14,7 +14,9 @@ use crate::rendering::colors::{
 };
 use crate::rendering::transforms::entity_translation;
 use crate::rendering::visuals::{EntityVisualStyle, VisualAssets, spawn_entity_visual};
-use crate::resources::{RenderSyncStats, SimResource, VisibleChunks, VisibleEntityIds};
+use crate::map::resources::VisibleChunks;
+use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
+use crate::resources::SimResource;
 
 #[derive(Component)]
 pub(crate) struct PlacedEntitySprite {

@@ -1,6 +1,7 @@
 use super::common::{technology_id_by_name, test_app};
 use bevy::prelude::*;
-use factory_app::resources::{SimResource, TechnologyWindowState};
+use factory_app::resources::SimResource;
+use factory_app::ui::resources::TechnologyWindowState;
 use factory_app::ui::technology_panel::TechnologyStartQueueButton;
 use std::time::Duration;
 

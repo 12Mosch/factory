@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::resources::CraftingPanelTab;
+use crate::ui::resources::CraftingPanelTab;
 use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 
 use super::components::{

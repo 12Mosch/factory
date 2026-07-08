@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 use crate::constants::{INITIAL_CAMERA_SCALE, TILE_SIZE};
 use crate::rendering::player::PlayerSprite;
 use crate::rendering::transforms::player_translation;
-use crate::resources::{MapTextureBounds, RenderDetail, SimResource, VisibleChunks};
+use crate::map::resources::{MapTextureBounds, VisibleChunks};
+use crate::rendering::resources::RenderDetail;
+use crate::resources::SimResource;
 
 pub(crate) const RENDER_CHUNK_MARGIN: i32 = 1;
 pub(crate) const FALLBACK_VISIBLE_CHUNK_RADIUS: i32 = 2;
