@@ -29,6 +29,14 @@ pub enum PrototypeLoadError {
         owner: String,
         fluid: String,
     },
+    InvalidRecipeFluidAmount {
+        recipe: String,
+        fluid: String,
+    },
+    MissingPumpjackResourceItem {
+        entity: String,
+        item: String,
+    },
     InvalidFluidBox {
         entity: String,
         box_index: usize,
@@ -103,6 +111,18 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "prototype {owner:?} references missing fluid {fluid:?}"
+                )
+            }
+            Self::InvalidRecipeFluidAmount { recipe, fluid } => {
+                write!(
+                    formatter,
+                    "recipe {recipe:?} requires a non-zero amount of fluid {fluid:?}"
+                )
+            }
+            Self::MissingPumpjackResourceItem { entity, item } => {
+                write!(
+                    formatter,
+                    "pumpjack {entity:?} references missing resource item {item:?}"
                 )
             }
             Self::InvalidFluidBox { entity, box_index } => {

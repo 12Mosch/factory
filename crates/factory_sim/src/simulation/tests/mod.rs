@@ -11,6 +11,7 @@ mod inserters;
 mod inventory;
 mod manual_crafting;
 mod manual_mining;
+mod oil;
 mod placement;
 mod player;
 mod power;

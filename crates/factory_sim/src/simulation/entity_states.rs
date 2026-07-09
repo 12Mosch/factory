@@ -163,6 +163,18 @@ impl EntityStateBehavior for OffshorePumpState {
     }
 }
 
+impl EntityStateBehavior for PumpjackState {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        _sim: &Simulation,
+        _entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        Ok(())
+    }
+}
+
 // Fluid box contents are validated network-wide by `validate_fluid_box_states`
 // and hold no recoverable items.
 impl EntityStateBehavior for Vec<FluidBoxState> {

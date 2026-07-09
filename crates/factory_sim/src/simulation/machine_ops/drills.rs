@@ -9,6 +9,9 @@ pub(in crate::simulation) fn first_resource_in_mining_area(
         let Some(resource) = world.tile_at(x, y).and_then(|tile| tile.resource) else {
             continue;
         };
+        if is_fluid_resource_item(&world.prototypes, resource.resource_item) {
+            continue;
+        }
         return Some((ManualMiningTarget { x, y }, resource.resource_item));
     }
 
@@ -28,6 +31,9 @@ pub(in crate::simulation) fn first_resource_in_mining_area_profiled<P: TickProfi
         else {
             continue;
         };
+        if is_fluid_resource_item(&world.prototypes, resource.resource_item) {
+            continue;
+        }
         return Some((ManualMiningTarget { x, y }, resource.resource_item));
     }
 

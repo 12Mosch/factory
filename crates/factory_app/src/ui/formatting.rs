@@ -31,10 +31,17 @@ impl AssemblerDetailText {
 }
 
 pub fn crafting_recipe_choices(catalog: &PrototypeCatalog) -> Vec<&factory_data::RecipePrototype> {
+    machine_recipe_choices(catalog, CraftingCategory::Crafting)
+}
+
+pub fn machine_recipe_choices(
+    catalog: &PrototypeCatalog,
+    category: CraftingCategory,
+) -> Vec<&factory_data::RecipePrototype> {
     catalog
         .recipes
         .iter()
-        .filter(|recipe| recipe.category == CraftingCategory::Crafting)
+        .filter(|recipe| recipe.category == category)
         .collect()
 }
 
@@ -55,42 +62,61 @@ pub fn format_assembler_detail_text(
     };
 
     let statuses = sim.assembler_ingredient_status(entity_id).ok()?;
-    let ingredients = if statuses.is_empty() {
+    let fluid_boxes =
+        factory_sim::entity_access::fluid_box_states(sim, entity_id).unwrap_or_default();
+    let mut ingredient_lines = statuses
+        .iter()
+        .map(|status| {
+            format!(
+                "{}: need {}, have {}, missing {}",
+                format_item_display_name(sim.catalog(), status.item),
+                status.required,
+                status.available,
+                status.missing
+            )
+        })
+        .collect::<Vec<_>>();
+    ingredient_lines.extend(recipe.fluid_ingredients.iter().map(|ingredient| {
+        let available_milliunits = fluid_boxes
+            .iter()
+            .filter(|state| state.fluid_id == Some(ingredient.fluid))
+            .map(|state| state.amount_milliunits)
+            .sum::<u64>();
+        format!(
+            "{}: need {}, have {}",
+            format_fluid_display_name(sim.catalog(), ingredient.fluid),
+            ingredient.amount_milliunits / 1000,
+            available_milliunits / 1000
+        )
+    }));
+    let ingredients = if ingredient_lines.is_empty() {
         "Ingredients: <none>".to_string()
     } else {
-        format!(
-            "Ingredients:\n{}",
-            statuses
-                .iter()
-                .map(|status| {
-                    format!(
-                        "{}: need {}, have {}, missing {}",
-                        format_item_display_name(sim.catalog(), status.item),
-                        status.required,
-                        status.available,
-                        status.missing
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
+        format!("Ingredients:\n{}", ingredient_lines.join("\n"))
     };
-    let products = if recipe.products.is_empty() {
+
+    let product_parts = recipe
+        .products
+        .iter()
+        .map(|product| {
+            format!(
+                "{} x{}",
+                format_item_display_name(sim.catalog(), product.item),
+                product.amount
+            )
+        })
+        .chain(recipe.fluid_products.iter().map(|product| {
+            format!(
+                "{} x{}",
+                format_fluid_display_name(sim.catalog(), product.fluid),
+                product.amount_milliunits / 1000
+            )
+        }))
+        .collect::<Vec<_>>();
+    let products = if product_parts.is_empty() {
         "Output: <none>".to_string()
     } else {
-        format!(
-            "Output: {}",
-            recipe
-                .products
-                .iter()
-                .map(|product| format!(
-                    "{} x{}",
-                    format_item_display_name(sim.catalog(), product.item),
-                    product.amount
-                ))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+        format!("Output: {}", product_parts.join(", "))
     };
 
     Some(AssemblerDetailText {

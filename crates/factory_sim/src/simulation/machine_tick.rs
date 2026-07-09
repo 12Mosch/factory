@@ -6,6 +6,7 @@ mod furnaces;
 mod inserters;
 mod labs;
 mod progress;
+mod pumpjacks;
 
 impl Simulation {
     fn machine_tick_context(&mut self) -> MachineTickContext<'_> {
@@ -23,6 +24,7 @@ impl Simulation {
     pub(super) fn advance_machines<P: TickProfiler>(&mut self, profiler: &mut P) {
         let mut context = self.machine_tick_context();
         context.advance_burner_mining_drills(profiler);
+        context.advance_pumpjacks();
         context.advance_furnaces(profiler);
         context.advance_assembling_machines(profiler);
         context.advance_labs(profiler);

@@ -1,6 +1,6 @@
 use crate::catalog::PrototypeCatalog;
 
-const ITEM_NAMES: [&str; 36] = [
+const ITEM_NAMES: [&str; 42] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -37,11 +37,17 @@ const ITEM_NAMES: [&str; 36] = [
     "pipe",
     "storage_tank",
     "logistic_science_pack",
+    "crude_oil",
+    "pumpjack",
+    "oil_refinery",
+    "chemical_plant",
+    "plastic_bar",
+    "sulfur",
 ];
 
-const FLUID_NAMES: [&str; 2] = ["water", "steam"];
+const FLUID_NAMES: [&str; 4] = ["water", "steam", "crude_oil", "petroleum_gas"];
 
-const RECIPE_NAMES: [&str; 32] = [
+const RECIPE_NAMES: [&str; 38] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -74,9 +80,15 @@ const RECIPE_NAMES: [&str; 32] = [
     "express_transport_belt",
     "express_underground_belt",
     "express_splitter",
+    "pumpjack",
+    "oil_refinery",
+    "chemical_plant",
+    "basic_oil_processing",
+    "plastic_bar",
+    "sulfur",
 ];
 
-const ENTITY_NAMES: [&str; 30] = [
+const ENTITY_NAMES: [&str; 34] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -107,10 +119,14 @@ const ENTITY_NAMES: [&str; 30] = [
     "offshore_pump",
     "pipe",
     "storage_tank",
+    "crude_oil_patch",
+    "pumpjack",
+    "oil_refinery",
+    "chemical_plant",
 ];
 
 const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
-const TECHNOLOGY_NAMES: [&str; 7] = [
+const TECHNOLOGY_NAMES: [&str; 10] = [
     "logistics",
     "automation",
     "electric_power",
@@ -118,18 +134,21 @@ const TECHNOLOGY_NAMES: [&str; 7] = [
     "logistics_2",
     "fluid_handling",
     "logistics_3",
+    "oil_processing",
+    "plastics",
+    "sulfur_processing",
 ];
 
 #[test]
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 36);
-    assert_eq!(catalog.fluids.len(), 2);
-    assert_eq!(catalog.recipes.len(), 32);
-    assert_eq!(catalog.entities.len(), 30);
+    assert_eq!(catalog.items.len(), 42);
+    assert_eq!(catalog.fluids.len(), 4);
+    assert_eq!(catalog.recipes.len(), 38);
+    assert_eq!(catalog.entities.len(), 34);
     assert_eq!(catalog.tiles.len(), 3);
-    assert_eq!(catalog.technologies.len(), 7);
+    assert_eq!(catalog.technologies.len(), 10);
 }
 
 #[test]

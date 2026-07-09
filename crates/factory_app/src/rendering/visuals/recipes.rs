@@ -41,6 +41,7 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::SteamEngine => steam_engine_layers(&mut builder, style),
         EntityKind::Boiler => boiler_layers(&mut builder, style),
         EntityKind::OffshorePump => offshore_pump_layers(&mut builder, style),
+        EntityKind::Pumpjack => pumpjack_layers(&mut builder, style),
         EntityKind::Pipe => pipe_layers(&mut builder, style),
         EntityKind::StorageTank => storage_tank_layers(&mut builder, style),
         EntityKind::ResourcePatch => {}
@@ -319,6 +320,28 @@ fn offshore_pump_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualSt
             Vec2::new(0.24, 0.0),
             0.11,
             Color::srgba(0.08, 0.16, 0.20, 0.58),
+        );
+}
+
+fn pumpjack_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+    builder
+        .scaled(
+            Vec2::new(0.24, 0.72),
+            Vec2::new(-0.18, 0.0),
+            0.10,
+            Color::srgba(0.10, 0.09, 0.08, 0.72),
+        )
+        .scaled(
+            Vec2::new(0.66, 0.16),
+            Vec2::new(0.06, 0.22),
+            0.11,
+            Color::srgba(0.88, 0.62, 0.24, 0.78),
+        )
+        .scaled(
+            Vec2::new(0.30, 0.26),
+            Vec2::new(0.20, -0.16),
+            0.12,
+            Color::srgba(0.06, 0.05, 0.05, 0.66),
         );
 }
 

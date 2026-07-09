@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::PrototypeLoadError;
-use crate::ids::ItemId;
-use crate::model::{CollisionLayer, CollisionMask, ItemAmount, TechnologyPrototype};
-use crate::raw::{RawCollisionMask, RawItemAmount};
+use crate::ids::{FluidId, ItemId};
+use crate::model::{CollisionLayer, CollisionMask, FluidAmount, ItemAmount, TechnologyPrototype};
+use crate::raw::{RawCollisionMask, RawFluidAmount, RawItemAmount};
 
 pub(crate) trait RawPrototype {
     fn id(&self) -> u16;
@@ -72,6 +72,34 @@ pub(crate) fn resolve_item_amounts(
             Ok(ItemAmount {
                 item,
                 amount: amount.amount,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn resolve_fluid_amounts(
+    recipe: &str,
+    amounts: Vec<RawFluidAmount>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<Vec<FluidAmount>, PrototypeLoadError> {
+    amounts
+        .into_iter()
+        .map(|amount| {
+            let fluid = *fluid_ids_by_name.get(&amount.fluid).ok_or_else(|| {
+                PrototypeLoadError::MissingFluidReference {
+                    owner: recipe.to_string(),
+                    fluid: amount.fluid.clone(),
+                }
+            })?;
+            if amount.amount == 0 {
+                return Err(PrototypeLoadError::InvalidRecipeFluidAmount {
+                    recipe: recipe.to_string(),
+                    fluid: amount.fluid,
+                });
+            }
+            Ok(FluidAmount {
+                fluid,
+                amount_milliunits: u64::from(amount.amount) * 1000,
             })
         })
         .collect()

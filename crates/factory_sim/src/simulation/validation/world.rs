@@ -239,7 +239,10 @@ pub(super) fn validate_placed_entities(sim: &Simulation) -> Result<(), SimValida
 }
 
 fn entity_can_occupy_tile(prototype: &factory_data::EntityPrototype, tile: &TileCell) -> bool {
-    if prototype.entity_kind == EntityKind::MiningDrill {
+    if matches!(
+        prototype.entity_kind,
+        EntityKind::MiningDrill | EntityKind::Pumpjack
+    ) {
         tile.collision.walkable
     } else {
         tile.collision.buildable

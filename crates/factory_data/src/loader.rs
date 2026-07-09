@@ -8,15 +8,16 @@ use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, Til
 use crate::model::{
     ElectricPolePrototype, EntityPrototype, FluidBoxPrototype, FluidConnectionPrototype,
     FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
-    MiningDrillPrototype, RecipePrototype, TechnologyEffect, TechnologyPrototype, TilePrototype,
+    MiningDrillPrototype, PumpjackPrototype, RecipePrototype, TechnologyEffect,
+    TechnologyPrototype, TilePrototype,
 };
 use crate::raw::{
     RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype,
-    RawItemPrototype, RawPrototypeCatalog, RawRecipePrototype, RawTechnologyEffect,
-    RawTechnologyPrototype, RawTilePrototype,
+    RawItemPrototype, RawPrototypeCatalog, RawPumpjackPrototype, RawRecipePrototype,
+    RawTechnologyEffect, RawTechnologyPrototype, RawTilePrototype,
 };
 use crate::validation::{
-    resolve_collision_mask, resolve_item_amounts, validate_group,
+    resolve_collision_mask, resolve_fluid_amounts, resolve_item_amounts, validate_group,
     validate_technology_prerequisite_graph,
 };
 
@@ -39,7 +40,8 @@ impl PrototypeCatalog {
 
         let (items, item_ids_by_name) = load_items(raw.items);
         let (fluids, fluid_ids_by_name) = load_fluids(raw.fluids);
-        let (recipes, recipe_ids_by_name) = load_recipes(raw.recipes, &item_ids_by_name)?;
+        let (recipes, recipe_ids_by_name) =
+            load_recipes(raw.recipes, &item_ids_by_name, &fluid_ids_by_name)?;
         let entities = load_entities(raw.entities, &item_ids_by_name, &fluid_ids_by_name)?;
         let tiles = load_tiles(raw.tiles)?;
         let technologies =
@@ -136,6 +138,7 @@ fn load_fluids(fluids: Vec<RawFluidPrototype>) -> (Vec<FluidPrototype>, HashMap<
 fn load_recipes(
     recipes: Vec<RawRecipePrototype>,
     item_ids_by_name: &HashMap<String, ItemId>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
 ) -> Result<(Vec<RecipePrototype>, HashMap<String, RecipeId>), PrototypeLoadError> {
     let recipes = recipes
         .into_iter()
@@ -152,6 +155,16 @@ fn load_recipes(
                     item_ids_by_name,
                 )?,
                 products: resolve_item_amounts(&recipe_name, recipe.products, item_ids_by_name)?,
+                fluid_ingredients: resolve_fluid_amounts(
+                    &recipe_name,
+                    recipe.fluid_ingredients,
+                    fluid_ids_by_name,
+                )?,
+                fluid_products: resolve_fluid_amounts(
+                    &recipe_name,
+                    recipe.fluid_products,
+                    fluid_ids_by_name,
+                )?,
             })
         })
         .collect::<Result<Vec<_>, PrototypeLoadError>>()?;
@@ -176,10 +189,13 @@ fn load_entities(
             let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
             let fluid_boxes =
                 resolve_fluid_boxes(&name, size, entity.fluid_boxes, fluid_ids_by_name)?;
+            let pumpjack =
+                resolve_pumpjack(&name, entity.pumpjack, item_ids_by_name, fluid_ids_by_name)?;
             validate_machine_fluid_roles(
                 &name,
                 entity.entity_kind,
                 &fluid_boxes,
+                pumpjack.as_ref(),
                 fluid_ids_by_name,
             )?;
             Ok(EntityPrototype {
@@ -222,6 +238,7 @@ fn load_entities(
                 steam_engine: entity.steam_engine,
                 boiler: entity.boiler,
                 offshore_pump: entity.offshore_pump,
+                pumpjack,
                 fluid_boxes,
             })
         })
@@ -280,10 +297,41 @@ fn resolve_fluid_boxes(
             Ok(FluidBoxPrototype {
                 capacity_milliunits: fluid_box.capacity_milliunits,
                 filter,
+                io: fluid_box.io,
                 connections,
             })
         })
         .collect()
+}
+
+fn resolve_pumpjack(
+    entity_name: &str,
+    pumpjack: Option<RawPumpjackPrototype>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<Option<PumpjackPrototype>, PrototypeLoadError> {
+    let Some(pumpjack) = pumpjack else {
+        return Ok(None);
+    };
+
+    let resource_item = *item_ids_by_name
+        .get(&pumpjack.resource_item)
+        .ok_or_else(|| PrototypeLoadError::MissingPumpjackResourceItem {
+            entity: entity_name.to_string(),
+            item: pumpjack.resource_item.clone(),
+        })?;
+    let output_fluid = *fluid_ids_by_name
+        .get(&pumpjack.output_fluid)
+        .ok_or_else(|| PrototypeLoadError::MissingFluidReference {
+            owner: entity_name.to_string(),
+            fluid: pumpjack.output_fluid.clone(),
+        })?;
+
+    Ok(Some(PumpjackPrototype {
+        pumping_speed_per_second_milliunits: pumpjack.pumping_speed_per_second_milliunits,
+        resource_item,
+        output_fluid,
+    }))
 }
 
 fn validate_fluid_connection_geometry(
@@ -318,6 +366,7 @@ fn validate_machine_fluid_roles(
     entity_name: &str,
     entity_kind: crate::model::EntityKind,
     fluid_boxes: &[FluidBoxPrototype],
+    pumpjack: Option<&PumpjackPrototype>,
     fluid_ids_by_name: &HashMap<String, FluidId>,
 ) -> Result<(), PrototypeLoadError> {
     let required_fluid = |fluid_name: &str| {
@@ -343,6 +392,15 @@ fn validate_machine_fluid_roles(
         ),
         crate::model::EntityKind::SteamEngine => {
             require_fluid_box_filters(entity_name, fluid_boxes, &[Some(required_fluid("steam")?)])
+        }
+        crate::model::EntityKind::Pumpjack => {
+            let Some(pumpjack) = pumpjack else {
+                return Err(PrototypeLoadError::InvalidFluidBox {
+                    entity: entity_name.to_string(),
+                    box_index: 0,
+                });
+            };
+            require_fluid_box_filters(entity_name, fluid_boxes, &[Some(pumpjack.output_fluid)])
         }
         _ => Ok(()),
     }

@@ -217,7 +217,9 @@ impl Simulation {
                 .world
                 .tile_at(target.x, target.y)
                 .and_then(|tile| tile.resource)
-                .is_some())
+                .is_some_and(|resource| {
+                    !is_fluid_resource_item(&self.world.prototypes, resource.resource_item)
+                }))
             && self.is_manual_mining_target_in_reach(target)
     }
 

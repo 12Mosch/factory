@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_data::{EntityKind, EntityPrototypeId, PrototypeCatalog};
+use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, PrototypeCatalog};
 use factory_sim::{Direction, EntityFootprint, EntityId, Simulation};
 use std::collections::HashSet;
 use std::time::Instant;
@@ -9,9 +9,10 @@ use crate::constants::{
 };
 use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{
-    assembler_color, boiler_color, burner_drill_color, chest_color, electric_pole_color,
-    furnace_color, inserter_color, lab_color, offshore_pump_color, pipe_color, splitter_color,
-    steam_engine_color, storage_tank_color, transport_belt_color,
+    assembler_color, boiler_color, burner_drill_color, chemical_plant_color, chest_color,
+    electric_pole_color, furnace_color, inserter_color, lab_color, offshore_pump_color,
+    oil_refinery_color, pipe_color, pumpjack_color, splitter_color, steam_engine_color,
+    storage_tank_color, transport_belt_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
@@ -193,7 +194,15 @@ pub(crate) fn entity_prototype_visual_style(
             direction,
         )),
         EntityKind::AssemblingMachine => Some(entity_visual_style(
-            assembler_color(),
+            match prototype
+                .assembling_machine
+                .as_ref()
+                .map(|assembling_machine| assembling_machine.crafting_category)
+            {
+                Some(CraftingCategory::OilProcessing) => oil_refinery_color(),
+                Some(CraftingCategory::Chemistry) => chemical_plant_color(),
+                _ => assembler_color(),
+            },
             machine_size(),
             prototype.entity_kind,
             direction,
@@ -230,6 +239,12 @@ pub(crate) fn entity_prototype_visual_style(
         )),
         EntityKind::OffshorePump => Some(entity_visual_style(
             offshore_pump_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Pumpjack => Some(entity_visual_style(
+            pumpjack_color(),
             machine_size(),
             prototype.entity_kind,
             direction,

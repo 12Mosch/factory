@@ -120,7 +120,8 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     }
 
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
-        return assembler_input_can_accept(catalog, research, assembler, item)
+        let machine_category = assembler_machine_category(catalog, entities, entity_id);
+        return assembler_input_can_accept(catalog, research, machine_category, assembler, item)
             && assembler
                 .input_inventory
                 .can_insert(catalog, item.item_id, item.count);
@@ -244,8 +245,13 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         return false;
     }
 
-    if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
-        if !assembler_input_can_accept(catalog, research, assembler, item) {
+    if entities.assembling_machines.contains_key(&entity_id) {
+        let machine_category = assembler_machine_category(catalog, entities, entity_id);
+        let assembler = entities
+            .assembling_machines
+            .get_mut(&entity_id)
+            .expect("assembler presence was checked above");
+        if !assembler_input_can_accept(catalog, research, machine_category, assembler, item) {
             return false;
         }
 

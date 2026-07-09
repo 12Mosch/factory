@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_data::{PrototypeCatalog, RecipeId};
+use factory_data::{CraftingCategory, PrototypeCatalog, RecipeId};
 use factory_sim::{AssemblingMachineState, SimCommand};
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
@@ -7,8 +7,8 @@ use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::{
-    AssemblerDetailText, crafting_recipe_choices, format_assembler_detail_text,
-    format_recipe_display_name,
+    AssemblerDetailText, format_assembler_detail_text, format_recipe_display_name,
+    machine_recipe_choices,
 };
 use crate::ui::inventory_panel::{InventoryPanel, spawn_slot_button};
 use crate::ui::machine_indicators::BurnerProgressFill;
@@ -59,6 +59,8 @@ pub(crate) fn spawn_assembler_panel(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     catalog: &PrototypeCatalog,
     state: &AssemblingMachineState,
+    machine_category: CraftingCategory,
+    title: &str,
 ) {
     root.spawn((
         Node {
@@ -71,7 +73,7 @@ pub(crate) fn spawn_assembler_panel(
     ))
     .with_children(|panel| {
         panel.spawn((
-            Text::new("Assembling Machine 1"),
+            Text::new(title.to_string()),
             TextFont::from_font_size(14.0),
             TextColor(Color::WHITE),
         ));
@@ -93,7 +95,7 @@ pub(crate) fn spawn_assembler_panel(
                 BackgroundColor(Color::NONE),
             ))
             .with_children(|recipes| {
-                for recipe in crafting_recipe_choices(catalog) {
+                for recipe in machine_recipe_choices(catalog, machine_category) {
                     spawn_assembler_recipe_button(recipes, recipe.id, &recipe.name);
                 }
             });

@@ -29,6 +29,20 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                 });
             }
         }
+        for amount in recipe
+            .fluid_ingredients
+            .iter()
+            .chain(recipe.fluid_products.iter())
+        {
+            if !fluid_exists(catalog, amount.fluid) {
+                return Err(SimValidationError::InvalidFluidId(amount.fluid));
+            }
+            if amount.amount_milliunits == 0 {
+                return Err(SimValidationError::InvalidCraftingRecipe {
+                    recipe_id: recipe.id,
+                });
+            }
+        }
     }
 
     for (index, technology) in catalog.technologies.iter().enumerate() {
@@ -150,6 +164,22 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
             }
             EntityKind::Pipe | EntityKind::StorageTank => {
                 if prototype.fluid_boxes.len() != 1 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::Pumpjack => {
+                let Some(pumpjack) = prototype.pumpjack.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if pumpjack.pumping_speed_per_second_milliunits == 0
+                    || !item_exists(catalog, pumpjack.resource_item)
+                    || !fluid_exists(catalog, pumpjack.output_fluid)
+                    || prototype.fluid_boxes.len() != 1
+                {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,
                     });

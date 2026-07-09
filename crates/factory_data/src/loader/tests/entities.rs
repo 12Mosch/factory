@@ -2,7 +2,8 @@ use glam::IVec2;
 
 use crate::catalog::PrototypeCatalog;
 use crate::model::{
-    AssemblingMachinePrototype, ElectricEnergySourcePrototype, EntityKind, UndergroundBeltPart,
+    AssemblingMachinePrototype, CraftingCategory, ElectricEnergySourcePrototype, EntityKind,
+    UndergroundBeltPart,
 };
 
 #[test]
@@ -101,6 +102,7 @@ fn assembling_machine_loads_metadata() {
             crafting_speed_denominator: 2,
             input_slot_count: 4,
             output_slot_count: 1,
+            crafting_category: CraftingCategory::Crafting,
         })
     );
     assert_eq!(

@@ -73,6 +73,12 @@ impl Simulation {
         self.advance_machines(profiler);
         profiler.finish(ProfilePhase::Machines, machines);
 
+        // Machines produce and consume fluids through their own fluid boxes,
+        // so rebalance the networks and refresh the snapshots they invalidated.
+        profiler.measure(ProfilePhase::Fluids, || {
+            self.refresh_fluid_networks_after_dynamic_changes();
+        });
+
         let inserters = profiler.begin();
         self.advance_inserters(profiler);
         profiler.finish(ProfilePhase::Inserters, inserters);

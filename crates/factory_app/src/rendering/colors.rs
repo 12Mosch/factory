@@ -18,6 +18,18 @@ pub(crate) fn assembler_color() -> Color {
     Color::srgb(0.22, 0.50, 0.60)
 }
 
+pub(crate) fn oil_refinery_color() -> Color {
+    Color::srgb(0.42, 0.38, 0.30)
+}
+
+pub(crate) fn chemical_plant_color() -> Color {
+    Color::srgb(0.30, 0.55, 0.35)
+}
+
+pub(crate) fn pumpjack_color() -> Color {
+    Color::srgb(0.35, 0.30, 0.28)
+}
+
 pub(crate) fn lab_color() -> Color {
     Color::srgb(0.48, 0.36, 0.66)
 }
@@ -106,6 +118,8 @@ pub(crate) fn resource_color(resource: ResourceCell, ids: RenderPrototypeIds) ->
         Color::srgb(0.10, 0.10, 0.095)
     } else if resource.resource_item == ids.stone {
         Color::srgb(0.54, 0.51, 0.46)
+    } else if resource.resource_item == ids.crude_oil {
+        Color::srgb(0.16, 0.10, 0.22)
     } else {
         Color::srgb(0.82, 0.78, 0.66)
     }
@@ -119,6 +133,7 @@ pub(crate) struct RenderPrototypeIds {
     copper_ore: ItemId,
     coal: ItemId,
     stone: ItemId,
+    crude_oil: ItemId,
 }
 
 impl RenderPrototypeIds {
@@ -131,6 +146,7 @@ impl RenderPrototypeIds {
             copper_ore: ids.items.copper_ore,
             coal: ids.items.coal,
             stone: ids.items.stone,
+            crude_oil: ids.items.crude_oil,
         }
     }
 }
