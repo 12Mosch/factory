@@ -161,10 +161,10 @@ pub(crate) fn build_ghost_from_player_inventory(
         },
     )
     .map_err(ConstructionError::PlayerBuild)?;
-    debug_assert!(
-        !sim.construction.ghosts.contains_key(&ghost_id),
-        "placement overlap hook should have cleared the built ghost"
-    );
+    if sim.construction.ghosts.contains_key(&ghost_id) {
+        remove_ghost(&mut sim.construction, ghost_id);
+        sim.bump_entity_topology_revision();
+    }
 
     // Best-effort: blueprints may carry recipes that are locked or that the
     // placed prototype cannot craft; the ghost still builds in that case.

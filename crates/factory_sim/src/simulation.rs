@@ -365,6 +365,9 @@ pub enum SimValidationError {
         ghost_id: GhostId,
         prototype_id: EntityPrototypeId,
     },
+    InvalidGhostIdentity {
+        ghost_id: GhostId,
+    },
     InvalidGhostFootprint {
         ghost_id: GhostId,
     },

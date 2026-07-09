@@ -85,9 +85,18 @@ pub(crate) fn handle_sim_command_results(
                     Err(_) => continue,
                 };
             }
-            (SimCommand::CancelGhost { .. }, Ok(_))
-            | (SimCommand::DeleteBlueprint { .. }, Ok(_)) => {
-                sounds.write(SoundEvent::UiClick);
+            (SimCommand::CancelGhost { .. } | SimCommand::DeleteBlueprint { .. }, result) => {
+                match result {
+                    Ok(_) => {
+                        sounds.write(SoundEvent::UiClick);
+                    }
+                    Err(SimCommandError::Construction(error)) => {
+                        sounds.write(SoundEvent::PlaceError);
+                        build_state.last_status =
+                            construction_status_from_error(sim.sim.catalog(), *error);
+                    }
+                    Err(_) => continue,
+                }
             }
             (
                 SimCommand::MarkDeconstruction { .. },

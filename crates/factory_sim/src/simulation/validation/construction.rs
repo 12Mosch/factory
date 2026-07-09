@@ -10,7 +10,7 @@ pub(super) fn validate_construction_state(sim: &Simulation) -> Result<(), SimVal
 
     for (ghost_id, ghost) in &construction.ghosts {
         if ghost.id != *ghost_id {
-            return Err(SimValidationError::InvalidGhostFootprint {
+            return Err(SimValidationError::InvalidGhostIdentity {
                 ghost_id: *ghost_id,
             });
         }

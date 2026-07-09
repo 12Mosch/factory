@@ -20,6 +20,7 @@ pub(crate) struct BlueprintLibraryButton {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlueprintLibraryAction {
+    Close,
     /// Close the window and start a drag-select blueprint capture.
     CaptureNew,
     /// Load a library blueprint into the clipboard and enter paste mode.
@@ -76,6 +77,9 @@ pub(crate) fn handle_blueprint_library_buttons(
 
         state.sounds.write(SoundEvent::UiClick);
         match button.action {
+            BlueprintLibraryAction::Close => {
+                state.window.open = false;
+            }
             BlueprintLibraryAction::CaptureNew => {
                 state.window.open = false;
                 activate_planner_tool(
@@ -99,6 +103,16 @@ pub(crate) fn handle_blueprint_library_buttons(
                 );
             }
             BlueprintLibraryAction::Delete { index } => {
+                if state
+                    .sim
+                    .sim
+                    .construction()
+                    .blueprints()
+                    .get(index)
+                    .is_none()
+                {
+                    continue;
+                }
                 state
                     .commands
                     .write(SimCommandRequest(SimCommand::DeleteBlueprint { index }));
@@ -184,11 +198,25 @@ fn spawn_blueprint_library_modal(
         BorderColor::all(Color::srgba(0.36, 0.39, 0.34, 0.95)),
     ))
     .with_children(|modal| {
-        modal.spawn((
-            Text::new("Blueprint Library"),
-            TextFont::from_font_size(20.0),
-            TextColor(Color::srgb(0.94, 0.95, 0.90)),
-        ));
+        modal
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::SpaceBetween,
+                    column_gap: Val::Px(12.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|header| {
+                header.spawn((
+                    Text::new("Blueprint Library"),
+                    TextFont::from_font_size(20.0),
+                    TextColor(Color::srgb(0.94, 0.95, 0.90)),
+                ));
+                spawn_library_button(header, "Close", BlueprintLibraryAction::Close, 72.0);
+            });
         let clipboard_line = match &snapshot.clipboard {
             Some((name, count)) => format!("Clipboard: {name} ({count} entities) - Ctrl+V pastes"),
             None => "Clipboard empty - Ctrl+C copies an area".to_string(),

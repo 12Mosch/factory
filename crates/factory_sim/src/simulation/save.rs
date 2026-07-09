@@ -1,6 +1,8 @@
 use super::*;
 use bincode::Options;
 
+// Save version 9 intentionally invalidates older saves: construction planning
+// became part of deterministic simulation state and no v8 migration is kept.
 pub const SAVE_VERSION: u32 = 9;
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 6;
 

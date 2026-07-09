@@ -32,14 +32,34 @@ pub(crate) struct WorldBlockingWindows<'w> {
 
 impl WorldBlockingWindows<'_> {
     fn any_open(&self) -> bool {
-        self.map.open
-            || self.stats.open
-            || self.crafting.open
-            || self.audio_settings.open
-            || self.save_load.open
-            || self.build_menu.open
-            || self.blueprint_library.open
+        world_blocking_windows_open(
+            self.map.open,
+            self.stats.open,
+            self.crafting.open,
+            self.audio_settings.open,
+            self.save_load.open,
+            self.build_menu.open,
+            self.blueprint_library.open,
+        )
     }
+}
+
+fn world_blocking_windows_open(
+    map_open: bool,
+    stats_open: bool,
+    crafting_open: bool,
+    audio_settings_open: bool,
+    save_load_open: bool,
+    build_menu_open: bool,
+    blueprint_library_open: bool,
+) -> bool {
+    map_open
+        || stats_open
+        || crafting_open
+        || audio_settings_open
+        || save_load_open
+        || build_menu_open
+        || blueprint_library_open
 }
 
 pub(crate) fn reset_app_input_state(
@@ -173,13 +193,15 @@ pub(crate) fn handle_panel_input(
         }
     }
 
-    resources.input_state.world_blocked = resources.map.open
-        || resources.stats.open
-        || resources.crafting.open
-        || resources.audio_settings.open
-        || resources.save_load.open
-        || resources.build_menu.open
-        || resources.blueprint_library.open;
+    resources.input_state.world_blocked = world_blocking_windows_open(
+        resources.map.open,
+        resources.stats.open,
+        resources.crafting.open,
+        resources.audio_settings.open,
+        resources.save_load.open,
+        resources.build_menu.open,
+        resources.blueprint_library.open,
+    );
 }
 
 #[derive(SystemParam)]
