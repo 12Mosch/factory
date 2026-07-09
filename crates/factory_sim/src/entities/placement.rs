@@ -65,6 +65,7 @@ pub enum BuildPlacementIssueKind {
     EntityOccupied {
         entity_id: EntityId,
     },
+    GhostOccupied,
     PlayerOccupied,
     MissingBuildItem {
         prototype_id: EntityPrototypeId,

@@ -47,6 +47,7 @@ fn place_validated_entity(
         footprint,
     );
     let impact = impact_for_prototype(sim, request.prototype_id);
+    construction_ops::clear_ghosts_overlapping_footprint(sim, &footprint);
     let entity_id = sim.entities.reserve_entity(reservation);
     apply_entity_topology_change(sim, impact);
     entity_id

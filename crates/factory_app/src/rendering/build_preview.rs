@@ -86,10 +86,12 @@ pub(crate) fn update_build_preview(
 
     transform.translation = entity_translation(&footprint, 20.0);
     sprite.custom_size = Some(size);
-    sprite.color = if placement_preview.is_valid() {
-        Color::srgba(0.78, 1.0, 0.72, 0.42)
-    } else {
+    sprite.color = if !placement_preview.is_valid() {
         Color::srgba(1.0, 0.20, 0.16, 0.42)
+    } else if preview_state.ghost {
+        Color::srgba(0.55, 0.78, 1.0, 0.45)
+    } else {
+        Color::srgba(0.78, 1.0, 0.72, 0.42)
     };
     *visibility = Visibility::Visible;
 
@@ -142,6 +144,7 @@ pub(crate) fn update_build_preview(
 }
 
 pub(crate) fn update_build_placement_preview_state(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     sim: Res<SimResource>,
@@ -159,17 +162,31 @@ pub(crate) fn update_build_placement_preview_state(
         return;
     };
 
+    let ghost = keyboard.as_deref().is_some_and(|keyboard| {
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
+    });
     preview_state.cursor_tile = Some((x, y));
-    preview_state.preview = Some(factory_sim::placement::preview_from_player_inventory(
-        &sim.sim,
-        factory_sim::placement::PlayerPlacementRequest {
-            prototype_id: selection.prototype_id,
-            item_id: selection.item_id,
+    preview_state.ghost = ghost;
+    preview_state.preview = Some(if ghost {
+        factory_sim::construction_ops::preview_ghost_placement(
+            &sim.sim,
+            selection.prototype_id,
             x,
             y,
-            direction: build_state.direction,
-        },
-    ));
+            build_state.direction,
+        )
+    } else {
+        factory_sim::placement::preview_from_player_inventory(
+            &sim.sim,
+            factory_sim::placement::PlayerPlacementRequest {
+                prototype_id: selection.prototype_id,
+                item_id: selection.item_id,
+                x,
+                y,
+                direction: build_state.direction,
+            },
+        )
+    });
 }
 
 fn preview_tile_color(

@@ -1,6 +1,7 @@
 mod simulation;
 
 pub mod constants;
+pub mod construction;
 pub mod crafting;
 pub mod entities;
 pub mod error;

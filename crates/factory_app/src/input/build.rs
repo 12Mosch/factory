@@ -80,6 +80,7 @@ pub(crate) fn handle_build_rotate_cancel_keys(
 }
 
 pub(crate) fn handle_build_world_click(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
@@ -111,15 +112,27 @@ pub(crate) fn handle_build_world_click(
         return;
     };
 
-    state.commands.write(SimCommandRequest(
+    // Shift-click plans a ghost instead of building immediately.
+    let ghost = keyboard.as_deref().is_some_and(|keyboard| {
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
+    });
+    let command = if ghost {
+        SimCommand::PlaceGhost {
+            prototype_id: selection.prototype_id,
+            x,
+            y,
+            direction: state.build_state.direction,
+        }
+    } else {
         SimCommand::PlaceEntityFromPlayerInventory {
             prototype_id: selection.prototype_id,
             item_id: selection.item_id,
             x,
             y,
             direction: state.build_state.direction,
-        },
-    ));
+        }
+    };
+    state.commands.write(SimCommandRequest(command));
 }
 
 pub fn select_build_slot(

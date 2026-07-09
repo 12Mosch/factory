@@ -2,6 +2,7 @@ mod fixed_tick {
     mod audio_settings;
     mod build_selection;
     mod common;
+    mod construction_planning;
     mod container_open;
     mod determinism;
     mod map_rendering;

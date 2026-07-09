@@ -1,5 +1,6 @@
 mod audio;
 mod build;
+mod construction;
 mod input;
 mod map;
 mod rendering;
@@ -81,6 +82,7 @@ impl Plugin for FactoryAppPlugin {
             input::InputPlugin,
             audio::AudioPlugin,
             build::BuildPlugin,
+            construction::ConstructionPlugin,
             map::MapPlugin,
             rendering::RenderingPlugin,
             save_load::SaveLoadPlugin,

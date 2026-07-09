@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use factory_sim::{EntityId, Simulation};
 
-use crate::build::resources::BuildPlacementState;
+use crate::build::resources::{BuildPlacementState, PlannerState, PlannerTool};
 use crate::input::panels::{escape_consumed, world_input_blocked};
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -16,15 +16,17 @@ pub(crate) struct ContainerOpenState<'w> {
     build_state: Res<'w, BuildPlacementState>,
     input_state: Option<Res<'w, AppInputState>>,
     technology_window: Option<Res<'w, TechnologyWindowState>>,
+    sim: Res<'w, SimResource>,
+    planner: Res<'w, PlannerState>,
     open_container: ResMut<'w, OpenContainer>,
 }
 
 pub(crate) fn handle_container_open_input(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
-    sim: Res<SimResource>,
     mut state: ContainerOpenState,
 ) {
     let Some(mouse) = mouse else {
@@ -35,6 +37,7 @@ pub(crate) fn handle_container_open_input(
     }
     if world_input_blocked(state.input_state.as_deref())
         || !container_open_input_allowed(&state.build_state)
+        || state.planner.tool != PlannerTool::None
     {
         return;
     }
@@ -52,8 +55,26 @@ pub(crate) fn handle_container_open_input(
         return;
     }
 
+    let cursor_tile = cursor_tile_from_window(&windows, &cameras);
+    // Shift+click on a marked entity deconstructs it (see
+    // `handle_ghost_click`) instead of opening its window.
+    let shift_held = keyboard.as_deref().is_some_and(|keyboard| {
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
+    });
+    if shift_held
+        && let Some((x, y)) = cursor_tile
+        && let Some(entity_id) = state.sim.sim.entities().occupancy().entity_at(x, y)
+        && state
+            .sim
+            .sim
+            .construction()
+            .is_marked_for_deconstruction(entity_id)
+    {
+        return;
+    }
+
     state.open_container.entity_id =
-        opened_container_after_world_click(&sim.sim, cursor_tile_from_window(&windows, &cameras));
+        opened_container_after_world_click(&state.sim.sim, cursor_tile);
 }
 
 pub(crate) fn handle_container_close_input(

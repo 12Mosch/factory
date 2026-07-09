@@ -31,6 +31,7 @@ pub(crate) fn destroy_to_player_inventory(
         .entities
         .remove_placed_entity(entity_id)
         .expect("validated placed entity should still be removable");
+    construction_ops::clear_construction_state_for_removed_entity(sim, entity_id);
     sim.player_inventory = player_inventory;
     sim.manual_mining_progress = None;
     let impact = impact_for_prototype(sim, removed.prototype_id);

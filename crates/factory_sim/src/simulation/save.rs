@@ -1,7 +1,7 @@
 use super::*;
 use bincode::Options;
 
-pub const SAVE_VERSION: u32 = 8;
+pub const SAVE_VERSION: u32 = 9;
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 6;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
@@ -52,6 +52,7 @@ struct SimulationSnapshot {
     fluid_statistics: FluidStatistics,
     power_statistics: PowerStatistics,
     entities: EntityStore,
+    construction: ConstructionState,
     player: PlayerState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
@@ -180,6 +181,7 @@ impl SimulationSnapshot {
             fluid_statistics: sim.statistics.fluids.clone(),
             power_statistics: sim.statistics.power.clone(),
             entities: sim.entities.clone(),
+            construction: sim.construction.clone(),
             player: sim.player,
             player_inventory: sim.player_inventory.clone(),
             manual_mining_progress: sim.manual_mining_progress,
@@ -207,6 +209,7 @@ impl SimulationSnapshot {
             },
             chart: self.chart,
             entities: self.entities,
+            construction: self.construction,
             player: self.player,
             player_inventory: self.player_inventory,
             manual_mining_progress: self.manual_mining_progress,

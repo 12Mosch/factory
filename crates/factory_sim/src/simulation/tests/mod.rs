@@ -4,6 +4,7 @@ mod assemblers;
 mod belts;
 mod burner_drills;
 mod commands;
+mod construction;
 mod fluids;
 mod furnaces;
 mod inserters;
