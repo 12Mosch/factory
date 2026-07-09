@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::constants::TILE_SIZE;
 use crate::map::resources::{MapTextureBounds, VisibleChunks};
 use crate::rendering::belts::{
-    BeltDirectionSprite, BeltItemSprite, measured_sync_belt_direction_rendering,
+    BeltDirectionSprite, BeltItemLabel, BeltItemSprite, measured_sync_belt_direction_rendering,
     measured_sync_belt_item_rendering,
 };
 use crate::rendering::colors::{RenderPrototypeIds, tile_color};
@@ -22,13 +22,52 @@ use crate::rendering::resources::{
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
-use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, Simulation};
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeSet;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 const RENDER_SYNC_SMALL_MEASUREMENT_FRAMES: usize = 300;
 const RENDER_SYNC_SMALL_TOTAL_P95_BUDGET: Duration = Duration::from_millis(4);
 const RENDER_SYNC_SMALL_TOTAL_MAX_BUDGET: Duration = Duration::from_millis(8);
+const DENSE_BELT_ITEM_RENDER_BELTS: usize = 2_000;
+const DENSE_BELT_ITEM_RENDER_WARMUP_FRAMES: usize = 30;
+const DENSE_BELT_ITEM_RENDER_MEASUREMENT_FRAMES: usize = 120;
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
+static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
+static BENCHMARK_LOCK: Mutex<()> = Mutex::new(());
+
+struct CountingAllocator;
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
+        ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
+        ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
+        ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
 
 #[test]
 fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
@@ -277,6 +316,27 @@ fn render_sync_small_visual_load_budget() {
     );
 }
 
+#[test]
+#[ignore]
+fn dense_belt_item_render_sync_allocation_benchmark() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let (sim, belt_ids) = dense_belt_item_render_sync_fixture();
+    let mut app = dense_belt_item_render_sync_app(sim, &belt_ids);
+
+    for _ in 0..DENSE_BELT_ITEM_RENDER_WARMUP_FRAMES {
+        tick_sim_resource(&mut app);
+        app.update();
+    }
+
+    let stats = collect_dense_belt_item_render_sync_stats(
+        &mut app,
+        DENSE_BELT_ITEM_RENDER_MEASUREMENT_FRAMES,
+    );
+    print_dense_belt_item_render_sync_stats(&mut app, stats);
+}
+
 fn small_render_sync_fixture() -> Simulation {
     let mut sim = Simulation::new_test_world(123);
     for y in -4..=4 {
@@ -294,6 +354,30 @@ fn small_render_sync_fixture() -> Simulation {
     }
 
     sim
+}
+
+fn dense_belt_item_render_sync_fixture() -> (Simulation, Vec<EntityId>) {
+    let mut sim = Simulation::new_test_world(123);
+    for y in -8..=8 {
+        for x in -8..=8 {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
+
+    let belt_ids = place_entities(
+        &mut sim,
+        "transport_belt",
+        DENSE_BELT_ITEM_RENDER_BELTS,
+        Direction::East,
+    );
+    let iron_ore = item_id_by_name(sim.catalog(), "iron_ore");
+    for belt_id in &belt_ids {
+        let _ = sim.insert_item_onto_belt(*belt_id, 0, iron_ore);
+        let _ = sim.insert_item_onto_belt(*belt_id, 1, iron_ore);
+    }
+    sim.tick();
+
+    (sim, belt_ids)
 }
 
 fn visible_window() -> VisibleChunks {
@@ -391,6 +475,21 @@ fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
     app
 }
 
+fn dense_belt_item_render_sync_app(sim: Simulation, belt_ids: &[EntityId]) -> App {
+    let mut app = App::new();
+    app.insert_resource(SimResource { sim })
+        .insert_resource(VisibleEntityIds {
+            ids: belt_ids.iter().copied().collect(),
+            visible_revision: 1,
+            entity_topology_revision: 1,
+        })
+        .init_resource::<RenderDetail>()
+        .init_resource::<BeltItemRenderPool>()
+        .init_resource::<RenderSyncStats>()
+        .add_systems(Update, measured_sync_belt_item_rendering);
+    app
+}
+
 #[derive(Clone, Copy)]
 struct RenderSyncSample {
     stats: RenderSyncStats,
@@ -401,6 +500,31 @@ struct RenderSyncBudgetStats {
     average: RenderSyncStats,
     p95: RenderSyncStats,
     max: RenderSyncStats,
+}
+
+#[derive(Clone, Copy)]
+struct AllocationSample {
+    count: u64,
+    bytes: u64,
+}
+
+#[derive(Clone, Copy)]
+struct DenseBeltItemRenderSyncSample {
+    stats: RenderSyncStats,
+    allocations: AllocationSample,
+}
+
+#[derive(Clone, Copy)]
+struct DenseBeltItemRenderSyncStats {
+    average: RenderSyncStats,
+    p95: RenderSyncStats,
+    max: RenderSyncStats,
+    alloc_average_bytes: u64,
+    alloc_p95_bytes: u64,
+    alloc_max_bytes: u64,
+    alloc_average_count: u64,
+    alloc_p95_count: u64,
+    alloc_max_count: u64,
 }
 
 fn collect_render_sync_budget_stats(app: &mut App, frames: usize) -> RenderSyncBudgetStats {
@@ -417,6 +541,26 @@ fn collect_render_sync_budget_stats(app: &mut App, frames: usize) -> RenderSyncB
     render_sync_budget_stats(samples.into_iter().map(|sample| sample.stats).collect())
 }
 
+fn collect_dense_belt_item_render_sync_stats(
+    app: &mut App,
+    frames: usize,
+) -> DenseBeltItemRenderSyncStats {
+    assert!(frames > 0);
+    let mut samples = Vec::with_capacity(frames);
+
+    for _ in 0..frames {
+        tick_sim_resource(app);
+        reset_allocation_counters();
+        app.update();
+        samples.push(DenseBeltItemRenderSyncSample {
+            stats: *app.world().resource::<RenderSyncStats>(),
+            allocations: allocation_sample(),
+        });
+    }
+
+    dense_belt_item_render_sync_stats(samples)
+}
+
 fn render_sync_budget_stats(mut samples: Vec<RenderSyncStats>) -> RenderSyncBudgetStats {
     assert!(!samples.is_empty());
     samples.sort_by_key(|stats| stats.total);
@@ -426,6 +570,47 @@ fn render_sync_budget_stats(mut samples: Vec<RenderSyncStats>) -> RenderSyncBudg
         average: average_render_sync_stats(&samples),
         p95: percentile_render_sync_stats(&samples, p95_index),
         max: max_render_sync_stats(&samples),
+    }
+}
+
+fn dense_belt_item_render_sync_stats(
+    mut samples: Vec<DenseBeltItemRenderSyncSample>,
+) -> DenseBeltItemRenderSyncStats {
+    assert!(!samples.is_empty());
+    samples.sort_by_key(|sample| sample.stats.belt_items);
+    let p95_index = ((samples.len() * 95).div_ceil(100)).saturating_sub(1);
+    let stats = samples
+        .iter()
+        .map(|sample| sample.stats)
+        .collect::<Vec<_>>();
+
+    let mut allocation_bytes = samples
+        .iter()
+        .map(|sample| sample.allocations.bytes)
+        .collect::<Vec<_>>();
+    let mut allocation_counts = samples
+        .iter()
+        .map(|sample| sample.allocations.count)
+        .collect::<Vec<_>>();
+    allocation_bytes.sort_unstable();
+    allocation_counts.sort_unstable();
+    let total_bytes = allocation_bytes.iter().sum::<u64>();
+    let total_counts = allocation_counts.iter().sum::<u64>();
+
+    DenseBeltItemRenderSyncStats {
+        average: average_render_sync_stats(&stats),
+        p95: percentile_render_sync_stats(&stats, p95_index),
+        max: max_render_sync_stats(&stats),
+        alloc_average_bytes: total_bytes / allocation_bytes.len() as u64,
+        alloc_p95_bytes: allocation_bytes[p95_index],
+        alloc_max_bytes: *allocation_bytes
+            .last()
+            .expect("allocation bytes should exist"),
+        alloc_average_count: total_counts / allocation_counts.len() as u64,
+        alloc_p95_count: allocation_counts[p95_index],
+        alloc_max_count: *allocation_counts
+            .last()
+            .expect("allocation counts should exist"),
     }
 }
 
@@ -532,6 +717,46 @@ fn print_render_sync_budget_stats(app: &mut App, stats: RenderSyncBudgetStats) {
         resource_sprite_count(app),
         resource_label_count(app),
     );
+}
+
+fn print_dense_belt_item_render_sync_stats(app: &mut App, stats: DenseBeltItemRenderSyncStats) {
+    let visible_belt_items = app
+        .world()
+        .resource::<SimResource>()
+        .sim
+        .counts()
+        .belt_item_count;
+    println!(
+        "dense_belt_item_render_sync_allocation_benchmark:\n  visible belt items: {}\n  belt item sprites: {}\n  belt item labels: {}\n  belt_items: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
+        visible_belt_items,
+        belt_item_sprite_count(app),
+        belt_item_label_count(app),
+        ms(stats.average.belt_items),
+        ms(stats.p95.belt_items),
+        ms(stats.max.belt_items),
+        stats.alloc_average_bytes,
+        stats.alloc_average_count,
+        stats.alloc_p95_bytes,
+        stats.alloc_p95_count,
+        stats.alloc_max_bytes,
+        stats.alloc_max_count,
+    );
+}
+
+fn tick_sim_resource(app: &mut App) {
+    app.world_mut().resource_mut::<SimResource>().sim.tick();
+}
+
+fn reset_allocation_counters() {
+    ALLOCATION_COUNT.store(0, Ordering::Relaxed);
+    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+}
+
+fn allocation_sample() -> AllocationSample {
+    AllocationSample {
+        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
+        bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+    }
 }
 
 fn place_belts_across_generated_world(sim: &mut Simulation) {
@@ -663,6 +888,13 @@ fn belt_direction_sprite_count(app: &mut App) -> usize {
 fn belt_item_sprite_count(app: &mut App) -> usize {
     app.world_mut()
         .query_filtered::<Entity, With<BeltItemSprite>>()
+        .iter(app.world())
+        .count()
+}
+
+fn belt_item_label_count(app: &mut App) -> usize {
+    app.world_mut()
+        .query_filtered::<Entity, With<BeltItemLabel>>()
         .iter(app.world())
         .count()
 }

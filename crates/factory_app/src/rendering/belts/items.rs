@@ -23,6 +23,14 @@ use super::labels::{belt_item_label, label_translation, spawn_or_reuse_belt_item
 use super::render_state::direction_render_vector;
 use super::render_state::{splitter_port_tiles_for_render, transport_item_render_state_from_parts};
 
+#[derive(Default)]
+struct BeltItemRenderScratch {
+    visible_items: Vec<VisibleBeltItemRenderState>,
+    visible_by_key: HashMap<BeltItemKey, usize>,
+    seen_sprites: Vec<bool>,
+    seen_labels: Vec<bool>,
+}
+
 #[derive(SystemParam)]
 pub(crate) struct BeltItemRenderParams<'w, 's> {
     commands: Commands<'w, 's>,
@@ -31,6 +39,7 @@ pub(crate) struct BeltItemRenderParams<'w, 's> {
     detail: Res<'w, RenderDetail>,
     pool: ResMut<'w, BeltItemRenderPool>,
     visual_assets: VisualAssets<'w>,
+    scratch: Local<'s, BeltItemRenderScratch>,
     sprites: Query<
         'w,
         's,
@@ -65,6 +74,7 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
         detail,
         mut pool,
         mut visual_assets,
+        mut scratch,
         mut sprites,
         mut labels,
     } = params;
@@ -80,14 +90,19 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
     }
 
     let ids = BasePrototypeIds::from_catalog(sim.sim.catalog());
-    let visible_items = collect_visible_belt_items(&sim.sim, ids, &visible_entity_ids.ids);
+    collect_visible_belt_items_into(
+        &sim.sim,
+        ids,
+        &visible_entity_ids.ids,
+        &mut scratch.visible_items,
+    );
     sync_belt_item_entity_pool(
         &mut commands,
         &sim.sim,
         &mut pool,
         &mut visual_assets,
         detail.show_belt_item_labels,
-        &visible_items,
+        &mut scratch,
         &mut sprites,
         &mut labels,
     );
@@ -142,13 +157,13 @@ pub(super) fn pool_all_belt_items(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn sync_belt_item_entity_pool(
+fn sync_belt_item_entity_pool(
     commands: &mut Commands,
     sim: &Simulation,
     pool: &mut BeltItemRenderPool,
     visual_assets: &mut VisualAssets,
     show_labels: bool,
-    visible_items: &[VisibleBeltItemRenderState],
+    scratch: &mut BeltItemRenderScratch,
     sprites: &mut Query<
         (
             Entity,
@@ -170,18 +185,23 @@ pub(super) fn sync_belt_item_entity_pool(
         Without<BeltItemSprite>,
     >,
 ) {
-    let visible_by_key = visible_items
-        .iter()
-        .map(|item| (item.key, *item))
-        .collect::<HashMap<_, _>>();
-    let mut seen_sprites = HashSet::with_capacity(visible_items.len());
-    let mut seen_labels = HashSet::with_capacity(visible_items.len());
+    let visible_items = &scratch.visible_items;
+    let item_count = visible_items.len();
+    scratch.visible_by_key.clear();
+    scratch.visible_by_key.reserve(item_count);
+    for (index, item) in visible_items.iter().enumerate() {
+        scratch.visible_by_key.insert(item.key, index);
+    }
+
+    scratch.seen_sprites.clear();
+    scratch.seen_sprites.resize(item_count, false);
 
     for (entity, mut marker, mut transform, mut sprite, mut visibility) in &mut *sprites {
         if marker.active
-            && let Some(item) = visible_by_key.get(&marker.key)
+            && let Some(&index) = scratch.visible_by_key.get(&marker.key)
         {
-            seen_sprites.insert(marker.key);
+            let item = visible_items[index];
+            scratch.seen_sprites[index] = true;
             transform.translation = item.translation;
             if marker.item_id != item.item_id {
                 marker.item_id = item.item_id;
@@ -196,19 +216,23 @@ pub(super) fn sync_belt_item_entity_pool(
         }
     }
 
-    for item in visible_items {
-        if seen_sprites.contains(&item.key) {
+    for (index, item) in visible_items.iter().enumerate() {
+        if scratch.seen_sprites[index] {
             continue;
         }
         spawn_or_reuse_belt_item_sprite(commands, pool, visual_assets, *item);
     }
 
     if show_labels {
+        scratch.seen_labels.clear();
+        scratch.seen_labels.resize(item_count, false);
+
         for (entity, mut marker, mut transform, mut text, mut visibility) in &mut *labels {
             if marker.active
-                && let Some(item) = visible_by_key.get(&marker.key)
+                && let Some(&index) = scratch.visible_by_key.get(&marker.key)
             {
-                seen_labels.insert(marker.key);
+                let item = visible_items[index];
+                scratch.seen_labels[index] = true;
                 transform.translation = label_translation(item.translation);
                 if marker.item_id != item.item_id {
                     marker.item_id = item.item_id;
@@ -222,8 +246,8 @@ pub(super) fn sync_belt_item_entity_pool(
             }
         }
 
-        for item in visible_items {
-            if seen_labels.contains(&item.key) {
+        for (index, item) in visible_items.iter().enumerate() {
+            if scratch.seen_labels[index] {
                 continue;
             }
             spawn_or_reuse_belt_item_label(commands, sim, pool, *item);
@@ -271,12 +295,13 @@ pub(super) fn spawn_or_reuse_belt_item_sprite(
     );
 }
 
-pub(super) fn collect_visible_belt_items(
+pub(super) fn collect_visible_belt_items_into(
     sim: &Simulation,
     ids: BasePrototypeIds,
     visible_ids: &HashSet<EntityId>,
-) -> Vec<VisibleBeltItemRenderState> {
-    let mut items = Vec::new();
+    items: &mut Vec<VisibleBeltItemRenderState>,
+) {
+    items.clear();
     for &entity_id in visible_ids {
         let Some(placed) = sim.entities().placed_entity(entity_id) else {
             continue;
@@ -333,7 +358,6 @@ pub(super) fn collect_visible_belt_items(
             }
         }
     }
-    items
 }
 
 pub(super) fn push_unique(pool: &mut Vec<Entity>, entity: Entity) {
