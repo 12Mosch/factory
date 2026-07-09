@@ -45,7 +45,7 @@ pub(crate) fn handle_build_hotbar_keys(
     for (slot_index, key_code) in hotbar_keys().into_iter().enumerate() {
         if keyboard.just_pressed(key_code) {
             select_build_slot(
-                &sim.sim,
+                &sim.read(),
                 technology_window.as_deref(),
                 &hotbar,
                 &mut build_state,

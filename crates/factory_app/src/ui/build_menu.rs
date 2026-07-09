@@ -136,7 +136,7 @@ pub(crate) fn handle_build_menu_buttons(
         }
         state.sounds.write(SoundEvent::UiClick);
         if select_build_selection(
-            &state.sim.sim,
+            &state.sim.read(),
             state.technology_window.as_deref(),
             &mut state.build_state,
             &mut state.planner,
@@ -190,7 +190,7 @@ pub(crate) fn sync_build_menu(
         &mut roots,
         state.open,
         sim.is_changed() || hotbar.is_changed() || state.is_changed(),
-        || build_menu_snapshot(&sim.sim, &hotbar, &state),
+        || build_menu_snapshot(&sim.read(), &hotbar, &state),
         build_menu_root,
         spawn_build_menu_contents,
     );

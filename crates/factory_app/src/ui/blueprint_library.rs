@@ -90,7 +90,8 @@ pub(crate) fn handle_blueprint_library_buttons(
                 );
             }
             BlueprintLibraryAction::Paste { index } => {
-                let Some(blueprint) = state.sim.sim.construction().blueprints().get(index) else {
+                let sim = state.sim.read();
+                let Some(blueprint) = sim.construction().blueprints().get(index) else {
                     continue;
                 };
                 state.planner.clipboard = Some(blueprint.clone());
@@ -105,7 +106,7 @@ pub(crate) fn handle_blueprint_library_buttons(
             BlueprintLibraryAction::Delete { index } => {
                 if state
                     .sim
-                    .sim
+                    .read()
                     .construction()
                     .blueprints()
                     .get(index)
@@ -145,7 +146,7 @@ fn blueprint_library_snapshot(
 ) -> BlueprintLibrarySnapshot {
     BlueprintLibrarySnapshot {
         rows: sim
-            .sim
+            .read()
             .construction()
             .blueprints()
             .iter()

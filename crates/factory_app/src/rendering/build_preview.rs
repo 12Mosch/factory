@@ -78,7 +78,7 @@ pub(crate) fn update_build_preview(
     };
 
     let (_, size) = entity_prototype_render_style(
-        sim.sim.catalog(),
+        sim.read().catalog(),
         selection.prototype_id,
         build_state.direction,
     )
@@ -169,7 +169,7 @@ pub(crate) fn update_build_placement_preview_state(
     preview_state.ghost = ghost;
     preview_state.preview = Some(if ghost {
         factory_sim::construction_ops::preview_ghost_placement(
-            &sim.sim,
+            &sim.read(),
             selection.prototype_id,
             x,
             y,
@@ -177,7 +177,7 @@ pub(crate) fn update_build_placement_preview_state(
         )
     } else {
         factory_sim::placement::preview_from_player_inventory(
-            &sim.sim,
+            &sim.read(),
             factory_sim::placement::PlayerPlacementRequest {
                 prototype_id: selection.prototype_id,
                 item_id: selection.item_id,

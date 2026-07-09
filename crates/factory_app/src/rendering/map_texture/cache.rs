@@ -31,7 +31,7 @@ pub(crate) fn update_map_texture(
     // the fullscreen map is closed. Other layers only update while displayed.
     let surface_cache = cache.layer_mut(MapLayer::Surface);
     update_layer_map_texture(
-        &sim.sim,
+        &sim.read(),
         &settings,
         MapLayer::Surface,
         surface_cache,
@@ -42,7 +42,7 @@ pub(crate) fn update_map_texture(
     if state.open && state.selected_layer != MapLayer::Surface {
         let layer_cache = cache.layer_mut(state.selected_layer);
         update_layer_map_texture(
-            &sim.sim,
+            &sim.read(),
             &settings,
             state.selected_layer,
             layer_cache,

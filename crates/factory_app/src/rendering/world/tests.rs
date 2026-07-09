@@ -170,7 +170,7 @@ fn render_sync_counts_are_bounded_by_visible_chunks() {
     let total_generated_chunks = sim.world().generated_chunk_count();
     let total_entities = sim.entities().placed_len();
     let mut app = App::new();
-    app.insert_resource(SimResource { sim })
+    app.insert_resource(SimResource::new(sim))
         .insert_resource(visible)
         .init_resource::<WorldRenderCache>()
         .init_resource::<ResourceRenderCache>()
@@ -263,7 +263,7 @@ fn resource_visibility_changes_reuse_overlapping_sprites_and_labels() {
     second_visible.revision = 2;
 
     let mut app = App::new();
-    app.insert_resource(SimResource { sim })
+    app.insert_resource(SimResource::new(sim))
         .insert_resource(first_visible)
         .init_resource::<ResourceRenderCache>()
         .insert_resource(ResourceRenderSettings {
@@ -446,7 +446,7 @@ fn resource_coord_in_chunk(coord: ChunkCoord, chunk: &factory_sim::Chunk) -> Opt
 
 fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
     let mut app = App::new();
-    app.insert_resource(SimResource { sim })
+    app.insert_resource(SimResource::new(sim))
         .insert_resource(visible)
         .init_resource::<WorldRenderCache>()
         .init_resource::<ResourceRenderCache>()
@@ -477,7 +477,7 @@ fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
 
 fn dense_belt_item_render_sync_app(sim: Simulation, belt_ids: &[EntityId]) -> App {
     let mut app = App::new();
-    app.insert_resource(SimResource { sim })
+    app.insert_resource(SimResource::new(sim))
         .insert_resource(VisibleEntityIds {
             ids: belt_ids.iter().copied().collect(),
             visible_revision: 1,
@@ -723,7 +723,7 @@ fn print_dense_belt_item_render_sync_stats(app: &mut App, stats: DenseBeltItemRe
     let visible_belt_items = app
         .world()
         .resource::<SimResource>()
-        .sim
+        .read()
         .counts()
         .belt_item_count;
     println!(
@@ -744,7 +744,10 @@ fn print_dense_belt_item_render_sync_stats(app: &mut App, stats: DenseBeltItemRe
 }
 
 fn tick_sim_resource(app: &mut App) {
-    app.world_mut().resource_mut::<SimResource>().sim.tick();
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .write_for_tests()
+        .tick();
 }
 
 fn reset_allocation_counters() {

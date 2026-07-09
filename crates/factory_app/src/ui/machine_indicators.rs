@@ -200,41 +200,43 @@ pub(crate) fn update_burner_drill_indicators(
     mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
     mut progress_fills: Query<&mut Node, With<BurnerProgressFill>>,
 ) {
-    let indicator = open_container.entity_id.and_then(|entity_id| {
-        match open_machine_kind(&sim.sim, entity_id)? {
-            OpenMachineKind::BurnerDrill => {
-                let state =
-                    factory_sim::entity_access::burner_drill_state(&sim.sim, entity_id).ok()?;
-                Some((
-                    state.energy.energy_remaining_joules,
-                    state.mining_progress_ticks,
-                    state.mining_required_ticks,
-                ))
-            }
-            OpenMachineKind::Furnace => {
-                let state = factory_sim::entity_access::furnace_state(&sim.sim, entity_id).ok()?;
-                Some((
-                    state.energy.energy_remaining_joules,
-                    state.crafting_progress_ticks,
-                    state.crafting_required_ticks,
-                ))
-            }
-            OpenMachineKind::Boiler => {
-                let state = factory_sim::entity_access::boiler_state(&sim.sim, entity_id).ok()?;
-                Some((state.energy.energy_remaining_joules, 0, 1))
-            }
-            OpenMachineKind::Assembler => {
-                let state =
-                    factory_sim::entity_access::assembler_state(&sim.sim, entity_id).ok()?;
-                Some((
-                    0.0,
-                    state.crafting_progress_ticks,
-                    state.crafting_required_ticks,
-                ))
-            }
-            OpenMachineKind::Chest | OpenMachineKind::Lab => None,
-        }
-    });
+    let sim = sim.read();
+    let indicator =
+        open_container
+            .entity_id
+            .and_then(|entity_id| match open_machine_kind(&sim, entity_id)? {
+                OpenMachineKind::BurnerDrill => {
+                    let state =
+                        factory_sim::entity_access::burner_drill_state(&sim, entity_id).ok()?;
+                    Some((
+                        state.energy.energy_remaining_joules,
+                        state.mining_progress_ticks,
+                        state.mining_required_ticks,
+                    ))
+                }
+                OpenMachineKind::Furnace => {
+                    let state = factory_sim::entity_access::furnace_state(&sim, entity_id).ok()?;
+                    Some((
+                        state.energy.energy_remaining_joules,
+                        state.crafting_progress_ticks,
+                        state.crafting_required_ticks,
+                    ))
+                }
+                OpenMachineKind::Boiler => {
+                    let state = factory_sim::entity_access::boiler_state(&sim, entity_id).ok()?;
+                    Some((state.energy.energy_remaining_joules, 0, 1))
+                }
+                OpenMachineKind::Assembler => {
+                    let state =
+                        factory_sim::entity_access::assembler_state(&sim, entity_id).ok()?;
+                    Some((
+                        0.0,
+                        state.crafting_progress_ticks,
+                        state.crafting_required_ticks,
+                    ))
+                }
+                OpenMachineKind::Chest | OpenMachineKind::Lab => None,
+            });
 
     for mut text in &mut energy_texts {
         text.0 = indicator

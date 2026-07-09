@@ -29,7 +29,7 @@ pub(crate) fn sync_container_window(
 ) {
     let open_kind = open_container
         .entity_id
-        .and_then(|entity_id| open_machine_kind(&sim.sim, entity_id));
+        .and_then(|entity_id| open_machine_kind(&sim.read(), entity_id));
     if open_container.entity_id.is_some() && open_kind.is_none() {
         open_container.entity_id = None;
     }
@@ -45,7 +45,7 @@ pub(crate) fn sync_container_window(
             ContainerWindowSnapshot { entity_id, kind }
         },
         container_window_root,
-        |root, snapshot| spawn_container_window_contents(root, &sim.sim, snapshot),
+        |root, snapshot| spawn_container_window_contents(root, &sim.read(), snapshot),
     );
     // Transfer feedback belongs to the container it was produced in; drop it
     // whenever the window closed or switched to another container.

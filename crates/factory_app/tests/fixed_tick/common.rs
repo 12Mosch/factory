@@ -25,13 +25,13 @@ pub fn test_app(frame_duration: Duration) -> App {
 }
 
 pub fn run_until_tick(app: &mut App, target_tick: u64) {
-    while app.world().resource::<SimResource>().sim.tick_count() < target_tick {
+    while app.world().resource::<SimResource>().read().tick_count() < target_tick {
         app.update();
     }
 }
 
 pub fn sim_tick_and_hash(app: &App) -> (u64, u64) {
-    let sim = &app.world().resource::<SimResource>().sim;
+    let sim = &app.world().resource::<SimResource>().read();
     (sim.tick_count(), sim.state_hash())
 }
 
@@ -87,7 +87,7 @@ pub fn format_item_name_for_test(sim: &Simulation, item_id: ItemId) -> String {
 }
 
 pub fn first_available_build_selection(app: &App) -> BuildSelection {
-    let sim = &app.world().resource::<SimResource>().sim;
+    let sim = &app.world().resource::<SimResource>().read();
     let buildable = buildable_prototypes(sim.catalog())
         .into_iter()
         .find(|buildable| sim.player_inventory().count(buildable.item_id) > 0)
@@ -96,7 +96,7 @@ pub fn first_available_build_selection(app: &App) -> BuildSelection {
 }
 
 pub fn first_available_hotbar_slot(app: &App) -> (usize, BuildSelection) {
-    let sim = &app.world().resource::<SimResource>().sim;
+    let sim = &app.world().resource::<SimResource>().read();
     let hotbar = app.world().resource::<HotbarState>();
     hotbar
         .slots

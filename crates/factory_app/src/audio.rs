@@ -226,7 +226,7 @@ pub(crate) fn play_sound_events(
         return;
     }
 
-    let tick = sim.sim.tick_count();
+    let tick = sim.read().tick_count();
     for event in events.read() {
         if dedupe
             .last_played_tick
@@ -271,7 +271,7 @@ pub(crate) fn observe_manual_mining_audio(
     mut observer: ResMut<ManualMiningAudioObserver>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let current = sim.sim.manual_mining_progress();
+    let current = sim.read().manual_mining_progress();
     let previous = observer.previous;
 
     if let (Some(previous), Some(current)) = (previous, current) {
@@ -302,7 +302,8 @@ pub(crate) fn observe_crafting_audio(
     mut observer: ResMut<CraftingAudioObserver>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let queue = sim.sim.crafting_queue();
+    let sim = sim.read();
+    let queue = sim.crafting_queue();
     let current_front = queue.entries.front().copied();
     let current_len = queue.entries.len();
 
@@ -322,11 +323,11 @@ pub(crate) fn observe_research_audio(
     mut sounds: MessageWriter<SoundEvent>,
 ) {
     let unlocked = sim
-        .sim
+        .read()
         .catalog()
         .technologies
         .iter()
-        .filter(|technology| sim.sim.is_technology_unlocked(technology.id))
+        .filter(|technology| sim.read().is_technology_unlocked(technology.id))
         .map(|technology| technology.id)
         .collect::<HashSet<_>>();
 
@@ -355,10 +356,10 @@ pub(crate) fn sync_machine_audio_loops(
     let mut candidates = visible
         .ids
         .iter()
-        .filter_map(|entity_id| machine_loop_candidate(&sim.sim, *entity_id))
+        .filter_map(|entity_id| machine_loop_candidate(&sim.read(), *entity_id))
         .collect::<Vec<_>>();
 
-    let (player_x, player_y) = sim.sim.player().position_tiles();
+    let (player_x, player_y) = sim.read().player().position_tiles();
     candidates.sort_by(|a, b| {
         a.distance_squared(player_x, player_y)
             .total_cmp(&b.distance_squared(player_x, player_y))

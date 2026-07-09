@@ -89,16 +89,16 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
         return;
     }
 
-    let ids = BasePrototypeIds::from_catalog(sim.sim.catalog());
+    let ids = BasePrototypeIds::from_catalog(sim.read().catalog());
     collect_visible_belt_items_into(
-        &sim.sim,
+        &sim.read(),
         ids,
         &visible_entity_ids.ids,
         &mut scratch.visible_items,
     );
     sync_belt_item_entity_pool(
         &mut commands,
-        &sim.sim,
+        &sim.read(),
         &mut pool,
         &mut visual_assets,
         detail.show_belt_item_labels,

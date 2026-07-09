@@ -34,6 +34,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
             ..Default::default()
         },
         rolling_average_sim_tick_ms: 1.25,
+        save_blocked_fixed_ticks: 0,
     };
     let mut render_sync = RenderSyncStats::default();
     render_sync.record_player(Duration::from_micros(10));

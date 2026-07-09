@@ -49,13 +49,14 @@ pub(super) fn sync_visible_world_tiles_impl(
         meshes,
         materials,
     } = params;
+    let sim = sim.read();
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         return;
     };
 
     if cache.last_reload_token == token.value
         && cache.last_visible_revision == visible.revision
-        && cache.last_chunk_revision == sim.sim.world().chunk_revision()
+        && cache.last_chunk_revision == sim.world().chunk_revision()
     {
         return;
     }
@@ -72,9 +73,7 @@ pub(super) fn sync_visible_world_tiles_impl(
         .chunk_entities
         .keys()
         .copied()
-        .filter(|coord| {
-            !visible.chunks.contains(coord) || !sim.sim.world().chunks.contains_key(coord)
-        })
+        .filter(|coord| !visible.chunks.contains(coord) || !sim.world().chunks.contains_key(coord))
         .collect::<Vec<_>>();
     for coord in stale_chunks {
         if let Some(entity) = cache.chunk_entities.remove(&coord) {
@@ -82,7 +81,7 @@ pub(super) fn sync_visible_world_tiles_impl(
         }
     }
 
-    let ids = RenderPrototypeIds::from_catalog(sim.sim.catalog());
+    let ids = RenderPrototypeIds::from_catalog(sim.catalog());
     let material = cache
         .material
         .get_or_insert_with(|| materials.add(ColorMaterial::from_color(Color::WHITE)))
@@ -92,7 +91,7 @@ pub(super) fn sync_visible_world_tiles_impl(
         if cache.chunk_entities.contains_key(coord) {
             continue;
         }
-        let Some(chunk) = sim.sim.world().chunks.get(coord) else {
+        let Some(chunk) = sim.world().chunks.get(coord) else {
             continue;
         };
         let entity = commands
@@ -107,5 +106,5 @@ pub(super) fn sync_visible_world_tiles_impl(
     }
 
     cache.last_visible_revision = visible.revision;
-    cache.last_chunk_revision = sim.sim.world().chunk_revision();
+    cache.last_chunk_revision = sim.world().chunk_revision();
 }

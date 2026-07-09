@@ -75,24 +75,24 @@ pub(crate) fn ensure_selected_technology(
 
     if window_state
         .selected
-        .is_some_and(|technology_id| sim.sim.catalog().technology(technology_id).is_some())
+        .is_some_and(|technology_id| sim.read().catalog().technology(technology_id).is_some())
     {
         return;
     }
 
     window_state.selected = sim
-        .sim
+        .read()
         .active_research()
         .or_else(|| {
-            sim.sim
+            sim.read()
                 .catalog()
                 .technologies
                 .iter()
-                .find(|technology| !sim.sim.is_technology_unlocked(technology.id))
+                .find(|technology| !sim.read().is_technology_unlocked(technology.id))
                 .map(|technology| technology.id)
         })
         .or_else(|| {
-            sim.sim
+            sim.read()
                 .catalog()
                 .technologies
                 .first()
@@ -127,8 +127,8 @@ pub(crate) fn handle_technology_panel_buttons(
         let Some(technology_id) = window_state.selected else {
             continue;
         };
-        if sim.sim.active_research() == Some(technology_id)
-            || sim.sim.research_queue().contains(&technology_id)
+        if sim.read().active_research() == Some(technology_id)
+            || sim.read().research_queue().contains(&technology_id)
         {
             continue;
         }
@@ -178,8 +178,8 @@ pub(crate) fn sync_technology_panel(
         &mut roots,
         window_state.open,
         true,
-        || technology_panel_snapshot(&sim.sim, &window_state),
+        || technology_panel_snapshot(&sim.read(), &window_state),
         technology_panel_root,
-        |root, _| spawn_technology_panel_contents(root, &sim.sim, window_state.selected),
+        |root, _| spawn_technology_panel_contents(root, &sim.read(), window_state.selected),
     );
 }

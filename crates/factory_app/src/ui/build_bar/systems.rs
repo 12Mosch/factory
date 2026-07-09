@@ -156,7 +156,7 @@ pub(crate) fn handle_build_bar_button_clicks(
         if *interaction == Interaction::Pressed {
             state.sounds.write(SoundEvent::UiClick);
             select_build_slot(
-                &state.sim.sim,
+                &state.sim.read(),
                 state.technology_window.as_deref(),
                 &state.hotbar,
                 &mut state.build_state,
@@ -197,8 +197,8 @@ pub(crate) fn update_build_bar_visuals(
             continue;
         };
         let selected = build_state.selected == Some(selection);
-        let unlocked = sim.sim.is_entity_unlocked(selection.prototype_id);
-        let available = unlocked && sim.sim.player_inventory().count(selection.item_id) > 0;
+        let unlocked = sim.read().is_entity_unlocked(selection.prototype_id);
+        let available = unlocked && sim.read().player_inventory().count(selection.item_id) > 0;
         *background = BackgroundColor(slot_background_color(*interaction, selected, available));
         *border = BorderColor::all(if selected {
             Color::srgb(0.94, 0.66, 0.20)
@@ -212,7 +212,7 @@ pub(crate) fn update_build_bar_visuals(
             text.0.clear();
             continue;
         };
-        let count = sim.sim.player_inventory().count(selection.item_id);
+        let count = sim.read().player_inventory().count(selection.item_id);
         text.0 = count.to_string();
         *color = TextColor(if count == 0 {
             Color::srgb(0.62, 0.58, 0.52)
@@ -226,13 +226,14 @@ pub(crate) fn update_build_bar_visuals(
             text.0.clear();
             continue;
         };
-        let prototype = sim.sim.catalog().entity(selection.prototype_id);
+        let sim = sim.read();
+        let prototype = sim.catalog().entity(selection.prototype_id);
         text.0 = prototype
             .map(|prototype| compact_item_name(&prototype.name))
             .unwrap_or_default();
         let available = prototype.is_some()
-            && sim.sim.is_entity_unlocked(selection.prototype_id)
-            && sim.sim.player_inventory().count(selection.item_id) > 0;
+            && sim.is_entity_unlocked(selection.prototype_id)
+            && sim.player_inventory().count(selection.item_id) > 0;
         *color = TextColor(if available {
             Color::WHITE
         } else {
@@ -278,7 +279,7 @@ pub(crate) fn update_build_status_text(
     let live_status = build_state
         .selected
         .and(preview_state.preview.as_ref())
-        .and_then(|preview| build_status_from_preview(sim.sim.catalog(), preview));
+        .and_then(|preview| build_status_from_preview(sim.read().catalog(), preview));
     let status = live_status.as_ref().unwrap_or(&build_state.last_status);
 
     let (message, color) = match status {

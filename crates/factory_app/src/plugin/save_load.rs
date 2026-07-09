@@ -2,9 +2,9 @@ use bevy::prelude::*;
 
 use super::AppSet;
 use crate::save_load::{
-    AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
-    SaveLoadWindowState, handle_save_load_shortcuts, initialize_autosave_tick, poll_save_jobs,
-    run_autosave,
+    AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadMetrics,
+    SaveLoadStatus, SaveLoadWindowState, handle_save_load_shortcuts, initialize_autosave_tick,
+    poll_save_jobs, run_autosave,
 };
 use crate::ui::save_load::{handle_save_load_buttons, sync_save_load_window};
 
@@ -16,6 +16,7 @@ impl Plugin for SaveLoadPlugin {
         app.init_resource::<SaveLoadConfig>()
             .init_resource::<SaveLoadWindowState>()
             .init_resource::<SaveLoadStatus>()
+            .init_resource::<SaveLoadMetrics>()
             .init_resource::<PendingSaveJobs>()
             .init_resource::<AutosaveState>()
             .init_resource::<PresentationReloadToken>()

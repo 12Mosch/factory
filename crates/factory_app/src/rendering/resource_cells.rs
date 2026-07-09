@@ -37,7 +37,7 @@ pub(crate) fn sync_resource_debug_rendering(
     mut commands: Commands,
     mut params: ResourceRenderParams,
 ) {
-    let resource_revision = params.sim.sim.world().resource_revision();
+    let resource_revision = params.sim.read().world().resource_revision();
     let initial_sync = params.cache.last_resource_revision.is_none();
     let resources_changed = params.cache.last_resource_revision != Some(resource_revision);
     let visibility_changed = params.cache.last_visible_revision != params.visible.revision;
@@ -49,9 +49,9 @@ pub(crate) fn sync_resource_debug_rendering(
         return;
     }
 
-    let ids = RenderPrototypeIds::from_catalog(params.sim.sim.catalog());
+    let ids = RenderPrototypeIds::from_catalog(params.sim.read().catalog());
     if initial_sync || visibility_changed || label_setting_changed {
-        let resources = collect_resource_tiles(&params.sim.sim, &params.visible);
+        let resources = collect_resource_tiles(&params.sim.read(), &params.visible);
         reconcile_resource_tiles(
             &mut commands,
             &mut params.cache,
@@ -75,7 +75,7 @@ pub(crate) fn sync_resource_debug_rendering(
             .expect("resource cache should be initialized before incremental sync");
         if let Some(changes) = params
             .sim
-            .sim
+            .read()
             .world()
             .resource_dirty_tiles_since(last_revision)
         {
@@ -95,7 +95,7 @@ pub(crate) fn sync_resource_debug_rendering(
                 );
             }
         } else {
-            let resources = collect_resource_tiles(&params.sim.sim, &params.visible);
+            let resources = collect_resource_tiles(&params.sim.read(), &params.visible);
             reconcile_resource_tiles(
                 &mut commands,
                 &mut params.cache,

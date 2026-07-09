@@ -43,7 +43,7 @@ pub(crate) fn sync_production_stats_window(
         &mut roots,
         state.open,
         sim.is_changed() || state.is_changed(),
-        || production_stats_snapshot(&sim.sim, state.selected_tab),
+        || production_stats_snapshot(&sim.read(), state.selected_tab),
         production_stats_root,
         spawn_production_stats_contents,
     );

@@ -15,7 +15,7 @@ pub(crate) fn spawn_player(mut commands: Commands, sim: Res<SimResource>) {
             Color::srgb(0.92, 0.84, 0.42),
             Vec2::splat(PLAYER_SPRITE_SIZE),
         ),
-        Transform::from_translation(player_translation(sim.sim.player(), 4.0)),
+        Transform::from_translation(player_translation(sim.read().player(), 4.0)),
         PlayerSprite,
     ));
 }
@@ -25,7 +25,7 @@ pub(crate) fn sync_player_sprite(
     mut players: Query<&mut Transform, With<PlayerSprite>>,
 ) {
     for mut transform in &mut players {
-        transform.translation = player_translation(sim.sim.player(), transform.translation.z);
+        transform.translation = player_translation(sim.read().player(), transform.translation.z);
     }
 }
 

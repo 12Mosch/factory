@@ -57,7 +57,7 @@ pub(crate) fn handle_manual_crafting_recipe_buttons(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        if craftable_for_player(&sim.sim, button.recipe_id) {
+        if craftable_for_player(&sim.read(), button.recipe_id) {
             commands.write(SimCommandRequest(SimCommand::StartManualCraft(
                 button.recipe_id,
             )));
@@ -73,7 +73,7 @@ pub(crate) fn sync_manual_crafting_panel(
     mut queue_roots: WindowRootQuery<CraftingQueueSnapshot>,
 ) {
     let queue = if state.open {
-        queue_snapshot(&sim.sim)
+        queue_snapshot(&sim.read())
     } else {
         Vec::new()
     };
@@ -82,7 +82,7 @@ pub(crate) fn sync_manual_crafting_panel(
         &mut roots,
         state.open,
         true,
-        || crafting_panel_snapshot(&sim.sim, state.selected_tab),
+        || crafting_panel_snapshot(&sim.read(), state.selected_tab),
         manual_crafting_root,
         |root, snapshot| spawn_manual_crafting_contents(root, snapshot, queue.clone()),
     );

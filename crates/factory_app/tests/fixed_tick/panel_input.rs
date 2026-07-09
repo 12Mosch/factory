@@ -45,7 +45,7 @@ fn map_screen_toggles_with_m() {
         let (x, y) = app
             .world()
             .resource::<SimResource>()
-            .sim
+            .read()
             .player()
             .position_tiles();
         Vec2::new(x, y)
@@ -70,14 +70,15 @@ fn open_map_follow_updates_center_to_player() {
     app.update();
     release_key(&mut app, KeyCode::KeyM);
     {
-        let mut sim = app.world_mut().resource_mut::<SimResource>();
-        sim.sim.move_player_by_tiles(3.0, 2.0);
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        sim.move_player_by_tiles(3.0, 2.0);
     }
     let player_center = {
         let (x, y) = app
             .world()
             .resource::<SimResource>()
-            .sim
+            .read()
             .player()
             .position_tiles();
         Vec2::new(x, y)
@@ -175,7 +176,7 @@ fn fullscreen_map_f_recenters_and_reenables_follow() {
         let (x, y) = app
             .world()
             .resource::<SimResource>()
-            .sim
+            .read()
             .player()
             .position_tiles();
         Vec2::new(x, y)

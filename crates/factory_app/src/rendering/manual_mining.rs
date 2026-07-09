@@ -88,7 +88,7 @@ pub(crate) fn update_manual_mining_progress_bar(
     mut backgrounds: ManualMiningProgressBarBackgroundQuery,
     mut fills: ManualMiningProgressBarFillQuery,
 ) {
-    let progress = sim.sim.manual_mining_progress();
+    let progress = sim.read().manual_mining_progress();
 
     for (mut transform, mut visibility) in &mut backgrounds {
         if let Some(progress) = progress {

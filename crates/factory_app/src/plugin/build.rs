@@ -25,7 +25,7 @@ pub(super) struct BuildPlugin;
 impl Plugin for BuildPlugin {
     fn build(&self, app: &mut App) {
         let hotbar = HotbarState {
-            slots: default_hotbar_slots(app.world().resource::<SimResource>().sim.catalog()),
+            slots: default_hotbar_slots(app.world().resource::<SimResource>().read().catalog()),
         };
 
         app.insert_resource(hotbar)

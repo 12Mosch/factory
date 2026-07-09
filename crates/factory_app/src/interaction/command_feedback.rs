@@ -27,7 +27,7 @@ pub(crate) fn handle_sim_command_results(
                 sounds.write(SoundEvent::UiClick);
             }
             (SimCommand::TransferSlot { .. }, Err(SimCommandError::Transfer(error))) => {
-                feedback.message = Some(slot_transfer_error_message(sim.sim.catalog(), *error));
+                feedback.message = Some(slot_transfer_error_message(sim.read().catalog(), *error));
             }
             (SimCommand::StartManualCraft(_), Ok(_))
             | (SimCommand::SelectAssemblerRecipe { .. }, Ok(_))
@@ -37,7 +37,8 @@ pub(crate) fn handle_sim_command_results(
                 sounds.write(SoundEvent::UiClick);
             }
             (SimCommand::PlaceEntityFromPlayerInventory { prototype_id, .. }, result) => {
-                let catalog = sim.sim.catalog();
+                let sim = sim.read();
+                let catalog = sim.catalog();
                 let status = match result {
                     Ok(_) => {
                         sounds.write(SoundEvent::Place);
@@ -61,13 +62,13 @@ pub(crate) fn handle_sim_command_results(
                         sounds.write(SoundEvent::Place);
                         BuildPlacementStatus::Placed(format!(
                             "Planned {}",
-                            entity_display_name(sim.sim.catalog(), *prototype_id)
+                            entity_display_name(sim.read().catalog(), *prototype_id)
                                 .unwrap_or_else(|| "Building".to_string())
                         ))
                     }
                     Err(SimCommandError::Construction(error)) => {
                         sounds.write(SoundEvent::PlaceError);
-                        construction_status_from_error(sim.sim.catalog(), *error)
+                        construction_status_from_error(sim.read().catalog(), *error)
                     }
                     Err(_) => continue,
                 };
@@ -80,7 +81,7 @@ pub(crate) fn handle_sim_command_results(
                     }
                     Err(SimCommandError::Construction(error)) => {
                         sounds.write(SoundEvent::PlaceError);
-                        construction_status_from_error(sim.sim.catalog(), *error)
+                        construction_status_from_error(sim.read().catalog(), *error)
                     }
                     Err(_) => continue,
                 };
@@ -93,7 +94,7 @@ pub(crate) fn handle_sim_command_results(
                     Err(SimCommandError::Construction(error)) => {
                         sounds.write(SoundEvent::PlaceError);
                         build_state.last_status =
-                            construction_status_from_error(sim.sim.catalog(), *error);
+                            construction_status_from_error(sim.read().catalog(), *error);
                     }
                     Err(_) => continue,
                 }
@@ -128,7 +129,7 @@ pub(crate) fn handle_sim_command_results(
                     }
                     Err(SimCommandError::Construction(error)) => {
                         sounds.write(SoundEvent::PlaceError);
-                        construction_status_from_error(sim.sim.catalog(), *error)
+                        construction_status_from_error(sim.read().catalog(), *error)
                     }
                     Err(_) => continue,
                 };
@@ -160,7 +161,7 @@ pub(crate) fn handle_sim_command_results(
                     }
                     Err(SimCommandError::Construction(error)) => {
                         sounds.write(SoundEvent::PlaceError);
-                        construction_status_from_error(sim.sim.catalog(), *error)
+                        construction_status_from_error(sim.read().catalog(), *error)
                     }
                     Err(_) => continue,
                 };
