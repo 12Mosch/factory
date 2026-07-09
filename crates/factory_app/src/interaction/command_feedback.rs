@@ -36,14 +36,7 @@ pub(crate) fn handle_sim_command_results(
             | (SimCommand::MoveQueuedResearch { .. }, Ok(_)) => {
                 sounds.write(SoundEvent::UiClick);
             }
-            (
-                SimCommand::PlaceEntityFromPlayerInventory {
-                    prototype_id,
-                    item_id,
-                    ..
-                },
-                result,
-            ) => {
+            (SimCommand::PlaceEntityFromPlayerInventory { prototype_id, .. }, result) => {
                 let catalog = sim.sim.catalog();
                 let status = match result {
                     Ok(_) => {
@@ -61,13 +54,6 @@ pub(crate) fn handle_sim_command_results(
                     Err(_) => continue,
                 };
                 build_state.last_status = status;
-                if build_state
-                    .selected
-                    .is_some_and(|selection| selection.item_id == *item_id)
-                    && sim.sim.player_inventory().count(*item_id) == 0
-                {
-                    build_state.selected = None;
-                }
             }
             (SimCommand::PlaceGhost { prototype_id, .. }, result) => {
                 build_state.last_status = match result {

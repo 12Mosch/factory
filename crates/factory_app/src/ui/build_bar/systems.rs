@@ -11,6 +11,7 @@ use super::style::{
 use crate::audio::SoundEvent;
 use crate::build::resources::{
     BuildPlacementPreviewState, BuildPlacementState, BuildPlacementStatus, HotbarState,
+    PlannerState,
 };
 use crate::input::build::select_build_slot;
 use crate::input::panels::world_input_blocked;
@@ -132,6 +133,7 @@ pub(crate) struct BuildBarButtonState<'w> {
     technology_window: Option<Res<'w, TechnologyWindowState>>,
     hotbar: Res<'w, HotbarState>,
     build_state: ResMut<'w, BuildPlacementState>,
+    planner: ResMut<'w, PlannerState>,
     sounds: MessageWriter<'w, SoundEvent>,
 }
 
@@ -158,6 +160,7 @@ pub(crate) fn handle_build_bar_button_clicks(
                 state.technology_window.as_deref(),
                 &state.hotbar,
                 &mut state.build_state,
+                &mut state.planner,
                 button.slot_index,
             );
         }
