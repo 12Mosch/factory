@@ -58,16 +58,20 @@ pub(crate) fn update_debug_overlay(
     let frame_ms = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
         .and_then(|diagnostic| diagnostic.smoothed());
-    let counts = sim.read().counts();
+    let sim_read = sim.read();
+    let counts = sim_read.counts();
+    let tick = sim_read.tick_count();
+    let power = sim_read.power_summary();
+    drop(sim_read);
     let overlay_text = format_debug_overlay(DebugOverlaySnapshot {
-        tick: sim.read().tick_count(),
+        tick,
         ups: stats.ups,
         fps,
         frame_ms,
         sim_profile: &sim_profile,
         render_sync: &render_sync,
         counts,
-        power: sim.read().power_summary(),
+        power,
     });
 
     for mut text in &mut overlay {

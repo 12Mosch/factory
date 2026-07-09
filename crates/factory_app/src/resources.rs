@@ -35,7 +35,7 @@ impl SimResource {
         self.inner.write().expect("simulation lock poisoned")
     }
 
-    pub fn replace(&self, sim: Simulation) -> Result<(), SimAccessError> {
+    pub fn replace(&mut self, sim: Simulation) -> Result<(), SimAccessError> {
         let mut guard = self.inner.try_write().map_err(|error| match error {
             std::sync::TryLockError::Poisoned(_) => SimAccessError::Poisoned,
             std::sync::TryLockError::WouldBlock => SimAccessError::Busy,

@@ -42,12 +42,13 @@ pub(crate) fn update_visible_chunks(
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     mut visible: ResMut<VisibleChunks>,
 ) {
+    let sim = sim.read();
     let candidate_chunks = cameras
         .iter()
         .next()
         .and_then(|(camera, transform)| visible_chunks_from_camera(camera, transform))
         .unwrap_or_else(|| {
-            let (tile_x, tile_y) = sim.read().player().tile_position();
+            let (tile_x, tile_y) = sim.player().tile_position();
             let player_chunk = ChunkCoord {
                 x: tile_x.div_euclid(CHUNK_SIZE),
                 y: tile_y.div_euclid(CHUNK_SIZE),
@@ -56,7 +57,7 @@ pub(crate) fn update_visible_chunks(
         });
     let chunks = candidate_chunks
         .into_iter()
-        .filter(|coord| sim.read().world().chunks.contains_key(coord))
+        .filter(|coord| sim.world().chunks.contains_key(coord))
         .collect::<BTreeSet<_>>();
     let tile_bounds = tile_bounds_for_chunks(&chunks);
 

@@ -242,7 +242,13 @@ pub(crate) fn handle_save_load_shortcuts(
     }
 
     if keyboard.just_pressed(KeyCode::F9) {
-        load_slot(SaveSlotKind::Quick, &config, &mut status, &mut load_state);
+        load_slot(
+            SaveSlotKind::Quick,
+            &config,
+            &pending_jobs,
+            &mut status,
+            &mut load_state,
+        );
     }
 }
 
@@ -327,7 +333,7 @@ pub(crate) fn run_autosave(
 
 #[derive(SystemParam)]
 pub(crate) struct LoadState<'w> {
-    pub(crate) sim: Res<'w, SimResource>,
+    pub(crate) sim: ResMut<'w, SimResource>,
     pub(crate) window: ResMut<'w, SaveLoadWindowState>,
     pub(crate) autosave: ResMut<'w, AutosaveState>,
     pub(crate) build_state: ResMut<'w, BuildPlacementState>,
@@ -347,9 +353,20 @@ pub(crate) struct LoadState<'w> {
 pub(crate) fn load_slot(
     slot: SaveSlotKind,
     config: &SaveLoadConfig,
+    pending_jobs: &PendingSaveJobs,
     status: &mut SaveLoadStatus,
     state: &mut LoadState,
 ) -> bool {
+    // A save worker holds a read lock on the simulation, so `replace` would
+    // fail with `Busy` anyway. Bail out before the expensive file read and
+    // deserialization instead of discovering the conflict after the work.
+    if pending_jobs.any_running() {
+        status.message = Some("Cannot load while a save is in progress.".to_string());
+        status.kind = SaveLoadStatusKind::Error;
+        status.last_completed_slot = None;
+        return false;
+    }
+
     let path = slot_path(config, slot);
     if !path.is_file() {
         status.message = Some(format!(
@@ -597,7 +614,7 @@ mod tests {
 
     #[test]
     fn replace_fails_fast_while_save_reader_is_active() {
-        let resource = SimResource::new(factory_sim::Simulation::new_test_world(1));
+        let mut resource = SimResource::new(factory_sim::Simulation::new_test_world(1));
         let before_hash = resource.read().state_hash();
         let handle = resource.clone_handle();
         let guard = handle.read().expect("save reader should acquire the lock");
