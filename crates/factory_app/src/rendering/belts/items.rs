@@ -188,11 +188,7 @@ fn sync_belt_item_entity_pool(
     let visible_items = &scratch.visible_items;
     let item_count = visible_items.len();
     scratch.visible_by_key.clear();
-    if scratch.visible_by_key.capacity() < item_count {
-        scratch
-            .visible_by_key
-            .reserve(item_count - scratch.visible_by_key.capacity());
-    }
+    scratch.visible_by_key.reserve(item_count);
     for (index, item) in visible_items.iter().enumerate() {
         scratch.visible_by_key.insert(item.key, index);
     }
