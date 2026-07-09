@@ -100,7 +100,7 @@ fn zero_inventory_selection_stays_armed_for_ghost_planning() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
     let selection = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         let selection = BuildSelection {
             prototype_id: entity_id_by_name(sim.catalog(), "transport_belt"),
             item_id: item_id_by_name(sim.catalog(), "transport_belt"),
@@ -129,7 +129,7 @@ fn ghost_commands_flow_through_the_fixed_tick() {
     app.update();
 
     let (furnace, x, y) = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
         let (x, y) = first_buildable_rect(sim, furnace);
         (furnace, x, y)
@@ -145,7 +145,7 @@ fn ghost_commands_flow_through_the_fixed_tick() {
     app.update();
 
     let ghost_id = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         assert_eq!(sim.construction().ghost_count(), 1);
         sim.construction()
             .ghost_at(x, y)
@@ -157,7 +157,7 @@ fn ghost_commands_flow_through_the_fixed_tick() {
         .write_message(SimCommandRequest(SimCommand::BuildGhost { ghost_id }));
     app.update();
 
-    let sim = &app.world().resource::<SimResource>().sim;
+    let sim = &app.world().resource::<SimResource>().read();
     assert_eq!(sim.construction().ghost_count(), 0);
     assert!(
         sim.entities().occupancy().entity_at(x, y).is_some(),

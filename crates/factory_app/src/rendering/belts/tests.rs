@@ -125,7 +125,7 @@ fn belt_item_rendering_reuses_pooled_sprite_and_label_entities() {
         .expect("empty belt should accept item");
 
     let mut app = App::new();
-    app.insert_resource(SimResource { sim })
+    app.insert_resource(SimResource::new(sim))
         .insert_resource(visible_entity_ids([belt_id]))
         .init_resource::<RenderDetail>()
         .init_resource::<BeltItemRenderPool>()
@@ -179,7 +179,7 @@ fn belt_item_rendering_reuses_active_entities_when_sim_ticks() {
         .expect("empty belt should accept item");
 
     let mut app = App::new();
-    app.insert_resource(SimResource { sim })
+    app.insert_resource(SimResource::new(sim))
         .insert_resource(visible_entity_ids([belt_id]))
         .init_resource::<RenderDetail>()
         .init_resource::<BeltItemRenderPool>()
@@ -191,7 +191,10 @@ fn belt_item_rendering_reuses_active_entities_when_sim_ticks() {
     let (first_label, first_label_translation) =
         active_belt_item_label_state(&mut app).expect("label should spawn");
 
-    app.world_mut().resource_mut::<SimResource>().sim.tick();
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .write_for_tests()
+        .tick();
     app.update();
 
     let (second_sprite, second_sprite_translation) =

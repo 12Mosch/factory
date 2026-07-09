@@ -181,26 +181,26 @@ pub(crate) fn update_container_slot_text(
     open_container: Res<OpenContainer>,
     mut texts: Query<(&ContainerSlotText, &mut Text)>,
 ) {
+    let sim = sim.read();
     let container_inventory = open_container
         .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::inventory(&sim.sim, entity_id).ok());
-    let burner_drill_state = open_container.entity_id.and_then(|entity_id| {
-        factory_sim::entity_access::burner_drill_state(&sim.sim, entity_id).ok()
-    });
+        .and_then(|entity_id| factory_sim::entity_access::inventory(&sim, entity_id).ok());
+    let burner_drill_state = open_container
+        .entity_id
+        .and_then(|entity_id| factory_sim::entity_access::burner_drill_state(&sim, entity_id).ok());
     let furnace_state = open_container
         .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::furnace_state(&sim.sim, entity_id).ok());
+        .and_then(|entity_id| factory_sim::entity_access::furnace_state(&sim, entity_id).ok());
     let boiler_state = open_container
         .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::boiler_state(&sim.sim, entity_id).ok());
-    let assembler_state = open_container.entity_id.and_then(|entity_id| {
-        factory_sim::entity_access::assembler_state(&sim.sim, entity_id).ok()
-    });
+        .and_then(|entity_id| factory_sim::entity_access::boiler_state(&sim, entity_id).ok());
+    let assembler_state = open_container
+        .entity_id
+        .and_then(|entity_id| factory_sim::entity_access::assembler_state(&sim, entity_id).ok());
 
     for (marker, mut text) in &mut texts {
         let stack = match marker.panel {
             InventoryPanel::Player => sim
-                .sim
                 .player_inventory()
                 .slots
                 .get(marker.slot_index)
@@ -246,7 +246,7 @@ pub(crate) fn update_container_slot_text(
                 .and_then(|slot| *slot),
         };
         text.0 = stack
-            .map(|stack| format_item_stack(stack, sim.sim.catalog()))
+            .map(|stack| format_item_stack(stack, sim.catalog()))
             .unwrap_or_default();
     }
 }

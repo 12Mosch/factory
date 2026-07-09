@@ -68,7 +68,7 @@ fn default_hotbar_holds_first_ten_buildables() {
     app.update();
 
     let expected = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         buildable_prototypes(sim.catalog())
             .into_iter()
             .take(HOTBAR_SLOT_COUNT)
@@ -111,7 +111,7 @@ fn number_key_selects_hotbar_slot_without_placing() {
     let before_entities = app
         .world()
         .resource::<SimResource>()
-        .sim
+        .read()
         .entities()
         .placed_len();
     let (slot_index, selection) = first_available_hotbar_slot(&app);
@@ -126,7 +126,7 @@ fn number_key_selects_hotbar_slot_without_placing() {
     assert_eq!(
         app.world()
             .resource::<SimResource>()
-            .sim
+            .read()
             .entities()
             .placed_len(),
         before_entities
@@ -195,7 +195,7 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
     let (assembler_entity, assembler_item, automation) = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         let assembler_entity = entity_id_by_name(sim.catalog(), "assembling_machine");
         let assembler_item = item_id_by_name(sim.catalog(), "assembling_machine");
         let automation = technology_id_by_name(sim.catalog(), "automation");
@@ -207,10 +207,15 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
         item_id: assembler_item,
     });
     {
-        let catalog = app.world().resource::<SimResource>().sim.catalog().clone();
+        let catalog = app
+            .world()
+            .resource::<SimResource>()
+            .read()
+            .catalog()
+            .clone();
         app.world_mut()
             .resource_mut::<SimResource>()
-            .sim
+            .write_for_tests()
             .player_inventory_mut()
             .insert(&catalog, assembler_item, 1)
             .expect("test inventory should accept assembler");
@@ -233,13 +238,12 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
         .release(hotbar_key_for_slot(slot_index));
     app.update();
     {
-        let mut sim = app.world_mut().resource_mut::<SimResource>();
-        complete_research_by_name(&mut sim.sim, "logistics");
-        sim.sim
-            .select_research(automation)
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        complete_research_by_name(&mut sim, "logistics");
+        sim.select_research(automation)
             .expect("automation should be selectable");
-        sim.sim
-            .add_research_units(20)
+        sim.add_research_units(20)
             .expect("automation should complete");
     }
     app.world_mut()

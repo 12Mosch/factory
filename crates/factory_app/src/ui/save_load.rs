@@ -91,14 +91,21 @@ pub(crate) fn handle_save_load_buttons(
             SaveSlotAction::Save => {
                 request_save(
                     button.slot,
-                    &load_state.sim.sim,
+                    &load_state.sim,
                     &config,
                     &mut pending_jobs,
                     &mut status,
+                    &mut load_state.metrics,
                 );
             }
             SaveSlotAction::Load => {
-                load_slot(button.slot, &config, &mut status, &mut load_state);
+                load_slot(
+                    button.slot,
+                    &config,
+                    &pending_jobs,
+                    &mut status,
+                    &mut load_state,
+                );
             }
         }
     }

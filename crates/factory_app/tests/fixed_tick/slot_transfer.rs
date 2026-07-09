@@ -272,19 +272,20 @@ fn slot_click_error_message_formats_typed_transfer_errors() {
 fn slot_click_failure_updates_inventory_transfer_feedback() {
     let mut app = super::common::test_app(std::time::Duration::from_millis(16));
     let furnace = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         entity_id_by_name(sim.catalog(), "stone_furnace")
     };
     let inserter = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         item_id_by_name(sim.catalog(), "inserter")
     };
     let entity_id = {
-        let mut sim = app.world_mut().resource_mut::<SimResource>();
-        let (x, y) = first_buildable_rect(&sim.sim, furnace);
-        let entity_id = place_test_entity(&mut sim.sim, furnace, x, y);
-        *sim.sim.player_inventory_mut() = Inventory::player();
-        sim.sim.player_inventory_mut().slots[2] = Some(ItemStack {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let (x, y) = first_buildable_rect(&sim, furnace);
+        let entity_id = place_test_entity(&mut sim, furnace, x, y);
+        *sim.player_inventory_mut() = Inventory::player();
+        sim.player_inventory_mut().slots[2] = Some(ItemStack {
             item_id: inserter,
             count: 1,
         });

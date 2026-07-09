@@ -52,15 +52,15 @@ fn zero_duration_render_pause_does_not_advance_or_corrupt_sim() {
 #[test]
 fn input_movement_changes_player_position_under_fixed_ticks() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
-    let before = app.world().resource::<SimResource>().sim.player();
-    let before_tick = app.world().resource::<SimResource>().sim.tick_count();
+    let before = app.world().resource::<SimResource>().read().player();
+    let before_tick = app.world().resource::<SimResource>().read().tick_count();
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyD);
     run_until_tick(&mut app, before_tick + 1);
 
-    let after = app.world().resource::<SimResource>().sim.player();
+    let after = app.world().resource::<SimResource>().read().player();
     assert!(after.x_fixed() > before.x_fixed());
     assert_eq!(after.y_fixed(), before.y_fixed());
 }

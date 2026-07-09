@@ -45,7 +45,7 @@ pub(crate) fn handle_full_map_buttons(
 
     for interaction in &mut recenter_buttons {
         if *interaction == Interaction::Pressed {
-            let (x, y) = sim.sim.player().position_tiles();
+            let (x, y) = sim.read().player().position_tiles();
             state.center_tile = Vec2::new(x, y);
             state.follow_player = true;
         }

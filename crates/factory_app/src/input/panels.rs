@@ -102,7 +102,7 @@ pub(crate) fn handle_panel_input(
             resources.build_state.selected = None;
             resources.open_container.entity_id = None;
             if resources.map.follow_player {
-                let (x, y) = resources.sim.sim.player().position_tiles();
+                let (x, y) = resources.sim.read().player().position_tiles();
                 resources.map.center_tile = Vec2::new(x, y);
             }
         }
@@ -222,7 +222,7 @@ pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResou
         return;
     }
 
-    let (player_x, player_y) = resources.sim.sim.player().position_tiles();
+    let (player_x, player_y) = resources.sim.read().player().position_tiles();
     let player_center = Vec2::new(player_x, player_y);
     if resources.state.follow_player {
         resources.state.center_tile = player_center;

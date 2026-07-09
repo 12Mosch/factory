@@ -20,6 +20,7 @@ pub(crate) fn sync_belt_direction_rendering(
     detail: Res<RenderDetail>,
     mut sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
 ) {
+    let sim = sim.read();
     if !detail.show_belt_directions {
         for (entity, _, _, _) in &mut sprites {
             commands.entity(entity).despawn();
@@ -37,7 +38,7 @@ pub(crate) fn sync_belt_direction_rendering(
         let key = (marker.entity_id, marker.part);
         if visible_ids.contains(&marker.entity_id)
             && let Some((translation, size, color)) =
-                belt_direction_render_state(&sim.sim, marker.entity_id, marker.part)
+                belt_direction_render_state(&sim, marker.entity_id, marker.part)
         {
             seen.insert(key);
             transform.translation = translation;
@@ -49,11 +50,11 @@ pub(crate) fn sync_belt_direction_rendering(
     }
 
     for &entity_id in visible_ids {
-        let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
+        let Some(placed) = sim.entities().placed_entity(entity_id) else {
             continue;
         };
-        if factory_sim::entity_access::belt_segment(&sim.sim, placed.id).is_err()
-            && factory_sim::entity_access::splitter_state(&sim.sim, placed.id).is_err()
+        if factory_sim::entity_access::belt_segment(&sim, placed.id).is_err()
+            && factory_sim::entity_access::splitter_state(&sim, placed.id).is_err()
         {
             continue;
         }
@@ -65,7 +66,7 @@ pub(crate) fn sync_belt_direction_rendering(
             }
 
             let Some((translation, size, color)) =
-                belt_direction_render_state(&sim.sim, placed.id, part)
+                belt_direction_render_state(&sim, placed.id, part)
             else {
                 continue;
             };

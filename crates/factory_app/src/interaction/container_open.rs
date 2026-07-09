@@ -63,10 +63,10 @@ pub(crate) fn handle_container_open_input(
     });
     if shift_held
         && let Some((x, y)) = cursor_tile
-        && let Some(entity_id) = state.sim.sim.entities().occupancy().entity_at(x, y)
+        && let Some(entity_id) = state.sim.read().entities().occupancy().entity_at(x, y)
         && state
             .sim
-            .sim
+            .read()
             .construction()
             .is_marked_for_deconstruction(entity_id)
     {
@@ -74,7 +74,7 @@ pub(crate) fn handle_container_open_input(
     }
 
     state.open_container.entity_id =
-        opened_container_after_world_click(&state.sim.sim, cursor_tile);
+        opened_container_after_world_click(&state.sim.read(), cursor_tile);
 }
 
 pub(crate) fn handle_container_close_input(

@@ -198,7 +198,7 @@ pub(crate) fn handle_planner_drag(
             state.commands.write(SimCommandRequest(command));
         }
         PlannerTool::Copy => {
-            match state.sim.sim.capture_blueprint(
+            match state.sim.read().capture_blueprint(
                 CLIPBOARD_BLUEPRINT_NAME,
                 rect.min_x,
                 rect.min_y,
@@ -226,7 +226,7 @@ pub(crate) fn handle_planner_drag(
         PlannerTool::CaptureBlueprint => {
             let name = format!(
                 "Blueprint {}",
-                state.sim.sim.construction().blueprints().len() + 1
+                state.sim.read().construction().blueprints().len() + 1
             );
             state
                 .commands
@@ -333,7 +333,7 @@ pub(crate) fn handle_ghost_click(
         return;
     };
 
-    if let Some(ghost) = state.sim.sim.construction().ghost_at(x, y) {
+    if let Some(ghost) = state.sim.read().construction().ghost_at(x, y) {
         if left {
             state
                 .commands
@@ -352,10 +352,10 @@ pub(crate) fn handle_ghost_click(
 
     if left
         && shift_pressed(&keyboard)
-        && let Some(entity_id) = state.sim.sim.entities().occupancy().entity_at(x, y)
+        && let Some(entity_id) = state.sim.read().entities().occupancy().entity_at(x, y)
         && state
             .sim
-            .sim
+            .read()
             .construction()
             .is_marked_for_deconstruction(entity_id)
     {

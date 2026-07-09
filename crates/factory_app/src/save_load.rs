@@ -1,11 +1,11 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use factory_sim::{SaveLoadError, Simulation, load_from_bytes, save_to_bytes};
+use factory_sim::{SaveLoadError, load_from_bytes, save_to_bytes};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use crate::build::resources::BuildPlacementState;
 use crate::constants::SIM_TICKS_PER_SECOND;
@@ -13,8 +13,8 @@ use crate::map::resources::{MapTextureCache, MapViewState};
 use crate::rendering::map_texture::MapTextureUploadQueue;
 use crate::rendering::resource_cells::ResourceRenderCache;
 use crate::rendering::resources::VisibleEntityIds;
-use crate::resources::SimResource;
-use crate::simulation::{SimCommandRequest, SimCommandResult};
+use crate::resources::{SimAccessError, SimResource};
+use crate::simulation::{SimCommandBacklog, SimCommandRequest, SimCommandResult};
 use crate::ui::resources::OpenContainer;
 
 pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [
@@ -135,7 +135,26 @@ struct SaveJob {
     slot: SaveSlotKind,
     explicit: bool,
     pollable: bool,
-    handle: JoinHandle<Result<(), String>>,
+    handle: JoinHandle<Result<SaveJobOutcome, String>>,
+}
+
+#[derive(Debug)]
+struct SaveJobOutcome {
+    lock_wait_ms: f64,
+    serialize_ms: f64,
+    write_ms: f64,
+    total_ms: f64,
+    bytes: usize,
+}
+
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct SaveLoadMetrics {
+    pub last_request_submission_ms: f64,
+    pub last_worker_lock_wait_ms: f64,
+    pub last_serialize_ms: f64,
+    pub last_write_ms: f64,
+    pub last_total_ms: f64,
+    pub last_bytes: usize,
 }
 
 #[derive(Resource, Default)]
@@ -149,7 +168,7 @@ pub struct PresentationReloadToken {
 }
 
 pub(crate) fn initialize_autosave_tick(sim: Res<SimResource>, mut autosave: ResMut<AutosaveState>) {
-    autosave.last_autosave_tick = sim.sim.tick_count();
+    autosave.last_autosave_tick = sim.read().tick_count();
 }
 
 pub fn slot_path(config: &SaveLoadConfig, slot: SaveSlotKind) -> PathBuf {
@@ -191,12 +210,13 @@ pub fn slot_modified_label(config: &SaveLoadConfig, slot: SaveSlotKind) -> Strin
 
 pub fn request_save(
     slot: SaveSlotKind,
-    sim: &Simulation,
+    sim: &SimResource,
     config: &SaveLoadConfig,
     pending_jobs: &mut PendingSaveJobs,
     status: &mut SaveLoadStatus,
+    metrics: &mut SaveLoadMetrics,
 ) -> bool {
-    request_save_with_status(slot, sim, config, pending_jobs, status, true)
+    request_save_with_status(slot, sim, config, pending_jobs, status, metrics, true)
 }
 
 pub(crate) fn handle_save_load_shortcuts(
@@ -213,21 +233,29 @@ pub(crate) fn handle_save_load_shortcuts(
     if keyboard.just_pressed(KeyCode::F5) {
         request_save(
             SaveSlotKind::Quick,
-            &load_state.sim.sim,
+            &load_state.sim,
             &config,
             &mut pending_jobs,
             &mut status,
+            &mut load_state.metrics,
         );
     }
 
     if keyboard.just_pressed(KeyCode::F9) {
-        load_slot(SaveSlotKind::Quick, &config, &mut status, &mut load_state);
+        load_slot(
+            SaveSlotKind::Quick,
+            &config,
+            &pending_jobs,
+            &mut status,
+            &mut load_state,
+        );
     }
 }
 
 pub(crate) fn poll_save_jobs(
     mut pending_jobs: ResMut<PendingSaveJobs>,
     mut status: ResMut<SaveLoadStatus>,
+    mut metrics: ResMut<SaveLoadMetrics>,
 ) {
     let mut index = 0;
     while index < pending_jobs.jobs.len() {
@@ -247,7 +275,12 @@ pub(crate) fn poll_save_jobs(
             .join()
             .unwrap_or_else(|_| Err("save worker panicked".to_string()));
         match result {
-            Ok(()) => {
+            Ok(outcome) => {
+                metrics.last_worker_lock_wait_ms = outcome.lock_wait_ms;
+                metrics.last_serialize_ms = outcome.serialize_ms;
+                metrics.last_write_ms = outcome.write_ms;
+                metrics.last_total_ms = outcome.total_ms;
+                metrics.last_bytes = outcome.bytes;
                 if job.explicit || status.kind != SaveLoadStatusKind::Error {
                     status.message = Some(format!("{} saved.", slot_display_name(job.slot)));
                     status.kind = SaveLoadStatusKind::Success;
@@ -272,8 +305,9 @@ pub(crate) fn run_autosave(
     mut pending_jobs: ResMut<PendingSaveJobs>,
     mut autosave: ResMut<AutosaveState>,
     mut status: ResMut<SaveLoadStatus>,
+    mut metrics: ResMut<SaveLoadMetrics>,
 ) {
-    let tick = sim.sim.tick_count();
+    let tick = sim.read().tick_count();
     if tick
         < autosave
             .last_autosave_tick
@@ -286,10 +320,11 @@ pub(crate) fn run_autosave(
     }
     if request_save_with_status(
         SaveSlotKind::Auto,
-        &sim.sim,
+        &sim,
         &config,
         &mut pending_jobs,
         &mut status,
+        &mut metrics,
         false,
     ) {
         autosave.last_autosave_tick = tick;
@@ -311,14 +346,27 @@ pub(crate) struct LoadState<'w> {
     pub(crate) reload_token: ResMut<'w, PresentationReloadToken>,
     pub(crate) pending_commands: ResMut<'w, Messages<SimCommandRequest>>,
     pub(crate) pending_results: ResMut<'w, Messages<SimCommandResult>>,
+    pub(crate) command_backlog: ResMut<'w, SimCommandBacklog>,
+    pub(crate) metrics: ResMut<'w, SaveLoadMetrics>,
 }
 
 pub(crate) fn load_slot(
     slot: SaveSlotKind,
     config: &SaveLoadConfig,
+    pending_jobs: &PendingSaveJobs,
     status: &mut SaveLoadStatus,
     state: &mut LoadState,
 ) -> bool {
+    // A save worker holds a read lock on the simulation, so `replace` would
+    // fail with `Busy` anyway. Bail out before the expensive file read and
+    // deserialization instead of discovering the conflict after the work.
+    if pending_jobs.any_running() {
+        status.message = Some("Cannot load while a save is in progress.".to_string());
+        status.kind = SaveLoadStatusKind::Error;
+        status.last_completed_slot = None;
+        return false;
+    }
+
     let path = slot_path(config, slot);
     if !path.is_file() {
         status.message = Some(format!(
@@ -346,13 +394,25 @@ pub(crate) fn load_slot(
     match load_from_bytes(&bytes) {
         Ok(loaded) => {
             let tick = loaded.tick_count();
-            state.sim.sim = loaded;
+            let (player_x, player_y) = loaded.player().position_tiles();
+            if let Err(error) = state.sim.replace(loaded) {
+                status.message = Some(match error {
+                    SimAccessError::Busy => "Cannot load while a save is in progress.".to_string(),
+                    SimAccessError::Poisoned => {
+                        "Cannot load: simulation access failed.".to_string()
+                    }
+                });
+                status.kind = SaveLoadStatusKind::Error;
+                status.last_completed_slot = None;
+                return false;
+            }
             // Commands queued against the previous world must not apply to
             // the loaded one, and results already produced by this frame's
             // fixed tick (which ran before this `Update` system) must not be
             // read as feedback for the loaded world either.
             state.pending_commands.clear();
             state.pending_results.clear();
+            state.command_backlog.0.clear();
             state.build_state.selected = None;
             state.build_state.last_status = Default::default();
             state.open_container.entity_id = None;
@@ -360,7 +420,6 @@ pub(crate) fn load_slot(
             state.autosave.last_autosave_tick = tick;
             *state.map_cache = MapTextureCache::default();
             state.map_uploads.commands.clear();
-            let (player_x, player_y) = state.sim.sim.player().position_tiles();
             state.map_view.center_tile = Vec2::new(player_x, player_y);
             state.map_view.zoom = 1.0;
             state.map_view.follow_player = true;
@@ -405,10 +464,11 @@ pub fn format_save_load_error(error: SaveLoadError) -> String {
 
 fn request_save_with_status(
     slot: SaveSlotKind,
-    sim: &Simulation,
+    sim: &SimResource,
     config: &SaveLoadConfig,
     pending_jobs: &mut PendingSaveJobs,
     status: &mut SaveLoadStatus,
+    metrics: &mut SaveLoadMetrics,
     explicit: bool,
 ) -> bool {
     if !matches!(
@@ -431,11 +491,29 @@ fn request_save_with_status(
         return false;
     }
 
-    let sim = sim.clone();
+    let submission_start = Instant::now();
+    let sim = sim.clone_handle();
     let path = slot_path(config, slot);
     let handle = thread::spawn(move || {
+        let worker_start = Instant::now();
+        let lock_start = Instant::now();
+        let sim = sim
+            .read()
+            .map_err(|_| "simulation lock poisoned".to_string())?;
+        let lock_wait_ms = lock_start.elapsed().as_secs_f64() * 1000.0;
+        let serialize_start = Instant::now();
         let bytes = save_to_bytes(&sim).map_err(|error| format!("{error:?}"))?;
-        write_save_bytes(&path, &bytes).map_err(|error| error.to_string())
+        let serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
+        drop(sim);
+        let write_start = Instant::now();
+        write_save_bytes(&path, &bytes).map_err(|error| error.to_string())?;
+        Ok(SaveJobOutcome {
+            lock_wait_ms,
+            serialize_ms,
+            write_ms: write_start.elapsed().as_secs_f64() * 1000.0,
+            total_ms: worker_start.elapsed().as_secs_f64() * 1000.0,
+            bytes: bytes.len(),
+        })
     });
     pending_jobs.jobs.push(SaveJob {
         slot,
@@ -443,6 +521,7 @@ fn request_save_with_status(
         pollable: false,
         handle,
     });
+    metrics.last_request_submission_ms = submission_start.elapsed().as_secs_f64() * 1000.0;
 
     if explicit {
         status.message = Some(format!("Saving {}...", slot_display_name(slot)));
@@ -526,5 +605,24 @@ fn modified_time_label(modified: SystemTime) -> String {
         format!("Saved {} hr ago", seconds / (60 * 60))
     } else {
         format!("Saved {} days ago", seconds / (24 * 60 * 60))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replace_fails_fast_while_save_reader_is_active() {
+        let mut resource = SimResource::new(factory_sim::Simulation::new_test_world(1));
+        let before_hash = resource.read().state_hash();
+        let handle = resource.clone_handle();
+        let guard = handle.read().expect("save reader should acquire the lock");
+
+        let result = resource.replace(factory_sim::Simulation::new_test_world(2));
+
+        assert_eq!(result, Err(SimAccessError::Busy));
+        drop(guard);
+        assert_eq!(resource.read().state_hash(), before_hash);
     }
 }

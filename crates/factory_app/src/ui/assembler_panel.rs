@@ -223,7 +223,7 @@ pub(crate) fn handle_assembler_recipe_button_clicks(
     let Some(entity_id) = open_container.entity_id else {
         return;
     };
-    if open_machine_kind(&sim.sim, entity_id) != Some(OpenMachineKind::Assembler) {
+    if open_machine_kind(&sim.read(), entity_id) != Some(OpenMachineKind::Assembler) {
         return;
     }
 
@@ -246,7 +246,7 @@ pub(crate) fn update_assembler_detail_text(
 ) {
     let details = open_container
         .entity_id
-        .and_then(|entity_id| format_assembler_detail_text(&sim.sim, entity_id))
+        .and_then(|entity_id| format_assembler_detail_text(&sim.read(), entity_id))
         .unwrap_or_else(AssemblerDetailText::empty);
 
     for (mut text, is_recipe, is_ingredients, is_products, is_progress) in &mut texts {
@@ -270,7 +270,7 @@ pub(crate) fn update_assembler_recipe_button_colors(
     let Some(entity_id) = open_container.entity_id else {
         return;
     };
-    let selected_recipe = factory_sim::entity_access::assembler_state(&sim.sim, entity_id)
+    let selected_recipe = factory_sim::entity_access::assembler_state(&sim.read(), entity_id)
         .ok()
         .and_then(|state| state.selected_recipe);
 
@@ -278,7 +278,7 @@ pub(crate) fn update_assembler_recipe_button_colors(
         color.0 = if selected_recipe == Some(button.recipe_id) {
             assembler_recipe_button_selected_color()
         } else if sim
-            .sim
+            .read()
             .can_select_assembler_recipe(entity_id, button.recipe_id)
             .unwrap_or(false)
         {

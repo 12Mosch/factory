@@ -58,16 +58,20 @@ pub(crate) fn update_debug_overlay(
     let frame_ms = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
         .and_then(|diagnostic| diagnostic.smoothed());
-    let counts = sim.sim.counts();
+    let sim_read = sim.read();
+    let counts = sim_read.counts();
+    let tick = sim_read.tick_count();
+    let power = sim_read.power_summary();
+    drop(sim_read);
     let overlay_text = format_debug_overlay(DebugOverlaySnapshot {
-        tick: sim.sim.tick_count(),
+        tick,
         ups: stats.ups,
         fps,
         frame_ms,
         sim_profile: &sim_profile,
         render_sync: &render_sync,
         counts,
-        power: sim.sim.power_summary(),
+        power,
     });
 
     for mut text in &mut overlay {
@@ -176,6 +180,7 @@ mod tests {
                 ..default()
             },
             rolling_average_sim_tick_ms: 1.25,
+            save_blocked_fixed_ticks: 0,
         };
         let mut render_sync = RenderSyncStats::default();
         render_sync.record_player(Duration::from_micros(10));

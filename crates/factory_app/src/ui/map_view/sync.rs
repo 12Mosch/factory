@@ -43,7 +43,7 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
     let Some(map_bounds) = surface_cache.bounds else {
         return;
     };
-    let player = params.sim.sim.player();
+    let player = params.sim.read().player();
     let (player_x, player_y) = player.position_tiles();
     let crop_bounds = minimap_crop_bounds(map_bounds, Vec2::new(player_x, player_y));
     let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
@@ -71,7 +71,7 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
                 crop_bounds,
                 image_size: Vec2::splat(MINIMAP_CONTENT_SIZE),
                 player_position: Vec2::new(player_x, player_y),
-                sim: &params.sim.sim,
+                sim: &params.sim.read(),
                 settings: &params.settings,
                 layer: MapLayer::Surface,
                 camera_rect,
@@ -168,7 +168,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
         *border = BorderColor::all(layer_button_border_color(selected));
     }
 
-    let (player_x, player_y) = params.sim.sim.player().position_tiles();
+    let (player_x, player_y) = params.sim.read().player().position_tiles();
     let camera_rect = camera_tile_rect(&params.cameras);
     let chunk_cursor = fullscreen_cursor_chunk(crop_bounds, &params.windows, &params.image_layout);
     for overlay_root in &params.overlay_roots {
@@ -179,7 +179,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
                 crop_bounds,
                 image_size: display_size,
                 player_position: Vec2::new(player_x, player_y),
-                sim: &params.sim.sim,
+                sim: &params.sim.read(),
                 settings: &params.settings,
                 layer: params.state.selected_layer,
                 camera_rect,

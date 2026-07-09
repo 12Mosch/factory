@@ -92,13 +92,14 @@ pub(crate) fn sync_construction_rendering(
     mut ghost_sprites: GhostSpriteQuery,
     mut overlays: DeconstructionOverlayQuery,
 ) {
-    let revisions = (visible.revision, sim.sim.entity_topology_revision());
+    let sim = sim.read();
+    let revisions = (visible.revision, sim.entity_topology_revision());
     if render_state.synced == Some(revisions) {
         return;
     }
     render_state.synced = Some(revisions);
 
-    let construction = sim.sim.construction();
+    let construction = sim.construction();
     let (visible_ghosts, visible_marks) = match visible.tile_bounds {
         Some(bounds) => {
             let max_x = bounds.min_x + bounds.width as i32 - 1;
@@ -106,7 +107,6 @@ pub(crate) fn sync_construction_rendering(
             let ghosts =
                 construction.ghost_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y);
             let marks: HashSet<EntityId> = sim
-                .sim
                 .entities()
                 .occupancy()
                 .entity_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y)
@@ -125,7 +125,7 @@ pub(crate) fn sync_construction_rendering(
             .then(|| construction.ghost(marker.ghost_id))
             .flatten();
         let style = ghost.and_then(|ghost| {
-            entity_prototype_visual_style(sim.sim.catalog(), ghost.prototype_id, ghost.direction)
+            entity_prototype_visual_style(sim.catalog(), ghost.prototype_id, ghost.direction)
         });
         match (ghost, style) {
             (Some(ghost), Some(style)) => {
@@ -145,7 +145,7 @@ pub(crate) fn sync_construction_rendering(
             continue;
         };
         let Some(style) =
-            entity_prototype_visual_style(sim.sim.catalog(), ghost.prototype_id, ghost.direction)
+            entity_prototype_visual_style(sim.catalog(), ghost.prototype_id, ghost.direction)
         else {
             continue;
         };
@@ -162,7 +162,7 @@ pub(crate) fn sync_construction_rendering(
     for (entity, marker, mut transform, mut sprite) in &mut overlays {
         let placed = visible_marks
             .contains(&marker.entity_id)
-            .then(|| sim.sim.entities().placed_entity(marker.entity_id))
+            .then(|| sim.entities().placed_entity(marker.entity_id))
             .flatten();
         match placed {
             Some(placed) => {
@@ -178,7 +178,7 @@ pub(crate) fn sync_construction_rendering(
         if seen_marks.contains(&entity_id) {
             continue;
         }
-        let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
+        let Some(placed) = sim.entities().placed_entity(entity_id) else {
             continue;
         };
         commands.spawn((
@@ -294,7 +294,8 @@ pub(crate) fn update_paste_preview(
         return;
     };
 
-    let catalog = sim.sim.catalog();
+    let sim = sim.read();
+    let catalog = sim.catalog();
     let mut entries = blueprint.entities.iter().filter_map(|entity| {
         let style = entity_prototype_visual_style(catalog, entity.prototype_id, entity.direction)?;
         let prototype = catalog.entity(entity.prototype_id)?;

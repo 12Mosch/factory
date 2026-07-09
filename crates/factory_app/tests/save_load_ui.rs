@@ -9,7 +9,8 @@ use factory_app::rendering::resource_cells::ResourceRenderCache;
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
     LOAD_SAVE_SLOTS, MANUAL_SAVE_SLOTS, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig,
-    SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState, SaveSlotKind, slot_path,
+    SaveLoadMetrics, SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState,
+    SaveSlotKind, slot_path,
 };
 use factory_app::ui::resources::OpenContainer;
 use factory_app::ui::save_load::{SaveSlotAction, SaveSlotButton};
@@ -102,8 +103,8 @@ fn manual_load_button_restores_slot_file() {
 fn version_mismatch_reports_clear_error_and_keeps_current_sim() {
     let mut app = test_app(Duration::ZERO, "version_mismatch");
     let before = sim_tick_and_hash(&app);
-    let mut bytes =
-        save_to_bytes(&app.world().resource::<SimResource>().sim).expect("current sim should save");
+    let mut bytes = save_to_bytes(&app.world().resource::<SimResource>().read())
+        .expect("current sim should save");
     let found_version = SAVE_VERSION + 1;
     bytes[8..12].copy_from_slice(&found_version.to_le_bytes());
     write_slot_bytes(&app, SaveSlotKind::Manual(1), &bytes);
@@ -245,14 +246,36 @@ fn freeze_time(app: &mut App) {
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
 }
 
+#[test]
+#[ignore = "measurement harness"]
+fn save_request_latency_benchmark() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "save_request_latency");
+    run_until_tick(&mut app, 120);
+    freeze_time(&mut app);
+
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    let submission_ms = app
+        .world()
+        .resource::<SaveLoadMetrics>()
+        .last_request_submission_ms;
+    drain_save_jobs(&mut app);
+    let metrics = app.world().resource::<SaveLoadMetrics>();
+    println!(
+        "save_request_latency_benchmark: submission={submission_ms:.3} ms total={:.3} ms bytes={}",
+        metrics.last_total_ms, metrics.last_bytes
+    );
+    assert!(metrics.last_bytes > 0);
+}
+
 fn run_until_tick(app: &mut App, target_tick: u64) {
-    while app.world().resource::<SimResource>().sim.tick_count() < target_tick {
+    while app.world().resource::<SimResource>().read().tick_count() < target_tick {
         app.update();
     }
 }
 
 fn sim_tick_and_hash(app: &App) -> (u64, u64) {
-    let sim = &app.world().resource::<SimResource>().sim;
+    let sim = &app.world().resource::<SimResource>().read();
     (sim.tick_count(), sim.state_hash())
 }
 
@@ -297,8 +320,8 @@ fn drain_save_jobs(app: &mut App) {
 }
 
 fn write_slot_save(app: &App, slot: SaveSlotKind) {
-    let bytes =
-        save_to_bytes(&app.world().resource::<SimResource>().sim).expect("current sim should save");
+    let bytes = save_to_bytes(&app.world().resource::<SimResource>().read())
+        .expect("current sim should save");
     write_slot_bytes(app, slot, &bytes);
 }
 

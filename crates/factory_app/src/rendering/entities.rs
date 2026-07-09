@@ -28,14 +28,14 @@ pub(crate) fn update_visible_entity_ids(
     visible: Res<VisibleChunks>,
     mut visible_entity_ids: ResMut<VisibleEntityIds>,
 ) {
-    let entity_topology_revision = sim.sim.entity_topology_revision();
+    let entity_topology_revision = sim.read().entity_topology_revision();
     if visible_entity_ids.visible_revision == visible.revision
         && visible_entity_ids.entity_topology_revision == entity_topology_revision
     {
         return;
     }
 
-    visible_entity_ids.ids = visible_entity_ids_for_chunks(&sim.sim, &visible);
+    visible_entity_ids.ids = visible_entity_ids_for_chunks(&sim.read(), &visible);
     visible_entity_ids.visible_revision = visible.revision;
     visible_entity_ids.entity_topology_revision = entity_topology_revision;
 }
@@ -47,6 +47,7 @@ pub(crate) fn sync_placed_entity_rendering(
     mut visual_assets: VisualAssets,
     mut sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
 ) {
+    let sim = sim.read();
     if !visible_entity_ids.is_changed() {
         return;
     }
@@ -56,10 +57,9 @@ pub(crate) fn sync_placed_entity_rendering(
 
     for (entity, marker, mut transform, mut sprite) in &mut sprites {
         if visible_ids.contains(&marker.entity_id)
-            && let Some(style) = renderable_entity_visual_style(&sim.sim, marker.entity_id)
+            && let Some(style) = renderable_entity_visual_style(&sim, marker.entity_id)
         {
             let placed = sim
-                .sim
                 .entities()
                 .placed_entity(marker.entity_id)
                 .expect("validated renderable entity should still be placed");
@@ -72,10 +72,10 @@ pub(crate) fn sync_placed_entity_rendering(
     }
 
     for &entity_id in visible_ids {
-        let Some(placed) = sim.sim.entities().placed_entity(entity_id) else {
+        let Some(placed) = sim.entities().placed_entity(entity_id) else {
             continue;
         };
-        let Some(style) = renderable_entity_visual_style(&sim.sim, placed.id) else {
+        let Some(style) = renderable_entity_visual_style(&sim, placed.id) else {
             continue;
         };
         if seen.contains(&placed.id) {

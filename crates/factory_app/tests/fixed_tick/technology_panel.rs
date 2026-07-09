@@ -9,7 +9,7 @@ use std::time::Duration;
 fn technology_screen_start_button_updates_research_state() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     let logistics = {
-        let sim = &app.world().resource::<SimResource>().sim;
+        let sim = &app.world().resource::<SimResource>().read();
         technology_id_by_name(sim.catalog(), "logistics")
     };
     {
@@ -32,7 +32,10 @@ fn technology_screen_start_button_updates_research_state() {
     app.update();
 
     assert_eq!(
-        app.world().resource::<SimResource>().sim.active_research(),
+        app.world()
+            .resource::<SimResource>()
+            .read()
+            .active_research(),
         Some(logistics)
     );
 }

@@ -26,15 +26,6 @@ impl From<bincode::Error> for SaveLoadError {
     }
 }
 
-#[derive(Deserialize, Serialize)]
-struct SaveFile {
-    magic: [u8; 8],
-    save_version: u32,
-    prototype_format_version: u32,
-    prototype_hash: u64,
-    snapshot: SimulationSnapshot,
-}
-
 #[derive(Clone, Copy)]
 struct SaveHeader {
     magic: [u8; 8],
@@ -43,8 +34,8 @@ struct SaveHeader {
     prototype_hash: u64,
 }
 
-#[derive(Deserialize, Serialize)]
-struct SimulationSnapshot {
+#[derive(Deserialize)]
+struct SimulationSnapshotOwned {
     tick: u64,
     world_seed: u64,
     prototypes: PrototypeCatalog,
@@ -68,15 +59,17 @@ struct SimulationSnapshot {
 
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
     let prototype_hash = prototype_hash(&sim.world.prototypes);
-    let save_file = SaveFile {
-        magic: SAVE_MAGIC,
-        save_version: SAVE_VERSION,
-        prototype_format_version: PROTOTYPE_FORMAT_VERSION,
-        prototype_hash,
-        snapshot: SimulationSnapshot::from_simulation(sim),
-    };
-
-    bincode::serialize(&save_file).map_err(SaveLoadError::from)
+    let mut bytes = Vec::with_capacity(SAVE_HEADER_LEN);
+    bytes.extend_from_slice(&SAVE_MAGIC);
+    bytes.extend_from_slice(&SAVE_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&PROTOTYPE_FORMAT_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&prototype_hash.to_le_bytes());
+    let snapshot = SimulationSnapshotRef::from_simulation(sim);
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .serialize_into(&mut bytes, &snapshot)
+        .map_err(SaveLoadError::from)?;
+    Ok(bytes)
 }
 
 pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
@@ -104,27 +97,20 @@ pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
         return Err(size_limit_error());
     }
 
-    let snapshot = bincode::DefaultOptions::new()
+    let snapshot: SimulationSnapshotOwned = bincode::DefaultOptions::new()
         .with_fixint_encoding()
         .with_limit(MAX_SNAPSHOT_BYTES)
         .deserialize(snapshot_bytes)
         .map_err(SaveLoadError::from)?;
-    let save_file = SaveFile {
-        magic: header.magic,
-        save_version: header.save_version,
-        prototype_format_version: header.prototype_format_version,
-        prototype_hash: header.prototype_hash,
-        snapshot,
-    };
-    let computed_hash = prototype_hash(&save_file.snapshot.prototypes);
-    if save_file.prototype_hash != computed_hash {
+    let computed_hash = prototype_hash(&snapshot.prototypes);
+    if header.prototype_hash != computed_hash {
         return Err(SaveLoadError::PrototypeHashMismatch {
-            stored: save_file.prototype_hash,
+            stored: header.prototype_hash,
             computed: computed_hash,
         });
     }
 
-    let sim = save_file.snapshot.into_simulation();
+    let sim = snapshot.into_simulation();
     sim.validate_state()
         .map_err(SaveLoadError::InvalidSimulationState)?;
     Ok(sim)
@@ -171,31 +157,56 @@ pub fn prototype_hash(catalog: &PrototypeCatalog) -> u64 {
     hasher.finish()
 }
 
-impl SimulationSnapshot {
-    fn from_simulation(sim: &Simulation) -> Self {
+#[derive(Serialize)]
+struct SimulationSnapshotRef<'a> {
+    tick: u64,
+    world_seed: u64,
+    prototypes: &'a PrototypeCatalog,
+    chunks: &'a BTreeMap<ChunkCoord, Chunk>,
+    chart: &'a ChartState,
+    item_statistics: &'a ItemStatistics,
+    fluid_statistics: &'a FluidStatistics,
+    power_statistics: &'a PowerStatistics,
+    entities: &'a EntityStore,
+    construction: &'a ConstructionState,
+    player: PlayerState,
+    player_inventory: &'a Inventory,
+    manual_mining_progress: Option<ManualMiningProgress>,
+    crafting_queue: &'a CraftingQueue,
+    research: &'a ResearchState,
+    power_summary: PowerSummary,
+    power_networks: &'a Vec<PowerNetworkSnapshot>,
+    entity_power_statuses: &'a BTreeMap<EntityId, EntityPowerStatus>,
+    fluid_networks: &'a Vec<FluidNetworkSnapshot>,
+}
+
+impl<'a> SimulationSnapshotRef<'a> {
+    fn from_simulation(sim: &'a Simulation) -> Self {
         Self {
             tick: sim.tick,
             world_seed: sim.world.seed,
-            prototypes: sim.world.prototypes.clone(),
-            chunks: sim.world.chunks.clone(),
-            chart: sim.chart.clone(),
-            item_statistics: sim.statistics.items.clone(),
-            fluid_statistics: sim.statistics.fluids.clone(),
-            power_statistics: sim.statistics.power.clone(),
-            entities: sim.entities.clone(),
-            construction: sim.construction.clone(),
+            prototypes: &sim.world.prototypes,
+            chunks: &sim.world.chunks,
+            chart: &sim.chart,
+            item_statistics: &sim.statistics.items,
+            fluid_statistics: &sim.statistics.fluids,
+            power_statistics: &sim.statistics.power,
+            entities: &sim.entities,
+            construction: &sim.construction,
             player: sim.player,
-            player_inventory: sim.player_inventory.clone(),
+            player_inventory: &sim.player_inventory,
             manual_mining_progress: sim.manual_mining_progress,
-            crafting_queue: sim.crafting_queue.clone(),
-            research: sim.research.clone(),
+            crafting_queue: &sim.crafting_queue,
+            research: &sim.research,
             power_summary: sim.power.summary,
-            power_networks: sim.power.networks.clone(),
-            entity_power_statuses: sim.power.entity_statuses.clone(),
-            fluid_networks: sim.fluids.networks.clone(),
+            power_networks: &sim.power.networks,
+            entity_power_statuses: &sim.power.entity_statuses,
+            fluid_networks: &sim.fluids.networks,
         }
     }
+}
 
+impl SimulationSnapshotOwned {
     fn into_simulation(self) -> Simulation {
         let mut sim = Simulation {
             tick: self.tick,
@@ -290,6 +301,23 @@ mod tests {
         assert_eq!(sim.tick_count(), loaded.tick_count());
         assert_eq!(sim.seed(), loaded.seed());
         assert_eq!(before_hash, loaded.state_hash());
+    }
+
+    #[test]
+    fn save_header_layout_matches_loader() {
+        let sim = Simulation::new_test_world(42);
+        let bytes = save_to_bytes(&sim).expect("save should serialize");
+
+        assert_eq!(&bytes[..8], &SAVE_MAGIC);
+        assert_eq!(
+            u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+            SAVE_VERSION
+        );
+        assert_eq!(
+            u32::from_le_bytes(bytes[12..16].try_into().unwrap()),
+            PROTOTYPE_FORMAT_VERSION
+        );
+        assert!(load_from_bytes(&bytes).is_ok());
     }
 
     #[test]
