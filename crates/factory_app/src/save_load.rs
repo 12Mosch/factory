@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use crate::build::resources::BuildPlacementState;
 use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::map::resources::{MapTextureCache, MapViewState};
+use crate::rendering::map_texture::MapTextureUploadQueue;
 use crate::rendering::resource_cells::ResourceRenderCache;
 use crate::rendering::resources::VisibleEntityIds;
 use crate::resources::SimResource;
@@ -303,6 +304,7 @@ pub(crate) struct LoadState<'w> {
     pub(crate) build_state: ResMut<'w, BuildPlacementState>,
     pub(crate) open_container: ResMut<'w, OpenContainer>,
     pub(crate) map_cache: ResMut<'w, MapTextureCache>,
+    pub(crate) map_uploads: ResMut<'w, MapTextureUploadQueue>,
     pub(crate) map_view: ResMut<'w, MapViewState>,
     pub(crate) resource_cache: ResMut<'w, ResourceRenderCache>,
     pub(crate) visible_entity_ids: ResMut<'w, VisibleEntityIds>,
@@ -357,6 +359,7 @@ pub(crate) fn load_slot(
             state.window.open = false;
             state.autosave.last_autosave_tick = tick;
             *state.map_cache = MapTextureCache::default();
+            state.map_uploads.commands.clear();
             let (player_x, player_y) = state.sim.sim.player().position_tiles();
             state.map_view.center_tile = Vec2::new(player_x, player_y);
             state.map_view.zoom = 1.0;

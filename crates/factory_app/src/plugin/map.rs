@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use super::AppSet;
 use crate::input::panels::handle_fullscreen_map_input;
 use crate::map::resources::{MapDisplaySettings, MapOverlayMarkers, MapTextureCache, MapViewState};
-use crate::rendering::map_texture::update_map_texture;
+use crate::rendering::map_texture::{register_map_texture_upload_systems, update_map_texture};
 use crate::ui::map_view::{handle_full_map_buttons, sync_full_map_view, sync_minimap};
 
 /// Map texture generation, minimap, and fullscreen map view.
@@ -30,5 +30,7 @@ impl Plugin for MapPlugin {
                         .after(handle_full_map_buttons),
                 ),
             );
+
+        register_map_texture_upload_systems(app);
     }
 }

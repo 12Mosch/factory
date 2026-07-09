@@ -175,6 +175,7 @@ fn load_invalidates_render_caches() {
                 handle: None,
                 bounds: Some(Default::default()),
                 pixels: Some(vec![1, 2, 3, 4]),
+                dirty_regions: Default::default(),
                 painted_chunks: [(
                     ChunkCoord { x: 9, y: -3 },
                     MapChunkPaintState { revealed: true },
