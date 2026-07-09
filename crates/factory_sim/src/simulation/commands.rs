@@ -38,6 +38,56 @@ pub enum SimCommand {
         y: i32,
         direction: Direction,
     },
+    /// Plans an entity as a ghost without consuming items.
+    PlaceGhost {
+        prototype_id: EntityPrototypeId,
+        x: i32,
+        y: i32,
+        direction: Direction,
+    },
+    CancelGhost {
+        ghost_id: GhostId,
+    },
+    /// Manually builds a planned ghost from the player inventory.
+    BuildGhost {
+        ghost_id: GhostId,
+    },
+    /// Deconstruction planner: marks every entity intersecting the tile
+    /// rectangle for deconstruction and cancels ghosts in the area.
+    MarkDeconstruction {
+        min_x: i32,
+        min_y: i32,
+        max_x: i32,
+        max_y: i32,
+    },
+    CancelDeconstruction {
+        min_x: i32,
+        min_y: i32,
+        max_x: i32,
+        max_y: i32,
+    },
+    /// Manually deconstructs a marked entity into the player inventory.
+    DeconstructEntity {
+        entity_id: EntityId,
+    },
+    /// Places ghosts for the given blueprint entries with the blueprint
+    /// origin at `(x, y)`; blocked entries are skipped.
+    PasteBlueprint {
+        entities: Vec<BlueprintEntity>,
+        x: i32,
+        y: i32,
+    },
+    /// Captures the tile rectangle into the blueprint library.
+    SaveBlueprint {
+        name: String,
+        min_x: i32,
+        min_y: i32,
+        max_x: i32,
+        max_y: i32,
+    },
+    DeleteBlueprint {
+        index: usize,
+    },
     BuildRedScienceResearchFixture,
 }
 
@@ -74,6 +124,7 @@ pub enum SimCommandError {
     Research(ResearchError),
     Transfer(SlotTransferError),
     Build(PlayerBuildError),
+    Construction(ConstructionError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -82,6 +133,22 @@ pub enum SimCommandError {
 pub enum SimCommandEffect {
     None,
     EntityPlaced(EntityId),
+    GhostPlaced(GhostId),
+    EntityDeconstructed(EntityId),
+    DeconstructionMarked {
+        marked: usize,
+        ghosts_removed: usize,
+    },
+    DeconstructionCancelled {
+        cancelled: usize,
+    },
+    BlueprintPasted {
+        placed: usize,
+        skipped: usize,
+    },
+    BlueprintSaved {
+        index: usize,
+    },
 }
 
 impl Simulation {
@@ -161,6 +228,88 @@ impl Simulation {
                 )
                 .map_err(SimCommandError::Build)?;
                 Ok(SimCommandEffect::EntityPlaced(entity_id))
+            }
+            SimCommand::PlaceGhost {
+                prototype_id,
+                x,
+                y,
+                direction,
+            } => {
+                let ghost_id = construction_ops::place_ghost(
+                    self,
+                    GhostPlacementRequest {
+                        prototype_id,
+                        x,
+                        y,
+                        direction,
+                        recipe: None,
+                    },
+                )
+                .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::GhostPlaced(ghost_id))
+            }
+            SimCommand::CancelGhost { ghost_id } => {
+                construction_ops::cancel_ghost(self, ghost_id)
+                    .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::BuildGhost { ghost_id } => {
+                let entity_id = construction_ops::build_ghost_from_player_inventory(self, ghost_id)
+                    .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::EntityPlaced(entity_id))
+            }
+            SimCommand::MarkDeconstruction {
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            } => {
+                let (marked, ghosts_removed) = construction_ops::mark_area_for_deconstruction(
+                    self, min_x, min_y, max_x, max_y,
+                );
+                Ok(SimCommandEffect::DeconstructionMarked {
+                    marked,
+                    ghosts_removed,
+                })
+            }
+            SimCommand::CancelDeconstruction {
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            } => {
+                let cancelled = construction_ops::cancel_deconstruction_in_area(
+                    self, min_x, min_y, max_x, max_y,
+                );
+                Ok(SimCommandEffect::DeconstructionCancelled { cancelled })
+            }
+            SimCommand::DeconstructEntity { entity_id } => {
+                construction_ops::deconstruct_marked(self, entity_id)
+                    .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::EntityDeconstructed(entity_id))
+            }
+            SimCommand::PasteBlueprint { ref entities, x, y } => {
+                let (placed, skipped) =
+                    construction_ops::paste_blueprint_ghosts(self, entities, x, y);
+                Ok(SimCommandEffect::BlueprintPasted { placed, skipped })
+            }
+            SimCommand::SaveBlueprint {
+                ref name,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            } => {
+                let index = construction_ops::save_blueprint_from_area(
+                    self, name, min_x, min_y, max_x, max_y,
+                )
+                .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::BlueprintSaved { index })
+            }
+            SimCommand::DeleteBlueprint { index } => {
+                construction_ops::delete_blueprint(self, index)
+                    .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::None)
             }
             SimCommand::BuildRedScienceResearchFixture => {
                 self.build_red_science_research_fixture();

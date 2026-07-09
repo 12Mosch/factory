@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use crate::audio::SoundEvent;
 use crate::build::resources::{
     BuildMenuState, BuildPlacementState, BuildPlacementStatus, BuildSelection, HotbarState,
+    PlannerState,
 };
 use crate::input::build::{select_build_selection, technology_window_open};
 use crate::placement::build::buildable_prototypes;
@@ -87,6 +88,7 @@ pub(crate) struct BuildMenuButtonState<'w> {
     menu: ResMut<'w, BuildMenuState>,
     hotbar: ResMut<'w, HotbarState>,
     build_state: ResMut<'w, BuildPlacementState>,
+    planner: ResMut<'w, PlannerState>,
     open_container: ResMut<'w, OpenContainer>,
     sounds: MessageWriter<'w, SoundEvent>,
 }
@@ -137,6 +139,7 @@ pub(crate) fn handle_build_menu_buttons(
             &state.sim.sim,
             state.technology_window.as_deref(),
             &mut state.build_state,
+            &mut state.planner,
             button.selection,
         ) {
             state.menu.open = false;

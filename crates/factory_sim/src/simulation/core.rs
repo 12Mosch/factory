@@ -28,6 +28,7 @@ impl Simulation {
             world,
             chart: ChartState::default(),
             entities,
+            construction: ConstructionState::default(),
             player,
             player_inventory,
             manual_mining_progress: None,
@@ -121,6 +122,7 @@ impl Simulation {
         self.statistics.fluids.hash(&mut hasher);
         self.statistics.power.hash(&mut hasher);
         self.entities.hash(&mut hasher);
+        self.construction.hash(&mut hasher);
         self.player.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);
         self.manual_mining_progress.hash(&mut hasher);

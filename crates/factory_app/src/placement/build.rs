@@ -1,7 +1,7 @@
 use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{
-    BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview, Direction,
-    PlayerBuildError, Simulation,
+    BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview,
+    ConstructionError, Direction, EntityDestroyError, PlayerBuildError, Simulation,
 };
 
 use crate::build::resources::{BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT};
@@ -132,6 +132,55 @@ pub(crate) fn build_status_from_error(
     }
 }
 
+pub(crate) fn construction_status_from_error(
+    catalog: &PrototypeCatalog,
+    error: ConstructionError,
+) -> BuildPlacementStatus {
+    match error {
+        ConstructionError::Build(BuildError::EntityOccupied { .. }) => {
+            BuildPlacementStatus::CannotPlace("Entity already there".to_string())
+        }
+        ConstructionError::Build(BuildError::TileBlocked { .. }) => {
+            BuildPlacementStatus::CannotPlace("Tile blocked".to_string())
+        }
+        ConstructionError::Build(BuildError::OutsideGeneratedChunks { .. }) => {
+            BuildPlacementStatus::CannotPlace("Outside generated area".to_string())
+        }
+        ConstructionError::Build(_) => {
+            BuildPlacementStatus::CannotPlace("Cannot plan this here".to_string())
+        }
+        ConstructionError::PlayerBuild(error) => build_status_from_error(catalog, error),
+        ConstructionError::Destroy(EntityDestroyError::InsufficientInventory { item_id }) => {
+            BuildPlacementStatus::CannotPlace(format!(
+                "No inventory space for {}",
+                item_display_name(catalog, item_id).unwrap_or_else(|| "item".to_string())
+            ))
+        }
+        ConstructionError::Destroy(_) => {
+            BuildPlacementStatus::CannotPlace("Cannot deconstruct this".to_string())
+        }
+        ConstructionError::EntityLocked { prototype_id } => BuildPlacementStatus::Locked(format!(
+            "{} locked",
+            entity_display_name(catalog, prototype_id).unwrap_or_else(|| "Building".to_string())
+        )),
+        ConstructionError::GhostOccupied { .. } => {
+            BuildPlacementStatus::CannotPlace("Ghost already planned there".to_string())
+        }
+        ConstructionError::MissingGhost(_) => {
+            BuildPlacementStatus::CannotPlace("Ghost no longer exists".to_string())
+        }
+        ConstructionError::NotMarkedForDeconstruction(_) => {
+            BuildPlacementStatus::CannotPlace("Not marked for deconstruction".to_string())
+        }
+        ConstructionError::EmptyBlueprintArea => {
+            BuildPlacementStatus::CannotPlace("Nothing to capture".to_string())
+        }
+        ConstructionError::MissingBlueprint { .. } => {
+            BuildPlacementStatus::CannotPlace("Blueprint no longer exists".to_string())
+        }
+    }
+}
+
 pub(crate) fn build_status_from_preview(
     catalog: &PrototypeCatalog,
     preview: &BuildPlacementPreview,
@@ -166,6 +215,9 @@ pub(crate) fn build_status_from_preview_issue(
         BuildPlacementIssueKind::EntityOccupied { .. } => {
             BuildPlacementStatus::CannotPlace("Entity already there".to_string())
         }
+        BuildPlacementIssueKind::GhostOccupied => {
+            BuildPlacementStatus::CannotPlace("Ghost already planned there".to_string())
+        }
         BuildPlacementIssueKind::PlayerOccupied => {
             BuildPlacementStatus::CannotPlace("Player in the way".to_string())
         }
@@ -195,12 +247,13 @@ fn preview_issue_priority(issue: &BuildPlacementIssue) -> usize {
         BuildPlacementIssueKind::MissingBuildItem { .. } => 3,
         BuildPlacementIssueKind::MissingPrototype(_) => 4,
         BuildPlacementIssueKind::EntityOccupied { .. } => 5,
-        BuildPlacementIssueKind::PlayerOccupied => 6,
-        BuildPlacementIssueKind::TerrainBlocked => 7,
-        BuildPlacementIssueKind::OutsideGeneratedChunks => 8,
-        BuildPlacementIssueKind::MissingRequiredResource => 9,
-        BuildPlacementIssueKind::MissingAdjacentWater => 10,
-        BuildPlacementIssueKind::InvalidFootprint { .. } => 11,
+        BuildPlacementIssueKind::GhostOccupied => 6,
+        BuildPlacementIssueKind::PlayerOccupied => 7,
+        BuildPlacementIssueKind::TerrainBlocked => 8,
+        BuildPlacementIssueKind::OutsideGeneratedChunks => 9,
+        BuildPlacementIssueKind::MissingRequiredResource => 10,
+        BuildPlacementIssueKind::MissingAdjacentWater => 11,
+        BuildPlacementIssueKind::InvalidFootprint { .. } => 12,
     }
 }
 

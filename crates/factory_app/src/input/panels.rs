@@ -4,7 +4,9 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::audio::AudioSettingsWindowState;
-use crate::build::resources::{BuildMenuState, BuildPlacementState};
+use crate::build::resources::{
+    BlueprintLibraryWindowState, BuildMenuState, BuildPlacementState, PlannerState, PlannerTool,
+};
 use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapLayer, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
@@ -17,21 +19,54 @@ use crate::ui::resources::{
     CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
 
+#[derive(SystemParam)]
+pub(crate) struct WorldBlockingWindows<'w> {
+    map: Res<'w, MapViewState>,
+    stats: Res<'w, ProductionStatsWindowState>,
+    crafting: Res<'w, CraftingWindowState>,
+    audio_settings: Res<'w, AudioSettingsWindowState>,
+    save_load: Res<'w, SaveLoadWindowState>,
+    build_menu: Res<'w, BuildMenuState>,
+    blueprint_library: Res<'w, BlueprintLibraryWindowState>,
+}
+
+impl WorldBlockingWindows<'_> {
+    fn any_open(&self) -> bool {
+        world_blocking_windows_open(
+            self.map.open,
+            self.stats.open,
+            self.crafting.open,
+            self.audio_settings.open,
+            self.save_load.open,
+            self.build_menu.open,
+            self.blueprint_library.open,
+        )
+    }
+}
+
+fn world_blocking_windows_open(
+    map_open: bool,
+    stats_open: bool,
+    crafting_open: bool,
+    audio_settings_open: bool,
+    save_load_open: bool,
+    build_menu_open: bool,
+    blueprint_library_open: bool,
+) -> bool {
+    map_open
+        || stats_open
+        || crafting_open
+        || audio_settings_open
+        || save_load_open
+        || build_menu_open
+        || blueprint_library_open
+}
+
 pub(crate) fn reset_app_input_state(
-    map: Res<MapViewState>,
-    stats: Res<ProductionStatsWindowState>,
-    crafting: Res<CraftingWindowState>,
-    audio_settings: Res<AudioSettingsWindowState>,
-    save_load: Res<SaveLoadWindowState>,
-    build_menu: Res<BuildMenuState>,
+    windows: WorldBlockingWindows,
     mut input_state: ResMut<AppInputState>,
 ) {
-    input_state.world_blocked = map.open
-        || stats.open
-        || crafting.open
-        || audio_settings.open
-        || save_load.open
-        || build_menu.open;
+    input_state.world_blocked = windows.any_open();
     input_state.escape_consumed = false;
 }
 
@@ -49,6 +84,8 @@ pub(crate) struct PanelInputResources<'w> {
     build_menu: ResMut<'w, BuildMenuState>,
     open_container: ResMut<'w, OpenContainer>,
     build_state: ResMut<'w, BuildPlacementState>,
+    planner: ResMut<'w, PlannerState>,
+    blueprint_library: ResMut<'w, BlueprintLibraryWindowState>,
 }
 
 pub(crate) fn handle_panel_input(
@@ -77,7 +114,9 @@ pub(crate) fn handle_panel_input(
             resources.open_container.entity_id = None;
         }
     }
-    if keyboard.just_pressed(KeyCode::KeyC) {
+    let control_held =
+        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    if keyboard.just_pressed(KeyCode::KeyC) && !control_held {
         resources.crafting.open = !resources.crafting.open;
         if resources.crafting.open {
             resources.build_state.selected = None;
@@ -91,7 +130,14 @@ pub(crate) fn handle_panel_input(
             resources.open_container.entity_id = None;
         }
     }
-    if keyboard.just_pressed(KeyCode::KeyB) {
+    if keyboard.just_pressed(KeyCode::KeyB) && control_held {
+        resources.blueprint_library.open = !resources.blueprint_library.open;
+        if resources.blueprint_library.open {
+            resources.build_state.selected = None;
+            resources.open_container.entity_id = None;
+        }
+    }
+    if keyboard.just_pressed(KeyCode::KeyB) && !control_held {
         resources.build_menu.open = !resources.build_menu.open;
         resources.build_menu.message = None;
         if resources.build_menu.open {
@@ -124,8 +170,14 @@ pub(crate) fn handle_panel_input(
             resources.build_menu.open = false;
             resources.build_menu.message = None;
             resources.input_state.escape_consumed = true;
+        } else if resources.blueprint_library.open {
+            resources.blueprint_library.open = false;
+            resources.input_state.escape_consumed = true;
         } else if resources.open_container.entity_id.is_some() {
             resources.open_container.entity_id = None;
+            resources.input_state.escape_consumed = true;
+        } else if resources.planner.tool != PlannerTool::None {
+            resources.planner.set_tool(PlannerTool::None);
             resources.input_state.escape_consumed = true;
         } else if resources.build_state.selected.is_some() {
             resources.build_state.selected = None;
@@ -141,12 +193,15 @@ pub(crate) fn handle_panel_input(
         }
     }
 
-    resources.input_state.world_blocked = resources.map.open
-        || resources.stats.open
-        || resources.crafting.open
-        || resources.audio_settings.open
-        || resources.save_load.open
-        || resources.build_menu.open;
+    resources.input_state.world_blocked = world_blocking_windows_open(
+        resources.map.open,
+        resources.stats.open,
+        resources.crafting.open,
+        resources.audio_settings.open,
+        resources.save_load.open,
+        resources.build_menu.open,
+        resources.blueprint_library.open,
+    );
 }
 
 #[derive(SystemParam)]

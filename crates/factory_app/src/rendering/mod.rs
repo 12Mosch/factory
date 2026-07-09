@@ -2,6 +2,7 @@ pub mod belts;
 pub(crate) mod build_preview;
 pub(crate) mod camera;
 pub(crate) mod colors;
+pub(crate) mod construction;
 pub(crate) mod entities;
 pub(crate) mod manual_mining;
 pub mod map_texture;

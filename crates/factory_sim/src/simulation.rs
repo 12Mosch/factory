@@ -8,6 +8,10 @@ pub(crate) use std::collections::VecDeque;
 use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::hash::{Hash, Hasher};
 
+pub use crate::construction::{
+    Blueprint, BlueprintEntity, ConstructionError, ConstructionJob, ConstructionState, GhostEntity,
+    GhostId,
+};
 pub use crate::crafting::{CraftingError, CraftingJob, CraftingQueue};
 pub(crate) use crate::entities::EntityReservation;
 pub(crate) use crate::entities::store::for_each_entity_state_map;
@@ -87,6 +91,7 @@ pub struct Simulation {
     world: WorldSim,
     chart: ChartState,
     entities: EntityStore,
+    construction: ConstructionState,
 
     player: PlayerState,
     player_inventory: Inventory,
@@ -356,10 +361,40 @@ pub enum SimValidationError {
     InvalidItemStatistics(ItemId),
     InvalidFluidStatistics(FluidId),
     InvalidPowerStatistics,
+    InvalidGhostPrototype {
+        ghost_id: GhostId,
+        prototype_id: EntityPrototypeId,
+    },
+    InvalidGhostIdentity {
+        ghost_id: GhostId,
+    },
+    InvalidGhostFootprint {
+        ghost_id: GhostId,
+    },
+    InvalidGhostRecipe {
+        ghost_id: GhostId,
+        recipe_id: RecipeId,
+    },
+    GhostOccupancyMismatch,
+    GhostOverlapsEntity {
+        ghost_id: GhostId,
+        entity_id: EntityId,
+    },
+    InvalidDeconstructionMark(EntityId),
+    InvalidConstructionQueue,
+    InvalidBlueprintPrototype {
+        blueprint_index: usize,
+        prototype_id: EntityPrototypeId,
+    },
+    InvalidBlueprintRecipe {
+        blueprint_index: usize,
+        recipe_id: RecipeId,
+    },
 }
 
 mod belt_ops;
 mod commands;
+pub mod construction_ops;
 mod contexts;
 mod core;
 mod diagnostics_ops;
@@ -398,6 +433,7 @@ use self::belt_ops::*;
 pub use self::commands::{
     InventoryPanel, SimCommand, SimCommandEffect, SimCommandError, SlotTransferError,
 };
+pub use self::construction_ops::GhostPlacementRequest;
 use self::contexts::*;
 pub(crate) use self::entity_states::EntityStateBehavior;
 use self::fluid_ops::*;

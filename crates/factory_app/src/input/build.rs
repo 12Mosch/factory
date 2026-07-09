@@ -5,6 +5,7 @@ use factory_sim::SimCommand;
 
 use crate::build::resources::{
     BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT, HotbarState,
+    PlannerState, PlannerTool,
 };
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -30,6 +31,7 @@ pub(crate) fn handle_build_hotbar_keys(
     sim: Res<SimResource>,
     hotbar: Res<HotbarState>,
     mut build_state: ResMut<BuildPlacementState>,
+    mut planner: ResMut<PlannerState>,
 ) {
     if world_input_blocked(input_state.as_deref())
         || technology_window_open(technology_window.as_deref())
@@ -47,6 +49,7 @@ pub(crate) fn handle_build_hotbar_keys(
                 technology_window.as_deref(),
                 &hotbar,
                 &mut build_state,
+                &mut planner,
                 slot_index,
             );
             return;
@@ -80,6 +83,7 @@ pub(crate) fn handle_build_rotate_cancel_keys(
 }
 
 pub(crate) fn handle_build_world_click(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
@@ -111,15 +115,27 @@ pub(crate) fn handle_build_world_click(
         return;
     };
 
-    state.commands.write(SimCommandRequest(
+    // Shift-click plans a ghost instead of building immediately.
+    let ghost = keyboard.as_deref().is_some_and(|keyboard| {
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
+    });
+    let command = if ghost {
+        SimCommand::PlaceGhost {
+            prototype_id: selection.prototype_id,
+            x,
+            y,
+            direction: state.build_state.direction,
+        }
+    } else {
         SimCommand::PlaceEntityFromPlayerInventory {
             prototype_id: selection.prototype_id,
             item_id: selection.item_id,
             x,
             y,
             direction: state.build_state.direction,
-        },
-    ));
+        }
+    };
+    state.commands.write(SimCommandRequest(command));
 }
 
 pub fn select_build_slot(
@@ -127,6 +143,7 @@ pub fn select_build_slot(
     technology_window: Option<&TechnologyWindowState>,
     hotbar: &HotbarState,
     build_state: &mut BuildPlacementState,
+    planner: &mut PlannerState,
     slot_index: usize,
 ) {
     if technology_window_open(technology_window) {
@@ -139,16 +156,20 @@ pub fn select_build_slot(
         return;
     };
 
-    select_build_selection(sim, technology_window, build_state, selection);
+    select_build_selection(sim, technology_window, build_state, planner, selection);
 }
 
 /// Validates and applies a build selection. Returns whether the selection is
 /// now active; on failure the selection is cleared and `last_status` explains
-/// why.
+/// why. An empty inventory does not block selection: unlocked entities stay
+/// selectable so shift-click can plan ghosts without the item. Activating a
+/// selection deactivates any planner tool, keeping the two input modes
+/// mutually exclusive.
 pub fn select_build_selection(
     sim: &factory_sim::Simulation,
     technology_window: Option<&TechnologyWindowState>,
     build_state: &mut BuildPlacementState,
+    planner: &mut PlannerState,
     selection: BuildSelection,
 ) -> bool {
     if technology_window_open(technology_window) {
@@ -164,17 +185,17 @@ pub fn select_build_selection(
         ));
         return false;
     }
-    if sim.player_inventory().count(selection.item_id) == 0 {
-        build_state.selected = None;
-        build_state.last_status = BuildPlacementStatus::MissingInventory(short_inventory_need(
-            sim.catalog(),
-            selection.item_id,
-        ));
-        return false;
-    }
 
     build_state.selected = Some(selection);
-    build_state.last_status = Default::default();
+    build_state.last_status = if sim.player_inventory().count(selection.item_id) == 0 {
+        BuildPlacementStatus::MissingInventory(short_inventory_need(
+            sim.catalog(),
+            selection.item_id,
+        ))
+    } else {
+        Default::default()
+    };
+    planner.set_tool(PlannerTool::None);
     true
 }
 

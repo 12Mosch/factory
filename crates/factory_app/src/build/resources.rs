@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use factory_data::{EntityPrototypeId, ItemId};
-use factory_sim::Direction;
+use factory_sim::{Blueprint, Direction};
 
 #[derive(Resource, Default)]
 pub struct BuildPlacementState {
@@ -58,6 +58,9 @@ pub struct BuildMenuState {
 pub struct BuildPlacementPreviewState {
     pub cursor_tile: Option<(i32, i32)>,
     pub preview: Option<factory_sim::BuildPlacementPreview>,
+    /// Whether the preview reflects ghost placement (shift held) rather than
+    /// an immediate build.
+    pub ghost: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,4 +77,42 @@ pub enum BuildPlacementStatus {
     CannotPlace(String),
     MissingInventory(String),
     Locked(String),
+}
+
+/// Active construction-planning tool. Tools are mutually exclusive with a
+/// build selection: activating one clears the other.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlannerTool {
+    #[default]
+    None,
+    /// Drag-select an area to mark entities for deconstruction
+    /// (shift-drag cancels marks instead).
+    Deconstruct,
+    /// Drag-select an area to copy into the paste clipboard.
+    Copy,
+    /// Drag-select an area to save into the blueprint library.
+    CaptureBlueprint,
+    /// Clipboard blueprint follows the cursor; click to paste ghosts.
+    Paste,
+}
+
+/// Construction-planning input state: the active tool, an in-progress drag
+/// selection, and the copy/paste clipboard.
+#[derive(Resource, Default)]
+pub struct PlannerState {
+    pub tool: PlannerTool,
+    pub drag_start: Option<(i32, i32)>,
+    pub clipboard: Option<Blueprint>,
+}
+
+impl PlannerState {
+    pub fn set_tool(&mut self, tool: PlannerTool) {
+        self.tool = tool;
+        self.drag_start = None;
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct BlueprintLibraryWindowState {
+    pub open: bool,
 }

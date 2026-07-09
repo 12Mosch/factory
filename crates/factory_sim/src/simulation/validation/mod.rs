@@ -1,6 +1,7 @@
 use super::*;
 
 mod catalog;
+mod construction;
 mod crafting;
 mod entities;
 mod fluids;
@@ -11,6 +12,7 @@ mod research;
 mod world;
 
 use self::catalog::validate_catalog;
+use self::construction::validate_construction_state;
 use self::crafting::validate_crafting_queue;
 use self::entities::{validate_entity_occupancy, validate_entity_state_ownership_and_kind};
 use self::fluids::{validate_fluid_box_states, validate_fluid_network_snapshots};
@@ -31,6 +33,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_placed_entities(sim)?;
     validate_entity_occupancy(&sim.entities)?;
     validate_entity_state_ownership_and_kind(sim)?;
+    validate_construction_state(sim)?;
     validate_fluid_box_states(sim)?;
     validate_fluid_network_snapshots(sim)?;
 
