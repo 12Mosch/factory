@@ -295,6 +295,21 @@ mod tests {
     }
 
     #[test]
+    fn scaled_ellipse_preserves_its_elliptical_primitive() {
+        let mut builder = VisualLayerBuilder::new(Vec2::new(10.0, 20.0));
+        builder.scaled_ellipse(
+            Vec2::new(0.80, 0.50),
+            Vec2::new(-0.10, 0.20),
+            0.5,
+            Color::srgba(0.20, 0.40, 0.60, 0.70),
+        );
+
+        let layer = builder.finish()[0];
+        assert_eq!(layer.size, Vec2::new(8.0, 10.0));
+        assert_eq!(layer.primitive, VisualPrimitive::Ellipse);
+    }
+
+    #[test]
     fn builder_oriented_selects_axis_specs() {
         let color = Color::WHITE;
         let horizontal_size = Vec2::new(0.80, 0.20);
