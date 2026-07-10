@@ -27,6 +27,8 @@ pub(crate) struct RawWorldGenerationConfig {
     pub(crate) version: u32,
     pub(crate) starting_area: RawStartingArea,
     pub(crate) terrain: Vec<RawTerrainLayer>,
+    #[serde(default)]
+    pub(crate) terrain_noise: Option<RawTerrainNoise>,
     pub(crate) patch_grid: RawResourcePatchGrid,
     #[serde(default)]
     pub(crate) resources: Vec<RawResourceGeneration>,
@@ -42,6 +44,12 @@ pub(crate) struct RawStartingArea {
 pub(crate) struct RawTerrainLayer {
     pub(crate) tile: String,
     pub(crate) weight: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawTerrainNoise {
+    pub(crate) scale: u32,
+    pub(crate) octaves: u32,
 }
 
 #[derive(Debug, Deserialize)]

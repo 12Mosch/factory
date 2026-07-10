@@ -109,7 +109,18 @@ pub(super) fn generate_terrain(
     rules: &WorldGenRules,
 ) -> (TileId, TileCollision) {
     if rules.terrain_total_weight > 0 {
-        let terrain_roll = hash_world(seed, x, y) % rules.terrain_total_weight;
+        // Slice the coherent noise field into bands: each layer covers the
+        // slice of the value range proportional to its weight, in declaration
+        // order from the lowest values upward. Contiguous low regions become
+        // lakes instead of scattered single tiles.
+        let field = terrain_field(
+            seed ^ TERRAIN_FIELD_SALT,
+            x,
+            y,
+            rules.noise_scale,
+            rules.noise_octaves,
+        );
+        let terrain_roll = (field * rules.terrain_total_weight) >> NOISE_ONE_BITS;
         let mut cumulative_weight = 0;
         for layer in &rules.terrain {
             cumulative_weight += layer.weight;
@@ -120,6 +131,82 @@ pub(super) fn generate_terrain(
     }
 
     (rules.fallback_tile, rules.fallback_collision)
+}
+
+const TERRAIN_FIELD_SALT: u64 = 0x5e2d_58d8_b3bc_e8ee;
+
+/// Q16 fixed-point one for the noise field; noise values live in
+/// `[0, NOISE_ONE)`.
+const NOISE_ONE_BITS: u32 = 16;
+const NOISE_ONE: u64 = 1 << NOISE_ONE_BITS;
+
+/// Fractal value noise in `[0, NOISE_ONE)`: `octaves` layers of
+/// lattice-interpolated [`hash_world`] values, each octave halving both the
+/// wavelength (starting at `scale` tiles) and the amplitude. Integer-only so
+/// results are identical across platforms for a given seed.
+pub(super) fn terrain_field(
+    seed: u64,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+    scale: u32,
+    octaves: u32,
+) -> u64 {
+    let mut total = 0u64;
+    let mut amplitude_total = 0u64;
+    let mut amplitude = NOISE_ONE;
+    let mut wavelength = i64::from(scale.max(1));
+
+    for octave in 0..octaves {
+        if amplitude == 0 {
+            break;
+        }
+        let octave_seed = seed ^ splitmix64(u64::from(octave).wrapping_add(0x9d8f_3b1a));
+        total += value_noise(octave_seed, x, y, wavelength) * amplitude;
+        amplitude_total += amplitude;
+        amplitude >>= 1;
+        wavelength = (wavelength / 2).max(1);
+    }
+
+    if amplitude_total == 0 {
+        return 0;
+    }
+    total / amplitude_total
+}
+
+/// Single-octave value noise in `[0, NOISE_ONE)`: hashes the four corners of
+/// the `wavelength`-sized lattice cell containing `(x, y)` and blends them
+/// with smoothstep-eased bilinear interpolation.
+fn value_noise(seed: u64, x: WorldTileCoord, y: WorldTileCoord, wavelength: i64) -> u64 {
+    let cell_x = x.div_euclid(wavelength);
+    let cell_y = y.div_euclid(wavelength);
+    let fraction_x = (x.rem_euclid(wavelength) as u64 * NOISE_ONE) / wavelength as u64;
+    let fraction_y = (y.rem_euclid(wavelength) as u64 * NOISE_ONE) / wavelength as u64;
+    let ease_x = smoothstep_q16(fraction_x);
+    let ease_y = smoothstep_q16(fraction_y);
+
+    let corner_00 = lattice_value(seed, cell_x, cell_y);
+    let corner_10 = lattice_value(seed, cell_x.wrapping_add(1), cell_y);
+    let corner_01 = lattice_value(seed, cell_x, cell_y.wrapping_add(1));
+    let corner_11 = lattice_value(seed, cell_x.wrapping_add(1), cell_y.wrapping_add(1));
+
+    let top = lerp_q16(corner_00, corner_10, ease_x);
+    let bottom = lerp_q16(corner_01, corner_11, ease_x);
+    lerp_q16(top, bottom, ease_y)
+}
+
+/// Deterministic lattice corner value in `[0, NOISE_ONE)`.
+fn lattice_value(seed: u64, cell_x: i64, cell_y: i64) -> u64 {
+    hash_world(seed, cell_x, cell_y) >> (64 - NOISE_ONE_BITS)
+}
+
+/// Smoothstep `3t^2 - 2t^3` for `t` in Q16, yielding Q16.
+fn smoothstep_q16(t: u64) -> u64 {
+    (t * t * (3 * NOISE_ONE - 2 * t)) >> (2 * NOISE_ONE_BITS)
+}
+
+/// Linear interpolation between Q16 values `a` and `b` by Q16 factor `t`.
+fn lerp_q16(a: u64, b: u64, t: u64) -> u64 {
+    (a * (NOISE_ONE - t) + b * t) >> NOISE_ONE_BITS
 }
 
 pub(super) fn ground_collision() -> TileCollision {
@@ -368,6 +455,8 @@ pub(super) fn hash_world(seed: u64, x: WorldTileCoord, y: WorldTileCoord) -> u64
 pub(super) struct WorldGenRules {
     terrain: Vec<TerrainLayerRule>,
     terrain_total_weight: u64,
+    noise_scale: u32,
+    noise_octaves: u32,
     /// Tile used when no terrain layers are configured (empty config).
     fallback_tile: TileId,
     fallback_collision: TileCollision,
@@ -430,6 +519,8 @@ impl WorldGenRules {
         Self {
             terrain,
             terrain_total_weight,
+            noise_scale: config.terrain_noise.scale,
+            noise_octaves: config.terrain_noise.octaves,
             fallback_tile,
             fallback_collision,
             resources,
@@ -502,6 +593,85 @@ pub(super) fn lab_can_accept_item(catalog: &PrototypeCatalog, item_id: ItemId) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Terrain statistics over the configured starting area: how much water
+    /// there is and how strongly it clumps (fraction of water tiles with at
+    /// least two orthogonal water neighbours — near zero for independent
+    /// per-tile rolls, high for coherent lakes).
+    fn starting_area_water_stats(seed: u64, catalog: &PrototypeCatalog) -> (f64, f64) {
+        let rules = WorldGenRules::from_catalog(catalog);
+        let area = catalog.world_generation.starting_area;
+        let min_tile = i64::from(area.min_chunk) * i64::from(CHUNK_SIZE);
+        let max_tile = (i64::from(area.max_chunk) + 1) * i64::from(CHUNK_SIZE) - 1;
+
+        let is_water = |x: i64, y: i64| {
+            let (_, collision) = generate_terrain(seed, x, y, &rules);
+            !collision.walkable && !collision.buildable
+        };
+
+        let mut total = 0u64;
+        let mut water = 0u64;
+        let mut clustered = 0u64;
+        for y in min_tile..=max_tile {
+            for x in min_tile..=max_tile {
+                total += 1;
+                if !is_water(x, y) {
+                    continue;
+                }
+                water += 1;
+                let neighbours = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                    .into_iter()
+                    .filter(|&(nx, ny)| is_water(nx, ny))
+                    .count();
+                if neighbours >= 2 {
+                    clustered += 1;
+                }
+            }
+        }
+
+        let water_fraction = water as f64 / total as f64;
+        let clustered_fraction = if water == 0 {
+            0.0
+        } else {
+            clustered as f64 / water as f64
+        };
+        (water_fraction, clustered_fraction)
+    }
+
+    #[test]
+    fn terrain_water_forms_coherent_lakes() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+        for seed in [0, 42, 123, 8675309] {
+            let (water_fraction, clustered_fraction) = starting_area_water_stats(seed, &catalog);
+
+            assert!(
+                (0.02..0.45).contains(&water_fraction),
+                "seed {seed}: water fraction {water_fraction:.3} outside expected range"
+            );
+            assert!(
+                clustered_fraction > 0.8,
+                "seed {seed}: only {clustered_fraction:.3} of water tiles sit in \
+                 coherent bodies; terrain looks like salt-and-pepper noise"
+            );
+        }
+    }
+
+    #[test]
+    fn terrain_field_is_deterministic_and_seed_dependent() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+        let coord = ChunkCoord { x: 0, y: 0 };
+
+        assert_eq!(
+            generate_chunk(123, coord, &rules),
+            generate_chunk(123, coord, &rules)
+        );
+        assert_ne!(
+            generate_chunk(123, coord, &rules),
+            generate_chunk(124, coord, &rules)
+        );
+    }
 
     #[test]
     fn retained_resource_candidates_can_affect_their_chunk() {

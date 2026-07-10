@@ -264,10 +264,13 @@ pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 1;
 pub struct WorldGenerationConfig {
     pub version: u32,
     pub starting_area: StartingAreaConfig,
-    /// Weighted terrain layers; each tile rolls against the summed weights in
-    /// declaration order. Tile collision behaviour derives from the tile
-    /// prototype's collision mask.
+    /// Weighted terrain layers mapped onto a coherent noise field: each
+    /// layer's weight is its share of the noise value range, assigned in
+    /// declaration order from the lowest values upward (so an early "water"
+    /// layer fills basins, a late "grass" layer covers highlands). Tile
+    /// collision behaviour derives from the tile prototype's collision mask.
     pub terrain: Vec<TerrainLayerConfig>,
+    pub terrain_noise: TerrainNoiseConfig,
     pub patch_grid: ResourcePatchGridConfig,
     pub resources: Vec<ResourceGenerationConfig>,
 }
@@ -281,6 +284,7 @@ impl Default for WorldGenerationConfig {
                 max_chunk: 0,
             },
             terrain: Vec::new(),
+            terrain_noise: TerrainNoiseConfig::default(),
             patch_grid: ResourcePatchGridConfig {
                 cell_size: 40,
                 jitter: 16,
@@ -302,6 +306,25 @@ pub struct StartingAreaConfig {
 pub struct TerrainLayerConfig {
     pub tile: TileId,
     pub weight: u32,
+}
+
+/// Fractal value-noise parameters for the terrain field. `scale` is the base
+/// wavelength in tiles of the lowest-frequency octave; each further octave
+/// halves the wavelength and amplitude, adding finer detail such as ragged
+/// coastlines.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TerrainNoiseConfig {
+    pub scale: u32,
+    pub octaves: u32,
+}
+
+impl Default for TerrainNoiseConfig {
+    fn default() -> Self {
+        Self {
+            scale: 32,
+            octaves: 3,
+        }
+    }
 }
 
 /// Poisson-like placement grid for resource patch centers: one candidate
