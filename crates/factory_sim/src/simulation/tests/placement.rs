@@ -254,6 +254,38 @@ fn placement_preview_reports_missing_drill_resource() {
 }
 
 #[test]
+fn placement_preview_accepts_pumpjack_on_crude_oil() {
+    let mut sim = Simulation::new_test_world(123);
+    let pumpjack = entity_id_by_name(&sim.world.prototypes, "pumpjack");
+    let pumpjack_item = item_id_by_name(&sim.world.prototypes, "pumpjack");
+    let crude_oil = item_id(&sim.world.prototypes, "crude_oil");
+    let (x, y, _) = first_placeable_resource_tile(&sim, pumpjack, crude_oil);
+    give_player_build_item(&mut sim, pumpjack_item);
+
+    let preview = crate::placement::preview_from_player_inventory(
+        &sim,
+        crate::placement::PlayerPlacementRequest {
+            prototype_id: pumpjack,
+            item_id: pumpjack_item,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    );
+
+    assert!(
+        !preview.issues.iter().any(|issue| {
+            matches!(
+                issue.kind,
+                BuildPlacementIssueKind::TerrainBlocked
+                    | BuildPlacementIssueKind::MissingRequiredResource
+            )
+        }),
+        "a valid pumpjack footprint over crude oil should not be blocked in the preview"
+    );
+}
+
+#[test]
 fn placement_preview_reports_missing_offshore_pump_water() {
     let mut sim = Simulation::new_test_world(123);
     let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");

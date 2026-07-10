@@ -68,6 +68,15 @@ impl Simulation {
                 .keys()
                 .map(|entity_id| self.offshore_pump_status(*entity_id, fluids.water)),
         );
+        self.push_status_group(
+            &mut groups,
+            &mut total_by_status,
+            EntityKind::Pumpjack,
+            self.entities
+                .pumpjacks
+                .keys()
+                .map(|entity_id| self.pumpjack_status(*entity_id)),
+        );
 
         MachineStatusSnapshot {
             groups,
@@ -101,6 +110,9 @@ impl Simulation {
         }
         if self.entities.offshore_pumps.contains_key(&entity_id) {
             return Some(self.offshore_pump_status(entity_id, fluids.water));
+        }
+        if self.entities.pumpjacks.contains_key(&entity_id) {
+            return Some(self.pumpjack_status(entity_id));
         }
 
         None
@@ -321,6 +333,33 @@ impl Simulation {
         ) {
             return MachineStatus::OutputFull;
         }
+        let Some(prototype) = self
+            .entities
+            .placed_entity(entity_id)
+            .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+        else {
+            return MachineStatus::Idle;
+        };
+        let box_states = self
+            .entities
+            .fluid_boxes
+            .get(&entity_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if fluid_ingredient_box_indices(
+            &prototype.fluid_boxes,
+            box_states,
+            &recipe.fluid_ingredients,
+        )
+        .is_none()
+        {
+            return MachineStatus::NoFluid;
+        }
+        if fluid_product_box_indices(&prototype.fluid_boxes, box_states, &recipe.fluid_products)
+            .is_none()
+        {
+            return MachineStatus::OutputFull;
+        }
         if self
             .power
             .entity_statuses
@@ -431,6 +470,59 @@ impl Simulation {
         };
         if self.fluid_network_available_capacity_for_fluid(network_id, water) == 0 {
             return MachineStatus::OutputFull;
+        }
+        MachineStatus::Working
+    }
+
+    fn pumpjack_status(&self, entity_id: EntityId) -> MachineStatus {
+        let Some(placed) = self.entities.placed_entity(entity_id) else {
+            return MachineStatus::Idle;
+        };
+        let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
+            return MachineStatus::Idle;
+        };
+        let Some(pumpjack) = prototype.pumpjack.as_ref() else {
+            return MachineStatus::Idle;
+        };
+        if !placed.footprint.tiles().into_iter().any(|(x, y)| {
+            self.world
+                .tile_at(x, y)
+                .and_then(|tile| tile.resource)
+                .is_some_and(|resource| resource.resource_item == pumpjack.resource_item)
+        }) {
+            return MachineStatus::NoInput;
+        }
+        let Some(capacity_milliunits) = prototype
+            .fluid_boxes
+            .first()
+            .map(|fluid_box| fluid_box.capacity_milliunits)
+        else {
+            return MachineStatus::NoFluid;
+        };
+        let Some(state) = self
+            .entities
+            .fluid_boxes
+            .get(&entity_id)
+            .and_then(|boxes| boxes.first())
+        else {
+            return MachineStatus::NoFluid;
+        };
+        if state
+            .fluid_id
+            .is_some_and(|fluid| fluid != pumpjack.output_fluid)
+            || state.amount_milliunits >= capacity_milliunits
+        {
+            return MachineStatus::OutputFull;
+        }
+        if self
+            .power
+            .entity_statuses
+            .get(&entity_id)
+            .map(|status| status.satisfaction_permyriad)
+            .unwrap_or(0)
+            == 0
+        {
+            return MachineStatus::NoPower;
         }
         MachineStatus::Working
     }

@@ -207,6 +207,17 @@ fn powered_pumpjack_produces_crude_oil_into_its_output_box() {
         amount >= 10_000,
         "pumpjack should have produced crude oil, got {amount}"
     );
+    assert_eq!(
+        sim.machine_status_for_entity(pumpjack_id),
+        Some(MachineStatus::Working)
+    );
+    assert!(sim.machine_statuses().groups.iter().any(|group| {
+        group.kind == EntityKind::Pumpjack
+            && group
+                .counts
+                .iter()
+                .any(|count| count.status == MachineStatus::Working && count.count == 1)
+    }));
 }
 
 #[test]
@@ -349,6 +360,11 @@ fn chemical_plant_stalls_without_fluid_ingredients() {
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, plant_id, 0)
         .expect("chemical plant should accept coal");
 
+    assert_eq!(
+        sim.machine_status_for_entity(plant_id),
+        Some(MachineStatus::NoFluid)
+    );
+
     for _ in 0..200 {
         sim.tick();
     }
@@ -363,4 +379,27 @@ fn chemical_plant_stalls_without_fluid_ingredients() {
         "no petroleum gas means no plastic"
     );
     assert_eq!(state.input_inventory.count(coal), 2);
+}
+
+#[test]
+fn refinery_with_full_fluid_output_reports_output_full() {
+    let (mut sim, refinery_id) = sim_with_powered_refinery();
+    unlock_oil_processing(&mut sim);
+    let crude_oil = fluid_id(&sim.world.prototypes, "crude_oil");
+    let petroleum_gas = fluid_id(&sim.world.prototypes, "petroleum_gas");
+    let recipe = recipe_id(&sim.world.prototypes, "basic_oil_processing");
+    let output_capacity = sim.world.prototypes.entities
+        [entity_id_by_name(&sim.world.prototypes, "oil_refinery").index()]
+    .fluid_boxes[1]
+        .capacity_milliunits;
+
+    sim.select_assembler_recipe(refinery_id, recipe)
+        .expect("refinery should accept basic oil processing");
+    set_fluid_box(&mut sim, refinery_id, 0, crude_oil, 100_000);
+    set_fluid_box(&mut sim, refinery_id, 1, petroleum_gas, output_capacity);
+
+    assert_eq!(
+        sim.machine_status_for_entity(refinery_id),
+        Some(MachineStatus::OutputFull)
+    );
 }

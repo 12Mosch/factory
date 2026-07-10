@@ -105,7 +105,9 @@ fn collect_placement_preview_issues_for_footprint(
     direction: Direction,
     issues: &mut Vec<BuildPlacementIssue>,
 ) {
-    if prototype.entity_kind == EntityKind::MiningDrill && prototype.mining_drill.is_some() {
+    if prototype.entity_kind == EntityKind::Pumpjack && prototype.pumpjack.is_some() {
+        collect_pumpjack_preview_issues(sim, prototype, footprint, issues);
+    } else if prototype.entity_kind == EntityKind::MiningDrill && prototype.mining_drill.is_some() {
         collect_mining_drill_preview_issues(sim, prototype, footprint, issues);
     } else {
         for (x, y) in footprint.tiles() {
@@ -151,6 +153,45 @@ fn collect_placement_preview_issues_for_footprint(
             issues.push(BuildPlacementIssue {
                 tile: Some((x, y)),
                 kind: BuildPlacementIssueKind::EntityOccupied { entity_id },
+            });
+        }
+    }
+}
+
+fn collect_pumpjack_preview_issues(
+    sim: &Simulation,
+    prototype: &factory_data::EntityPrototype,
+    footprint: &EntityFootprint,
+    issues: &mut Vec<BuildPlacementIssue>,
+) {
+    for (x, y) in footprint.tiles() {
+        match sim.world.tile_at(x, y) {
+            Some(tile) if tile.collision.walkable => {}
+            Some(_) => issues.push(BuildPlacementIssue {
+                tile: Some((x, y)),
+                kind: BuildPlacementIssueKind::TerrainBlocked,
+            }),
+            None => issues.push(BuildPlacementIssue {
+                tile: Some((x, y)),
+                kind: BuildPlacementIssueKind::OutsideGeneratedChunks,
+            }),
+        }
+    }
+
+    let pumpjack = prototype
+        .pumpjack
+        .as_ref()
+        .expect("pumpjack prototype should have pumpjack metadata");
+    if footprint.tiles().into_iter().all(|(x, y)| {
+        sim.world
+            .tile_at(x, y)
+            .and_then(|tile| tile.resource)
+            .is_none_or(|resource| resource.resource_item != pumpjack.resource_item)
+    }) {
+        for tile in footprint.tiles() {
+            issues.push(BuildPlacementIssue {
+                tile: Some(tile),
+                kind: BuildPlacementIssueKind::MissingRequiredResource,
             });
         }
     }
