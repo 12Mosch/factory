@@ -25,6 +25,8 @@ pub struct RecipePrototype {
     pub crafting_time_ticks: u32,
     pub ingredients: Vec<ItemAmount>,
     pub products: Vec<ItemAmount>,
+    pub fluid_ingredients: Vec<FluidAmount>,
+    pub fluid_products: Vec<FluidAmount>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -47,6 +49,7 @@ pub struct EntityPrototype {
     pub steam_engine: Option<SteamEnginePrototype>,
     pub boiler: Option<BoilerPrototype>,
     pub offshore_pump: Option<OffshorePumpPrototype>,
+    pub pumpjack: Option<PumpjackPrototype>,
     pub fluid_boxes: Vec<FluidBoxPrototype>,
 }
 
@@ -54,7 +57,20 @@ pub struct EntityPrototype {
 pub struct FluidBoxPrototype {
     pub capacity_milliunits: u64,
     pub filter: Option<FluidId>,
+    pub io: FluidBoxIo,
     pub connections: Vec<FluidConnectionPrototype>,
+}
+
+/// Recipe-facing role of a fluid box. Passive boxes (pipes, tanks) are
+/// `InputOutput`; crafting machines declare which boxes feed fluid
+/// ingredients and which receive fluid products. The role only affects
+/// recipe matching; network equalization treats all boxes alike.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum FluidBoxIo {
+    #[default]
+    InputOutput,
+    Input,
+    Output,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -88,6 +104,14 @@ pub struct AssemblingMachinePrototype {
     pub crafting_speed_denominator: u32,
     pub input_slot_count: usize,
     pub output_slot_count: usize,
+    /// Recipe category this machine crafts; recipes of other categories
+    /// cannot be selected on it.
+    #[serde(default = "default_assembler_crafting_category")]
+    pub crafting_category: CraftingCategory,
+}
+
+fn default_assembler_crafting_category() -> CraftingCategory {
+    CraftingCategory::Crafting
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -139,6 +163,15 @@ pub struct OffshorePumpPrototype {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PumpjackPrototype {
+    pub pumping_speed_per_second_milliunits: u64,
+    /// Resource cell item this pumpjack must be placed over.
+    pub resource_item: ItemId,
+    /// Fluid produced into the pumpjack's output fluid box.
+    pub output_fluid: FluidId,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct UndergroundBeltPrototype {
     pub part: UndergroundBeltPart,
     pub max_distance: u8,
@@ -179,11 +212,19 @@ pub struct ItemAmount {
     pub amount: u16,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FluidAmount {
+    pub fluid: FluidId,
+    pub amount_milliunits: u64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum CraftingCategory {
     Manual,
     Smelting,
     Crafting,
+    OilProcessing,
+    Chemistry,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -201,6 +242,7 @@ pub enum EntityKind {
     SteamEngine,
     Boiler,
     OffshorePump,
+    Pumpjack,
     Pipe,
     StorageTank,
 }

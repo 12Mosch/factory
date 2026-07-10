@@ -18,6 +18,27 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin_with_boiler(
     fixture_height: i32,
     pole_offset: (i32, i32),
 ) -> (i32, i32, EntityId) {
+    place_powered_fixture_origin_where(
+        sim,
+        fixture_width,
+        fixture_height,
+        pole_offset,
+        fixture_is_clear_buildable,
+    )
+    .expect("expected powered fixture area")
+}
+
+/// Searches the generated world for a spot where a boiler-powered fixture can
+/// be assembled: offshore pump, boiler, steam engine, and a pole pair whose
+/// target pole sits at `pole_offset` relative to the fixture origin. The
+/// fixture area itself must satisfy `fixture_ok`.
+pub(in crate::simulation::tests) fn place_powered_fixture_origin_where(
+    sim: &mut Simulation,
+    fixture_width: i32,
+    fixture_height: i32,
+    pole_offset: (i32, i32),
+    fixture_ok: impl Fn(&Simulation, &EntityFootprint) -> bool,
+) -> Option<(i32, i32, EntityId)> {
     let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
     let boiler = entity_id_by_name(&sim.world.prototypes, "boiler");
     let steam_engine = entity_id_by_name(&sim.world.prototypes, "steam_engine");
@@ -36,7 +57,7 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin_with_boiler(
             height: fixture_height,
         };
 
-        if !fixture_is_clear_buildable(sim, &fixture)
+        if !fixture_ok(sim, &fixture)
             || !poles_within_small_pole_reach(source_pole, target_pole)
             || crate::placement::validate(
                 sim,
@@ -151,10 +172,10 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin_with_boiler(
             count: 50,
         });
 
-        return (fixture_x, fixture_y, boiler_id);
+        return Some((fixture_x, fixture_y, boiler_id));
     }
 
-    panic!("expected powered fixture area");
+    None
 }
 
 pub(in crate::simulation::tests) fn place_pump_pipe_boiler_fixture(
@@ -233,6 +254,39 @@ pub(in crate::simulation::tests) fn place_pump_pipe_boiler_fixture(
     }
 
     panic!("expected pump-pipe-boiler fixture area");
+}
+
+/// Places a powered pumpjack over a crude oil patch, backed by a boiler power
+/// plant. Returns `None` when the generated world offers no suitable spot.
+pub(in crate::simulation::tests) fn place_powered_pumpjack(
+    sim: &mut Simulation,
+) -> Option<EntityId> {
+    let pumpjack = entity_id_by_name(&sim.world.prototypes, "pumpjack");
+    let (x, y, _) = place_powered_fixture_origin_where(sim, 3, 3, (3, 1), |sim, fixture| {
+        crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pumpjack,
+                x: fixture.x,
+                y: fixture.y,
+                direction: Direction::North,
+            },
+        )
+        .is_ok()
+    })?;
+
+    Some(
+        crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: pumpjack,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated pumpjack fixture should be placeable"),
+    )
 }
 
 pub(in crate::simulation::tests) fn fixture_is_clear_buildable(

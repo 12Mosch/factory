@@ -42,10 +42,13 @@ fn electric_consumer_can_work(
     entity_id: EntityId,
 ) -> bool {
     if let Some(state) = entities.assembling_machines.get(&entity_id) {
-        return assembler_can_work(catalog, research, state);
+        return assembler_can_work(catalog, entities, research, entity_id, state);
     }
     if let Some(state) = entities.labs.get(&entity_id) {
         return lab_can_work(catalog, research, state);
+    }
+    if entities.pumpjacks.contains_key(&entity_id) {
+        return pumpjack_can_work(catalog, entities, entity_id);
     }
     if let (Some(placed), Some(state)) = (
         entities.placed_entity(entity_id),
@@ -59,15 +62,70 @@ fn electric_consumer_can_work(
 
 fn assembler_can_work(
     catalog: &PrototypeCatalog,
+    entities: &EntityStore,
     research: &ResearchState,
+    entity_id: EntityId,
     state: &AssemblingMachineState,
 ) -> bool {
     let Some(recipe) = selected_assembler_recipe(catalog, research, state) else {
         return false;
     };
 
-    assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
-        && assembler_output_can_accept(catalog, &state.output_inventory, &recipe.products)
+    if !assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
+        || !assembler_output_can_accept(catalog, &state.output_inventory, &recipe.products)
+    {
+        return false;
+    }
+    if recipe.fluid_ingredients.is_empty() && recipe.fluid_products.is_empty() {
+        return true;
+    }
+
+    let Some(prototype) = entities
+        .placed_entity(entity_id)
+        .and_then(|placed| catalog.entity(placed.prototype_id))
+    else {
+        return false;
+    };
+    let box_states = entities
+        .fluid_boxes
+        .get(&entity_id)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+
+    fluid_ingredient_box_indices(
+        &prototype.fluid_boxes,
+        box_states,
+        &recipe.fluid_ingredients,
+    )
+    .is_some()
+        && fluid_product_box_indices(&prototype.fluid_boxes, box_states, &recipe.fluid_products)
+            .is_some()
+}
+
+fn pumpjack_can_work(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    entity_id: EntityId,
+) -> bool {
+    let Some(prototype) = entities
+        .placed_entity(entity_id)
+        .and_then(|placed| catalog.entity(placed.prototype_id))
+    else {
+        return false;
+    };
+    let Some(capacity_milliunits) = prototype
+        .fluid_boxes
+        .first()
+        .map(|fluid_box| fluid_box.capacity_milliunits)
+    else {
+        return false;
+    };
+
+    entities
+        .fluid_boxes
+        .get(&entity_id)
+        .and_then(|boxes| boxes.first())
+        .is_some_and(|state| state.amount_milliunits < capacity_milliunits)
 }
 
 fn lab_can_work(catalog: &PrototypeCatalog, research: &ResearchState, state: &LabState) -> bool {

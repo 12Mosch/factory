@@ -74,10 +74,12 @@ pub(in crate::simulation) fn validate_assembler(
         return Ok(());
     };
 
+    let machine_category =
+        assembler_machine_category(&sim.world.prototypes, &sim.entities, entity_id);
     sim.world
         .prototypes
         .recipe(recipe_id)
-        .filter(|recipe| recipe.category == CraftingCategory::Crafting)
+        .filter(|recipe| recipe.category == machine_category)
         .ok_or(SimValidationError::InvalidMachineRecipe {
             entity_id,
             recipe_id,

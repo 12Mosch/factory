@@ -55,6 +55,12 @@ pub struct BaseItemIds {
     pub offshore_pump: ItemId,
     pub pipe: ItemId,
     pub storage_tank: ItemId,
+    pub crude_oil: ItemId,
+    pub pumpjack: ItemId,
+    pub oil_refinery: ItemId,
+    pub chemical_plant: ItemId,
+    pub plastic_bar: ItemId,
+    pub sulfur: ItemId,
 }
 
 impl BaseItemIds {
@@ -96,6 +102,12 @@ impl BaseItemIds {
             offshore_pump: item_id_by_name(catalog, "offshore_pump"),
             pipe: item_id_by_name(catalog, "pipe"),
             storage_tank: item_id_by_name(catalog, "storage_tank"),
+            crude_oil: item_id_by_name(catalog, "crude_oil"),
+            pumpjack: item_id_by_name(catalog, "pumpjack"),
+            oil_refinery: item_id_by_name(catalog, "oil_refinery"),
+            chemical_plant: item_id_by_name(catalog, "chemical_plant"),
+            plastic_bar: item_id_by_name(catalog, "plastic_bar"),
+            sulfur: item_id_by_name(catalog, "sulfur"),
         }
     }
 
@@ -108,6 +120,8 @@ impl BaseItemIds {
 pub struct BaseFluidIds {
     pub water: FluidId,
     pub steam: FluidId,
+    pub crude_oil: FluidId,
+    pub petroleum_gas: FluidId,
 }
 
 impl BaseFluidIds {
@@ -115,6 +129,8 @@ impl BaseFluidIds {
         Self {
             water: fluid_id_by_name(catalog, "water"),
             steam: fluid_id_by_name(catalog, "steam"),
+            crude_oil: fluid_id_by_name(catalog, "crude_oil"),
+            petroleum_gas: fluid_id_by_name(catalog, "petroleum_gas"),
         }
     }
 }

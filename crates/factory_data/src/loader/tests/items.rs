@@ -100,8 +100,8 @@ fn placeable_items_have_acquisition_paths() {
                 recipe.name
             );
             assert!(
-                !recipe.products.is_empty(),
-                "{} should produce at least one item",
+                !recipe.products.is_empty() || !recipe.fluid_products.is_empty(),
+                "{} should produce at least one item or fluid",
                 recipe.name
             );
             assert!(

@@ -36,10 +36,20 @@
         (id: 33, name: "pipe", stack_size: 100),
         (id: 34, name: "storage_tank", stack_size: 50),
         (id: 35, name: "logistic_science_pack", stack_size: 200),
+        // Marker item for crude oil resource cells; never obtainable as an
+        // inventory item because fluid resources are excluded from mining.
+        (id: 36, name: "crude_oil", stack_size: 100),
+        (id: 37, name: "pumpjack", stack_size: 20),
+        (id: 38, name: "oil_refinery", stack_size: 10),
+        (id: 39, name: "chemical_plant", stack_size: 10),
+        (id: 40, name: "plastic_bar", stack_size: 100),
+        (id: 41, name: "sulfur", stack_size: 50),
     ],
     fluids: [
         (id: 0, name: "water"),
         (id: 1, name: "steam"),
+        (id: 2, name: "crude_oil"),
+        (id: 3, name: "petroleum_gas"),
     ],
     recipes: [
         (
@@ -377,6 +387,74 @@
                 (item: "electronic_circuit", amount: 10),
             ],
             products: [(item: "express_splitter", amount: 1)],
+        ),
+        (
+            id: 32,
+            name: "pumpjack",
+            category: Crafting,
+            crafting_time_ticks: 300,
+            ingredients: [
+                (item: "steel_plate", amount: 5),
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "electronic_circuit", amount: 5),
+                (item: "pipe", amount: 10),
+            ],
+            products: [(item: "pumpjack", amount: 1)],
+        ),
+        (
+            id: 33,
+            name: "oil_refinery",
+            category: Crafting,
+            crafting_time_ticks: 480,
+            ingredients: [
+                (item: "steel_plate", amount: 15),
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "stone_brick", amount: 10),
+                (item: "electronic_circuit", amount: 10),
+                (item: "pipe", amount: 10),
+            ],
+            products: [(item: "oil_refinery", amount: 1)],
+        ),
+        (
+            id: 34,
+            name: "chemical_plant",
+            category: Crafting,
+            crafting_time_ticks: 300,
+            ingredients: [
+                (item: "steel_plate", amount: 5),
+                (item: "iron_gear_wheel", amount: 5),
+                (item: "electronic_circuit", amount: 5),
+                (item: "pipe", amount: 5),
+            ],
+            products: [(item: "chemical_plant", amount: 1)],
+        ),
+        (
+            id: 35,
+            name: "basic_oil_processing",
+            category: OilProcessing,
+            crafting_time_ticks: 300,
+            fluid_ingredients: [(fluid: "crude_oil", amount: 100)],
+            fluid_products: [(fluid: "petroleum_gas", amount: 45)],
+        ),
+        (
+            id: 36,
+            name: "plastic_bar",
+            category: Chemistry,
+            crafting_time_ticks: 60,
+            ingredients: [(item: "coal", amount: 1)],
+            fluid_ingredients: [(fluid: "petroleum_gas", amount: 20)],
+            products: [(item: "plastic_bar", amount: 2)],
+        ),
+        (
+            id: 37,
+            name: "sulfur",
+            category: Chemistry,
+            crafting_time_ticks: 60,
+            fluid_ingredients: [
+                (fluid: "petroleum_gas", amount: 30),
+                (fluid: "water", amount: 30),
+            ],
+            products: [(item: "sulfur", amount: 2)],
         ),
     ],
     entities: [
@@ -739,6 +817,107 @@
                 ),
             ],
         ),
+        (
+            id: 30,
+            name: "crude_oil_patch",
+            entity_kind: ResourcePatch,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["resource"]),
+        ),
+        (
+            id: 31,
+            name: "pumpjack",
+            entity_kind: Pumpjack,
+            size: (x: 3, y: 3),
+            collision_mask: (layers: ["ground", "building"]),
+            electric_energy_source: Some((energy_usage_watts: 90000, drain_watts: 0)),
+            pumpjack: Some((
+                pumping_speed_per_second_milliunits: 6000,
+                resource_item: "crude_oil",
+                output_fluid: "crude_oil",
+            )),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 100000,
+                    filter: Some("crude_oil"),
+                    io: Output,
+                    connections: [
+                        (local_offset: (x: 1, y: 0), side: North),
+                    ],
+                ),
+            ],
+        ),
+        (
+            id: 32,
+            name: "oil_refinery",
+            entity_kind: AssemblingMachine,
+            size: (x: 5, y: 5),
+            collision_mask: (layers: ["ground", "building"]),
+            assembling_machine: Some((
+                crafting_speed_numerator: 1,
+                crafting_speed_denominator: 1,
+                input_slot_count: 1,
+                output_slot_count: 1,
+                crafting_category: OilProcessing,
+            )),
+            electric_energy_source: Some((energy_usage_watts: 420000, drain_watts: 14000)),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 1000000,
+                    filter: Some("crude_oil"),
+                    io: Input,
+                    connections: [
+                        (local_offset: (x: 0, y: 2), side: West),
+                    ],
+                ),
+                (
+                    capacity_milliunits: 1000000,
+                    filter: Some("petroleum_gas"),
+                    io: Output,
+                    connections: [
+                        (local_offset: (x: 4, y: 2), side: East),
+                    ],
+                ),
+            ],
+        ),
+        (
+            id: 33,
+            name: "chemical_plant",
+            entity_kind: AssemblingMachine,
+            size: (x: 3, y: 3),
+            collision_mask: (layers: ["ground", "building"]),
+            assembling_machine: Some((
+                crafting_speed_numerator: 1,
+                crafting_speed_denominator: 1,
+                input_slot_count: 2,
+                output_slot_count: 2,
+                crafting_category: Chemistry,
+            )),
+            electric_energy_source: Some((energy_usage_watts: 210000, drain_watts: 7000)),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 1000000,
+                    io: Input,
+                    connections: [
+                        (local_offset: (x: 0, y: 0), side: North),
+                    ],
+                ),
+                (
+                    capacity_milliunits: 1000000,
+                    io: Input,
+                    connections: [
+                        (local_offset: (x: 2, y: 0), side: North),
+                    ],
+                ),
+                (
+                    capacity_milliunits: 1000000,
+                    io: Output,
+                    connections: [
+                        (local_offset: (x: 1, y: 2), side: South),
+                    ],
+                ),
+            ],
+        ),
     ],
     tiles: [
         (
@@ -839,6 +1018,47 @@
                 UnlockRecipe("express_underground_belt"),
                 UnlockRecipe("express_splitter"),
             ],
+        ),
+        (
+            id: 7,
+            name: "oil_processing",
+            prerequisites: ["fluid_handling"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 600,
+            effects: [
+                UnlockRecipe("pumpjack"),
+                UnlockRecipe("oil_refinery"),
+                UnlockRecipe("chemical_plant"),
+                UnlockRecipe("basic_oil_processing"),
+            ],
+        ),
+        (
+            id: 8,
+            name: "plastics",
+            prerequisites: ["oil_processing"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 600,
+            effects: [UnlockRecipe("plastic_bar")],
+        ),
+        (
+            id: 9,
+            name: "sulfur_processing",
+            prerequisites: ["oil_processing"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 600,
+            effects: [UnlockRecipe("sulfur")],
         ),
     ],
 )

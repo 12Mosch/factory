@@ -33,6 +33,7 @@ pub(in crate::simulation) fn reservation_for_prototype(
         transport_belts: transport_belt_segment_for_prototype(prototype, direction),
         splitters: splitter_state_for_prototype(prototype, direction),
         inserters: inserter_state_for_prototype(prototype),
+        pumpjacks: pumpjack_state_for_prototype(prototype),
     }
 }
 
@@ -168,6 +169,13 @@ fn offshore_pump_state_for_prototype(
 ) -> Option<OffshorePumpState> {
     (prototype.entity_kind == EntityKind::OffshorePump && prototype.offshore_pump.is_some())
         .then_some(OffshorePumpState)
+}
+
+fn pumpjack_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<PumpjackState> {
+    (prototype.entity_kind == EntityKind::Pumpjack && prototype.pumpjack.is_some())
+        .then_some(PumpjackState)
 }
 
 fn fluid_box_states_for_prototype(

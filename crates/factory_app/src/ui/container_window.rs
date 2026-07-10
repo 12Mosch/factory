@@ -1,9 +1,11 @@
 use bevy::prelude::*;
+use factory_data::CraftingCategory;
 use factory_sim::EntityId;
 
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
 use crate::ui::assembler_panel::spawn_assembler_panel;
+use crate::ui::formatting::format_recipe_display_name;
 use crate::ui::inventory_panel::{
     InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,
     spawn_slot_button,
@@ -90,7 +92,18 @@ fn spawn_container_window_contents(
         OpenMachineKind::Assembler => {
             let state = factory_sim::entity_access::assembler_state(sim, entity_id)
                 .expect("open assembler should expose state");
-            spawn_assembler_panel(root, sim.catalog(), state)
+            let prototype = sim
+                .entities()
+                .placed_entity(entity_id)
+                .and_then(|placed| sim.catalog().entity(placed.prototype_id));
+            let machine_category = prototype
+                .and_then(|prototype| prototype.assembling_machine.as_ref())
+                .map(|assembling_machine| assembling_machine.crafting_category)
+                .unwrap_or(CraftingCategory::Crafting);
+            let title = prototype
+                .map(|prototype| format_recipe_display_name(&prototype.name))
+                .unwrap_or_else(|| "Assembling Machine".to_string());
+            spawn_assembler_panel(root, sim.catalog(), state, machine_category, &title)
         }
     }
     spawn_inventory_transfer_feedback(root);

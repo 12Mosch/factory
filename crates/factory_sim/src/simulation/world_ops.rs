@@ -205,19 +205,30 @@ impl WorldSim {
             });
         }
 
+        if prototype.entity_kind == EntityKind::Pumpjack
+            && let Some(pumpjack) = prototype.pumpjack.as_ref()
+        {
+            self.validate_walkable_footprint(footprint)?;
+            let covers_resource = footprint.tiles().into_iter().any(|(x, y)| {
+                self.tile_at(x, y)
+                    .and_then(|tile| tile.resource)
+                    .is_some_and(|resource| resource.resource_item == pumpjack.resource_item)
+            });
+            if !covers_resource {
+                return Err(BuildError::TileBlocked {
+                    x: footprint.x,
+                    y: footprint.y,
+                });
+            }
+
+            return Ok(());
+        }
+
         if prototype.entity_kind != EntityKind::MiningDrill || prototype.mining_drill.is_none() {
             return self.validate_entity_footprint(footprint);
         }
 
-        footprint.validate()?;
-        for (x, y) in footprint.tiles() {
-            let tile = self
-                .tile_at(x, y)
-                .ok_or(BuildError::OutsideGeneratedChunks { x, y })?;
-            if !tile.collision.walkable {
-                return Err(BuildError::TileBlocked { x, y });
-            }
-        }
+        self.validate_walkable_footprint(footprint)?;
 
         let mining_drill = prototype
             .mining_drill
@@ -228,6 +239,22 @@ impl WorldSim {
                 x: footprint.x,
                 y: footprint.y,
             });
+        }
+
+        Ok(())
+    }
+
+    /// Footprint check for machines allowed to sit on resource tiles: every
+    /// tile must exist and be walkable, but need not be buildable.
+    fn validate_walkable_footprint(&self, footprint: &EntityFootprint) -> Result<(), BuildError> {
+        footprint.validate()?;
+        for (x, y) in footprint.tiles() {
+            let tile = self
+                .tile_at(x, y)
+                .ok_or(BuildError::OutsideGeneratedChunks { x, y })?;
+            if !tile.collision.walkable {
+                return Err(BuildError::TileBlocked { x, y });
+            }
         }
 
         Ok(())

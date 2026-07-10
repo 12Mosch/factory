@@ -113,9 +113,25 @@ pub(in crate::simulation) fn selected_assembler_recipe<'a>(
         .filter(|recipe| recipe_is_unlocked(catalog, research, recipe.id))
 }
 
+/// Recipe category crafted by the assembling machine `entity_id`. Falls back
+/// to `Crafting` when the machine metadata is missing.
+pub(in crate::simulation) fn assembler_machine_category(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    entity_id: EntityId,
+) -> CraftingCategory {
+    entities
+        .placed_entity(entity_id)
+        .and_then(|placed| catalog.entity(placed.prototype_id))
+        .and_then(|prototype| prototype.assembling_machine.as_ref())
+        .map(|assembling_machine| assembling_machine.crafting_category)
+        .unwrap_or(CraftingCategory::Crafting)
+}
+
 pub(in crate::simulation) fn assembler_input_can_accept(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
+    machine_category: CraftingCategory,
     state: &AssemblingMachineState,
     stack: ItemStack,
 ) -> bool {
@@ -124,7 +140,7 @@ pub(in crate::simulation) fn assembler_input_can_accept(
     };
     let Some(recipe) = catalog
         .recipe(recipe_id)
-        .filter(|recipe| recipe.category == CraftingCategory::Crafting)
+        .filter(|recipe| recipe.category == machine_category)
     else {
         return false;
     };
@@ -206,6 +222,102 @@ pub(in crate::simulation) fn assembler_output_can_accept(
     true
 }
 
+/// Assigns each fluid ingredient a distinct `Input` fluid box currently
+/// holding at least the required amount of that fluid. Returns the box index
+/// per ingredient, or `None` when a recipe cannot be satisfied.
+pub(in crate::simulation) fn fluid_ingredient_box_indices(
+    prototype_boxes: &[factory_data::FluidBoxPrototype],
+    box_states: &[FluidBoxState],
+    fluid_ingredients: &[factory_data::FluidAmount],
+) -> Option<Vec<usize>> {
+    let mut used = vec![false; prototype_boxes.len()];
+    fluid_ingredients
+        .iter()
+        .map(|ingredient| {
+            let box_index =
+                prototype_boxes
+                    .iter()
+                    .enumerate()
+                    .position(|(box_index, prototype_box)| {
+                        !used[box_index]
+                            && prototype_box.io == factory_data::FluidBoxIo::Input
+                            && box_states.get(box_index).is_some_and(|state| {
+                                state.fluid_id == Some(ingredient.fluid)
+                                    && state.amount_milliunits >= ingredient.amount_milliunits
+                            })
+                    })?;
+            used[box_index] = true;
+            Some(box_index)
+        })
+        .collect()
+}
+
+/// Assigns each fluid product a distinct `Output` fluid box that accepts the
+/// fluid and has room for the produced amount. Returns the box index per
+/// product, or `None` when the outputs cannot be stored.
+pub(in crate::simulation) fn fluid_product_box_indices(
+    prototype_boxes: &[factory_data::FluidBoxPrototype],
+    box_states: &[FluidBoxState],
+    fluid_products: &[factory_data::FluidAmount],
+) -> Option<Vec<usize>> {
+    let mut used = vec![false; prototype_boxes.len()];
+    fluid_products
+        .iter()
+        .map(|product| {
+            let box_index =
+                prototype_boxes
+                    .iter()
+                    .enumerate()
+                    .position(|(box_index, prototype_box)| {
+                        !used[box_index]
+                            && prototype_box.io == factory_data::FluidBoxIo::Output
+                            && prototype_box
+                                .filter
+                                .is_none_or(|filter| filter == product.fluid)
+                            && box_states.get(box_index).is_some_and(|state| {
+                                state.fluid_id.is_none_or(|fluid| fluid == product.fluid)
+                                    && prototype_box
+                                        .capacity_milliunits
+                                        .saturating_sub(state.amount_milliunits)
+                                        >= product.amount_milliunits
+                            })
+                    })?;
+            used[box_index] = true;
+            Some(box_index)
+        })
+        .collect()
+}
+
+pub(in crate::simulation) fn consume_fluid_ingredients(
+    box_states: &mut [FluidBoxState],
+    box_indices: &[usize],
+    fluid_ingredients: &[factory_data::FluidAmount],
+) {
+    for (ingredient, &box_index) in fluid_ingredients.iter().zip(box_indices) {
+        let state = &mut box_states[box_index];
+        debug_assert_eq!(state.fluid_id, Some(ingredient.fluid));
+        state.amount_milliunits = state
+            .amount_milliunits
+            .checked_sub(ingredient.amount_milliunits)
+            .expect("fluid ingredient availability was checked before completion");
+        if state.amount_milliunits == 0 {
+            state.fluid_id = None;
+        }
+    }
+}
+
+pub(in crate::simulation) fn insert_fluid_products(
+    box_states: &mut [FluidBoxState],
+    box_indices: &[usize],
+    fluid_products: &[factory_data::FluidAmount],
+) {
+    for (product, &box_index) in fluid_products.iter().zip(box_indices) {
+        let state = &mut box_states[box_index];
+        state.fluid_id = Some(product.fluid);
+        state.amount_milliunits += product.amount_milliunits;
+    }
+}
+
 pub(in crate::simulation) fn stack_in_assembler_inventory_slot(
     inventory: &Inventory,
     slot_index: usize,
@@ -220,11 +332,12 @@ pub(in crate::simulation) fn stack_in_assembler_inventory_slot(
 fn assembler_recipe(
     catalog: &PrototypeCatalog,
     recipe_id: RecipeId,
+    machine_category: CraftingCategory,
 ) -> Result<&factory_data::RecipePrototype, AssemblerError> {
     let recipe = catalog
         .recipe(recipe_id)
         .ok_or(AssemblerError::MissingRecipe(recipe_id))?;
-    if recipe.category != CraftingCategory::Crafting {
+    if recipe.category != machine_category {
         return Err(AssemblerError::InvalidRecipe(recipe_id));
     }
     Ok(recipe)
@@ -236,7 +349,9 @@ impl Simulation {
         entity_id: EntityId,
         recipe_id: RecipeId,
     ) -> Result<(), AssemblerError> {
-        let recipe = assembler_recipe(&self.world.prototypes, recipe_id)?;
+        let machine_category =
+            assembler_machine_category(&self.world.prototypes, &self.entities, entity_id);
+        let recipe = assembler_recipe(&self.world.prototypes, recipe_id, machine_category)?;
         if !self.is_recipe_unlocked(recipe_id) {
             return Err(AssemblerError::RecipeLocked(recipe_id));
         }
@@ -265,7 +380,9 @@ impl Simulation {
         entity_id: EntityId,
         recipe_id: RecipeId,
     ) -> Result<bool, AssemblerError> {
-        assembler_recipe(&self.world.prototypes, recipe_id)?;
+        let machine_category =
+            assembler_machine_category(&self.world.prototypes, &self.entities, entity_id);
+        assembler_recipe(&self.world.prototypes, recipe_id, machine_category)?;
         if !self.is_recipe_unlocked(recipe_id) {
             return Ok(false);
         }
@@ -278,6 +395,8 @@ impl Simulation {
         &self,
         entity_id: EntityId,
     ) -> Result<Vec<AssemblerIngredientStatus>, AssemblerError> {
+        let machine_category =
+            assembler_machine_category(&self.world.prototypes, &self.entities, entity_id);
         let state = self.entities.assembler_state(entity_id)?;
         let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, &self.research, state)
         else {
@@ -287,7 +406,7 @@ impl Simulation {
                 Ok(Vec::new())
             };
         };
-        if recipe.category != CraftingCategory::Crafting {
+        if recipe.category != machine_category {
             return Err(AssemblerError::InvalidRecipe(recipe.id));
         }
 

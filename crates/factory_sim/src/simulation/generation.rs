@@ -94,11 +94,12 @@ pub(super) fn generate_tile(
         resource_at_patch_tile(seed, x, y, centers)
     };
 
-    if resource.is_some() {
+    if let Some(resource) = resource {
+        // Fluid resources (crude oil) are extracted by pumpjacks, never mined.
         collision = TileCollision {
             walkable: true,
             buildable: false,
-            minable: true,
+            minable: resource.resource_item != ids.crude_oil,
         };
     }
 
@@ -159,7 +160,7 @@ pub(super) fn generate_resource_patch_centers(
     bounds: TileBounds,
 ) -> Vec<ResourcePatchCenter> {
     let configs = resource_patch_configs(ids);
-    let starting_offsets = [(-22, -14), (18, -12), (-16, 20), (20, 18)];
+    let starting_offsets = [(-22, -14), (18, -12), (-16, 20), (20, 18), (-26, 4)];
     let mut centers = Vec::new();
 
     for (index, config) in configs.iter().enumerate() {
@@ -277,7 +278,7 @@ pub(super) fn resource_at_patch_tile(
     })
 }
 
-pub(super) fn resource_patch_configs(ids: WorldPrototypeIds) -> [ResourcePatchConfig; 4] {
+pub(super) fn resource_patch_configs(ids: WorldPrototypeIds) -> [ResourcePatchConfig; 5] {
     [
         ResourcePatchConfig {
             resource_item: ids.resources[0],
@@ -302,6 +303,12 @@ pub(super) fn resource_patch_configs(ids: WorldPrototypeIds) -> [ResourcePatchCo
             frequency_percent: 48,
             radius: 7,
             richness: 520,
+        },
+        ResourcePatchConfig {
+            resource_item: ids.crude_oil,
+            frequency_percent: 30,
+            radius: 4,
+            richness: 900,
         },
     ]
 }
@@ -365,6 +372,7 @@ pub(super) struct WorldPrototypeIds {
     pub(super) dirt: TileId,
     pub(super) water: TileId,
     pub(super) resources: [ItemId; 4],
+    pub(super) crude_oil: ItemId,
 }
 
 impl WorldPrototypeIds {
@@ -375,6 +383,7 @@ impl WorldPrototypeIds {
             dirt: ids.tiles.dirt,
             water: ids.tiles.water,
             resources: ids.items.resource_items(),
+            crude_oil: ids.items.crude_oil,
         }
     }
 }
@@ -391,6 +400,18 @@ pub(super) fn recipe_id(prototypes: &PrototypeCatalog, name: &str) -> RecipeId {
 #[cfg(test)]
 pub(super) fn technology_id(prototypes: &PrototypeCatalog, name: &str) -> TechnologyId {
     factory_data::technology_id_by_name(prototypes, name)
+}
+
+/// Whether `item_id` marks a fluid resource cell (crude oil): some pumpjack
+/// prototype extracts it. Fluid resources are excluded from solid mining by
+/// drills and the player.
+pub(super) fn is_fluid_resource_item(prototypes: &PrototypeCatalog, item_id: ItemId) -> bool {
+    prototypes.entities.iter().any(|prototype| {
+        prototype
+            .pumpjack
+            .as_ref()
+            .is_some_and(|pumpjack| pumpjack.resource_item == item_id)
+    })
 }
 
 pub(super) fn item_stack_size(prototypes: &PrototypeCatalog, item_id: ItemId) -> Option<u16> {

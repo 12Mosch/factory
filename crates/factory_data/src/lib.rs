@@ -19,9 +19,9 @@ pub use ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId
 pub use model::{
     AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CollisionLayer, CollisionMask,
     CraftingCategory, ElectricEnergySourcePrototype, ElectricPolePrototype, EntityKind,
-    EntityPrototype, FluidBoxPrototype, FluidConnectionPrototype, FluidConnectionSide,
-    FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype,
-    OffshorePumpPrototype, RecipePrototype, SplitterPrototype, SteamEnginePrototype,
-    TechnologyEffect, TechnologyPrototype, TilePrototype, TransportBeltPrototype,
-    UndergroundBeltPart, UndergroundBeltPrototype,
+    EntityPrototype, FluidAmount, FluidBoxIo, FluidBoxPrototype, FluidConnectionPrototype,
+    FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
+    MiningDrillPrototype, OffshorePumpPrototype, PumpjackPrototype, RecipePrototype,
+    SplitterPrototype, SteamEnginePrototype, TechnologyEffect, TechnologyPrototype, TilePrototype,
+    TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype,
 };

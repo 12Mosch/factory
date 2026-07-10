@@ -36,6 +36,7 @@ macro_rules! for_each_entity_state_map {
             transport_belts: crate::logistics::BeltSegment => TransportBelt,
             splitters: crate::logistics::SplitterState => Splitter,
             inserters: crate::logistics::InserterState => Inserter,
+            pumpjacks: crate::machines::PumpjackState => Pumpjack,
         }
     };
 }
@@ -120,6 +121,7 @@ mod tests {
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
     use crate::machines::{
         AssemblingMachineState, BurnerEnergy, BurnerMiningDrillState, FurnaceState, LabState,
+        PumpjackState,
     };
     use crate::player::ManualMiningTarget;
     use crate::power::{
@@ -133,7 +135,7 @@ mod tests {
         // means the save format changed (field order, field types, or state
         // added to the registry): update the constant and bump `SAVE_VERSION`
         // only for intentional format changes.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xb956_31cb_52d8_e310;
+        const EXPECTED_LAYOUT_HASH: u64 = 0x3924_b0f4_26cd_bd64;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -167,9 +169,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(15);
+        let mut store = EntityStore::empty(16);
 
-        for raw in 1..=14 {
+        for raw in 1..=15 {
             let id = EntityId::new(raw);
             let tile = raw as i32;
             store.entities.push(SimEntity {
@@ -320,6 +322,7 @@ mod tests {
                 },
             },
         );
+        store.pumpjacks.insert(EntityId::new(15), PumpjackState);
 
         store
     }

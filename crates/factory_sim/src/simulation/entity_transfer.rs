@@ -400,8 +400,16 @@ pub fn player_slot_to_assembler_input(
         .ok_or(AssemblerError::EmptySlot {
             slot_index: player_slot_index,
         })?;
+    let machine_category =
+        assembler_machine_category(&sim.world.prototypes, &sim.entities, entity_id);
     let state = sim.entities.assembler_state(entity_id)?;
-    if !assembler_input_can_accept(&sim.world.prototypes, &sim.research, state, stack) {
+    if !assembler_input_can_accept(
+        &sim.world.prototypes,
+        &sim.research,
+        machine_category,
+        state,
+        stack,
+    ) {
         return Err(AssemblerError::InvalidInput(stack.item_id));
     }
     if !state

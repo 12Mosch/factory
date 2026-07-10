@@ -34,7 +34,7 @@ pub use crate::logistics::{
 pub use crate::machines::{
     AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BurnerDrillError,
     BurnerEnergy, BurnerMiningDrillState, FurnaceError, FurnaceState, LabError, LabState,
-    MachineStatus,
+    MachineStatus, PumpjackState,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
 pub use crate::power::{

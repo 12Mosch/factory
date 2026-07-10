@@ -2,8 +2,8 @@ use serde::Deserialize;
 
 use crate::model::{
     AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CraftingCategory,
-    ElectricEnergySourcePrototype, EntityKind, FluidConnectionSide, OffshorePumpPrototype,
-    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
+    ElectricEnergySourcePrototype, EntityKind, FluidBoxIo, FluidConnectionSide,
+    OffshorePumpPrototype, SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -39,8 +39,14 @@ pub(crate) struct RawRecipePrototype {
     pub(crate) name: String,
     pub(crate) category: CraftingCategory,
     pub(crate) crafting_time_ticks: u32,
+    #[serde(default)]
     pub(crate) ingredients: Vec<RawItemAmount>,
+    #[serde(default)]
     pub(crate) products: Vec<RawItemAmount>,
+    #[serde(default)]
+    pub(crate) fluid_ingredients: Vec<RawFluidAmount>,
+    #[serde(default)]
+    pub(crate) fluid_products: Vec<RawFluidAmount>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,14 +69,24 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) steam_engine: Option<SteamEnginePrototype>,
     pub(crate) boiler: Option<BoilerPrototype>,
     pub(crate) offshore_pump: Option<OffshorePumpPrototype>,
+    pub(crate) pumpjack: Option<RawPumpjackPrototype>,
     #[serde(default)]
     pub(crate) fluid_boxes: Vec<RawFluidBoxPrototype>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawPumpjackPrototype {
+    pub(crate) pumping_speed_per_second_milliunits: u64,
+    pub(crate) resource_item: String,
+    pub(crate) output_fluid: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawFluidBoxPrototype {
     pub(crate) capacity_milliunits: u64,
     pub(crate) filter: Option<String>,
+    #[serde(default)]
+    pub(crate) io: FluidBoxIo,
     pub(crate) connections: Vec<RawFluidConnectionPrototype>,
 }
 
@@ -127,6 +143,13 @@ pub(crate) enum RawTechnologyEffect {
 pub(crate) struct RawItemAmount {
     pub(crate) item: String,
     pub(crate) amount: u16,
+}
+
+/// Fluid quantity in whole fluid units; converted to milliunits on load.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawFluidAmount {
+    pub(crate) fluid: String,
+    pub(crate) amount: u32,
 }
 
 #[derive(Debug, Deserialize)]
