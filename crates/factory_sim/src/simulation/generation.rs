@@ -556,6 +556,18 @@ pub(super) fn resource_at_patch_tile(
     })
 }
 
+const RESOURCE_EDGE_SALT: u64 = 0x7b5d_1f25_8c92_f6a3;
+
+/// Wavelength and octave count of the patch edge field: small enough that a
+/// single patch grows several lobes, coarse enough that neighbouring tiles
+/// agree instead of flickering per tile.
+const RESOURCE_EDGE_SCALE: u32 = 8;
+const RESOURCE_EDGE_OCTAVES: u32 = 2;
+
+/// Coherent radius offset in `[-edge_noise, edge_noise]` for a resource patch
+/// boundary. Samples a small-scale [`terrain_field`] salted per resource, so
+/// patch outlines bulge in organic lobes rather than single-tile fuzz —
+/// the same fix the terrain bands use against salt-and-pepper noise.
 pub(super) fn resource_edge_noise(
     seed: u64,
     x: WorldTileCoord,
@@ -563,12 +575,17 @@ pub(super) fn resource_edge_noise(
     resource_item: ItemId,
     edge_noise: i32,
 ) -> i32 {
-    let hash = hash_world(
-        seed ^ 0x7b5d_1f25_8c92_f6a3 ^ u64::from(resource_item.raw()),
+    if edge_noise <= 0 {
+        return 0;
+    }
+    let field = terrain_field(
+        seed ^ RESOURCE_EDGE_SALT ^ u64::from(resource_item.raw()),
         x,
         y,
+        RESOURCE_EDGE_SCALE,
+        RESOURCE_EDGE_OCTAVES,
     );
-    (hash % (edge_noise * 2 + 1) as u64) as i32 - edge_noise
+    ((field * (edge_noise as u64 * 2 + 1)) >> NOISE_ONE_BITS) as i32 - edge_noise
 }
 
 pub(super) fn hash_resource_center(
@@ -891,6 +908,63 @@ mod tests {
                     "seed {seed}: no resource at starting patch center ({x}, {y})"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn resource_edge_noise_is_coherent_across_neighbouring_tiles() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+        let resource = rules
+            .resources
+            .first()
+            .expect("base catalog should configure resources");
+
+        for seed in [0, 42, 123, 8675309] {
+            let mut pairs = 0u64;
+            let mut equal = 0u64;
+            let mut seen_min = i32::MAX;
+            let mut seen_max = i32::MIN;
+            for y in -96..96i64 {
+                for x in -96..96i64 {
+                    let noise =
+                        resource_edge_noise(seed, x, y, resource.resource_item, rules.edge_noise);
+                    assert!(
+                        (-rules.edge_noise..=rules.edge_noise).contains(&noise),
+                        "seed {seed}: edge noise {noise} at ({x}, {y}) outside \
+                         [-{0}, {0}]",
+                        rules.edge_noise
+                    );
+                    seen_min = seen_min.min(noise);
+                    seen_max = seen_max.max(noise);
+                    let right = resource_edge_noise(
+                        seed,
+                        x + 1,
+                        y,
+                        resource.resource_item,
+                        rules.edge_noise,
+                    );
+                    pairs += 1;
+                    if noise == right {
+                        equal += 1;
+                    }
+                }
+            }
+
+            // Independent per-tile hashing agrees with its neighbour about
+            // 1/(2*edge_noise+1) of the time (~14% for edge_noise 3); a
+            // coherent field agrees far more often.
+            let equal_fraction = equal as f64 / pairs as f64;
+            assert!(
+                equal_fraction > 0.5,
+                "seed {seed}: only {equal_fraction:.3} of neighbouring tiles share an \
+                 edge offset; patch borders look like per-tile fuzz"
+            );
+            assert!(
+                seen_max - seen_min >= rules.edge_noise,
+                "seed {seed}: edge noise spread [{seen_min}, {seen_max}] is too flat \
+                 to shape patch outlines"
+            );
         }
     }
 
