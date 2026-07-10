@@ -96,7 +96,7 @@ pub(super) fn sync_visible_world_tiles_impl(
         };
         let entity = commands
             .spawn((
-                Mesh2d(meshes.add(world_chunk_mesh(chunk, ids))),
+                Mesh2d(meshes.add(world_chunk_mesh(sim.world(), chunk, ids))),
                 MeshMaterial2d(material.clone()),
                 Transform::default(),
                 WorldChunkMesh,

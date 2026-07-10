@@ -76,9 +76,12 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
     let chunk = sim.world().chunks[&ChunkCoord { x: 0, y: 0 }].clone();
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
 
-    let mesh = world_chunk_mesh(&chunk, ids);
+    let mesh = world_chunk_mesh(sim.world(), &chunk, ids);
     let (positions, colors) = mesh_quads(&mesh);
-    let quad_count = positions.len() / 4;
+    let base_quad_indices = (0..positions.len() / 4)
+        .filter(|quad| positions[quad * 4][2] == 0.0)
+        .collect::<Vec<_>>();
+    let quad_count = base_quad_indices.len();
     let tile_count = chunk.tiles.len();
     assert!(
         quad_count < tile_count,
@@ -87,7 +90,7 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
 
     let size = CHUNK_SIZE as usize;
     let mut painted = vec![None; tile_count];
-    for quad in 0..quad_count {
+    for quad in base_quad_indices {
         let min = positions[quad * 4];
         let max = positions[quad * 4 + 2];
         let color = colors[quad * 4];
@@ -105,13 +108,18 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
     }
 
     for (index, tile) in chunk.tiles.iter().enumerate() {
-        let expected = tile_color(tile.tile_id, ids).to_linear().to_f32_array();
+        let (x, y) = chunk
+            .coord
+            .tile_at((index % size) as i32, (index / size) as i32);
+        let expected = tile_color(tile.tile_id, ids, sim.seed(), x, y)
+            .to_linear()
+            .to_f32_array();
         assert_eq!(painted[index], Some(expected), "tile {index} coverage");
     }
 }
 
 #[test]
-fn world_chunk_mesh_collapses_uniform_chunk_to_single_quad() {
+fn world_chunk_mesh_variants_are_seed_deterministic() {
     let mut sim = Simulation::new_test_world(123);
     sim.ensure_chunk_generated(ChunkCoord { x: 0, y: 0 });
     let mut chunk = sim.world().chunks[&ChunkCoord { x: 0, y: 0 }].clone();
@@ -121,9 +129,13 @@ fn world_chunk_mesh_collapses_uniform_chunk_to_single_quad() {
     }
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
 
-    let mesh = world_chunk_mesh(&chunk, ids);
-    let (positions, _) = mesh_quads(&mesh);
-    assert_eq!(positions.len(), 4);
+    let first = world_chunk_mesh(sim.world(), &chunk, ids);
+    let second = world_chunk_mesh(sim.world(), &chunk, ids);
+    assert_eq!(mesh_quads(&first), mesh_quads(&second));
+
+    let other_sim = Simulation::new_test_world(124);
+    let other = world_chunk_mesh(other_sim.world(), &chunk, ids);
+    assert_ne!(mesh_quads(&first), mesh_quads(&other));
 }
 
 fn mesh_quads(mesh: &Mesh) -> (Vec<[f32; 3]>, Vec<[f32; 4]>) {
