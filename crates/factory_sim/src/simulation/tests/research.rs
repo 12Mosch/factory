@@ -491,6 +491,16 @@ fn moving_queued_research_rejects_invalid_prerequisite_order() {
     sim.enqueue_research(logistic_science_pack).unwrap();
     sim.enqueue_research(logistics_2).unwrap();
 
+    let queue_before_move = sim.research_queue().to_vec();
+
+    assert_eq!(
+        sim.can_move_queued_research(0, 1),
+        Err(ResearchError::PrerequisiteLocked {
+            technology_id: electric_power,
+            prerequisite_id: automation,
+        })
+    );
+    assert_eq!(sim.research_queue(), queue_before_move);
     assert_eq!(
         sim.move_queued_research(0, 1),
         Err(ResearchError::PrerequisiteLocked {
@@ -506,6 +516,51 @@ fn moving_queued_research_rejects_invalid_prerequisite_order() {
             logistic_science_pack,
             logistics_2
         ]
+    );
+}
+
+#[test]
+#[ignore = "manual performance measurement"]
+fn queued_research_move_validation_benchmark() {
+    const ITERATIONS: usize = 10_000;
+
+    let mut sim = Simulation::new_test_world(123);
+    let automation = technology_id(&sim.world.prototypes, "automation");
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    let electric_power = technology_id(&sim.world.prototypes, "electric_power");
+    let logistic_science_pack = technology_id(&sim.world.prototypes, "logistic_science_pack");
+    let logistics_2 = technology_id(&sim.world.prototypes, "logistics_2");
+
+    sim.enqueue_research(logistics).unwrap();
+    sim.enqueue_research(automation).unwrap();
+    sim.enqueue_research(electric_power).unwrap();
+    sim.enqueue_research(logistic_science_pack).unwrap();
+    sim.enqueue_research(logistics_2).unwrap();
+
+    for _ in 0..100 {
+        let mut trial = sim.clone();
+        assert!(trial.move_queued_research(0, 1).is_err());
+        assert!(sim.can_move_queued_research(0, 1).is_err());
+    }
+
+    let clone_validation_start = std::time::Instant::now();
+    for _ in 0..ITERATIONS {
+        let mut trial = sim.clone();
+        assert!(std::hint::black_box(trial.move_queued_research(0, 1)).is_err());
+    }
+    let clone_validation = clone_validation_start.elapsed();
+
+    let research_validation_start = std::time::Instant::now();
+    for _ in 0..ITERATIONS {
+        assert!(std::hint::black_box(sim.can_move_queued_research(0, 1)).is_err());
+    }
+    let research_validation = research_validation_start.elapsed();
+
+    eprintln!(
+        "queued_research_move_validation: full_sim_clone={:.3} us/op, research_state={:.3} us/op, speedup={:.1}x",
+        clone_validation.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64,
+        research_validation.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64,
+        clone_validation.as_secs_f64() / research_validation.as_secs_f64(),
     );
 }
 

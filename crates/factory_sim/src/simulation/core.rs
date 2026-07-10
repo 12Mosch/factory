@@ -1,6 +1,6 @@
 use super::research_ops::{
-    add_research_units_to_state, can_select_research_in_state,
-    promote_next_queued_research_in_state,
+    add_research_units_to_state, can_move_queued_research_in_state, can_select_research_in_state,
+    promote_next_queued_research_in_state, validate_research_queue_order_in_state,
 };
 use super::*;
 
@@ -226,9 +226,15 @@ impl Simulation {
     }
 
     pub fn can_enqueue_research(&self, technology_id: TechnologyId) -> Result<(), ResearchError> {
-        let mut proposed_queue = self.research.queue.clone();
-        proposed_queue.push(technology_id);
-        self.validate_research_queue_order(&proposed_queue)
+        validate_research_queue_order_in_state(
+            &self.world.prototypes,
+            &self.research,
+            self.research
+                .queue
+                .iter()
+                .copied()
+                .chain(std::iter::once(technology_id)),
+        )
     }
 
     pub fn enqueue_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
@@ -254,23 +260,29 @@ impl Simulation {
         from_index: usize,
         to_index: usize,
     ) -> Result<(), ResearchError> {
-        let len = self.research.queue.len();
-        if from_index >= len {
-            return Err(ResearchError::InvalidQueueIndex { index: from_index });
-        }
-        if to_index >= len {
-            return Err(ResearchError::InvalidQueueIndex { index: to_index });
-        }
+        self.can_move_queued_research(from_index, to_index)?;
         if from_index == to_index {
             return Ok(());
         }
 
-        let mut proposed_queue = self.research.queue.clone();
-        let technology_id = proposed_queue.remove(from_index);
-        proposed_queue.insert(to_index, technology_id);
-        self.validate_research_queue_order(&proposed_queue)?;
-        self.research.queue = proposed_queue;
+        let technology_id = self.research.queue.remove(from_index);
+        self.research.queue.insert(to_index, technology_id);
         Ok(())
+    }
+
+    /// Checks whether a queued research item can be moved without changing the
+    /// simulation. Queue validation only reads research state and prototypes.
+    pub fn can_move_queued_research(
+        &self,
+        from_index: usize,
+        to_index: usize,
+    ) -> Result<(), ResearchError> {
+        can_move_queued_research_in_state(
+            &self.world.prototypes,
+            &self.research,
+            from_index,
+            to_index,
+        )
     }
 
     pub fn add_research_units(
@@ -319,47 +331,6 @@ impl Simulation {
 
     fn promote_next_queued_research(&mut self) -> Result<(), ResearchError> {
         promote_next_queued_research_in_state(&self.world.prototypes, &mut self.research)
-    }
-
-    fn validate_research_queue_order(&self, queue: &[TechnologyId]) -> Result<(), ResearchError> {
-        let mut available = self.researched_technology_ids();
-        if let Some(active_id) = self.research.active {
-            let state = self.technology_research_state(active_id)?;
-            if state.unlocked {
-                return Err(ResearchError::AlreadyResearched(active_id));
-            }
-            available.push(active_id);
-        }
-        let mut seen = Vec::new();
-
-        for technology_id in queue {
-            if self.research.active == Some(*technology_id) {
-                return Err(ResearchError::AlreadyActive(*technology_id));
-            }
-            if seen.contains(technology_id) {
-                return Err(ResearchError::AlreadyQueued(*technology_id));
-            }
-
-            let technology = self.technology_by_id(*technology_id)?;
-            let state = self.technology_research_state(*technology_id)?;
-            if state.unlocked {
-                return Err(ResearchError::AlreadyResearched(*technology_id));
-            }
-
-            for prerequisite_id in &technology.prerequisites {
-                if !available.contains(prerequisite_id) {
-                    return Err(ResearchError::PrerequisiteLocked {
-                        technology_id: *technology_id,
-                        prerequisite_id: *prerequisite_id,
-                    });
-                }
-            }
-
-            seen.push(*technology_id);
-            available.push(*technology_id);
-        }
-
-        Ok(())
     }
 
     fn remove_queued_research_and_dependents(&mut self, index: usize) -> Vec<TechnologyId> {
