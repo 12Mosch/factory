@@ -116,13 +116,7 @@ pub(super) fn generate_terrain(
         // slice of the value range proportional to its weight, in declaration
         // order from the lowest values upward. Contiguous low regions become
         // lakes instead of scattered single tiles.
-        let field = terrain_field(
-            seed ^ TERRAIN_FIELD_SALT,
-            x,
-            y,
-            rules.noise_scale,
-            rules.noise_octaves,
-        );
+        let field = warped_terrain_field(seed, x, y, rules.noise_scale, rules.noise_octaves);
         let field = match &rules.spawn_bias {
             Some(bias) => bias.apply(x, y, field),
             None => field,
@@ -141,6 +135,51 @@ pub(super) fn generate_terrain(
 }
 
 const TERRAIN_FIELD_SALT: u64 = 0x5e2d_58d8_b3bc_e8ee;
+const WARP_X_SALT: u64 = 0x3c6e_f372_fe94_f82a;
+const WARP_Y_SALT: u64 = 0xd1b5_4a32_d192_ed03;
+
+/// Octave count of the warp fields: low, so offsets bend coastlines in broad
+/// curves instead of re-adding the per-tile jitter the coherent field removed.
+const WARP_OCTAVES: u32 = 2;
+
+/// Domain-warped terrain field: offsets the sample position by two extra
+/// low-octave noise fields before evaluating [`terrain_field`]. Smoothstepped
+/// value noise on a square lattice produces visibly axis-aligned, blobby
+/// features at chunk scale; warping the input coordinates through independent
+/// coherent offsets turns round lakes and straight shores into irregular,
+/// winding ones while reusing the same integer-only, per-tile machinery, so
+/// generation stays deterministic and chunk-order independent.
+pub(super) fn warped_terrain_field(
+    seed: u64,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+    scale: u32,
+    octaves: u32,
+) -> u64 {
+    let warp_x = warp_offset(seed ^ WARP_X_SALT, x, y, scale);
+    let warp_y = warp_offset(seed ^ WARP_Y_SALT, x, y, scale);
+    terrain_field(
+        seed ^ TERRAIN_FIELD_SALT,
+        x.wrapping_add(warp_x),
+        y.wrapping_add(warp_y),
+        scale,
+        octaves,
+    )
+}
+
+/// Coherent coordinate offset in `[-scale / 2, scale / 2]` for domain
+/// warping. The warp field shares the base wavelength of the terrain field it
+/// distorts, and its amplitude of half that wavelength displaces shores by up
+/// to a quarter of a feature — enough to break up lattice-aligned blobs
+/// without tearing the field's continuity.
+fn warp_offset(seed: u64, x: WorldTileCoord, y: WorldTileCoord, scale: u32) -> i64 {
+    let amplitude = i64::from(scale / 2);
+    if amplitude == 0 {
+        return 0;
+    }
+    let field = terrain_field(seed, x, y, scale, WARP_OCTAVES);
+    ((field * (amplitude as u64 * 2 + 1)) >> NOISE_ONE_BITS) as i64 - amplitude
+}
 
 /// Q16 fixed-point one for the noise field; noise values live in
 /// `[0, NOISE_ONE)`.
@@ -964,6 +1003,92 @@ mod tests {
                 seen_max - seen_min >= rules.edge_noise,
                 "seed {seed}: edge noise spread [{seen_min}, {seen_max}] is too flat \
                  to shape patch outlines"
+            );
+        }
+    }
+
+    #[test]
+    fn warp_offsets_are_coherent_and_span_their_range() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+        let amplitude = i64::from(rules.noise_scale / 2);
+        assert!(
+            amplitude > 0,
+            "base catalog noise scale should be large enough to warp"
+        );
+
+        for seed in [0, 42, 123, 8675309] {
+            let warp_seed = seed ^ WARP_X_SALT;
+            let mut pairs = 0u64;
+            let mut equal = 0u64;
+            let mut seen_min = i64::MAX;
+            let mut seen_max = i64::MIN;
+            for y in -96..96i64 {
+                for x in -96..96i64 {
+                    let offset = warp_offset(warp_seed, x, y, rules.noise_scale);
+                    assert!(
+                        (-amplitude..=amplitude).contains(&offset),
+                        "seed {seed}: warp offset {offset} at ({x}, {y}) outside \
+                         [-{amplitude}, {amplitude}]"
+                    );
+                    seen_min = seen_min.min(offset);
+                    seen_max = seen_max.max(offset);
+                    let right = warp_offset(warp_seed, x + 1, y, rules.noise_scale);
+                    pairs += 1;
+                    if offset == right {
+                        equal += 1;
+                    }
+                }
+            }
+
+            // Independent per-tile hashing agrees with its neighbour about
+            // 1/(2*amplitude+1) of the time; a coherent warp field agrees far
+            // more often, which is what keeps warped shores connected.
+            let equal_fraction = equal as f64 / pairs as f64;
+            assert!(
+                equal_fraction > 0.5,
+                "seed {seed}: only {equal_fraction:.3} of neighbouring tiles share a \
+                 warp offset; the warp field is not coherent"
+            );
+            assert!(
+                seen_max - seen_min >= amplitude,
+                "seed {seed}: warp offset spread [{seen_min}, {seen_max}] is too flat \
+                 to reshape coastlines"
+            );
+        }
+    }
+
+    #[test]
+    fn domain_warp_displaces_the_terrain_field() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+
+        for seed in [0, 42, 123, 8675309] {
+            let mut total = 0u64;
+            let mut moved = 0u64;
+            for y in -96..96i64 {
+                for x in -96..96i64 {
+                    let unwarped = terrain_field(
+                        seed ^ TERRAIN_FIELD_SALT,
+                        x,
+                        y,
+                        rules.noise_scale,
+                        rules.noise_octaves,
+                    );
+                    let warped =
+                        warped_terrain_field(seed, x, y, rules.noise_scale, rules.noise_octaves);
+                    total += 1;
+                    if warped != unwarped {
+                        moved += 1;
+                    }
+                }
+            }
+
+            let moved_fraction = moved as f64 / total as f64;
+            assert!(
+                moved_fraction > 0.9,
+                "seed {seed}: only {moved_fraction:.3} of tiles changed under domain \
+                 warping; the warp is a near no-op"
             );
         }
     }
