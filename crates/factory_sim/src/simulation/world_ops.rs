@@ -361,6 +361,11 @@ fn mine_resource_from_tile(
     prototypes: &PrototypeCatalog,
     amount: u32,
 ) -> Option<MinedResource> {
+    // Fluid resources (e.g. crude oil) are extracted by pumpjacks, never mined.
+    if !tile.collision.minable {
+        return None;
+    }
+
     let resource = tile.resource.as_mut()?;
     let mined_amount = amount.min(resource.amount);
     let mined = MinedResource {
