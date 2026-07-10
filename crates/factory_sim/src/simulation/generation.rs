@@ -616,11 +616,13 @@ pub(super) fn resource_at_patch_tile(
         let falloff = u64::from((radius_sq - distance_sq).max(1));
         let base = u64::from(candidate.center.richness / 3);
         let scaled = u64::from(candidate.center.richness) * falloff / u64::from(radius_sq);
-        let variation = hash_world(seed ^ 0x1d17_5f2c_6b31_f011, x, y) % base.max(1);
 
         ResourceCell {
             resource_item: candidate.center.resource_item,
-            amount: u32::try_from(base + scaled + variation).unwrap_or(u32::MAX),
+            // Richness should read as a smooth gradient toward the center.
+            // The coherent edge field still makes patch outlines organic, but
+            // independent per-tile variation would obscure this radial falloff.
+            amount: u32::try_from(base + scaled).unwrap_or(u32::MAX),
         }
     })
 }
@@ -1030,6 +1032,39 @@ mod tests {
                  to shape patch outlines"
             );
         }
+    }
+
+    #[test]
+    fn resource_richness_falls_smoothly_from_patch_center() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let resource_item = catalog
+            .world_generation
+            .resources
+            .first()
+            .expect("base catalog should configure resources")
+            .resource_item;
+        let centers = [ResourcePatchCenter {
+            resource_item,
+            x: 0,
+            y: 0,
+            radius: 10,
+            richness: 300,
+        }];
+
+        let amounts: Vec<_> = [0, 1, 5, 9]
+            .into_iter()
+            .map(|x| {
+                resource_at_patch_tile(123, x, 0, &centers, 0)
+                    .expect("tile should be inside the patch")
+                    .amount
+            })
+            .collect();
+
+        assert_eq!(amounts[0], 400);
+        assert!(
+            amounts.windows(2).all(|pair| pair[0] > pair[1]),
+            "resource amounts should decrease monotonically from the center: {amounts:?}"
+        );
     }
 
     #[test]
