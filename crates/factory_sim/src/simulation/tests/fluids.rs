@@ -435,6 +435,64 @@ fn storage_tank_equalizes_with_connected_pipe_by_fill_percentage() {
 }
 
 #[test]
+fn fluid_connection_directions_reports_joined_neighbors() {
+    let mut sim = Simulation::new_test_world(123);
+    let tank = entity_id_by_name(&sim.world.prototypes, "storage_tank");
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let (x, y) = first_buildable_rect(&sim.world, 5, 3);
+    let tank_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: tank,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("storage tank should be placeable");
+    let first_pipe = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x: x + 3,
+            y: y + 1,
+            direction: Direction::North,
+        },
+    )
+    .expect("pipe should connect to tank east port");
+    let second_pipe = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x: x + 4,
+            y: y + 1,
+            direction: Direction::North,
+        },
+    )
+    .expect("second pipe should be placeable");
+
+    let directions = |entity_id| crate::entity_access::fluid_connection_directions(&sim, entity_id);
+    let mask = |connected: [bool; 4]| {
+        Direction::ALL
+            .into_iter()
+            .filter(|direction| connected[direction.index()])
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        mask(directions(first_pipe)),
+        vec![Direction::East, Direction::West],
+        "middle pipe should join the tank to its west and the pipe to its east"
+    );
+    assert_eq!(mask(directions(second_pipe)), vec![Direction::West]);
+    assert!(
+        directions(tank_id)[Direction::East.index()],
+        "tank east port should join the adjacent pipe"
+    );
+    assert_eq!(mask(directions(EntityId::new(u64::MAX))), Vec::new());
+}
+
+#[test]
 fn removing_pipe_splits_fluid_network_without_invalid_fluid_state() {
     let mut sim = Simulation::new_test_world(123);
     let tank = entity_id_by_name(&sim.world.prototypes, "storage_tank");

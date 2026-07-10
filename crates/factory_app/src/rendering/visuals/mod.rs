@@ -12,6 +12,7 @@ use factory_sim::Direction;
 pub(crate) use cache::VisualAssetCache;
 use cache::VisualCacheKey;
 use rasterizer::rasterize_visual;
+pub(crate) use templates::ConnectionMask;
 use templates::VisualTemplate;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -20,6 +21,7 @@ pub(crate) struct EntityVisualStyle {
     pub(crate) size: Vec2,
     pub(crate) kind: EntityKind,
     pub(crate) direction: Direction,
+    pub(crate) connections: ConnectionMask,
 }
 
 #[derive(SystemParam)]
@@ -34,6 +36,7 @@ impl VisualAssets<'_> {
             VisualTemplate::Entity {
                 kind: style.kind,
                 direction: style.direction,
+                connections: style.connections,
             },
             style.base_color,
             style.size,
