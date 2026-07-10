@@ -115,3 +115,109 @@ pub(super) fn can_select_research_in_state(
 
     Ok(())
 }
+
+/// Validates a queued-research move without modifying the queue or any other
+/// simulation state.
+pub(super) fn can_move_queued_research_in_state(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    from_index: usize,
+    to_index: usize,
+) -> Result<(), ResearchError> {
+    let queue = &research.queue;
+    let len = queue.len();
+    if from_index >= len {
+        return Err(ResearchError::InvalidQueueIndex { index: from_index });
+    }
+    if to_index >= len {
+        return Err(ResearchError::InvalidQueueIndex { index: to_index });
+    }
+    if from_index == to_index {
+        return Ok(());
+    }
+
+    validate_research_queue_order_in_state(
+        catalog,
+        research,
+        (0..len).map(|index| queued_research_after_move(queue, from_index, to_index, index)),
+    )
+}
+
+/// Validates a research queue using only the prototype catalog and research
+/// state. This keeps queue validation independent from the rest of the world.
+pub(super) fn validate_research_queue_order_in_state(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    queue: impl IntoIterator<Item = TechnologyId>,
+) -> Result<(), ResearchError> {
+    let mut available = research
+        .technologies
+        .iter()
+        .filter(|state| state.unlocked)
+        .map(|state| state.technology_id)
+        .collect::<Vec<_>>();
+    if let Some(active_id) = research.active {
+        let state = research
+            .technology_state(active_id)
+            .ok_or(ResearchError::MissingTechnology(active_id))?;
+        if state.unlocked {
+            return Err(ResearchError::AlreadyResearched(active_id));
+        }
+        available.push(active_id);
+    }
+    let mut seen = Vec::new();
+
+    for technology_id in queue {
+        if research.active == Some(technology_id) {
+            return Err(ResearchError::AlreadyActive(technology_id));
+        }
+        if seen.contains(&technology_id) {
+            return Err(ResearchError::AlreadyQueued(technology_id));
+        }
+
+        let technology = catalog
+            .technology(technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))?;
+        let state = research
+            .technology_state(technology_id)
+            .ok_or(ResearchError::MissingTechnology(technology_id))?;
+        if state.unlocked {
+            return Err(ResearchError::AlreadyResearched(technology_id));
+        }
+
+        for prerequisite_id in &technology.prerequisites {
+            if !available.contains(prerequisite_id) {
+                return Err(ResearchError::PrerequisiteLocked {
+                    technology_id,
+                    prerequisite_id: *prerequisite_id,
+                });
+            }
+        }
+
+        seen.push(technology_id);
+        available.push(technology_id);
+    }
+
+    Ok(())
+}
+
+fn queued_research_after_move(
+    queue: &[TechnologyId],
+    from_index: usize,
+    to_index: usize,
+    index: usize,
+) -> TechnologyId {
+    if index == to_index {
+        return queue[from_index];
+    }
+
+    if from_index < to_index && (from_index..to_index).contains(&index) {
+        return queue[index + 1];
+    }
+
+    if to_index < from_index && ((to_index + 1)..=from_index).contains(&index) {
+        return queue[index - 1];
+    }
+
+    queue[index]
+}

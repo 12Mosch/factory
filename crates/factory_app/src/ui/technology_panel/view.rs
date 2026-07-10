@@ -432,6 +432,5 @@ fn can_move_queued_research(
     from_index: usize,
     to_index: usize,
 ) -> bool {
-    let mut sim = sim.clone();
-    sim.move_queued_research(from_index, to_index).is_ok()
+    sim.can_move_queued_research(from_index, to_index).is_ok()
 }
