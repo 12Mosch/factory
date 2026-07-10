@@ -3,7 +3,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use super::layers::{VisualLayer, color_to_unit_array, unit_to_u8};
+use super::layers::{VisualLayer, VisualPrimitive, color_to_unit_array, unit_to_u8};
 use super::recipes::visual_layers;
 use super::templates::VisualTemplate;
 use crate::constants::TILE_SIZE;
@@ -84,12 +84,31 @@ fn paint_layer(data: &mut [u8], width: u32, height: u32, visual_size: Vec2, laye
         for x in 0..width {
             let world_x = ((x as f32 + 0.5) / width as f32 - 0.5) * visual_size.x;
             let local_x = world_x - layer.offset.x;
-            if local_x.abs() > layer.size.x * 0.5 {
+            if !contains_point(layer.primitive, layer.size, Vec2::new(local_x, local_y)) {
                 continue;
             }
 
             let index = ((y * width + x) * 4) as usize;
             blend_pixel(&mut data[index..index + 4], color);
+        }
+    }
+}
+
+fn contains_point(primitive: VisualPrimitive, size: Vec2, point: Vec2) -> bool {
+    let half_size = size * 0.5;
+    match primitive {
+        VisualPrimitive::Rectangle => point.abs().cmple(half_size).all(),
+        VisualPrimitive::Ellipse => {
+            let normalized = point / half_size;
+            normalized.length_squared() <= 1.0
+        }
+        VisualPrimitive::RoundedRectangle { radius } => {
+            let radius = radius.clamp(0.0, half_size.min_element());
+            let inner_half_size = (half_size - Vec2::splat(radius)).max(Vec2::ZERO);
+            (point.abs() - inner_half_size)
+                .max(Vec2::ZERO)
+                .length_squared()
+                <= radius * radius
         }
     }
 }
@@ -136,12 +155,14 @@ mod tests {
                 offset: Vec2::new(5.0, -2.0),
                 z: 0.0,
                 color: Color::WHITE,
+                primitive: VisualPrimitive::Rectangle,
             },
             VisualLayer {
                 size: Vec2::new(8.0, 2.0),
                 offset: Vec2::new(-1.0, 8.0),
                 z: 0.0,
                 color: Color::WHITE,
+                primitive: VisualPrimitive::Rectangle,
             },
         ];
 
@@ -149,5 +170,24 @@ mod tests {
             visual_size_for_layers(&layers, Vec2::new(3.0, 3.0)),
             Vec2::new(14.0, 18.0)
         );
+    }
+
+    #[test]
+    fn procedural_primitives_have_non_rectangular_silhouettes() {
+        let size = Vec2::splat(2.0);
+        let corner = Vec2::new(0.9, 0.9);
+
+        assert!(contains_point(VisualPrimitive::Rectangle, size, corner));
+        assert!(!contains_point(VisualPrimitive::Ellipse, size, corner));
+        assert!(!contains_point(
+            VisualPrimitive::RoundedRectangle { radius: 0.5 },
+            size,
+            corner
+        ));
+        assert!(contains_point(
+            VisualPrimitive::RoundedRectangle { radius: 0.5 },
+            size,
+            Vec2::new(0.5, 0.5)
+        ));
     }
 }
