@@ -9,6 +9,18 @@ pub(super) struct VisualLayer {
     pub(super) offset: Vec2,
     pub(super) z: f32,
     pub(super) color: Color,
+    pub(super) primitive: VisualPrimitive,
+}
+
+/// A rasterizable silhouette for a visual layer.
+///
+/// Keeping primitives in world units lets recipes remain resolution independent while the
+/// rasterizer can choose an appropriate texture resolution for each entity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum VisualPrimitive {
+    Rectangle,
+    RoundedRectangle { radius: f32 },
+    Ellipse,
 }
 
 pub(super) struct VisualLayerBuilder {
@@ -25,11 +37,44 @@ impl VisualLayerBuilder {
     }
 
     pub(super) fn rect(&mut self, size: Vec2, offset: Vec2, z: f32, color: Color) -> &mut Self {
+        self.push(size, offset, z, color, VisualPrimitive::Rectangle)
+    }
+
+    pub(super) fn rounded_rect(
+        &mut self,
+        size: Vec2,
+        offset: Vec2,
+        z: f32,
+        color: Color,
+        radius: f32,
+    ) -> &mut Self {
+        self.push(
+            size,
+            offset,
+            z,
+            color,
+            VisualPrimitive::RoundedRectangle { radius },
+        )
+    }
+
+    pub(super) fn ellipse(&mut self, size: Vec2, offset: Vec2, z: f32, color: Color) -> &mut Self {
+        self.push(size, offset, z, color, VisualPrimitive::Ellipse)
+    }
+
+    fn push(
+        &mut self,
+        size: Vec2,
+        offset: Vec2,
+        z: f32,
+        color: Color,
+        primitive: VisualPrimitive,
+    ) -> &mut Self {
         self.layers.push(VisualLayer {
             size,
             offset,
             z,
             color,
+            primitive,
         });
         self
     }
@@ -42,6 +87,39 @@ impl VisualLayerBuilder {
         color: Color,
     ) -> &mut Self {
         self.rect(
+            self.base_size * size_scale,
+            self.base_size * offset_scale,
+            z,
+            color,
+        )
+    }
+
+    pub(super) fn scaled_rounded(
+        &mut self,
+        size_scale: Vec2,
+        offset_scale: Vec2,
+        z: f32,
+        color: Color,
+        radius_scale: f32,
+    ) -> &mut Self {
+        let size = self.base_size * size_scale;
+        self.rounded_rect(
+            size,
+            self.base_size * offset_scale,
+            z,
+            color,
+            size.min_element() * radius_scale,
+        )
+    }
+
+    pub(super) fn scaled_ellipse(
+        &mut self,
+        size_scale: Vec2,
+        offset_scale: Vec2,
+        z: f32,
+        color: Color,
+    ) -> &mut Self {
+        self.ellipse(
             self.base_size * size_scale,
             self.base_size * offset_scale,
             z,
@@ -200,6 +278,35 @@ mod tests {
         assert_eq!(layers[0].size, Vec2::new(2.5, 10.0));
         assert_eq!(layers[0].offset, Vec2::new(-1.0, 4.0));
         assert_eq!(layers[0].z, 0.5);
+        assert_eq!(layers[0].primitive, VisualPrimitive::Rectangle);
+    }
+
+    #[test]
+    fn rounded_scaled_uses_the_smaller_axis_for_its_radius() {
+        let mut builder = VisualLayerBuilder::new(Vec2::new(10.0, 20.0));
+        builder.scaled_rounded(Vec2::new(0.80, 0.50), Vec2::ZERO, 0.0, Color::WHITE, 0.25);
+
+        let layer = builder.finish()[0];
+        assert_eq!(layer.size, Vec2::new(8.0, 10.0));
+        assert_eq!(
+            layer.primitive,
+            VisualPrimitive::RoundedRectangle { radius: 2.0 }
+        );
+    }
+
+    #[test]
+    fn scaled_ellipse_preserves_its_elliptical_primitive() {
+        let mut builder = VisualLayerBuilder::new(Vec2::new(10.0, 20.0));
+        builder.scaled_ellipse(
+            Vec2::new(0.80, 0.50),
+            Vec2::new(-0.10, 0.20),
+            0.5,
+            Color::srgba(0.20, 0.40, 0.60, 0.70),
+        );
+
+        let layer = builder.finish()[0];
+        assert_eq!(layer.size, Vec2::new(8.0, 10.0));
+        assert_eq!(layer.primitive, VisualPrimitive::Ellipse);
     }
 
     #[test]
