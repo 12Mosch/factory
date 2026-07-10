@@ -31,6 +31,8 @@ pub(crate) struct RawWorldGenerationConfig {
     pub(crate) terrain_noise: Option<RawTerrainNoise>,
     pub(crate) patch_grid: RawResourcePatchGrid,
     #[serde(default)]
+    pub(crate) distance_scaling: Option<RawResourceDistanceScaling>,
+    #[serde(default)]
     pub(crate) resources: Vec<RawResourceGeneration>,
 }
 
@@ -57,6 +59,14 @@ pub(crate) struct RawResourcePatchGrid {
     pub(crate) cell_size: i32,
     pub(crate) jitter: i32,
     pub(crate) edge_noise: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawResourceDistanceScaling {
+    pub(crate) interval_tiles: u32,
+    pub(crate) richness_bonus_percent: u32,
+    pub(crate) radius_bonus_tiles: u8,
+    pub(crate) max_radius_bonus_tiles: u8,
 }
 
 #[derive(Debug, Deserialize)]

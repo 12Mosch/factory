@@ -1,5 +1,8 @@
 use super::*;
-use factory_data::{CollisionLayer, CollisionMask, ResourceExtraction, item_id_by_name};
+use factory_data::{
+    CollisionLayer, CollisionMask, ResourceDistanceScalingConfig, ResourceExtraction,
+    item_id_by_name,
+};
 
 #[derive(Default)]
 pub(super) struct StableHasher {
@@ -391,7 +394,10 @@ pub(super) fn generate_resource_patch_centers(
         .max()
         .unwrap_or(0)
         + rules.edge_noise
-        + rules.grid_jitter;
+        + rules.grid_jitter
+        + rules
+            .distance_scaling
+            .map_or(0, |scaling| i32::from(scaling.max_radius_bonus_tiles));
     let max_reach = i64::from(max_reach);
     let grid_size = i64::from(rules.grid_cell_size);
     let min_grid_x = (bounds.min_x - max_reach).div_euclid(grid_size);
@@ -412,12 +418,18 @@ pub(super) fn generate_resource_patch_centers(
                 let jitter_y = ((hash >> 16) % (rules.grid_jitter * 2 + 1) as u64) as i64
                     - i64::from(rules.grid_jitter);
 
+                let x = grid_x * grid_size + grid_size / 2 + jitter_x;
+                let y = grid_y * grid_size + grid_size / 2 + jitter_y;
+                let (radius, richness) = match &rules.distance_scaling {
+                    Some(scaling) => scale_patch_with_distance(scaling, resource, x, y),
+                    None => (resource.radius, resource.richness),
+                };
                 let center = ResourcePatchCenter {
                     resource_item: resource.resource_item,
-                    x: grid_x * grid_size + grid_size / 2 + jitter_x,
-                    y: grid_y * grid_size + grid_size / 2 + jitter_y,
-                    radius: resource.radius,
-                    richness: resource.richness,
+                    x,
+                    y,
+                    radius,
+                    richness,
                 };
                 if resource_patch_can_affect_bounds(center, bounds, rules.edge_noise) {
                     centers.push(center);
@@ -427,6 +439,35 @@ pub(super) fn generate_resource_patch_centers(
     }
 
     centers
+}
+
+/// Radius and richness of a grid patch centered at `(x, y)` after distance
+/// scaling: per `interval_tiles` of distance from the world origin the patch
+/// gains `richness_bonus_percent` of its base richness and
+/// `radius_bonus_tiles` of radius, the latter capped at
+/// `max_radius_bonus_tiles` (which also bounds the center scan reach).
+/// Integer-only so generation stays deterministic across platforms.
+fn scale_patch_with_distance(
+    scaling: &ResourceDistanceScalingConfig,
+    resource: &ResourceRule,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+) -> (i32, u32) {
+    let distance_sq = (i128::from(x) * i128::from(x) + i128::from(y) * i128::from(y)) as u128;
+    let distance = distance_sq.isqrt();
+    let interval = u128::from(scaling.interval_tiles.max(1));
+
+    let radius_bonus = (distance * u128::from(scaling.radius_bonus_tiles) / interval)
+        .min(u128::from(scaling.max_radius_bonus_tiles)) as i32;
+    let richness_bonus =
+        u128::from(resource.richness) * u128::from(scaling.richness_bonus_percent) * distance
+            / (interval * 100);
+    let richness = u128::from(resource.richness) + richness_bonus;
+
+    (
+        resource.radius + radius_bonus,
+        u32::try_from(richness).unwrap_or(u32::MAX),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -501,15 +542,16 @@ pub(super) fn resource_at_patch_tile(
             u32::try_from(candidate.radius_sq.max(1)).expect("resource radius is bounded");
         let distance_sq = u32::try_from(candidate.distance_sq.max(0))
             .expect("resource distance is bounded by radius");
-        let falloff = (radius_sq - distance_sq).max(1);
-        let base = candidate.center.richness / 3;
-        let scaled = candidate.center.richness * falloff / radius_sq;
-        let variation =
-            (hash_world(seed ^ 0x1d17_5f2c_6b31_f011, x, y) % u64::from(base.max(1))) as u32;
+        // Distance-scaled richness can approach u32::MAX, so the amount math
+        // runs in u64 and saturates on the way back.
+        let falloff = u64::from((radius_sq - distance_sq).max(1));
+        let base = u64::from(candidate.center.richness / 3);
+        let scaled = u64::from(candidate.center.richness) * falloff / u64::from(radius_sq);
+        let variation = hash_world(seed ^ 0x1d17_5f2c_6b31_f011, x, y) % base.max(1);
 
         ResourceCell {
             resource_item: candidate.center.resource_item,
-            amount: base + scaled + variation,
+            amount: u32::try_from(base + scaled + variation).unwrap_or(u32::MAX),
         }
     })
 }
@@ -583,6 +625,9 @@ pub(super) struct WorldGenRules {
     grid_cell_size: i32,
     grid_jitter: i32,
     edge_noise: i32,
+    /// Distance-based richness/radius growth for grid patches; starting
+    /// patches stay at their configured base values.
+    distance_scaling: Option<ResourceDistanceScalingConfig>,
     /// Derived from the terrain bands and starting patches; `None` when no
     /// walkable+buildable band exists to bias toward.
     spawn_bias: Option<SpawnTerrainBias>,
@@ -656,6 +701,7 @@ impl WorldGenRules {
             grid_cell_size: config.patch_grid.cell_size,
             grid_jitter: config.patch_grid.jitter,
             edge_noise: config.patch_grid.edge_noise,
+            distance_scaling: config.distance_scaling,
             spawn_bias,
         }
     }
@@ -862,6 +908,108 @@ mod tests {
             generate_chunk(123, coord, &rules),
             generate_chunk(124, coord, &rules)
         );
+    }
+
+    #[test]
+    fn grid_patch_richness_and_radius_scale_with_distance() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+        let scaling = catalog
+            .world_generation
+            .distance_scaling
+            .expect("base catalog should configure distance scaling");
+
+        // Far enough out that no starting patch reaches the chunk and every
+        // relevant patch center sits past the radius bonus cap.
+        let bounds = TileBounds::for_chunk(ChunkCoord { x: 20, y: 20 });
+        let centers = generate_resource_patch_centers(123, &rules, bounds);
+        assert!(
+            !centers.is_empty(),
+            "expected grid patches in the far chunk"
+        );
+
+        for center in &centers {
+            let base = rules
+                .resources
+                .iter()
+                .find(|resource| resource.resource_item == center.resource_item)
+                .expect("center resource should be configured");
+            assert!(
+                center.richness > base.richness * 2,
+                "richness {} at ({}, {}) should be well above base {}",
+                center.richness,
+                center.x,
+                center.y,
+                base.richness
+            );
+            assert_eq!(
+                center.radius,
+                base.radius + i32::from(scaling.max_radius_bonus_tiles),
+                "radius bonus at ({}, {}) should be capped",
+                center.x,
+                center.y
+            );
+        }
+    }
+
+    #[test]
+    fn starting_patches_keep_base_richness_and_radius() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+
+        for resource in &rules.resources {
+            let Some((x, y)) = resource.starting_patch else {
+                continue;
+            };
+            let coord =
+                ChunkCoord::from_tile(x, y).expect("starting patch centers are within chunk range");
+            let bounds = TileBounds::for_chunk(coord);
+            let centers = generate_resource_patch_centers(123, &rules, bounds);
+            let center = centers
+                .iter()
+                .find(|center| {
+                    center.resource_item == resource.resource_item && center.x == x && center.y == y
+                })
+                .expect("starting patch center should be generated");
+
+            assert_eq!(center.radius, resource.radius);
+            assert_eq!(center.richness, resource.richness);
+        }
+    }
+
+    #[test]
+    fn distance_scaled_patches_do_not_create_chunk_seams() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+
+        for seed in [0, 123] {
+            for coord in [ChunkCoord { x: 15, y: 0 }, ChunkCoord { x: -20, y: 20 }] {
+                let bounds = TileBounds::for_chunk(coord);
+                // Centers from a scan wide enough to include everything that
+                // could possibly reach the chunk; any tile that differs means
+                // the per-chunk scan missed a relevant center.
+                let margin = i64::from(rules.grid_cell_size) * 3;
+                let expanded = TileBounds {
+                    min_x: bounds.min_x - margin,
+                    max_x: bounds.max_x + margin,
+                    min_y: bounds.min_y - margin,
+                    max_y: bounds.max_y + margin,
+                };
+                let chunk_centers = generate_resource_patch_centers(seed, &rules, bounds);
+                let expanded_centers = generate_resource_patch_centers(seed, &rules, expanded);
+
+                for y in bounds.min_y..=bounds.max_y {
+                    for x in bounds.min_x..=bounds.max_x {
+                        assert_eq!(
+                            resource_at_patch_tile(seed, x, y, &chunk_centers, rules.edge_noise),
+                            resource_at_patch_tile(seed, x, y, &expanded_centers, rules.edge_noise),
+                            "seed {seed}: tile ({x}, {y}) differs between per-chunk \
+                             and expanded center scans"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -8,10 +8,10 @@ use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, Til
 use crate::model::{
     ElectricPolePrototype, EntityPrototype, FluidBoxPrototype, FluidConnectionPrototype,
     FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
-    MiningDrillPrototype, PumpjackPrototype, RecipePrototype, ResourceGenerationConfig,
-    ResourcePatchGridConfig, StartingAreaConfig, TechnologyEffect, TechnologyPrototype,
-    TerrainLayerConfig, TerrainNoiseConfig, TilePrototype, WORLD_GENERATION_FORMAT_VERSION,
-    WorldGenerationConfig,
+    MiningDrillPrototype, PumpjackPrototype, RecipePrototype, ResourceDistanceScalingConfig,
+    ResourceGenerationConfig, ResourcePatchGridConfig, StartingAreaConfig, TechnologyEffect,
+    TechnologyPrototype, TerrainLayerConfig, TerrainNoiseConfig, TilePrototype,
+    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };
 use crate::raw::{
     RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype,
@@ -493,6 +493,14 @@ fn load_world_generation(
             jitter: raw.patch_grid.jitter,
             edge_noise: raw.patch_grid.edge_noise,
         },
+        distance_scaling: raw
+            .distance_scaling
+            .map(|scaling| ResourceDistanceScalingConfig {
+                interval_tiles: scaling.interval_tiles,
+                richness_bonus_percent: scaling.richness_bonus_percent,
+                radius_bonus_tiles: scaling.radius_bonus_tiles,
+                max_radius_bonus_tiles: scaling.max_radius_bonus_tiles,
+            }),
         resources,
     })
 }
@@ -535,6 +543,19 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
         if noise.octaves < 1 || noise.octaves > 8 {
             return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
                 detail: "terrain noise octaves must be between 1 and 8",
+            });
+        }
+    }
+    if let Some(scaling) = &raw.distance_scaling {
+        if scaling.interval_tiles < 1 {
+            return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                detail: "distance scaling interval_tiles must be at least 1",
+            });
+        }
+        if scaling.radius_bonus_tiles > scaling.max_radius_bonus_tiles {
+            return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                detail: "distance scaling radius_bonus_tiles must not exceed \
+                         max_radius_bonus_tiles",
             });
         }
     }

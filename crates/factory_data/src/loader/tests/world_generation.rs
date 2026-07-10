@@ -3,7 +3,8 @@ use glam::IVec2;
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
 use crate::model::{
-    ResourceExtraction, TerrainNoiseConfig, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    ResourceDistanceScalingConfig, ResourceExtraction, TerrainNoiseConfig,
+    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };
 
 fn catalog_ron(world_generation: &str) -> String {
@@ -49,6 +50,7 @@ fn base_catalog_defines_world_generation() {
     );
     assert_eq!(config.terrain_noise, TerrainNoiseConfig::default());
     assert_eq!(config.patch_grid.cell_size, 40);
+    assert!(config.distance_scaling.is_some());
     assert_eq!(config.resources.len(), 5);
     assert_eq!(
         config
@@ -141,6 +143,49 @@ fn terrain_noise_parses_and_defaults_when_absent() {
         absent.world_generation.terrain_noise,
         TerrainNoiseConfig::default()
     );
+}
+
+#[test]
+fn distance_scaling_parses_and_defaults_to_none() {
+    let explicit = PrototypeCatalog::from_ron_str(&catalog_ron(
+        r#"
+        world_generation: Some((
+            version: 1,
+            starting_area: (min_chunk: 0, max_chunk: 0),
+            terrain: [(tile: "grass", weight: 1)],
+            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
+            distance_scaling: Some((
+                interval_tiles: 100,
+                richness_bonus_percent: 75,
+                radius_bonus_tiles: 1,
+                max_radius_bonus_tiles: 6,
+            )),
+        )),
+        "#,
+    ))
+    .expect("catalog should load");
+    assert_eq!(
+        explicit.world_generation.distance_scaling,
+        Some(ResourceDistanceScalingConfig {
+            interval_tiles: 100,
+            richness_bonus_percent: 75,
+            radius_bonus_tiles: 1,
+            max_radius_bonus_tiles: 6,
+        })
+    );
+
+    let absent = PrototypeCatalog::from_ron_str(&catalog_ron(
+        r#"
+        world_generation: Some((
+            version: 1,
+            starting_area: (min_chunk: 0, max_chunk: 0),
+            terrain: [(tile: "grass", weight: 1)],
+            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
+        )),
+        "#,
+    ))
+    .expect("catalog should load");
+    assert_eq!(absent.world_generation.distance_scaling, None);
 }
 
 #[test]
@@ -273,6 +318,14 @@ fn invalid_numeric_constraints_fail() {
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], terrain_noise: Some((scale: 32, octaves: 9)), patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
             "too many noise octaves",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 0, richness_bonus_percent: 75, radius_bonus_tiles: 1, max_radius_bonus_tiles: 6)))",
+            "zero distance scaling interval",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 75, radius_bonus_tiles: 7, max_radius_bonus_tiles: 6)))",
+            "distance scaling radius bonus above its cap",
         ),
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 101, radius: 5, richness: 100)])",
