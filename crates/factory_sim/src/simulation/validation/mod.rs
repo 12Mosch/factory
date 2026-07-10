@@ -14,7 +14,9 @@ mod world;
 use self::catalog::validate_catalog;
 use self::construction::validate_construction_state;
 use self::crafting::validate_crafting_queue;
-use self::entities::{validate_entity_occupancy, validate_entity_state_ownership_and_kind};
+use self::entities::{
+    validate_enemies, validate_entity_occupancy, validate_entity_state_ownership_and_kind,
+};
 use self::fluids::{validate_fluid_box_states, validate_fluid_network_snapshots};
 use self::inventory::validate_inventory;
 use self::research::validate_research_state;
@@ -40,6 +42,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
     validate_crafting_queue(sim)?;
     validate_research_state(sim)?;
+    validate_enemies(sim)?;
 
     validate_entity_states(sim)?;
 

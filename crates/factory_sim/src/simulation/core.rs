@@ -37,9 +37,12 @@ impl Simulation {
             power: PowerSubsystem::default(),
             fluids: FluidSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
+            pollution: PollutionState::default(),
+            enemies: EnemySubsystem::default(),
             transport: TransportLaneCache::default(),
         };
         sim.reveal_chunks_around_player();
+        sim.seed_enemy_spawners_in_new_chunks();
         sim
     }
 
@@ -62,6 +65,7 @@ impl Simulation {
         self.tick += 1;
         self.advance_statistics_to_current_tick();
         self.reveal_chunks_around_player();
+        self.seed_enemy_spawners_in_new_chunks();
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
@@ -85,6 +89,16 @@ impl Simulation {
 
         profiler.measure(ProfilePhase::ManualCrafting, || {
             self.advance_manual_crafting();
+        });
+
+        profiler.measure(ProfilePhase::Pollution, || {
+            self.emit_pollution_from_machines();
+            self.spread_and_absorb_pollution();
+        });
+        profiler.measure(ProfilePhase::Enemies, || {
+            self.advance_enemy_spawners();
+            self.advance_enemies();
+            self.advance_gun_turrets();
         });
     }
 
@@ -140,6 +154,8 @@ impl Simulation {
         self.power.networks.hash(&mut hasher);
         self.power.entity_statuses.hash(&mut hasher);
         self.fluids.networks.hash(&mut hasher);
+        self.pollution.hash(&mut hasher);
+        self.enemies.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -148,7 +164,11 @@ impl Simulation {
     }
 
     pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> bool {
-        self.world.ensure_chunk_generated(coord)
+        let generated = self.world.ensure_chunk_generated(coord);
+        if generated {
+            self.seed_enemy_spawners_in_new_chunks();
+        }
+        generated
     }
 
     pub fn entities(&self) -> &EntityStore {

@@ -122,6 +122,11 @@ pub(in crate::simulation) fn inserter_target_can_accept(
             && lab.inventory.can_insert(catalog, item.item_id, item.count);
     }
 
+    if let Some(turret) = entities.gun_turrets.get(&entity_id) {
+        return item_is_ammo(catalog, item.item_id)
+            && turret.ammo.can_insert(catalog, item.item_id, item.count);
+    }
+
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
         return burner_fuel_slot_can_accept(catalog, furnace.energy.fuel_slot, item)
             || input_slot_can_accept(catalog, research, furnace.input_slot, item);
@@ -230,6 +235,17 @@ pub(in crate::simulation) fn try_drop_inserter_item(
 
         return lab
             .inventory
+            .insert(catalog, item.item_id, item.count)
+            .is_ok();
+    }
+
+    if let Some(turret) = entities.gun_turrets.get_mut(&entity_id) {
+        if !item_is_ammo(catalog, item.item_id) {
+            return false;
+        }
+
+        return turret
+            .ammo
             .insert(catalog, item.item_id, item.count)
             .is_ok();
     }

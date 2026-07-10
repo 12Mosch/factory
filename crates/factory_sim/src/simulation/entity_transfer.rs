@@ -73,6 +73,11 @@ pub fn player_slot_to_entity(
     {
         return Err(ContainerError::InvalidItem(stack.item_id));
     }
+    if sim.entities.gun_turrets.contains_key(&entity_id)
+        && !item_is_ammo(&sim.world.prototypes, stack.item_id)
+    {
+        return Err(ContainerError::InvalidItem(stack.item_id));
+    }
     let entity_inventory = EntityStore::entity_inventory(&sim.entities, entity_id)?;
     ensure_inventory_can_accept(&sim.world.prototypes, entity_inventory, stack)?;
 

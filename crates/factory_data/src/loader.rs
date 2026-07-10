@@ -6,18 +6,19 @@ use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
 use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 use crate::model::{
-    ElectricPolePrototype, EntityPrototype, FluidBoxPrototype, FluidConnectionPrototype,
-    FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
-    MiningDrillPrototype, PumpjackPrototype, RecipePrototype, ResourceDistanceScalingConfig,
-    ResourceGenerationConfig, ResourcePatchGridConfig, StartingAreaConfig, TechnologyEffect,
-    TechnologyPrototype, TerrainLayerConfig, TerrainNoiseConfig, TilePrototype,
-    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    ElectricPolePrototype, EnemyBaseGenerationConfig, EnemySpawnerPrototype, EntityPrototype,
+    FluidBoxPrototype, FluidConnectionPrototype, FluidConnectionSide, FluidPrototype,
+    InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype, PumpjackPrototype,
+    RecipePrototype, ResourceDistanceScalingConfig, ResourceGenerationConfig,
+    ResourcePatchGridConfig, StartingAreaConfig, TechnologyEffect, TechnologyPrototype,
+    TerrainLayerConfig, TerrainNoiseConfig, TilePrototype, WORLD_GENERATION_FORMAT_VERSION,
+    WorldGenerationConfig,
 };
 use crate::raw::{
-    RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype,
-    RawItemPrototype, RawPrototypeCatalog, RawPumpjackPrototype, RawRecipePrototype,
-    RawResourceGeneration, RawTechnologyEffect, RawTechnologyPrototype, RawTerrainLayer,
-    RawTilePrototype, RawWorldGenerationConfig,
+    RawEnemyBaseGeneration, RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype,
+    RawFluidPrototype, RawItemPrototype, RawPrototypeCatalog, RawPumpjackPrototype,
+    RawRecipePrototype, RawResourceGeneration, RawTechnologyEffect, RawTechnologyPrototype,
+    RawTerrainLayer, RawTilePrototype, RawWorldGenerationConfig,
 };
 use crate::validation::{
     resolve_collision_mask, resolve_fluid_amounts, resolve_item_amounts, validate_group,
@@ -51,7 +52,7 @@ impl PrototypeCatalog {
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
         validate_technology_prerequisite_graph(&technologies)?;
         let world_generation =
-            load_world_generation(raw.world_generation, &item_ids_by_name, &tiles)?;
+            load_world_generation(raw.world_generation, &item_ids_by_name, &tiles, &entities)?;
 
         Ok(Self {
             items,
@@ -119,6 +120,8 @@ fn load_items(items: Vec<RawItemPrototype>) -> (Vec<ItemPrototype>, HashMap<Stri
                 name: item.name,
                 stack_size: item.stack_size,
                 fuel_value_joules: item.fuel_value_joules,
+                ammo: item.ammo,
+                repair: item.repair,
             }
         })
         .collect();
@@ -248,6 +251,18 @@ fn load_entities(
                 offshore_pump: entity.offshore_pump,
                 pumpjack,
                 fluid_boxes,
+                max_health: entity.max_health,
+                pollution_per_minute_milli: entity.pollution_per_minute_milli,
+                gun_turret: entity.gun_turret,
+                enemy_spawner: entity.enemy_spawner.map(|spawner| EnemySpawnerPrototype {
+                    max_alive_units: spawner.max_alive_units,
+                    guard_units: spawner.guard_units,
+                    free_spawn_interval_ticks: spawner.free_spawn_interval_ticks,
+                    unit_spawn_pollution_cost_milli: spawner.unit_spawn_pollution_cost_milli,
+                    pollution_absorption_per_tick_milli: spawner
+                        .pollution_absorption_per_tick_milli,
+                    unit: spawner.unit,
+                }),
             })
         })
         .collect()
@@ -463,6 +478,7 @@ fn load_world_generation(
     raw: Option<RawWorldGenerationConfig>,
     item_ids_by_name: &HashMap<String, ItemId>,
     tiles: &[TilePrototype],
+    entities: &[EntityPrototype],
 ) -> Result<WorldGenerationConfig, PrototypeLoadError> {
     let Some(raw) = raw else {
         return Ok(WorldGenerationConfig::default());
@@ -479,6 +495,10 @@ fn load_world_generation(
         })
         .unwrap_or_default();
     let resources = resolve_resources(raw.resources, item_ids_by_name)?;
+    let enemy_bases = raw
+        .enemy_bases
+        .map(|bases| resolve_enemy_bases(bases, entities))
+        .transpose()?;
 
     Ok(WorldGenerationConfig {
         version: raw.version,
@@ -502,6 +522,36 @@ fn load_world_generation(
                 max_radius_bonus_tiles: scaling.max_radius_bonus_tiles,
             }),
         resources,
+        enemy_bases,
+    })
+}
+
+/// Resolve the enemy base spawner entity name and validate placement rules.
+fn resolve_enemy_bases(
+    bases: RawEnemyBaseGeneration,
+    entities: &[EntityPrototype],
+) -> Result<EnemyBaseGenerationConfig, PrototypeLoadError> {
+    let spawner_entity = entities
+        .iter()
+        .find(|entity| entity.name == bases.spawner_entity)
+        .ok_or(PrototypeLoadError::MissingWorldGenerationSpawnerEntity {
+            entity: bases.spawner_entity.clone(),
+        })?;
+    if spawner_entity.enemy_spawner.is_none() {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "enemy base spawner entity must declare an enemy_spawner section",
+        });
+    }
+    if bases.frequency_percent > 100 {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "enemy base frequency_percent must not exceed 100",
+        });
+    }
+
+    Ok(EnemyBaseGenerationConfig {
+        spawner_entity: spawner_entity.id,
+        frequency_percent: bases.frequency_percent,
+        min_distance_tiles: bases.min_distance_tiles,
     })
 }
 
@@ -646,6 +696,7 @@ fn load_tiles(tiles: Vec<RawTilePrototype>) -> Result<Vec<TilePrototype>, Protot
                 id: TileId::new(tile.id),
                 name: name.clone(),
                 collision_mask: resolve_collision_mask(name, tile.collision_mask)?,
+                pollution_absorption_per_minute_milli: tile.pollution_absorption_per_minute_milli,
             })
         })
         .collect()

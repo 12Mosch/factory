@@ -17,14 +17,15 @@ pub use catalog::PrototypeCatalog;
 pub use error::PrototypeLoadError;
 pub use ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 pub use model::{
-    AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CollisionLayer, CollisionMask,
-    CraftingCategory, ElectricEnergySourcePrototype, ElectricPolePrototype, EntityKind,
-    EntityPrototype, FluidAmount, FluidBoxIo, FluidBoxPrototype, FluidConnectionPrototype,
-    FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
-    MiningDrillPrototype, OffshorePumpPrototype, PumpjackPrototype, RecipePrototype,
+    AmmoPrototype, AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CollisionLayer,
+    CollisionMask, CraftingCategory, ElectricEnergySourcePrototype, ElectricPolePrototype,
+    EnemyBaseGenerationConfig, EnemySpawnerPrototype, EntityKind, EntityPrototype, FluidAmount,
+    FluidBoxIo, FluidBoxPrototype, FluidConnectionPrototype, FluidConnectionSide, FluidPrototype,
+    GunTurretPrototype, InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype,
+    OffshorePumpPrototype, PumpjackPrototype, RecipePrototype, RepairToolPrototype,
     ResourceDistanceScalingConfig, ResourceExtraction, ResourceGenerationConfig,
     ResourcePatchGridConfig, SplitterPrototype, StartingAreaConfig, SteamEnginePrototype,
     TechnologyEffect, TechnologyPrototype, TerrainLayerConfig, TerrainNoiseConfig, TilePrototype,
-    TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype,
+    TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype, UnitPrototype,
     WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };

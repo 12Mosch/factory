@@ -1,8 +1,10 @@
 mod simulation;
 
+pub mod combat;
 pub mod constants;
 pub mod construction;
 pub mod crafting;
+pub mod enemies;
 pub mod entities;
 pub mod error;
 pub mod fluids;
@@ -12,6 +14,7 @@ pub mod inventory;
 pub mod logistics;
 pub mod machines;
 pub mod player;
+pub mod pollution;
 pub mod power;
 pub mod prelude;
 pub mod prototypes;

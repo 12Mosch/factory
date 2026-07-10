@@ -84,6 +84,9 @@ pub enum PrototypeLoadError {
     MissingWorldGenerationResourceItem {
         item: String,
     },
+    MissingWorldGenerationSpawnerEntity {
+        entity: String,
+    },
     DuplicateWorldGenerationResource {
         item: String,
     },
@@ -205,6 +208,10 @@ impl fmt::Display for PrototypeLoadError {
             Self::MissingWorldGenerationResourceItem { item } => write!(
                 formatter,
                 "world generation config references missing resource item {item:?}"
+            ),
+            Self::MissingWorldGenerationSpawnerEntity { entity } => write!(
+                formatter,
+                "world generation config references missing spawner entity {entity:?}"
             ),
             Self::DuplicateWorldGenerationResource { item } => write!(
                 formatter,

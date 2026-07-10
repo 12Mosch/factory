@@ -44,6 +44,20 @@
         (id: 39, name: "chemical_plant", stack_size: 10),
         (id: 40, name: "plastic_bar", stack_size: 100),
         (id: 41, name: "sulfur", stack_size: 50),
+        (id: 42, name: "wall", stack_size: 100),
+        (id: 43, name: "gun_turret", stack_size: 50),
+        (
+            id: 44,
+            name: "firearm_magazine",
+            stack_size: 200,
+            ammo: Some((damage_per_shot: 5, shots_per_item: 10)),
+        ),
+        (
+            id: 45,
+            name: "repair_pack",
+            stack_size: 100,
+            repair: Some((restore_health: 300)),
+        ),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -456,6 +470,45 @@
             ],
             products: [(item: "sulfur", amount: 2)],
         ),
+        (
+            id: 38,
+            name: "wall",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [(item: "stone_brick", amount: 5)],
+            products: [(item: "wall", amount: 1)],
+        ),
+        (
+            id: 39,
+            name: "gun_turret",
+            category: Crafting,
+            crafting_time_ticks: 480,
+            ingredients: [
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "copper_plate", amount: 10),
+                (item: "iron_plate", amount: 20),
+            ],
+            products: [(item: "gun_turret", amount: 1)],
+        ),
+        (
+            id: 40,
+            name: "firearm_magazine",
+            category: Crafting,
+            crafting_time_ticks: 60,
+            ingredients: [(item: "iron_plate", amount: 4)],
+            products: [(item: "firearm_magazine", amount: 1)],
+        ),
+        (
+            id: 41,
+            name: "repair_pack",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "electronic_circuit", amount: 2),
+                (item: "iron_gear_wheel", amount: 2),
+            ],
+            products: [(item: "repair_pack", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -493,6 +546,8 @@
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),
             burner: Some((energy_usage_watts: 90000)),
+            max_health: Some(200),
+            pollution_per_minute_milli: Some(2000),
         ),
         (
             id: 5,
@@ -507,6 +562,8 @@
                 output_slot_count: 1,
             )),
             electric_energy_source: Some((energy_usage_watts: 75000, drain_watts: 2500)),
+            max_health: Some(300),
+            pollution_per_minute_milli: Some(4000),
         ),
         (
             id: 6,
@@ -521,6 +578,7 @@
                 drop_ticks: 35,
             )),
             electric_energy_source: Some((energy_usage_watts: 15100, drain_watts: 400)),
+            max_health: Some(150),
         ),
         (
             id: 7,
@@ -531,6 +589,7 @@
             transport_belt: Some((
                 speed_subtiles_per_tick: 8,
             )),
+            max_health: Some(150),
         ),
         (
             id: 8,
@@ -540,6 +599,8 @@
             collision_mask: (layers: ["ground", "building"]),
             burner: Some((energy_usage_watts: 150000)),
             mining_drill: Some((mining_area: (x: 2, y: 2), ticks_per_item: 240)),
+            max_health: Some(300),
+            pollution_per_minute_milli: Some(12000),
         ),
         (
             id: 9,
@@ -549,6 +610,7 @@
             collision_mask: (layers: ["ground", "building"]),
             inventory_slot_count: Some(16),
             electric_energy_source: Some((energy_usage_watts: 60000, drain_watts: 0)),
+            max_health: Some(150),
         ),
         (
             id: 10,
@@ -557,6 +619,7 @@
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
             inventory_slot_count: Some(16),
+            max_health: Some(100),
         ),
         (
             id: 11,
@@ -569,6 +632,7 @@
                 speed_subtiles_per_tick: 8,
                 underground: Some((part: Entrance, max_distance: 4)),
             )),
+            max_health: Some(150),
         ),
         (
             id: 12,
@@ -581,6 +645,7 @@
                 speed_subtiles_per_tick: 8,
                 underground: Some((part: Exit, max_distance: 4)),
             )),
+            max_health: Some(150),
         ),
         (
             id: 13,
@@ -589,6 +654,7 @@
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
             splitter: Some((speed_subtiles_per_tick: 8)),
+            max_health: Some(170),
         ),
         (
             id: 14,
@@ -599,6 +665,7 @@
             transport_belt: Some((
                 speed_subtiles_per_tick: 16,
             )),
+            max_health: Some(160),
         ),
         (
             id: 15,
@@ -609,6 +676,7 @@
             transport_belt: Some((
                 speed_subtiles_per_tick: 24,
             )),
+            max_health: Some(170),
         ),
         (
             id: 16,
@@ -621,6 +689,7 @@
                 speed_subtiles_per_tick: 16,
                 underground: Some((part: Entrance, max_distance: 6)),
             )),
+            max_health: Some(160),
         ),
         (
             id: 17,
@@ -633,6 +702,7 @@
                 speed_subtiles_per_tick: 16,
                 underground: Some((part: Exit, max_distance: 6)),
             )),
+            max_health: Some(160),
         ),
         (
             id: 18,
@@ -645,6 +715,7 @@
                 speed_subtiles_per_tick: 24,
                 underground: Some((part: Entrance, max_distance: 8)),
             )),
+            max_health: Some(170),
         ),
         (
             id: 19,
@@ -657,6 +728,7 @@
                 speed_subtiles_per_tick: 24,
                 underground: Some((part: Exit, max_distance: 8)),
             )),
+            max_health: Some(170),
         ),
         (
             id: 20,
@@ -665,6 +737,7 @@
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
             splitter: Some((speed_subtiles_per_tick: 16)),
+            max_health: Some(180),
         ),
         (
             id: 21,
@@ -673,6 +746,7 @@
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
             splitter: Some((speed_subtiles_per_tick: 24)),
+            max_health: Some(190),
         ),
         (
             id: 22,
@@ -687,6 +761,7 @@
                 drop_ticks: 12,
             )),
             electric_energy_source: Some((energy_usage_watts: 59300, drain_watts: 500)),
+            max_health: Some(150),
         ),
         (
             id: 23,
@@ -701,6 +776,7 @@
                 drop_ticks: 25,
             )),
             electric_energy_source: Some((energy_usage_watts: 21400, drain_watts: 400)),
+            max_health: Some(160),
         ),
         (
             id: 24,
@@ -712,6 +788,7 @@
                 supply_area_tiles: (x: 5, y: 5),
                 wire_reach_tiles_x2: 15,
             )),
+            max_health: Some(100),
         ),
         (
             id: 25,
@@ -719,6 +796,7 @@
             entity_kind: SteamEngine,
             size: (x: 3, y: 5),
             collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(400),
             steam_engine: Some((
                 max_power_output_watts: 900000,
                 steam_consumption_per_second_milliunits: 30000,
@@ -740,6 +818,8 @@
             size: (x: 2, y: 3),
             collision_mask: (layers: ["ground", "building"]),
             burner: Some((energy_usage_watts: 1800000)),
+            max_health: Some(200),
+            pollution_per_minute_milli: Some(30000),
             boiler: Some((
                 water_consumption_per_second_milliunits: 6000,
                 steam_output_per_second_milliunits: 60000,
@@ -768,6 +848,7 @@
             entity_kind: OffshorePump,
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(150),
             offshore_pump: Some((
                 pumping_speed_per_second_milliunits: 1200000,
             )),
@@ -787,6 +868,7 @@
             entity_kind: Pipe,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(100),
             fluid_boxes: [
                 (
                     capacity_milliunits: 100000,
@@ -805,6 +887,7 @@
             entity_kind: StorageTank,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(500),
             fluid_boxes: [
                 (
                     capacity_milliunits: 25000000,
@@ -831,6 +914,8 @@
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
             electric_energy_source: Some((energy_usage_watts: 90000, drain_watts: 0)),
+            max_health: Some(200),
+            pollution_per_minute_milli: Some(10000),
             pumpjack: Some((
                 pumping_speed_per_second_milliunits: 6000,
                 resource_item: "crude_oil",
@@ -861,6 +946,8 @@
                 crafting_category: OilProcessing,
             )),
             electric_energy_source: Some((energy_usage_watts: 420000, drain_watts: 14000)),
+            max_health: Some(350),
+            pollution_per_minute_milli: Some(6000),
             fluid_boxes: [
                 (
                     capacity_milliunits: 1000000,
@@ -894,6 +981,8 @@
                 crafting_category: Chemistry,
             )),
             electric_energy_source: Some((energy_usage_watts: 210000, drain_watts: 7000)),
+            max_health: Some(300),
+            pollution_per_minute_milli: Some(4000),
             fluid_boxes: [
                 (
                     capacity_milliunits: 1000000,
@@ -918,12 +1007,54 @@
                 ),
             ],
         ),
+        (
+            id: 34,
+            name: "wall",
+            entity_kind: Wall,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(350),
+        ),
+        (
+            id: 35,
+            name: "gun_turret",
+            entity_kind: GunTurret,
+            size: (x: 2, y: 2),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(400),
+            gun_turret: Some((range_tiles: 12, cooldown_ticks: 12)),
+        ),
+        (
+            id: 36,
+            name: "biter_spawner",
+            entity_kind: EnemySpawner,
+            size: (x: 2, y: 2),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(350),
+            enemy_spawner: Some((
+                max_alive_units: 15,
+                guard_units: 3,
+                free_spawn_interval_ticks: 1800,
+                unit_spawn_pollution_cost_milli: 4000,
+                pollution_absorption_per_tick_milli: 20,
+                unit: (
+                    max_health: 30,
+                    damage: 15,
+                    attack_cooldown_ticks: 60,
+                    speed_fixed_per_tick: 40,
+                    aggro_radius_tiles: 12,
+                ),
+            )),
+        ),
     ],
     tiles: [
         (
             id: 0,
             name: "grass",
             collision_mask: (layers: ["ground"]),
+            // Vegetation scrubs pollution: a full grass chunk absorbs about
+            // one pollution unit per minute.
+            pollution_absorption_per_minute_milli: 1,
         ),
         (
             id: 1,
@@ -934,6 +1065,7 @@
             id: 2,
             name: "water",
             collision_mask: (layers: ["water"]),
+            pollution_absorption_per_minute_milli: 2,
         ),
     ],
     technologies: [
@@ -1060,6 +1192,24 @@
             research_time_ticks: 600,
             effects: [UnlockRecipe("sulfur")],
         ),
+        (
+            id: 10,
+            name: "stone_walls",
+            prerequisites: ["logistics"],
+            science_packs: [(item: "automation_science_pack", amount: 1)],
+            required_units: 10,
+            research_time_ticks: 600,
+            effects: [UnlockRecipe("wall")],
+        ),
+        (
+            id: 11,
+            name: "turrets",
+            prerequisites: ["stone_walls"],
+            science_packs: [(item: "automation_science_pack", amount: 1)],
+            required_units: 10,
+            research_time_ticks: 600,
+            effects: [UnlockRecipe("gun_turret")],
+        ),
     ],
     world_generation: Some((
         version: 1,
@@ -1124,5 +1274,12 @@
                 starting_patch: Some((x: -26, y: 4)),
             ),
         ],
+        // Nests appear beyond the starting area; expanding outward or letting
+        // pollution drift into them provokes attacks.
+        enemy_bases: Some((
+            spawner_entity: "biter_spawner",
+            frequency_percent: 12,
+            min_distance_tiles: 120,
+        )),
     )),
 )

@@ -6,6 +6,16 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         if item.id.index() != index {
             return Err(SimValidationError::UnknownItem(item.id));
         }
+        if let Some(ammo) = item.ammo
+            && (ammo.damage_per_shot == 0 || ammo.shots_per_item == 0)
+        {
+            return Err(SimValidationError::UnknownItem(item.id));
+        }
+        if let Some(repair) = item.repair
+            && repair.restore_health == 0
+        {
+            return Err(SimValidationError::UnknownItem(item.id));
+        }
     }
 
     for (index, fluid) in catalog.fluids.iter().enumerate() {
@@ -204,6 +214,46 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 };
                 if splitter.speed_subtiles_per_tick == 0 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::Wall => {
+                if prototype.max_health.is_none() {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::GunTurret => {
+                let Some(gun_turret) = prototype.gun_turret.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if gun_turret.range_tiles == 0
+                    || gun_turret.cooldown_ticks == 0
+                    || prototype.max_health.is_none()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::EnemySpawner => {
+                let Some(spawner) = prototype.enemy_spawner.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if spawner.max_alive_units == 0
+                    || spawner.free_spawn_interval_ticks == 0
+                    || spawner.unit.max_health == 0
+                    || spawner.unit.attack_cooldown_ticks == 0
+                    || spawner.unit.speed_fixed_per_tick == 0
+                    || prototype.max_health.is_none()
+                {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,
                     });

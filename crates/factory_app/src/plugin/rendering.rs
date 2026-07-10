@@ -8,6 +8,7 @@ use crate::rendering::belts::{
 use crate::rendering::camera::{
     follow_player_camera, setup_camera, update_render_detail, update_visible_chunks,
 };
+use crate::rendering::enemies::sync_enemy_rendering;
 use crate::rendering::entities::{
     measured_sync_placed_entity_rendering, update_visible_entity_ids,
 };
@@ -70,6 +71,7 @@ impl Plugin for RenderingPlugin {
                     measured_sync_visible_world_tiles,
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
+                    sync_enemy_rendering,
                     measured_sync_belt_direction_rendering,
                     measured_sync_belt_item_rendering,
                 )

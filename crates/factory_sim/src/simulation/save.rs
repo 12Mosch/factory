@@ -3,10 +3,13 @@ use bincode::Options;
 
 // Save version 9 intentionally invalidates older saves: construction planning
 // became part of deterministic simulation state and no v8 migration is kept.
-pub const SAVE_VERSION: u32 = 11;
+// v12: pollution and enemy state (spawners, units, health, turrets) joined
+// the snapshot and the entity state registry.
+pub const SAVE_VERSION: u32 = 12;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 9;
+// v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 10;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 const SAVE_HEADER_LEN: usize = 8 + 4 + 4 + 8;
@@ -57,6 +60,8 @@ struct SimulationSnapshotOwned {
     power_networks: Vec<PowerNetworkSnapshot>,
     entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
     fluid_networks: Vec<FluidNetworkSnapshot>,
+    pollution: PollutionState,
+    enemies: EnemySubsystem,
 }
 
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
@@ -180,6 +185,8 @@ struct SimulationSnapshotRef<'a> {
     power_networks: &'a Vec<PowerNetworkSnapshot>,
     entity_power_statuses: &'a BTreeMap<EntityId, EntityPowerStatus>,
     fluid_networks: &'a Vec<FluidNetworkSnapshot>,
+    pollution: &'a PollutionState,
+    enemies: &'a EnemySubsystem,
 }
 
 impl<'a> SimulationSnapshotRef<'a> {
@@ -204,6 +211,8 @@ impl<'a> SimulationSnapshotRef<'a> {
             power_networks: &sim.power.networks,
             entity_power_statuses: &sim.power.entity_statuses,
             fluid_networks: &sim.fluids.networks,
+            pollution: &sim.pollution,
+            enemies: &sim.enemies,
         }
     }
 }
@@ -245,6 +254,8 @@ impl SimulationSnapshotOwned {
                 fluids: self.fluid_statistics,
                 power: self.power_statistics,
             },
+            pollution: self.pollution,
+            enemies: self.enemies,
             transport: TransportLaneCache::default(),
         };
         sim.ensure_fluid_network_topology();

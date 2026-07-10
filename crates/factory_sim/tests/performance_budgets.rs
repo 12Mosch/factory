@@ -538,6 +538,8 @@ fn average_profile(samples: &[TickSample]) -> SimulationTickProfile {
         inventory_transfers: average_duration(samples, len, |profile| profile.inventory_transfers),
         chunk_lookup: average_duration(samples, len, |profile| profile.chunk_lookup),
         manual_crafting: average_duration(samples, len, |profile| profile.manual_crafting),
+        pollution: average_duration(samples, len, |profile| profile.pollution),
+        enemies: average_duration(samples, len, |profile| profile.enemies),
         validation: average_duration(samples, len, |profile| profile.validation),
     }
 }
@@ -556,6 +558,8 @@ fn percentile_profile(samples: &[TickSample], index: usize) -> SimulationTickPro
         }),
         chunk_lookup: percentile_duration(samples, index, |profile| profile.chunk_lookup),
         manual_crafting: percentile_duration(samples, index, |profile| profile.manual_crafting),
+        pollution: percentile_duration(samples, index, |profile| profile.pollution),
+        enemies: percentile_duration(samples, index, |profile| profile.enemies),
         validation: percentile_duration(samples, index, |profile| profile.validation),
     }
 }
@@ -572,6 +576,8 @@ fn max_profile(samples: &[TickSample]) -> SimulationTickProfile {
         inventory_transfers: max_duration(samples, |profile| profile.inventory_transfers),
         chunk_lookup: max_duration(samples, |profile| profile.chunk_lookup),
         manual_crafting: max_duration(samples, |profile| profile.manual_crafting),
+        pollution: max_duration(samples, |profile| profile.pollution),
+        enemies: max_duration(samples, |profile| profile.enemies),
         validation: max_duration(samples, |profile| profile.validation),
     }
 }

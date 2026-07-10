@@ -25,6 +25,8 @@ pub struct SimulationTickProfile {
     pub inventory_transfers: Duration,
     pub chunk_lookup: Duration,
     pub manual_crafting: Duration,
+    pub pollution: Duration,
+    pub enemies: Duration,
     pub validation: Duration,
 }
 
@@ -39,6 +41,8 @@ pub(crate) enum ProfilePhase {
     InventoryTransfers,
     ChunkLookup,
     ManualCrafting,
+    Pollution,
+    Enemies,
     #[cfg(debug_assertions)]
     Validation,
     Total,
@@ -108,6 +112,8 @@ impl TickProfiler for TickProfileCollector {
             ProfilePhase::InventoryTransfers => self.profile.inventory_transfers += elapsed,
             ProfilePhase::ChunkLookup => self.profile.chunk_lookup += elapsed,
             ProfilePhase::ManualCrafting => self.profile.manual_crafting += elapsed,
+            ProfilePhase::Pollution => self.profile.pollution += elapsed,
+            ProfilePhase::Enemies => self.profile.enemies += elapsed,
             #[cfg(debug_assertions)]
             ProfilePhase::Validation => self.profile.validation += elapsed,
             ProfilePhase::Total => self.profile.total += elapsed,
