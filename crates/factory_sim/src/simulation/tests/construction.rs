@@ -355,7 +355,23 @@ fn blueprint_captures_assembler_recipes_onto_ghosts() {
         factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "assembling_machine");
     assert!(sim.is_entity_unlocked(assembler_prototype));
 
-    let (x, y) = first_buildable_rect_without_resource(&sim.world, 6, 3);
+    let (x, y) = all_tile_coords(&sim.world)
+        .into_iter()
+        .find(|&(x, y)| {
+            [x, x + 3].into_iter().all(|x| {
+                crate::placement::validate(
+                    &sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: assembler_prototype,
+                        x,
+                        y,
+                        direction: Direction::North,
+                    },
+                )
+                .is_ok()
+            })
+        })
+        .expect("expected two adjacent clear assembler placement areas");
     let assembler_id = place_at(&mut sim, assembler_prototype, x, y, Direction::North);
     let recipe = sim
         .world
