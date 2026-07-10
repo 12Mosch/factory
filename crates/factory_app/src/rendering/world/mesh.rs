@@ -90,10 +90,12 @@ pub(super) fn world_chunk_mesh(world: &WorldSim, chunk: &Chunk, ids: RenderProto
         world,
         chunk,
         ids,
-        &mut positions,
-        &mut uvs,
-        &mut colors,
-        &mut indices,
+        &mut MeshBuffers {
+            positions: &mut positions,
+            uvs: &mut uvs,
+            colors: &mut colors,
+            indices: &mut indices,
+        },
     );
 
     Mesh::new(
@@ -106,15 +108,18 @@ pub(super) fn world_chunk_mesh(world: &WorldSim, chunk: &Chunk, ids: RenderProto
     .with_inserted_indices(Indices::U32(indices))
 }
 
-#[allow(clippy::too_many_arguments)]
+struct MeshBuffers<'a> {
+    positions: &'a mut Vec<[f32; 3]>,
+    uvs: &'a mut Vec<[f32; 2]>,
+    colors: &'a mut Vec<[f32; 4]>,
+    indices: &'a mut Vec<u32>,
+}
+
 fn append_terrain_details(
     world: &WorldSim,
     chunk: &Chunk,
     ids: RenderPrototypeIds,
-    positions: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    colors: &mut Vec<[f32; 4]>,
-    indices: &mut Vec<u32>,
+    buffers: &mut MeshBuffers<'_>,
 ) {
     let size = CHUNK_SIZE as usize;
     for (index, tile) in chunk.tiles.iter().enumerate() {
@@ -126,9 +131,7 @@ fn append_terrain_details(
         let detail = tile_hash(world.seed, x, y, 0xa54f_f53a_5f1d_36f1);
 
         if ids.is_water(tile.tile_id) {
-            append_water_foam(
-                world, ids, x, y, min_x, min_y, positions, uvs, colors, indices,
-            );
+            append_water_foam(world, ids, x, y, min_x, min_y, buffers);
             continue;
         }
 
@@ -145,10 +148,7 @@ fn append_terrain_details(
             let offset_x = 0.9 + ((detail >> 16) % 48) as f32 / 48.0 * 5.4;
             let offset_y = 0.9 + ((detail >> 24) % 48) as f32 / 48.0 * 5.4;
             append_quad(
-                positions,
-                uvs,
-                colors,
-                indices,
+                buffers,
                 [min_x + offset_x, min_y + offset_y],
                 [min_x + offset_x + width, min_y + offset_y + height],
                 0.02,
@@ -173,10 +173,7 @@ fn append_terrain_details(
                 )
             };
             append_quad(
-                positions,
-                uvs,
-                colors,
-                indices,
+                buffers,
                 min,
                 max,
                 0.015,
@@ -186,7 +183,6 @@ fn append_terrain_details(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn append_water_foam(
     world: &WorldSim,
     ids: RenderPrototypeIds,
@@ -194,10 +190,7 @@ fn append_water_foam(
     y: i64,
     min_x: f32,
     min_y: f32,
-    positions: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    colors: &mut Vec<[f32; 4]>,
-    indices: &mut Vec<u32>,
+    buffers: &mut MeshBuffers<'_>,
 ) {
     const EDGES: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
     let foam = Color::srgba(0.55, 0.76, 0.82, 0.40);
@@ -230,29 +223,25 @@ fn append_water_foam(
                 [min_x + wobble, min_y + TILE_SIZE - trail],
             ),
         };
-        append_quad(positions, uvs, colors, indices, min, max, 0.025, foam);
+        append_quad(buffers, min, max, 0.025, foam);
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn append_quad(
-    positions: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    colors: &mut Vec<[f32; 4]>,
-    indices: &mut Vec<u32>,
-    min: [f32; 2],
-    max: [f32; 2],
-    z: f32,
-    color: Color,
-) {
-    let base = positions.len() as u32;
-    positions.extend_from_slice(&[
+fn append_quad(buffers: &mut MeshBuffers<'_>, min: [f32; 2], max: [f32; 2], z: f32, color: Color) {
+    let base = buffers.positions.len() as u32;
+    buffers.positions.extend_from_slice(&[
         [min[0], min[1], z],
         [max[0], min[1], z],
         [max[0], max[1], z],
         [min[0], max[1], z],
     ]);
-    uvs.extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
-    colors.extend_from_slice(&[color.to_linear().to_f32_array(); 4]);
-    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    buffers
+        .uvs
+        .extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+    buffers
+        .colors
+        .extend_from_slice(&[color.to_linear().to_f32_array(); 4]);
+    buffers
+        .indices
+        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
