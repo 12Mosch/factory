@@ -1,17 +1,25 @@
 use bevy::{
     asset::RenderAssetUsages, mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
 };
-use factory_sim::CHUNK_SIZE;
+use factory_sim::{CHUNK_SIZE, Chunk, WorldSim};
 
 use crate::constants::TILE_SIZE;
-use crate::rendering::colors::{RenderPrototypeIds, tile_color};
+use crate::rendering::colors::{RenderPrototypeIds, tile_color, tile_hash};
 
-pub(super) fn world_chunk_mesh(chunk: &factory_sim::Chunk, ids: RenderPrototypeIds) -> Mesh {
+pub(super) fn world_chunk_mesh(world: &WorldSim, chunk: &Chunk, ids: RenderPrototypeIds) -> Mesh {
     let size = CHUNK_SIZE as usize;
     let tile_colors = chunk
         .tiles
         .iter()
-        .map(|tile| tile_color(tile.tile_id, ids).to_linear().to_f32_array())
+        .enumerate()
+        .map(|(index, tile)| {
+            let (x, y) = chunk
+                .coord
+                .tile_at((index % size) as i32, (index / size) as i32);
+            tile_color(tile.tile_id, ids, world.seed, x, y)
+                .to_linear()
+                .to_f32_array()
+        })
         .collect::<Vec<_>>();
 
     let mut positions = Vec::new();
@@ -78,6 +86,18 @@ pub(super) fn world_chunk_mesh(chunk: &factory_sim::Chunk, ids: RenderPrototypeI
         ]);
     }
 
+    append_terrain_details(
+        world,
+        chunk,
+        ids,
+        &mut MeshBuffers {
+            positions: &mut positions,
+            uvs: &mut uvs,
+            colors: &mut colors,
+            indices: &mut indices,
+        },
+    );
+
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
@@ -86,4 +106,142 @@ pub(super) fn world_chunk_mesh(chunk: &factory_sim::Chunk, ids: RenderPrototypeI
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
     .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
     .with_inserted_indices(Indices::U32(indices))
+}
+
+struct MeshBuffers<'a> {
+    positions: &'a mut Vec<[f32; 3]>,
+    uvs: &'a mut Vec<[f32; 2]>,
+    colors: &'a mut Vec<[f32; 4]>,
+    indices: &'a mut Vec<u32>,
+}
+
+fn append_terrain_details(
+    world: &WorldSim,
+    chunk: &Chunk,
+    ids: RenderPrototypeIds,
+    buffers: &mut MeshBuffers<'_>,
+) {
+    let size = CHUNK_SIZE as usize;
+    for (index, tile) in chunk.tiles.iter().enumerate() {
+        let (x, y) = chunk
+            .coord
+            .tile_at((index % size) as i32, (index / size) as i32);
+        let min_x = x as f32 * TILE_SIZE;
+        let min_y = y as f32 * TILE_SIZE;
+        let detail = tile_hash(world.seed, x, y, 0xa54f_f53a_5f1d_36f1);
+
+        if ids.is_water(tile.tile_id) {
+            append_water_foam(world, ids, x, y, min_x, min_y, buffers);
+            continue;
+        }
+
+        // Sparse, tiny flecks read as grass blades or pebbles without turning
+        // every tile into additional geometry.
+        if detail.is_multiple_of(7) {
+            let fleck_color = if ids.is_dirt(tile.tile_id) {
+                Color::srgba(0.68, 0.56, 0.35, 0.34)
+            } else {
+                Color::srgba(0.48, 0.66, 0.30, 0.30)
+            };
+            let width = 0.55 + ((detail >> 8) & 3) as f32 * 0.18;
+            let height = 0.34 + ((detail >> 10) & 3) as f32 * 0.13;
+            let offset_x = 0.9 + ((detail >> 16) % 48) as f32 / 48.0 * 5.4;
+            let offset_y = 0.9 + ((detail >> 24) % 48) as f32 / 48.0 * 5.4;
+            append_quad(
+                buffers,
+                [min_x + offset_x, min_y + offset_y],
+                [min_x + offset_x + width, min_y + offset_y + height],
+                0.02,
+                fleck_color,
+            );
+        }
+
+        // Occasional short cracks give broad areas a low-contrast seam layer.
+        if detail % 13 == 1 {
+            let horizontal = detail & 1 == 0;
+            let length = 2.2 + ((detail >> 32) & 7) as f32 * 0.38;
+            let offset = 1.1 + ((detail >> 40) % 40) as f32 / 40.0 * 4.8;
+            let (min, max) = if horizontal {
+                (
+                    [min_x + 1.0, min_y + offset],
+                    [min_x + 1.0 + length, min_y + offset + 0.22],
+                )
+            } else {
+                (
+                    [min_x + offset, min_y + 1.0],
+                    [min_x + offset + 0.22, min_y + 1.0 + length],
+                )
+            };
+            append_quad(
+                buffers,
+                min,
+                max,
+                0.015,
+                Color::srgba(0.08, 0.12, 0.075, 0.14),
+            );
+        }
+    }
+}
+
+fn append_water_foam(
+    world: &WorldSim,
+    ids: RenderPrototypeIds,
+    x: i64,
+    y: i64,
+    min_x: f32,
+    min_y: f32,
+    buffers: &mut MeshBuffers<'_>,
+) {
+    const EDGES: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+    let foam = Color::srgba(0.55, 0.76, 0.82, 0.40);
+    for (edge, (dx, dy)) in EDGES.into_iter().enumerate() {
+        let Some(neighbor) = world.tile_at(x + dx, y + dy) else {
+            continue;
+        };
+        if ids.is_water(neighbor.tile_id) {
+            continue;
+        }
+        let edge_hash = tile_hash(world.seed, x, y, 0x510e_527f_ade6_82d1 + edge as u64);
+        let wobble = 0.34 + (edge_hash % 4) as f32 * 0.08;
+        let lead = 0.25 + ((edge_hash >> 8) % 5) as f32 * 0.12;
+        let trail = 0.25 + ((edge_hash >> 12) % 5) as f32 * 0.12;
+        let (min, max) = match edge {
+            0 => (
+                [min_x + lead, min_y],
+                [min_x + TILE_SIZE - trail, min_y + wobble],
+            ),
+            1 => (
+                [min_x + TILE_SIZE - wobble, min_y + lead],
+                [min_x + TILE_SIZE, min_y + TILE_SIZE - trail],
+            ),
+            2 => (
+                [min_x + lead, min_y + TILE_SIZE - wobble],
+                [min_x + TILE_SIZE - trail, min_y + TILE_SIZE],
+            ),
+            _ => (
+                [min_x, min_y + lead],
+                [min_x + wobble, min_y + TILE_SIZE - trail],
+            ),
+        };
+        append_quad(buffers, min, max, 0.025, foam);
+    }
+}
+
+fn append_quad(buffers: &mut MeshBuffers<'_>, min: [f32; 2], max: [f32; 2], z: f32, color: Color) {
+    let base = buffers.positions.len() as u32;
+    buffers.positions.extend_from_slice(&[
+        [min[0], min[1], z],
+        [max[0], min[1], z],
+        [max[0], max[1], z],
+        [min[0], max[1], z],
+    ]);
+    buffers
+        .uvs
+        .extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
+    buffers
+        .colors
+        .extend_from_slice(&[color.to_linear().to_f32_array(); 4]);
+    buffers
+        .indices
+        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }

@@ -1,6 +1,7 @@
 use super::mesh::world_chunk_mesh;
 use super::*;
 use bevy::prelude::*;
+use bevy::sprite_render::AlphaMode2d;
 
 use crate::constants::TILE_SIZE;
 use crate::map::resources::{MapTextureBounds, VisibleChunks};
@@ -76,9 +77,12 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
     let chunk = sim.world().chunks[&ChunkCoord { x: 0, y: 0 }].clone();
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
 
-    let mesh = world_chunk_mesh(&chunk, ids);
+    let mesh = world_chunk_mesh(sim.world(), &chunk, ids);
     let (positions, colors) = mesh_quads(&mesh);
-    let quad_count = positions.len() / 4;
+    let base_quad_indices = (0..positions.len() / 4)
+        .filter(|quad| positions[quad * 4][2] == 0.0)
+        .collect::<Vec<_>>();
+    let quad_count = base_quad_indices.len();
     let tile_count = chunk.tiles.len();
     assert!(
         quad_count < tile_count,
@@ -87,7 +91,7 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
 
     let size = CHUNK_SIZE as usize;
     let mut painted = vec![None; tile_count];
-    for quad in 0..quad_count {
+    for quad in base_quad_indices {
         let min = positions[quad * 4];
         let max = positions[quad * 4 + 2];
         let color = colors[quad * 4];
@@ -105,13 +109,18 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
     }
 
     for (index, tile) in chunk.tiles.iter().enumerate() {
-        let expected = tile_color(tile.tile_id, ids).to_linear().to_f32_array();
+        let (x, y) = chunk
+            .coord
+            .tile_at((index % size) as i32, (index / size) as i32);
+        let expected = tile_color(tile.tile_id, ids, sim.seed(), x, y)
+            .to_linear()
+            .to_f32_array();
         assert_eq!(painted[index], Some(expected), "tile {index} coverage");
     }
 }
 
 #[test]
-fn world_chunk_mesh_collapses_uniform_chunk_to_single_quad() {
+fn world_chunk_mesh_variants_are_seed_deterministic() {
     let mut sim = Simulation::new_test_world(123);
     sim.ensure_chunk_generated(ChunkCoord { x: 0, y: 0 });
     let mut chunk = sim.world().chunks[&ChunkCoord { x: 0, y: 0 }].clone();
@@ -121,9 +130,119 @@ fn world_chunk_mesh_collapses_uniform_chunk_to_single_quad() {
     }
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
 
-    let mesh = world_chunk_mesh(&chunk, ids);
-    let (positions, _) = mesh_quads(&mesh);
-    assert_eq!(positions.len(), 4);
+    let first = world_chunk_mesh(sim.world(), &chunk, ids);
+    let second = world_chunk_mesh(sim.world(), &chunk, ids);
+    assert_eq!(mesh_quads(&first), mesh_quads(&second));
+
+    let other_sim = Simulation::new_test_world(124);
+    let other = world_chunk_mesh(other_sim.world(), &chunk, ids);
+    assert_ne!(mesh_quads(&first), mesh_quads(&other));
+}
+
+#[test]
+fn world_chunk_material_preserves_transparent_detail_alpha() {
+    let sim = Simulation::new_test_world(123);
+    let coord = *sim
+        .world()
+        .chunks
+        .keys()
+        .next()
+        .expect("test world should contain a chunk");
+    let mut app = terrain_render_app(sim, coord);
+
+    app.update();
+
+    let material = app
+        .world()
+        .resource::<WorldRenderCache>()
+        .material
+        .clone()
+        .expect("world render should cache its material");
+    assert_eq!(
+        app.world()
+            .resource::<Assets<ColorMaterial>>()
+            .get(&material)
+            .expect("cached material should remain loaded")
+            .alpha_mode,
+        AlphaMode2d::Blend
+    );
+}
+
+#[test]
+fn generating_neighbor_remeshes_cached_shoreline_chunk() {
+    let (sim, cached_coord, generated_coord) = streamed_shoreline_fixture();
+    let mut app = terrain_render_app(sim, cached_coord);
+    app.update();
+
+    let handle = app.world().resource::<WorldRenderCache>().chunk_meshes[&cached_coord].clone();
+    let before = mesh_quads(
+        app.world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .expect("cached shoreline mesh should exist"),
+    );
+
+    assert!(
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .ensure_chunk_generated(generated_coord)
+    );
+    app.update();
+
+    let cache = app.world().resource::<WorldRenderCache>();
+    assert_eq!(cache.chunk_meshes[&cached_coord], handle);
+    let after = mesh_quads(
+        app.world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .expect("remeshed shoreline should reuse its cached asset"),
+    );
+    assert_ne!(before, after, "newly known coast should add foam geometry");
+}
+
+fn terrain_render_app(sim: Simulation, visible_coord: ChunkCoord) -> App {
+    let mut app = App::new();
+    app.insert_resource(SimResource::new(sim))
+        .insert_resource(visible_for_chunks([visible_coord]))
+        .init_resource::<WorldRenderCache>()
+        .init_resource::<PresentationReloadToken>()
+        .insert_resource(Assets::<Mesh>::default())
+        .insert_resource(Assets::<ColorMaterial>::default())
+        .add_systems(Update, sync_visible_world_tiles);
+    app
+}
+
+fn streamed_shoreline_fixture() -> (Simulation, ChunkCoord, ChunkCoord) {
+    const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+    for seed in 0..16 {
+        let sim = Simulation::new_test_world(seed);
+        let ids = RenderPrototypeIds::from_catalog(sim.catalog());
+        for &cached_coord in sim.world().chunks.keys() {
+            for (dx, dy) in DIRECTIONS {
+                let generated_coord = ChunkCoord {
+                    x: cached_coord.x + dx,
+                    y: cached_coord.y + dy,
+                };
+                if sim.world().chunks.contains_key(&generated_coord) {
+                    continue;
+                }
+                let cached_chunk = &sim.world().chunks[&cached_coord];
+                let before = mesh_quads(&world_chunk_mesh(sim.world(), cached_chunk, ids));
+                let mut completed = sim.clone();
+                completed.ensure_chunk_generated(generated_coord);
+                let after = mesh_quads(&world_chunk_mesh(
+                    completed.world(),
+                    &completed.world().chunks[&cached_coord],
+                    ids,
+                ));
+                if before != after {
+                    return (sim, cached_coord, generated_coord);
+                }
+            }
+        }
+    }
+    panic!("expected a generated-neighbor fixture that reveals a shoreline");
 }
 
 fn mesh_quads(mesh: &Mesh) -> (Vec<[f32; 3]>, Vec<[f32; 4]>) {

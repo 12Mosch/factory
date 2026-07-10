@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::constants::RESOURCE_SIZE;
 use crate::map::resources::VisibleChunks;
-use crate::rendering::colors::{RenderPrototypeIds, resource_color};
+use crate::rendering::colors::{RenderPrototypeIds, resource_color_variant};
 use crate::rendering::resources::{RenderDetail, RenderSyncStats};
 use crate::rendering::transforms::tile_translation;
 use crate::rendering::visuals::{VisualAssets, spawn_resource_visual};
@@ -62,6 +62,7 @@ pub(crate) fn sync_resource_debug_rendering(
             &mut params.labels,
             &resources,
             ids,
+            sim.seed(),
             show_amount_labels,
         );
         params.cache.last_resource_revision = Some(resource_revision);
@@ -87,6 +88,7 @@ pub(crate) fn sync_resource_debug_rendering(
                     ResourceTileChangeContext {
                         visible: &params.visible,
                         ids,
+                        seed: sim.seed(),
                         show_amount_labels,
                     },
                 );
@@ -101,6 +103,7 @@ pub(crate) fn sync_resource_debug_rendering(
                 &mut params.labels,
                 &resources,
                 ids,
+                sim.seed(),
                 show_amount_labels,
             );
         }
@@ -139,6 +142,7 @@ fn reconcile_resource_tiles(
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
     resources: &BTreeMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), ResourceCell>,
     ids: RenderPrototypeIds,
+    seed: u64,
     show_amount_labels: bool,
 ) {
     let stale_sprites = cache
@@ -154,7 +158,17 @@ fn reconcile_resource_tiles(
     }
 
     for (&(x, y), &resource) in resources {
-        sync_resource_sprite(commands, cache, visual_assets, sprites, x, y, resource, ids);
+        sync_resource_sprite(
+            commands,
+            cache,
+            visual_assets,
+            sprites,
+            x,
+            y,
+            resource,
+            ids,
+            seed,
+        );
     }
 
     if !show_amount_labels {
@@ -226,6 +240,7 @@ fn apply_resource_tile_change(
         change.y,
         resource,
         change_context.ids,
+        change_context.seed,
     );
 
     if change_context.show_amount_labels {
@@ -239,6 +254,7 @@ fn apply_resource_tile_change(
 struct ResourceTileChangeContext<'a> {
     visible: &'a VisibleChunks,
     ids: RenderPrototypeIds,
+    seed: u64,
     show_amount_labels: bool,
 }
 
@@ -252,9 +268,10 @@ fn sync_resource_sprite(
     y: factory_sim::WorldTileCoord,
     resource: ResourceCell,
     ids: RenderPrototypeIds,
+    seed: u64,
 ) {
     let coord = (x, y);
-    let color = resource_color(resource, ids);
+    let color = resource_color_variant(resource, ids, seed, x, y);
     if let Some(&entity) = cache.sprite_entities.get(&coord)
         && let Ok((_, mut sprite)) = sprites.get_mut(entity)
     {

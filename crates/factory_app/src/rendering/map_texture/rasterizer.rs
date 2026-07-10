@@ -60,7 +60,9 @@ impl MapRasterizer<'_> {
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
             let world_x = chunk.coord.tile_at(local_x, 0).0;
             let world_y = chunk.coord.tile_at(0, local_y).1;
-            let color = self.painter.pixel_for_tile(tile, revealed);
+            let color = self
+                .painter
+                .pixel_for_tile(tile, world_x, world_y, revealed);
             set_world_pixel(data, bounds, world_x, world_y, color);
         }
 
@@ -75,7 +77,7 @@ impl MapRasterizer<'_> {
         };
         if let Some(tile) = self.sim.world().tile_at(x, y) {
             let revealed = self.chunk_paint_state(coord).revealed;
-            let color = self.painter.pixel_for_tile(tile, revealed);
+            let color = self.painter.pixel_for_tile(tile, x, y, revealed);
             set_world_pixel(data, bounds, x, y, color);
         }
 

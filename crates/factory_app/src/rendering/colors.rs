@@ -115,14 +115,84 @@ pub(crate) fn inserter_color(inserter: Option<&InserterPrototype>) -> Color {
     }
 }
 
-pub(crate) fn tile_color(tile_id: TileId, ids: RenderPrototypeIds) -> Color {
+pub(crate) fn tile_color(
+    tile_id: TileId,
+    ids: RenderPrototypeIds,
+    seed: u64,
+    x: i64,
+    y: i64,
+) -> Color {
+    let variant = coherent_variant(seed, x, y, 8, 0x6a09_e667_f3bc_c909);
     if tile_id == ids.water {
-        Color::srgb(0.08, 0.29, 0.54)
+        match variant {
+            -1 => Color::srgb(0.074, 0.278, 0.525),
+            1 => Color::srgb(0.086, 0.302, 0.555),
+            _ => Color::srgb(0.08, 0.29, 0.54),
+        }
     } else if tile_id == ids.dirt {
-        Color::srgb(0.42, 0.34, 0.23)
+        match variant {
+            -1 => Color::srgb(0.395, 0.315, 0.215),
+            1 => Color::srgb(0.445, 0.365, 0.245),
+            _ => Color::srgb(0.42, 0.34, 0.23),
+        }
     } else {
-        Color::srgb(0.22, 0.43, 0.24)
+        match variant {
+            -1 => Color::srgb(0.205, 0.405, 0.225),
+            1 => Color::srgb(0.235, 0.45, 0.255),
+            _ => Color::srgb(0.22, 0.43, 0.24),
+        }
     }
+}
+
+pub(crate) fn resource_color_variant(
+    resource: ResourceCell,
+    ids: RenderPrototypeIds,
+    seed: u64,
+    x: i64,
+    y: i64,
+) -> Color {
+    let factor = match coherent_variant(seed, x, y, 5, 0xbb67_ae85_84ca_a73b) {
+        -1 => 0.90,
+        1 => 1.06,
+        _ => 0.98,
+    };
+    let color = resource_color(resource, ids).to_srgba();
+    Color::srgba(
+        (color.red * factor).min(1.0),
+        (color.green * factor).min(1.0),
+        (color.blue * factor).min(1.0),
+        color.alpha,
+    )
+}
+
+pub(crate) fn tile_hash(seed: u64, x: i64, y: i64, salt: u64) -> u64 {
+    let mut value = seed
+        ^ (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (y as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
+        ^ salt;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn coherent_variant(seed: u64, x: i64, y: i64, scale: i64, salt: u64) -> i8 {
+    let cell_x = x.div_euclid(scale);
+    let cell_y = y.div_euclid(scale);
+    let tx = smoothstep(x.rem_euclid(scale) as f32 / scale as f32);
+    let ty = smoothstep(y.rem_euclid(scale) as f32 / scale as f32);
+    let sample =
+        |sample_x, sample_y| (tile_hash(seed, sample_x, sample_y, salt) & 0xffff) as f32 / 65_535.0;
+    let south = sample(cell_x, cell_y).lerp(sample(cell_x + 1, cell_y), tx);
+    let north = sample(cell_x, cell_y + 1).lerp(sample(cell_x + 1, cell_y + 1), tx);
+    match south.lerp(north, ty) {
+        value if value < 0.36 => -1,
+        value if value > 0.64 => 1,
+        _ => 0,
+    }
+}
+
+fn smoothstep(value: f32) -> f32 {
+    value * value * (3.0 - 2.0 * value)
 }
 
 pub(crate) fn resource_color(resource: ResourceCell, ids: RenderPrototypeIds) -> Color {
@@ -164,5 +234,13 @@ impl RenderPrototypeIds {
             stone: ids.items.stone,
             crude_oil: ids.items.crude_oil,
         }
+    }
+
+    pub(crate) fn is_water(self, tile_id: TileId) -> bool {
+        tile_id == self.water
+    }
+
+    pub(crate) fn is_dirt(self, tile_id: TileId) -> bool {
+        tile_id == self.dirt
     }
 }
