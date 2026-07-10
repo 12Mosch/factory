@@ -446,38 +446,68 @@ pub(super) fn generate_resource_patch_centers(
 
     for grid_y in min_grid_y..=max_grid_y {
         for grid_x in min_grid_x..=max_grid_x {
-            for resource in &rules.resources {
-                let hash = hash_resource_center(seed, grid_x, grid_y, resource.resource_item);
-                if hash % 100 >= u64::from(resource.frequency_percent) {
-                    continue;
-                }
-
-                let jitter_x = ((hash >> 8) % (rules.grid_jitter * 2 + 1) as u64) as i64
-                    - i64::from(rules.grid_jitter);
-                let jitter_y = ((hash >> 16) % (rules.grid_jitter * 2 + 1) as u64) as i64
-                    - i64::from(rules.grid_jitter);
-
-                let x = grid_x * grid_size + grid_size / 2 + jitter_x;
-                let y = grid_y * grid_size + grid_size / 2 + jitter_y;
-                let (radius, richness) = match &rules.distance_scaling {
-                    Some(scaling) => scale_patch_with_distance(scaling, resource, x, y),
-                    None => (resource.radius, resource.richness),
-                };
-                let center = ResourcePatchCenter {
-                    resource_item: resource.resource_item,
-                    x,
-                    y,
-                    radius,
-                    richness,
-                };
-                if resource_patch_can_affect_bounds(center, bounds, rules.edge_noise) {
-                    centers.push(center);
-                }
+            let Some(center) = resource_patch_center_for_grid_cell(seed, rules, grid_x, grid_y)
+            else {
+                continue;
+            };
+            if resource_patch_can_affect_bounds(center, bounds, rules.edge_noise) {
+                centers.push(center);
             }
         }
     }
 
     centers
+}
+
+/// Selects exactly one resource rule for a grid cell, using each configured
+/// `frequency_percent` as its relative weight. This keeps random patches from
+/// different resources sharing a cell and competing tile-by-tile at their
+/// overlapping borders.
+fn resource_patch_center_for_grid_cell(
+    seed: u64,
+    rules: &WorldGenRules,
+    grid_x: WorldTileCoord,
+    grid_y: WorldTileCoord,
+) -> Option<ResourcePatchCenter> {
+    let hash = hash_resource_center(seed, grid_x, grid_y);
+    let resource = select_resource_for_grid_cell(&rules.resources, hash)?;
+    let jitter_x =
+        ((hash >> 8) % (rules.grid_jitter * 2 + 1) as u64) as i64 - i64::from(rules.grid_jitter);
+    let jitter_y =
+        ((hash >> 16) % (rules.grid_jitter * 2 + 1) as u64) as i64 - i64::from(rules.grid_jitter);
+    let grid_size = i64::from(rules.grid_cell_size);
+    let x = grid_x * grid_size + grid_size / 2 + jitter_x;
+    let y = grid_y * grid_size + grid_size / 2 + jitter_y;
+    let (radius, richness) = match &rules.distance_scaling {
+        Some(scaling) => scale_patch_with_distance(scaling, resource, x, y),
+        None => (resource.radius, resource.richness),
+    };
+
+    Some(ResourcePatchCenter {
+        resource_item: resource.resource_item,
+        x,
+        y,
+        radius,
+        richness,
+    })
+}
+
+fn select_resource_for_grid_cell(resources: &[ResourceRule], hash: u64) -> Option<&ResourceRule> {
+    let total_weight: u64 = resources
+        .iter()
+        .map(|resource| u64::from(resource.frequency_percent))
+        .sum();
+    let mut roll = hash % total_weight.max(1);
+
+    for resource in resources {
+        let weight = u64::from(resource.frequency_percent);
+        if roll < weight {
+            return Some(resource);
+        }
+        roll -= weight;
+    }
+
+    None
 }
 
 /// Radius and richness of a grid patch centered at `(x, y)` after distance
@@ -631,13 +661,8 @@ pub(super) fn hash_resource_center(
     seed: u64,
     grid_x: WorldTileCoord,
     grid_y: WorldTileCoord,
-    resource_item: ItemId,
 ) -> u64 {
-    hash_world(
-        seed ^ 0xa24b_aed4_963e_e407 ^ u64::from(resource_item.raw()).rotate_left(17),
-        grid_x,
-        grid_y,
-    )
+    hash_world(seed ^ 0xa24b_aed4_963e_e407, grid_x, grid_y)
 }
 
 #[derive(Clone, Copy)]
@@ -1107,6 +1132,48 @@ mod tests {
             generate_chunk(123, coord, &rules),
             generate_chunk(124, coord, &rules)
         );
+    }
+
+    #[test]
+    fn grid_cells_select_one_resource_weighted_by_frequency() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+        let mut counts = vec![0u64; rules.resources.len()];
+        let mut total = 0u64;
+
+        for grid_y in -64..64 {
+            for grid_x in -64..64 {
+                let hash = hash_resource_center(123, grid_x, grid_y);
+                let selected = select_resource_for_grid_cell(&rules.resources, hash)
+                    .expect("base resource frequencies should select one resource per grid cell");
+                let center = resource_patch_center_for_grid_cell(123, &rules, grid_x, grid_y)
+                    .expect("selected grid resource should produce a patch center");
+                assert_eq!(center.resource_item, selected.resource_item);
+
+                let index = rules
+                    .resources
+                    .iter()
+                    .position(|resource| resource.resource_item == selected.resource_item)
+                    .expect("selected resource should be configured");
+                counts[index] += 1;
+                total += 1;
+            }
+        }
+
+        let total_weight: u64 = rules
+            .resources
+            .iter()
+            .map(|resource| u64::from(resource.frequency_percent))
+            .sum();
+        for (resource, count) in rules.resources.iter().zip(counts) {
+            let expected = f64::from(resource.frequency_percent) / total_weight as f64;
+            let actual = count as f64 / total as f64;
+            assert!(
+                (actual - expected).abs() < 0.025,
+                "resource {:?} selected at {actual:.3}, expected about {expected:.3}",
+                resource.resource_item
+            );
+        }
     }
 
     #[test]
