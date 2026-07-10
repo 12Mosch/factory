@@ -165,13 +165,16 @@ pub(super) fn generate_resource_patch_centers(
 
     for (index, config) in configs.iter().enumerate() {
         let (x, y) = starting_offsets[index];
-        centers.push(ResourcePatchCenter {
+        let center = ResourcePatchCenter {
             resource_item: config.resource_item,
             x,
             y,
             radius: config.radius,
             richness: config.richness,
-        });
+        };
+        if resource_patch_can_affect_bounds(center, bounds) {
+            centers.push(center);
+        }
     }
 
     let max_reach = configs
@@ -181,10 +184,10 @@ pub(super) fn generate_resource_patch_centers(
         .unwrap_or(0)
         + RESOURCE_PATCH_EDGE_NOISE
         + RESOURCE_PATCH_GRID_JITTER;
-    let min_grid_x = (bounds.min_x - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) - 1;
-    let max_grid_x = (bounds.max_x + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) + 1;
-    let min_grid_y = (bounds.min_y - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) - 1;
-    let max_grid_y = (bounds.max_y + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE) + 1;
+    let min_grid_x = (bounds.min_x - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
+    let max_grid_x = (bounds.max_x + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
+    let min_grid_y = (bounds.min_y - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
+    let max_grid_y = (bounds.max_y + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
 
     for grid_y in min_grid_y..=max_grid_y {
         for grid_x in min_grid_x..=max_grid_x {
@@ -199,13 +202,16 @@ pub(super) fn generate_resource_patch_centers(
                 let jitter_y = ((hash >> 16) % (RESOURCE_PATCH_GRID_JITTER * 2 + 1) as u64) as i32
                     - RESOURCE_PATCH_GRID_JITTER;
 
-                centers.push(ResourcePatchCenter {
+                let center = ResourcePatchCenter {
                     resource_item: config.resource_item,
                     x: grid_x * RESOURCE_PATCH_GRID_SIZE + RESOURCE_PATCH_GRID_SIZE / 2 + jitter_x,
                     y: grid_y * RESOURCE_PATCH_GRID_SIZE + RESOURCE_PATCH_GRID_SIZE / 2 + jitter_y,
                     radius: config.radius,
                     richness: config.richness,
-                });
+                };
+                if resource_patch_can_affect_bounds(center, bounds) {
+                    centers.push(center);
+                }
             }
         }
     }
@@ -230,6 +236,16 @@ impl TileBounds {
             max_y: coord.y * CHUNK_SIZE + CHUNK_SIZE - 1,
         }
     }
+}
+
+fn resource_patch_can_affect_bounds(center: ResourcePatchCenter, bounds: TileBounds) -> bool {
+    let closest_x = center.x.clamp(bounds.min_x, bounds.max_x);
+    let closest_y = center.y.clamp(bounds.min_y, bounds.max_y);
+    let dx = i64::from(center.x - closest_x);
+    let dy = i64::from(center.y - closest_y);
+    let reach = i64::from(center.radius + RESOURCE_PATCH_EDGE_NOISE);
+
+    dx * dx + dy * dy <= reach * reach
 }
 
 pub(super) fn resource_at_patch_tile(
@@ -436,4 +452,34 @@ pub(super) fn is_science_pack_item(catalog: &PrototypeCatalog, item_id: ItemId) 
 
 pub(super) fn lab_can_accept_item(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
     is_science_pack_item(catalog, item_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_resource_candidates_can_affect_their_chunk() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let ids = WorldPrototypeIds::from_catalog(&catalog);
+
+        for seed in [0, 123, 987_654_321] {
+            for coord in [
+                ChunkCoord { x: -2, y: -2 },
+                ChunkCoord { x: 0, y: 0 },
+                ChunkCoord { x: 2, y: 2 },
+                ChunkCoord { x: 17, y: -23 },
+            ] {
+                let bounds = TileBounds::for_chunk(coord);
+                let centers = generate_resource_patch_centers(seed, ids, bounds);
+
+                assert!(
+                    centers
+                        .iter()
+                        .all(|center| resource_patch_can_affect_bounds(*center, bounds)),
+                    "a retained candidate cannot affect chunk {coord:?} for seed {seed}"
+                );
+            }
+        }
+    }
 }
