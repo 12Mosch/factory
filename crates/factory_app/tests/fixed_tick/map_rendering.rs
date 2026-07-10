@@ -54,9 +54,9 @@ fn generated_unrevealed_streamed_chunks_remain_hidden_until_revealed() {
     let target_chunk = ChunkCoord { x: 0, y: 11 };
     let target = first_walkable_tile_in_chunk(sim.seed(), target_chunk);
     move_player_to_tile(&mut sim, target);
-    let sample = (
-        target_chunk.x * CHUNK_SIZE + (target.0 + 1).rem_euclid(CHUNK_SIZE),
-        target.1,
+    let sample = target_chunk.tile_at(
+        i32::try_from((target.0 + 1).rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
+        i32::try_from(target.1.rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
     );
 
     let map = generate_map_pixels(&sim, &MapDisplaySettings::default());
@@ -70,9 +70,9 @@ fn debug_reveal_shows_generated_streamed_chunks() {
     let target_chunk = ChunkCoord { x: 0, y: 13 };
     let target = first_walkable_tile_in_chunk(sim.seed(), target_chunk);
     move_player_to_tile(&mut sim, target);
-    let sample = (
-        target_chunk.x * CHUNK_SIZE + (target.0 + 1).rem_euclid(CHUNK_SIZE),
-        target.1,
+    let sample = target_chunk.tile_at(
+        i32::try_from((target.0 + 1).rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
+        i32::try_from(target.1.rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
     );
 
     let map = generate_map_pixels(
@@ -212,10 +212,7 @@ fn revealed_resource_tile(sim: &Simulation) -> (i64, i64) {
                     }
                     let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                     let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                    Some((
-                        chunk.coord.x * CHUNK_SIZE + local_x,
-                        chunk.coord.y * CHUNK_SIZE + local_y,
-                    ))
+                    Some(chunk.coord.tile_at(local_x, local_y))
                 })
         })
         .next()
@@ -233,8 +230,7 @@ fn revealed_buildable_tile(
         for (index, _) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = chunk.coord.tile_at(local_x, local_y);
             if factory_sim::placement::validate(
                 sim,
                 factory_sim::placement::EntityPlacementRequest {

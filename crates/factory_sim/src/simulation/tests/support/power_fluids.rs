@@ -305,8 +305,8 @@ pub(in crate::simulation::tests) fn poles_within_small_pole_reach(
     first: (WorldTileCoord, WorldTileCoord),
     second: (WorldTileCoord, WorldTileCoord),
 ) -> bool {
-    let dx_x2 = i64::from((first.0 - second.0) * 2);
-    let dy_x2 = i64::from((first.1 - second.1) * 2);
+    let dx_x2 = (first.0 - second.0) * 2;
+    let dy_x2 = (first.1 - second.1) * 2;
     dx_x2 * dx_x2 + dy_x2 * dy_x2 <= 15 * 15
 }
 
