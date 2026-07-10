@@ -5,7 +5,8 @@ use bincode::Options;
 // became part of deterministic simulation state and no v8 migration is kept.
 pub const SAVE_VERSION: u32 = 11;
 // v8: PrototypeCatalog gained the world_generation config section.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 8;
+// v9: WorldGenerationConfig gained the optional distance_scaling section.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 9;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 const SAVE_HEADER_LEN: usize = 8 + 4 + 4 + 8;

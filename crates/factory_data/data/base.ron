@@ -1073,6 +1073,15 @@
         ],
         terrain_noise: Some((scale: 32, octaves: 3)),
         patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
+        // Expansion reward: every 100 tiles from spawn, grid patches gain 75%
+        // of their base richness and 1 tile of radius (radius capped at +6).
+        // Starting patches keep their base values.
+        distance_scaling: Some((
+            interval_tiles: 100,
+            richness_bonus_percent: 75,
+            radius_bonus_tiles: 1,
+            max_radius_bonus_tiles: 6,
+        )),
         resources: [
             (
                 item: "iron_ore",

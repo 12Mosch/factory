@@ -272,6 +272,9 @@ pub struct WorldGenerationConfig {
     pub terrain: Vec<TerrainLayerConfig>,
     pub terrain_noise: TerrainNoiseConfig,
     pub patch_grid: ResourcePatchGridConfig,
+    /// Distance-based reward for expanding outward; `None` keeps every patch
+    /// at its base richness and radius.
+    pub distance_scaling: Option<ResourceDistanceScalingConfig>,
     pub resources: Vec<ResourceGenerationConfig>,
 }
 
@@ -290,6 +293,7 @@ impl Default for WorldGenerationConfig {
                 jitter: 16,
                 edge_noise: 3,
             },
+            distance_scaling: None,
             resources: Vec::new(),
         }
     }
@@ -335,6 +339,22 @@ pub struct ResourcePatchGridConfig {
     pub cell_size: i32,
     pub jitter: i32,
     pub edge_noise: i32,
+}
+
+/// Linear distance scaling for grid-placed resource patches, rewarding
+/// expansion away from the spawn: for every `interval_tiles` of distance
+/// between a patch center and the world origin, the patch gains
+/// `richness_bonus_percent` percent of its base richness and
+/// `radius_bonus_tiles` tiles of radius. The radius bonus is capped at
+/// `max_radius_bonus_tiles` so chunk generation can bound how far away a
+/// patch center may still reach into a chunk. Starting patches are spawn
+/// guarantees and are never scaled.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ResourceDistanceScalingConfig {
+    pub interval_tiles: u32,
+    pub richness_bonus_percent: u32,
+    pub radius_bonus_tiles: u8,
+    pub max_radius_bonus_tiles: u8,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
