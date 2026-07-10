@@ -26,7 +26,7 @@ impl Simulation {
         self.try_move_player_axis(0, delta_y);
     }
 
-    pub fn can_player_occupy_tile(&self, x: i32, y: i32) -> bool {
+    pub fn can_player_occupy_tile(&self, x: WorldTileCoord, y: WorldTileCoord) -> bool {
         player_can_occupy_tile(&self.world, &self.entities.occupancy, x, y)
     }
 
@@ -228,7 +228,8 @@ impl Simulation {
         let dx = self.player.x - tile_center_fixed(target.x);
         let dy = self.player.y - tile_center_fixed(target.y);
 
-        dx * dx + dy * dy <= reach * reach
+        i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy)
+            <= i128::from(reach) * i128::from(reach)
     }
 
     pub(super) fn try_move_player_axis(&mut self, delta_x: i64, delta_y: i64) {
@@ -236,14 +237,16 @@ impl Simulation {
             return;
         }
 
-        let candidate = PlayerState {
-            x: self.player.x + delta_x,
-            y: self.player.y + delta_y,
+        let Some(x) = self.player.x.checked_add(delta_x) else {
+            return;
         };
+        let Some(y) = self.player.y.checked_add(delta_y) else {
+            return;
+        };
+        let candidate = PlayerState { x, y };
         let (tile_x, tile_y) = candidate.tile_position();
-        let candidate_chunk = ChunkCoord {
-            x: tile_x.div_euclid(CHUNK_SIZE),
-            y: tile_y.div_euclid(CHUNK_SIZE),
+        let Some(candidate_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
+            return;
         };
         self.world.ensure_chunk_generated(candidate_chunk);
 
@@ -261,7 +264,7 @@ impl PlayerState {
         )
     }
 
-    pub fn tile_position(self) -> (i32, i32) {
+    pub fn tile_position(self) -> (WorldTileCoord, WorldTileCoord) {
         (fixed_to_tile(self.x), fixed_to_tile(self.y))
     }
 
@@ -273,10 +276,13 @@ impl PlayerState {
         self.y
     }
 
-    pub(super) fn centered_on_tile(x: i32, y: i32) -> Self {
+    pub(super) fn centered_on_tile<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        x: X,
+        y: Y,
+    ) -> Self {
         Self {
-            x: tile_center_fixed(x),
-            y: tile_center_fixed(y),
+            x: tile_center_fixed(x.into()),
+            y: tile_center_fixed(y.into()),
         }
     }
 }

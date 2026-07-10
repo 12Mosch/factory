@@ -102,8 +102,8 @@ pub(crate) fn sync_construction_rendering(
     let construction = sim.construction();
     let (visible_ghosts, visible_marks) = match visible.tile_bounds {
         Some(bounds) => {
-            let max_x = bounds.min_x + bounds.width as i32 - 1;
-            let max_y = bounds.min_y + bounds.height as i32 - 1;
+            let max_x = bounds.min_x + i64::from(bounds.width) - 1;
+            let max_y = bounds.min_y + i64::from(bounds.height) - 1;
             let ghosts =
                 construction.ghost_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y);
             let marks: HashSet<EntityId> = sim
@@ -300,8 +300,8 @@ pub(crate) fn update_paste_preview(
         let style = entity_prototype_visual_style(catalog, entity.prototype_id, entity.direction)?;
         let prototype = catalog.entity(entity.prototype_id)?;
         let footprint = EntityFootprint::from_size(
-            x + entity.dx,
-            y + entity.dy,
+            x + i64::from(entity.dx),
+            y + i64::from(entity.dy),
             prototype.size.x,
             prototype.size.y,
             entity.direction,

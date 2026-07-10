@@ -308,8 +308,8 @@ fn place_entities(
 
 fn benchmark_placement_request(
     prototype_id: factory_data::EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: i64,
+    y: i64,
     direction: Direction,
 ) -> factory_sim::placement::EntityPlacementRequest {
     factory_sim::placement::EntityPlacementRequest {
@@ -437,7 +437,7 @@ fn place_fluid_fixtures(sim: &mut Simulation, count: usize) {
     panic!("could only place {placed} of {count} fluid benchmark fixtures");
 }
 
-fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
+fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i64, i64)> {
     let mut chunks = sim.world().chunks.keys().copied().collect::<Vec<_>>();
     chunks.sort_unstable();
     chunks
@@ -446,10 +446,7 @@ fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
             (0..CHUNK_SIZE * CHUNK_SIZE).map(move |index| {
                 let local_x = index.rem_euclid(CHUNK_SIZE);
                 let local_y = index.div_euclid(CHUNK_SIZE);
-                (
-                    coord.x * CHUNK_SIZE + local_x,
-                    coord.y * CHUNK_SIZE + local_y,
-                )
+                coord.tile_at(local_x, local_y)
             })
         })
         .collect()

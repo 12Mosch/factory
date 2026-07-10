@@ -49,11 +49,9 @@ pub(crate) fn update_visible_chunks(
         .and_then(|(camera, transform)| visible_chunks_from_camera(camera, transform))
         .unwrap_or_else(|| {
             let (tile_x, tile_y) = sim.player().tile_position();
-            let player_chunk = ChunkCoord {
-                x: tile_x.div_euclid(CHUNK_SIZE),
-                y: tile_y.div_euclid(CHUNK_SIZE),
-            };
-            visible_chunks_around(player_chunk, FALLBACK_VISIBLE_CHUNK_RADIUS)
+            ChunkCoord::from_tile(tile_x, tile_y)
+                .map(|coord| visible_chunks_around(coord, FALLBACK_VISIBLE_CHUNK_RADIUS))
+                .unwrap_or_default()
         });
     let chunks = candidate_chunks
         .into_iter()
@@ -111,15 +109,17 @@ pub(crate) fn visible_chunks_for_world_rect(
     let max_tile_x = world_pixel_to_tile(max_world_x);
     let min_tile_y = world_pixel_to_tile(min_world_y);
     let max_tile_y = world_pixel_to_tile(max_world_y);
-    let min_chunk_x = min_tile_x.div_euclid(CHUNK_SIZE) - margin_chunks;
-    let max_chunk_x = max_tile_x.div_euclid(CHUNK_SIZE) + margin_chunks;
-    let min_chunk_y = min_tile_y.div_euclid(CHUNK_SIZE) - margin_chunks;
-    let max_chunk_y = max_tile_y.div_euclid(CHUNK_SIZE) + margin_chunks;
+    let min_chunk_x = min_tile_x.div_euclid(i64::from(CHUNK_SIZE)) - i64::from(margin_chunks);
+    let max_chunk_x = max_tile_x.div_euclid(i64::from(CHUNK_SIZE)) + i64::from(margin_chunks);
+    let min_chunk_y = min_tile_y.div_euclid(i64::from(CHUNK_SIZE)) - i64::from(margin_chunks);
+    let max_chunk_y = max_tile_y.div_euclid(i64::from(CHUNK_SIZE)) + i64::from(margin_chunks);
 
     let mut chunks = BTreeSet::new();
     for y in min_chunk_y..=max_chunk_y {
         for x in min_chunk_x..=max_chunk_x {
-            chunks.insert(ChunkCoord { x, y });
+            if let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) {
+                chunks.insert(ChunkCoord { x, y });
+            }
         }
     }
     chunks
@@ -136,8 +136,8 @@ fn visible_chunks_around(center: ChunkCoord, radius: i32) -> BTreeSet<ChunkCoord
     chunks
 }
 
-fn world_pixel_to_tile(value: f32) -> i32 {
-    (value / TILE_SIZE).floor() as i32
+fn world_pixel_to_tile(value: f32) -> i64 {
+    (value / TILE_SIZE).floor() as i64
 }
 
 fn orthographic_camera_scale(projection: &Projection) -> Option<f32> {
@@ -163,10 +163,28 @@ fn tile_bounds_for_chunks(chunks: &BTreeSet<ChunkCoord>) -> Option<MapTextureBou
     let max_chunk_y = chunks.iter().map(|coord| coord.y).max()?;
 
     Some(MapTextureBounds {
-        min_x: min_chunk_x * CHUNK_SIZE,
-        min_y: min_chunk_y * CHUNK_SIZE,
-        width: ((max_chunk_x - min_chunk_x + 1) * CHUNK_SIZE) as u32,
-        height: ((max_chunk_y - min_chunk_y + 1) * CHUNK_SIZE) as u32,
+        min_x: ChunkCoord {
+            x: min_chunk_x,
+            y: min_chunk_y,
+        }
+        .min_tile()
+        .0,
+        min_y: ChunkCoord {
+            x: min_chunk_x,
+            y: min_chunk_y,
+        }
+        .min_tile()
+        .1,
+        width: u32::try_from(
+            (i64::from(max_chunk_x) - i64::from(min_chunk_x) + 1) * i64::from(CHUNK_SIZE),
+        )
+        .unwrap_or(u32::MAX)
+        .min(crate::map::resources::MAX_MAP_TEXTURE_SIDE_TILES),
+        height: u32::try_from(
+            (i64::from(max_chunk_y) - i64::from(min_chunk_y) + 1) * i64::from(CHUNK_SIZE),
+        )
+        .unwrap_or(u32::MAX)
+        .min(crate::map::resources::MAX_MAP_TEXTURE_SIDE_TILES),
     })
 }
 

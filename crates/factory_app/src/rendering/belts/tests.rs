@@ -287,13 +287,12 @@ fn first_placeable_tile(
     sim: &Simulation,
     prototype_id: EntityPrototypeId,
     direction: Direction,
-) -> (i32, i32) {
+) -> (i64, i64) {
     for chunk in sim.world().chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = chunk.coord.tile_at(local_x, local_y);
 
             if factory_sim::placement::validate(
                 sim,

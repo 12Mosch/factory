@@ -5,8 +5,8 @@ pub(super) struct PoleNode<'a> {
     pub(super) entity_id: EntityId,
     pub(super) placed: &'a PlacedEntity,
     pub(super) prototype: &'a factory_data::ElectricPolePrototype,
-    pub(super) center_x2: i32,
-    pub(super) center_y2: i32,
+    pub(super) center_x2: WorldTileCoord,
+    pub(super) center_y2: WorldTileCoord,
 }
 
 #[derive(Clone, Copy)]

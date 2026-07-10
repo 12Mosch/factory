@@ -37,8 +37,8 @@ pub(super) fn map_rect_for_footprint(
         MapTileRect {
             min: Vec2::new(footprint.x as f32, footprint.y as f32),
             max: Vec2::new(
-                (footprint.x + footprint.width) as f32,
-                (footprint.y + footprint.height) as f32,
+                (footprint.x + i64::from(footprint.width)) as f32,
+                (footprint.y + i64::from(footprint.height)) as f32,
             ),
         },
     )
@@ -49,7 +49,8 @@ pub(super) fn map_rect_for_chunk(
     image_size: Vec2,
     coord: ChunkCoord,
 ) -> Option<MapUiRect> {
-    let min = Vec2::new((coord.x * CHUNK_SIZE) as f32, (coord.y * CHUNK_SIZE) as f32);
+    let (min_x, min_y) = coord.min_tile();
+    let min = Vec2::new(min_x as f32, min_y as f32);
     map_rect_for_world_rect(
         crop_bounds,
         image_size,
@@ -107,15 +108,15 @@ pub(super) fn minimap_crop_bounds(map_bounds: MapTextureBounds, center: Vec2) ->
 pub(super) fn clamped_window_min(
     center: f32,
     window_size: u32,
-    bounds_min: i32,
+    bounds_min: i64,
     bounds_size: u32,
-) -> i32 {
+) -> i64 {
     if bounds_size <= window_size {
         return bounds_min;
     }
 
-    let desired = (center - window_size as f32 * 0.5).floor() as i32;
-    let max_min = bounds_min + bounds_size as i32 - window_size as i32;
+    let desired = (center - window_size as f32 * 0.5).floor() as i64;
+    let max_min = bounds_min + i64::from(bounds_size) - i64::from(window_size);
     desired.clamp(bounds_min, max_min)
 }
 
@@ -186,7 +187,7 @@ pub(super) fn fullscreen_view_tile_size(
 
 pub(super) fn clamp_center_axis(
     center: f32,
-    bounds_min: i32,
+    bounds_min: i64,
     bounds_size: u32,
     view_size: u32,
 ) -> f32 {
@@ -206,13 +207,13 @@ pub fn texture_rect_for_world_bounds(
 ) -> Rect {
     let local_x = crop_bounds.min_x - map_bounds.min_x;
     let local_y = crop_bounds.min_y - map_bounds.min_y;
-    let top_y = map_bounds.height as i32 - local_y - crop_bounds.height as i32;
+    let top_y = i64::from(map_bounds.height) - local_y - i64::from(crop_bounds.height);
 
     Rect::new(
         local_x as f32,
         top_y as f32,
-        (local_x + crop_bounds.width as i32) as f32,
-        (top_y + crop_bounds.height as i32) as f32,
+        (local_x + i64::from(crop_bounds.width)) as f32,
+        (top_y + i64::from(crop_bounds.height)) as f32,
     )
 }
 

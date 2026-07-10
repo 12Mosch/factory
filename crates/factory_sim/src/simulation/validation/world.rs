@@ -166,8 +166,8 @@ pub(super) fn validate_world_resources(world: &WorldSim) -> Result<(), SimValida
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
                 return Err(SimValidationError::MissingTile {
-                    x: chunk.coord.x * CHUNK_SIZE + local_x,
-                    y: chunk.coord.y * CHUNK_SIZE + local_y,
+                    x: chunk.coord.tile_at(local_x, local_y).0,
+                    y: chunk.coord.tile_at(local_x, local_y).1,
                 });
             }
 

@@ -133,8 +133,8 @@ fn spawn_entity_overlays(
         return;
     }
 
-    let max_x = context.crop_bounds.min_x + context.crop_bounds.width as i32 - 1;
-    let max_y = context.crop_bounds.min_y + context.crop_bounds.height as i32 - 1;
+    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
+    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
     for entity_id in context.sim.entities().occupancy().entity_ids_in_tile_rect(
         context.crop_bounds.min_x,
         max_x,
@@ -177,10 +177,7 @@ fn entity_footprint_is_visible(
 ) -> bool {
     settings.debug_reveal_all
         || footprint.tiles().into_iter().any(|(x, y)| {
-            sim.is_chunk_revealed(ChunkCoord {
-                x: x.div_euclid(CHUNK_SIZE),
-                y: y.div_euclid(CHUNK_SIZE),
-            })
+            ChunkCoord::from_tile(x, y).is_some_and(|coord| sim.is_chunk_revealed(coord))
         })
 }
 

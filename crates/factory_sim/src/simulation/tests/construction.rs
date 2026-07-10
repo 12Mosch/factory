@@ -5,8 +5,8 @@ use crate::simulation::construction_ops::GhostPlacementRequest;
 
 fn ghost_request(
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     direction: Direction,
 ) -> GhostPlacementRequest {
     GhostPlacementRequest {

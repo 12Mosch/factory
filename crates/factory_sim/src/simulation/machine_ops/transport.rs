@@ -99,7 +99,7 @@ pub(in crate::simulation) fn splitter_output_lane_index(
 pub(in crate::simulation) fn splitter_input_port_for_occupied_tile(
     entities: &EntityStore,
     entity_id: EntityId,
-    tile: (i32, i32),
+    tile: (WorldTileCoord, WorldTileCoord),
 ) -> Option<usize> {
     let placed = entities.placed_entities.get(&entity_id)?;
     splitter_port_tiles(placed)?

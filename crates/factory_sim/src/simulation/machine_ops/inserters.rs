@@ -3,7 +3,10 @@ use crate::simulation::*;
 pub(in crate::simulation) fn inserter_transfer_tiles(
     catalog: &PrototypeCatalog,
     placed: &PlacedEntity,
-) -> Option<((i32, i32), (i32, i32))> {
+) -> Option<(
+    (WorldTileCoord, WorldTileCoord),
+    (WorldTileCoord, WorldTileCoord),
+)> {
     let prototype = catalog.entity(placed.prototype_id)?;
     let inserter = prototype.inserter.as_ref()?;
 
@@ -13,7 +16,10 @@ pub(in crate::simulation) fn inserter_transfer_tiles(
 pub(in crate::simulation) fn inserter_transfer_tiles_for_prototype(
     placed: &PlacedEntity,
     inserter: &factory_data::InserterPrototype,
-) -> ((i32, i32), (i32, i32)) {
+) -> (
+    (WorldTileCoord, WorldTileCoord),
+    (WorldTileCoord, WorldTileCoord),
+) {
     let pickup_offset = rotate_inserter_offset(
         (inserter.pickup_offset.x, inserter.pickup_offset.y),
         placed.direction,
@@ -24,8 +30,14 @@ pub(in crate::simulation) fn inserter_transfer_tiles_for_prototype(
     );
 
     (
-        (placed.x + pickup_offset.0, placed.y + pickup_offset.1),
-        (placed.x + drop_offset.0, placed.y + drop_offset.1),
+        (
+            placed.x + i64::from(pickup_offset.0),
+            placed.y + i64::from(pickup_offset.1),
+        ),
+        (
+            placed.x + i64::from(drop_offset.0),
+            placed.y + i64::from(drop_offset.1),
+        ),
     )
 }
 
@@ -41,7 +53,7 @@ fn rotate_inserter_offset(offset: (i32, i32), direction: Direction) -> (i32, i32
 
 pub(in crate::simulation) fn peek_inserter_source_item(
     entities: &EntityStore,
-    pickup_tile: (i32, i32),
+    pickup_tile: (WorldTileCoord, WorldTileCoord),
 ) -> Option<ItemId> {
     let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
 
@@ -94,7 +106,7 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     entities: &EntityStore,
-    drop_tile: (i32, i32),
+    drop_tile: (WorldTileCoord, WorldTileCoord),
     item: ItemStack,
 ) -> bool {
     let Some(entity_id) = entities.occupancy.entity_at(drop_tile.0, drop_tile.1) else {
@@ -146,7 +158,7 @@ pub(in crate::simulation) fn inserter_target_can_accept(
 pub(in crate::simulation) fn try_take_inserter_source_item(
     entities: &mut EntityStore,
     transport: &mut TransportLaneCache,
-    pickup_tile: (i32, i32),
+    pickup_tile: (WorldTileCoord, WorldTileCoord),
     item_id: ItemId,
 ) -> Option<ItemStack> {
     let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
@@ -200,7 +212,7 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     research: &ResearchState,
     entities: &mut EntityStore,
     transport: &mut TransportLaneCache,
-    drop_tile: (i32, i32),
+    drop_tile: (WorldTileCoord, WorldTileCoord),
     item: ItemStack,
 ) -> bool {
     let Some(entity_id) = entities.occupancy.entity_at(drop_tile.0, drop_tile.1) else {

@@ -107,8 +107,8 @@ pub struct SimEntity {
 pub struct PlacedEntity {
     pub id: EntityId,
     pub prototype_id: EntityPrototypeId,
-    pub x: i32,
-    pub y: i32,
+    pub x: crate::world::WorldTileCoord,
+    pub y: crate::world::WorldTileCoord,
     pub direction: Direction,
     pub footprint: EntityFootprint,
 }
@@ -135,7 +135,7 @@ mod tests {
         // means the save format changed (field order, field types, or state
         // added to the registry): update the constant and bump `SAVE_VERSION`
         // only for intentional format changes.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x3924_b0f4_26cd_bd64;
+        const EXPECTED_LAYOUT_HASH: u64 = 0xe35f_37be_4cc1_1674;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -173,11 +173,11 @@ mod tests {
 
         for raw in 1..=15 {
             let id = EntityId::new(raw);
-            let tile = raw as i32;
+            let tile = raw as i64;
             store.entities.push(SimEntity {
                 id,
-                x: i64::from(tile) * 1024,
-                y: i64::from(tile + 1) * 1024,
+                x: tile * 1024,
+                y: (tile + 1) * 1024,
             });
             store.placed_entities.insert(
                 id,

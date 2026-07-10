@@ -65,7 +65,7 @@ impl Simulation {
             .expect("scripted lab inventory should accept research packs");
     }
 
-    fn build_basic_power_fixture(&mut self) -> Option<(i32, i32, EntityId)> {
+    fn build_basic_power_fixture(&mut self) -> Option<(WorldTileCoord, WorldTileCoord, EntityId)> {
         let pump =
             factory_data::entity_prototype_id_by_name(&self.world.prototypes, "offshore_pump");
         let boiler = factory_data::entity_prototype_id_by_name(&self.world.prototypes, "boiler");
@@ -125,7 +125,7 @@ impl Simulation {
         None
     }
 
-    fn all_tile_coords(&self) -> Vec<(i32, i32)> {
+    fn all_tile_coords(&self) -> Vec<(WorldTileCoord, WorldTileCoord)> {
         self.world
             .chunks
             .values()
@@ -133,10 +133,7 @@ impl Simulation {
                 chunk.tiles.iter().enumerate().map(move |(index, _)| {
                     let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                     let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                    (
-                        chunk.coord.x * CHUNK_SIZE + local_x,
-                        chunk.coord.y * CHUNK_SIZE + local_y,
-                    )
+                    chunk.coord.tile_at(local_x, local_y)
                 })
             })
             .collect()
@@ -145,8 +142,8 @@ impl Simulation {
 
 fn scripted_placement_request(
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
 ) -> crate::placement::EntityPlacementRequest {
     crate::placement::EntityPlacementRequest {
         prototype_id,

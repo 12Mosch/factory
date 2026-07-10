@@ -37,8 +37,8 @@ pub(in crate::simulation) struct FluidNetworkDynamicSummary {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct FluidEndpoint {
-    pub(super) x: i32,
-    pub(super) y: i32,
+    pub(super) x: WorldTileCoord,
+    pub(super) y: WorldTileCoord,
     pub(super) axis: FluidEndpointAxis,
 }
 

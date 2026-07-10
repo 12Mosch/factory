@@ -35,7 +35,7 @@ pub fn sim_tick_and_hash(app: &App) -> (u64, u64) {
     (sim.tick_count(), sim.state_hash())
 }
 
-pub fn pixel_at(map: &factory_app::rendering::map_texture::MapPixels, tile: (i32, i32)) -> [u8; 4] {
+pub fn pixel_at(map: &factory_app::rendering::map_texture::MapPixels, tile: (i64, i64)) -> [u8; 4] {
     let local_x = (tile.0 - map.bounds.min_x) as u32;
     let local_y = (tile.1 - map.bounds.min_y) as u32;
     let flipped_y = map.bounds.height - 1 - local_y;
@@ -48,7 +48,7 @@ pub fn pixel_at(map: &factory_app::rendering::map_texture::MapPixels, tile: (i32
     ]
 }
 
-pub fn first_resource_tile_for_app(sim: &Simulation) -> (i32, i32, factory_sim::ResourceCell) {
+pub fn first_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::ResourceCell) {
     sim.world()
         .chunks
         .values()
@@ -61,11 +61,8 @@ pub fn first_resource_tile_for_app(sim: &Simulation) -> (i32, i32, factory_sim::
                     let resource = tile.resource?;
                     let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                     let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                    Some((
-                        chunk.coord.x * CHUNK_SIZE + local_x,
-                        chunk.coord.y * CHUNK_SIZE + local_y,
-                        resource,
-                    ))
+                    let (x, y) = chunk.coord.tile_at(local_x, local_y);
+                    Some((x, y, resource))
                 })
         })
         .next()
@@ -129,8 +126,8 @@ pub fn place_powered_fixture_origin(
     sim: &mut Simulation,
     fixture_width: i32,
     fixture_height: i32,
-    pole_offset: (i32, i32),
-) -> (i32, i32) {
+    pole_offset: (i64, i64),
+) -> (i64, i64) {
     let pump = entity_id_by_name(sim.catalog(), "offshore_pump");
     let boiler = entity_id_by_name(sim.catalog(), "boiler");
     let steam_engine = entity_id_by_name(sim.catalog(), "steam_engine");
@@ -199,8 +196,8 @@ pub fn place_powered_fixture_origin(
 pub fn place_test_entity(
     sim: &mut Simulation,
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: i64,
+    y: i64,
 ) -> EntityId {
     factory_sim::placement::place(sim, placement_request(prototype_id, x, y, Direction::North))
         .expect("test entity should be placeable")
@@ -208,8 +205,8 @@ pub fn place_test_entity(
 
 fn placement_request(
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: i64,
+    y: i64,
     direction: Direction,
 ) -> factory_sim::placement::EntityPlacementRequest {
     factory_sim::placement::EntityPlacementRequest {
@@ -220,7 +217,7 @@ fn placement_request(
     }
 }
 
-pub fn all_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
+pub fn all_tile_coords(sim: &Simulation) -> Vec<(i64, i64)> {
     sim.world()
         .chunks
         .values()
@@ -228,10 +225,7 @@ pub fn all_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
             chunk.tiles.iter().enumerate().map(move |(index, _)| {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                (
-                    chunk.coord.x * CHUNK_SIZE + local_x,
-                    chunk.coord.y * CHUNK_SIZE + local_y,
-                )
+                chunk.coord.tile_at(local_x, local_y)
             })
         })
         .collect()
@@ -251,21 +245,20 @@ pub fn fixture_is_clear_buildable(sim: &Simulation, footprint: &EntityFootprint)
         })
 }
 
-pub fn poles_within_small_pole_reach(first: (i32, i32), second: (i32, i32)) -> bool {
-    let dx_x2 = i64::from((first.0 - second.0) * 2);
-    let dy_x2 = i64::from((first.1 - second.1) * 2);
+pub fn poles_within_small_pole_reach(first: (i64, i64), second: (i64, i64)) -> bool {
+    let dx_x2 = (first.0 - second.0) * 2;
+    let dy_x2 = (first.1 - second.1) * 2;
     dx_x2 * dx_x2 + dy_x2 * dy_x2 <= 15 * 15
 }
 
-pub fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i32, i32) {
+pub fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i64, i64) {
     let prototype = &sim.catalog().entities[prototype_id.index()];
 
     for chunk in sim.world().chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = chunk.coord.tile_at(local_x, local_y);
             let footprint = EntityFootprint {
                 x,
                 y,
@@ -292,7 +285,7 @@ pub fn first_placeable_resource_rect(
     sim: &Simulation,
     prototype_id: EntityPrototypeId,
     resource_item: ItemId,
-) -> (i32, i32) {
+) -> (i64, i64) {
     for chunk in sim.world().chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
             let Some(resource) = tile.resource else {
@@ -304,8 +297,7 @@ pub fn first_placeable_resource_rect(
 
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = chunk.coord.tile_at(local_x, local_y);
 
             if factory_sim::placement::validate(
                 sim,

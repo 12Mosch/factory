@@ -8,8 +8,8 @@ use crate::simulation::*;
 pub(in crate::simulation) fn reservation_for_prototype(
     prototype: &factory_data::EntityPrototype,
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     direction: Direction,
     footprint: EntityFootprint,
 ) -> EntityReservation {

@@ -53,8 +53,7 @@ pub(super) fn world_chunk_mesh(chunk: &factory_sim::Chunk, ids: RenderPrototypeI
             merged[start + dy * size..start + dy * size + width].fill(true);
         }
 
-        let world_x = chunk.coord.x * CHUNK_SIZE + local_x as i32;
-        let world_y = chunk.coord.y * CHUNK_SIZE + local_y as i32;
+        let (world_x, world_y) = chunk.coord.tile_at(local_x as i32, local_y as i32);
         let min_x = world_x as f32 * TILE_SIZE;
         let min_y = world_y as f32 * TILE_SIZE;
         let max_x = min_x + width as f32 * TILE_SIZE;

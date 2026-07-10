@@ -8,11 +8,11 @@ use smallvec::SmallVec;
 pub enum UndergroundBeltLinkPreview {
     Entrance {
         max_distance: u8,
-        matched_exit_tile: Option<(i32, i32)>,
+        matched_exit_tile: Option<(crate::world::WorldTileCoord, crate::world::WorldTileCoord)>,
     },
     Exit {
         max_distance: u8,
-        matched_entrance_tile: Option<(i32, i32)>,
+        matched_entrance_tile: Option<(crate::world::WorldTileCoord, crate::world::WorldTileCoord)>,
     },
 }
 

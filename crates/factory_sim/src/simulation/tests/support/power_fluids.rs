@@ -5,8 +5,8 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin(
     sim: &mut Simulation,
     fixture_width: i32,
     fixture_height: i32,
-    pole_offset: (i32, i32),
-) -> (i32, i32) {
+    pole_offset: (WorldTileCoord, WorldTileCoord),
+) -> (WorldTileCoord, WorldTileCoord) {
     let (x, y, _) =
         place_powered_fixture_origin_with_boiler(sim, fixture_width, fixture_height, pole_offset);
     (x, y)
@@ -16,8 +16,8 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin_with_boiler(
     sim: &mut Simulation,
     fixture_width: i32,
     fixture_height: i32,
-    pole_offset: (i32, i32),
-) -> (i32, i32, EntityId) {
+    pole_offset: (WorldTileCoord, WorldTileCoord),
+) -> (i64, i64, EntityId) {
     place_powered_fixture_origin_where(
         sim,
         fixture_width,
@@ -36,9 +36,9 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin_where(
     sim: &mut Simulation,
     fixture_width: i32,
     fixture_height: i32,
-    pole_offset: (i32, i32),
+    pole_offset: (WorldTileCoord, WorldTileCoord),
     fixture_ok: impl Fn(&Simulation, &EntityFootprint) -> bool,
-) -> Option<(i32, i32, EntityId)> {
+) -> Option<(i64, i64, EntityId)> {
     let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
     let boiler = entity_id_by_name(&sim.world.prototypes, "boiler");
     let steam_engine = entity_id_by_name(&sim.world.prototypes, "steam_engine");
@@ -302,11 +302,11 @@ pub(in crate::simulation::tests) fn fixture_is_clear_buildable(
 }
 
 pub(in crate::simulation::tests) fn poles_within_small_pole_reach(
-    first: (i32, i32),
-    second: (i32, i32),
+    first: (WorldTileCoord, WorldTileCoord),
+    second: (WorldTileCoord, WorldTileCoord),
 ) -> bool {
-    let dx_x2 = i64::from((first.0 - second.0) * 2);
-    let dy_x2 = i64::from((first.1 - second.1) * 2);
+    let dx_x2 = (first.0 - second.0) * 2;
+    let dy_x2 = (first.1 - second.1) * 2;
     dx_x2 * dx_x2 + dy_x2 * dy_x2 <= 15 * 15
 }
 
@@ -372,7 +372,7 @@ pub(in crate::simulation::tests) fn place_disconnected_assembler_network(
 pub(in crate::simulation::tests) fn first_placeable_offshore_pump(
     sim: &Simulation,
     pump: EntityPrototypeId,
-) -> (i32, i32) {
+) -> (WorldTileCoord, WorldTileCoord) {
     all_tile_coords(&sim.world)
         .into_iter()
         .find(|(x, y)| {
@@ -393,7 +393,7 @@ pub(in crate::simulation::tests) fn first_placeable_offshore_pump(
 pub(in crate::simulation::tests) fn first_buildable_offshore_pump_footprint_away_from_water(
     sim: &Simulation,
     pump: EntityPrototypeId,
-) -> (i32, i32) {
+) -> (WorldTileCoord, WorldTileCoord) {
     let prototype = &sim.world.prototypes.entities[pump.index()];
     for (x, y) in all_tile_coords(&sim.world) {
         let footprint =
@@ -407,7 +407,7 @@ pub(in crate::simulation::tests) fn first_buildable_offshore_pump_footprint_away
         {
             continue;
         }
-        let north_edge_is_water = (x..x + footprint.width).any(|tile_x| {
+        let north_edge_is_water = (x..x + i64::from(footprint.width)).any(|tile_x| {
             sim.world
                 .tile_at(tile_x, y - 1)
                 .is_some_and(|tile| !tile.collision.walkable && !tile.collision.buildable)
@@ -422,7 +422,7 @@ pub(in crate::simulation::tests) fn first_buildable_offshore_pump_footprint_away
 
 pub(in crate::simulation::tests) fn pole_is_disconnected_from_existing_poles(
     sim: &Simulation,
-    pole_pos: (i32, i32),
+    pole_pos: (WorldTileCoord, WorldTileCoord),
 ) -> bool {
     sim.entities.electric_poles.keys().all(|entity_id| {
         let placed = sim

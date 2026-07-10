@@ -159,8 +159,8 @@ fn render_sync_counts_are_bounded_by_visible_chunks() {
     let visible = VisibleChunks {
         chunks: visible_chunks,
         tile_bounds: Some(MapTextureBounds {
-            min_x: -CHUNK_SIZE,
-            min_y: -CHUNK_SIZE,
+            min_x: -i64::from(CHUNK_SIZE),
+            min_y: -i64::from(CHUNK_SIZE),
             width: (CHUNK_SIZE * 2) as u32,
             height: (CHUNK_SIZE * 2) as u32,
         }),
@@ -213,14 +213,11 @@ fn render_sync_counts_are_bounded_by_visible_chunks() {
             .resource::<ResourceRenderCache>()
             .sprite_entities
             .keys()
-            .all(|(x, y)| app
-                .world()
-                .resource::<VisibleChunks>()
-                .chunks
-                .contains(&ChunkCoord {
-                    x: x.div_euclid(CHUNK_SIZE),
-                    y: y.div_euclid(CHUNK_SIZE),
-                }))
+            .all(
+                |(x, y)| app.world().resource::<VisibleChunks>().chunks.contains(
+                    &ChunkCoord::from_tile(*x, *y).expect("visible tile is in the chunk plane")
+                )
+            )
     );
     assert!(total_entities > placed_entity_sprite_count(&mut app));
     assert!(placed_entity_sprite_count(&mut app) <= visible_chunk_count * CHUNK_SIZE as usize);
@@ -387,8 +384,8 @@ fn visible_window() -> VisibleChunks {
     VisibleChunks {
         chunks: visible_chunks,
         tile_bounds: Some(MapTextureBounds {
-            min_x: -4 * CHUNK_SIZE,
-            min_y: -4 * CHUNK_SIZE,
+            min_x: -4 * i64::from(CHUNK_SIZE),
+            min_y: -4 * i64::from(CHUNK_SIZE),
             width: (CHUNK_SIZE * 3) as u32,
             height: (CHUNK_SIZE * 3) as u32,
         }),
@@ -422,8 +419,18 @@ fn visible_for_chunks<const N: usize>(chunks: [ChunkCoord; N]) -> VisibleChunks 
     VisibleChunks {
         chunks,
         tile_bounds: Some(MapTextureBounds {
-            min_x: min_chunk_x * CHUNK_SIZE,
-            min_y: min_chunk_y * CHUNK_SIZE,
+            min_x: ChunkCoord {
+                x: min_chunk_x,
+                y: min_chunk_y,
+            }
+            .min_tile()
+            .0,
+            min_y: ChunkCoord {
+                x: min_chunk_x,
+                y: min_chunk_y,
+            }
+            .min_tile()
+            .1,
             width: ((max_chunk_x - min_chunk_x + 1) * CHUNK_SIZE) as u32,
             height: ((max_chunk_y - min_chunk_y + 1) * CHUNK_SIZE) as u32,
         }),
@@ -431,15 +438,12 @@ fn visible_for_chunks<const N: usize>(chunks: [ChunkCoord; N]) -> VisibleChunks 
     }
 }
 
-fn resource_coord_in_chunk(coord: ChunkCoord, chunk: &factory_sim::Chunk) -> Option<(i32, i32)> {
+fn resource_coord_in_chunk(coord: ChunkCoord, chunk: &factory_sim::Chunk) -> Option<(i64, i64)> {
     chunk.tiles.iter().enumerate().find_map(|(index, tile)| {
         tile.resource.map(|_| {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            (
-                coord.x * CHUNK_SIZE + local_x,
-                coord.y * CHUNK_SIZE + local_y,
-            )
+            coord.tile_at(local_x, local_y)
         })
     })
 }
@@ -831,7 +835,7 @@ fn place_entities(
     );
 }
 
-fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
+fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i64, i64)> {
     let mut chunks = sim.world().chunks.keys().copied().collect::<Vec<_>>();
     chunks.sort_unstable();
     chunks
@@ -840,10 +844,7 @@ fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
             (0..CHUNK_SIZE * CHUNK_SIZE).map(move |index| {
                 let local_x = index.rem_euclid(CHUNK_SIZE);
                 let local_y = index.div_euclid(CHUNK_SIZE);
-                (
-                    coord.x * CHUNK_SIZE + local_x,
-                    coord.y * CHUNK_SIZE + local_y,
-                )
+                coord.tile_at(local_x, local_y)
             })
         })
         .collect()
@@ -853,9 +854,10 @@ fn first_placeable_tile_in_chunk(
     sim: &Simulation,
     coord: ChunkCoord,
     prototype_id: factory_data::EntityPrototypeId,
-) -> Option<(i32, i32)> {
-    for y in coord.y * CHUNK_SIZE..(coord.y + 1) * CHUNK_SIZE {
-        for x in coord.x * CHUNK_SIZE..(coord.x + 1) * CHUNK_SIZE {
+) -> Option<(i64, i64)> {
+    let (min_x, min_y) = coord.min_tile();
+    for y in min_y..min_y + i64::from(CHUNK_SIZE) {
+        for x in min_x..min_x + i64::from(CHUNK_SIZE) {
             if factory_sim::placement::validate(
                 sim,
                 factory_sim::placement::EntityPlacementRequest {

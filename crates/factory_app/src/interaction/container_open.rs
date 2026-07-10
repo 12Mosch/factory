@@ -95,7 +95,7 @@ pub(crate) fn handle_container_close_input(
 
 pub fn opened_container_after_world_click(
     sim: &Simulation,
-    cursor_tile: Option<(i32, i32)>,
+    cursor_tile: Option<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>,
 ) -> Option<EntityId> {
     let (x, y) = cursor_tile?;
     let entity_id = sim.entities().occupancy().entity_at(x, y)?;

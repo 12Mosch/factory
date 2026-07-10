@@ -148,10 +148,10 @@ fn resize_cached_pixels(
     };
 
     let mut new_pixels = vec![0; new_bounds.width as usize * new_bounds.height as usize * 4];
-    let old_max_x = old_bounds.min_x + old_bounds.width as i32 - 1;
-    let old_max_y = old_bounds.min_y + old_bounds.height as i32 - 1;
-    let new_max_x = new_bounds.min_x + new_bounds.width as i32 - 1;
-    let new_max_y = new_bounds.min_y + new_bounds.height as i32 - 1;
+    let old_max_x = old_bounds.min_x + i64::from(old_bounds.width) - 1;
+    let old_max_y = old_bounds.min_y + i64::from(old_bounds.height) - 1;
+    let new_max_x = new_bounds.min_x + i64::from(new_bounds.width) - 1;
+    let new_max_y = new_bounds.min_y + i64::from(new_bounds.height) - 1;
     let min_x = old_bounds.min_x.max(new_bounds.min_x);
     let max_x = old_max_x.min(new_max_x);
     let min_y = old_bounds.min_y.max(new_bounds.min_y);
@@ -563,11 +563,12 @@ mod tests {
         assert_eq!(dirty_upload_bytes_per_iteration, 4);
     }
 
-    fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i32, i32) {
+    fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i64, i64) {
         let mut world = WorldSim::new_seeded(seed);
         world.ensure_chunk_generated(coord);
-        for y in coord.y * CHUNK_SIZE..(coord.y + 1) * CHUNK_SIZE {
-            for x in coord.x * CHUNK_SIZE..(coord.x + 1) * CHUNK_SIZE {
+        let (min_x, min_y) = coord.min_tile();
+        for y in min_y..min_y + i64::from(CHUNK_SIZE) {
+            for x in min_x..min_x + i64::from(CHUNK_SIZE) {
                 if world
                     .tile_at(x, y)
                     .is_some_and(|tile| tile.collision.walkable)
@@ -580,7 +581,7 @@ mod tests {
         panic!("expected a walkable streamed tile");
     }
 
-    fn move_player_to_tile(sim: &mut Simulation, tile: (i32, i32)) {
+    fn move_player_to_tile(sim: &mut Simulation, tile: (i64, i64)) {
         let (player_x, player_y) = sim.player().position_tiles();
         sim.move_player_by_tiles(
             tile.0 as f32 + 0.5 - player_x,
@@ -592,7 +593,7 @@ mod tests {
     fn resource_tile_with_minimum_amount(
         sim: &Simulation,
         minimum_amount: u32,
-    ) -> Option<(i32, i32)> {
+    ) -> Option<(i64, i64)> {
         sim.world()
             .chunks
             .values()
@@ -608,16 +609,13 @@ mod tests {
                         }
                         let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                         let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                        Some((
-                            chunk.coord.x * CHUNK_SIZE + local_x,
-                            chunk.coord.y * CHUNK_SIZE + local_y,
-                        ))
+                        Some(chunk.coord.tile_at(local_x, local_y))
                     })
             })
             .next()
     }
 
-    fn mine_one_resource(sim: &mut Simulation, tile: (i32, i32)) {
+    fn mine_one_resource(sim: &mut Simulation, tile: (i64, i64)) {
         let before = sim.world().resource_revision();
         let target = Some(ManualMiningTarget {
             x: tile.0,

@@ -10,8 +10,8 @@ pub struct ResourceCell {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResourceTileChange {
     pub revision: u64,
-    pub x: i32,
-    pub y: i32,
+    pub x: crate::world::WorldTileCoord,
+    pub y: crate::world::WorldTileCoord,
     pub resource: Option<ResourceCell>,
 }
 

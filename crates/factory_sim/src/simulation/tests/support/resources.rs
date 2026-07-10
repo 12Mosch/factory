@@ -3,17 +3,14 @@ use super::*;
 
 pub(in crate::simulation::tests) fn first_resource_tile(
     world: &WorldSim,
-) -> (i32, i32, ResourceCell) {
+) -> (i64, i64, ResourceCell) {
     for chunk in world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
             if let Some(resource) = tile.resource {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                return (
-                    chunk.coord.x * CHUNK_SIZE + local_x,
-                    chunk.coord.y * CHUNK_SIZE + local_y,
-                    resource,
-                );
+                let (x, y) = chunk.coord.tile_at(local_x, local_y);
+                return (x, y, resource);
             }
         }
     }
@@ -24,7 +21,7 @@ pub(in crate::simulation::tests) fn first_resource_tile(
 pub(in crate::simulation::tests) fn first_resource_tile_for_item(
     world: &WorldSim,
     resource_item: ItemId,
-) -> (i32, i32, u32) {
+) -> (i64, i64, u32) {
     for chunk in world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
             let Some(resource) = tile.resource else {
@@ -47,7 +44,7 @@ pub(in crate::simulation::tests) fn first_placeable_resource_tile(
     sim: &Simulation,
     prototype_id: EntityPrototypeId,
     resource_item: ItemId,
-) -> (i32, i32, u32) {
+) -> (i64, i64, u32) {
     for (x, y) in all_tile_coords(&sim.world) {
         let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
             continue;
@@ -73,8 +70,8 @@ pub(in crate::simulation::tests) fn first_placeable_resource_tile(
 
 pub(in crate::simulation::tests) fn resource_amount_at(
     world: &WorldSim,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
 ) -> Option<u32> {
     world
         .tile_at(x, y)
@@ -83,7 +80,10 @@ pub(in crate::simulation::tests) fn resource_amount_at(
 
 pub(in crate::simulation::tests) fn nearby_resource_pair(
     world: &WorldSim,
-) -> ((i32, i32), (i32, i32)) {
+) -> (
+    (WorldTileCoord, WorldTileCoord),
+    (WorldTileCoord, WorldTileCoord),
+) {
     let resources = all_tile_coords(world)
         .into_iter()
         .filter(|(x, y)| {
@@ -113,7 +113,7 @@ pub(in crate::simulation::tests) fn nearby_resource_pair(
 
 pub(in crate::simulation::tests) fn resource_tiles(
     world: &WorldSim,
-) -> Vec<(i32, i32, ResourceCell)> {
+) -> Vec<(WorldTileCoord, WorldTileCoord, ResourceCell)> {
     world
         .chunks
         .values()

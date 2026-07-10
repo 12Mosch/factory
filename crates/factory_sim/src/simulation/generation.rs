@@ -71,8 +71,7 @@ pub(super) fn generate_chunk(seed: u64, coord: ChunkCoord, ids: WorldPrototypeId
 
     for local_y in 0..CHUNK_SIZE {
         for local_x in 0..CHUNK_SIZE {
-            let x = coord.x * CHUNK_SIZE + local_x;
-            let y = coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = coord.tile_at(local_x, local_y);
             tiles.push(generate_tile(seed, x, y, ids, &centers));
         }
     }
@@ -82,8 +81,8 @@ pub(super) fn generate_chunk(seed: u64, coord: ChunkCoord, ids: WorldPrototypeId
 
 pub(super) fn generate_tile(
     seed: u64,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     ids: WorldPrototypeIds,
     centers: &[ResourcePatchCenter],
 ) -> TileCell {
@@ -112,8 +111,8 @@ pub(super) fn generate_tile(
 
 pub(super) fn generate_terrain(
     seed: u64,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     ids: WorldPrototypeIds,
 ) -> (TileId, TileCollision) {
     let terrain_hash = hash_world(seed, x, y);
@@ -167,8 +166,8 @@ pub(super) fn generate_resource_patch_centers(
         let (x, y) = starting_offsets[index];
         let center = ResourcePatchCenter {
             resource_item: config.resource_item,
-            x,
-            y,
+            x: i64::from(x),
+            y: i64::from(y),
             radius: config.radius,
             richness: config.richness,
         };
@@ -184,10 +183,12 @@ pub(super) fn generate_resource_patch_centers(
         .unwrap_or(0)
         + RESOURCE_PATCH_EDGE_NOISE
         + RESOURCE_PATCH_GRID_JITTER;
-    let min_grid_x = (bounds.min_x - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
-    let max_grid_x = (bounds.max_x + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
-    let min_grid_y = (bounds.min_y - max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
-    let max_grid_y = (bounds.max_y + max_reach).div_euclid(RESOURCE_PATCH_GRID_SIZE);
+    let max_reach = i64::from(max_reach);
+    let grid_size = i64::from(RESOURCE_PATCH_GRID_SIZE);
+    let min_grid_x = (bounds.min_x - max_reach).div_euclid(grid_size);
+    let max_grid_x = (bounds.max_x + max_reach).div_euclid(grid_size);
+    let min_grid_y = (bounds.min_y - max_reach).div_euclid(grid_size);
+    let max_grid_y = (bounds.max_y + max_reach).div_euclid(grid_size);
 
     for grid_y in min_grid_y..=max_grid_y {
         for grid_x in min_grid_x..=max_grid_x {
@@ -197,15 +198,15 @@ pub(super) fn generate_resource_patch_centers(
                     continue;
                 }
 
-                let jitter_x = ((hash >> 8) % (RESOURCE_PATCH_GRID_JITTER * 2 + 1) as u64) as i32
-                    - RESOURCE_PATCH_GRID_JITTER;
-                let jitter_y = ((hash >> 16) % (RESOURCE_PATCH_GRID_JITTER * 2 + 1) as u64) as i32
-                    - RESOURCE_PATCH_GRID_JITTER;
+                let jitter_x = ((hash >> 8) % (RESOURCE_PATCH_GRID_JITTER * 2 + 1) as u64) as i64
+                    - i64::from(RESOURCE_PATCH_GRID_JITTER);
+                let jitter_y = ((hash >> 16) % (RESOURCE_PATCH_GRID_JITTER * 2 + 1) as u64) as i64
+                    - i64::from(RESOURCE_PATCH_GRID_JITTER);
 
                 let center = ResourcePatchCenter {
                     resource_item: config.resource_item,
-                    x: grid_x * RESOURCE_PATCH_GRID_SIZE + RESOURCE_PATCH_GRID_SIZE / 2 + jitter_x,
-                    y: grid_y * RESOURCE_PATCH_GRID_SIZE + RESOURCE_PATCH_GRID_SIZE / 2 + jitter_y,
+                    x: grid_x * grid_size + grid_size / 2 + jitter_x,
+                    y: grid_y * grid_size + grid_size / 2 + jitter_y,
                     radius: config.radius,
                     richness: config.richness,
                 };
@@ -221,19 +222,21 @@ pub(super) fn generate_resource_patch_centers(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TileBounds {
-    pub(super) min_x: i32,
-    pub(super) max_x: i32,
-    pub(super) min_y: i32,
-    pub(super) max_y: i32,
+    pub(super) min_x: WorldTileCoord,
+    pub(super) max_x: WorldTileCoord,
+    pub(super) min_y: WorldTileCoord,
+    pub(super) max_y: WorldTileCoord,
 }
 
 impl TileBounds {
     pub(super) fn for_chunk(coord: ChunkCoord) -> Self {
+        let (min_x, min_y) = coord.min_tile();
+        let max_offset = i64::from(CHUNK_SIZE - 1);
         Self {
-            min_x: coord.x * CHUNK_SIZE,
-            max_x: coord.x * CHUNK_SIZE + CHUNK_SIZE - 1,
-            min_y: coord.y * CHUNK_SIZE,
-            max_y: coord.y * CHUNK_SIZE + CHUNK_SIZE - 1,
+            min_x,
+            max_x: min_x + max_offset,
+            min_y,
+            max_y: min_y + max_offset,
         }
     }
 }
@@ -241,27 +244,27 @@ impl TileBounds {
 fn resource_patch_can_affect_bounds(center: ResourcePatchCenter, bounds: TileBounds) -> bool {
     let closest_x = center.x.clamp(bounds.min_x, bounds.max_x);
     let closest_y = center.y.clamp(bounds.min_y, bounds.max_y);
-    let dx = i64::from(center.x - closest_x);
-    let dy = i64::from(center.y - closest_y);
-    let reach = i64::from(center.radius + RESOURCE_PATCH_EDGE_NOISE);
+    let dx = i128::from(center.x) - i128::from(closest_x);
+    let dy = i128::from(center.y) - i128::from(closest_y);
+    let reach = i128::from(center.radius + RESOURCE_PATCH_EDGE_NOISE);
 
     dx * dx + dy * dy <= reach * reach
 }
 
 pub(super) fn resource_at_patch_tile(
     seed: u64,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     centers: &[ResourcePatchCenter],
 ) -> Option<ResourceCell> {
     let mut best: Option<ResourceCandidate> = None;
 
     for center in centers {
-        let dx = x - center.x;
-        let dy = y - center.y;
+        let dx = i128::from(x) - i128::from(center.x);
+        let dy = i128::from(y) - i128::from(center.y);
         let distance_sq = dx * dx + dy * dy;
         let radius = center.radius + resource_edge_noise(seed, x, y, center.resource_item);
-        let radius_sq = radius * radius;
+        let radius_sq = i128::from(radius) * i128::from(radius);
 
         if distance_sq > radius_sq {
             continue;
@@ -279,8 +282,10 @@ pub(super) fn resource_at_patch_tile(
     }
 
     best.map(|candidate| {
-        let radius_sq = candidate.radius_sq.max(1) as u32;
-        let distance_sq = candidate.distance_sq.max(0) as u32;
+        let radius_sq =
+            u32::try_from(candidate.radius_sq.max(1)).expect("resource radius is bounded");
+        let distance_sq = u32::try_from(candidate.distance_sq.max(0))
+            .expect("resource distance is bounded by radius");
         let falloff = (radius_sq - distance_sq).max(1);
         let base = candidate.center.richness / 3;
         let scaled = candidate.center.richness * falloff / radius_sq;
@@ -329,7 +334,12 @@ pub(super) fn resource_patch_configs(ids: WorldPrototypeIds) -> [ResourcePatchCo
     ]
 }
 
-pub(super) fn resource_edge_noise(seed: u64, x: i32, y: i32, resource_item: ItemId) -> i32 {
+pub(super) fn resource_edge_noise(
+    seed: u64,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+    resource_item: ItemId,
+) -> i32 {
     let hash = hash_world(
         seed ^ 0x7b5d_1f25_8c92_f6a3 ^ u64::from(resource_item.raw()),
         x,
@@ -340,8 +350,8 @@ pub(super) fn resource_edge_noise(seed: u64, x: i32, y: i32, resource_item: Item
 
 pub(super) fn hash_resource_center(
     seed: u64,
-    grid_x: i32,
-    grid_y: i32,
+    grid_x: WorldTileCoord,
+    grid_y: WorldTileCoord,
     resource_item: ItemId,
 ) -> u64 {
     hash_world(
@@ -362,8 +372,8 @@ pub(super) struct ResourcePatchConfig {
 #[derive(Clone, Copy)]
 pub(super) struct ResourcePatchCenter {
     resource_item: ItemId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     radius: i32,
     richness: u32,
 }
@@ -371,14 +381,14 @@ pub(super) struct ResourcePatchCenter {
 #[derive(Clone, Copy)]
 pub(super) struct ResourceCandidate {
     center: ResourcePatchCenter,
-    distance_sq: i32,
-    radius_sq: i32,
-    score: i32,
+    distance_sq: i128,
+    radius_sq: i128,
+    score: i128,
 }
 
-pub(super) fn hash_world(seed: u64, x: i32, y: i32) -> u64 {
-    let x_bits = x as i64 as u64;
-    let y_bits = y as i64 as u64;
+pub(super) fn hash_world(seed: u64, x: WorldTileCoord, y: WorldTileCoord) -> u64 {
+    let x_bits = x as u64;
+    let y_bits = y as u64;
     splitmix64(seed ^ x_bits.rotate_left(32) ^ y_bits.rotate_left(1))
 }
 

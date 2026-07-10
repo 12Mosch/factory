@@ -69,8 +69,8 @@ pub fn place_selected_building_at_tile(
     sim: &mut Simulation,
     selection: BuildSelection,
     direction: Direction,
-    x: i32,
-    y: i32,
+    x: factory_sim::WorldTileCoord,
+    y: factory_sim::WorldTileCoord,
 ) -> BuildPlacementStatus {
     match factory_sim::placement::place_from_player_inventory(
         sim,
@@ -174,6 +174,9 @@ pub(crate) fn construction_status_from_error(
         }
         ConstructionError::EmptyBlueprintArea => {
             BuildPlacementStatus::CannotPlace("Nothing to capture".to_string())
+        }
+        ConstructionError::BlueprintOffsetOutOfRange => {
+            BuildPlacementStatus::CannotPlace("Blueprint area is too large".to_string())
         }
         ConstructionError::MissingBlueprint { .. } => {
             BuildPlacementStatus::CannotPlace("Blueprint no longer exists".to_string())

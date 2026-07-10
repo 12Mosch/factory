@@ -9,8 +9,8 @@ use crate::construction::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GhostPlacementRequest {
     pub prototype_id: EntityPrototypeId,
-    pub x: i32,
-    pub y: i32,
+    pub x: WorldTileCoord,
+    pub y: WorldTileCoord,
     pub direction: Direction,
     pub recipe: Option<RecipeId>,
 }
@@ -27,10 +27,10 @@ impl Simulation {
     pub fn capture_blueprint(
         &self,
         name: &str,
-        min_x: i32,
-        min_y: i32,
-        max_x: i32,
-        max_y: i32,
+        min_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_x: WorldTileCoord,
+        max_y: WorldTileCoord,
     ) -> Result<Blueprint, ConstructionError> {
         capture_blueprint(self, name, min_x, min_y, max_x, max_y)
     }
@@ -213,10 +213,10 @@ pub(crate) fn clear_construction_state_for_removed_entity(
 /// Returns `(entities_marked, ghosts_removed)`.
 pub(crate) fn mark_area_for_deconstruction(
     sim: &mut Simulation,
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
+    min_x: WorldTileCoord,
+    min_y: WorldTileCoord,
+    max_x: WorldTileCoord,
+    max_y: WorldTileCoord,
 ) -> (usize, usize) {
     let entity_ids = sim
         .entities
@@ -251,10 +251,10 @@ pub(crate) fn mark_area_for_deconstruction(
 /// were removed.
 pub(crate) fn cancel_deconstruction_in_area(
     sim: &mut Simulation,
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
+    min_x: WorldTileCoord,
+    min_y: WorldTileCoord,
+    max_x: WorldTileCoord,
+    max_y: WorldTileCoord,
 ) -> usize {
     let entity_ids = sim
         .entities
@@ -294,12 +294,18 @@ pub(crate) fn deconstruct_marked(
 fn capture_blueprint(
     sim: &Simulation,
     name: &str,
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
+    min_x: WorldTileCoord,
+    min_y: WorldTileCoord,
+    max_x: WorldTileCoord,
+    max_y: WorldTileCoord,
 ) -> Result<Blueprint, ConstructionError> {
-    let mut captured: Vec<(i32, i32, EntityPrototypeId, Direction, Option<RecipeId>)> = Vec::new();
+    let mut captured: Vec<(
+        WorldTileCoord,
+        WorldTileCoord,
+        EntityPrototypeId,
+        Direction,
+        Option<RecipeId>,
+    )> = Vec::new();
 
     for entity_id in sim
         .entities
@@ -349,28 +355,34 @@ fn capture_blueprint(
     let origin_y = captured.iter().map(|entry| entry.1).min().unwrap();
     captured.sort_by_key(|&(x, y, prototype_id, ..)| (y, x, prototype_id));
 
-    Ok(Blueprint {
-        name: name.to_string(),
-        entities: captured
-            .into_iter()
-            .map(|(x, y, prototype_id, direction, recipe)| BlueprintEntity {
+    let entities = captured
+        .into_iter()
+        .map(|(x, y, prototype_id, direction, recipe)| {
+            Ok(BlueprintEntity {
                 prototype_id,
-                dx: x - origin_x,
-                dy: y - origin_y,
+                dx: i32::try_from(x - origin_x)
+                    .map_err(|_| ConstructionError::BlueprintOffsetOutOfRange)?,
+                dy: i32::try_from(y - origin_y)
+                    .map_err(|_| ConstructionError::BlueprintOffsetOutOfRange)?,
                 direction,
                 recipe,
             })
-            .collect(),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Blueprint {
+        name: name.to_string(),
+        entities,
     })
 }
 
 pub(crate) fn save_blueprint_from_area(
     sim: &mut Simulation,
     name: &str,
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
+    min_x: WorldTileCoord,
+    min_y: WorldTileCoord,
+    max_x: WorldTileCoord,
+    max_y: WorldTileCoord,
 ) -> Result<usize, ConstructionError> {
     let blueprint = capture_blueprint(sim, name, min_x, min_y, max_x, max_y)?;
     sim.construction.blueprints.push(blueprint);
@@ -394,8 +406,8 @@ pub(crate) fn delete_blueprint(
 pub(crate) fn paste_blueprint_ghosts(
     sim: &mut Simulation,
     entities: &[BlueprintEntity],
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
 ) -> (usize, usize) {
     let mut placed = 0;
     let mut skipped = 0;
@@ -403,8 +415,8 @@ pub(crate) fn paste_blueprint_ghosts(
     for entity in entities {
         let request = GhostPlacementRequest {
             prototype_id: entity.prototype_id,
-            x: x + entity.dx,
-            y: y + entity.dy,
+            x: x + i64::from(entity.dx),
+            y: y + i64::from(entity.dy),
             direction: entity.direction,
             recipe: entity.recipe,
         };
@@ -423,8 +435,8 @@ pub(crate) fn paste_blueprint_ghosts(
 pub fn preview_ghost_placement(
     sim: &Simulation,
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     direction: Direction,
 ) -> BuildPlacementPreview {
     let mut preview = BuildPlacementPreview {

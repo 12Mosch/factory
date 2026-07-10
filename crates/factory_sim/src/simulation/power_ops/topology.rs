@@ -34,7 +34,7 @@ impl Simulation {
             .map(|(network_id, root)| (*root, network_id as u32))
             .collect::<BTreeMap<_, _>>();
         let mut pole_counts = vec![0; root_network_ids.len()];
-        let mut coverage = BTreeMap::<(i32, i32), u32>::new();
+        let mut coverage = BTreeMap::<(WorldTileCoord, WorldTileCoord), u32>::new();
 
         for (index, pole) in poles.iter().enumerate() {
             let root = disjoint_set.find(index);
@@ -117,21 +117,21 @@ pub(super) fn connect_poles_within_wire_reach(
         .unwrap_or(1)
         .max(1);
     let bucket_span_x2 = max_reach_x2;
-    let mut buckets = BTreeMap::<(i32, i32), Vec<usize>>::new();
+    let mut buckets = BTreeMap::<(WorldTileCoord, WorldTileCoord), Vec<usize>>::new();
 
     for (index, pole) in poles.iter().enumerate() {
         buckets
             .entry((
-                pole.center_x2.div_euclid(bucket_span_x2),
-                pole.center_y2.div_euclid(bucket_span_x2),
+                pole.center_x2.div_euclid(i64::from(bucket_span_x2)),
+                pole.center_y2.div_euclid(i64::from(bucket_span_x2)),
             ))
             .or_default()
             .push(index);
     }
 
     for (index, pole) in poles.iter().enumerate() {
-        let bucket_x = pole.center_x2.div_euclid(bucket_span_x2);
-        let bucket_y = pole.center_y2.div_euclid(bucket_span_x2);
+        let bucket_x = pole.center_x2.div_euclid(i64::from(bucket_span_x2));
+        let bucket_y = pole.center_y2.div_euclid(i64::from(bucket_span_x2));
         for y in bucket_y - 1..=bucket_y + 1 {
             for x in bucket_x - 1..=bucket_x + 1 {
                 let Some(candidate_indices) = buckets.get(&(x, y)) else {
@@ -157,33 +157,33 @@ pub(super) fn poles_are_within_mutual_reach(first: &PoleNode<'_>, second: &PoleN
             .wire_reach_tiles_x2
             .min(second.prototype.wire_reach_tiles_x2),
     );
-    let dx = i64::from(first.center_x2 - second.center_x2);
-    let dy = i64::from(first.center_y2 - second.center_y2);
+    let dx = i128::from(first.center_x2) - i128::from(second.center_x2);
+    let dy = i128::from(first.center_y2) - i128::from(second.center_y2);
 
-    dx * dx + dy * dy <= reach_x2 * reach_x2
+    dx * dx + dy * dy <= i128::from(reach_x2) * i128::from(reach_x2)
 }
 
-pub(super) fn footprint_center_x2(footprint: &EntityFootprint) -> (i32, i32) {
+pub(super) fn footprint_center_x2(footprint: &EntityFootprint) -> (WorldTileCoord, WorldTileCoord) {
     (
-        footprint.x.saturating_mul(2) + footprint.width,
-        footprint.y.saturating_mul(2) + footprint.height,
+        footprint.x.saturating_mul(2) + i64::from(footprint.width),
+        footprint.y.saturating_mul(2) + i64::from(footprint.height),
     )
 }
 
 pub(super) fn pole_supply_tiles(
     placed: &PlacedEntity,
     prototype: &factory_data::ElectricPolePrototype,
-) -> Vec<(i32, i32)> {
-    let center_x = placed.footprint.x + (placed.footprint.width - 1) / 2;
-    let center_y = placed.footprint.y + (placed.footprint.height - 1) / 2;
+) -> Vec<(WorldTileCoord, WorldTileCoord)> {
+    let center_x = placed.footprint.x + i64::from((placed.footprint.width - 1) / 2);
+    let center_y = placed.footprint.y + i64::from((placed.footprint.height - 1) / 2);
     let width = prototype.supply_area_tiles.x.max(1);
     let height = prototype.supply_area_tiles.y.max(1);
-    let start_x = center_x - width / 2;
-    let start_y = center_y - height / 2;
+    let start_x = center_x - i64::from(width / 2);
+    let start_y = center_y - i64::from(height / 2);
     let mut tiles = Vec::with_capacity((width * height) as usize);
 
-    for y in start_y..start_y + height {
-        for x in start_x..start_x + width {
+    for y in start_y..start_y + i64::from(height) {
+        for x in start_x..start_x + i64::from(width) {
             tiles.push((x, y));
         }
     }

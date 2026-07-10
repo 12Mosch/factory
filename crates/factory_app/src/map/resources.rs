@@ -1,8 +1,9 @@
 use bevy::prelude::{Color, Handle, Image, Resource, Vec2};
-use factory_sim::{CHUNK_SIZE, ChunkCoord};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, WorldTileCoord};
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_DIRTY_REGION_RECTS: usize = 512;
+pub const MAX_MAP_TEXTURE_SIDE_TILES: u32 = 2048;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MapLayer {
@@ -53,21 +54,20 @@ pub struct MapDisplaySettings {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MapTextureBounds {
-    pub min_x: i32,
-    pub min_y: i32,
+    pub min_x: WorldTileCoord,
+    pub min_y: WorldTileCoord,
     pub width: u32,
     pub height: u32,
 }
 
 impl MapTextureBounds {
-    pub fn contains_tile(self, tile: (i32, i32)) -> bool {
-        self.contains_tile_wide((tile.0 as i64, tile.1 as i64))
+    pub fn contains_tile(self, tile: (WorldTileCoord, WorldTileCoord)) -> bool {
+        self.contains_tile_wide(tile)
     }
 
     pub fn contains_chunk(self, coord: ChunkCoord) -> bool {
         let chunk_size = i64::from(CHUNK_SIZE);
-        let min_x = i64::from(coord.x) * chunk_size;
-        let min_y = i64::from(coord.y) * chunk_size;
+        let (min_x, min_y) = coord.min_tile();
         let max_x = (i64::from(coord.x) + 1) * chunk_size - 1;
         let max_y = (i64::from(coord.y) + 1) * chunk_size - 1;
 
@@ -75,8 +75,8 @@ impl MapTextureBounds {
     }
 
     fn contains_tile_wide(self, tile: (i64, i64)) -> bool {
-        let min_x = i64::from(self.min_x);
-        let min_y = i64::from(self.min_y);
+        let min_x = self.min_x;
+        let min_y = self.min_y;
         let max_x = min_x + i64::from(self.width);
         let max_y = min_y + i64::from(self.height);
 
@@ -91,22 +91,22 @@ mod tests {
     #[test]
     fn map_texture_bounds_contains_tile_handles_extreme_edges() {
         let bounds = MapTextureBounds {
-            min_x: i32::MAX,
-            min_y: i32::MIN,
+            min_x: i64::from(i32::MAX),
+            min_y: i64::from(i32::MIN),
             width: 1,
             height: 1,
         };
 
-        assert!(bounds.contains_tile((i32::MAX, i32::MIN)));
-        assert!(!bounds.contains_tile((i32::MAX - 1, i32::MIN)));
-        assert!(!bounds.contains_tile((i32::MAX, i32::MIN + 1)));
+        assert!(bounds.contains_tile((i64::from(i32::MAX), i64::from(i32::MIN))));
+        assert!(!bounds.contains_tile((i64::from(i32::MAX - 1), i64::from(i32::MIN))));
+        assert!(!bounds.contains_tile((i64::from(i32::MAX), i64::from(i32::MIN + 1))));
     }
 
     #[test]
     fn map_texture_bounds_contains_chunk_handles_extreme_coords() {
         let bounds = MapTextureBounds {
-            min_x: i32::MIN,
-            min_y: i32::MIN,
+            min_x: i64::from(i32::MIN),
+            min_y: i64::from(i32::MIN),
             width: u32::MAX,
             height: u32::MAX,
         };
@@ -221,7 +221,12 @@ impl MapTextureDirtyRegions {
         self.rects.clear();
     }
 
-    pub(crate) fn mark_world_tile(&mut self, bounds: MapTextureBounds, x: i32, y: i32) {
+    pub(crate) fn mark_world_tile(
+        &mut self,
+        bounds: MapTextureBounds,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) {
         let Some((image_x, image_y)) = world_tile_to_image(bounds, x, y) else {
             return;
         };
@@ -235,13 +240,12 @@ impl MapTextureDirtyRegions {
 
     pub(crate) fn mark_world_chunk(&mut self, bounds: MapTextureBounds, coord: ChunkCoord) {
         let chunk_size = i64::from(CHUNK_SIZE);
-        let chunk_min_x = i64::from(coord.x) * chunk_size;
-        let chunk_min_y = i64::from(coord.y) * chunk_size;
+        let (chunk_min_x, chunk_min_y) = coord.min_tile();
         let chunk_max_x = chunk_min_x + chunk_size - 1;
         let chunk_max_y = chunk_min_y + chunk_size - 1;
 
-        let bounds_min_x = i64::from(bounds.min_x);
-        let bounds_min_y = i64::from(bounds.min_y);
+        let bounds_min_x = bounds.min_x;
+        let bounds_min_y = bounds.min_y;
         let bounds_max_x = bounds_min_x + i64::from(bounds.width) - 1;
         let bounds_max_y = bounds_min_y + i64::from(bounds.height) - 1;
 
@@ -318,7 +322,11 @@ impl MapTextureDirtyRegions {
     }
 }
 
-fn world_tile_to_image(bounds: MapTextureBounds, x: i32, y: i32) -> Option<(u32, u32)> {
+fn world_tile_to_image(
+    bounds: MapTextureBounds,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+) -> Option<(u32, u32)> {
     if !bounds.contains_tile((x, y)) {
         return None;
     }

@@ -226,7 +226,10 @@ fn status_count(sim: &Simulation, status: MachineStatus) -> usize {
         .unwrap_or(0)
 }
 
-fn first_placeable_entity_tile(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i32, i32) {
+fn first_placeable_entity_tile(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+) -> (WorldTileCoord, WorldTileCoord) {
     all_tile_coords(&sim.world)
         .into_iter()
         .find(|(x, y)| {

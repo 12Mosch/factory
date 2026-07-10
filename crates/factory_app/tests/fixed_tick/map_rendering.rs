@@ -54,9 +54,9 @@ fn generated_unrevealed_streamed_chunks_remain_hidden_until_revealed() {
     let target_chunk = ChunkCoord { x: 0, y: 11 };
     let target = first_walkable_tile_in_chunk(sim.seed(), target_chunk);
     move_player_to_tile(&mut sim, target);
-    let sample = (
-        target_chunk.x * CHUNK_SIZE + (target.0 + 1).rem_euclid(CHUNK_SIZE),
-        target.1,
+    let sample = target_chunk.tile_at(
+        i32::try_from((target.0 + 1).rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
+        i32::try_from(target.1.rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
     );
 
     let map = generate_map_pixels(&sim, &MapDisplaySettings::default());
@@ -70,9 +70,9 @@ fn debug_reveal_shows_generated_streamed_chunks() {
     let target_chunk = ChunkCoord { x: 0, y: 13 };
     let target = first_walkable_tile_in_chunk(sim.seed(), target_chunk);
     move_player_to_tile(&mut sim, target);
-    let sample = (
-        target_chunk.x * CHUNK_SIZE + (target.0 + 1).rem_euclid(CHUNK_SIZE),
-        target.1,
+    let sample = target_chunk.tile_at(
+        i32::try_from((target.0 + 1).rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
+        i32::try_from(target.1.rem_euclid(i64::from(CHUNK_SIZE))).expect("local tile fits"),
     );
 
     let map = generate_map_pixels(
@@ -103,12 +103,12 @@ fn fullscreen_crop_bounds_clamps_near_map_edges() {
 
     let upper_right = fullscreen_crop_bounds(map_bounds, Vec2::new(500.0, 500.0), 2.0, Vec2::ONE);
     assert_eq!(
-        upper_right.min_x + upper_right.width as i32,
-        map_bounds.min_x + map_bounds.width as i32
+        upper_right.min_x + i64::from(upper_right.width),
+        map_bounds.min_x + i64::from(map_bounds.width)
     );
     assert_eq!(
-        upper_right.min_y + upper_right.height as i32,
-        map_bounds.min_y + map_bounds.height as i32
+        upper_right.min_y + i64::from(upper_right.height),
+        map_bounds.min_y + i64::from(map_bounds.height)
     );
 }
 
@@ -159,24 +159,22 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
     );
 
     assert!(!sim.is_chunk_revealed(concealed_chunk));
-    let hidden_tile = (
-        concealed_chunk.x * CHUNK_SIZE + 1,
-        concealed_chunk.y * CHUNK_SIZE + 1,
-    );
+    let hidden_tile = concealed_chunk.tile_at(1, 1);
     assert_hidden_pixel(&resources, hidden_tile);
     assert_hidden_pixel(&entities, hidden_tile);
 }
 
-fn assert_hidden_pixel(map: &MapPixels, tile: (i32, i32)) {
+fn assert_hidden_pixel(map: &MapPixels, tile: (i64, i64)) {
     assert!(map.bounds.contains_tile(tile));
     assert_eq!(pixel_at(map, tile), UNREVEALED_PIXEL);
 }
 
-fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i32, i32) {
+fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i64, i64) {
     let mut world = WorldSim::new_seeded(seed);
     world.ensure_chunk_generated(coord);
-    for y in coord.y * CHUNK_SIZE..(coord.y + 1) * CHUNK_SIZE {
-        for x in coord.x * CHUNK_SIZE..(coord.x + 1) * CHUNK_SIZE {
+    let (min_x, min_y) = coord.min_tile();
+    for y in min_y..min_y + i64::from(CHUNK_SIZE) {
+        for x in min_x..min_x + i64::from(CHUNK_SIZE) {
             if world
                 .tile_at(x, y)
                 .is_some_and(|tile| tile.collision.walkable)
@@ -189,7 +187,7 @@ fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i32, i32) {
     panic!("expected a walkable streamed tile");
 }
 
-fn move_player_to_tile(sim: &mut Simulation, tile: (i32, i32)) {
+fn move_player_to_tile(sim: &mut Simulation, tile: (i64, i64)) {
     let (player_x, player_y) = sim.player().position_tiles();
     sim.move_player_by_tiles(
         tile.0 as f32 + 0.5 - player_x,
@@ -198,7 +196,7 @@ fn move_player_to_tile(sim: &mut Simulation, tile: (i32, i32)) {
     assert_eq!(sim.player().tile_position(), tile);
 }
 
-fn revealed_resource_tile(sim: &Simulation) -> (i32, i32) {
+fn revealed_resource_tile(sim: &Simulation) -> (i64, i64) {
     sim.world()
         .chunks
         .values()
@@ -214,10 +212,7 @@ fn revealed_resource_tile(sim: &Simulation) -> (i32, i32) {
                     }
                     let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                     let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                    Some((
-                        chunk.coord.x * CHUNK_SIZE + local_x,
-                        chunk.coord.y * CHUNK_SIZE + local_y,
-                    ))
+                    Some(chunk.coord.tile_at(local_x, local_y))
                 })
         })
         .next()
@@ -227,7 +222,7 @@ fn revealed_resource_tile(sim: &Simulation) -> (i32, i32) {
 fn revealed_buildable_tile(
     sim: &Simulation,
     prototype_id: factory_data::EntityPrototypeId,
-) -> (i32, i32) {
+) -> (i64, i64) {
     for chunk in sim.world().chunks.values() {
         if !sim.is_chunk_revealed(chunk.coord) {
             continue;
@@ -235,8 +230,7 @@ fn revealed_buildable_tile(
         for (index, _) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = chunk.coord.tile_at(local_x, local_y);
             if factory_sim::placement::validate(
                 sim,
                 factory_sim::placement::EntityPlacementRequest {

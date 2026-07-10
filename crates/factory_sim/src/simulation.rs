@@ -46,7 +46,7 @@ pub use crate::research::{
 };
 pub use crate::world::{
     Chunk, ChunkCoord, MinedResource, ResourceCell, ResourceTileChange, TileCell, TileCollision,
-    WorldSim,
+    WorldSim, WorldTileCoord,
 };
 
 pub const CHUNK_SIZE: i32 = 32;
@@ -252,8 +252,8 @@ pub type SimulationValidationError = SimValidationError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimValidationError {
     MissingTile {
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
     },
     InvalidEntityPrototype {
         entity_id: EntityId,
@@ -267,8 +267,8 @@ pub enum SimValidationError {
     },
     InvalidEntityTile {
         entity_id: EntityId,
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
     },
     UnknownItem(ItemId),
     InvalidFluidId(FluidId),
@@ -279,8 +279,8 @@ pub enum SimValidationError {
         stack_size: u16,
     },
     EntityOverlap {
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
         first: EntityId,
         second: EntityId,
     },
@@ -354,8 +354,8 @@ pub enum SimValidationError {
     },
     InvalidInserterTarget {
         entity_id: EntityId,
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
     },
     InvalidChartChunk(ChunkCoord),
     InvalidItemStatistics(ItemId),
@@ -451,6 +451,7 @@ pub use self::save::{
 pub use self::scripted::scripted_inputs_for_red_science_factory;
 use self::statistics_ops::power_sample_is_recorded;
 use self::statistics_state::StatisticsSubsystem;
+pub use self::world_ops::ChunkNeighborhoodError;
 use self::world_ops::*;
 
 #[cfg(test)]

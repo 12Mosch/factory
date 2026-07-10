@@ -259,7 +259,7 @@ pub(in crate::simulation) fn validate_inserter(
 fn validate_inserter_target(
     sim: &Simulation,
     entity_id: EntityId,
-    target: (i32, i32),
+    target: (WorldTileCoord, WorldTileCoord),
 ) -> Result<(), SimValidationError> {
     if let Some(target_entity_id) = sim.entities.occupancy.entity_at(target.0, target.1)
         && !sim.entities.placed_entities.contains_key(&target_entity_id)

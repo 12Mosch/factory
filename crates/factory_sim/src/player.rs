@@ -8,8 +8,8 @@ pub struct PlayerState {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ManualMiningTarget {
-    pub x: i32,
-    pub y: i32,
+    pub x: crate::world::WorldTileCoord,
+    pub y: crate::world::WorldTileCoord,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use factory_data::{EntityPrototypeId, ItemId};
-use factory_sim::{Blueprint, Direction};
+use factory_sim::{Blueprint, Direction, WorldTileCoord};
 
 #[derive(Resource, Default)]
 pub struct BuildPlacementState {
@@ -56,7 +56,7 @@ pub struct BuildMenuState {
 
 #[derive(Resource, Default)]
 pub struct BuildPlacementPreviewState {
-    pub cursor_tile: Option<(i32, i32)>,
+    pub cursor_tile: Option<(WorldTileCoord, WorldTileCoord)>,
     pub preview: Option<factory_sim::BuildPlacementPreview>,
     /// Whether the preview reflects ghost placement (shift held) rather than
     /// an immediate build.
@@ -101,7 +101,7 @@ pub enum PlannerTool {
 #[derive(Resource, Default)]
 pub struct PlannerState {
     pub tool: PlannerTool,
-    pub drag_start: Option<(i32, i32)>,
+    pub drag_start: Option<(WorldTileCoord, WorldTileCoord)>,
     pub clipboard: Option<Blueprint>,
 }
 

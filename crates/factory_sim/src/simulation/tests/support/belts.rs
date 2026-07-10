@@ -48,8 +48,8 @@ pub(in crate::simulation::tests) const BELT_TIERS: [BeltTier; 3] = [
 
 fn belt_placement_request(
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     direction: Direction,
 ) -> crate::placement::EntityPlacementRequest {
     crate::placement::EntityPlacementRequest {
@@ -63,8 +63,8 @@ fn belt_placement_request(
 fn can_place_belt_fixture(
     sim: &Simulation,
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     direction: Direction,
 ) -> bool {
     crate::placement::validate(sim, belt_placement_request(prototype_id, x, y, direction)).is_ok()
@@ -73,8 +73,8 @@ fn can_place_belt_fixture(
 fn place_belt_fixture(
     sim: &mut Simulation,
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     direction: Direction,
     message: &str,
 ) -> EntityId {
@@ -158,7 +158,7 @@ pub(in crate::simulation::tests) fn place_named_belt_line(
                 sim,
                 crate::placement::EntityPlacementRequest {
                     prototype_id: belt,
-                    x: x + offset,
+                    x: x + i64::from(offset),
                     y,
                     direction: Direction::East,
                 },
@@ -171,7 +171,7 @@ pub(in crate::simulation::tests) fn place_named_belt_line(
                         sim,
                         crate::placement::EntityPlacementRequest {
                             prototype_id: belt,
-                            x: x + offset,
+                            x: x + i64::from(offset),
                             y,
                             direction: Direction::East,
                         },
@@ -198,13 +198,13 @@ pub(in crate::simulation::tests) fn place_throughput_underground_pair(
     let underground_offset = i32::from(max_distance) + 1;
 
     for (x, y) in all_tile_coords(&sim.world) {
-        let entrance_x = x + THROUGHPUT_UPSTREAM_LEN;
-        let exit_x = entrance_x + underground_offset;
+        let entrance_x = x + i64::from(THROUGHPUT_UPSTREAM_LEN);
+        let exit_x = entrance_x + i64::from(underground_offset);
         let input_tiles = (0..THROUGHPUT_UPSTREAM_LEN)
-            .map(|offset| (x + offset, y))
+            .map(|offset| (x + i64::from(offset), y))
             .collect::<Vec<_>>();
         let output_tiles = (1..=THROUGHPUT_DOWNSTREAM_LEN)
-            .map(|offset| (exit_x + offset, y))
+            .map(|offset| (exit_x + i64::from(offset), y))
             .collect::<Vec<_>>();
 
         if input_tiles.iter().any(|(tile_x, tile_y)| {
@@ -273,15 +273,15 @@ pub(in crate::simulation::tests) fn place_throughput_splitter_fixture(
     let splitter = entity_id_by_name(&sim.world.prototypes, splitter_name);
 
     for (x, y) in all_tile_coords(&sim.world) {
-        let splitter_x = x + THROUGHPUT_UPSTREAM_LEN;
+        let splitter_x = x + i64::from(THROUGHPUT_UPSTREAM_LEN);
         let input_tiles = (0..THROUGHPUT_UPSTREAM_LEN)
-            .map(|offset| (x + offset, y))
+            .map(|offset| (x + i64::from(offset), y))
             .collect::<Vec<_>>();
         let output0_tiles = (1..=THROUGHPUT_DOWNSTREAM_LEN)
-            .map(|offset| (splitter_x + offset, y))
+            .map(|offset| (splitter_x + i64::from(offset), y))
             .collect::<Vec<_>>();
         let output1_tiles = (1..=THROUGHPUT_DOWNSTREAM_LEN)
-            .map(|offset| (splitter_x + offset, y + 1))
+            .map(|offset| (splitter_x + i64::from(offset), y + 1))
             .collect::<Vec<_>>();
 
         if input_tiles.iter().any(|(tile_x, tile_y)| {
@@ -420,11 +420,11 @@ pub(in crate::simulation::tests) fn place_splitter_fixture(
         let output1_start = (x + 2, y + 1);
 
         let output0_tiles = (0..output_len)
-            .map(|offset| (output0_start.0 + offset, output0_start.1))
+            .map(|offset| (output0_start.0 + i64::from(offset), output0_start.1))
             .collect::<Vec<_>>();
         let output1_tiles = if connect_second_output {
             (0..output_len)
-                .map(|offset| (output1_start.0 + offset, output1_start.1))
+                .map(|offset| (output1_start.0 + i64::from(offset), output1_start.1))
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -549,7 +549,7 @@ pub(in crate::simulation::tests) fn place_underground_belt_endpoint_pair(
     let output = entity_id_by_name(&sim.world.prototypes, output_endpoint_name);
 
     for (x, y) in all_tile_coords(&sim.world) {
-        let output_x = x + offset;
+        let output_x = x + i64::from(offset);
         if crate::placement::validate(
             sim,
             crate::placement::EntityPlacementRequest {

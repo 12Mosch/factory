@@ -34,15 +34,15 @@ pub enum SimCommand {
     PlaceEntityFromPlayerInventory {
         prototype_id: EntityPrototypeId,
         item_id: ItemId,
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
         direction: Direction,
     },
     /// Plans an entity as a ghost without consuming items.
     PlaceGhost {
         prototype_id: EntityPrototypeId,
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
         direction: Direction,
     },
     CancelGhost {
@@ -55,16 +55,16 @@ pub enum SimCommand {
     /// Deconstruction planner: marks every entity intersecting the tile
     /// rectangle for deconstruction and cancels ghosts in the area.
     MarkDeconstruction {
-        min_x: i32,
-        min_y: i32,
-        max_x: i32,
-        max_y: i32,
+        min_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_x: WorldTileCoord,
+        max_y: WorldTileCoord,
     },
     CancelDeconstruction {
-        min_x: i32,
-        min_y: i32,
-        max_x: i32,
-        max_y: i32,
+        min_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_x: WorldTileCoord,
+        max_y: WorldTileCoord,
     },
     /// Manually deconstructs a marked entity into the player inventory.
     DeconstructEntity {
@@ -74,16 +74,16 @@ pub enum SimCommand {
     /// origin at `(x, y)`; blocked entries are skipped.
     PasteBlueprint {
         entities: Vec<BlueprintEntity>,
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
     },
     /// Captures the tile rectangle into the blueprint library.
     SaveBlueprint {
         name: String,
-        min_x: i32,
-        min_y: i32,
-        max_x: i32,
-        max_y: i32,
+        min_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_x: WorldTileCoord,
+        max_y: WorldTileCoord,
     },
     DeleteBlueprint {
         index: usize,

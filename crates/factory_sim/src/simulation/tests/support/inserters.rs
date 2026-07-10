@@ -11,8 +11,8 @@ pub(in crate::simulation::tests) fn place_unpowered_chest_inserter_furnace_line(
 pub(in crate::simulation::tests) fn place_chest_inserter_furnace_line_at(
     sim: &mut Simulation,
     inserter_name: &str,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
 ) -> (EntityId, EntityId, EntityId) {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let inserter = entity_id_by_name(&sim.world.prototypes, inserter_name);

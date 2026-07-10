@@ -31,7 +31,7 @@ pub(super) fn transport_item_render_state_from_parts(
 
 pub(super) fn splitter_port_tiles_for_render(
     footprint: &factory_sim::EntityFootprint,
-) -> Option<[(i32, i32); 2]> {
+) -> Option<[(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord); 2]> {
     let mut tiles = footprint.tiles();
     if tiles.len() != 2 {
         return None;

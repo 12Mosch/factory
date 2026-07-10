@@ -1,4 +1,4 @@
-use crate::simulation::{Direction, PlacedEntity};
+use crate::simulation::{Direction, PlacedEntity, WorldTileCoord};
 
 use super::types::{FluidEndpoint, FluidEndpointAxis};
 
@@ -15,8 +15,8 @@ pub(super) fn rotated_fluid_endpoint(
         prototype.size.y,
         placed.direction,
     )?;
-    let tile_x = placed.footprint.x + local_x;
-    let tile_y = placed.footprint.y + local_y;
+    let tile_x = placed.footprint.x + i64::from(local_x);
+    let tile_y = placed.footprint.y + i64::from(local_y);
 
     Some(endpoint_for_side(tile_x, tile_y, side))
 }
@@ -50,8 +50,8 @@ fn rotate_fluid_connection(
 }
 
 fn endpoint_for_side(
-    tile_x: i32,
-    tile_y: i32,
+    tile_x: WorldTileCoord,
+    tile_y: WorldTileCoord,
     side: factory_data::FluidConnectionSide,
 ) -> FluidEndpoint {
     match side {
