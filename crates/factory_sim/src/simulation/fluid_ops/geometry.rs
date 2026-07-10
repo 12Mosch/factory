@@ -2,11 +2,28 @@ use crate::simulation::{Direction, PlacedEntity, WorldTileCoord};
 
 use super::types::{FluidEndpoint, FluidEndpointAxis};
 
+/// A fluid connection resolved into world space: the shared-edge endpoint, the tile the
+/// connection sits on, and the adjacent tile it opens toward.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FluidConnectionGeometry {
+    pub(super) endpoint: FluidEndpoint,
+    pub(super) tile: (WorldTileCoord, WorldTileCoord),
+    pub(super) facing_tile: (WorldTileCoord, WorldTileCoord),
+}
+
 pub(super) fn rotated_fluid_endpoint(
     placed: &PlacedEntity,
     prototype: &factory_data::EntityPrototype,
     connection: &factory_data::FluidConnectionPrototype,
 ) -> Option<FluidEndpoint> {
+    Some(rotated_fluid_connection_geometry(placed, prototype, connection)?.endpoint)
+}
+
+pub(super) fn rotated_fluid_connection_geometry(
+    placed: &PlacedEntity,
+    prototype: &factory_data::EntityPrototype,
+    connection: &factory_data::FluidConnectionPrototype,
+) -> Option<FluidConnectionGeometry> {
     let (local_x, local_y, side) = rotate_fluid_connection(
         connection.local_offset.x,
         connection.local_offset.y,
@@ -18,7 +35,11 @@ pub(super) fn rotated_fluid_endpoint(
     let tile_x = placed.footprint.x + i64::from(local_x);
     let tile_y = placed.footprint.y + i64::from(local_y);
 
-    Some(endpoint_for_side(tile_x, tile_y, side))
+    Some(FluidConnectionGeometry {
+        endpoint: endpoint_for_side(tile_x, tile_y, side),
+        tile: (tile_x, tile_y),
+        facing_tile: facing_tile_for_side(tile_x, tile_y, side),
+    })
 }
 
 fn rotate_fluid_connection(
@@ -75,6 +96,21 @@ fn endpoint_for_side(
             y: tile_y,
             axis: FluidEndpointAxis::Vertical,
         },
+    }
+}
+
+/// The tile on the far side of the edge a connection opens toward. Horizontal edges at
+/// `y` separate rows `y - 1` and `y`; vertical edges at `x` separate columns `x - 1` and `x`.
+fn facing_tile_for_side(
+    tile_x: WorldTileCoord,
+    tile_y: WorldTileCoord,
+    side: factory_data::FluidConnectionSide,
+) -> (WorldTileCoord, WorldTileCoord) {
+    match side {
+        factory_data::FluidConnectionSide::North => (tile_x, tile_y - 1),
+        factory_data::FluidConnectionSide::East => (tile_x + 1, tile_y),
+        factory_data::FluidConnectionSide::South => (tile_x, tile_y + 1),
+        factory_data::FluidConnectionSide::West => (tile_x - 1, tile_y),
     }
 }
 

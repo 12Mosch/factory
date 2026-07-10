@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, PrototypeCatalog};
-use factory_sim::{Direction, EntityFootprint, EntityId, Simulation};
+use factory_sim::{Direction, EntityFootprint, EntityId, PlacedEntity, Simulation};
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -16,7 +16,9 @@ use crate::rendering::colors::{
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
-use crate::rendering::visuals::{EntityVisualStyle, VisualAssets, spawn_entity_visual};
+use crate::rendering::visuals::{
+    ConnectionMask, EntityVisualStyle, VisualAssets, spawn_entity_visual,
+};
 use crate::resources::SimResource;
 
 #[derive(Component)]
@@ -126,7 +128,81 @@ pub(crate) fn renderable_entity_visual_style(
     entity_id: EntityId,
 ) -> Option<EntityVisualStyle> {
     let placed = sim.entities().placed_entity(entity_id)?;
-    entity_prototype_visual_style(sim.catalog(), placed.prototype_id, placed.direction)
+    let mut style =
+        entity_prototype_visual_style(sim.catalog(), placed.prototype_id, placed.direction)?;
+    style.connections = entity_connection_mask(sim, placed, style.kind);
+    Some(style)
+}
+
+/// Directions in which the placed entity visually joins a neighbor. Only pipes and belts
+/// render connection overlays; every other kind keeps an empty mask so its cached visual
+/// is shared across placements.
+fn entity_connection_mask(
+    sim: &Simulation,
+    placed: &PlacedEntity,
+    kind: EntityKind,
+) -> ConnectionMask {
+    match kind {
+        EntityKind::Pipe => ConnectionMask::from_directions(
+            factory_sim::entity_access::fluid_connection_directions(sim, placed.id),
+        ),
+        EntityKind::TransportBelt => belt_connection_mask(sim, placed),
+        _ => ConnectionMask::EMPTY,
+    }
+}
+
+fn belt_connection_mask(sim: &Simulation, placed: &PlacedEntity) -> ConnectionMask {
+    let flow = belt_flow_direction(sim, placed);
+    let mut connected = [false; 4];
+
+    for direction in Direction::ALL {
+        let (dx, dy) = direction_tile_delta(direction);
+        let Some(neighbor_id) = sim
+            .entities()
+            .occupancy()
+            .entity_at(placed.footprint.x + dx, placed.footprint.y + dy)
+        else {
+            continue;
+        };
+        let Some(neighbor) = sim.entities().placed_entity(neighbor_id) else {
+            continue;
+        };
+        let Some(prototype) = sim.catalog().entity(neighbor.prototype_id) else {
+            continue;
+        };
+        if !matches!(
+            prototype.entity_kind,
+            EntityKind::TransportBelt | EntityKind::Splitter
+        ) {
+            continue;
+        }
+
+        let neighbor_flow = belt_flow_direction(sim, neighbor);
+        connected[direction.index()] = if direction == flow {
+            // Downstream edge: joined unless the neighbor faces us head-on.
+            neighbor_flow != direction.opposite()
+        } else {
+            // Upstream or side edge: joined when the neighbor flows into this tile.
+            neighbor_flow == direction.opposite()
+        };
+    }
+
+    ConnectionMask::from_directions(connected)
+}
+
+fn belt_flow_direction(sim: &Simulation, placed: &PlacedEntity) -> Direction {
+    factory_sim::entity_access::belt_segment(sim, placed.id)
+        .map(|segment| segment.dir)
+        .unwrap_or(placed.direction)
+}
+
+fn direction_tile_delta(direction: Direction) -> (i64, i64) {
+    match direction {
+        Direction::North => (0, 1),
+        Direction::East => (1, 0),
+        Direction::South => (0, -1),
+        Direction::West => (-1, 0),
+    }
 }
 
 pub(crate) fn entity_prototype_render_style(
@@ -294,6 +370,7 @@ fn entity_visual_style(
         size,
         kind,
         direction,
+        connections: ConnectionMask::EMPTY,
     }
 }
 

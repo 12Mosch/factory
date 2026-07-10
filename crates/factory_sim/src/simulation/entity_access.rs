@@ -36,6 +36,13 @@ pub fn fluid_box_states(sim: &Simulation, entity_id: EntityId) -> Option<&[Fluid
     sim.entities.fluid_box_states(entity_id)
 }
 
+/// For each cardinal direction (indexed by [`Direction::index`]), whether `entity_id` has a
+/// fluid connection joined to a matching connection on the adjacent entity. All false when
+/// the entity does not exist or has no fluid boxes.
+pub fn fluid_connection_directions(sim: &Simulation, entity_id: EntityId) -> [bool; 4] {
+    sim.fluid_connection_directions(entity_id)
+}
+
 pub fn belt_segment(sim: &Simulation, entity_id: EntityId) -> Result<&BeltSegment, BeltError> {
     sim.entities.belt_segment(entity_id)
 }
