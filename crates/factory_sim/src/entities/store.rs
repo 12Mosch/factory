@@ -37,6 +37,9 @@ macro_rules! for_each_entity_state_map {
             splitters: crate::logistics::SplitterState => Splitter,
             inserters: crate::logistics::InserterState => Inserter,
             pumpjacks: crate::machines::PumpjackState => Pumpjack,
+            gun_turrets: crate::combat::GunTurretState => GunTurret,
+            enemy_spawners: crate::combat::EnemySpawnerState => EnemySpawner,
+            entity_health: crate::combat::HealthState => _,
         }
     };
 }
@@ -116,6 +119,7 @@ pub struct PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combat::{EnemySpawnerState, GunTurretState, HealthState};
     use crate::fluids::FluidBoxState;
     use crate::inventory::{Inventory, ItemStack};
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
@@ -135,7 +139,9 @@ mod tests {
         // means the save format changed (field order, field types, or state
         // added to the registry): update the constant and bump `SAVE_VERSION`
         // only for intentional format changes.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xe35f_37be_4cc1_1674;
+        // v12: gun turret, enemy spawner, and health state maps joined the
+        // registry.
+        const EXPECTED_LAYOUT_HASH: u64 = 0xb651_6127_9811_1adb;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -169,9 +175,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(16);
+        let mut store = EntityStore::empty(19);
 
-        for raw in 1..=15 {
+        for raw in 1..=18 {
             let id = EntityId::new(raw);
             let tile = raw as i64;
             store.entities.push(SimEntity {
@@ -323,6 +329,30 @@ mod tests {
             },
         );
         store.pumpjacks.insert(EntityId::new(15), PumpjackState);
+        store.gun_turrets.insert(
+            EntityId::new(16),
+            GunTurretState {
+                ammo: Inventory {
+                    slots: vec![Some(ItemStack {
+                        item_id: copper,
+                        count: 7,
+                    })],
+                },
+                loaded_shots: 4,
+                loaded_damage: 5,
+                next_ready_tick: 17,
+            },
+        );
+        store.enemy_spawners.insert(
+            EntityId::new(17),
+            EnemySpawnerState {
+                absorbed_pollution_micro: 987_654,
+                next_free_spawn_tick: 1_800,
+            },
+        );
+        store
+            .entity_health
+            .insert(EntityId::new(18), HealthState { current: 42 });
 
         store
     }

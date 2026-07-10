@@ -245,6 +245,77 @@ impl EntityStateBehavior for InserterState {
     }
 }
 
+impl EntityStateBehavior for GunTurretState {
+    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+        // The opened magazine (`loaded_shots`) is lost; only unopened
+        // magazines in the ammo inventory are recovered.
+        push_inventory_stacks(stacks, &self.ammo);
+    }
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        super::validation::inventory::validate_inventory(&sim.world.prototypes, &self.ammo)?;
+        for stack in self.ammo.slots.iter().flatten() {
+            let is_ammo = sim
+                .world
+                .prototypes
+                .item(stack.item_id)
+                .is_some_and(|item| item.ammo.is_some());
+            if !is_ammo {
+                return Err(SimValidationError::InvalidMachineItem {
+                    entity_id,
+                    item_id: stack.item_id,
+                });
+            }
+        }
+        if self.loaded_shots > 0 && self.loaded_damage == 0 {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+
+        Ok(())
+    }
+}
+
+impl EntityStateBehavior for EnemySpawnerState {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        _sim: &Simulation,
+        _entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        Ok(())
+    }
+}
+
+impl EntityStateBehavior for HealthState {
+    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let max_health = sim
+            .entities
+            .placed_entities
+            .get(&entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.max_health);
+        let Some(max_health) = max_health else {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        };
+        if self.current == 0 || self.current > max_health {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+
+        Ok(())
+    }
+}
+
 fn push_inventory_stacks(stacks: &mut Vec<ItemStack>, inventory: &Inventory) {
     stacks.extend(inventory.slots.iter().flatten().copied());
 }

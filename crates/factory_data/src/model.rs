@@ -15,6 +15,22 @@ pub struct ItemPrototype {
     pub name: String,
     pub stack_size: u16,
     pub fuel_value_joules: Option<u64>,
+    /// Present when the item can be loaded into gun turrets as ammunition.
+    pub ammo: Option<AmmoPrototype>,
+    /// Present when the item can be consumed to repair damaged entities.
+    pub repair: Option<RepairToolPrototype>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct AmmoPrototype {
+    pub damage_per_shot: u32,
+    pub shots_per_item: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RepairToolPrototype {
+    /// Total health one item restores before it is used up.
+    pub restore_health: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -51,6 +67,50 @@ pub struct EntityPrototype {
     pub offshore_pump: Option<OffshorePumpPrototype>,
     pub pumpjack: Option<PumpjackPrototype>,
     pub fluid_boxes: Vec<FluidBoxPrototype>,
+    /// Present when the entity can take damage and be destroyed.
+    pub max_health: Option<u32>,
+    /// Pollution emitted into the entity's chunk while it is actively
+    /// working, in milli-pollution-units per minute.
+    pub pollution_per_minute_milli: Option<u32>,
+    pub gun_turret: Option<GunTurretPrototype>,
+    pub enemy_spawner: Option<EnemySpawnerPrototype>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct GunTurretPrototype {
+    /// Maximum distance from the turret's footprint to a target, in tiles.
+    pub range_tiles: u32,
+    pub cooldown_ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct EnemySpawnerPrototype {
+    /// Upper bound on units alive at once that this spawner produced.
+    pub max_alive_units: u32,
+    /// Units kept alive near the spawner without pollution input.
+    pub guard_units: u32,
+    /// Ticks between free guard spawns while below `guard_units`.
+    pub free_spawn_interval_ticks: u32,
+    /// Absorbed pollution required to spawn one attacking unit, in
+    /// milli-pollution-units.
+    pub unit_spawn_pollution_cost_milli: u32,
+    /// Pollution drained from the spawner's chunk each tick, in
+    /// milli-pollution-units.
+    pub pollution_absorption_per_tick_milli: u32,
+    pub unit: UnitPrototype,
+}
+
+/// Combat stats of the mobile unit an enemy spawner produces.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct UnitPrototype {
+    pub max_health: u32,
+    pub damage: u32,
+    pub attack_cooldown_ticks: u32,
+    /// Movement speed in fixed-point position units per tick (1024 = one
+    /// tile per tick).
+    pub speed_fixed_per_tick: u32,
+    /// Distance within which an idle unit acquires player targets, in tiles.
+    pub aggro_radius_tiles: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -188,6 +248,9 @@ pub struct TilePrototype {
     pub id: TileId,
     pub name: String,
     pub collision_mask: CollisionMask,
+    /// Pollution absorbed by one tile of this terrain, in
+    /// milli-pollution-units per minute.
+    pub pollution_absorption_per_minute_milli: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -245,6 +308,9 @@ pub enum EntityKind {
     Pumpjack,
     Pipe,
     StorageTank,
+    Wall,
+    GunTurret,
+    EnemySpawner,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -276,6 +342,9 @@ pub struct WorldGenerationConfig {
     /// at its base richness and radius.
     pub distance_scaling: Option<ResourceDistanceScalingConfig>,
     pub resources: Vec<ResourceGenerationConfig>,
+    /// Enemy spawner placement rules; `None` generates a world without
+    /// enemies.
+    pub enemy_bases: Option<EnemyBaseGenerationConfig>,
 }
 
 impl Default for WorldGenerationConfig {
@@ -295,8 +364,21 @@ impl Default for WorldGenerationConfig {
             },
             distance_scaling: None,
             resources: Vec::new(),
+            enemy_bases: None,
         }
     }
+}
+
+/// Deterministic per-chunk enemy spawner placement: each generated chunk
+/// beyond `min_distance_tiles` from the origin rolls `frequency_percent` for
+/// one spawner at a seed-derived position inside the chunk.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct EnemyBaseGenerationConfig {
+    pub spawner_entity: EntityPrototypeId,
+    /// Chance (0-100) that an eligible chunk contains a spawner.
+    pub frequency_percent: u8,
+    /// Chunks whose center is closer to the origin than this stay clear.
+    pub min_distance_tiles: u32,
 }
 
 /// Inclusive chunk range generated up front when a world is created.

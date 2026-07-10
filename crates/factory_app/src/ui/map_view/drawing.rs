@@ -84,6 +84,7 @@ pub(super) fn rebuild_map_overlay(
                 );
             }
 
+            spawn_pollution_overlays(overlay, &context);
             spawn_entity_overlays(overlay, &context);
 
             spawn_point_overlay(
@@ -120,6 +121,43 @@ pub(super) fn rebuild_map_overlay(
                 );
             }
         });
+}
+
+/// Red haze over polluted revealed chunks; opacity scales with the chunk's
+/// pollution level.
+fn spawn_pollution_overlays(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    context: &MapOverlayContext,
+) {
+    // Below this level the haze would be invisible anyway; skip the rect.
+    const MIN_VISIBLE_POLLUTION_MICRO: u64 = 100_000;
+    // Pollution level rendered at full haze opacity (10 pollution units).
+    const FULL_HAZE_POLLUTION_MICRO: u64 = 10_000_000;
+
+    if context.layer == MapLayer::Resources {
+        return;
+    }
+
+    for (coord, amount_micro) in context.sim.pollution().polluted_chunks() {
+        if amount_micro < MIN_VISIBLE_POLLUTION_MICRO {
+            continue;
+        }
+        if !context.settings.debug_reveal_all && !context.sim.is_chunk_revealed(coord) {
+            continue;
+        }
+        let Some(rect) = map_rect_for_chunk(context.crop_bounds, context.image_size, coord) else {
+            continue;
+        };
+
+        let strength = (amount_micro as f32 / FULL_HAZE_POLLUTION_MICRO as f32).clamp(0.06, 1.0);
+        spawn_rect_overlay(
+            parent,
+            rect,
+            Color::NONE,
+            Color::srgba(0.82, 0.20, 0.16, 0.30 * strength),
+            0.0,
+        );
+    }
 }
 
 fn spawn_entity_overlays(

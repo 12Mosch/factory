@@ -53,6 +53,9 @@ macro_rules! define_validate_entity_state_ownership {
             for entity_id in sim.entities.fluid_boxes.keys() {
                 validate_fluid_box_owner(sim, *entity_id)?;
             }
+            for entity_id in sim.entities.entity_health.keys() {
+                validate_health_owner(sim, *entity_id)?;
+            }
 
             Ok(())
         }
@@ -98,6 +101,33 @@ fn validate_electric_consumer_owner(
 
     if prototype.electric_energy_source.is_none() {
         return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+
+    Ok(())
+}
+
+fn validate_health_owner(sim: &Simulation, entity_id: EntityId) -> Result<(), SimValidationError> {
+    let prototype = owner_prototype(sim, entity_id)?;
+
+    if prototype.max_health.is_none() {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+
+    Ok(())
+}
+
+/// Enemy units are self-contained; validate their copied combat stats stay
+/// coherent.
+pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationError> {
+    for (id, enemy) in &sim.enemies.enemies {
+        if enemy.id != *id
+            || enemy.health == 0
+            || enemy.health > enemy.max_health
+            || enemy.speed_fixed_per_tick == 0
+            || enemy.id.raw() > sim.enemies.next_enemy_id
+        {
+            return Err(SimValidationError::InvalidEnemy { enemy_id: *id });
+        }
     }
 
     Ok(())

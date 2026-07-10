@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 pub struct PlayerState {
     pub(crate) x: i64,
     pub(crate) y: i64,
+    /// Health the currently opened repair pack can still restore; a new pack
+    /// is consumed from the inventory when this reaches zero mid-repair.
+    pub(crate) repair_remaining_health: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

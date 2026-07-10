@@ -3,6 +3,7 @@ mod support;
 mod assemblers;
 mod belts;
 mod burner_drills;
+mod combat;
 mod commands;
 mod construction;
 mod fluids;

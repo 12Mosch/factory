@@ -235,7 +235,7 @@ pub(crate) fn update_burner_drill_indicators(
                         state.crafting_required_ticks,
                     ))
                 }
-                OpenMachineKind::Chest | OpenMachineKind::Lab => None,
+                OpenMachineKind::Chest | OpenMachineKind::Lab | OpenMachineKind::Turret => None,
             });
 
     for mut text in &mut energy_texts {

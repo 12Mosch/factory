@@ -34,6 +34,9 @@ pub(in crate::simulation) fn reservation_for_prototype(
         splitters: splitter_state_for_prototype(prototype, direction),
         inserters: inserter_state_for_prototype(prototype),
         pumpjacks: pumpjack_state_for_prototype(prototype),
+        gun_turrets: gun_turret_state_for_prototype(prototype),
+        enemy_spawners: enemy_spawner_state_for_prototype(prototype),
+        entity_health: health_state_for_prototype(prototype),
     }
 }
 
@@ -234,4 +237,24 @@ fn inserter_state_for_prototype(
 ) -> Option<InserterState> {
     (prototype.entity_kind == EntityKind::Inserter && prototype.inserter.is_some())
         .then_some(InserterState::WaitingForItem)
+}
+
+fn gun_turret_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<GunTurretState> {
+    (prototype.entity_kind == EntityKind::GunTurret && prototype.gun_turret.is_some())
+        .then(GunTurretState::new)
+}
+
+fn enemy_spawner_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<EnemySpawnerState> {
+    (prototype.entity_kind == EntityKind::EnemySpawner && prototype.enemy_spawner.is_some())
+        .then_some(EnemySpawnerState::default())
+}
+
+fn health_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<HealthState> {
+    prototype.max_health.map(|max_health| HealthState {
+        current: max_health,
+    })
 }

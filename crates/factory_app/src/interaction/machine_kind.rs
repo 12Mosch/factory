@@ -9,6 +9,7 @@ pub(crate) enum OpenMachineKind {
     Boiler,
     Assembler,
     Lab,
+    Turret,
 }
 
 pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option<OpenMachineKind> {
@@ -19,6 +20,7 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
         EntityKind::Boiler => Some(OpenMachineKind::Boiler),
         EntityKind::AssemblingMachine => Some(OpenMachineKind::Assembler),
         EntityKind::Lab => Some(OpenMachineKind::Lab),
+        EntityKind::GunTurret => Some(OpenMachineKind::Turret),
         _ => None,
     }
 }

@@ -46,6 +46,7 @@ impl EntityStore {
         self.entity_inventories
             .get(&entity_id)
             .or_else(|| self.labs.get(&entity_id).map(|lab| &lab.inventory))
+            .or_else(|| self.gun_turrets.get(&entity_id).map(|turret| &turret.ammo))
             .ok_or(ContainerError::NotContainer(entity_id))
     }
 
@@ -60,6 +61,11 @@ impl EntityStore {
         self.entity_inventories
             .get_mut(&entity_id)
             .or_else(|| self.labs.get_mut(&entity_id).map(|lab| &mut lab.inventory))
+            .or_else(|| {
+                self.gun_turrets
+                    .get_mut(&entity_id)
+                    .map(|turret| &mut turret.ammo)
+            })
             .ok_or(ContainerError::NotContainer(entity_id))
     }
 

@@ -9,11 +9,15 @@ pub(crate) use std::collections::VecDeque;
 use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::hash::{Hash, Hasher};
 
+pub use crate::combat::{
+    EnemySpawnerState, GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState, HealthState, RepairError,
+};
 pub use crate::construction::{
     Blueprint, BlueprintEntity, ConstructionError, ConstructionJob, ConstructionState, GhostEntity,
     GhostId,
 };
 pub use crate::crafting::{CraftingError, CraftingJob, CraftingQueue};
+pub use crate::enemies::{Enemy, EnemyId, EnemyMode, EnemySubsystem};
 pub(crate) use crate::entities::EntityReservation;
 pub(crate) use crate::entities::store::for_each_entity_state_map;
 pub use crate::entities::{
@@ -38,6 +42,7 @@ pub use crate::machines::{
     MachineStatus, PumpjackState,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
+pub use crate::pollution::PollutionState;
 pub use crate::power::{
     BoilerError, BoilerState, ElectricConsumerState, ElectricPoleState, EntityPowerStatus,
     OffshorePumpState, PowerNetworkSnapshot, PowerSummary, SteamEngineState,
@@ -60,7 +65,10 @@ pub const MANUAL_MINING_TICKS_PER_ITEM: u32 =
 pub const PLAYER_INVENTORY_SLOT_COUNT: usize = 80;
 const FIXED_SIM_TICKS_PER_SECOND: f32 = 60.0;
 pub const ITEM_STATISTICS_WINDOW_TICKS: u64 = 60 * FIXED_SIM_TICKS_PER_SECOND as u64;
-const PLAYER_POSITION_SCALE: i64 = 1024;
+/// Fixed-point scale for free-moving positions (player, enemy units):
+/// 1024 units per tile.
+pub const POSITION_SCALE: i64 = 1024;
+const PLAYER_POSITION_SCALE: i64 = POSITION_SCALE;
 pub const BURNER_MINING_DRILL_FUEL_SLOT_INDEX: usize = 0;
 pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
@@ -75,6 +83,23 @@ pub const BASIC_INSERTER_PICKUP_TICKS: u32 = 35;
 pub const BASIC_INSERTER_DROP_TICKS: u32 = 35;
 pub const POWER_SATISFACTION_FULL_PERMYRIAD: u32 = 10_000;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
+
+/// Pollution diffuses between chunks and is absorbed by terrain once per
+/// interval instead of every tick.
+pub const POLLUTION_SPREAD_INTERVAL_TICKS: u64 = 64;
+/// Share of a chunk's pollution handed to each of its four neighbors per
+/// spread interval, in permille.
+pub const POLLUTION_SPREAD_PER_NEIGHBOR_PERMILLE: u64 = 20;
+/// Chunks below this level keep their pollution local instead of spreading.
+pub const POLLUTION_MIN_TO_SPREAD_MICRO: u64 = 100_000;
+/// Residue below this level evaporates after a spread pass so the pollution
+/// map stays bounded.
+pub const POLLUTION_MIN_RETAINED_MICRO: u64 = 1_000;
+
+/// Health restored per applied repair command; the app repeats the command
+/// while the repair input is held.
+pub const REPAIR_HEALTH_PER_ACTION: u32 = 5;
+pub const REPAIR_REACH_TILES: f32 = 3.0;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct Simulation {
@@ -98,6 +123,8 @@ pub struct Simulation {
     power: PowerSubsystem,
     fluids: FluidSubsystem,
     statistics: StatisticsSubsystem,
+    pollution: PollutionState,
+    enemies: EnemySubsystem,
 
     #[serde(skip)]
     transport: TransportLaneCache,
@@ -386,15 +413,20 @@ pub enum SimValidationError {
         blueprint_index: usize,
         recipe_id: RecipeId,
     },
+    InvalidEnemy {
+        enemy_id: EnemyId,
+    },
 }
 
 mod belt_ops;
+mod combat_ops;
 mod commands;
 pub mod construction_ops;
 mod contexts;
 mod core;
 mod diagnostics_ops;
 mod disjoint_set;
+mod enemy_ops;
 pub mod entity_access;
 pub mod entity_mutation;
 mod entity_recovery_ops;
@@ -412,6 +444,7 @@ mod placement_mutation_ops;
 mod placement_preview_ops;
 mod placement_validation_ops;
 mod player_ops;
+mod pollution_ops;
 mod power_ops;
 mod power_state;
 mod profiling;

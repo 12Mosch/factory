@@ -6,6 +6,7 @@ use crate::input::camera::zoom_camera;
 use crate::input::mining::update_manual_mining_from_input;
 use crate::input::movement::move_player_from_input;
 use crate::input::panels::{handle_panel_input, reset_app_input_state};
+use crate::input::repair::update_repair_from_input;
 use crate::input::resources::AppInputState;
 
 /// Input resources, panel-state collection, and the fixed-step systems that
@@ -27,7 +28,11 @@ impl Plugin for InputPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (move_player_from_input, update_manual_mining_from_input)
+                (
+                    move_player_from_input,
+                    update_manual_mining_from_input,
+                    update_repair_from_input,
+                )
                     .chain()
                     .in_set(AppSet::SimInput),
             )

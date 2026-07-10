@@ -86,6 +86,11 @@ fn spawn_container_window_contents(
         OpenMachineKind::Lab => {
             spawn_container_inventory_panel(root, "Lab", container_slot_count(sim, entity_id))
         }
+        OpenMachineKind::Turret => spawn_container_inventory_panel(
+            root,
+            "Gun Turret",
+            container_slot_count(sim, entity_id),
+        ),
         OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
         OpenMachineKind::Furnace => spawn_furnace_panel(root),
         OpenMachineKind::Boiler => spawn_boiler_panel(root),

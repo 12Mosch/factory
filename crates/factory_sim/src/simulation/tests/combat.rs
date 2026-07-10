@@ -1,0 +1,445 @@
+use super::super::*;
+use super::support::*;
+
+fn chunk_of_entity(sim: &Simulation, entity_id: EntityId) -> ChunkCoord {
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .expect("test entity should be placed");
+    ChunkCoord::from_tile(placed.x, placed.y).expect("test entity should be in the chunk plane")
+}
+
+fn place_biter_spawner(sim: &mut Simulation) -> EntityId {
+    let spawner = entity_id_by_name(&sim.world.prototypes, "biter_spawner");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 8, 8);
+    // Center of the clear rect keeps room for spawned units on every side.
+    place_at(sim, spawner, x + 3, y + 3, Direction::North)
+}
+
+fn load_turret_ammo(sim: &mut Simulation, turret_id: EntityId, count: u16) {
+    let magazine = item_id_by_name(&sim.world.prototypes, "firearm_magazine");
+    let catalog = sim.world.prototypes.clone();
+    crate::entity_access::inventory_mut(sim, turret_id)
+        .expect("turret should expose its ammo inventory")
+        .insert(&catalog, magazine, count)
+        .expect("turret ammo inventory should accept magazines");
+}
+
+fn spawn_test_enemy_at(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoord) -> EnemyId {
+    let unit = sim
+        .world
+        .prototypes
+        .entity(entity_id_by_name(&sim.world.prototypes, "biter_spawner"))
+        .and_then(|prototype| prototype.enemy_spawner.as_ref())
+        .expect("biter spawner prototype should define a unit")
+        .unit;
+    let id = sim.enemies.allocate_id();
+    sim.enemies.enemies.insert(
+        id,
+        Enemy {
+            id,
+            x: x * POSITION_SCALE + POSITION_SCALE / 2,
+            y: y * POSITION_SCALE + POSITION_SCALE / 2,
+            health: unit.max_health,
+            max_health: unit.max_health,
+            damage: unit.damage,
+            attack_cooldown_ticks: unit.attack_cooldown_ticks,
+            speed_fixed_per_tick: unit.speed_fixed_per_tick,
+            aggro_radius_tiles: unit.aggro_radius_tiles,
+            mode: EnemyMode::Attack,
+            home_spawner: None,
+            target: None,
+            path: VecDeque::new(),
+            next_attack_tick: 0,
+            next_decision_tick: 0,
+        },
+    );
+    id
+}
+
+#[test]
+fn working_furnace_emits_pollution_into_its_chunk() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id_by_name(&sim.world.prototypes, "iron_ore");
+    let coal = item_id_by_name(&sim.world.prototypes, "coal");
+    let furnace_id = place_stone_furnace(&mut sim);
+    add_furnace_input_and_fuel(&mut sim, furnace_id, iron_ore, coal);
+    let coord = chunk_of_entity(&sim, furnace_id);
+
+    for _ in 0..30 {
+        sim.tick();
+    }
+
+    assert!(
+        sim.pollution().amount_micro(coord) > 0,
+        "working furnace should pollute its chunk"
+    );
+}
+
+#[test]
+fn idle_furnace_emits_no_pollution() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace_id = place_stone_furnace(&mut sim);
+    let coord = chunk_of_entity(&sim, furnace_id);
+
+    for _ in 0..30 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.pollution().amount_micro(coord), 0);
+}
+
+#[test]
+fn pollution_spreads_to_neighbor_chunks_at_interval() {
+    let mut sim = Simulation::new_test_world(123);
+    let center = ChunkCoord { x: 0, y: 0 };
+    let seeded = 10_000_000;
+    sim.add_pollution_micro(center, seeded);
+
+    for _ in 0..POLLUTION_SPREAD_INTERVAL_TICKS {
+        sim.tick();
+    }
+
+    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        let neighbor = ChunkCoord {
+            x: center.x + dx,
+            y: center.y + dy,
+        };
+        assert!(
+            sim.pollution().amount_micro(neighbor) > 0,
+            "pollution should spread to neighbor {neighbor:?}"
+        );
+    }
+    assert!(
+        sim.pollution().amount_micro(center) < seeded,
+        "spreading chunk should lose the shared pollution"
+    );
+}
+
+#[test]
+fn terrain_absorbs_pollution_over_time() {
+    let mut sim = Simulation::new_test_world(123);
+    // Below the spread threshold, so only absorption changes the amount.
+    let seeded = 50_000;
+    let center = ChunkCoord { x: 0, y: 0 };
+    sim.add_pollution_micro(center, seeded);
+    let total_before = sim.pollution().total_micro();
+
+    for _ in 0..POLLUTION_SPREAD_INTERVAL_TICKS {
+        sim.tick();
+    }
+
+    assert!(
+        sim.pollution().total_micro() < total_before,
+        "terrain should absorb pollution"
+    );
+}
+
+#[test]
+fn enemy_spawners_seed_in_distant_chunks_but_not_near_spawn() {
+    let mut sim = Simulation::new_test_world(123);
+    assert!(
+        sim.entities.enemy_spawners.is_empty(),
+        "starting area should stay clear of spawners"
+    );
+
+    for x in 4..12 {
+        for y in 4..12 {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
+
+    assert!(
+        !sim.entities.enemy_spawners.is_empty(),
+        "distant chunks should contain enemy spawners"
+    );
+    for spawner_id in sim.entities.enemy_spawners.keys() {
+        let placed = sim
+            .entities
+            .placed_entities
+            .get(spawner_id)
+            .expect("spawner should be placed");
+        let distance_squared = placed.x * placed.x + placed.y * placed.y;
+        assert!(
+            distance_squared >= 100 * 100,
+            "spawners should keep their distance from the origin"
+        );
+    }
+    sim.validate().expect("seeded world should stay valid");
+}
+
+#[test]
+fn spawner_spawns_guard_without_pollution() {
+    let mut sim = Simulation::new_test_world(123);
+    place_biter_spawner(&mut sim);
+
+    sim.tick();
+
+    assert_eq!(sim.enemies().len(), 1);
+    let guard = sim.enemies().iter().next().expect("guard should exist");
+    assert_eq!(guard.mode, EnemyMode::Guard);
+}
+
+#[test]
+fn spawner_converts_absorbed_pollution_into_attackers() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let coord = chunk_of_entity(&sim, spawner_id);
+    // Seed well above the 4000 milli unit cost: chunk spread and terrain
+    // absorption also drain the chunk while the spawner soaks it up.
+    sim.add_pollution_micro(coord, 12_000_000);
+
+    // The spawner drains 20 milli per tick, so absorbing the unit cost
+    // takes at least 200 ticks; run with headroom.
+    let mut attacker_spawned = false;
+    for _ in 0..400 {
+        sim.tick();
+        if sim
+            .enemies()
+            .iter()
+            .any(|enemy| enemy.mode == EnemyMode::Attack)
+        {
+            attacker_spawned = true;
+            break;
+        }
+    }
+
+    assert!(
+        attacker_spawned,
+        "absorbed pollution should produce an attacker"
+    );
+    assert!(
+        sim.pollution().amount_micro(coord) < 12_000_000,
+        "spawner should have drained chunk pollution"
+    );
+}
+
+#[test]
+fn biter_destroys_nearby_building() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let spawner = sim
+        .entities
+        .placed_entity(spawner_id)
+        .expect("spawner should be placed");
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let chest_x = spawner.x + 4;
+    let chest_y = spawner.y;
+    let chest_id = place_at(&mut sim, chest, chest_x, chest_y, Direction::North);
+
+    let mut destroyed = false;
+    for _ in 0..1500 {
+        sim.tick();
+        if sim.entities.placed_entity(chest_id).is_none() {
+            destroyed = true;
+            break;
+        }
+    }
+
+    assert!(destroyed, "guard biter should destroy the nearby chest");
+    assert!(
+        sim.entities.occupancy.entity_at(chest_x, chest_y).is_none(),
+        "destroyed chest should release its tile"
+    );
+    sim.validate()
+        .expect("simulation should stay valid after destruction");
+}
+
+#[test]
+fn gun_turret_kills_enemy_and_consumes_ammo() {
+    let mut sim = Simulation::new_test_world(123);
+    let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 6, 6);
+    let turret_id = place_at(&mut sim, turret, x, y, Direction::North);
+    load_turret_ammo(&mut sim, turret_id, 2);
+    let enemy_id = spawn_test_enemy_at(&mut sim, x + 4, y + 4);
+
+    let mut killed = false;
+    for _ in 0..200 {
+        sim.tick();
+        if sim.enemies().get(enemy_id).is_none() {
+            killed = true;
+            break;
+        }
+    }
+
+    assert!(killed, "turret should kill the enemy in range");
+    let state = sim
+        .entities
+        .gun_turrets
+        .get(&turret_id)
+        .expect("turret state should exist");
+    let remaining_magazines: u32 = state
+        .ammo
+        .slots
+        .iter()
+        .flatten()
+        .map(|stack| u32::from(stack.count))
+        .sum();
+    assert!(
+        remaining_magazines < 2 || state.loaded_shots < 10,
+        "firing should consume ammo"
+    );
+}
+
+#[test]
+fn unloaded_turret_does_not_fire() {
+    let mut sim = Simulation::new_test_world(123);
+    let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 6, 6);
+    place_at(&mut sim, turret, x, y, Direction::North);
+    let enemy_id = spawn_test_enemy_at(&mut sim, x + 4, y + 4);
+
+    for _ in 0..120 {
+        sim.tick();
+    }
+
+    let enemy = sim.enemies().get(enemy_id).expect("enemy should survive");
+    assert_eq!(enemy.health, enemy.max_health);
+}
+
+#[test]
+fn gun_turret_destroys_spawner_in_range() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let spawner = sim
+        .entities
+        .placed_entity(spawner_id)
+        .expect("spawner should be placed");
+    let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+    let (turret_x, turret_y) = (spawner.x + 6, spawner.y);
+    let turret_id = place_at(&mut sim, turret, turret_x, turret_y, Direction::North);
+    load_turret_ammo(&mut sim, turret_id, 40);
+
+    let mut destroyed = false;
+    for _ in 0..3000 {
+        sim.tick();
+        if sim.entities.placed_entity(spawner_id).is_none() {
+            destroyed = true;
+            break;
+        }
+    }
+
+    assert!(destroyed, "turret creep should clear the nest");
+    sim.validate()
+        .expect("simulation should stay valid after nest destruction");
+}
+
+#[test]
+fn walls_take_damage_and_repair_consumes_packs() {
+    let mut sim = Simulation::new_test_world(123);
+    let wall = entity_id_by_name(&sim.world.prototypes, "wall");
+    let repair_pack = item_id_by_name(&sim.world.prototypes, "repair_pack");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 2);
+    let wall_id = place_at(&mut sim, wall, x, y, Direction::North);
+    sim.player = PlayerState::centered_on_tile(x, y + 1);
+
+    assert_eq!(sim.entity_health(wall_id), Some((350, 350)));
+    assert!(!sim.damage_entity(wall_id, 100));
+    assert_eq!(sim.entity_health(wall_id), Some((250, 350)));
+
+    let catalog = sim.world.prototypes.clone();
+    sim.player_inventory
+        .insert(&catalog, repair_pack, 1)
+        .expect("player inventory should accept a repair pack");
+
+    for _ in 0..20 {
+        sim.repair_entity(wall_id).expect("repair should succeed");
+    }
+
+    assert_eq!(sim.entity_health(wall_id), Some((350, 350)));
+    assert_eq!(sim.player_inventory.count(repair_pack), 0);
+    // Repairing a full-health entity is a no-op success.
+    sim.repair_entity(wall_id)
+        .expect("full-health repair should be a no-op");
+    sim.validate().expect("repair should keep the state valid");
+}
+
+#[test]
+fn repair_requires_reach_and_packs() {
+    let mut sim = Simulation::new_test_world(123);
+    let wall = entity_id_by_name(&sim.world.prototypes, "wall");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 2);
+    let wall_id = place_at(&mut sim, wall, x, y, Direction::North);
+    sim.damage_entity(wall_id, 100);
+
+    sim.player = PlayerState::centered_on_tile(x + 40, y);
+    assert_eq!(sim.repair_entity(wall_id), Err(RepairError::OutOfReach));
+
+    sim.player = PlayerState::centered_on_tile(x, y + 1);
+    sim.player_inventory = Inventory::player();
+    assert_eq!(sim.repair_entity(wall_id), Err(RepairError::NoRepairPacks));
+}
+
+#[test]
+fn destroying_wall_by_damage_drops_nothing() {
+    let mut sim = Simulation::new_test_world(123);
+    let wall = entity_id_by_name(&sim.world.prototypes, "wall");
+    let wall_item = item_id_by_name(&sim.world.prototypes, "wall");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 1);
+    let wall_id = place_at(&mut sim, wall, x, y, Direction::North);
+    sim.player_inventory = Inventory::player();
+
+    assert!(sim.damage_entity(wall_id, 350));
+
+    assert!(sim.entities.placed_entity(wall_id).is_none());
+    assert_eq!(sim.player_inventory.count(wall_item), 0);
+    sim.validate()
+        .expect("violent destruction should keep the state valid");
+}
+
+#[test]
+fn wall_and_turret_recipes_unlock_via_research() {
+    let mut sim = Simulation::new_test_world(123);
+    let wall_recipe = recipe_id(&sim.world.prototypes, "wall");
+    let turret_recipe = recipe_id(&sim.world.prototypes, "gun_turret");
+    let magazine_recipe = recipe_id(&sim.world.prototypes, "firearm_magazine");
+    let repair_recipe = recipe_id(&sim.world.prototypes, "repair_pack");
+
+    assert!(!sim.is_recipe_unlocked(wall_recipe));
+    assert!(!sim.is_recipe_unlocked(turret_recipe));
+    assert!(sim.is_recipe_unlocked(magazine_recipe));
+    assert!(sim.is_recipe_unlocked(repair_recipe));
+
+    complete_research_by_name(&mut sim, "logistics");
+    complete_research_by_name(&mut sim, "stone_walls");
+    assert!(sim.is_recipe_unlocked(wall_recipe));
+    complete_research_by_name(&mut sim, "turrets");
+    assert!(sim.is_recipe_unlocked(turret_recipe));
+}
+
+#[test]
+fn combat_state_round_trips_through_save() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let coord = chunk_of_entity(&sim, spawner_id);
+    sim.add_pollution_micro(coord, 8_000_000);
+    let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 6, 6);
+    let turret_id = place_at(&mut sim, turret, x, y, Direction::North);
+    load_turret_ammo(&mut sim, turret_id, 5);
+
+    for _ in 0..300 {
+        sim.tick();
+    }
+    // The turret may have shot down everything the spawner produced; add a
+    // unit out of turret range so the save definitely covers live enemies.
+    spawn_test_enemy_at(&mut sim, x + 30, y + 30);
+    assert!(!sim.enemies().is_empty(), "an enemy should be alive");
+    assert!(sim.pollution().total_micro() > 0);
+
+    let before_hash = sim.state_hash();
+    let bytes = save_to_bytes(&sim).expect("combat state should save");
+    let mut loaded = load_from_bytes(&bytes).expect("combat state should load");
+
+    assert_eq!(before_hash, loaded.state_hash());
+    for _ in 0..60 {
+        sim.tick();
+        loaded.tick();
+    }
+    assert_eq!(
+        sim.state_hash(),
+        loaded.state_hash(),
+        "loaded simulation should stay in lockstep"
+    );
+}

@@ -1,10 +1,10 @@
 use serde::Deserialize;
 
 use crate::model::{
-    AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CraftingCategory,
-    ElectricEnergySourcePrototype, EntityKind, FluidBoxIo, FluidConnectionSide,
-    OffshorePumpPrototype, ResourceExtraction, SplitterPrototype, SteamEnginePrototype,
-    TransportBeltPrototype,
+    AmmoPrototype, AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CraftingCategory,
+    ElectricEnergySourcePrototype, EntityKind, FluidBoxIo, FluidConnectionSide, GunTurretPrototype,
+    OffshorePumpPrototype, RepairToolPrototype, ResourceExtraction, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype, UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -34,6 +34,15 @@ pub(crate) struct RawWorldGenerationConfig {
     pub(crate) distance_scaling: Option<RawResourceDistanceScaling>,
     #[serde(default)]
     pub(crate) resources: Vec<RawResourceGeneration>,
+    #[serde(default)]
+    pub(crate) enemy_bases: Option<RawEnemyBaseGeneration>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawEnemyBaseGeneration {
+    pub(crate) spawner_entity: String,
+    pub(crate) frequency_percent: u8,
+    pub(crate) min_distance_tiles: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +95,8 @@ pub(crate) struct RawItemPrototype {
     pub(crate) name: String,
     pub(crate) stack_size: u16,
     pub(crate) fuel_value_joules: Option<u64>,
+    pub(crate) ammo: Option<AmmoPrototype>,
+    pub(crate) repair: Option<RepairToolPrototype>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +144,20 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) pumpjack: Option<RawPumpjackPrototype>,
     #[serde(default)]
     pub(crate) fluid_boxes: Vec<RawFluidBoxPrototype>,
+    pub(crate) max_health: Option<u32>,
+    pub(crate) pollution_per_minute_milli: Option<u32>,
+    pub(crate) gun_turret: Option<GunTurretPrototype>,
+    pub(crate) enemy_spawner: Option<RawEnemySpawnerPrototype>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawEnemySpawnerPrototype {
+    pub(crate) max_alive_units: u32,
+    pub(crate) guard_units: u32,
+    pub(crate) free_spawn_interval_ticks: u32,
+    pub(crate) unit_spawn_pollution_cost_milli: u32,
+    pub(crate) pollution_absorption_per_tick_milli: u32,
+    pub(crate) unit: UnitPrototype,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +207,8 @@ pub(crate) struct RawTilePrototype {
     pub(crate) id: u16,
     pub(crate) name: String,
     pub(crate) collision_mask: RawCollisionMask,
+    #[serde(default)]
+    pub(crate) pollution_absorption_per_minute_milli: u32,
 }
 
 #[derive(Debug, Deserialize)]

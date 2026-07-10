@@ -58,6 +58,22 @@ pub(crate) fn storage_tank_color() -> Color {
     Color::srgb(0.53, 0.62, 0.64)
 }
 
+pub(crate) fn wall_color() -> Color {
+    Color::srgb(0.76, 0.78, 0.74)
+}
+
+pub(crate) fn gun_turret_color() -> Color {
+    Color::srgb(0.62, 0.54, 0.30)
+}
+
+pub(crate) fn enemy_spawner_color() -> Color {
+    Color::srgb(0.52, 0.22, 0.38)
+}
+
+pub(crate) fn enemy_unit_color() -> Color {
+    Color::srgb(0.72, 0.26, 0.22)
+}
+
 pub(crate) fn transport_belt_color(speed_subtiles_per_tick: Option<u16>) -> Color {
     match speed_subtiles_per_tick {
         Some(16) => Color::srgb(0.82, 0.24, 0.16),

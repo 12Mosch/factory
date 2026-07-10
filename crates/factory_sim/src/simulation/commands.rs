@@ -70,6 +70,11 @@ pub enum SimCommand {
     DeconstructEntity {
         entity_id: EntityId,
     },
+    /// Repairs a damaged entity near the player, consuming repair packs.
+    /// Sent repeatedly while the repair input is held.
+    RepairEntity {
+        entity_id: EntityId,
+    },
     /// Places ghosts for the given blueprint entries with the blueprint
     /// origin at `(x, y)`; blocked entries are skipped.
     PasteBlueprint {
@@ -125,6 +130,7 @@ pub enum SimCommandError {
     Transfer(SlotTransferError),
     Build(PlayerBuildError),
     Construction(ConstructionError),
+    Repair(RepairError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -287,6 +293,11 @@ impl Simulation {
                 construction_ops::deconstruct_marked(self, entity_id)
                     .map_err(SimCommandError::Construction)?;
                 Ok(SimCommandEffect::EntityDeconstructed(entity_id))
+            }
+            SimCommand::RepairEntity { entity_id } => {
+                self.repair_entity(entity_id)
+                    .map_err(SimCommandError::Repair)?;
+                Ok(SimCommandEffect::None)
             }
             SimCommand::PasteBlueprint { ref entities, x, y } => {
                 let (placed, skipped) =

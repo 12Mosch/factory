@@ -243,7 +243,11 @@ impl Simulation {
         let Some(y) = self.player.y.checked_add(delta_y) else {
             return;
         };
-        let candidate = PlayerState { x, y };
+        let candidate = PlayerState {
+            x,
+            y,
+            ..self.player
+        };
         let (tile_x, tile_y) = candidate.tile_position();
         let Some(candidate_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
             return;
@@ -283,6 +287,7 @@ impl PlayerState {
         Self {
             x: tile_center_fixed(x.into()),
             y: tile_center_fixed(y.into()),
+            repair_remaining_health: 0,
         }
     }
 }
