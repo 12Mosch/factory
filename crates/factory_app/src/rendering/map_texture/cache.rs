@@ -148,10 +148,10 @@ fn resize_cached_pixels(
     };
 
     let mut new_pixels = vec![0; new_bounds.width as usize * new_bounds.height as usize * 4];
-    let old_max_x = old_bounds.min_x + old_bounds.width as i32 - 1;
-    let old_max_y = old_bounds.min_y + old_bounds.height as i32 - 1;
-    let new_max_x = new_bounds.min_x + new_bounds.width as i32 - 1;
-    let new_max_y = new_bounds.min_y + new_bounds.height as i32 - 1;
+    let old_max_x = old_bounds.min_x + i64::from(old_bounds.width) - 1;
+    let old_max_y = old_bounds.min_y + i64::from(old_bounds.height) - 1;
+    let new_max_x = new_bounds.min_x + i64::from(new_bounds.width) - 1;
+    let new_max_y = new_bounds.min_y + i64::from(new_bounds.height) - 1;
     let min_x = old_bounds.min_x.max(new_bounds.min_x);
     let max_x = old_max_x.min(new_max_x);
     let min_y = old_bounds.min_y.max(new_bounds.min_y);

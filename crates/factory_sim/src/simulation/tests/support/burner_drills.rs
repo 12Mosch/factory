@@ -4,7 +4,7 @@ use super::*;
 pub(in crate::simulation::tests) fn place_burner_drill_on_resource(
     sim: &mut Simulation,
     resource_item: ItemId,
-) -> (EntityId, i32, i32, u32) {
+) -> (EntityId, i64, i64, u32) {
     let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
     for (x, y) in all_tile_coords(&sim.world) {
         let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
@@ -46,7 +46,7 @@ pub(in crate::simulation::tests) fn place_burner_drill_on_resource(
 pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_chest(
     sim: &mut Simulation,
     resource_item: ItemId,
-) -> (EntityId, EntityId, i32, i32, u32) {
+) -> (EntityId, EntityId, i64, i64, u32) {
     let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     for direction in [
@@ -133,7 +133,7 @@ pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_chest(
 pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_belt(
     sim: &mut Simulation,
     resource_item: ItemId,
-) -> (EntityId, EntityId, i32, i32, u32) {
+) -> (EntityId, EntityId, i64, i64, u32) {
     let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
     let belt = entity_id_by_name(&sim.world.prototypes, "transport_belt");
     for direction in [

@@ -94,7 +94,10 @@ fn resource_generation_is_deterministic() {
     assert_eq!(resource_tiles(&a), resource_tiles(&b));
 }
 
-fn resource_tiles_in_chunk(world: &WorldSim, coord: ChunkCoord) -> Vec<(i32, i32, ResourceCell)> {
+fn resource_tiles_in_chunk(
+    world: &WorldSim,
+    coord: ChunkCoord,
+) -> Vec<(WorldTileCoord, WorldTileCoord, ResourceCell)> {
     let chunk = world
         .chunks
         .get(&coord)

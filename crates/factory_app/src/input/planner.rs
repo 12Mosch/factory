@@ -1,7 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use factory_sim::SimCommand;
+use factory_sim::{SimCommand, WorldTileCoord};
 
 use crate::build::resources::{BuildPlacementState, PlannerState, PlannerTool};
 use crate::input::panels::world_input_blocked;
@@ -18,14 +18,17 @@ pub(crate) const CLIPBOARD_BLUEPRINT_NAME: &str = "Clipboard";
 /// A normalized drag-selected tile rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TileRect {
-    pub min_x: i32,
-    pub min_y: i32,
-    pub max_x: i32,
-    pub max_y: i32,
+    pub min_x: WorldTileCoord,
+    pub min_y: WorldTileCoord,
+    pub max_x: WorldTileCoord,
+    pub max_y: WorldTileCoord,
 }
 
 impl TileRect {
-    pub(crate) fn from_corners(a: (i32, i32), b: (i32, i32)) -> Self {
+    pub(crate) fn from_corners(
+        a: (WorldTileCoord, WorldTileCoord),
+        b: (WorldTileCoord, WorldTileCoord),
+    ) -> Self {
         Self {
             min_x: a.0.min(b.0),
             min_y: a.1.min(b.1),

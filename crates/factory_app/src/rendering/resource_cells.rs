@@ -28,8 +28,9 @@ pub(crate) struct ResourceRenderSettings {
 pub struct ResourceRenderCache {
     pub last_resource_revision: Option<u64>,
     pub last_visible_revision: u64,
-    pub sprite_entities: HashMap<(i32, i32), Entity>,
-    pub label_entities: HashMap<(i32, i32), Entity>,
+    pub sprite_entities:
+        HashMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), Entity>,
+    pub label_entities: HashMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), Entity>,
     pub show_amount_labels: bool,
 }
 
@@ -136,7 +137,7 @@ fn reconcile_resource_tiles(
     visual_assets: &mut VisualAssets,
     sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    resources: &BTreeMap<(i32, i32), ResourceCell>,
+    resources: &BTreeMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), ResourceCell>,
     ids: RenderPrototypeIds,
     show_amount_labels: bool,
 ) {
@@ -193,9 +194,8 @@ fn apply_resource_tile_change(
     change_context: ResourceTileChangeContext,
 ) {
     let coord = (change.x, change.y);
-    let chunk_coord = factory_sim::ChunkCoord {
-        x: change.x.div_euclid(CHUNK_SIZE),
-        y: change.y.div_euclid(CHUNK_SIZE),
+    let Some(chunk_coord) = factory_sim::ChunkCoord::from_tile(change.x, change.y) else {
+        return;
     };
     if !change_context.visible.chunks.contains(&chunk_coord) {
         if let Some(entity) = cache.sprite_entities.remove(&coord) {
@@ -248,8 +248,8 @@ fn sync_resource_sprite(
     cache: &mut ResourceRenderCache,
     visual_assets: &mut VisualAssets,
     sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    x: i32,
-    y: i32,
+    x: factory_sim::WorldTileCoord,
+    y: factory_sim::WorldTileCoord,
     resource: ResourceCell,
     ids: RenderPrototypeIds,
 ) {
@@ -270,8 +270,8 @@ fn sync_resource_label(
     commands: &mut Commands,
     cache: &mut ResourceRenderCache,
     labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    x: i32,
-    y: i32,
+    x: factory_sim::WorldTileCoord,
+    y: factory_sim::WorldTileCoord,
     resource: ResourceCell,
 ) {
     let coord = (x, y);
@@ -289,8 +289,8 @@ fn sync_resource_label(
 fn spawn_resource_sprite(
     commands: &mut Commands,
     visual_assets: &mut VisualAssets,
-    x: i32,
-    y: i32,
+    x: factory_sim::WorldTileCoord,
+    y: factory_sim::WorldTileCoord,
     color: Color,
 ) -> Entity {
     spawn_resource_visual(
@@ -303,7 +303,12 @@ fn spawn_resource_sprite(
     )
 }
 
-fn spawn_resource_label(commands: &mut Commands, x: i32, y: i32, resource: ResourceCell) -> Entity {
+fn spawn_resource_label(
+    commands: &mut Commands,
+    x: factory_sim::WorldTileCoord,
+    y: factory_sim::WorldTileCoord,
+    resource: ResourceCell,
+) -> Entity {
     commands
         .spawn((
             Text2d::new(format_resource_amount(resource.amount)),
@@ -321,7 +326,7 @@ fn spawn_resource_label(commands: &mut Commands, x: i32, y: i32, resource: Resou
 pub(crate) fn collect_resource_tiles(
     sim: &Simulation,
     visible: &VisibleChunks,
-) -> BTreeMap<(i32, i32), ResourceCell> {
+) -> BTreeMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), ResourceCell> {
     let mut resources = BTreeMap::new();
 
     for coord in &visible.chunks {
@@ -334,8 +339,8 @@ pub(crate) fn collect_resource_tiles(
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
                 resources.insert(
                     (
-                        chunk.coord.x * CHUNK_SIZE + local_x,
-                        chunk.coord.y * CHUNK_SIZE + local_y,
+                        chunk.coord.tile_at(local_x, local_y).0,
+                        chunk.coord.tile_at(local_x, local_y).1,
                     ),
                     resource,
                 );

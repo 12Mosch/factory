@@ -191,7 +191,7 @@ pub(crate) fn update_build_placement_preview_state(
 
 fn preview_tile_color(
     preview: &factory_sim::BuildPlacementPreview,
-    tile: (i32, i32),
+    tile: (factory_sim::WorldTileCoord, factory_sim::WorldTileCoord),
     is_footprint_tile: bool,
 ) -> Color {
     if preview.issues.iter().any(|issue| issue.tile == Some(tile)) {

@@ -5,7 +5,7 @@ pub(in crate::simulation::tests) fn first_manual_mining_reach_tile(
     sim: &Simulation,
     target_x: i32,
     target_y: i32,
-) -> (i32, i32) {
+) -> (WorldTileCoord, WorldTileCoord) {
     for dy in -2..=2 {
         for dx in -2..=2 {
             if dx * dx + dy * dy > 4 {
@@ -44,7 +44,7 @@ pub(in crate::simulation::tests) fn first_buildable_rect_without_resource(
     world: &WorldSim,
     width: i32,
     height: i32,
-) -> (i32, i32) {
+) -> (WorldTileCoord, WorldTileCoord) {
     for chunk in world.chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
             let (x, y) = tile_coord(chunk, index);
@@ -71,7 +71,9 @@ pub(in crate::simulation::tests) fn first_buildable_rect_without_resource(
     panic!("expected buildable area without resources");
 }
 
-pub(in crate::simulation::tests) fn first_water_tile(world: &WorldSim) -> (i32, i32) {
+pub(in crate::simulation::tests) fn first_water_tile(
+    world: &WorldSim,
+) -> (WorldTileCoord, WorldTileCoord) {
     for chunk in world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
             if !tile.collision.buildable {
@@ -92,7 +94,7 @@ pub(in crate::simulation::tests) fn first_buildable_rect(
     world: &WorldSim,
     width: i32,
     height: i32,
-) -> (i32, i32) {
+) -> (WorldTileCoord, WorldTileCoord) {
     for chunk in world.chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
@@ -117,7 +119,7 @@ pub(in crate::simulation::tests) fn first_buildable_rect(
 
 pub(in crate::simulation::tests) fn first_player_approach_to_water(
     sim: &Simulation,
-) -> ((i32, i32), (f32, f32)) {
+) -> ((WorldTileCoord, WorldTileCoord), (f32, f32)) {
     for chunk in sim.world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
             if tile.collision.walkable {
@@ -139,7 +141,7 @@ pub(in crate::simulation::tests) fn first_player_approach_to_water(
 
 pub(in crate::simulation::tests) fn first_player_approach_to_streamed_walkable_tile(
     sim: &Simulation,
-) -> ((i32, i32), (f32, f32), ChunkCoord) {
+) -> ((WorldTileCoord, WorldTileCoord), (f32, f32), ChunkCoord) {
     for chunk in sim.world.chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
             let (x, y) = tile_coord(chunk, index);
@@ -175,7 +177,7 @@ pub(in crate::simulation::tests) fn first_player_approach_to_streamed_walkable_t
 
 pub(in crate::simulation::tests) fn first_player_approach_to_occupied_tile(
     sim: &mut Simulation,
-) -> ((i32, i32), (f32, f32)) {
+) -> ((WorldTileCoord, WorldTileCoord), (f32, f32)) {
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
 
     for (x, y) in all_tile_coords(&sim.world) {
@@ -216,7 +218,10 @@ pub(in crate::simulation::tests) fn first_player_approach_to_occupied_tile(
 
 pub(in crate::simulation::tests) fn first_player_slide_fixture(
     sim: &mut Simulation,
-) -> ((i32, i32), (i32, i32)) {
+) -> (
+    (WorldTileCoord, WorldTileCoord),
+    (WorldTileCoord, WorldTileCoord),
+) {
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
 
     for (x, y) in all_tile_coords(&sim.world) {
@@ -253,7 +258,10 @@ pub(in crate::simulation::tests) fn first_player_slide_fixture(
     panic!("expected a slide fixture with an occupied x-axis target and open y-axis target");
 }
 
-pub(in crate::simulation::tests) fn tile_coord(chunk: &Chunk, index: usize) -> (i32, i32) {
+pub(in crate::simulation::tests) fn tile_coord(
+    chunk: &Chunk,
+    index: usize,
+) -> (WorldTileCoord, WorldTileCoord) {
     let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
     let local_y = (index as i32).div_euclid(CHUNK_SIZE);
     (
@@ -262,7 +270,9 @@ pub(in crate::simulation::tests) fn tile_coord(chunk: &Chunk, index: usize) -> (
     )
 }
 
-pub(in crate::simulation::tests) fn all_tile_coords(world: &WorldSim) -> Vec<(i32, i32)> {
+pub(in crate::simulation::tests) fn all_tile_coords(
+    world: &WorldSim,
+) -> Vec<(WorldTileCoord, WorldTileCoord)> {
     world
         .chunks
         .values()
@@ -280,7 +290,7 @@ pub(in crate::simulation::tests) fn first_placeable_entity_tile(
     sim: &Simulation,
     prototype_id: EntityPrototypeId,
     direction: Direction,
-) -> (i32, i32) {
+) -> (WorldTileCoord, WorldTileCoord) {
     for (x, y) in all_tile_coords(&sim.world) {
         if crate::placement::validate(
             sim,
@@ -303,8 +313,8 @@ pub(in crate::simulation::tests) fn first_placeable_entity_tile(
 pub(in crate::simulation::tests) fn place_at(
     sim: &mut Simulation,
     prototype_id: EntityPrototypeId,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
     direction: Direction,
 ) -> EntityId {
     crate::placement::place(
@@ -319,5 +329,5 @@ pub(in crate::simulation::tests) fn place_at(
     .expect("test entity should be placeable")
 }
 
-pub(in crate::simulation::tests) const CARDINAL_DIRECTIONS: [(i32, i32); 4] =
+pub(in crate::simulation::tests) const CARDINAL_DIRECTIONS: [(WorldTileCoord, WorldTileCoord); 4] =
     [(1, 0), (-1, 0), (0, 1), (0, -1)];

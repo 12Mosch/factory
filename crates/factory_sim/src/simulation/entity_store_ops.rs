@@ -317,7 +317,13 @@ impl EntityStore {
 }
 
 impl EntityFootprint {
-    pub fn from_size(x: i32, y: i32, width: i32, height: i32, direction: Direction) -> Self {
+    pub fn from_size(
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+        width: i32,
+        height: i32,
+        direction: Direction,
+    ) -> Self {
         let (width, height) = match direction {
             Direction::North | Direction::South => (width, height),
             Direction::East | Direction::West => (height, width),
@@ -342,11 +348,11 @@ impl EntityFootprint {
         }
     }
 
-    pub fn tiles(&self) -> Vec<(i32, i32)> {
+    pub fn tiles(&self) -> Vec<(WorldTileCoord, WorldTileCoord)> {
         let mut tiles = Vec::with_capacity((self.width * self.height) as usize);
 
-        for y in self.y..self.y + self.height {
-            for x in self.x..self.x + self.width {
+        for y in self.y..self.y + i64::from(self.height) {
+            for x in self.x..self.x + i64::from(self.width) {
                 tiles.push((x, y));
             }
         }
@@ -354,8 +360,11 @@ impl EntityFootprint {
         tiles
     }
 
-    pub fn contains_tile(&self, x: i32, y: i32) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    pub fn contains_tile(&self, x: WorldTileCoord, y: WorldTileCoord) -> bool {
+        x >= self.x
+            && x < self.x + i64::from(self.width)
+            && y >= self.y
+            && y < self.y + i64::from(self.height)
     }
 }
 
@@ -372,23 +381,27 @@ impl OccupancyGrid {
         self.occupied_tiles.is_empty()
     }
 
-    pub fn entity_at(&self, x: i32, y: i32) -> Option<EntityId> {
-        self.occupied_tiles.get(&(x, y)).copied()
+    pub fn entity_at<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &self,
+        x: X,
+        y: Y,
+    ) -> Option<EntityId> {
+        self.occupied_tiles.get(&(x.into(), y.into())).copied()
     }
 
     pub fn entity_ids_in_tile_rect(
         &self,
-        min_x: i32,
-        max_x: i32,
-        min_y: i32,
-        max_y: i32,
+        min_x: WorldTileCoord,
+        max_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_y: WorldTileCoord,
     ) -> BTreeSet<EntityId> {
         if min_x > max_x || min_y > max_y {
             return BTreeSet::new();
         }
 
         self.occupied_tiles
-            .range((min_x, i32::MIN)..=(max_x, i32::MAX))
+            .range((min_x, i64::MIN)..=(max_x, i64::MAX))
             .filter_map(|(&(x, y), &entity_id)| {
                 (x >= min_x && x <= max_x && y >= min_y && y <= max_y).then_some(entity_id)
             })

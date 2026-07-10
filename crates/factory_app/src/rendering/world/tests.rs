@@ -431,7 +431,7 @@ fn visible_for_chunks<const N: usize>(chunks: [ChunkCoord; N]) -> VisibleChunks 
     }
 }
 
-fn resource_coord_in_chunk(coord: ChunkCoord, chunk: &factory_sim::Chunk) -> Option<(i32, i32)> {
+fn resource_coord_in_chunk(coord: ChunkCoord, chunk: &factory_sim::Chunk) -> Option<(i64, i64)> {
     chunk.tiles.iter().enumerate().find_map(|(index, tile)| {
         tile.resource.map(|_| {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
@@ -831,7 +831,7 @@ fn place_entities(
     );
 }
 
-fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i32, i32)> {
+fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i64, i64)> {
     let mut chunks = sim.world().chunks.keys().copied().collect::<Vec<_>>();
     chunks.sort_unstable();
     chunks
@@ -853,7 +853,7 @@ fn first_placeable_tile_in_chunk(
     sim: &Simulation,
     coord: ChunkCoord,
     prototype_id: factory_data::EntityPrototypeId,
-) -> Option<(i32, i32)> {
+) -> Option<(i64, i64)> {
     for y in coord.y * CHUNK_SIZE..(coord.y + 1) * CHUNK_SIZE {
         for x in coord.x * CHUNK_SIZE..(coord.x + 1) * CHUNK_SIZE {
             if factory_sim::placement::validate(

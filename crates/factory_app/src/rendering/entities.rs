@@ -112,8 +112,8 @@ fn visible_entity_ids_for_chunks(sim: &Simulation, visible: &VisibleChunks) -> H
     let Some(bounds) = visible.tile_bounds else {
         return HashSet::new();
     };
-    let max_x = bounds.min_x + bounds.width as i32 - 1;
-    let max_y = bounds.min_y + bounds.height as i32 - 1;
+    let max_x = bounds.min_x + i64::from(bounds.width) - 1;
+    let max_y = bounds.min_y + i64::from(bounds.height) - 1;
     sim.entities()
         .occupancy()
         .entity_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y)

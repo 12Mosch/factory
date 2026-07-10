@@ -58,8 +58,8 @@ impl MapRasterizer<'_> {
         for (index, tile) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let world_x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let world_y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let world_x = chunk.coord.tile_at(local_x, 0).0;
+            let world_y = chunk.coord.tile_at(0, local_y).1;
             let color = self.painter.pixel_for_tile(tile, revealed);
             set_world_pixel(data, bounds, world_x, world_y, color);
         }
@@ -69,10 +69,9 @@ impl MapRasterizer<'_> {
         }
     }
 
-    pub(super) fn repaint_tile(&self, data: &mut [u8], bounds: MapTextureBounds, x: i32, y: i32) {
-        let coord = ChunkCoord {
-            x: x.div_euclid(CHUNK_SIZE),
-            y: y.div_euclid(CHUNK_SIZE),
+    pub(super) fn repaint_tile(&self, data: &mut [u8], bounds: MapTextureBounds, x: i64, y: i64) {
+        let Some(coord) = ChunkCoord::from_tile(x, y) else {
+            return;
         };
         if let Some(tile) = self.sim.world().tile_at(x, y) {
             let revealed = self.chunk_paint_state(coord).revealed;
@@ -81,7 +80,8 @@ impl MapRasterizer<'_> {
         }
 
         if self.settings.show_chunk_grid
-            && (x.rem_euclid(CHUNK_SIZE) == 0 || y.rem_euclid(CHUNK_SIZE) == 0)
+            && (x.rem_euclid(i64::from(CHUNK_SIZE)) == 0
+                || y.rem_euclid(i64::from(CHUNK_SIZE)) == 0)
         {
             set_world_pixel(data, bounds, x, y, super::pixels::GRID_PIXEL);
         }

@@ -22,8 +22,14 @@ impl WorldSim {
         )
     }
 
-    pub fn tile_at(&self, x: i32, y: i32) -> Option<&TileCell> {
-        let (coord, index) = chunk_coord_and_tile_index(x, y);
+    pub fn tile_at<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &self,
+        x: X,
+        y: Y,
+    ) -> Option<&TileCell> {
+        let x = x.into();
+        let y = y.into();
+        let (coord, index) = chunk_coord_and_tile_index(x, y)?;
 
         self.chunks
             .get(&coord)
@@ -42,19 +48,40 @@ impl WorldSim {
         true
     }
 
-    pub fn ensure_chunks_around_chunk(&mut self, center: ChunkCoord, radius: i32) -> usize {
-        let radius = radius.max(0);
+    pub fn ensure_chunks_around_chunk(
+        &mut self,
+        center: ChunkCoord,
+        radius: i32,
+    ) -> Result<usize, ChunkNeighborhoodError> {
+        let radius = i64::from(radius.max(0));
+        let min_x = i64::from(center.x) - radius;
+        let max_x = i64::from(center.x) + radius;
+        let min_y = i64::from(center.y) - radius;
+        let max_y = i64::from(center.y) + radius;
+        if min_x < i64::from(i32::MIN)
+            || max_x > i64::from(i32::MAX)
+            || min_y < i64::from(i32::MIN)
+            || max_y > i64::from(i32::MAX)
+        {
+            return Err(ChunkNeighborhoodError::OutOfChunkCoordinateRange {
+                center,
+                radius: radius as i32,
+            });
+        }
         let mut generated = 0;
 
-        for y in center.y - radius..=center.y + radius {
-            for x in center.x - radius..=center.x + radius {
-                if self.ensure_chunk_generated(ChunkCoord { x, y }) {
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                if self.ensure_chunk_generated(ChunkCoord {
+                    x: x as i32,
+                    y: y as i32,
+                }) {
                     generated += 1;
                 }
             }
         }
 
-        generated
+        Ok(generated)
     }
 
     pub fn chunk_revision(&self) -> u64 {
@@ -67,8 +94,8 @@ impl WorldSim {
 
     pub(super) fn tile_at_profiled<P: TickProfiler>(
         &self,
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
         profiler: &mut P,
     ) -> Option<&TileCell> {
         profiler.measure(ProfilePhase::ChunkLookup, || self.tile_at(x, y))
@@ -103,7 +130,14 @@ impl WorldSim {
         )
     }
 
-    pub fn mine_resource_at(&mut self, x: i32, y: i32, amount: u32) -> Option<MinedResource> {
+    pub fn mine_resource_at<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &mut self,
+        x: X,
+        y: Y,
+        amount: u32,
+    ) -> Option<MinedResource> {
+        let x = x.into();
+        let y = y.into();
         if amount == 0 {
             return None;
         }
@@ -121,8 +155,8 @@ impl WorldSim {
 
     pub(super) fn mine_resource_at_profiled<P: TickProfiler>(
         &mut self,
-        x: i32,
-        y: i32,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
         amount: u32,
         profiler: &mut P,
     ) -> Option<MinedResource> {
@@ -141,7 +175,13 @@ impl WorldSim {
         Some(mined)
     }
 
-    pub fn can_build_on_tile(&self, x: i32, y: i32) -> Result<(), BuildError> {
+    pub fn can_build_on_tile<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &self,
+        x: X,
+        y: Y,
+    ) -> Result<(), BuildError> {
+        let x = x.into();
+        let y = y.into();
         let tile = self
             .tile_at(x, y)
             .ok_or(BuildError::OutsideGeneratedChunks { x, y })?;
@@ -153,13 +193,15 @@ impl WorldSim {
         }
     }
 
-    pub fn entity_footprint(
+    pub fn entity_footprint<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
         &self,
         prototype_id: EntityPrototypeId,
-        x: i32,
-        y: i32,
+        x: X,
+        y: Y,
         direction: Direction,
     ) -> Result<EntityFootprint, BuildError> {
+        let x = x.into();
+        let y = y.into();
         let prototype = self
             .prototypes
             .entity(prototype_id)
@@ -260,15 +302,24 @@ impl WorldSim {
         Ok(())
     }
 
-    pub(super) fn tile_at_mut(&mut self, x: i32, y: i32) -> Option<&mut TileCell> {
-        let (coord, index) = chunk_coord_and_tile_index(x, y);
+    pub(super) fn tile_at_mut(
+        &mut self,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) -> Option<&mut TileCell> {
+        let (coord, index) = chunk_coord_and_tile_index(x, y)?;
 
         self.chunks
             .get_mut(&coord)
             .and_then(|chunk| chunk.tiles.get_mut(index))
     }
 
-    fn record_resource_tile_change(&mut self, x: i32, y: i32, resource: Option<ResourceCell>) {
+    fn record_resource_tile_change(
+        &mut self,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+        resource: Option<ResourceCell>,
+    ) {
         self.resource_revision = self.resource_revision.wrapping_add(1);
         self.resource_dirty_tiles.push_back(ResourceTileChange {
             revision: self.resource_revision,
@@ -290,18 +341,18 @@ pub(super) fn is_water_like_tile(tile: &TileCell) -> bool {
 pub(super) fn offshore_pump_water_tiles(
     footprint: &EntityFootprint,
     direction: Direction,
-) -> Vec<(i32, i32)> {
+) -> Vec<(WorldTileCoord, WorldTileCoord)> {
     match direction {
-        Direction::North => (footprint.x..footprint.x + footprint.width)
+        Direction::North => (footprint.x..footprint.x + i64::from(footprint.width))
             .map(|x| (x, footprint.y - 1))
             .collect(),
-        Direction::East => (footprint.y..footprint.y + footprint.height)
-            .map(|y| (footprint.x + footprint.width, y))
+        Direction::East => (footprint.y..footprint.y + i64::from(footprint.height))
+            .map(|y| (footprint.x + i64::from(footprint.width), y))
             .collect(),
-        Direction::South => (footprint.x..footprint.x + footprint.width)
-            .map(|x| (x, footprint.y + footprint.height))
+        Direction::South => (footprint.x..footprint.x + i64::from(footprint.width))
+            .map(|x| (x, footprint.y + i64::from(footprint.height)))
             .collect(),
-        Direction::West => (footprint.y..footprint.y + footprint.height)
+        Direction::West => (footprint.y..footprint.y + i64::from(footprint.height))
             .map(|y| (footprint.x - 1, y))
             .collect(),
     }
@@ -328,16 +379,17 @@ fn mine_resource_from_tile(
     Some(mined)
 }
 
-pub(super) fn chunk_coord_and_tile_index(x: i32, y: i32) -> (ChunkCoord, usize) {
-    let coord = ChunkCoord {
-        x: x.div_euclid(CHUNK_SIZE),
-        y: y.div_euclid(CHUNK_SIZE),
-    };
-    let local_x = x.rem_euclid(CHUNK_SIZE) as usize;
-    let local_y = y.rem_euclid(CHUNK_SIZE) as usize;
+pub(super) fn chunk_coord_and_tile_index(
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+) -> Option<(ChunkCoord, usize)> {
+    let coord = ChunkCoord::from_tile(x, y)?;
+    let size = i64::from(CHUNK_SIZE);
+    let local_x = x.rem_euclid(size) as usize;
+    let local_y = y.rem_euclid(size) as usize;
     let index = local_y * CHUNK_SIZE as usize + local_x;
 
-    (coord, index)
+    Some((coord, index))
 }
 
 pub(super) fn find_player_start(
@@ -376,25 +428,52 @@ pub(super) fn find_player_start(
     None
 }
 
-pub(super) fn world_tile_bounds(world: &WorldSim) -> Option<(i32, i32, i32, i32)> {
+pub(super) fn world_tile_bounds(
+    world: &WorldSim,
+) -> Option<(
+    WorldTileCoord,
+    WorldTileCoord,
+    WorldTileCoord,
+    WorldTileCoord,
+)> {
     let min_chunk_x = world.chunks.keys().map(|coord| coord.x).min()?;
     let max_chunk_x = world.chunks.keys().map(|coord| coord.x).max()?;
     let min_chunk_y = world.chunks.keys().map(|coord| coord.y).min()?;
     let max_chunk_y = world.chunks.keys().map(|coord| coord.y).max()?;
 
     Some((
-        min_chunk_x * CHUNK_SIZE,
-        max_chunk_x * CHUNK_SIZE + CHUNK_SIZE - 1,
-        min_chunk_y * CHUNK_SIZE,
-        max_chunk_y * CHUNK_SIZE + CHUNK_SIZE - 1,
+        ChunkCoord {
+            x: min_chunk_x,
+            y: min_chunk_y,
+        }
+        .min_tile()
+        .0,
+        ChunkCoord {
+            x: max_chunk_x,
+            y: max_chunk_y,
+        }
+        .min_tile()
+        .0 + i64::from(CHUNK_SIZE - 1),
+        ChunkCoord {
+            x: min_chunk_x,
+            y: min_chunk_y,
+        }
+        .min_tile()
+        .1,
+        ChunkCoord {
+            x: max_chunk_x,
+            y: max_chunk_y,
+        }
+        .min_tile()
+        .1 + i64::from(CHUNK_SIZE - 1),
     ))
 }
 
 pub(super) fn player_can_occupy_tile(
     world: &WorldSim,
     occupancy: &OccupancyGrid,
-    x: i32,
-    y: i32,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
 ) -> bool {
     let Some(tile) = world.tile_at(x, y) else {
         return false;
@@ -407,12 +486,17 @@ pub(super) fn tiles_to_fixed(tiles: f32) -> i64 {
     (tiles * PLAYER_POSITION_SCALE as f32).round() as i64
 }
 
-pub(super) fn fixed_to_tile(value: i64) -> i32 {
-    value.div_euclid(PLAYER_POSITION_SCALE) as i32
+pub(super) fn fixed_to_tile(value: i64) -> WorldTileCoord {
+    value.div_euclid(PLAYER_POSITION_SCALE)
 }
 
-pub(super) fn tile_center_fixed(tile: i32) -> i64 {
-    i64::from(tile) * PLAYER_POSITION_SCALE + PLAYER_POSITION_SCALE / 2
+pub(super) fn tile_center_fixed(tile: WorldTileCoord) -> i64 {
+    tile * PLAYER_POSITION_SCALE + PLAYER_POSITION_SCALE / 2
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChunkNeighborhoodError {
+    OutOfChunkCoordinateRange { center: ChunkCoord, radius: i32 },
 }
 
 #[cfg(test)]

@@ -3,8 +3,8 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EntityPlacementRequest {
     pub prototype_id: EntityPrototypeId,
-    pub x: i32,
-    pub y: i32,
+    pub x: WorldTileCoord,
+    pub y: WorldTileCoord,
     pub direction: Direction,
 }
 
@@ -12,8 +12,8 @@ pub struct EntityPlacementRequest {
 pub struct PlayerPlacementRequest {
     pub prototype_id: EntityPrototypeId,
     pub item_id: ItemId,
-    pub x: i32,
-    pub y: i32,
+    pub x: WorldTileCoord,
+    pub y: WorldTileCoord,
     pub direction: Direction,
 }
 

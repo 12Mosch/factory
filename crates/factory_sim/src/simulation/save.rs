@@ -3,7 +3,7 @@ use bincode::Options;
 
 // Save version 9 intentionally invalidates older saves: construction planning
 // became part of deterministic simulation state and no v8 migration is kept.
-pub const SAVE_VERSION: u32 = 10;
+pub const SAVE_VERSION: u32 = 11;
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 7;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";

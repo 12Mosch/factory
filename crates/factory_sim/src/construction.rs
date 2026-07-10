@@ -30,8 +30,8 @@ impl GhostId {
 pub struct GhostEntity {
     pub id: GhostId,
     pub prototype_id: EntityPrototypeId,
-    pub x: i32,
-    pub y: i32,
+    pub x: crate::world::WorldTileCoord,
+    pub y: crate::world::WorldTileCoord,
     pub direction: Direction,
     pub footprint: EntityFootprint,
     /// Recipe to preselect when the ghost is built, captured from blueprints
@@ -88,7 +88,8 @@ impl Blueprint {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ConstructionState {
     pub(crate) ghosts: BTreeMap<GhostId, GhostEntity>,
-    pub(crate) ghost_occupancy: BTreeMap<(i32, i32), GhostId>,
+    pub(crate) ghost_occupancy:
+        BTreeMap<(crate::world::WorldTileCoord, crate::world::WorldTileCoord), GhostId>,
     pub(crate) deconstruction_marks: BTreeSet<EntityId>,
     pub(crate) queue: VecDeque<ConstructionJob>,
     pub(crate) blueprints: Vec<Blueprint>,
@@ -121,24 +122,28 @@ impl ConstructionState {
         self.ghosts.len()
     }
 
-    pub fn ghost_at(&self, x: i32, y: i32) -> Option<&GhostEntity> {
+    pub fn ghost_at(
+        &self,
+        x: crate::world::WorldTileCoord,
+        y: crate::world::WorldTileCoord,
+    ) -> Option<&GhostEntity> {
         let ghost_id = self.ghost_occupancy.get(&(x, y))?;
         self.ghosts.get(ghost_id)
     }
 
     pub fn ghost_ids_in_tile_rect(
         &self,
-        min_x: i32,
-        max_x: i32,
-        min_y: i32,
-        max_y: i32,
+        min_x: crate::world::WorldTileCoord,
+        max_x: crate::world::WorldTileCoord,
+        min_y: crate::world::WorldTileCoord,
+        max_y: crate::world::WorldTileCoord,
     ) -> BTreeSet<GhostId> {
         if min_x > max_x || min_y > max_y {
             return BTreeSet::new();
         }
 
         self.ghost_occupancy
-            .range((min_x, i32::MIN)..=(max_x, i32::MAX))
+            .range((min_x, i64::MIN)..=(max_x, i64::MAX))
             .filter_map(|(&(x, y), &ghost_id)| {
                 (x >= min_x && x <= max_x && y >= min_y && y <= max_y).then_some(ghost_id)
             })
@@ -176,10 +181,18 @@ pub enum ConstructionError {
     Build(BuildError),
     PlayerBuild(PlayerBuildError),
     Destroy(EntityDestroyError),
-    EntityLocked { prototype_id: EntityPrototypeId },
-    GhostOccupied { x: i32, y: i32, ghost_id: GhostId },
+    EntityLocked {
+        prototype_id: EntityPrototypeId,
+    },
+    GhostOccupied {
+        x: crate::world::WorldTileCoord,
+        y: crate::world::WorldTileCoord,
+        ghost_id: GhostId,
+    },
     MissingGhost(GhostId),
     NotMarkedForDeconstruction(EntityId),
     EmptyBlueprintArea,
-    MissingBlueprint { index: usize },
+    MissingBlueprint {
+        index: usize,
+    },
 }

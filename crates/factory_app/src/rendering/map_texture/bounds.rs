@@ -36,9 +36,27 @@ pub(super) fn chunk_texture_bounds(
     }
 
     Some(MapTextureBounds {
-        min_x: min_chunk_x * CHUNK_SIZE,
-        min_y: min_chunk_y * CHUNK_SIZE,
-        width: ((max_chunk_x - min_chunk_x + 1) * CHUNK_SIZE) as u32,
-        height: ((max_chunk_y - min_chunk_y + 1) * CHUNK_SIZE) as u32,
+        min_x: ChunkCoord {
+            x: min_chunk_x,
+            y: min_chunk_y,
+        }
+        .min_tile()
+        .0,
+        min_y: ChunkCoord {
+            x: min_chunk_x,
+            y: min_chunk_y,
+        }
+        .min_tile()
+        .1,
+        width: u32::try_from(
+            (i64::from(max_chunk_x) - i64::from(min_chunk_x) + 1) * i64::from(CHUNK_SIZE),
+        )
+        .ok()?
+        .min(crate::map::resources::MAX_MAP_TEXTURE_SIDE_TILES),
+        height: u32::try_from(
+            (i64::from(max_chunk_y) - i64::from(min_chunk_y) + 1) * i64::from(CHUNK_SIZE),
+        )
+        .ok()?
+        .min(crate::map::resources::MAX_MAP_TEXTURE_SIDE_TILES),
     })
 }

@@ -1,6 +1,7 @@
 use crate::entities::store::{EntityStore, for_each_entity_state_map};
 use crate::entities::{Direction, EntityFootprint};
 use crate::ids::EntityId;
+use crate::world::WorldTileCoord;
 use factory_data::EntityPrototypeId;
 
 macro_rules! define_entity_reservation {
@@ -13,8 +14,8 @@ macro_rules! define_entity_reservation {
         /// when the registry gains a new state map.
         pub(crate) struct EntityReservation {
             pub(crate) prototype_id: EntityPrototypeId,
-            pub(crate) x: i32,
-            pub(crate) y: i32,
+            pub(crate) x: WorldTileCoord,
+            pub(crate) y: WorldTileCoord,
             pub(crate) direction: Direction,
             pub(crate) footprint: EntityFootprint,
             $(pub(crate) $field: Option<$ty>,)*

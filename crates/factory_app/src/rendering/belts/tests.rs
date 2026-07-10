@@ -287,7 +287,7 @@ fn first_placeable_tile(
     sim: &Simulation,
     prototype_id: EntityPrototypeId,
     direction: Direction,
-) -> (i32, i32) {
+) -> (i64, i64) {
     for chunk in sim.world().chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);

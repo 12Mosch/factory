@@ -107,8 +107,8 @@ pub struct SimEntity {
 pub struct PlacedEntity {
     pub id: EntityId,
     pub prototype_id: EntityPrototypeId,
-    pub x: i32,
-    pub y: i32,
+    pub x: crate::world::WorldTileCoord,
+    pub y: crate::world::WorldTileCoord,
     pub direction: Direction,
     pub footprint: EntityFootprint,
 }
@@ -173,7 +173,7 @@ mod tests {
 
         for raw in 1..=15 {
             let id = EntityId::new(raw);
-            let tile = raw as i32;
+            let tile = raw as i64;
             store.entities.push(SimEntity {
                 id,
                 x: i64::from(tile) * 1024,

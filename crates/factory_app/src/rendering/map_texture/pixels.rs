@@ -12,8 +12,8 @@ pub struct MapPixels {
 pub(super) fn set_world_pixel(
     data: &mut [u8],
     bounds: MapTextureBounds,
-    x: i32,
-    y: i32,
+    x: i64,
+    y: i64,
     pixel: [u8; 4],
 ) {
     let local_x = x - bounds.min_x;
@@ -31,7 +31,7 @@ pub(super) fn set_world_pixel(
     data[offset..offset + 4].copy_from_slice(&pixel);
 }
 
-pub(super) fn pixel_offset(bounds: MapTextureBounds, x: i32, y: i32) -> usize {
+pub(super) fn pixel_offset(bounds: MapTextureBounds, x: i64, y: i64) -> usize {
     let local_x = (x - bounds.min_x) as u32;
     let local_y = (y - bounds.min_y) as u32;
     let flipped_y = bounds.height - 1 - local_y;

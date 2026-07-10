@@ -43,13 +43,13 @@ pub(in crate::simulation) fn first_resource_in_mining_area_profiled<P: TickProfi
 pub(in crate::simulation) fn mining_area_tiles(
     footprint: &EntityFootprint,
     mining_drill: &factory_data::MiningDrillPrototype,
-) -> Vec<(i32, i32)> {
+) -> Vec<(WorldTileCoord, WorldTileCoord)> {
     let width = mining_drill.mining_area.x.min(footprint.width).max(0);
     let height = mining_drill.mining_area.y.min(footprint.height).max(0);
     let mut tiles = Vec::with_capacity((width * height) as usize);
 
-    for y in footprint.y..footprint.y + height {
-        for x in footprint.x..footprint.x + width {
+    for y in footprint.y..footprint.y + i64::from(height) {
+        for x in footprint.x..footprint.x + i64::from(width) {
             tiles.push((x, y));
         }
     }
@@ -84,23 +84,25 @@ pub(in crate::simulation) fn drill_output_target(
     }
 }
 
-pub(in crate::simulation) fn drill_output_tile(placed: &PlacedEntity) -> (i32, i32) {
+pub(in crate::simulation) fn drill_output_tile(
+    placed: &PlacedEntity,
+) -> (WorldTileCoord, WorldTileCoord) {
     match placed.direction {
         Direction::North => (
-            placed.footprint.x + placed.footprint.width / 2,
-            placed.footprint.y + placed.footprint.height,
+            placed.footprint.x + i64::from(placed.footprint.width / 2),
+            placed.footprint.y + i64::from(placed.footprint.height),
         ),
         Direction::East => (
-            placed.footprint.x + placed.footprint.width,
-            placed.footprint.y + placed.footprint.height / 2,
+            placed.footprint.x + i64::from(placed.footprint.width),
+            placed.footprint.y + i64::from(placed.footprint.height / 2),
         ),
         Direction::South => (
-            placed.footprint.x + placed.footprint.width / 2,
+            placed.footprint.x + i64::from(placed.footprint.width / 2),
             placed.footprint.y - 1,
         ),
         Direction::West => (
             placed.footprint.x - 1,
-            placed.footprint.y + placed.footprint.height / 2,
+            placed.footprint.y + i64::from(placed.footprint.height / 2),
         ),
     }
 }

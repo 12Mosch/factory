@@ -155,12 +155,16 @@ impl Simulation {
 
     pub(super) fn reveal_chunks_around_player(&mut self) {
         let (tile_x, tile_y) = self.player.tile_position();
-        let player_chunk = ChunkCoord {
-            x: tile_x.div_euclid(CHUNK_SIZE),
-            y: tile_y.div_euclid(CHUNK_SIZE),
+        let Some(player_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
+            return;
         };
-        self.world
-            .ensure_chunks_around_chunk(player_chunk, CHART_REVEAL_RADIUS_CHUNKS);
+        if self
+            .world
+            .ensure_chunks_around_chunk(player_chunk, CHART_REVEAL_RADIUS_CHUNKS)
+            .is_err()
+        {
+            return;
+        }
 
         let mut revealed_any = false;
         for y in player_chunk.y - CHART_REVEAL_RADIUS_CHUNKS

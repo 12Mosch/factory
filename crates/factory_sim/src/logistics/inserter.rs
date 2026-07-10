@@ -12,8 +12,8 @@ pub enum InserterState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct InserterTransferPreview {
-    pub pickup_tile: (i32, i32),
-    pub drop_tile: (i32, i32),
+    pub pickup_tile: (crate::world::WorldTileCoord, crate::world::WorldTileCoord),
+    pub drop_tile: (crate::world::WorldTileCoord, crate::world::WorldTileCoord),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

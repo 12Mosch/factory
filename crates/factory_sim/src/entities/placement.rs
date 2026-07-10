@@ -5,10 +5,23 @@ use factory_data::{EntityPrototypeId, ItemId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildError {
     MissingPrototype(EntityPrototypeId),
-    InvalidFootprint { width: i32, height: i32 },
-    OutsideGeneratedChunks { x: i32, y: i32 },
-    TileBlocked { x: i32, y: i32 },
-    EntityOccupied { x: i32, y: i32, entity_id: EntityId },
+    InvalidFootprint {
+        width: i32,
+        height: i32,
+    },
+    OutsideGeneratedChunks {
+        x: crate::world::WorldTileCoord,
+        y: crate::world::WorldTileCoord,
+    },
+    TileBlocked {
+        x: crate::world::WorldTileCoord,
+        y: crate::world::WorldTileCoord,
+    },
+    EntityOccupied {
+        x: crate::world::WorldTileCoord,
+        y: crate::world::WorldTileCoord,
+        entity_id: EntityId,
+    },
     MissingEntity(EntityId),
 }
 
@@ -49,7 +62,7 @@ impl BuildPlacementPreview {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildPlacementIssue {
-    pub tile: Option<(i32, i32)>,
+    pub tile: Option<(crate::world::WorldTileCoord, crate::world::WorldTileCoord)>,
     pub kind: BuildPlacementIssueKind,
 }
 
