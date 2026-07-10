@@ -120,6 +120,10 @@ pub(super) fn generate_terrain(
             rules.noise_scale,
             rules.noise_octaves,
         );
+        let field = match &rules.spawn_bias {
+            Some(bias) => bias.apply(x, y, field),
+            None => field,
+        };
         let terrain_roll = (field * rules.terrain_total_weight) >> NOISE_ONE_BITS;
         let mut cumulative_weight = 0;
         for layer in &rules.terrain {
@@ -207,6 +211,121 @@ fn smoothstep_q16(t: u64) -> u64 {
 /// Linear interpolation between Q16 values `a` and `b` by Q16 factor `t`.
 fn lerp_q16(a: u64, b: u64, t: u64) -> u64 {
     (a * (NOISE_ONE - t) + b * t) >> NOISE_ONE_BITS
+}
+
+/// Minimum full-strength spawn bias radius in tiles, so the spawn tile sits
+/// on open ground even when no starting patches are configured.
+const SPAWN_LAND_MIN_RADIUS: i64 = 8;
+
+/// Radial terrain bias that guarantees open ground around the spawn point.
+///
+/// Within `inner_radius` tiles of the origin the noise field is clamped into
+/// `[min_field, max_field]`, the value range covered by the widest contiguous
+/// run of walkable+buildable terrain bands. That forces the spawn tile and
+/// every starting resource patch onto dry, buildable land for any seed while
+/// keeping the variation between ground bands (shores, grass) intact. Between
+/// `inner_radius` and `outer_radius` the clamp relaxes linearly back to the
+/// full noise range so the guaranteed land blends into the surrounding
+/// coastline. Integer-only, so generation stays deterministic across
+/// platforms.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SpawnTerrainBias {
+    inner_radius: i64,
+    outer_radius: i64,
+    min_field: u64,
+    max_field: u64,
+}
+
+impl SpawnTerrainBias {
+    fn derive(
+        terrain: &[TerrainLayerRule],
+        total_weight: u64,
+        resources: &[ResourceRule],
+        edge_noise: i32,
+        noise_scale: u32,
+    ) -> Option<Self> {
+        if total_weight == 0 {
+            return None;
+        }
+
+        // Widest contiguous run of ground bands in the field's value range.
+        // Zero-weight layers occupy no value range, so they never break a run.
+        let mut cumulative = 0u64;
+        let mut run_start = 0u64;
+        let mut run_weight = 0u64;
+        let mut best: Option<(u64, u64)> = None;
+        for layer in terrain {
+            if layer.collision.walkable && layer.collision.buildable {
+                if run_weight == 0 {
+                    run_start = cumulative;
+                }
+                run_weight += layer.weight;
+            } else if layer.weight > 0 {
+                run_weight = 0;
+            }
+            cumulative += layer.weight;
+            if run_weight > 0 && best.is_none_or(|(start, end)| end - start < run_weight) {
+                best = Some((run_start, run_start + run_weight));
+            }
+        }
+        let (start, end) = best?;
+
+        // Tightest Q16 field range whose band roll stays inside [start, end).
+        let min_field = (start << NOISE_ONE_BITS).div_ceil(total_weight);
+        let max_field = (((end << NOISE_ONE_BITS) - 1) / total_weight).min(NOISE_ONE - 1);
+        if min_field > max_field {
+            return None;
+        }
+
+        // The full-strength zone must reach past every starting patch's noisy
+        // edge; the fade band beyond it spans one base noise wavelength.
+        let mut inner_radius = SPAWN_LAND_MIN_RADIUS;
+        for resource in resources {
+            let Some((x, y)) = resource.starting_patch else {
+                continue;
+            };
+            let distance_sq =
+                (i128::from(x) * i128::from(x) + i128::from(y) * i128::from(y)) as u128;
+            let mut distance = distance_sq.isqrt() as i64;
+            if (distance as u128) * (distance as u128) < distance_sq {
+                distance += 1;
+            }
+            inner_radius =
+                inner_radius.max(distance + i64::from(resource.radius) + i64::from(edge_noise));
+        }
+        let outer_radius = inner_radius + i64::from(noise_scale.max(1));
+
+        Some(Self {
+            inner_radius,
+            outer_radius,
+            min_field,
+            max_field,
+        })
+    }
+
+    fn apply(&self, x: WorldTileCoord, y: WorldTileCoord, field: u64) -> u64 {
+        let dx = i128::from(x);
+        let dy = i128::from(y);
+        let distance_sq = (dx * dx + dy * dy) as u128;
+        let outer = self.outer_radius as u128;
+        if distance_sq >= outer * outer {
+            return field;
+        }
+
+        // Q16 clamp strength: full inside the inner radius, fading linearly
+        // to zero at the outer radius.
+        let distance = distance_sq.isqrt() as i64;
+        let strength = if distance <= self.inner_radius {
+            NOISE_ONE
+        } else {
+            ((self.outer_radius - distance) as u64 * NOISE_ONE)
+                / (self.outer_radius - self.inner_radius) as u64
+        };
+        let lower = (self.min_field * strength) >> NOISE_ONE_BITS;
+        let upper =
+            (NOISE_ONE - 1) - (((NOISE_ONE - 1 - self.max_field) * strength) >> NOISE_ONE_BITS);
+        field.clamp(lower, upper)
+    }
 }
 
 pub(super) fn ground_collision() -> TileCollision {
@@ -464,6 +583,9 @@ pub(super) struct WorldGenRules {
     grid_cell_size: i32,
     grid_jitter: i32,
     edge_noise: i32,
+    /// Derived from the terrain bands and starting patches; `None` when no
+    /// walkable+buildable band exists to bias toward.
+    spawn_bias: Option<SpawnTerrainBias>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -501,7 +623,7 @@ impl WorldGenRules {
             .first()
             .map(|tile| (tile.id, collision_from_mask(&tile.collision_mask)))
             .unwrap_or_else(|| (TileId::new(0), ground_collision()));
-        let resources = config
+        let resources: Vec<ResourceRule> = config
             .resources
             .iter()
             .map(|resource| ResourceRule {
@@ -515,6 +637,13 @@ impl WorldGenRules {
                     .map(|offset| (i64::from(offset.x), i64::from(offset.y))),
             })
             .collect();
+        let spawn_bias = SpawnTerrainBias::derive(
+            &terrain,
+            terrain_total_weight,
+            &resources,
+            config.patch_grid.edge_noise,
+            config.terrain_noise.scale,
+        );
 
         Self {
             terrain,
@@ -527,6 +656,7 @@ impl WorldGenRules {
             grid_cell_size: config.patch_grid.cell_size,
             grid_jitter: config.patch_grid.jitter,
             edge_noise: config.patch_grid.edge_noise,
+            spawn_bias,
         }
     }
 
@@ -654,6 +784,67 @@ mod tests {
                 "seed {seed}: only {clustered_fraction:.3} of water tiles sit in \
                  coherent bodies; terrain looks like salt-and-pepper noise"
             );
+        }
+    }
+
+    #[test]
+    fn spawn_area_terrain_is_open_ground_for_any_seed() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+        let bias = rules
+            .spawn_bias
+            .expect("base catalog should derive a spawn bias");
+        let radius = bias.inner_radius;
+
+        for seed in [0, 42, 123, 8675309, 0xdead_beef] {
+            for y in -radius..=radius {
+                for x in -radius..=radius {
+                    if x * x + y * y > radius * radius {
+                        continue;
+                    }
+                    let (_, collision) = generate_terrain(seed, x, y, &rules);
+                    assert!(
+                        collision.walkable && collision.buildable,
+                        "seed {seed}: tile ({x}, {y}) inside the spawn bias radius \
+                         {radius} is not open ground"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn starting_patches_generate_their_resource_for_any_seed() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+        let starting_patches: Vec<_> = catalog
+            .world_generation
+            .resources
+            .iter()
+            .filter_map(|resource| resource.starting_patch)
+            .collect();
+        assert!(
+            !starting_patches.is_empty(),
+            "base catalog should configure starting patches"
+        );
+
+        for seed in [0, 42, 123, 8675309, 0xdead_beef] {
+            for &offset in &starting_patches {
+                let (x, y) = (i64::from(offset.x), i64::from(offset.y));
+                let coord = ChunkCoord::from_tile(x, y)
+                    .expect("starting patch centers are within chunk range");
+                let bounds = TileBounds::for_chunk(coord);
+                let centers = generate_resource_patch_centers(seed, &rules, bounds);
+                let tile = generate_tile(seed, x, y, &rules, &centers);
+
+                // An overlapping random patch may win the tile, but the spawn
+                // bias guarantees some resource generates here instead of the
+                // patch drowning in a lake.
+                assert!(
+                    tile.resource.is_some(),
+                    "seed {seed}: no resource at starting patch center ({x}, {y})"
+                );
+            }
         }
     }
 
