@@ -201,7 +201,13 @@ fn placement_preview_reports_outside_generated_chunks() {
     let mut sim = Simulation::new_test_world(123);
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
     let inserter_item = item_id_by_name(&sim.world.prototypes, "inserter");
-    let outside_x = i64::from((STARTING_MAX_CHUNK + 1) * CHUNK_SIZE);
+    let max_chunk = sim
+        .world
+        .prototypes
+        .world_generation
+        .starting_area
+        .max_chunk;
+    let outside_x = i64::from((max_chunk + 1) * CHUNK_SIZE);
     give_player_build_item(&mut sim, inserter_item);
 
     let preview = crate::placement::preview_from_player_inventory(
@@ -360,7 +366,13 @@ fn multi_tile_entity_cannot_overlap_player_tile() {
 fn entity_cannot_be_placed_outside_generated_chunks() {
     let mut sim = Simulation::new_test_world(123);
     let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
-    let outside_x = i64::from((STARTING_MAX_CHUNK + 1) * CHUNK_SIZE);
+    let max_chunk = sim
+        .world
+        .prototypes
+        .world_generation
+        .starting_area
+        .max_chunk;
+    let outside_x = i64::from((max_chunk + 1) * CHUNK_SIZE);
 
     let error = crate::placement::place(
         &mut sim,

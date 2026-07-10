@@ -8,13 +8,15 @@ use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, Til
 use crate::model::{
     ElectricPolePrototype, EntityPrototype, FluidBoxPrototype, FluidConnectionPrototype,
     FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
-    MiningDrillPrototype, PumpjackPrototype, RecipePrototype, TechnologyEffect,
-    TechnologyPrototype, TilePrototype,
+    MiningDrillPrototype, PumpjackPrototype, RecipePrototype, ResourceGenerationConfig,
+    ResourcePatchGridConfig, StartingAreaConfig, TechnologyEffect, TechnologyPrototype,
+    TerrainLayerConfig, TilePrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };
 use crate::raw::{
     RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype,
     RawItemPrototype, RawPrototypeCatalog, RawPumpjackPrototype, RawRecipePrototype,
-    RawTechnologyEffect, RawTechnologyPrototype, RawTilePrototype,
+    RawResourceGeneration, RawTechnologyEffect, RawTechnologyPrototype, RawTerrainLayer,
+    RawTilePrototype, RawWorldGenerationConfig,
 };
 use crate::validation::{
     resolve_collision_mask, resolve_fluid_amounts, resolve_item_amounts, validate_group,
@@ -47,6 +49,8 @@ impl PrototypeCatalog {
         let technologies =
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
         validate_technology_prerequisite_graph(&technologies)?;
+        let world_generation =
+            load_world_generation(raw.world_generation, &item_ids_by_name, &tiles)?;
 
         Ok(Self {
             items,
@@ -55,6 +59,7 @@ impl PrototypeCatalog {
             entities,
             tiles,
             technologies,
+            world_generation,
         })
     }
 }
@@ -66,6 +71,7 @@ struct ValidatedRawCatalog {
     entities: Vec<RawEntityPrototype>,
     tiles: Vec<RawTilePrototype>,
     technologies: Vec<RawTechnologyPrototype>,
+    world_generation: Option<RawWorldGenerationConfig>,
 }
 
 impl ValidatedRawCatalog {
@@ -95,6 +101,7 @@ impl ValidatedRawCatalog {
             entities,
             tiles,
             technologies,
+            world_generation: raw.world_generation,
         })
     }
 }
@@ -449,6 +456,145 @@ fn resolve_entity_build_item(
         }
         None => Ok(item_ids_by_name.get(entity_name).copied()),
     }
+}
+
+fn load_world_generation(
+    raw: Option<RawWorldGenerationConfig>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+    tiles: &[TilePrototype],
+) -> Result<WorldGenerationConfig, PrototypeLoadError> {
+    let Some(raw) = raw else {
+        return Ok(WorldGenerationConfig::default());
+    };
+
+    validate_world_generation(&raw)?;
+
+    let terrain = resolve_terrain_layers(raw.terrain, tiles)?;
+    let resources = resolve_resources(raw.resources, item_ids_by_name)?;
+
+    Ok(WorldGenerationConfig {
+        version: raw.version,
+        starting_area: StartingAreaConfig {
+            min_chunk: raw.starting_area.min_chunk,
+            max_chunk: raw.starting_area.max_chunk,
+        },
+        terrain,
+        patch_grid: ResourcePatchGridConfig {
+            cell_size: raw.patch_grid.cell_size,
+            jitter: raw.patch_grid.jitter,
+            edge_noise: raw.patch_grid.edge_noise,
+        },
+        resources,
+    })
+}
+
+/// Validate the top-level world generation fields that do not require
+/// resolving names against loaded prototypes.
+fn validate_world_generation(
+    raw: &RawWorldGenerationConfig,
+) -> Result<(), PrototypeLoadError> {
+    if raw.version != WORLD_GENERATION_FORMAT_VERSION {
+        return Err(PrototypeLoadError::UnsupportedWorldGenerationVersion {
+            found: raw.version,
+            supported: WORLD_GENERATION_FORMAT_VERSION,
+        });
+    }
+    if raw.starting_area.min_chunk > raw.starting_area.max_chunk {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "starting area min_chunk must not exceed max_chunk",
+        });
+    }
+    if raw.patch_grid.cell_size < 1 {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid cell_size must be at least 1",
+        });
+    }
+    if raw.patch_grid.jitter < 0 || raw.patch_grid.edge_noise < 0 {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid jitter and edge_noise must not be negative",
+        });
+    }
+    if raw.terrain.is_empty() {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "terrain must declare at least one layer",
+        });
+    }
+    Ok(())
+}
+
+/// Resolve terrain layer tile names against loaded tiles and validate weights.
+fn resolve_terrain_layers(
+    terrain: Vec<RawTerrainLayer>,
+    tiles: &[TilePrototype],
+) -> Result<Vec<TerrainLayerConfig>, PrototypeLoadError> {
+    let terrain = terrain
+        .into_iter()
+        .map(|layer| {
+            let tile = tiles
+                .iter()
+                .find(|tile| tile.name == layer.tile)
+                .map(|tile| tile.id)
+                .ok_or(PrototypeLoadError::MissingWorldGenerationTile { tile: layer.tile })?;
+            Ok(TerrainLayerConfig {
+                tile,
+                weight: layer.weight,
+            })
+        })
+        .collect::<Result<Vec<_>, PrototypeLoadError>>()?;
+    if terrain.iter().all(|layer| layer.weight == 0) {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "terrain layer weights must not all be zero",
+        });
+    }
+    Ok(terrain)
+}
+
+/// Resolve resource item names against loaded items and validate each entry.
+fn resolve_resources(
+    resources: Vec<RawResourceGeneration>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+) -> Result<Vec<ResourceGenerationConfig>, PrototypeLoadError> {
+    let mut seen_resource_items = std::collections::HashSet::new();
+    resources
+        .into_iter()
+        .map(|resource| {
+            let resource_item = *item_ids_by_name.get(&resource.item).ok_or_else(|| {
+                PrototypeLoadError::MissingWorldGenerationResourceItem {
+                    item: resource.item.clone(),
+                }
+            })?;
+            if !seen_resource_items.insert(resource_item) {
+                return Err(PrototypeLoadError::DuplicateWorldGenerationResource {
+                    item: resource.item,
+                });
+            }
+            if resource.frequency_percent > 100 {
+                return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                    detail: "resource frequency_percent must not exceed 100",
+                });
+            }
+            if resource.radius < 1 {
+                return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                    detail: "resource radius must be at least 1",
+                });
+            }
+            if resource.richness == 0 {
+                return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                    detail: "resource richness must be at least 1",
+                });
+            }
+            Ok(ResourceGenerationConfig {
+                resource_item,
+                extraction: resource.extraction,
+                frequency_percent: resource.frequency_percent,
+                radius: resource.radius,
+                richness: resource.richness,
+                starting_patch: resource
+                    .starting_patch
+                    .map(|offset| IVec2::new(offset.x, offset.y)),
+            })
+        })
+        .collect::<Result<Vec<_>, PrototypeLoadError>>()
 }
 
 fn load_tiles(tiles: Vec<RawTilePrototype>) -> Result<Vec<TilePrototype>, PrototypeLoadError> {

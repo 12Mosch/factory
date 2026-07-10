@@ -74,6 +74,22 @@ pub enum PrototypeLoadError {
         owner: String,
         layer: String,
     },
+    UnsupportedWorldGenerationVersion {
+        found: u32,
+        supported: u32,
+    },
+    MissingWorldGenerationTile {
+        tile: String,
+    },
+    MissingWorldGenerationResourceItem {
+        item: String,
+    },
+    DuplicateWorldGenerationResource {
+        item: String,
+    },
+    InvalidWorldGenerationConfig {
+        detail: &'static str,
+    },
 }
 
 impl fmt::Display for PrototypeLoadError {
@@ -175,6 +191,27 @@ impl fmt::Display for PrototypeLoadError {
                     formatter,
                     "prototype {owner:?} uses invalid collision layer {layer:?}"
                 )
+            }
+            Self::UnsupportedWorldGenerationVersion { found, supported } => write!(
+                formatter,
+                "world generation config version {found} is not supported (expected {supported})"
+            ),
+            Self::MissingWorldGenerationTile { tile } => {
+                write!(
+                    formatter,
+                    "world generation config references missing tile {tile:?}"
+                )
+            }
+            Self::MissingWorldGenerationResourceItem { item } => write!(
+                formatter,
+                "world generation config references missing resource item {item:?}"
+            ),
+            Self::DuplicateWorldGenerationResource { item } => write!(
+                formatter,
+                "world generation config defines resource item {item:?} more than once"
+            ),
+            Self::InvalidWorldGenerationConfig { detail } => {
+                write!(formatter, "invalid world generation config: {detail}")
             }
         }
     }

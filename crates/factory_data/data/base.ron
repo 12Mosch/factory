@@ -1061,4 +1061,57 @@
             effects: [UnlockRecipe("sulfur")],
         ),
     ],
+    world_generation: Some((
+        version: 1,
+        starting_area: (min_chunk: -2, max_chunk: 2),
+        // Weighted terrain roll per tile, evaluated in order.
+        terrain: [
+            (tile: "water", weight: 10),
+            (tile: "dirt", weight: 25),
+            (tile: "grass", weight: 65),
+        ],
+        patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
+        resources: [
+            (
+                item: "iron_ore",
+                extraction: Solid,
+                frequency_percent: 68,
+                radius: 9,
+                richness: 700,
+                starting_patch: Some((x: -22, y: -14)),
+            ),
+            (
+                item: "copper_ore",
+                extraction: Solid,
+                frequency_percent: 62,
+                radius: 8,
+                richness: 650,
+                starting_patch: Some((x: 18, y: -12)),
+            ),
+            (
+                item: "coal",
+                extraction: Solid,
+                frequency_percent: 55,
+                radius: 10,
+                richness: 800,
+                starting_patch: Some((x: -16, y: 20)),
+            ),
+            (
+                item: "stone",
+                extraction: Solid,
+                frequency_percent: 48,
+                radius: 7,
+                richness: 520,
+                starting_patch: Some((x: 20, y: 18)),
+            ),
+            (
+                item: "crude_oil",
+                extraction: Fluid,
+                frequency_percent: 30,
+                radius: 4,
+                richness: 900,
+                starting_patch: Some((x: -26, y: 4)),
+            ),
+        ],
+    )),
 )

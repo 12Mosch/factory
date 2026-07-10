@@ -22,6 +22,8 @@ pub use model::{
     EntityPrototype, FluidAmount, FluidBoxIo, FluidBoxPrototype, FluidConnectionPrototype,
     FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
     MiningDrillPrototype, OffshorePumpPrototype, PumpjackPrototype, RecipePrototype,
-    SplitterPrototype, SteamEnginePrototype, TechnologyEffect, TechnologyPrototype, TilePrototype,
-    TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype,
+    ResourceExtraction, ResourceGenerationConfig, ResourcePatchGridConfig, SplitterPrototype,
+    StartingAreaConfig, SteamEnginePrototype, TechnologyEffect, TechnologyPrototype,
+    TerrainLayerConfig, TilePrototype, TransportBeltPrototype, UndergroundBeltPart,
+    UndergroundBeltPrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };

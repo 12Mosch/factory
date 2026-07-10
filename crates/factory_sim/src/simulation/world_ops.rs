@@ -41,8 +41,8 @@ impl WorldSim {
             return false;
         }
 
-        let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
-        let chunk = generate_chunk(self.seed, coord, ids);
+        let rules = WorldGenRules::from_catalog(&self.prototypes);
+        let chunk = generate_chunk(self.seed, coord, &rules);
         self.chunks.insert(coord, chunk);
         self.chunk_revision = self.chunk_revision.wrapping_add(1);
         true
@@ -142,10 +142,14 @@ impl WorldSim {
             return None;
         }
 
-        let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
         let (mined, resource) = {
-            let tile = self.tile_at_mut(x, y)?;
-            let mined = mine_resource_from_tile(tile, ids, amount)?;
+            let prototypes = &self.prototypes;
+            let (coord, index) = chunk_coord_and_tile_index(x, y)?;
+            let tile = self
+                .chunks
+                .get_mut(&coord)
+                .and_then(|chunk| chunk.tiles.get_mut(index))?;
+            let mined = mine_resource_from_tile(tile, prototypes, amount)?;
             (mined, tile.resource)
         };
         self.record_resource_tile_change(x, y, resource);
@@ -164,10 +168,16 @@ impl WorldSim {
             return None;
         }
 
-        let ids = WorldPrototypeIds::from_catalog(&self.prototypes);
         let (mined, resource) = {
-            let tile = profiler.measure(ProfilePhase::ChunkLookup, || self.tile_at_mut(x, y))?;
-            let mined = mine_resource_from_tile(tile, ids, amount)?;
+            let prototypes = &self.prototypes;
+            let chunks = &mut self.chunks;
+            let tile = profiler.measure(ProfilePhase::ChunkLookup, move || {
+                let (coord, index) = chunk_coord_and_tile_index(x, y)?;
+                chunks
+                    .get_mut(&coord)
+                    .and_then(|chunk| chunk.tiles.get_mut(index))
+            })?;
+            let mined = mine_resource_from_tile(tile, prototypes, amount)?;
             (mined, tile.resource)
         };
         self.record_resource_tile_change(x, y, resource);
@@ -302,18 +312,6 @@ impl WorldSim {
         Ok(())
     }
 
-    pub(super) fn tile_at_mut(
-        &mut self,
-        x: WorldTileCoord,
-        y: WorldTileCoord,
-    ) -> Option<&mut TileCell> {
-        let (coord, index) = chunk_coord_and_tile_index(x, y)?;
-
-        self.chunks
-            .get_mut(&coord)
-            .and_then(|chunk| chunk.tiles.get_mut(index))
-    }
-
     fn record_resource_tile_change(
         &mut self,
         x: WorldTileCoord,
@@ -360,7 +358,7 @@ pub(super) fn offshore_pump_water_tiles(
 
 fn mine_resource_from_tile(
     tile: &mut TileCell,
-    ids: WorldPrototypeIds,
+    prototypes: &PrototypeCatalog,
     amount: u32,
 ) -> Option<MinedResource> {
     let resource = tile.resource.as_mut()?;
@@ -373,7 +371,7 @@ fn mine_resource_from_tile(
     resource.amount -= mined_amount;
     if resource.amount == 0 {
         tile.resource = None;
-        tile.collision = collision_for_tile(tile.tile_id, ids);
+        tile.collision = tile_collision(prototypes, tile.tile_id);
     }
 
     Some(mined)

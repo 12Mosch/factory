@@ -6,3 +6,4 @@ mod items;
 mod recipes;
 mod technology;
 mod validation_errors;
+mod world_generation;
