@@ -1064,12 +1064,14 @@
     world_generation: Some((
         version: 1,
         starting_area: (min_chunk: -2, max_chunk: 2),
-        // Weighted terrain roll per tile, evaluated in order.
+        // Bands over a coherent noise field, lowest values first: water fills
+        // basins, dirt forms shores around them, grass covers the rest.
         terrain: [
-            (tile: "water", weight: 10),
-            (tile: "dirt", weight: 25),
-            (tile: "grass", weight: 65),
+            (tile: "water", weight: 30),
+            (tile: "dirt", weight: 10),
+            (tile: "grass", weight: 60),
         ],
+        terrain_noise: Some((scale: 32, octaves: 3)),
         patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
         resources: [
             (

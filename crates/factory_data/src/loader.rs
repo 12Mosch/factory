@@ -10,7 +10,8 @@ use crate::model::{
     FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount, ItemPrototype,
     MiningDrillPrototype, PumpjackPrototype, RecipePrototype, ResourceGenerationConfig,
     ResourcePatchGridConfig, StartingAreaConfig, TechnologyEffect, TechnologyPrototype,
-    TerrainLayerConfig, TilePrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    TerrainLayerConfig, TerrainNoiseConfig, TilePrototype, WORLD_GENERATION_FORMAT_VERSION,
+    WorldGenerationConfig,
 };
 use crate::raw::{
     RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype,
@@ -470,6 +471,13 @@ fn load_world_generation(
     validate_world_generation(&raw)?;
 
     let terrain = resolve_terrain_layers(raw.terrain, tiles)?;
+    let terrain_noise = raw
+        .terrain_noise
+        .map(|noise| TerrainNoiseConfig {
+            scale: noise.scale,
+            octaves: noise.octaves,
+        })
+        .unwrap_or_default();
     let resources = resolve_resources(raw.resources, item_ids_by_name)?;
 
     Ok(WorldGenerationConfig {
@@ -479,6 +487,7 @@ fn load_world_generation(
             max_chunk: raw.starting_area.max_chunk,
         },
         terrain,
+        terrain_noise,
         patch_grid: ResourcePatchGridConfig {
             cell_size: raw.patch_grid.cell_size,
             jitter: raw.patch_grid.jitter,
@@ -490,9 +499,7 @@ fn load_world_generation(
 
 /// Validate the top-level world generation fields that do not require
 /// resolving names against loaded prototypes.
-fn validate_world_generation(
-    raw: &RawWorldGenerationConfig,
-) -> Result<(), PrototypeLoadError> {
+fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), PrototypeLoadError> {
     if raw.version != WORLD_GENERATION_FORMAT_VERSION {
         return Err(PrototypeLoadError::UnsupportedWorldGenerationVersion {
             found: raw.version,
@@ -518,6 +525,18 @@ fn validate_world_generation(
         return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
             detail: "terrain must declare at least one layer",
         });
+    }
+    if let Some(noise) = &raw.terrain_noise {
+        if noise.scale < 1 {
+            return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                detail: "terrain noise scale must be at least 1",
+            });
+        }
+        if noise.octaves < 1 || noise.octaves > 8 {
+            return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                detail: "terrain noise octaves must be between 1 and 8",
+            });
+        }
     }
     Ok(())
 }

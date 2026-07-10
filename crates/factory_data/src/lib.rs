@@ -24,6 +24,7 @@ pub use model::{
     MiningDrillPrototype, OffshorePumpPrototype, PumpjackPrototype, RecipePrototype,
     ResourceExtraction, ResourceGenerationConfig, ResourcePatchGridConfig, SplitterPrototype,
     StartingAreaConfig, SteamEnginePrototype, TechnologyEffect, TechnologyPrototype,
-    TerrainLayerConfig, TilePrototype, TransportBeltPrototype, UndergroundBeltPart,
-    UndergroundBeltPrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    TerrainLayerConfig, TerrainNoiseConfig, TilePrototype, TransportBeltPrototype,
+    UndergroundBeltPart, UndergroundBeltPrototype, WORLD_GENERATION_FORMAT_VERSION,
+    WorldGenerationConfig,
 };

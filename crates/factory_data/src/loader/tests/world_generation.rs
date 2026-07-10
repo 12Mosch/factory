@@ -2,7 +2,9 @@ use glam::IVec2;
 
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
-use crate::model::{ResourceExtraction, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig};
+use crate::model::{
+    ResourceExtraction, TerrainNoiseConfig, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+};
 
 fn catalog_ron(world_generation: &str) -> String {
     format!(
@@ -45,6 +47,7 @@ fn base_catalog_defines_world_generation() {
         config.terrain.iter().map(|layer| layer.weight).sum::<u32>(),
         100
     );
+    assert_eq!(config.terrain_noise, TerrainNoiseConfig::default());
     assert_eq!(config.patch_grid.cell_size, 40);
     assert_eq!(config.resources.len(), 5);
     assert_eq!(
@@ -98,6 +101,45 @@ fn section_resolves_names_to_ids() {
     assert_eq!(
         config.resources[0].starting_patch,
         Some(IVec2::new(-22, -14))
+    );
+}
+
+#[test]
+fn terrain_noise_parses_and_defaults_when_absent() {
+    let explicit = PrototypeCatalog::from_ron_str(&catalog_ron(
+        r#"
+        world_generation: Some((
+            version: 1,
+            starting_area: (min_chunk: 0, max_chunk: 0),
+            terrain: [(tile: "grass", weight: 1)],
+            terrain_noise: Some((scale: 48, octaves: 4)),
+            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
+        )),
+        "#,
+    ))
+    .expect("catalog should load");
+    assert_eq!(
+        explicit.world_generation.terrain_noise,
+        TerrainNoiseConfig {
+            scale: 48,
+            octaves: 4,
+        }
+    );
+
+    let absent = PrototypeCatalog::from_ron_str(&catalog_ron(
+        r#"
+        world_generation: Some((
+            version: 1,
+            starting_area: (min_chunk: 0, max_chunk: 0),
+            terrain: [(tile: "grass", weight: 1)],
+            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
+        )),
+        "#,
+    ))
+    .expect("catalog should load");
+    assert_eq!(
+        absent.world_generation.terrain_noise,
+        TerrainNoiseConfig::default()
     );
 }
 
@@ -219,6 +261,18 @@ fn invalid_numeric_constraints_fail() {
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 0)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
             "all-zero terrain weights",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], terrain_noise: Some((scale: 0, octaves: 3)), patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
+            "zero noise scale",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], terrain_noise: Some((scale: 32, octaves: 0)), patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
+            "zero noise octaves",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], terrain_noise: Some((scale: 32, octaves: 9)), patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
+            "too many noise octaves",
         ),
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 101, radius: 5, richness: 100)])",
