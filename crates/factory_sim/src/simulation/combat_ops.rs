@@ -1,5 +1,6 @@
 use super::enemy_ops::chebyshev_distance_to_footprint;
 use super::*;
+use std::collections::BTreeMap;
 
 impl Simulation {
     /// Gun turrets acquire the nearest enemy unit in range (falling back to
@@ -8,6 +9,9 @@ impl Simulation {
     /// entity state is borrowed.
     pub(super) fn advance_gun_turrets(&mut self) {
         let mut structure_damage: Vec<(EntityId, u32)> = Vec::new();
+        // Units move during their own simulation step, not during turret
+        // fire, so one index is valid for this whole pass.
+        let enemy_chunks = EnemyChunkIndex::from_enemies(&self.enemies);
         {
             let tick = self.tick;
             let Simulation {
@@ -41,33 +45,35 @@ impl Simulation {
 
                 let footprint = placed.footprint;
                 let range = i64::from(turret.range_tiles);
-                let fired =
-                    if let Some(enemy_id) = nearest_enemy_in_range(enemies, &footprint, range) {
-                        let enemy = enemies
-                            .enemies
-                            .get_mut(&enemy_id)
-                            .expect("selected enemy id should exist");
-                        let damage = state.loaded_damage;
-                        if enemy.health <= damage {
-                            enemies.enemies.remove(&enemy_id);
-                        } else {
-                            enemy.health -= damage;
-                            // Retaliate: the shot pulls the unit onto the turret.
-                            enemy.target = Some(turret_id);
-                            enemy.path.clear();
-                        }
-                        true
-                    } else if let Some(spawner_id) = nearest_spawner_in_range(
-                        &entities.enemy_spawners,
-                        &entities.placed_entities,
-                        &footprint,
-                        range,
-                    ) {
-                        structure_damage.push((spawner_id, state.loaded_damage));
-                        true
+                let fired = if let Some(enemy_id) =
+                    nearest_enemy_in_range(enemies, &enemy_chunks, &footprint, range)
+                {
+                    let enemy = enemies
+                        .enemies
+                        .get_mut(&enemy_id)
+                        .expect("selected enemy id should exist");
+                    let damage = state.loaded_damage;
+                    if enemy.health <= damage {
+                        enemies.enemies.remove(&enemy_id);
                     } else {
-                        false
-                    };
+                        enemy.health -= damage;
+                        // Retaliate: the shot pulls the unit onto the turret.
+                        enemy.target = Some(turret_id);
+                        enemy.path.clear();
+                    }
+                    true
+                } else if let Some(spawner_id) = nearest_spawner_in_range(
+                    &entities.enemy_spawners,
+                    &entities.placed_entities,
+                    &entities.occupancy,
+                    &footprint,
+                    range,
+                ) {
+                    structure_damage.push((spawner_id, state.loaded_damage));
+                    true
+                } else {
+                    false
+                };
 
                 if fired {
                     state.loaded_shots -= 1;
@@ -208,11 +214,16 @@ fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
 /// footprint; ties resolve to the lowest enemy id.
 fn nearest_enemy_in_range(
     enemies: &EnemySubsystem,
+    enemy_chunks: &EnemyChunkIndex,
     footprint: &EntityFootprint,
     range: i64,
 ) -> Option<EnemyId> {
     let mut best: Option<(i64, EnemyId)> = None;
-    for enemy in enemies.enemies.values() {
+    for enemy_id in enemy_chunks.ids_in_expanded_footprint(footprint, range) {
+        let Some(enemy) = enemies.enemies.get(enemy_id) else {
+            // A preceding turret may have killed this indexed enemy.
+            continue;
+        };
         let distance = chebyshev_distance_to_footprint(enemy.tile(), footprint);
         if distance > range {
             continue;
@@ -227,11 +238,25 @@ fn nearest_enemy_in_range(
 fn nearest_spawner_in_range(
     enemy_spawners: &BTreeMap<EntityId, EnemySpawnerState>,
     placed_entities: &BTreeMap<EntityId, PlacedEntity>,
+    occupancy: &OccupancyGrid,
     footprint: &EntityFootprint,
     range: i64,
 ) -> Option<EntityId> {
     let mut best: Option<(i64, EntityId)> = None;
-    for &spawner_id in enemy_spawners.keys() {
+    let min_x = footprint.x.saturating_sub(range);
+    let max_x = footprint
+        .x
+        .saturating_add(i64::from(footprint.width) - 1)
+        .saturating_add(range);
+    let min_y = footprint.y.saturating_sub(range);
+    let max_y = footprint
+        .y
+        .saturating_add(i64::from(footprint.height) - 1)
+        .saturating_add(range);
+    for spawner_id in occupancy.entity_ids_in_tile_rect(min_x, max_x, min_y, max_y) {
+        if !enemy_spawners.contains_key(&spawner_id) {
+            continue;
+        }
         let Some(placed) = placed_entities.get(&spawner_id) else {
             continue;
         };
@@ -248,4 +273,61 @@ fn nearest_spawner_in_range(
         }
     }
     best.map(|(_, id)| id)
+}
+
+/// Short-lived spatial index for the turret pass. Keeping it local avoids
+/// serializing derived state while turning one scan per turret into one scan
+/// of the nearby generated chunks.
+struct EnemyChunkIndex {
+    chunks: BTreeMap<ChunkCoord, Vec<EnemyId>>,
+}
+
+impl EnemyChunkIndex {
+    fn from_enemies(enemies: &EnemySubsystem) -> Self {
+        let mut chunks = BTreeMap::<ChunkCoord, Vec<EnemyId>>::new();
+        for enemy in enemies.enemies.values() {
+            if let Some(coord) = ChunkCoord::from_tile(enemy.tile().0, enemy.tile().1) {
+                chunks.entry(coord).or_default().push(enemy.id);
+            }
+        }
+        Self { chunks }
+    }
+
+    fn ids_in_expanded_footprint(
+        &self,
+        footprint: &EntityFootprint,
+        range: i64,
+    ) -> Box<dyn Iterator<Item = &EnemyId> + '_> {
+        let min_x = footprint.x.saturating_sub(range);
+        let max_x = footprint
+            .x
+            .saturating_add(i64::from(footprint.width) - 1)
+            .saturating_add(range);
+        let min_y = footprint.y.saturating_sub(range);
+        let max_y = footprint
+            .y
+            .saturating_add(i64::from(footprint.height) - 1)
+            .saturating_add(range);
+        let Some(min_chunk) = ChunkCoord::from_tile(min_x, min_y) else {
+            return Box::new(std::iter::empty());
+        };
+        let Some(max_chunk) = ChunkCoord::from_tile(max_x, max_y) else {
+            return Box::new(std::iter::empty());
+        };
+
+        Box::new(
+            self.chunks
+                .range(
+                    ChunkCoord {
+                        x: min_chunk.x,
+                        y: i32::MIN,
+                    }..=ChunkCoord {
+                        x: max_chunk.x,
+                        y: i32::MAX,
+                    },
+                )
+                .filter(move |(coord, _)| coord.y >= min_chunk.y && coord.y <= max_chunk.y)
+                .flat_map(|(_, enemy_ids)| enemy_ids),
+        )
+    }
 }

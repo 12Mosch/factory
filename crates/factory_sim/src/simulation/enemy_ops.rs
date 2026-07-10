@@ -61,7 +61,10 @@ impl Simulation {
         let center_x = min_x + i64::from(CHUNK_SIZE) / 2;
         let center_y = min_y + i64::from(CHUNK_SIZE) / 2;
         let min_distance = i64::from(config.min_distance_tiles);
-        if center_x * center_x + center_y * center_y < min_distance * min_distance {
+        let center_distance_squared = i128::from(center_x) * i128::from(center_x)
+            + i128::from(center_y) * i128::from(center_y);
+        let min_distance_squared = i128::from(min_distance) * i128::from(min_distance);
+        if center_distance_squared < min_distance_squared {
             return;
         }
 
@@ -336,12 +339,9 @@ fn acquire_target(world: &WorldSim, entities: &EntityStore, enemy: &Enemy) -> Op
             );
             nearest_attackable(world, entities, (tile_x, tile_y), candidates.into_iter())
         }
-        EnemyMode::Attack => nearest_attackable(
-            world,
-            entities,
-            (tile_x, tile_y),
-            entities.placed_entities.keys().copied(),
-        ),
+        EnemyMode::Attack => {
+            nearest_attackable_in_expanding_ranges(world, entities, (tile_x, tile_y))
+        }
     }
 }
 
@@ -354,7 +354,17 @@ fn nearest_attackable(
     from: (WorldTileCoord, WorldTileCoord),
     candidates: impl Iterator<Item = EntityId>,
 ) -> Option<EntityId> {
-    let mut best: Option<(i64, EntityId)> = None;
+    nearest_attackable_with_distance(world, entities, from, candidates)
+        .map(|(_, entity_id)| entity_id)
+}
+
+fn nearest_attackable_with_distance(
+    world: &WorldSim,
+    entities: &EntityStore,
+    from: (WorldTileCoord, WorldTileCoord),
+    candidates: impl Iterator<Item = EntityId>,
+) -> Option<(i128, EntityId)> {
+    let mut best: Option<(i128, EntityId)> = None;
     for entity_id in candidates {
         let Some(placed) = entities.placed_entities.get(&entity_id) else {
             continue;
@@ -365,12 +375,47 @@ fn nearest_attackable(
         let (center_x, center_y) = footprint_center_tile(&placed.footprint);
         let dx = center_x - from.0;
         let dy = center_y - from.1;
-        let distance = dx * dx + dy * dy;
+        let distance = i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy);
         if best.is_none_or(|(best_distance, _)| distance < best_distance) {
             best = Some((distance, entity_id));
         }
     }
-    best.map(|(_, entity_id)| entity_id)
+    best
+}
+
+/// Finds the nearest player structure through the occupancy grid, doubling
+/// the searched square until it proves no unseen footprint can be nearer.
+fn nearest_attackable_in_expanding_ranges(
+    world: &WorldSim,
+    entities: &EntityStore,
+    from: (WorldTileCoord, WorldTileCoord),
+) -> Option<EntityId> {
+    let mut radius = i64::from(CHUNK_SIZE);
+    let mut candidates = BTreeSet::new();
+
+    loop {
+        candidates.extend(entities.occupancy.entity_ids_in_tile_rect(
+            from.0.saturating_sub(radius),
+            from.0.saturating_add(radius),
+            from.1.saturating_sub(radius),
+            from.1.saturating_add(radius),
+        ));
+        let best =
+            nearest_attackable_with_distance(world, entities, from, candidates.iter().copied());
+        if let Some((distance, entity_id)) = best {
+            let min_unseen_center_distance = radius.saturating_add(1);
+            let unseen_distance_squared =
+                i128::from(min_unseen_center_distance) * i128::from(min_unseen_center_distance);
+            if distance < unseen_distance_squared {
+                return Some(entity_id);
+            }
+        }
+
+        if radius == i64::MAX {
+            return best.map(|(_, entity_id)| entity_id);
+        }
+        radius = radius.saturating_mul(2);
+    }
 }
 
 fn is_attackable_kind(world: &WorldSim, placed: &PlacedEntity) -> bool {

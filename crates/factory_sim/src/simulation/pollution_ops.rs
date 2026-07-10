@@ -70,7 +70,7 @@ impl Simulation {
             .collect();
 
         for (coord, amount) in snapshot {
-            let share = amount * POLLUTION_SPREAD_PER_NEIGHBOR_PERMILLE / 1000;
+            let share = amount / 1000 * POLLUTION_SPREAD_PER_NEIGHBOR_PERMILLE;
             if share == 0 {
                 continue;
             }
