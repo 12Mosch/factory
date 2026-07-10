@@ -15,7 +15,8 @@ use crate::model::{
 use crate::raw::{
     RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype,
     RawItemPrototype, RawPrototypeCatalog, RawPumpjackPrototype, RawRecipePrototype,
-    RawTechnologyEffect, RawTechnologyPrototype, RawTilePrototype, RawWorldGenerationConfig,
+    RawResourceGeneration, RawTechnologyEffect, RawTechnologyPrototype, RawTerrainLayer,
+    RawTilePrototype, RawWorldGenerationConfig,
 };
 use crate::validation::{
     resolve_collision_mask, resolve_fluid_amounts, resolve_item_amounts, validate_group,
@@ -466,6 +467,32 @@ fn load_world_generation(
         return Ok(WorldGenerationConfig::default());
     };
 
+    validate_world_generation(&raw)?;
+
+    let terrain = resolve_terrain_layers(raw.terrain, tiles)?;
+    let resources = resolve_resources(raw.resources, item_ids_by_name)?;
+
+    Ok(WorldGenerationConfig {
+        version: raw.version,
+        starting_area: StartingAreaConfig {
+            min_chunk: raw.starting_area.min_chunk,
+            max_chunk: raw.starting_area.max_chunk,
+        },
+        terrain,
+        patch_grid: ResourcePatchGridConfig {
+            cell_size: raw.patch_grid.cell_size,
+            jitter: raw.patch_grid.jitter,
+            edge_noise: raw.patch_grid.edge_noise,
+        },
+        resources,
+    })
+}
+
+/// Validate the top-level world generation fields that do not require
+/// resolving names against loaded prototypes.
+fn validate_world_generation(
+    raw: &RawWorldGenerationConfig,
+) -> Result<(), PrototypeLoadError> {
     if raw.version != WORLD_GENERATION_FORMAT_VERSION {
         return Err(PrototypeLoadError::UnsupportedWorldGenerationVersion {
             found: raw.version,
@@ -492,9 +519,15 @@ fn load_world_generation(
             detail: "terrain must declare at least one layer",
         });
     }
+    Ok(())
+}
 
-    let terrain = raw
-        .terrain
+/// Resolve terrain layer tile names against loaded tiles and validate weights.
+fn resolve_terrain_layers(
+    terrain: Vec<RawTerrainLayer>,
+    tiles: &[TilePrototype],
+) -> Result<Vec<TerrainLayerConfig>, PrototypeLoadError> {
+    let terrain = terrain
         .into_iter()
         .map(|layer| {
             let tile = tiles
@@ -513,10 +546,16 @@ fn load_world_generation(
             detail: "terrain layer weights must not all be zero",
         });
     }
+    Ok(terrain)
+}
 
+/// Resolve resource item names against loaded items and validate each entry.
+fn resolve_resources(
+    resources: Vec<RawResourceGeneration>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+) -> Result<Vec<ResourceGenerationConfig>, PrototypeLoadError> {
     let mut seen_resource_items = std::collections::HashSet::new();
-    let resources = raw
-        .resources
+    resources
         .into_iter()
         .map(|resource| {
             let resource_item = *item_ids_by_name.get(&resource.item).ok_or_else(|| {
@@ -555,22 +594,7 @@ fn load_world_generation(
                     .map(|offset| IVec2::new(offset.x, offset.y)),
             })
         })
-        .collect::<Result<Vec<_>, PrototypeLoadError>>()?;
-
-    Ok(WorldGenerationConfig {
-        version: raw.version,
-        starting_area: StartingAreaConfig {
-            min_chunk: raw.starting_area.min_chunk,
-            max_chunk: raw.starting_area.max_chunk,
-        },
-        terrain,
-        patch_grid: ResourcePatchGridConfig {
-            cell_size: raw.patch_grid.cell_size,
-            jitter: raw.patch_grid.jitter,
-            edge_noise: raw.patch_grid.edge_noise,
-        },
-        resources,
-    })
+        .collect::<Result<Vec<_>, PrototypeLoadError>>()
 }
 
 fn load_tiles(tiles: Vec<RawTilePrototype>) -> Result<Vec<TilePrototype>, PrototypeLoadError> {
