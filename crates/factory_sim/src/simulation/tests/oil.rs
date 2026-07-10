@@ -115,6 +115,27 @@ fn manual_mining_rejects_crude_oil_tiles() {
 }
 
 #[test]
+fn mine_resource_at_rejects_crude_oil_tiles() {
+    let mut sim = Simulation::new_test_world(123);
+    let crude_oil = item_id(&sim.world.prototypes, "crude_oil");
+    let (x, y, amount) = first_resource_tile_for_item(&sim.world, crude_oil);
+    let revision_before = sim.world.resource_revision();
+
+    assert!(
+        sim.world.mine_resource_at(x, y, 1).is_none(),
+        "crude oil tiles must not be minable"
+    );
+
+    let tile = sim.world.tile_at(x, y).expect("oil tile should exist");
+    assert_eq!(
+        tile.resource.map(|resource| resource.amount),
+        Some(amount),
+        "rejected mining must not deplete the resource"
+    );
+    assert_eq!(sim.world.resource_revision(), revision_before);
+}
+
+#[test]
 fn burner_drill_cannot_target_crude_oil() {
     let sim = Simulation::new_test_world(123);
     let crude_oil = item_id(&sim.world.prototypes, "crude_oil");
