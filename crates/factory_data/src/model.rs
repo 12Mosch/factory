@@ -252,6 +252,91 @@ pub struct CollisionMask {
     pub layers: Vec<CollisionLayer>,
 }
 
+/// Format version accepted for [`WorldGenerationConfig`]; configs declaring a
+/// different version are rejected at load time instead of being misread.
+pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 1;
+
+/// Data-driven world generation rules: terrain distribution, starting area,
+/// and resource patch definitions. Loaded from the `world_generation` section
+/// of a prototype catalog; a catalog without that section gets the empty
+/// default, which generates a bare fallback-tile world without resources.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct WorldGenerationConfig {
+    pub version: u32,
+    pub starting_area: StartingAreaConfig,
+    /// Weighted terrain layers; each tile rolls against the summed weights in
+    /// declaration order. Tile collision behaviour derives from the tile
+    /// prototype's collision mask.
+    pub terrain: Vec<TerrainLayerConfig>,
+    pub patch_grid: ResourcePatchGridConfig,
+    pub resources: Vec<ResourceGenerationConfig>,
+}
+
+impl Default for WorldGenerationConfig {
+    fn default() -> Self {
+        Self {
+            version: WORLD_GENERATION_FORMAT_VERSION,
+            starting_area: StartingAreaConfig {
+                min_chunk: 0,
+                max_chunk: 0,
+            },
+            terrain: Vec::new(),
+            patch_grid: ResourcePatchGridConfig {
+                cell_size: 40,
+                jitter: 16,
+                edge_noise: 3,
+            },
+            resources: Vec::new(),
+        }
+    }
+}
+
+/// Inclusive chunk range generated up front when a world is created.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct StartingAreaConfig {
+    pub min_chunk: i32,
+    pub max_chunk: i32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TerrainLayerConfig {
+    pub tile: TileId,
+    pub weight: u32,
+}
+
+/// Poisson-like placement grid for resource patch centers: one candidate
+/// center per `cell_size` tiles, offset by up to `jitter` tiles, with patch
+/// edges roughened by up to `edge_noise` tiles.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ResourcePatchGridConfig {
+    pub cell_size: i32,
+    pub jitter: i32,
+    pub edge_noise: i32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ResourceGenerationConfig {
+    pub resource_item: ItemId,
+    pub extraction: ResourceExtraction,
+    /// Chance (0-100) that a grid cell spawns a patch of this resource.
+    pub frequency_percent: u8,
+    pub radius: i32,
+    pub richness: u32,
+    /// Guaranteed patch center near the origin so starter worlds always
+    /// contain the resource; offsets are in tiles.
+    pub starting_patch: Option<IVec2>,
+}
+
+/// How a generated resource cell is extracted. `Solid` resources are minable
+/// by drills and the player; `Fluid` resources are extracted by pumpjacks and
+/// excluded from mining. This is authoritative for minability regardless of
+/// which machine prototypes exist.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum ResourceExtraction {
+    Solid,
+    Fluid,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum CollisionLayer {
     Ground,

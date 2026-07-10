@@ -29,7 +29,8 @@ fn world_tile_lookup_is_stable_across_chunk_boundaries() {
 fn generated_chunks_have_expected_shape() {
     let world = WorldSim::new_seeded(123);
 
-    let generated_side = (STARTING_MAX_CHUNK - STARTING_MIN_CHUNK + 1) as usize;
+    let area = world.prototypes.world_generation.starting_area;
+    let generated_side = (area.max_chunk - area.min_chunk + 1) as usize;
     assert_eq!(world.chunks.len(), generated_side * generated_side);
     for chunk in world.chunks.values() {
         assert_eq!(chunk.tiles.len(), (CHUNK_SIZE * CHUNK_SIZE) as usize);
@@ -119,7 +120,6 @@ fn resource_tiles_in_chunk(
 #[test]
 fn seed_123_contains_all_resource_item_types() {
     let world = WorldSim::new_seeded(123);
-    let ids = WorldPrototypeIds::from_catalog(&world.prototypes);
     let resource_items = world
         .chunks
         .values()
@@ -127,10 +127,13 @@ fn seed_123_contains_all_resource_item_types() {
         .filter_map(|tile| tile.resource.map(|resource| resource.resource_item))
         .collect::<BTreeSet<_>>();
 
-    for resource_item in ids.resources {
+    let configured = &world.prototypes.world_generation.resources;
+    assert!(!configured.is_empty());
+    for resource in configured {
         assert!(
-            resource_items.contains(&resource_item),
-            "missing generated resource item {resource_item:?}"
+            resource_items.contains(&resource.resource_item),
+            "missing generated resource item {:?}",
+            resource.resource_item
         );
     }
 }

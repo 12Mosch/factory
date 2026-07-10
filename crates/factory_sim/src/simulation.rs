@@ -1,5 +1,6 @@
 pub(crate) use factory_data::{
-    CraftingCategory, EntityKind, PrototypeCatalog, TechnologyEffect, TileId, UndergroundBeltPart,
+    CraftingCategory, EntityKind, PrototypeCatalog, ResourceExtraction, TechnologyEffect, TileId,
+    UndergroundBeltPart,
 };
 use factory_data::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId};
 use serde::{Deserialize, Serialize};
@@ -60,11 +61,6 @@ pub const PLAYER_INVENTORY_SLOT_COUNT: usize = 80;
 const FIXED_SIM_TICKS_PER_SECOND: f32 = 60.0;
 pub const ITEM_STATISTICS_WINDOW_TICKS: u64 = 60 * FIXED_SIM_TICKS_PER_SECOND as u64;
 const PLAYER_POSITION_SCALE: i64 = 1024;
-const STARTING_MIN_CHUNK: i32 = -2;
-const STARTING_MAX_CHUNK: i32 = 2;
-const RESOURCE_PATCH_GRID_SIZE: i32 = 40;
-const RESOURCE_PATCH_GRID_JITTER: i32 = 16;
-const RESOURCE_PATCH_EDGE_NOISE: i32 = 3;
 pub const BURNER_MINING_DRILL_FUEL_SLOT_INDEX: usize = 0;
 pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;

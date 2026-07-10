@@ -3,7 +3,8 @@ use serde::Deserialize;
 use crate::model::{
     AssemblingMachinePrototype, BoilerPrototype, BurnerPrototype, CraftingCategory,
     ElectricEnergySourcePrototype, EntityKind, FluidBoxIo, FluidConnectionSide,
-    OffshorePumpPrototype, SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
+    OffshorePumpPrototype, ResourceExtraction, SplitterPrototype, SteamEnginePrototype,
+    TransportBeltPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -17,6 +18,48 @@ pub(crate) struct RawPrototypeCatalog {
     pub(crate) tiles: Vec<RawTilePrototype>,
     #[serde(default)]
     pub(crate) technologies: Vec<RawTechnologyPrototype>,
+    #[serde(default)]
+    pub(crate) world_generation: Option<RawWorldGenerationConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawWorldGenerationConfig {
+    pub(crate) version: u32,
+    pub(crate) starting_area: RawStartingArea,
+    pub(crate) terrain: Vec<RawTerrainLayer>,
+    pub(crate) patch_grid: RawResourcePatchGrid,
+    #[serde(default)]
+    pub(crate) resources: Vec<RawResourceGeneration>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawStartingArea {
+    pub(crate) min_chunk: i32,
+    pub(crate) max_chunk: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawTerrainLayer {
+    pub(crate) tile: String,
+    pub(crate) weight: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawResourcePatchGrid {
+    pub(crate) cell_size: i32,
+    pub(crate) jitter: i32,
+    pub(crate) edge_noise: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawResourceGeneration {
+    pub(crate) item: String,
+    pub(crate) extraction: ResourceExtraction,
+    pub(crate) frequency_percent: u8,
+    pub(crate) radius: i32,
+    pub(crate) richness: u32,
+    #[serde(default)]
+    pub(crate) starting_patch: Option<RawIVec2>,
 }
 
 #[derive(Debug, Deserialize)]

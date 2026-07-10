@@ -10,8 +10,17 @@ pub(in crate::simulation) fn validate_burner_mining_drill(
     validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
     validate_single_slot(&sim.world.prototypes, state.output_slot)?;
     if let Some(stack) = state.output_slot {
-        let ids = WorldPrototypeIds::from_catalog(&sim.world.prototypes);
-        if !ids.resources.contains(&stack.item_id) {
+        let is_solid_resource =
+            sim.world
+                .prototypes
+                .world_generation
+                .resources
+                .iter()
+                .any(|resource| {
+                    resource.resource_item == stack.item_id
+                        && resource.extraction == ResourceExtraction::Solid
+                });
+        if !is_solid_resource {
             return Err(SimValidationError::InvalidMachineItem {
                 entity_id,
                 item_id: stack.item_id,
