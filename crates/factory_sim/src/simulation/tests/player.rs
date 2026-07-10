@@ -5,10 +5,8 @@ use super::support::*;
 fn initial_simulation_reveals_player_chunk() {
     let sim = Simulation::new_test_world(123);
     let (player_x, player_y) = sim.player.tile_position();
-    let coord = ChunkCoord {
-        x: player_x.div_euclid(CHUNK_SIZE),
-        y: player_y.div_euclid(CHUNK_SIZE),
-    };
+    let coord = ChunkCoord::from_tile(player_x, player_y)
+        .expect("initial player should be inside the chunk plane");
 
     assert!(sim.is_chunk_revealed(coord));
 }
@@ -17,7 +15,7 @@ fn initial_simulation_reveals_player_chunk() {
 fn moving_player_into_another_chunk_reveals_that_chunk() {
     let mut sim = Simulation::new_test_world(123);
     let target = ChunkCoord { x: 1, y: 0 };
-    sim.player = PlayerState::centered_on_tile(target.x * CHUNK_SIZE, target.y * CHUNK_SIZE);
+    sim.player = PlayerState::centered_on_tile(target.min_tile().0, target.min_tile().1);
 
     sim.tick();
 

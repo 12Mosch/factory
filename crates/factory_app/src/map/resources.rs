@@ -91,22 +91,22 @@ mod tests {
     #[test]
     fn map_texture_bounds_contains_tile_handles_extreme_edges() {
         let bounds = MapTextureBounds {
-            min_x: i32::MAX,
-            min_y: i32::MIN,
+            min_x: i64::from(i32::MAX),
+            min_y: i64::from(i32::MIN),
             width: 1,
             height: 1,
         };
 
-        assert!(bounds.contains_tile((i32::MAX, i32::MIN)));
-        assert!(!bounds.contains_tile((i32::MAX - 1, i32::MIN)));
-        assert!(!bounds.contains_tile((i32::MAX, i32::MIN + 1)));
+        assert!(bounds.contains_tile((i64::from(i32::MAX), i64::from(i32::MIN))));
+        assert!(!bounds.contains_tile((i64::from(i32::MAX - 1), i64::from(i32::MIN))));
+        assert!(!bounds.contains_tile((i64::from(i32::MAX), i64::from(i32::MIN + 1))));
     }
 
     #[test]
     fn map_texture_bounds_contains_chunk_handles_extreme_coords() {
         let bounds = MapTextureBounds {
-            min_x: i32::MIN,
-            min_y: i32::MIN,
+            min_x: i64::from(i32::MIN),
+            min_y: i64::from(i32::MIN),
             width: u32::MAX,
             height: u32::MAX,
         };

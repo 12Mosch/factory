@@ -192,6 +192,7 @@ pub enum ConstructionError {
     MissingGhost(GhostId),
     NotMarkedForDeconstruction(EntityId),
     EmptyBlueprintArea,
+    BlueprintOffsetOutOfRange,
     MissingBlueprint {
         index: usize,
     },

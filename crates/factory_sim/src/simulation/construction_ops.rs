@@ -355,20 +355,24 @@ fn capture_blueprint(
     let origin_y = captured.iter().map(|entry| entry.1).min().unwrap();
     captured.sort_by_key(|&(x, y, prototype_id, ..)| (y, x, prototype_id));
 
-    Ok(Blueprint {
-        name: name.to_string(),
-        entities: captured
-            .into_iter()
-            .map(|(x, y, prototype_id, direction, recipe)| BlueprintEntity {
+    let entities = captured
+        .into_iter()
+        .map(|(x, y, prototype_id, direction, recipe)| {
+            Ok(BlueprintEntity {
                 prototype_id,
                 dx: i32::try_from(x - origin_x)
-                    .expect("blueprint offsets are bounded by its capture area"),
+                    .map_err(|_| ConstructionError::BlueprintOffsetOutOfRange)?,
                 dy: i32::try_from(y - origin_y)
-                    .expect("blueprint offsets are bounded by its capture area"),
+                    .map_err(|_| ConstructionError::BlueprintOffsetOutOfRange)?,
                 direction,
                 recipe,
             })
-            .collect(),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Blueprint {
+        name: name.to_string(),
+        entities,
     })
 }
 

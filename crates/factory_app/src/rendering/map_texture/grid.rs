@@ -57,8 +57,8 @@ mod tests {
     #[test]
     fn draw_chunk_grid_paints_exactly_the_chunk_boundary_pixels() {
         let bounds = MapTextureBounds {
-            min_x: -CHUNK_SIZE * 2,
-            min_y: -CHUNK_SIZE,
+            min_x: -i64::from(CHUNK_SIZE) * 2,
+            min_y: -i64::from(CHUNK_SIZE),
             width: (CHUNK_SIZE * 3) as u32,
             height: (CHUNK_SIZE * 2) as u32,
         };
@@ -69,12 +69,13 @@ mod tests {
         for world_y in bounds.min_y..bounds.min_y + i64::from(bounds.height) {
             for world_x in bounds.min_x..bounds.min_x + i64::from(bounds.width) {
                 let offset = pixel_offset(bounds, world_x, world_y);
-                let expected =
-                    if world_x.rem_euclid(CHUNK_SIZE) == 0 || world_y.rem_euclid(CHUNK_SIZE) == 0 {
-                        GRID_PIXEL
-                    } else {
-                        [0; 4]
-                    };
+                let expected = if world_x.rem_euclid(i64::from(CHUNK_SIZE)) == 0
+                    || world_y.rem_euclid(i64::from(CHUNK_SIZE)) == 0
+                {
+                    GRID_PIXEL
+                } else {
+                    [0; 4]
+                };
                 assert_eq!(
                     data[offset..offset + 4],
                     expected,

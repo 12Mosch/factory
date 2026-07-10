@@ -9,11 +9,8 @@ pub(in crate::simulation::tests) fn first_resource_tile(
             if let Some(resource) = tile.resource {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                return (
-                    chunk.coord.x * CHUNK_SIZE + local_x,
-                    chunk.coord.y * CHUNK_SIZE + local_y,
-                    resource,
-                );
+                let (x, y) = chunk.coord.tile_at(local_x, local_y);
+                return (x, y, resource);
             }
         }
     }

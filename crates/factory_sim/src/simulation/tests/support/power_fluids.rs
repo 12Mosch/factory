@@ -407,7 +407,7 @@ pub(in crate::simulation::tests) fn first_buildable_offshore_pump_footprint_away
         {
             continue;
         }
-        let north_edge_is_water = (x..x + footprint.width).any(|tile_x| {
+        let north_edge_is_water = (x..x + i64::from(footprint.width)).any(|tile_x| {
             sim.world
                 .tile_at(tile_x, y - 1)
                 .is_some_and(|tile| !tile.collision.walkable && !tile.collision.buildable)

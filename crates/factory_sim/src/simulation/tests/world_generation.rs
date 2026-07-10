@@ -110,11 +110,8 @@ fn resource_tiles_in_chunk(
             let resource = tile.resource?;
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            Some((
-                coord.x * CHUNK_SIZE + local_x,
-                coord.y * CHUNK_SIZE + local_y,
-                resource,
-            ))
+            let (x, y) = coord.tile_at(local_x, local_y);
+            Some((x, y, resource))
         })
         .collect()
 }

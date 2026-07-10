@@ -228,10 +228,7 @@ pub fn all_tile_coords(sim: &Simulation) -> Vec<(i64, i64)> {
             chunk.tiles.iter().enumerate().map(move |(index, _)| {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                (
-                    chunk.coord.x * CHUNK_SIZE + local_x,
-                    chunk.coord.y * CHUNK_SIZE + local_y,
-                )
+                chunk.coord.tile_at(local_x, local_y)
             })
         })
         .collect()
@@ -252,8 +249,8 @@ pub fn fixture_is_clear_buildable(sim: &Simulation, footprint: &EntityFootprint)
 }
 
 pub fn poles_within_small_pole_reach(first: (i64, i64), second: (i64, i64)) -> bool {
-    let dx_x2 = i64::from((first.0 - second.0) * 2);
-    let dy_x2 = i64::from((first.1 - second.1) * 2);
+    let dx_x2 = (first.0 - second.0) * 2;
+    let dy_x2 = (first.1 - second.1) * 2;
     dx_x2 * dx_x2 + dy_x2 * dy_x2 <= 15 * 15
 }
 
@@ -264,8 +261,7 @@ pub fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -
         for (index, _) in chunk.tiles.iter().enumerate() {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = chunk.coord.tile_at(local_x, local_y);
             let footprint = EntityFootprint {
                 x,
                 y,
@@ -304,8 +300,7 @@ pub fn first_placeable_resource_rect(
 
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = chunk.coord.tile_at(local_x, local_y);
 
             if factory_sim::placement::validate(
                 sim,

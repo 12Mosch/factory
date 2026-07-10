@@ -436,10 +436,7 @@ fn resource_coord_in_chunk(coord: ChunkCoord, chunk: &factory_sim::Chunk) -> Opt
         tile.resource.map(|_| {
             let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
             let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            (
-                coord.x * CHUNK_SIZE + local_x,
-                coord.y * CHUNK_SIZE + local_y,
-            )
+            coord.tile_at(local_x, local_y)
         })
     })
 }

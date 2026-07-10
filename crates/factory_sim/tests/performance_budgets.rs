@@ -446,10 +446,7 @@ fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i64, i64)> {
             (0..CHUNK_SIZE * CHUNK_SIZE).map(move |index| {
                 let local_x = index.rem_euclid(CHUNK_SIZE);
                 let local_y = index.div_euclid(CHUNK_SIZE);
-                (
-                    coord.x * CHUNK_SIZE + local_x,
-                    coord.y * CHUNK_SIZE + local_y,
-                )
+                coord.tile_at(local_x, local_y)
             })
         })
         .collect()

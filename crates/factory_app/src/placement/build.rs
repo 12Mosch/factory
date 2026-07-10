@@ -175,6 +175,9 @@ pub(crate) fn construction_status_from_error(
         ConstructionError::EmptyBlueprintArea => {
             BuildPlacementStatus::CannotPlace("Nothing to capture".to_string())
         }
+        ConstructionError::BlueprintOffsetOutOfRange => {
+            BuildPlacementStatus::CannotPlace("Blueprint area is too large".to_string())
+        }
         ConstructionError::MissingBlueprint { .. } => {
             BuildPlacementStatus::CannotPlace("Blueprint no longer exists".to_string())
         }

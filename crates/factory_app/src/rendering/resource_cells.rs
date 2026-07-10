@@ -337,13 +337,8 @@ pub(crate) fn collect_resource_tiles(
             if let Some(resource) = tile.resource {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                resources.insert(
-                    (
-                        chunk.coord.tile_at(local_x, local_y).0,
-                        chunk.coord.tile_at(local_x, local_y).1,
-                    ),
-                    resource,
-                );
+                let tile_coord = chunk.coord.tile_at(local_x, local_y);
+                resources.insert(tile_coord, resource);
             }
         }
     }

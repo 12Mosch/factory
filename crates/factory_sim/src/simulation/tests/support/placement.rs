@@ -3,8 +3,8 @@ use super::*;
 
 pub(in crate::simulation::tests) fn first_manual_mining_reach_tile(
     sim: &Simulation,
-    target_x: i32,
-    target_y: i32,
+    target_x: WorldTileCoord,
+    target_y: WorldTileCoord,
 ) -> (WorldTileCoord, WorldTileCoord) {
     for dy in -2..=2 {
         for dx in -2..=2 {
@@ -12,8 +12,8 @@ pub(in crate::simulation::tests) fn first_manual_mining_reach_tile(
                 continue;
             }
 
-            let x = target_x + dx;
-            let y = target_y + dy;
+            let x = target_x + i64::from(dx);
+            let y = target_y + i64::from(dy);
             if sim.can_player_occupy_tile(x, y) {
                 return (x, y);
             }
@@ -77,12 +77,7 @@ pub(in crate::simulation::tests) fn first_water_tile(
     for chunk in world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
             if !tile.collision.buildable {
-                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
-                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                return (
-                    chunk.coord.x * CHUNK_SIZE + local_x,
-                    chunk.coord.y * CHUNK_SIZE + local_y,
-                );
+                return tile_coord(chunk, index);
             }
         }
     }
@@ -97,10 +92,7 @@ pub(in crate::simulation::tests) fn first_buildable_rect(
 ) -> (WorldTileCoord, WorldTileCoord) {
     for chunk in world.chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
-            let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
-            let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-            let x = chunk.coord.x * CHUNK_SIZE + local_x;
-            let y = chunk.coord.y * CHUNK_SIZE + local_y;
+            let (x, y) = tile_coord(chunk, index);
             let footprint = EntityFootprint {
                 x,
                 y,
@@ -156,10 +148,8 @@ pub(in crate::simulation::tests) fn first_player_approach_to_streamed_walkable_t
                     continue;
                 }
 
-                let target_chunk = ChunkCoord {
-                    x: target_x.div_euclid(CHUNK_SIZE),
-                    y: target_y.div_euclid(CHUNK_SIZE),
-                };
+                let target_chunk = ChunkCoord::from_tile(target_x, target_y)
+                    .expect("streamed target should remain in the chunk plane");
                 let mut world = sim.world.clone();
                 world.ensure_chunk_generated(target_chunk);
                 if world
@@ -264,10 +254,7 @@ pub(in crate::simulation::tests) fn tile_coord(
 ) -> (WorldTileCoord, WorldTileCoord) {
     let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
     let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-    (
-        chunk.coord.x * CHUNK_SIZE + local_x,
-        chunk.coord.y * CHUNK_SIZE + local_y,
-    )
+    chunk.coord.tile_at(local_x, local_y)
 }
 
 pub(in crate::simulation::tests) fn all_tile_coords(

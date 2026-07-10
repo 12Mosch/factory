@@ -103,12 +103,12 @@ fn fullscreen_crop_bounds_clamps_near_map_edges() {
 
     let upper_right = fullscreen_crop_bounds(map_bounds, Vec2::new(500.0, 500.0), 2.0, Vec2::ONE);
     assert_eq!(
-        upper_right.min_x + upper_right.i64::from(width),
-        map_bounds.min_x + map_bounds.i64::from(width)
+        upper_right.min_x + i64::from(upper_right.width),
+        map_bounds.min_x + i64::from(map_bounds.width)
     );
     assert_eq!(
-        upper_right.min_y + upper_right.i64::from(height),
-        map_bounds.min_y + map_bounds.i64::from(height)
+        upper_right.min_y + i64::from(upper_right.height),
+        map_bounds.min_y + i64::from(map_bounds.height)
     );
 }
 
@@ -159,10 +159,7 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
     );
 
     assert!(!sim.is_chunk_revealed(concealed_chunk));
-    let hidden_tile = (
-        concealed_chunk.x * CHUNK_SIZE + 1,
-        concealed_chunk.y * CHUNK_SIZE + 1,
-    );
+    let hidden_tile = concealed_chunk.tile_at(1, 1);
     assert_hidden_pixel(&resources, hidden_tile);
     assert_hidden_pixel(&entities, hidden_tile);
 }
@@ -175,8 +172,9 @@ fn assert_hidden_pixel(map: &MapPixels, tile: (i64, i64)) {
 fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i64, i64) {
     let mut world = WorldSim::new_seeded(seed);
     world.ensure_chunk_generated(coord);
-    for y in coord.y * CHUNK_SIZE..(coord.y + 1) * CHUNK_SIZE {
-        for x in coord.x * CHUNK_SIZE..(coord.x + 1) * CHUNK_SIZE {
+    let (min_x, min_y) = coord.min_tile();
+    for y in min_y..min_y + i64::from(CHUNK_SIZE) {
+        for x in min_x..min_x + i64::from(CHUNK_SIZE) {
             if world
                 .tile_at(x, y)
                 .is_some_and(|tile| tile.collision.walkable)
