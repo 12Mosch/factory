@@ -15,6 +15,7 @@ use super::layout::{
 
 pub(crate) const MINIMAP_FRAME_SIZE: f32 = 184.0;
 pub(crate) const MINIMAP_RIGHT_OFFSET: f32 = 14.0;
+pub(crate) const MINIMAP_TOP_OFFSET: f32 = 14.0;
 const MINIMAP_PADDING: f32 = 4.0;
 pub(super) const MINIMAP_CONTENT_SIZE: f32 = MINIMAP_FRAME_SIZE - MINIMAP_PADDING * 2.0;
 const MAP_PLAYER_MARKER_SIZE: f32 = 9.0;
@@ -281,7 +282,7 @@ pub(super) fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, text
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(MINIMAP_RIGHT_OFFSET),
-                top: Val::Px(14.0),
+                top: Val::Px(MINIMAP_TOP_OFFSET),
                 width: Val::Px(MINIMAP_FRAME_SIZE),
                 height: Val::Px(MINIMAP_FRAME_SIZE),
                 padding: UiRect::all(Val::Px(MINIMAP_PADDING)),

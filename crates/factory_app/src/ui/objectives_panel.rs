@@ -1,11 +1,12 @@
 use bevy::prelude::*;
-use factory_data::{BasePrototypeIds, entity_prototype_id_by_name};
+use factory_data::{BasePrototypeIds, EntityPrototypeId, entity_prototype_id_by_name};
 use factory_sim::Simulation;
 
 use crate::resources::SimResource;
-use crate::ui::map_view::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET};
+use crate::ui::map_view::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET, MINIMAP_TOP_OFFSET};
 
 const OBJECTIVE_COUNT: usize = 6;
+const STOCKPILE_OBJECTIVE_INDEX: usize = 4;
 const MINIMAP_PANEL_GAP: f32 = 12.0;
 const OBJECTIVES_PANEL_RIGHT: f32 = MINIMAP_RIGHT_OFFSET + MINIMAP_FRAME_SIZE + MINIMAP_PANEL_GAP;
 
@@ -85,9 +86,27 @@ impl ObjectivesSnapshot {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ObjectivePrototypeIds {
+    base: BasePrototypeIds,
+    furnace: EntityPrototypeId,
+    drill: EntityPrototypeId,
+}
+
+impl ObjectivePrototypeIds {
+    fn from_simulation(sim: &Simulation) -> Self {
+        Self {
+            base: BasePrototypeIds::from_catalog(sim.catalog()),
+            furnace: entity_prototype_id_by_name(sim.catalog(), "stone_furnace"),
+            drill: entity_prototype_id_by_name(sim.catalog(), "burner_mining_drill"),
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct ObjectivesPanelState {
     snapshot: ObjectivesSnapshot,
+    prototype_ids: Option<ObjectivePrototypeIds>,
 }
 
 #[derive(Component)]
@@ -111,14 +130,17 @@ pub(crate) fn setup_objectives_panel(
     sim: Res<SimResource>,
     mut state: ResMut<ObjectivesPanelState>,
 ) {
-    state.snapshot = objectives_snapshot(&sim.read());
+    let sim = sim.read();
+    let prototype_ids = ObjectivePrototypeIds::from_simulation(&sim);
+    state.snapshot = objectives_snapshot(&sim, prototype_ids);
+    state.prototype_ids = Some(prototype_ids);
     let snapshot = state.snapshot.clone();
 
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(MINIMAP_RIGHT_OFFSET),
+                top: Val::Px(MINIMAP_TOP_OFFSET),
                 right: Val::Px(OBJECTIVES_PANEL_RIGHT),
                 width: Val::Px(330.0),
                 flex_direction: FlexDirection::Column,
@@ -204,7 +226,14 @@ pub(crate) fn sync_objectives_panel(
     mut hints: Query<&mut Text, (With<ObjectiveHintText>, Without<ObjectiveRowText>)>,
     mut roots: Query<&mut Visibility, With<ObjectivesPanelRoot>>,
 ) {
-    let next = objectives_snapshot(&sim.read());
+    if !sim.is_changed() {
+        return;
+    }
+
+    let prototype_ids = state
+        .prototype_ids
+        .expect("objectives panel prototype ids should be initialized at startup");
+    let next = objectives_snapshot(&sim.read(), prototype_ids);
     if next == state.snapshot {
         return;
     }
@@ -234,8 +263,7 @@ pub(crate) fn sync_objectives_panel(
     }
 }
 
-fn objectives_snapshot(sim: &Simulation) -> ObjectivesSnapshot {
-    let ids = BasePrototypeIds::from_catalog(sim.catalog());
+fn objectives_snapshot(sim: &Simulation, ids: ObjectivePrototypeIds) -> ObjectivesSnapshot {
     let statistics = sim.item_statistics();
     let produced = |item_id| {
         statistics
@@ -245,23 +273,21 @@ fn objectives_snapshot(sim: &Simulation) -> ObjectivesSnapshot {
             .map_or(0, |row| row.produced_total)
     };
 
-    let furnace_id = entity_prototype_id_by_name(sim.catalog(), "stone_furnace");
-    let drill_id = entity_prototype_id_by_name(sim.catalog(), "burner_mining_drill");
     let furnace_count = sim
         .entities()
         .placed_entities()
-        .filter(|entity| entity.prototype_id == furnace_id)
+        .filter(|entity| entity.prototype_id == ids.furnace)
         .count() as u64;
     let drill_count = sim
         .entities()
         .placed_entities()
-        .filter(|entity| entity.prototype_id == drill_id)
+        .filter(|entity| entity.prototype_id == ids.drill)
         .count() as u64;
 
     objectives_from_evidence(ObjectiveEvidence {
-        iron_ore_produced: produced(ids.items.iron_ore),
-        iron_plate_produced: produced(ids.items.iron_plate),
-        transport_belts_produced: produced(ids.items.transport_belt),
+        iron_ore_produced: produced(ids.base.items.iron_ore),
+        iron_plate_produced: produced(ids.base.items.iron_plate),
+        transport_belts_produced: produced(ids.base.items.transport_belt),
         furnace_count,
         drill_count,
     })
@@ -281,7 +307,7 @@ fn objectives_from_evidence(evidence: ObjectiveEvidence) -> ObjectivesSnapshot {
         .furnace_count
         .max(u64::from(evidence.iron_plate_produced > 0));
     let drill_placed = evidence.drill_count.max(u64::from(
-        evidence.iron_ore_produced >= OBJECTIVES[4].target,
+        evidence.iron_ore_produced >= OBJECTIVES[STOCKPILE_OBJECTIVE_INDEX].target,
     ));
 
     ObjectivesSnapshot {
