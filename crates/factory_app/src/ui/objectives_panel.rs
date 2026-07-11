@@ -1,10 +1,11 @@
 use bevy::prelude::*;
-use factory_sim::EarlyGameProgress;
+use factory_sim::OnboardingProgress;
 
 use crate::resources::SimResource;
 use crate::ui::map_view::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET, MINIMAP_TOP_OFFSET};
 
-const OBJECTIVE_COUNT: usize = 6;
+const OBJECTIVE_COUNT: usize = 17;
+const VISIBLE_ROW_COUNT: usize = 5;
 const MINIMAP_PANEL_GAP: f32 = 12.0;
 const OBJECTIVES_PANEL_RIGHT: f32 = MINIMAP_RIGHT_OFFSET + MINIMAP_FRAME_SIZE + MINIMAP_PANEL_GAP;
 
@@ -46,6 +47,61 @@ const OBJECTIVES: [ObjectiveDefinition; OBJECTIVE_COUNT] = [
         hint: "Press C and craft 10 transport belts for your first production line.",
         target: 10,
     },
+    ObjectiveDefinition {
+        title: "Generate electricity",
+        hint: "Connect an offshore pump, boiler, steam engine, and small electric pole; fuel the boiler.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Place a lab",
+        hint: "Place a lab within the coverage of a small electric pole.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Produce automation science",
+        hint: "Craft 10 red science packs and insert them into the powered lab.",
+        target: 10,
+    },
+    ObjectiveDefinition {
+        title: "Research Logistics",
+        hint: "Press T to open technologies and research Logistics.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Research Automation",
+        hint: "Research Automation to unlock assembling machines.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Automate an item",
+        hint: "Power and supply an assembling machine, select a recipe, and let it finish one item.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Produce logistic science",
+        hint: "Research electric power and logistic science packs, then automate 10 green science packs.",
+        target: 10,
+    },
+    ObjectiveDefinition {
+        title: "Research Oil Processing",
+        hint: "Press T and queue the Logistics 2, Fluid Handling, and Oil Processing prerequisite chain.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Refine petroleum gas",
+        hint: "Power a pumpjack over crude oil, pipe it to a refinery, and select Basic Oil Processing.",
+        target: 45,
+    },
+    ObjectiveDefinition {
+        title: "Research Turrets",
+        hint: "Research Stone Walls followed by Turrets.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Deploy a loaded gun turret",
+        hint: "Place a gun turret and load it with usable ammunition. Onboarding complete: expand and defend your factory!",
+        target: 1,
+    },
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -53,7 +109,6 @@ struct ObjectiveProgress {
     current: u64,
     target: u64,
 }
-
 impl ObjectiveProgress {
     fn is_complete(self) -> bool {
         self.current >= self.target
@@ -64,23 +119,26 @@ impl ObjectiveProgress {
 struct ObjectivesSnapshot {
     progress: [ObjectiveProgress; OBJECTIVE_COUNT],
 }
-
 impl Default for ObjectivesSnapshot {
     fn default() -> Self {
         Self {
-            progress: std::array::from_fn(|index| ObjectiveProgress {
+            progress: std::array::from_fn(|i| ObjectiveProgress {
                 current: 0,
-                target: OBJECTIVES[index].target,
+                target: OBJECTIVES[i].target,
             }),
         }
     }
 }
-
 impl ObjectivesSnapshot {
     fn active_index(&self) -> Option<usize> {
-        self.progress
-            .iter()
-            .position(|progress| !progress.is_complete())
+        self.progress.iter().position(|p| !p.is_complete())
+    }
+    fn visible_indices(&self) -> [usize; VISIBLE_ROW_COUNT] {
+        let active = self.active_index().unwrap_or(OBJECTIVE_COUNT - 1);
+        let start = active
+            .saturating_sub(2)
+            .min(OBJECTIVE_COUNT - VISIBLE_ROW_COUNT);
+        std::array::from_fn(|offset| start + offset)
     }
 }
 
@@ -89,20 +147,16 @@ pub(crate) struct ObjectivesPanelState {
     snapshot: ObjectivesSnapshot,
     progress_revision: u64,
 }
-
 #[derive(Component)]
 pub struct ObjectivesPanelRoot;
-
 #[derive(Component)]
 pub(crate) struct ObjectiveRow {
-    index: usize,
+    slot: usize,
 }
-
 #[derive(Component)]
 pub(crate) struct ObjectiveRowText {
-    index: usize,
+    slot: usize,
 }
-
 #[derive(Component)]
 pub(crate) struct ObjectiveHintText;
 
@@ -111,12 +165,11 @@ pub(crate) fn setup_objectives_panel(
     sim: Res<SimResource>,
     mut state: ResMut<ObjectivesPanelState>,
 ) {
-    let sim = sim.read();
-    let progress = sim.early_game_progress();
+    let progress = sim.read().onboarding_progress();
     state.snapshot = objectives_snapshot(progress);
     state.progress_revision = progress.revision;
     let snapshot = state.snapshot.clone();
-
+    let visible = snapshot.visible_indices();
     commands
         .spawn((
             Node {
@@ -142,11 +195,9 @@ pub(crate) fn setup_objectives_panel(
                 TextFont::from_font_size(16.0),
                 TextColor(Color::srgb(0.92, 0.82, 0.45)),
             ));
-
-            for index in 0..OBJECTIVE_COUNT {
-                spawn_objective_row(panel, index, &snapshot);
+            for (slot, index) in visible.into_iter().enumerate() {
+                spawn_objective_row(panel, slot, index, &snapshot);
             }
-
             panel
                 .spawn((
                     Node {
@@ -168,10 +219,12 @@ pub(crate) fn setup_objectives_panel(
 
 fn spawn_objective_row(
     panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    slot: usize,
     index: usize,
     snapshot: &ObjectivesSnapshot,
 ) {
     let progress = snapshot.progress[index];
+    let active = snapshot.active_index() == Some(index);
     panel
         .spawn((
             Node {
@@ -181,21 +234,15 @@ fn spawn_objective_row(
                 border: UiRect::left(Val::Px(3.0)),
                 ..default()
             },
-            BackgroundColor(row_background(
-                progress,
-                snapshot.active_index() == Some(index),
-            )),
-            BorderColor::all(row_accent(progress, snapshot.active_index() == Some(index))),
-            ObjectiveRow { index },
+            BackgroundColor(row_background(progress, active)),
+            BorderColor::all(row_accent(progress, active)),
+            ObjectiveRow { slot },
         ))
         .with_child((
             Text::new(row_text(index, progress)),
             TextFont::from_font_size(13.0),
-            TextColor(row_text_color(
-                progress,
-                snapshot.active_index() == Some(index),
-            )),
-            ObjectiveRowText { index },
+            TextColor(row_text_color(progress, active)),
+            ObjectiveRowText { slot },
         ));
 }
 
@@ -207,7 +254,7 @@ pub(crate) fn sync_objectives_panel(
     mut hints: Query<&mut Text, (With<ObjectiveHintText>, Without<ObjectiveRowText>)>,
     mut roots: Query<&mut Visibility, With<ObjectivesPanelRoot>>,
 ) {
-    let progress = sim.read().early_game_progress();
+    let progress = sim.read().onboarding_progress();
     if progress.revision == state.progress_revision {
         return;
     }
@@ -217,92 +264,84 @@ pub(crate) fn sync_objectives_panel(
         return;
     }
     state.snapshot = next;
-    let active_index = state.snapshot.active_index();
-
+    let active = state.snapshot.active_index();
+    let visible = state.snapshot.visible_indices();
     for mut visibility in &mut roots {
         *visibility = panel_visibility(&state.snapshot);
     }
-
     for (row, mut background, mut border) in &mut rows {
-        let progress = state.snapshot.progress[row.index];
-        let active = active_index == Some(row.index);
-        background.0 = row_background(progress, active);
-        border.set_all(row_accent(progress, active));
+        let index = visible[row.slot];
+        let p = state.snapshot.progress[index];
+        background.0 = row_background(p, active == Some(index));
+        border.set_all(row_accent(p, active == Some(index)));
     }
-
     for (label, mut text, mut color) in &mut labels {
-        let progress = state.snapshot.progress[label.index];
-        text.0 = row_text(label.index, progress);
-        color.0 = row_text_color(progress, active_index == Some(label.index));
+        let index = visible[label.slot];
+        let p = state.snapshot.progress[index];
+        text.0 = row_text(index, p);
+        color.0 = row_text_color(p, active == Some(index));
     }
-
     let hint = hint_text(&state.snapshot);
     for mut text in &mut hints {
         text.0 = hint.clone();
     }
 }
 
-fn objectives_snapshot(progress: EarlyGameProgress) -> ObjectivesSnapshot {
+fn objectives_snapshot(p: OnboardingProgress) -> ObjectivesSnapshot {
+    let values = [
+        p.iron_ore_manually_mined,
+        p.stone_furnaces_placed,
+        p.iron_plates_smelted,
+        p.burner_mining_drills_placed,
+        p.iron_ore_drill_mined,
+        p.transport_belts_manually_crafted,
+        u64::from(p.electricity_generated),
+        p.labs_placed,
+        p.automation_science_packs_produced,
+        u64::from(p.logistics_researched),
+        u64::from(p.automation_researched),
+        p.assembler_items_produced,
+        p.logistic_science_packs_produced,
+        u64::from(p.oil_processing_researched),
+        p.petroleum_gas_produced,
+        u64::from(p.turrets_researched),
+        p.loaded_gun_turrets,
+    ];
     ObjectivesSnapshot {
-        progress: [
-            ObjectiveProgress {
-                current: progress.iron_ore_manually_mined,
-                target: OBJECTIVES[0].target,
-            },
-            ObjectiveProgress {
-                current: progress.stone_furnaces_placed,
-                target: OBJECTIVES[1].target,
-            },
-            ObjectiveProgress {
-                current: progress.iron_plates_smelted,
-                target: OBJECTIVES[2].target,
-            },
-            ObjectiveProgress {
-                current: progress.burner_mining_drills_placed,
-                target: OBJECTIVES[3].target,
-            },
-            ObjectiveProgress {
-                current: progress.iron_ore_drill_mined,
-                target: OBJECTIVES[4].target,
-            },
-            ObjectiveProgress {
-                current: progress.transport_belts_manually_crafted,
-                target: OBJECTIVES[5].target,
-            },
-        ],
+        progress: std::array::from_fn(|i| ObjectiveProgress {
+            current: values[i],
+            target: OBJECTIVES[i].target,
+        }),
     }
 }
-
-fn row_text(index: usize, progress: ObjectiveProgress) -> String {
-    if progress.is_complete() {
-        format!("[x] {}", OBJECTIVES[index].title)
+fn row_text(index: usize, p: ObjectiveProgress) -> String {
+    if p.is_complete() {
+        format!("[x] {}. {}", index + 1, OBJECTIVES[index].title)
     } else {
         format!(
-            "[ ] {}  {}/{}",
+            "[ ] {}. {}  {}/{}",
+            index + 1,
             OBJECTIVES[index].title,
-            progress.current.min(progress.target),
-            progress.target
+            p.current.min(p.target),
+            p.target
         )
     }
 }
-
-fn hint_text(snapshot: &ObjectivesSnapshot) -> String {
-    snapshot.active_index().map_or_else(
-        || "Early objectives complete. Grow the factory!".to_string(),
-        |index| format!("NEXT: {}", OBJECTIVES[index].hint),
+fn hint_text(s: &ObjectivesSnapshot) -> String {
+    s.active_index().map_or_else(
+        || "Onboarding complete. Expand and defend your factory!".to_string(),
+        |i| format!("NEXT: {}", OBJECTIVES[i].hint),
     )
 }
-
-fn panel_visibility(snapshot: &ObjectivesSnapshot) -> Visibility {
-    if snapshot.active_index().is_some() {
+fn panel_visibility(s: &ObjectivesSnapshot) -> Visibility {
+    if s.active_index().is_some() {
         Visibility::Visible
     } else {
         Visibility::Hidden
     }
 }
-
-fn row_background(progress: ObjectiveProgress, active: bool) -> Color {
-    if progress.is_complete() {
+fn row_background(p: ObjectiveProgress, active: bool) -> Color {
+    if p.is_complete() {
         Color::srgba(0.08, 0.18, 0.11, 0.78)
     } else if active {
         Color::srgba(0.20, 0.16, 0.065, 0.90)
@@ -310,9 +349,8 @@ fn row_background(progress: ObjectiveProgress, active: bool) -> Color {
         Color::srgba(0.07, 0.075, 0.072, 0.72)
     }
 }
-
-fn row_accent(progress: ObjectiveProgress, active: bool) -> Color {
-    if progress.is_complete() {
+fn row_accent(p: ObjectiveProgress, active: bool) -> Color {
+    if p.is_complete() {
         Color::srgb(0.31, 0.72, 0.40)
     } else if active {
         Color::srgb(0.92, 0.63, 0.18)
@@ -320,9 +358,8 @@ fn row_accent(progress: ObjectiveProgress, active: bool) -> Color {
         Color::srgb(0.25, 0.28, 0.25)
     }
 }
-
-fn row_text_color(progress: ObjectiveProgress, active: bool) -> Color {
-    if progress.is_complete() {
+fn row_text_color(p: ObjectiveProgress, active: bool) -> Color {
+    if p.is_complete() {
         Color::srgb(0.62, 0.82, 0.64)
     } else if active {
         Color::srgb(1.0, 0.91, 0.66)
@@ -334,65 +371,62 @@ fn row_text_color(progress: ObjectiveProgress, active: bool) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn objectives_advance_in_early_game_order() {
-        let snapshot = objectives_snapshot(EarlyGameProgress {
-            iron_ore_manually_mined: 12,
-            stone_furnaces_placed: 1,
-            iron_plates_smelted: 4,
-            ..default()
-        });
-
-        assert!(snapshot.progress[0].is_complete());
-        assert!(snapshot.progress[1].is_complete());
-        assert!(!snapshot.progress[2].is_complete());
-        assert_eq!(snapshot.active_index(), Some(2));
-        assert_eq!(
-            row_text(2, snapshot.progress[2]),
-            "[ ] Smelt iron plates  4/10"
-        );
-    }
-
-    #[test]
-    fn production_does_not_infer_unrelated_objectives() {
-        let snapshot = objectives_snapshot(EarlyGameProgress {
-            iron_plates_smelted: 10,
-            iron_ore_drill_mined: 25,
-            ..default()
-        });
-
-        assert!(!snapshot.progress[0].is_complete());
-        assert!(!snapshot.progress[1].is_complete());
-        assert!(!snapshot.progress[3].is_complete());
-        assert!(snapshot.progress[4].is_complete());
-    }
-
-    #[test]
-    fn completed_panel_replaces_next_step_with_growth_message() {
-        let snapshot = objectives_snapshot(EarlyGameProgress {
+    fn windows_track_active_objective() {
+        let first = ObjectivesSnapshot::default();
+        assert_eq!(first.visible_indices(), [0, 1, 2, 3, 4]);
+        let middle = objectives_snapshot(OnboardingProgress {
             iron_ore_manually_mined: 10,
             stone_furnaces_placed: 1,
             iron_plates_smelted: 10,
             burner_mining_drills_placed: 1,
             iron_ore_drill_mined: 25,
             transport_belts_manually_crafted: 10,
+            electricity_generated: true,
+            labs_placed: 1,
             ..default()
         });
-
-        assert_eq!(snapshot.active_index(), None);
-        assert_eq!(
-            hint_text(&snapshot),
-            "Early objectives complete. Grow the factory!"
-        );
-        assert_eq!(panel_visibility(&snapshot), Visibility::Hidden);
+        assert_eq!(middle.active_index(), Some(8));
+        assert_eq!(middle.visible_indices(), [6, 7, 8, 9, 10]);
     }
-
     #[test]
-    fn unfinished_panel_remains_visible() {
+    fn end_window_is_thirteen_through_seventeen() {
+        let mut s = ObjectivesSnapshot::default();
+        for p in &mut s.progress[..16] {
+            p.current = p.target;
+        }
+        assert_eq!(s.visible_indices(), [12, 13, 14, 15, 16]);
+    }
+    #[test]
+    fn later_progress_does_not_skip_sequence() {
+        let s = objectives_snapshot(OnboardingProgress {
+            turrets_researched: true,
+            loaded_gun_turrets: 1,
+            ..default()
+        });
+        assert_eq!(s.active_index(), Some(0));
+    }
+    #[test]
+    fn labels_use_absolute_numbers_and_cap_progress() {
         assert_eq!(
-            panel_visibility(&ObjectivesSnapshot::default()),
-            Visibility::Visible
+            row_text(
+                8,
+                ObjectiveProgress {
+                    current: 99,
+                    target: 10
+                }
+            ),
+            "[x] 9. Produce automation science"
+        );
+        assert!(
+            row_text(
+                8,
+                ObjectiveProgress {
+                    current: 7,
+                    target: 10
+                }
+            )
+            .contains("7/10")
         );
     }
 }

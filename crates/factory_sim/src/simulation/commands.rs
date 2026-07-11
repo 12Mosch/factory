@@ -363,17 +363,14 @@ impl Simulation {
     fn record_early_game_placement(&mut self, item_id: ItemId) {
         let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
         if item_id == base.items.stone_furnace {
-            self.early_game_progress.stone_furnaces_placed = self
-                .early_game_progress
-                .stone_furnaces_placed
-                .saturating_add(1);
-            self.early_game_progress.changed();
+            self.onboarding_progress
+                .record_counter(|progress| &mut progress.stone_furnaces_placed, 1);
         } else if item_id == base.items.burner_mining_drill {
-            self.early_game_progress.burner_mining_drills_placed = self
-                .early_game_progress
-                .burner_mining_drills_placed
-                .saturating_add(1);
-            self.early_game_progress.changed();
+            self.onboarding_progress
+                .record_counter(|progress| &mut progress.burner_mining_drills_placed, 1);
+        } else if item_id == base.items.lab {
+            self.onboarding_progress
+                .record_counter(|progress| &mut progress.labs_placed, 1);
         }
     }
 }

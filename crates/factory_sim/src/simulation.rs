@@ -118,7 +118,7 @@ pub struct Simulation {
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
-    early_game_progress: EarlyGameProgress,
+    onboarding_progress: OnboardingProgress,
     pub research: ResearchState,
 
     power: PowerSubsystem,
@@ -132,7 +132,7 @@ pub struct Simulation {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
-pub struct EarlyGameProgress {
+pub struct OnboardingProgress {
     pub revision: u64,
     pub iron_ore_manually_mined: u64,
     pub stone_furnaces_placed: u64,
@@ -140,11 +140,78 @@ pub struct EarlyGameProgress {
     pub burner_mining_drills_placed: u64,
     pub iron_ore_drill_mined: u64,
     pub transport_belts_manually_crafted: u64,
+    pub electricity_generated: bool,
+    pub labs_placed: u64,
+    pub automation_science_packs_produced: u64,
+    pub logistics_researched: bool,
+    pub automation_researched: bool,
+    pub assembler_items_produced: u64,
+    pub logistic_science_packs_produced: u64,
+    pub oil_processing_researched: bool,
+    pub petroleum_gas_produced: u64,
+    pub turrets_researched: bool,
+    pub loaded_gun_turrets: u64,
 }
 
-impl EarlyGameProgress {
+impl OnboardingProgress {
     fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn add(counter: &mut u64, amount: u64) -> bool {
+        let next = counter.saturating_add(amount);
+        let changed = next != *counter;
+        *counter = next;
+        changed
+    }
+
+    fn record_counter(&mut self, select: impl FnOnce(&mut Self) -> &mut u64, amount: u64) {
+        if amount != 0 && Self::add(select(self), amount) {
+            self.changed();
+        }
+    }
+
+    fn record_flag(&mut self, select: impl FnOnce(&mut Self) -> &mut bool) {
+        let flag = select(self);
+        if !*flag {
+            *flag = true;
+            self.changed();
+        }
+    }
+
+    fn record_electricity_generated(&mut self) {
+        self.record_flag(|progress| &mut progress.electricity_generated);
+    }
+
+    fn record_item_produced(
+        &mut self,
+        base: &factory_data::BasePrototypeIds,
+        item: ItemId,
+        amount: u64,
+    ) {
+        if item == base.items.automation_science_pack {
+            self.record_counter(
+                |progress| &mut progress.automation_science_packs_produced,
+                amount,
+            );
+        } else if item == base.items.logistic_science_pack {
+            self.record_counter(
+                |progress| &mut progress.logistic_science_packs_produced,
+                amount,
+            );
+        }
+    }
+
+    fn record_research_completed(&mut self, technology_name: &str) {
+        match technology_name {
+            "logistics" => self.record_flag(|progress| &mut progress.logistics_researched),
+            "automation" => self.record_flag(|progress| &mut progress.automation_researched),
+            "oil_processing" => {
+                self.record_flag(|progress| &mut progress.oil_processing_researched)
+            }
+            "turrets" => self.record_flag(|progress| &mut progress.turrets_researched),
+            _ => {}
+        }
     }
 }
 

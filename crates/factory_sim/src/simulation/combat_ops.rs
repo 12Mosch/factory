@@ -8,6 +8,21 @@ impl Simulation {
     /// applied after the turret loop so destruction never happens while
     /// entity state is borrowed.
     pub(super) fn advance_gun_turrets(&mut self) {
+        if self.onboarding_progress.loaded_gun_turrets == 0
+            && self.entities.gun_turrets.iter().any(|(entity_id, state)| {
+                self.entities.placed_entities.contains_key(entity_id)
+                    && (state.loaded_shots > 0
+                        || state.ammo.slots.iter().flatten().any(|stack| {
+                            self.world
+                                .prototypes
+                                .item(stack.item_id)
+                                .is_some_and(|item| item.ammo.is_some())
+                        }))
+            })
+        {
+            self.onboarding_progress
+                .record_counter(|progress| &mut progress.loaded_gun_turrets, 1);
+        }
         let mut structure_damage: Vec<(EntityId, u32)> = Vec::new();
         // Units move during their own simulation step, not during turret
         // fire, so one index is valid for this whole pass.
