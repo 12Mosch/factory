@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_sim::{ThreatEvent, ThreatEventKind, ThreatLocation};
+use factory_sim::{CHUNK_SIZE, ThreatEvent, ThreatEventKind, ThreatLocation};
 use std::collections::VecDeque;
 
 use crate::map::resources::{MapLayer, MapViewState};
@@ -152,7 +152,10 @@ pub fn handle_threat_alert_clicks(mut clicks: AlertClicks, mut map: ResMut<MapVi
             ThreatLocation::Exact { x, y } => Vec2::new(x as f32, y as f32),
             ThreatLocation::Sector(coord) => {
                 let (x, y) = coord.min_tile();
-                Vec2::new((x + 16) as f32, (y + 16) as f32)
+                Vec2::new(
+                    (x + i64::from(CHUNK_SIZE) / 2) as f32,
+                    (y + i64::from(CHUNK_SIZE) / 2) as f32,
+                )
             }
         };
     }

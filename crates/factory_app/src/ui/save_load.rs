@@ -149,9 +149,15 @@ pub(crate) fn sync_save_load_window(
     config: Res<SaveLoadConfig>,
     pending_jobs: Res<PendingSaveJobs>,
     status: Res<SaveLoadStatus>,
-    confirmation: Res<NewWorldConfirmation>,
+    mut confirmation: ResMut<NewWorldConfirmation>,
     mut roots: WindowRootQuery<SaveLoadSnapshot>,
 ) {
+    // The window can be dismissed through several independent paths (Escape,
+    // successful load, confirming New World), so reset the confirmation here
+    // rather than at each closing call site.
+    if !state.open {
+        confirmation.awaiting_confirmation = false;
+    }
     sync_window(
         &mut commands,
         &mut roots,

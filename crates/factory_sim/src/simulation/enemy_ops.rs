@@ -119,7 +119,7 @@ impl Simulation {
             }
         }
         for raid in self.enemies.raids.values() {
-            let location = raid
+            let member_location = raid
                 .members
                 .iter()
                 .next()
@@ -127,10 +127,15 @@ impl Simulation {
                 .map(|unit| ThreatLocation::Exact {
                     x: unit.tile().0,
                     y: unit.tile().1,
-                })
-                .unwrap_or(ThreatLocation::Sector(
-                    self.enemies.bases[&raid.base_id].anchor,
-                ));
+                });
+            let Some(location) = member_location.or_else(|| {
+                self.enemies
+                    .bases
+                    .get(&raid.base_id)
+                    .map(|base| ThreatLocation::Sector(base.anchor))
+            }) else {
+                continue;
+            };
             snapshot.raids.push((raid.id, location));
             if let Some(target) = raid.target {
                 snapshot.raid_targets.push((raid.id, target));

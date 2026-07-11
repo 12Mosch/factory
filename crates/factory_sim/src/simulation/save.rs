@@ -12,6 +12,7 @@ pub const SAVE_VERSION: u32 = 15;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
+// v11: PrototypeCatalog gained the optional enemy_gameplay config section.
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 11;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
