@@ -10,6 +10,7 @@ pub(crate) use components::{
     FullMapImage, FullMapLayerButton, FullMapOverlayRoot, FullMapRecenterButton, FullMapRoot,
     MinimapImage, MinimapOverlayRoot, MinimapRoot,
 };
+pub(crate) use drawing::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET};
 pub(crate) use input::handle_full_map_buttons;
 pub use layout::{
     FULL_MAP_BASELINE_VIEW_HEIGHT, FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center,

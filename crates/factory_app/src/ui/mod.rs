@@ -11,6 +11,7 @@ pub(crate) mod layout;
 pub(crate) mod machine_indicators;
 pub(crate) mod manual_crafting;
 pub mod map_view;
+pub mod objectives_panel;
 pub mod production_stats;
 pub mod resources;
 pub mod save_load;

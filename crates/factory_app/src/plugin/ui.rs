@@ -23,6 +23,9 @@ use crate::ui::manual_crafting::{
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
     sync_manual_crafting_panel,
 };
+use crate::ui::objectives_panel::{
+    ObjectivesPanelState, setup_objectives_panel, sync_objectives_panel,
+};
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
 use crate::ui::resources::{
     CraftingWindowState, InventoryTransferFeedback, OpenContainer, ProductionStatsWindowState,
@@ -45,7 +48,8 @@ impl Plugin for UiPlugin {
             .init_resource::<TechnologyWindowState>()
             .init_resource::<CraftingWindowState>()
             .init_resource::<ProductionStatsWindowState>()
-            .add_systems(Startup, setup_debug_overlay)
+            .init_resource::<ObjectivesPanelState>()
+            .add_systems(Startup, (setup_debug_overlay, setup_objectives_panel))
             .add_systems(
                 Update,
                 (
@@ -81,6 +85,7 @@ impl Plugin for UiPlugin {
                         .after(handle_container_slot_clicks)
                         .after(handle_sim_command_results),
                     update_burner_drill_indicators,
+                    sync_objectives_panel,
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
                     handle_manual_crafting_tab_buttons.in_set(AppSet::UiInteraction),
