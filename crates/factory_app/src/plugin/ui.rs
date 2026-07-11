@@ -2,7 +2,9 @@ use bevy::prelude::*;
 
 use super::AppSet;
 use crate::input::build::handle_build_world_click;
-use crate::interaction::command_feedback::handle_sim_command_results;
+use crate::interaction::command_feedback::{
+    ItemGainFeedback, expire_item_gain_feedback, handle_sim_command_results,
+};
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
@@ -14,8 +16,8 @@ use crate::ui::assembler_panel::{
 use crate::ui::build_menu::handle_build_menu_buttons;
 use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{
-    DebugOverlayVisible, apply_debug_overlay_visibility, setup_debug_overlay,
-    toggle_debug_overlay, update_debug_overlay, update_ups_stats,
+    DebugOverlayVisible, apply_debug_overlay_visibility, setup_debug_overlay, toggle_debug_overlay,
+    update_debug_overlay, update_ups_stats,
 };
 use crate::ui::inventory_panel::{
     handle_container_slot_clicks, update_container_slot_text,
@@ -49,6 +51,7 @@ impl Plugin for UiPlugin {
             .init_resource::<DebugOverlayVisible>()
             .init_resource::<OpenContainer>()
             .init_resource::<InventoryTransferFeedback>()
+            .init_resource::<ItemGainFeedback>()
             .init_resource::<TechnologyWindowState>()
             .init_resource::<CraftingWindowState>()
             .init_resource::<ProductionStatsWindowState>()
@@ -85,6 +88,7 @@ impl Plugin for UiPlugin {
                     sync_container_window.after(handle_build_menu_buttons),
                     handle_container_slot_clicks.in_set(AppSet::UiInteraction),
                     handle_sim_command_results.in_set(AppSet::UiInteraction),
+                    expire_item_gain_feedback.after(handle_sim_command_results),
                     update_container_slot_text,
                     update_inventory_transfer_feedback_text
                         .after(sync_container_window)

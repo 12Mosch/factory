@@ -39,6 +39,31 @@ fn apply_command_set_manual_mining_target_matches_direct_call() {
 }
 
 #[test]
+fn apply_command_reports_manually_mined_item_and_inventory_total() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y, resource) = first_resource_tile(&sim.world);
+    let target = ManualMiningTarget { x, y };
+    sim.player = PlayerState::centered_on_tile(x, y);
+    let count_before = sim.player_inventory.count(resource.resource_item);
+
+    let mut effect = SimCommandEffect::None;
+    for _ in 0..MANUAL_MINING_TICKS_PER_ITEM {
+        effect = sim
+            .apply_command(&SimCommand::SetManualMiningTarget(Some(target)))
+            .expect("manual mining target should apply");
+    }
+
+    assert_eq!(
+        effect,
+        SimCommandEffect::PlayerItemGained {
+            item_id: resource.resource_item,
+            amount: 1,
+            total: count_before + 1,
+        }
+    );
+}
+
+#[test]
 fn apply_command_start_manual_craft_consumes_ingredients() {
     let mut sim = Simulation::new_test_world(123);
     let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
