@@ -425,7 +425,7 @@ mod tests {
         let catalog = PrototypeCatalog::from_ron_str(r#"(
             items: [(id: 0, name: "machine", stack_size: 50)],
             recipes: [(id: 0, name: "machine", category: Crafting, crafting_time_ticks: 1, products: [(item: "machine", amount: 1)])],
-            entities: [(id: 0, name: "machine", entity_kind: AssemblingMachine, building_category: Some(Production), building_menu_order: Some(1), size: (x: 1, y: 1), collision_mask: (layers: ["building"]))],
+            entities: [(id: 0, name: "machine", entity_kind: AssemblingMachine, build_item: Some("machine"), building_category: Some(Production), building_menu_order: Some(1), size: (x: 1, y: 1), collision_mask: (layers: ["building"]))],
             tiles: [],
             technologies: [
                 (id: 0, name: "first", prerequisites: [], science_packs: [], required_units: 1, research_time_ticks: 1, effects: [UnlockRecipe("machine")]),

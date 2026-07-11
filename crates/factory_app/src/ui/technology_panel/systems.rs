@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use factory_sim::SimCommand;
 
 use crate::audio::SoundEvent;
-use crate::build::resources::BuildPlacementState;
+use crate::build::resources::{BuildMenuState, BuildPlacementState};
 use crate::input::panels::escape_consumed;
 use crate::input::resources::AppInputState;
 use crate::resources::SimResource;
@@ -43,12 +43,17 @@ type TechnologyQueueInteractionQuery<'w, 's> = Query<
 pub(crate) fn handle_technology_window_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     input_state: Option<Res<AppInputState>>,
+    build_menu: Res<BuildMenuState>,
     mut window_state: ResMut<TechnologyWindowState>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
     let Some(keyboard) = keyboard else {
         return;
     };
+
+    if build_menu.open || escape_consumed(input_state.as_deref()) {
+        return;
+    }
 
     if keyboard.just_pressed(KeyCode::KeyT) {
         window_state.open = !window_state.open;
@@ -57,10 +62,7 @@ pub(crate) fn handle_technology_window_input(
         }
     }
 
-    if !escape_consumed(input_state.as_deref())
-        && window_state.open
-        && keyboard.just_pressed(KeyCode::Escape)
-    {
+    if window_state.open && keyboard.just_pressed(KeyCode::Escape) {
         window_state.open = false;
     }
 }

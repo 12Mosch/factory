@@ -98,6 +98,28 @@ pub(crate) fn handle_panel_input(
         return;
     };
 
+    if resources.build_menu.open {
+        if keyboard.just_pressed(KeyCode::Escape) {
+            if resources.build_menu.search_query.is_empty() {
+                resources.build_menu.close();
+            } else {
+                resources.build_menu.search_query.clear();
+                resources.build_menu.message = None;
+            }
+            resources.input_state.escape_consumed = true;
+        }
+        resources.input_state.world_blocked = world_blocking_windows_open(
+            resources.map.open,
+            resources.stats.open,
+            resources.crafting.open,
+            resources.audio_settings.open,
+            resources.save_load.open,
+            resources.build_menu.open,
+            resources.blueprint_library.open,
+        );
+        return;
+    }
+
     if keyboard.just_pressed(KeyCode::KeyM) {
         resources.map.open = !resources.map.open;
         if resources.map.open {
@@ -140,13 +162,9 @@ pub(crate) fn handle_panel_input(
         }
     }
     if keyboard.just_pressed(KeyCode::KeyB) && !control_held {
-        if resources.build_menu.open {
-            resources.build_menu.close();
-        } else {
-            resources.build_menu.open_fresh();
-            resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
-        }
+        resources.build_menu.open_fresh();
+        resources.build_state.selected = None;
+        resources.open_container.entity_id = None;
     }
     if keyboard.just_pressed(KeyCode::F3) {
         resources.settings.debug_reveal_all = !resources.settings.debug_reveal_all;
@@ -168,14 +186,6 @@ pub(crate) fn handle_panel_input(
             resources.input_state.escape_consumed = true;
         } else if resources.technology.open {
             resources.technology.open = false;
-            resources.input_state.escape_consumed = true;
-        } else if resources.build_menu.open {
-            if resources.build_menu.search_query.is_empty() {
-                resources.build_menu.close();
-            } else {
-                resources.build_menu.search_query.clear();
-                resources.build_menu.message = None;
-            }
             resources.input_state.escape_consumed = true;
         } else if resources.blueprint_library.open {
             resources.blueprint_library.open = false;
@@ -223,9 +233,7 @@ pub(crate) fn handle_build_menu_search_input(
         keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
     });
     for input in inputs.read() {
-        if input.state != ButtonState::Pressed
-            || matches!(input.key_code, KeyCode::KeyB | KeyCode::Escape)
-        {
+        if input.state != ButtonState::Pressed || input.key_code == KeyCode::Escape {
             continue;
         }
         if input.key_code == KeyCode::Backspace {

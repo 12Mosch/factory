@@ -180,14 +180,20 @@ pub(crate) fn sync_build_menu(
     sim: Res<SimResource>,
     hotbar: Res<HotbarState>,
     state: Res<BuildMenuState>,
+    mut cached_buildables: Local<Option<Vec<BuildablePrototype>>>,
     mut roots: WindowRootQuery<BuildMenuSnapshot>,
 ) {
+    let buildables = cached_buildables.get_or_insert_with(|| {
+        let mut buildables = buildable_prototypes(sim.read().catalog());
+        sort_buildables(&mut buildables);
+        buildables
+    });
     sync_window(
         &mut commands,
         &mut roots,
         state.open,
         sim.is_changed() || hotbar.is_changed() || state.is_changed(),
-        || build_menu_snapshot(&sim.read(), &hotbar, &state),
+        || build_menu_snapshot(&sim.read(), &hotbar, &state, buildables),
         build_menu_root,
         spawn_contents,
     );
@@ -197,16 +203,10 @@ pub(crate) fn build_menu_snapshot(
     sim: &Simulation,
     hotbar: &HotbarState,
     state: &BuildMenuState,
+    buildables: &[BuildablePrototype],
 ) -> BuildMenuSnapshot {
     let catalog = sim.catalog();
-    let mut buildables = buildable_prototypes(catalog);
-    buildables.sort_by(|left, right| {
-        left.category
-            .cmp(&right.category)
-            .then_with(|| left.menu_order.cmp(&right.menu_order))
-            .then_with(|| normalize(&left.display_name).cmp(&normalize(&right.display_name)))
-            .then_with(|| left.prototype_id.cmp(&right.prototype_id))
-    });
+    let buildables = buildables.to_vec();
     let query = normalize(&state.search_query);
     let search_matches =
         |buildable: &BuildablePrototype| matches_search(buildable, catalog, &query);
@@ -251,6 +251,16 @@ pub(crate) fn build_menu_snapshot(
         message: state.message.clone(),
         empty_message,
     }
+}
+
+fn sort_buildables(buildables: &mut [BuildablePrototype]) {
+    buildables.sort_by(|left, right| {
+        left.category
+            .cmp(&right.category)
+            .then_with(|| left.menu_order.cmp(&right.menu_order))
+            .then_with(|| normalize(&left.display_name).cmp(&normalize(&right.display_name)))
+            .then_with(|| left.prototype_id.cmp(&right.prototype_id))
+    });
 }
 
 fn entry_from_buildable(
@@ -639,21 +649,28 @@ mod tests {
             7,
             PrototypeCatalog::load_base().expect("base catalog should load"),
         );
-        let catalog_count = buildable_prototypes(sim.catalog()).len();
+        let mut buildables = buildable_prototypes(sim.catalog());
+        sort_buildables(&mut buildables);
+        let catalog_count = buildables.len();
         let mut hotbar = HotbarState::default();
-        let favorite = buildable_prototypes(sim.catalog())[0].selection();
+        let favorite = buildables[0].selection();
         hotbar.slots[4] = Some(favorite);
         let mut state = BuildMenuState::default();
 
-        let all = build_menu_snapshot(&sim, &hotbar, &state);
+        let all = build_menu_snapshot(&sim, &hotbar, &state, &buildables);
         assert_eq!(all.entries.len(), catalog_count);
         assert!(all.entries.iter().any(|entry| !entry.unlocked));
 
         state.selected_view = BuildingMenuView::Favorites;
-        assert_eq!(build_menu_snapshot(&sim, &hotbar, &state).entries.len(), 1);
+        assert_eq!(
+            build_menu_snapshot(&sim, &hotbar, &state, &buildables)
+                .entries
+                .len(),
+            1
+        );
         state.selected_view = BuildingMenuView::Category(BuildingCategory::Defense);
         assert!(
-            build_menu_snapshot(&sim, &hotbar, &state)
+            build_menu_snapshot(&sim, &hotbar, &state, &buildables)
                 .entries
                 .iter()
                 .all(|entry| entry.category == BuildingCategory::Defense)
@@ -662,21 +679,21 @@ mod tests {
         state.selected_view = BuildingMenuView::All;
         state.search_query = "LoGiStIcS".into();
         assert!(
-            build_menu_snapshot(&sim, &hotbar, &state)
+            build_menu_snapshot(&sim, &hotbar, &state, &buildables)
                 .entries
                 .iter()
                 .all(|entry| entry.category == BuildingCategory::Logistics)
         );
         state.search_query = "automation".into();
         assert!(
-            build_menu_snapshot(&sim, &hotbar, &state)
+            build_menu_snapshot(&sim, &hotbar, &state, &buildables)
                 .entries
                 .iter()
                 .any(|entry| entry.internal_name == "assembling_machine")
         );
         state.search_query = "does not exist".into();
         assert!(
-            build_menu_snapshot(&sim, &hotbar, &state)
+            build_menu_snapshot(&sim, &hotbar, &state, &buildables)
                 .empty_message
                 .is_some()
         );

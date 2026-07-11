@@ -40,6 +40,30 @@ fn buildable_entity_missing_menu_metadata_fails() {
 }
 
 #[test]
+fn buildable_entity_with_only_category_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "chest", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "chest", entity_kind: Chest, build_item: Some("chest"), building_category: Some(Storage), size: (x: 1, y: 1), collision_mask: (layers: ["building"]))],
+        tiles: [],
+    )"#).expect_err("building menu order should be required with a category");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidBuildingMenuMetadata { entity, .. } if entity == "chest")
+    );
+}
+
+#[test]
+fn buildable_entity_with_only_menu_order_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "chest", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "chest", entity_kind: Chest, build_item: Some("chest"), building_menu_order: Some(1), size: (x: 1, y: 1), collision_mask: (layers: ["building"]))],
+        tiles: [],
+    )"#).expect_err("building category should be required with a menu order");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidBuildingMenuMetadata { entity, .. } if entity == "chest")
+    );
+}
+
+#[test]
 fn non_buildable_entity_with_menu_metadata_fails() {
     let error = PrototypeCatalog::from_ron_str(r#"(
         items: [], recipes: [],
