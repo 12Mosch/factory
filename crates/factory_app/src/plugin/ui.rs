@@ -13,7 +13,10 @@ use crate::ui::assembler_panel::{
 };
 use crate::ui::build_menu::handle_build_menu_buttons;
 use crate::ui::container_window::sync_container_window;
-use crate::ui::debug_overlay::{setup_debug_overlay, update_debug_overlay, update_ups_stats};
+use crate::ui::debug_overlay::{
+    DebugOverlayVisible, apply_debug_overlay_visibility, setup_debug_overlay,
+    toggle_debug_overlay, update_debug_overlay, update_ups_stats,
+};
 use crate::ui::inventory_panel::{
     handle_container_slot_clicks, update_container_slot_text,
     update_inventory_transfer_feedback_text,
@@ -43,6 +46,7 @@ pub(super) struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UpsStats>()
+            .init_resource::<DebugOverlayVisible>()
             .init_resource::<OpenContainer>()
             .init_resource::<InventoryTransferFeedback>()
             .init_resource::<TechnologyWindowState>()
@@ -65,6 +69,7 @@ impl Plugin for UiPlugin {
                 Update,
                 (
                     update_ups_stats,
+                    toggle_debug_overlay,
                     handle_container_open_input.before(handle_build_world_click),
                     handle_container_close_input,
                 )
@@ -73,6 +78,7 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
+                    apply_debug_overlay_visibility.after(toggle_debug_overlay),
                     update_debug_overlay,
                     // The menu clears `open_container` when it opens; sync after
                     // it so the container window hides on the same frame.

@@ -9,6 +9,19 @@ use crate::resources::{SimProfileStats, SimResource, UpsStats};
 #[derive(Component)]
 pub struct DebugOverlayText;
 
+#[derive(Component)]
+pub struct DebugOverlayRoot;
+
+/// Whether the debug performance overlay is shown. Toggled with F4.
+#[derive(Resource)]
+pub struct DebugOverlayVisible(pub bool);
+
+impl Default for DebugOverlayVisible {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 pub(crate) fn setup_debug_overlay(mut commands: Commands) {
     commands
         .spawn((
@@ -21,6 +34,7 @@ pub(crate) fn setup_debug_overlay(mut commands: Commands) {
             },
             BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.72)),
             GlobalZIndex(1000),
+            DebugOverlayRoot,
         ))
         .with_child((
             Text::new("Tick: 0\nUPS: 0.0"),
@@ -28,6 +42,37 @@ pub(crate) fn setup_debug_overlay(mut commands: Commands) {
             TextColor(Color::WHITE),
             DebugOverlayText,
         ));
+}
+
+pub(crate) fn toggle_debug_overlay(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut visible: ResMut<DebugOverlayVisible>,
+) {
+    let Some(keyboard) = keyboard else {
+        return;
+    };
+
+    if keyboard.just_pressed(KeyCode::F4) {
+        visible.0 = !visible.0;
+    }
+}
+
+pub(crate) fn apply_debug_overlay_visibility(
+    visible: Res<DebugOverlayVisible>,
+    mut roots: Query<&mut Visibility, With<DebugOverlayRoot>>,
+) {
+    if !visible.is_changed() {
+        return;
+    }
+
+    let target = if visible.0 {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut roots {
+        *visibility = target;
+    }
 }
 
 pub(crate) fn update_ups_stats(time: Res<Time<Real>>, mut stats: ResMut<UpsStats>) {
@@ -50,8 +95,13 @@ pub(crate) fn update_debug_overlay(
     diagnostics: Res<DiagnosticsStore>,
     sim_profile: Res<SimProfileStats>,
     render_sync: Res<RenderSyncStats>,
+    visible: Res<DebugOverlayVisible>,
     mut overlay: Query<&mut Text, With<DebugOverlayText>>,
 ) {
+    if !visible.0 {
+        return;
+    }
+
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|diagnostic| diagnostic.smoothed());
