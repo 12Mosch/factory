@@ -59,7 +59,13 @@ fn machine_guidance_color(status: MachineStatus) -> Color {
     match status {
         MachineStatus::Working => Color::srgb(0.42, 0.84, 0.55),
         MachineStatus::Idle => Color::srgb(0.72, 0.74, 0.72),
-        _ => Color::srgb(1.0, 0.72, 0.30),
+        MachineStatus::NoRecipe => Color::srgb(1.0, 0.72, 0.30),
+        MachineStatus::NoResearch => Color::srgb(1.0, 0.72, 0.30),
+        MachineStatus::NoFuel => Color::srgb(1.0, 0.72, 0.30),
+        MachineStatus::NoPower => Color::srgb(1.0, 0.52, 0.30),
+        MachineStatus::NoInput => Color::srgb(1.0, 0.72, 0.30),
+        MachineStatus::NoFluid => Color::srgb(1.0, 0.72, 0.30),
+        MachineStatus::OutputFull => Color::srgb(1.0, 0.72, 0.30),
     }
 }
 
@@ -331,6 +337,14 @@ mod tests {
     #[test]
     fn machine_guidance_explains_common_blockers_and_resolution() {
         assert_eq!(
+            format_machine_guidance(MachineStatus::Working),
+            "Working — machine is operating normally."
+        );
+        assert_eq!(
+            format_machine_guidance(MachineStatus::Idle),
+            "Idle — give this machine work to do."
+        );
+        assert_eq!(
             format_machine_guidance(MachineStatus::NoFuel),
             "Needs fuel — add a burnable item to the Fuel slot."
         );
@@ -345,6 +359,18 @@ mod tests {
         assert_eq!(
             format_machine_guidance(MachineStatus::NoRecipe),
             "Missing recipe — select a recipe above to begin crafting."
+        );
+        assert_eq!(
+            format_machine_guidance(MachineStatus::NoResearch),
+            "No research — select research or unlock the required technology."
+        );
+        assert_eq!(
+            format_machine_guidance(MachineStatus::NoInput),
+            "Missing input — add the required ingredients or resources."
+        );
+        assert_eq!(
+            format_machine_guidance(MachineStatus::NoFluid),
+            "Missing fluid — connect a pipe carrying the required fluid."
         );
     }
 }
