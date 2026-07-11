@@ -181,6 +181,7 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) statistics: StatisticsContext<'a>,
     pub(super) onboarding_progress: &'a mut OnboardingProgress,
+    pub(super) base: factory_data::BasePrototypeIds,
 }
 
 impl<'a> MachineTickContext<'a> {
@@ -190,9 +191,8 @@ impl<'a> MachineTickContext<'a> {
 
     pub(super) fn record_item_produced(&mut self, item_id: ItemId, amount: u64) {
         self.statistics.record_item_produced(item_id, amount);
-        let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
         self.onboarding_progress
-            .record_item_produced(&base, item_id, amount);
+            .record_item_produced(&self.base, item_id, amount);
     }
 
     pub(super) fn record_item_consumed(&mut self, item_id: ItemId, amount: u64) {

@@ -10,6 +10,7 @@ mod pumpjacks;
 
 impl Simulation {
     fn machine_tick_context(&mut self) -> MachineTickContext<'_> {
+        let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
         MachineTickContext {
             world: &mut self.world,
             entities: &mut self.entities,
@@ -18,6 +19,7 @@ impl Simulation {
             power: &mut self.power,
             statistics: StatisticsContext::new(self.tick, &mut self.statistics),
             onboarding_progress: &mut self.onboarding_progress,
+            base,
         }
     }
 

@@ -110,9 +110,8 @@ impl MachineTickContext<'_> {
             for product in products {
                 self.statistics
                     .record_item_produced(product.item, u64::from(product.amount));
-                let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
                 self.onboarding_progress.record_item_produced(
-                    &base,
+                    &self.base,
                     product.item,
                     u64::from(product.amount),
                 );
@@ -128,11 +127,7 @@ impl MachineTickContext<'_> {
             for product in fluid_products {
                 self.statistics
                     .record_fluid_produced(product.fluid, product.amount_milliunits);
-                let petroleum =
-                    factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
-                        .fluids
-                        .petroleum_gas;
-                if product.fluid == petroleum {
+                if product.fluid == self.base.fluids.petroleum_gas {
                     self.onboarding_progress.record_counter(
                         |progress| &mut progress.petroleum_gas_produced,
                         product.amount_milliunits / 1_000,

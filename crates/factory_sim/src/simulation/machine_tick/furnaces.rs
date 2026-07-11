@@ -64,8 +64,7 @@ impl MachineTickContext<'_> {
             });
             self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
             self.record_item_produced(product.item, u64::from(product.amount));
-            let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
-            if product.item == base.items.iron_plate {
+            if product.item == self.base.items.iron_plate {
                 self.onboarding_progress.record_counter(
                     |progress| &mut progress.iron_plates_smelted,
                     u64::from(product.amount),

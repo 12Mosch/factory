@@ -96,6 +96,45 @@ impl Simulation {
         assignments
     }
 
+    /// True when at least one steam engine is wired into a power network and
+    /// has usable steam flowing into it, regardless of whether any consumer
+    /// currently demands that power. `assign_steam_engines_to_fluid_networks`
+    /// caps assignment on network demand, so it can't answer this on its own
+    /// (a generator built before any consumer would otherwise never report
+    /// as "generating").
+    pub(super) fn any_steam_engine_can_generate(
+        &self,
+        network_ids_by_entity: &BTreeMap<EntityId, u32>,
+    ) -> bool {
+        let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
+            .fluids
+            .steam;
+
+        self.entities.steam_engines.keys().any(|&engine_id| {
+            network_ids_by_entity.contains_key(&engine_id)
+                && self.steam_engine_prototype(engine_id).is_some_and(|prototype| {
+                    per_tick_milliunits(prototype.steam_consumption_per_second_milliunits) > 0
+                })
+                && self
+                    .fluid_network_id_for_box_key(FluidBoxKey {
+                        entity_id: engine_id,
+                        box_index: 0,
+                    })
+                    .and_then(|steam_network_id| {
+                        self.fluids
+                            .topology_networks
+                            .iter()
+                            .find(|network| network.network_id == steam_network_id)
+                    })
+                    .is_some_and(|network| {
+                        let summary = self.fluid_network_dynamic_summary(network);
+                        !summary.blocked
+                            && summary.fluid_id == Some(steam)
+                            && summary.total_milliunits > 0
+                    })
+        })
+    }
+
     pub(in crate::simulation) fn steam_engine_prototype(
         &self,
         engine_id: EntityId,

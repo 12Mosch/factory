@@ -85,8 +85,7 @@ impl MachineTickContext<'_> {
                 );
             });
             self.record_item_produced(mined.resource_item, u64::from(mined.amount));
-            let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
-            if mined.resource_item == base.items.iron_ore {
+            if mined.resource_item == self.base.items.iron_ore {
                 self.onboarding_progress.record_counter(
                     |progress| &mut progress.iron_ore_drill_mined,
                     u64::from(mined.amount),

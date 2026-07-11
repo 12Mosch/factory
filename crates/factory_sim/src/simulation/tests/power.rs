@@ -284,6 +284,22 @@ fn steam_engine_produces_only_with_connected_pole_and_adjacent_fueled_boiler() {
 }
 
 #[test]
+fn electricity_generated_milestone_fires_without_any_connected_consumer() {
+    let mut sim = Simulation::new_test_world(123);
+    place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+
+    let summary = sim.power_summary();
+    assert_eq!(summary.consumption_watts, 0);
+    assert_eq!(summary.production_watts, 0);
+    assert_eq!(summary.available_production_watts, 0);
+    assert!(sim.onboarding_progress().electricity_generated);
+}
+
+#[test]
 fn inserter_does_not_move_without_electricity() {
     let mut sim = Simulation::new_test_world(123);
     let (chest_id, inserter_id, furnace_id) = place_unpowered_chest_inserter_furnace_line(&mut sim);
