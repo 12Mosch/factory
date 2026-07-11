@@ -119,6 +119,91 @@ fn validate_health_owner(sim: &Simulation, entity_id: EntityId) -> Result<(), Si
 /// Enemy units are self-contained; validate their copied combat stats stay
 /// coherent.
 pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationError> {
+    if !sim.config.is_valid()
+        || sim.enemies.evolution_points > 10_000
+        || sim.enemies.threat_events.len() > 256
+    {
+        return Err(SimValidationError::InvalidEnemyState);
+    }
+    let mut last_sequence = 0;
+    for event in &sim.enemies.threat_events {
+        if event.sequence <= last_sequence || event.sequence > sim.enemies.threat_sequence {
+            return Err(SimValidationError::InvalidEnemyState);
+        }
+        last_sequence = event.sequence;
+    }
+    if sim
+        .enemies
+        .bases
+        .keys()
+        .next_back()
+        .is_some_and(|id| id.raw() > sim.enemies.next_base_id)
+        || sim
+            .enemies
+            .raids
+            .keys()
+            .next_back()
+            .is_some_and(|id| id.raw() > sim.enemies.next_raid_id)
+        || sim
+            .enemies
+            .expansions
+            .keys()
+            .next_back()
+            .is_some_and(|id| id.raw() > sim.enemies.next_expansion_id)
+    {
+        return Err(SimValidationError::InvalidEnemyState);
+    }
+    for (spawner, base_id) in &sim.enemies.spawner_bases {
+        if !sim.entities.enemy_spawners.contains_key(spawner)
+            || !sim
+                .enemies
+                .bases
+                .get(base_id)
+                .is_some_and(|base| base.spawners.contains(spawner))
+        {
+            return Err(SimValidationError::InvalidEnemyState);
+        }
+    }
+    for base in sim.enemies.bases.values() {
+        if base.spawners.is_empty()
+            || base
+                .spawners
+                .iter()
+                .any(|spawner| sim.enemies.spawner_bases.get(spawner) != Some(&base.id))
+        {
+            return Err(SimValidationError::InvalidEnemyState);
+        }
+    }
+    let mut grouped = BTreeSet::new();
+    for raid in sim.enemies.raids.values() {
+        for id in &raid.members {
+            if !grouped.insert(*id)
+                || !sim
+                    .enemies
+                    .enemies
+                    .get(id)
+                    .is_some_and(|unit| unit.mission == EnemyMission::Raid(raid.id))
+            {
+                return Err(SimValidationError::InvalidEnemyState);
+            }
+        }
+    }
+    for party in sim.enemies.expansions.values() {
+        if ChunkCoord::from_tile(party.destination.0, party.destination.1).is_none() {
+            return Err(SimValidationError::InvalidEnemyState);
+        }
+        for id in &party.members {
+            if !grouped.insert(*id)
+                || !sim
+                    .enemies
+                    .enemies
+                    .get(id)
+                    .is_some_and(|unit| unit.mission == EnemyMission::Expansion(party.id))
+            {
+                return Err(SimValidationError::InvalidEnemyState);
+            }
+        }
+    }
     for (id, enemy) in &sim.enemies.enemies {
         if enemy.id != *id
             || enemy.health == 0
@@ -127,6 +212,27 @@ pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationErro
             || enemy.id.raw() > sim.enemies.next_enemy_id
         {
             return Err(SimValidationError::InvalidEnemy { enemy_id: *id });
+        }
+        let mission_valid = match enemy.mission {
+            EnemyMission::Guard => true,
+            EnemyMission::Staging(base) => sim
+                .enemies
+                .bases
+                .get(&base)
+                .is_some_and(|state| state.staged_units.contains(id)),
+            EnemyMission::Raid(raid) => sim
+                .enemies
+                .raids
+                .get(&raid)
+                .is_some_and(|state| state.members.contains(id)),
+            EnemyMission::Expansion(expansion) => sim
+                .enemies
+                .expansions
+                .get(&expansion)
+                .is_some_and(|state| state.members.contains(id)),
+        };
+        if !mission_valid {
+            return Err(SimValidationError::InvalidEnemyState);
         }
     }
 

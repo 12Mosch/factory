@@ -1,5 +1,6 @@
 use super::*;
-use factory_data::{EnemyBaseGenerationConfig, UnitPrototype};
+use crate::enemies::{EnemyBase, Expansion, Raid};
+use factory_data::{EnemyBaseGenerationConfig, EnemyGameplayConfig, UnitPrototype};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -24,6 +25,176 @@ const SPAWNER_PLACEMENT_SALT: u64 = 0x656e_656d_795f_6261;
 impl Simulation {
     pub fn enemies(&self) -> &EnemySubsystem {
         &self.enemies
+    }
+
+    pub fn enemy_settings(&self) -> SimulationConfig {
+        self.config
+    }
+
+    pub fn threat_events_after(&self, sequence: u64) -> Vec<ThreatEvent> {
+        self.enemies
+            .threat_events
+            .iter()
+            .copied()
+            .filter(|event| event.sequence > sequence)
+            .collect()
+    }
+
+    pub fn threat_snapshot(&self) -> ThreatSnapshot {
+        let active = self
+            .enemies
+            .bases
+            .values()
+            .filter(|base| base.pollution_contact)
+            .count();
+        let staged = self
+            .enemies
+            .bases
+            .values()
+            .map(|base| base.staged_units.len())
+            .sum();
+        let inbound = self.enemies.raids.len();
+        let spotted = self
+            .enemies
+            .expansions
+            .values()
+            .filter(|party| party.spotted)
+            .count();
+        let half_staged = self.enemies.bases.values().any(|base| {
+            base.staged_units.len() >= usize::from(self.raid_target_size().div_ceil(2))
+        });
+        let damaged_recently = self.enemies.threat_events.iter().rev().any(|event| {
+            event.kind == ThreatEventKind::StructureUnderAttack
+                && self.tick.saturating_sub(event.tick) <= 600
+        });
+        let tier = if damaged_recently || inbound > 1 {
+            ThreatTier::Critical
+        } else if inbound > 0 || half_staged {
+            ThreatTier::High
+        } else if active > 0 {
+            ThreatTier::Elevated
+        } else {
+            ThreatTier::Low
+        };
+        let maximum_launch_countdown_ticks = self
+            .enemies
+            .bases
+            .values()
+            .filter_map(|base| {
+                base.staging_started_tick.map(|start| {
+                    self.gameplay().map_or(0, |cfg| {
+                        u64::from(cfg.raid_staging_timeout_ticks)
+                            .saturating_sub(self.tick.saturating_sub(start))
+                    })
+                })
+            })
+            .max()
+            .unwrap_or(0);
+        ThreatSnapshot {
+            tier,
+            evolution_percent: (self.enemies.evolution_points / 100) as u8,
+            total_pollution_micro: self.pollution.total_micro(),
+            pollution_active_colonies: active,
+            staged_units: staged,
+            maximum_launch_countdown_ticks,
+            inbound_raids: inbound,
+            spotted_expansions: spotted,
+        }
+    }
+
+    pub fn enemy_map_snapshot(&self) -> EnemyMapSnapshot {
+        let mut snapshot = EnemyMapSnapshot::default();
+        for base in self.enemies.bases.values() {
+            if base.pollution_contact {
+                snapshot.contacted_sectors.push(base.anchor);
+            }
+            if self.chart.revealed_chunks.contains(&base.anchor)
+                && let Some(spawner) = base
+                    .spawners
+                    .iter()
+                    .next()
+                    .and_then(|id| self.entities.placed_entities.get(id))
+            {
+                snapshot.known_bases.push((base.id, spawner.x, spawner.y));
+            }
+        }
+        for raid in self.enemies.raids.values() {
+            let location = raid
+                .members
+                .iter()
+                .next()
+                .and_then(|id| self.enemies.enemies.get(id))
+                .map(|unit| ThreatLocation::Exact {
+                    x: unit.tile().0,
+                    y: unit.tile().1,
+                })
+                .unwrap_or(ThreatLocation::Sector(
+                    self.enemies.bases[&raid.base_id].anchor,
+                ));
+            snapshot.raids.push((raid.id, location));
+            if let Some(target) = raid.target {
+                snapshot.raid_targets.push((raid.id, target));
+            }
+        }
+        for party in self
+            .enemies
+            .expansions
+            .values()
+            .filter(|party| party.spotted)
+        {
+            snapshot.expansions.push((
+                party.id,
+                ThreatLocation::Exact {
+                    x: party.destination.0,
+                    y: party.destination.1,
+                },
+            ));
+        }
+        snapshot
+    }
+
+    fn gameplay(&self) -> Option<&EnemyGameplayConfig> {
+        self.world.prototypes.enemy_gameplay.as_ref()
+    }
+
+    pub(super) fn set_enemy_runtime_settings(&mut self, settings: EnemyRuntimeSettings) {
+        let mut candidate = self.config;
+        candidate.runtime = settings;
+        candidate.preset = EnemyDifficultyPreset::Custom;
+        if !candidate.is_valid() {
+            return;
+        }
+        let old = self.config.runtime;
+        self.config = candidate;
+        let Some(gameplay) = self.gameplay().copied() else {
+            return;
+        };
+        for base in self.enemies.bases.values_mut() {
+            base.next_raid_tick = self.tick
+                + scaled_interval(
+                    gameplay.raid_cooldown_ticks,
+                    settings.raid_frequency_percent,
+                );
+            base.next_expansion_tick = if settings.expansion {
+                self.tick
+                    + scaled_interval(
+                        gameplay.expansion_interval_ticks,
+                        settings.expansion_frequency_percent,
+                    )
+            } else {
+                u64::MAX
+            };
+            if old.proactive_raids && !settings.proactive_raids {
+                base.attack_budget_micro = 0;
+                for id in std::mem::take(&mut base.staged_units) {
+                    if let Some(unit) = self.enemies.enemies.get_mut(&id) {
+                        unit.mode = EnemyMode::Guard;
+                        unit.mission = EnemyMission::Guard;
+                    }
+                }
+                base.staging_started_tick = None;
+            }
+        }
     }
 
     /// Rolls spawner placement for every generated chunk that has not been
@@ -57,10 +228,13 @@ impl Simulation {
         coord: ChunkCoord,
         config: &EnemyBaseGenerationConfig,
     ) {
+        let Some(gameplay) = self.gameplay().copied() else {
+            return;
+        };
         let (min_x, min_y) = coord.min_tile();
         let center_x = min_x + i64::from(CHUNK_SIZE) / 2;
         let center_y = min_y + i64::from(CHUNK_SIZE) / 2;
-        let min_distance = i64::from(config.min_distance_tiles);
+        let min_distance = i64::from(self.config.world.starting_safe_radius_tiles);
         let center_distance_squared = i128::from(center_x) * i128::from(center_x)
             + i128::from(center_y) * i128::from(center_y);
         let min_distance_squared = i128::from(min_distance) * i128::from(min_distance);
@@ -71,35 +245,84 @@ impl Simulation {
         let roll = splitmix64(
             self.world.seed ^ SPAWNER_PLACEMENT_SALT ^ hash_world(self.world.seed, min_x, min_y),
         );
-        if roll % 100 >= u64::from(config.frequency_percent) {
+        let density_chance =
+            u64::from(config.frequency_percent) * u64::from(self.config.world.base_density_percent);
+        if roll % 10_000 >= density_chance {
             return;
         }
 
         let Some(prototype) = self.world.prototypes.entity(config.spawner_entity) else {
             return;
         };
+        let prototype_size = prototype.size;
         // Keep the footprint fully inside the chunk so seeding one chunk
         // never depends on whether its neighbors exist yet.
         let margin = 2;
-        let span_x = i64::from(CHUNK_SIZE) - 2 * margin - i64::from(prototype.size.x);
-        let span_y = i64::from(CHUNK_SIZE) - 2 * margin - i64::from(prototype.size.y);
+        let span_x = i64::from(CHUNK_SIZE) - 2 * margin - i64::from(prototype_size.x);
+        let span_y = i64::from(CHUNK_SIZE) - 2 * margin - i64::from(prototype_size.y);
         if span_x <= 0 || span_y <= 0 {
             return;
         }
-        let x = min_x + margin + ((roll >> 8) % span_x as u64) as i64;
-        let y = min_y + margin + ((roll >> 24) % span_y as u64) as i64;
-
-        // Placement validation rejects water, resources, and occupied tiles;
-        // a failed roll simply leaves the chunk without a nest.
-        let _ = placement::place(
-            self,
-            placement::EntityPlacementRequest {
-                prototype_id: config.spawner_entity,
-                x,
-                y,
-                direction: Direction::North,
+        let anchor_x = min_x + margin + ((roll >> 8) % span_x as u64) as i64;
+        let anchor_y = min_y + margin + ((roll >> 24) % span_y as u64) as i64;
+        let id = self.enemies.allocate_base_id();
+        let count_range =
+            gameplay.generated_colony_max_spawners - gameplay.generated_colony_min_spawners + 1;
+        let count =
+            gameplay.generated_colony_min_spawners + ((roll >> 40) % u64::from(count_range)) as u8;
+        self.enemies.bases.insert(
+            id,
+            EnemyBase {
+                id,
+                anchor: coord,
+                spawners: BTreeSet::new(),
+                creation_tick: self.tick,
+                attack_budget_micro: 0,
+                staged_units: BTreeSet::new(),
+                staging_started_tick: None,
+                next_raid_tick: self.tick,
+                next_expansion_tick: self.tick
+                    + scaled_interval(
+                        gameplay.expansion_interval_ticks,
+                        self.config.runtime.expansion_frequency_percent,
+                    ),
+                next_growth_tick: self.tick + u64::from(gameplay.outpost_growth_interval_ticks),
+                pollution_contact: false,
             },
         );
+        for index in 0..count {
+            let site_roll = splitmix64(roll ^ u64::from(index).wrapping_mul(0x9e37_79b9));
+            let radius = i64::from(gameplay.colony_spawner_radius_tiles);
+            let dx = (site_roll % (radius as u64 * 2 + 1)) as i64 - radius;
+            let dy = ((site_roll >> 16) % (radius as u64 * 2 + 1)) as i64 - radius;
+            let x = (anchor_x + dx).clamp(
+                min_x + margin,
+                min_x + i64::from(CHUNK_SIZE) - margin - i64::from(prototype_size.x),
+            );
+            let y = (anchor_y + dy).clamp(
+                min_y + margin,
+                min_y + i64::from(CHUNK_SIZE) - margin - i64::from(prototype_size.y),
+            );
+            self.enemies.placement_base = Some(id);
+            let _ = placement::place(
+                self,
+                placement::EntityPlacementRequest {
+                    prototype_id: config.spawner_entity,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            );
+            self.enemies.placement_base = None;
+        }
+        if self
+            .enemies
+            .bases
+            .get(&id)
+            .is_some_and(|base| base.spawners.is_empty())
+        {
+            self.enemies.bases.remove(&id);
+        }
     }
 
     /// Spawner behavior: drain pollution from the local chunk, convert it
@@ -108,7 +331,7 @@ impl Simulation {
         struct SpawnRequest {
             spawner_id: EntityId,
             unit: UnitPrototype,
-            mode: EnemyMode,
+            mission: EnemyMission,
         }
 
         let mut alive_by_spawner = BTreeMap::<EntityId, u32>::new();
@@ -122,8 +345,11 @@ impl Simulation {
             }
         }
 
+        self.advance_evolution_time();
         let mut requests: Vec<SpawnRequest> = Vec::new();
+        let mut absorbed_by_base = BTreeMap::<EnemyBaseId, u64>::new();
         let tick = self.tick;
+        let raid_size = u64::from(self.raid_target_size());
         let Simulation {
             world,
             entities,
@@ -145,48 +371,121 @@ impl Simulation {
                 continue;
             };
 
-            let absorbed = pollution.remove_micro(
-                coord,
-                u64::from(config.pollution_absorption_per_tick_milli) * 1000,
-            );
-            state.absorbed_pollution_micro += absorbed;
+            let Some(base_id) = self.enemies.spawner_bases.get(&spawner_id).copied() else {
+                continue;
+            };
+            let cap = u64::from(config.unit_spawn_pollution_cost_milli) * 1000 * raid_size * 10;
+            let budget = self
+                .enemies
+                .bases
+                .get(&base_id)
+                .map_or(0, |base| base.attack_budget_micro);
+            let absorption = u64::from(config.pollution_absorption_per_tick_milli)
+                * 1000
+                * u64::from(self.config.runtime.pollution_sensitivity_percent)
+                / 100;
+            let absorbed = if budget < cap {
+                pollution.remove_micro(coord, absorption.min(cap - budget))
+            } else {
+                0
+            };
+            *absorbed_by_base.entry(base_id).or_default() += absorbed;
+            state.absorbed_pollution_micro = 0;
 
             let alive = alive_by_spawner.get(&spawner_id).copied().unwrap_or(0);
             let guards = guards_by_spawner.get(&spawner_id).copied().unwrap_or(0);
-            let spawn_cost = u64::from(config.unit_spawn_pollution_cost_milli) * 1000;
-
-            if spawn_cost > 0
-                && state.absorbed_pollution_micro >= spawn_cost
-                && alive < config.max_alive_units
-            {
-                state.absorbed_pollution_micro -= spawn_cost;
-                requests.push(SpawnRequest {
-                    spawner_id,
-                    unit: config.unit,
-                    mode: EnemyMode::Attack,
-                });
-            } else if tick >= state.next_free_spawn_tick {
+            if tick >= state.next_free_spawn_tick {
                 state.next_free_spawn_tick = tick + u64::from(config.free_spawn_interval_ticks);
                 if guards < config.guard_units && alive < config.max_alive_units {
                     requests.push(SpawnRequest {
                         spawner_id,
                         unit: config.unit,
-                        mode: EnemyMode::Guard,
+                        mission: EnemyMission::Guard,
+                    });
+                }
+            }
+        }
+
+        for (base_id, absorbed) in absorbed_by_base {
+            if absorbed == 0 {
+                continue;
+            }
+            let became_active = self
+                .enemies
+                .bases
+                .get(&base_id)
+                .is_some_and(|base| !base.pollution_contact);
+            if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                base.attack_budget_micro = base.attack_budget_micro.saturating_add(absorbed);
+                base.pollution_contact = true;
+            }
+            self.add_pollution_evolution(absorbed);
+            if became_active {
+                self.emit_base_event(base_id, ThreatEventKind::PollutionContact);
+            }
+        }
+
+        if self.config.runtime.proactive_raids {
+            let base_ids: Vec<_> = self.enemies.bases.keys().copied().collect();
+            let target_size = usize::from(self.raid_target_size());
+            for base_id in base_ids {
+                let Some((&spawner_id, unit, cost, can_spawn)) = self
+                    .enemies
+                    .bases
+                    .get(&base_id)
+                    .and_then(|base| base.spawners.iter().next())
+                    .and_then(|spawner_id| {
+                        let placed = self.entities.placed_entities.get(spawner_id)?;
+                        let cfg = self
+                            .world
+                            .prototypes
+                            .entity(placed.prototype_id)?
+                            .enemy_spawner
+                            .as_ref()?;
+                        Some((
+                            spawner_id,
+                            cfg.unit,
+                            u64::from(cfg.unit_spawn_pollution_cost_milli) * 1000,
+                            alive_by_spawner.get(spawner_id).copied().unwrap_or(0)
+                                < cfg.max_alive_units,
+                        ))
+                    })
+                else {
+                    continue;
+                };
+                let base = self
+                    .enemies
+                    .bases
+                    .get_mut(&base_id)
+                    .expect("listed base must exist");
+                if cost > 0
+                    && base.attack_budget_micro >= cost
+                    && base.staged_units.len() < target_size
+                    && can_spawn
+                {
+                    base.attack_budget_micro -= cost;
+                    requests.push(SpawnRequest {
+                        spawner_id,
+                        unit,
+                        mission: EnemyMission::Staging(base_id),
                     });
                 }
             }
         }
 
         for request in requests {
-            self.spawn_enemy_near_spawner(request.spawner_id, &request.unit, request.mode);
+            self.spawn_enemy_near_spawner(request.spawner_id, &request.unit, request.mission);
         }
+        self.launch_ready_raids();
+        self.advance_expansions_and_growth();
+        self.cleanup_enemy_groups();
     }
 
     fn spawn_enemy_near_spawner(
         &mut self,
         spawner_id: EntityId,
         unit: &UnitPrototype,
-        mode: EnemyMode,
+        mission: EnemyMission,
     ) {
         let Some(placed) = self.entities.placed_entities.get(&spawner_id) else {
             return;
@@ -203,19 +502,27 @@ impl Simulation {
 
         let id = self.enemies.allocate_id();
         let stagger = id.raw() % 16;
+        let strength = u32::from(self.config.runtime.strength_percent);
+        let evolution = 100 + u32::from(self.enemies.evolution_points) / 100;
+        let mode = if mission == EnemyMission::Guard {
+            EnemyMode::Guard
+        } else {
+            EnemyMode::Attack
+        };
         self.enemies.enemies.insert(
             id,
             Enemy {
                 id,
                 x: tile_center_fixed(tile_x),
                 y: tile_center_fixed(tile_y),
-                health: unit.max_health,
-                max_health: unit.max_health,
-                damage: unit.damage,
+                health: scale_stat(unit.max_health, strength, evolution),
+                max_health: scale_stat(unit.max_health, strength, evolution),
+                damage: scale_stat(unit.damage, strength, evolution),
                 attack_cooldown_ticks: unit.attack_cooldown_ticks,
                 speed_fixed_per_tick: unit.speed_fixed_per_tick,
                 aggro_radius_tiles: unit.aggro_radius_tiles,
                 mode,
+                mission,
                 home_spawner: Some(spawner_id),
                 target: None,
                 path: VecDeque::new(),
@@ -223,12 +530,77 @@ impl Simulation {
                 next_decision_tick: self.tick + stagger,
             },
         );
+        if let EnemyMission::Staging(base_id) = mission
+            && let Some(base) = self.enemies.bases.get_mut(&base_id)
+        {
+            base.staged_units.insert(id);
+            if base.staging_started_tick.is_none() {
+                base.staging_started_tick = Some(self.tick);
+                self.emit_base_event(base_id, ThreatEventKind::RaidPreparing);
+            }
+        }
     }
 
     /// Unit AI: validate or acquire a target, path toward it, and attack
     /// whatever stands adjacent. Damage is collected first and applied after
     /// the loop so unit order cannot observe half-applied destruction.
     pub(super) fn advance_enemies(&mut self) {
+        for raid in self.enemies.raids.values_mut() {
+            if raid
+                .target
+                .is_some_and(|target| !self.entities.placed_entities.contains_key(&target))
+            {
+                raid.target = None;
+            }
+            if raid.target.is_none() {
+                raid.target = raid
+                    .members
+                    .iter()
+                    .filter_map(|id| self.enemies.enemies.get(id))
+                    .find_map(|unit| acquire_target(&self.world, &self.entities, unit));
+            }
+            for member in &raid.members {
+                if let Some(unit) = self.enemies.enemies.get_mut(member) {
+                    unit.target = raid.target;
+                }
+            }
+        }
+        for party in self.enemies.expansions.values() {
+            for member in &party.members {
+                if let Some(unit) = self.enemies.enemies.get_mut(member)
+                    && unit.path.is_empty()
+                {
+                    unit.path.push_back(party.destination);
+                }
+            }
+        }
+        let newly_spotted: Vec<_> = self
+            .enemies
+            .expansions
+            .iter()
+            .filter_map(|(&id, party)| {
+                (!party.spotted
+                    && party.members.iter().any(|member| {
+                        self.enemies.enemies.get(member).is_some_and(|unit| {
+                            ChunkCoord::from_tile(unit.tile().0, unit.tile().1)
+                                .is_some_and(|chunk| self.chart.revealed_chunks.contains(&chunk))
+                        })
+                    }))
+                .then_some(id)
+            })
+            .collect();
+        for id in newly_spotted {
+            let destination = self.enemies.expansions.get_mut(&id).map(|party| {
+                party.spotted = true;
+                party.destination
+            });
+            if let Some((x, y)) = destination {
+                self.emit_event(
+                    ThreatEventKind::ExpansionSpotted,
+                    ThreatLocation::Exact { x, y },
+                );
+            }
+        }
         let mut attacks: Vec<(EntityId, u32)> = Vec::new();
         {
             let Simulation {
@@ -249,7 +621,656 @@ impl Simulation {
         for (entity_id, damage) in attacks {
             self.damage_entity(entity_id, damage);
         }
+        self.resolve_arrived_expansions();
     }
+
+    pub(super) fn on_enemy_spawner_placed(
+        &mut self,
+        entity_id: EntityId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) {
+        let Some(anchor) = ChunkCoord::from_tile(x, y) else {
+            return;
+        };
+        let base_id = if let Some(id) = self.enemies.placement_base {
+            id
+        } else {
+            let id = self.enemies.allocate_base_id();
+            let gameplay = self.gameplay().copied();
+            self.enemies.bases.insert(
+                id,
+                EnemyBase {
+                    id,
+                    anchor,
+                    spawners: BTreeSet::new(),
+                    creation_tick: self.tick,
+                    attack_budget_micro: 0,
+                    staged_units: BTreeSet::new(),
+                    staging_started_tick: None,
+                    next_raid_tick: self.tick,
+                    next_expansion_tick: gameplay.map_or(u64::MAX, |cfg| {
+                        self.tick
+                            + scaled_interval(
+                                cfg.expansion_interval_ticks,
+                                self.config.runtime.expansion_frequency_percent,
+                            )
+                    }),
+                    next_growth_tick: gameplay.map_or(u64::MAX, |cfg| {
+                        self.tick + u64::from(cfg.outpost_growth_interval_ticks)
+                    }),
+                    pollution_contact: false,
+                },
+            );
+            id
+        };
+        if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+            base.spawners.insert(entity_id);
+        }
+        self.enemies.spawner_bases.insert(entity_id, base_id);
+    }
+
+    pub(super) fn on_enemy_spawner_removed(
+        &mut self,
+        entity_id: EntityId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) {
+        let Some(base_id) = self.enemies.spawner_bases.remove(&entity_id) else {
+            return;
+        };
+        let destroyed = self
+            .gameplay()
+            .map_or(100, |cfg| cfg.evolution_spawner_destroyed_points);
+        self.add_evolution_points(u32::from(destroyed));
+        let empty = self.enemies.bases.get_mut(&base_id).is_some_and(|base| {
+            base.spawners.remove(&entity_id);
+            base.spawners.is_empty()
+        });
+        if empty {
+            let staged = self
+                .enemies
+                .bases
+                .get_mut(&base_id)
+                .map(|base| std::mem::take(&mut base.staged_units))
+                .unwrap_or_default();
+            if self.config.runtime.proactive_raids && !staged.is_empty() {
+                let raid_id = self.enemies.allocate_raid_id();
+                for id in &staged {
+                    if let Some(unit) = self.enemies.enemies.get_mut(id) {
+                        unit.mission = EnemyMission::Raid(raid_id);
+                        unit.mode = EnemyMode::Attack;
+                    }
+                }
+                self.enemies.raids.insert(
+                    raid_id,
+                    Raid {
+                        id: raid_id,
+                        base_id,
+                        members: staged,
+                        target: None,
+                        launched_tick: self.tick,
+                    },
+                );
+                self.emit_base_event(base_id, ThreatEventKind::RaidLaunched);
+            } else {
+                for id in staged {
+                    if let Some(unit) = self.enemies.enemies.get_mut(&id) {
+                        unit.mission = EnemyMission::Guard;
+                        unit.mode = EnemyMode::Guard;
+                    }
+                }
+            }
+            let bonus = self
+                .gameplay()
+                .map_or(200, |cfg| cfg.evolution_colony_destroyed_points);
+            self.add_evolution_points(u32::from(bonus));
+            self.enemies.bases.remove(&base_id);
+            self.emit_event(
+                ThreatEventKind::BaseDestroyed,
+                ThreatLocation::Exact { x, y },
+            );
+        }
+        for unit in self
+            .enemies
+            .enemies
+            .values_mut()
+            .filter(|unit| unit.home_spawner == Some(entity_id))
+        {
+            unit.home_spawner = None;
+            if matches!(unit.mission, EnemyMission::Guard) {
+                unit.target = None;
+            }
+        }
+    }
+
+    pub(super) fn emit_structure_damage_warning(&mut self, x: WorldTileCoord, y: WorldTileCoord) {
+        let Some(chunk) = ChunkCoord::from_tile(x, y) else {
+            return;
+        };
+        if self
+            .enemies
+            .structure_warning_ticks
+            .get(&chunk)
+            .is_some_and(|tick| self.tick.saturating_sub(*tick) < 600)
+        {
+            return;
+        }
+        self.enemies
+            .structure_warning_ticks
+            .insert(chunk, self.tick);
+        self.emit_event(
+            ThreatEventKind::StructureUnderAttack,
+            ThreatLocation::Exact { x, y },
+        );
+    }
+
+    fn emit_base_event(&mut self, base_id: EnemyBaseId, kind: ThreatEventKind) {
+        let Some(base) = self.enemies.bases.get(&base_id) else {
+            return;
+        };
+        let location = if self.chart.revealed_chunks.contains(&base.anchor) {
+            base.spawners
+                .iter()
+                .next()
+                .and_then(|id| self.entities.placed_entities.get(id))
+                .map_or(ThreatLocation::Sector(base.anchor), |entity| {
+                    ThreatLocation::Exact {
+                        x: entity.x,
+                        y: entity.y,
+                    }
+                })
+        } else {
+            ThreatLocation::Sector(base.anchor)
+        };
+        self.emit_event(kind, location);
+    }
+
+    fn emit_event(&mut self, kind: ThreatEventKind, location: ThreatLocation) {
+        self.enemies.threat_sequence = self.enemies.threat_sequence.saturating_add(1);
+        self.enemies.threat_events.push_back(ThreatEvent {
+            sequence: self.enemies.threat_sequence,
+            tick: self.tick,
+            kind,
+            location,
+        });
+        while self.enemies.threat_events.len() > 256 {
+            self.enemies.threat_events.pop_front();
+        }
+    }
+
+    fn advance_evolution_time(&mut self) {
+        let Some(cfg) = self.gameplay().copied() else {
+            return;
+        };
+        if self
+            .tick
+            .is_multiple_of(u64::from(cfg.evolution_time_interval_ticks))
+        {
+            self.add_evolution_points(u32::from(cfg.evolution_time_points));
+        }
+    }
+
+    fn add_pollution_evolution(&mut self, absorbed_micro: u64) {
+        let Some(cfg) = self.gameplay().copied() else {
+            return;
+        };
+        let per_point = u64::from(cfg.evolution_pollution_units_per_point) * 1_000_000;
+        self.enemies.pollution_evolution_micro_remainder = self
+            .enemies
+            .pollution_evolution_micro_remainder
+            .saturating_add(absorbed_micro);
+        let points = self.enemies.pollution_evolution_micro_remainder / per_point;
+        self.enemies.pollution_evolution_micro_remainder %= per_point;
+        self.add_evolution_points(points.min(u64::from(u32::MAX)) as u32);
+    }
+
+    fn add_evolution_points(&mut self, raw: u32) {
+        let scaled = raw
+            .saturating_mul(u32::from(self.config.runtime.evolution_rate_percent))
+            .saturating_add(self.enemies.evolution_remainder);
+        self.enemies.evolution_remainder = scaled % 100;
+        self.enemies.evolution_points =
+            u16::try_from((u32::from(self.enemies.evolution_points) + scaled / 100).min(10_000))
+                .unwrap_or(10_000);
+    }
+
+    fn raid_target_size(&self) -> u8 {
+        4 + (self.enemies.evolution_points / 2500).min(4) as u8
+    }
+
+    fn launch_ready_raids(&mut self) {
+        let Some(cfg) = self.gameplay().copied() else {
+            return;
+        };
+        let target_size = usize::from(self.raid_target_size());
+        let ids: Vec<_> = self
+            .enemies
+            .bases
+            .iter()
+            .filter_map(|(&id, base)| {
+                let timed_out = base.staging_started_tick.is_some_and(|start| {
+                    self.tick.saturating_sub(start) >= u64::from(cfg.raid_staging_timeout_ticks)
+                });
+                (self.tick >= base.next_raid_tick
+                    && (base.staged_units.len() >= target_size
+                        || timed_out && base.staged_units.len() >= 2))
+                    .then_some(id)
+            })
+            .collect();
+        for base_id in ids {
+            let raid_id = self.enemies.allocate_raid_id();
+            let members = {
+                let base = self
+                    .enemies
+                    .bases
+                    .get_mut(&base_id)
+                    .expect("launch base must exist");
+                base.staging_started_tick = None;
+                base.next_raid_tick = self.tick
+                    + scaled_interval(
+                        cfg.raid_cooldown_ticks,
+                        self.config.runtime.raid_frequency_percent,
+                    );
+                std::mem::take(&mut base.staged_units)
+            };
+            for id in &members {
+                if let Some(unit) = self.enemies.enemies.get_mut(id) {
+                    unit.mission = EnemyMission::Raid(raid_id);
+                    unit.mode = EnemyMode::Attack;
+                }
+            }
+            self.enemies.raids.insert(
+                raid_id,
+                Raid {
+                    id: raid_id,
+                    base_id,
+                    members,
+                    target: None,
+                    launched_tick: self.tick,
+                },
+            );
+            self.emit_base_event(base_id, ThreatEventKind::RaidLaunched);
+        }
+    }
+
+    pub(super) fn cleanup_enemy_groups(&mut self) {
+        for base in self.enemies.bases.values_mut() {
+            base.staged_units
+                .retain(|id| self.enemies.enemies.contains_key(id));
+        }
+        self.enemies.raids.retain(|_, raid| {
+            raid.members
+                .retain(|id| self.enemies.enemies.contains_key(id));
+            !raid.members.is_empty()
+        });
+        self.enemies.expansions.retain(|_, party| {
+            party
+                .members
+                .retain(|id| self.enemies.enemies.contains_key(id));
+            !party.members.is_empty()
+        });
+    }
+
+    fn advance_expansions_and_growth(&mut self) {
+        let Some(cfg) = self.gameplay().copied() else {
+            return;
+        };
+        let base_ids: Vec<_> = self.enemies.bases.keys().copied().collect();
+        for base_id in base_ids {
+            let (spawner_count, creation, next_expansion, next_growth) = {
+                let base = &self.enemies.bases[&base_id];
+                (
+                    base.spawners.len(),
+                    base.creation_tick,
+                    base.next_expansion_tick,
+                    base.next_growth_tick,
+                )
+            };
+            if spawner_count < usize::from(cfg.max_spawners_per_colony) && self.tick >= next_growth
+            {
+                self.try_grow_base(base_id, cfg);
+                if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                    base.next_growth_tick =
+                        self.tick + u64::from(cfg.outpost_growth_interval_ticks);
+                }
+            }
+            if self.config.runtime.expansion
+                && spawner_count >= 3
+                && self.tick.saturating_sub(creation) >= u64::from(cfg.expansion_minimum_age_ticks)
+                && self.tick >= next_expansion
+            {
+                if let Some(destination) = self.find_expansion_site(base_id, cfg) {
+                    self.dispatch_expansion(base_id, destination);
+                    if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                        base.next_expansion_tick = self.tick
+                            + scaled_interval(
+                                cfg.expansion_interval_ticks,
+                                self.config.runtime.expansion_frequency_percent,
+                            );
+                    }
+                } else if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                    base.next_expansion_tick = self.tick + u64::from(cfg.expansion_retry_ticks);
+                }
+            }
+        }
+    }
+
+    fn try_grow_base(&mut self, base_id: EnemyBaseId, cfg: EnemyGameplayConfig) {
+        let Some((&spawner, anchor)) = self
+            .enemies
+            .bases
+            .get(&base_id)
+            .and_then(|base| base.spawners.iter().next().map(|id| (id, base.anchor)))
+        else {
+            return;
+        };
+        let Some(placed) = self.entities.placed_entities.get(&spawner).cloned() else {
+            return;
+        };
+        for attempt in 0..16_u64 {
+            let roll = splitmix64(self.world.seed ^ base_id.raw() ^ self.tick ^ attempt);
+            let radius = i64::from(cfg.colony_spawner_radius_tiles);
+            let x = placed.x + (roll % (radius as u64 * 2 + 1)) as i64 - radius;
+            let y = placed.y + ((roll >> 16) % (radius as u64 * 2 + 1)) as i64 - radius;
+            if ChunkCoord::from_tile(x, y) != Some(anchor) {
+                continue;
+            }
+            self.enemies.placement_base = Some(base_id);
+            let result = placement::place(
+                self,
+                placement::EntityPlacementRequest {
+                    prototype_id: placed.prototype_id,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            );
+            self.enemies.placement_base = None;
+            if result.is_ok() {
+                break;
+            }
+        }
+    }
+
+    fn find_expansion_site(
+        &self,
+        base_id: EnemyBaseId,
+        cfg: EnemyGameplayConfig,
+    ) -> Option<(WorldTileCoord, WorldTileCoord)> {
+        let source = self.enemies.bases.get(&base_id)?.anchor;
+        let mut candidates: Vec<_> = self
+            .world
+            .chunks
+            .keys()
+            .copied()
+            .filter(|coord| {
+                let distance = (coord.x - source.x).abs().max((coord.y - source.y).abs());
+                distance >= i32::from(cfg.expansion_min_distance_chunks)
+                    && distance <= i32::from(cfg.expansion_max_distance_chunks)
+            })
+            .collect();
+        candidates.sort_by_key(|coord| {
+            splitmix64(
+                self.world.seed
+                    ^ base_id.raw()
+                    ^ hash_world(self.world.seed, i64::from(coord.x), i64::from(coord.y)),
+            )
+        });
+        candidates
+            .into_iter()
+            .take(usize::from(cfg.expansion_candidate_limit))
+            .find_map(|coord| {
+                let (min_x, min_y) = coord.min_tile();
+                let roll = splitmix64(
+                    self.world.seed ^ base_id.raw() ^ hash_world(self.world.seed, min_x, min_y),
+                );
+                let x = min_x + 4 + (roll % (CHUNK_SIZE - 8) as u64) as i64;
+                let y = min_y + 4 + ((roll >> 16) % (CHUNK_SIZE - 8) as u64) as i64;
+                self.expansion_site_clear(base_id, x, y, cfg)
+                    .then_some((x, y))
+            })
+    }
+
+    fn expansion_site_clear(
+        &self,
+        source: EnemyBaseId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+        cfg: EnemyGameplayConfig,
+    ) -> bool {
+        let Some(tile) = self.world.tile_at(x, y) else {
+            return false;
+        };
+        if tile.resource.is_some()
+            || self.entities.occupancy.entity_at(x, y).is_some()
+            || !tile.collision.walkable
+            || !tile.collision.buildable
+        {
+            return false;
+        }
+        let Some(chunk) = ChunkCoord::from_tile(x, y) else {
+            return false;
+        };
+        if self.enemies.bases.values().any(|base| {
+            base.id != source
+                && (base.anchor.x - chunk.x)
+                    .abs()
+                    .max((base.anchor.y - chunk.y).abs())
+                    < i32::from(cfg.expansion_colony_spacing_chunks)
+        }) {
+            return false;
+        }
+        let spacing = i64::from(cfg.expansion_player_spacing_tiles);
+        let player_tile = self.player.tile_position();
+        if (player_tile.0 - x).abs().max((player_tile.1 - y).abs()) < spacing {
+            return false;
+        }
+        !self
+            .entities
+            .placed_entities
+            .values()
+            .filter(|entity| {
+                self.world
+                    .prototypes
+                    .entity(entity.prototype_id)
+                    .is_some_and(|p| {
+                        p.entity_kind != EntityKind::EnemySpawner
+                            && p.entity_kind != EntityKind::ResourcePatch
+                    })
+            })
+            .any(|entity| (entity.x - x).abs().max((entity.y - y).abs()) < spacing)
+    }
+
+    fn dispatch_expansion(
+        &mut self,
+        base_id: EnemyBaseId,
+        destination: (WorldTileCoord, WorldTileCoord),
+    ) {
+        let Some((&spawner_id, unit, spawner_prototype)) = self
+            .enemies
+            .bases
+            .get(&base_id)
+            .and_then(|base| base.spawners.iter().next())
+            .and_then(|id| {
+                let placed = self.entities.placed_entities.get(id)?;
+                Some((
+                    id,
+                    self.world
+                        .prototypes
+                        .entity(placed.prototype_id)?
+                        .enemy_spawner
+                        .as_ref()?
+                        .unit,
+                    placed.prototype_id,
+                ))
+            })
+        else {
+            return;
+        };
+        let expansion_id = self.enemies.allocate_expansion_id();
+        let count = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
+        let before: BTreeSet<_> = self.enemies.enemies.keys().copied().collect();
+        for _ in 0..count {
+            self.spawn_enemy_near_spawner(spawner_id, &unit, EnemyMission::Expansion(expansion_id));
+        }
+        let members = self
+            .enemies
+            .enemies
+            .keys()
+            .filter(|id| !before.contains(id))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if members.is_empty() {
+            return;
+        }
+        let destination_chunk = ChunkCoord::from_tile(destination.0, destination.1);
+        let spotted = self
+            .enemies
+            .bases
+            .get(&base_id)
+            .is_some_and(|base| self.chart.revealed_chunks.contains(&base.anchor))
+            || destination_chunk.is_some_and(|chunk| self.chart.revealed_chunks.contains(&chunk));
+        self.enemies.expansions.insert(
+            expansion_id,
+            Expansion {
+                id: expansion_id,
+                base_id,
+                members,
+                destination,
+                spotted,
+                spawner_prototype,
+            },
+        );
+        if spotted {
+            self.emit_event(
+                ThreatEventKind::ExpansionSpotted,
+                ThreatLocation::Exact {
+                    x: destination.0,
+                    y: destination.1,
+                },
+            );
+        }
+    }
+
+    fn resolve_arrived_expansions(&mut self) {
+        let arrivals: Vec<_> = self
+            .enemies
+            .expansions
+            .iter()
+            .filter_map(|(&id, party)| {
+                party
+                    .members
+                    .iter()
+                    .filter_map(|member| self.enemies.enemies.get(member))
+                    .any(|unit| unit.tile() == party.destination)
+                    .then_some(id)
+            })
+            .collect();
+        for expansion_id in arrivals {
+            let Some(party) = self.enemies.expansions.remove(&expansion_id) else {
+                continue;
+            };
+            let Some(cfg) = self.gameplay().copied() else {
+                continue;
+            };
+            let Some(founder) = party
+                .members
+                .iter()
+                .filter(|id| self.enemies.enemies.contains_key(id))
+                .min()
+                .copied()
+            else {
+                continue;
+            };
+            if !self.expansion_site_clear(
+                party.base_id,
+                party.destination.0,
+                party.destination.1,
+                cfg,
+            ) {
+                for id in party.members {
+                    if let Some(unit) = self.enemies.enemies.get_mut(&id) {
+                        unit.mission = EnemyMission::Guard;
+                        unit.mode = EnemyMode::Guard;
+                        unit.path.clear();
+                    }
+                }
+                continue;
+            }
+            let prototype_id = party.spawner_prototype;
+            let new_base = self.enemies.allocate_base_id();
+            let anchor = ChunkCoord::from_tile(party.destination.0, party.destination.1)
+                .expect("generated destination has a chunk");
+            self.enemies.bases.insert(
+                new_base,
+                EnemyBase {
+                    id: new_base,
+                    anchor,
+                    spawners: BTreeSet::new(),
+                    creation_tick: self.tick,
+                    attack_budget_micro: 0,
+                    staged_units: BTreeSet::new(),
+                    staging_started_tick: None,
+                    next_raid_tick: self.tick,
+                    next_expansion_tick: self.tick
+                        + scaled_interval(
+                            cfg.expansion_interval_ticks,
+                            self.config.runtime.expansion_frequency_percent,
+                        ),
+                    next_growth_tick: self.tick + u64::from(cfg.outpost_growth_interval_ticks),
+                    pollution_contact: false,
+                },
+            );
+            self.enemies.placement_base = Some(new_base);
+            let placed = placement::place(
+                self,
+                placement::EntityPlacementRequest {
+                    prototype_id,
+                    x: party.destination.0,
+                    y: party.destination.1,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok();
+            self.enemies.placement_base = None;
+            if placed {
+                self.enemies.enemies.remove(&founder);
+                for id in party.members {
+                    if let Some(unit) = self.enemies.enemies.get_mut(&id) {
+                        unit.mission = EnemyMission::Guard;
+                        unit.mode = EnemyMode::Guard;
+                        unit.home_spawner = self.enemies.bases[&new_base]
+                            .spawners
+                            .iter()
+                            .next()
+                            .copied();
+                        unit.path.clear();
+                    }
+                }
+            } else {
+                self.enemies.bases.remove(&new_base);
+            }
+        }
+    }
+}
+
+fn scaled_interval(base_ticks: u32, percent: u16) -> u64 {
+    if percent == 0 {
+        u64::MAX
+    } else {
+        (u64::from(base_ticks) * 100)
+            .div_ceil(u64::from(percent))
+            .max(1)
+    }
+}
+
+fn scale_stat(base: u32, strength_percent: u32, evolution_percent: u32) -> u32 {
+    u32::try_from(
+        (u64::from(base) * u64::from(strength_percent) * u64::from(evolution_percent) / 10_000)
+            .max(1),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 fn step_enemy(
@@ -679,4 +1700,86 @@ fn free_tile_around_footprint(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod enemy_feature_tests {
+    use super::*;
+
+    #[test]
+    fn difficulty_presets_match_balance_defaults() {
+        let peaceful = EnemyDifficultyPreset::Peaceful.config();
+        let standard = EnemyDifficultyPreset::Standard.config();
+        let aggressive = EnemyDifficultyPreset::Aggressive.config();
+        assert_eq!(
+            (
+                peaceful.world.base_density_percent,
+                peaceful.world.starting_safe_radius_tiles
+            ),
+            (75, 180)
+        );
+        assert_eq!(
+            (
+                standard.runtime.strength_percent,
+                standard.runtime.raid_frequency_percent
+            ),
+            (100, 100)
+        );
+        assert_eq!(
+            (
+                aggressive.runtime.strength_percent,
+                aggressive.runtime.expansion_frequency_percent
+            ),
+            (150, 175)
+        );
+        assert!(!peaceful.runtime.proactive_raids && !peaceful.runtime.expansion);
+    }
+
+    #[test]
+    fn density_zero_prevents_generated_colonies() {
+        let standard = SimulationConfig::default();
+        let config = SimulationConfig {
+            preset: EnemyDifficultyPreset::Custom,
+            world: EnemyWorldSettings {
+                base_density_percent: 0,
+                ..standard.world
+            },
+            ..standard
+        };
+        let mut sim =
+            Simulation::new_with_config(123, PrototypeCatalog::load_base().unwrap(), config);
+        for y in -20..=20 {
+            for x in -20..=20 {
+                sim.ensure_chunk_generated(ChunkCoord { x, y });
+            }
+        }
+        assert!(sim.enemies.bases.is_empty());
+    }
+
+    #[test]
+    fn runtime_command_preserves_immutable_world_settings() {
+        let mut sim = Simulation::new_test_world(123);
+        let world = sim.enemy_settings().world;
+        let runtime = EnemyDifficultyPreset::Peaceful.config().runtime;
+        sim.apply_command(&SimCommand::SetEnemyRuntimeSettings(runtime))
+            .unwrap();
+        assert_eq!(sim.enemy_settings().world, world);
+        assert_eq!(sim.enemy_settings().runtime, runtime);
+        assert_eq!(sim.enemy_settings().preset, EnemyDifficultyPreset::Custom);
+    }
+
+    #[test]
+    fn threat_log_is_ordered_and_bounded() {
+        let mut sim = Simulation::new_test_world(123);
+        for index in 0..300 {
+            sim.tick = index;
+            sim.emit_event(
+                ThreatEventKind::StructureUnderAttack,
+                ThreatLocation::Sector(ChunkCoord { x: 0, y: 0 }),
+            );
+        }
+        assert_eq!(sim.enemies.threat_events.len(), 256);
+        assert_eq!(sim.enemies.threat_events.front().unwrap().sequence, 45);
+        assert_eq!(sim.threat_events_after(298).len(), 2);
+    }
 }

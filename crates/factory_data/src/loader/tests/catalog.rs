@@ -1,5 +1,23 @@
 use crate::catalog::PrototypeCatalog;
 
+#[test]
+fn base_enemy_gameplay_values_are_valid_and_data_driven() {
+    let catalog = PrototypeCatalog::load_base().unwrap();
+    let enemy = catalog
+        .enemy_gameplay
+        .expect("base catalog has enemy gameplay");
+    assert_eq!(
+        (
+            enemy.generated_colony_min_spawners,
+            enemy.generated_colony_max_spawners
+        ),
+        (2, 4)
+    );
+    assert_eq!(enemy.raid_cooldown_ticks, 7_200);
+    assert_eq!(enemy.expansion_interval_ticks, 36_000);
+    assert_eq!(enemy.expansion_candidate_limit, 128);
+}
+
 const ITEM_NAMES: [&str; 42] = [
     "iron_ore",
     "copper_ore",

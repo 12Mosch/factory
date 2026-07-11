@@ -38,6 +38,7 @@ fn place_validated_entity(
     footprint: EntityFootprint,
 ) -> EntityId {
     let prototype = &sim.world.prototypes.entities[request.prototype_id.index()];
+    let is_enemy_spawner = prototype.entity_kind == EntityKind::EnemySpawner;
     let reservation = reservation_for_prototype(
         prototype,
         request.prototype_id,
@@ -49,6 +50,9 @@ fn place_validated_entity(
     let impact = impact_for_prototype(sim, request.prototype_id);
     construction_ops::clear_ghosts_overlapping_footprint(sim, &footprint);
     let entity_id = sim.entities.reserve_entity(reservation);
+    if is_enemy_spawner {
+        sim.on_enemy_spawner_placed(entity_id, request.x, request.y);
+    }
     apply_entity_topology_change(sim, impact);
     entity_id
 }

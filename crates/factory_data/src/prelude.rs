@@ -1,8 +1,8 @@
 pub use crate::{
     AssemblingMachinePrototype, BaseFluidIds, BaseItemIds, BasePrototypeIds, BaseTileIds,
     BoilerPrototype, BuildingCategory, BurnerPrototype, CollisionLayer, CollisionMask,
-    CraftingCategory, ElectricEnergySourcePrototype, ElectricPolePrototype, EntityKind,
-    EntityPrototype, EntityPrototypeId, FluidAmount, FluidBoxIo, FluidBoxPrototype,
+    CraftingCategory, ElectricEnergySourcePrototype, ElectricPolePrototype, EnemyGameplayConfig,
+    EntityKind, EntityPrototype, EntityPrototypeId, FluidAmount, FluidBoxIo, FluidBoxPrototype,
     FluidConnectionPrototype, FluidConnectionSide, FluidId, FluidPrototype, InserterPrototype,
     ItemAmount, ItemId, ItemPrototype, MiningDrillPrototype, OffshorePumpPrototype,
     PrototypeCatalog, PrototypeLoadError, PumpjackPrototype, RecipeId, RecipePrototype,

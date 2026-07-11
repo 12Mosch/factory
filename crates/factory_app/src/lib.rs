@@ -4,6 +4,7 @@ mod plugin;
 pub mod save_load;
 pub mod simulation;
 mod utils;
+pub mod world_setup;
 
 pub mod build;
 pub mod constants;

@@ -57,6 +57,7 @@ impl MapLayerPainter {
             MapLayer::Entities => {
                 darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.30)
             }
+            MapLayer::Threat => darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.16),
         }
     }
 }
@@ -91,7 +92,12 @@ mod tests {
             .and_then(|chunk| chunk.tiles.first())
             .expect("test world should contain at least one tile");
 
-        for layer in [MapLayer::Surface, MapLayer::Resources, MapLayer::Entities] {
+        for layer in [
+            MapLayer::Surface,
+            MapLayer::Resources,
+            MapLayer::Entities,
+            MapLayer::Threat,
+        ] {
             let painter = MapLayerPainter::new(layer, &sim);
             assert_eq!(painter.pixel_for_tile(tile, 0, 0, false), UNREVEALED_PIXEL);
         }

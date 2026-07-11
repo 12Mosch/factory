@@ -255,6 +255,7 @@ mod tests {
                 inserter_count: 6,
                 active_machines: 2,
                 idle_machines: 3,
+                ..SimulationCounts::default()
             },
             power: PowerSummary {
                 production_watts: 900_000,

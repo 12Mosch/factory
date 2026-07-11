@@ -16,4 +16,5 @@ pub mod production_stats;
 pub mod resources;
 pub mod save_load;
 pub mod technology_panel;
+pub mod threat;
 pub(crate) mod window_sync;

@@ -8,9 +8,15 @@ mod save_load;
 mod simulation;
 mod ui;
 
+use crate::world_setup::{
+    AppMode, StartInWorldSetup, build_world_setup_ui, cleanup_world_setup,
+    handle_world_setup_buttons, handle_world_setup_load_buttons, handle_world_setup_seed_input,
+    sync_world_setup_text,
+};
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::input::InputSystems;
 use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
 
 /// Shared ordering labels for systems whose ordering constraints cross plugin
 /// boundaries. Plugin-internal ordering uses direct `.before`/`.after` edges
@@ -54,6 +60,15 @@ pub struct FactoryAppPlugin;
 
 impl Plugin for FactoryAppPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<StatesPlugin>() {
+            app.add_plugins(StatesPlugin);
+        }
+        let initial_mode = if app.world().contains_resource::<StartInWorldSetup>() {
+            AppMode::WorldSetup
+        } else {
+            AppMode::InGame
+        };
+        app.insert_state(initial_mode);
         if !app.is_plugin_added::<DiagnosticsPlugin>() {
             app.add_plugins(DiagnosticsPlugin);
         }
@@ -67,11 +82,15 @@ impl Plugin for FactoryAppPlugin {
         app.configure_sets(PreUpdate, AppSet::PanelInput.after(InputSystems))
             .configure_sets(
                 FixedUpdate,
-                (AppSet::SimInput, AppSet::SimTick, AppSet::PostTick).chain(),
+                (AppSet::SimInput, AppSet::SimTick, AppSet::PostTick)
+                    .chain()
+                    .run_if(in_state(AppMode::InGame)),
             )
             .configure_sets(
                 Update,
-                (AppSet::TechnologyWindow, AppSet::WorldInput).chain(),
+                (AppSet::TechnologyWindow, AppSet::WorldInput)
+                    .chain()
+                    .run_if(in_state(AppMode::InGame)),
             )
             .configure_sets(Update, (AppSet::MapTexture, AppSet::RenderSync).chain());
 
@@ -87,6 +106,20 @@ impl Plugin for FactoryAppPlugin {
             rendering::RenderingPlugin,
             save_load::SaveLoadPlugin,
             ui::UiPlugin,
-        ));
+        ))
+        .init_resource::<crate::world_setup::WorldSetupState>()
+        .add_systems(OnEnter(AppMode::WorldSetup), build_world_setup_ui)
+        .add_systems(OnExit(AppMode::WorldSetup), cleanup_world_setup)
+        .add_systems(
+            Update,
+            (
+                handle_world_setup_seed_input,
+                handle_world_setup_load_buttons,
+                handle_world_setup_buttons,
+                sync_world_setup_text,
+            )
+                .chain()
+                .run_if(in_state(AppMode::WorldSetup)),
+        );
     }
 }

@@ -17,7 +17,11 @@ pub use crate::construction::{
     GhostId,
 };
 pub use crate::crafting::{CraftingError, CraftingJob, CraftingQueue};
-pub use crate::enemies::{Enemy, EnemyId, EnemyMode, EnemySubsystem};
+pub use crate::enemies::{
+    Enemy, EnemyBaseId, EnemyDifficultyPreset, EnemyId, EnemyMapSnapshot, EnemyMission, EnemyMode,
+    EnemyRuntimeSettings, EnemySubsystem, EnemyWorldSettings, ExpansionId, RaidId,
+    SimulationConfig, ThreatEvent, ThreatEventKind, ThreatLocation, ThreatSnapshot, ThreatTier,
+};
 pub(crate) use crate::entities::EntityReservation;
 pub(crate) use crate::entities::store::for_each_entity_state_map;
 pub use crate::entities::{
@@ -126,6 +130,7 @@ pub struct Simulation {
     statistics: StatisticsSubsystem,
     pollution: PollutionState,
     enemies: EnemySubsystem,
+    config: SimulationConfig,
 
     #[serde(skip)]
     transport: TransportLaneCache,
@@ -501,6 +506,7 @@ pub enum SimValidationError {
     InvalidEnemy {
         enemy_id: EnemyId,
     },
+    InvalidEnemyState,
 }
 
 mod belt_ops;

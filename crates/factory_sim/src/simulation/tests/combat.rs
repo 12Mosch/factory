@@ -47,6 +47,7 @@ fn spawn_test_enemy_at(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoor
             speed_fixed_per_tick: unit.speed_fixed_per_tick,
             aggro_radius_tiles: unit.aggro_radius_tiles,
             mode: EnemyMode::Attack,
+            mission: EnemyMission::Guard,
             home_spawner: None,
             target: None,
             path: VecDeque::new(),

@@ -6,7 +6,9 @@ use crate::save_load::{
     SaveLoadStatus, SaveLoadWindowState, handle_save_load_shortcuts, initialize_autosave_tick,
     poll_save_jobs, run_autosave,
 };
-use crate::ui::save_load::{handle_save_load_buttons, sync_save_load_window};
+use crate::ui::save_load::{
+    NewWorldConfirmation, handle_new_world_button, handle_save_load_buttons, sync_save_load_window,
+};
 
 /// Manual and automatic save/load, plus the save/load window.
 pub(super) struct SaveLoadPlugin;
@@ -20,12 +22,14 @@ impl Plugin for SaveLoadPlugin {
             .init_resource::<PendingSaveJobs>()
             .init_resource::<AutosaveState>()
             .init_resource::<PresentationReloadToken>()
+            .init_resource::<NewWorldConfirmation>()
             .add_systems(Startup, initialize_autosave_tick)
             .add_systems(
                 Update,
                 (
                     handle_save_load_shortcuts,
                     handle_save_load_buttons.in_set(AppSet::UiInteraction),
+                    handle_new_world_button.in_set(AppSet::UiInteraction),
                     run_autosave,
                     poll_save_jobs,
                     sync_save_load_window,

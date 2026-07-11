@@ -40,6 +40,9 @@ use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
 };
+use crate::ui::threat::{
+    ThreatUiState, handle_threat_alert_clicks, setup_threat_ui, sync_threat_ui,
+};
 
 /// General UI: debug overlay, containers and inventory, technology window,
 /// manual crafting, production stats, and machine indicators.
@@ -56,7 +59,11 @@ impl Plugin for UiPlugin {
             .init_resource::<CraftingWindowState>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<ObjectivesPanelState>()
-            .add_systems(Startup, (setup_debug_overlay, setup_objectives_panel))
+            .init_resource::<ThreatUiState>()
+            .add_systems(
+                Startup,
+                (setup_debug_overlay, setup_objectives_panel, setup_threat_ui),
+            )
             .add_systems(
                 Update,
                 (
@@ -97,6 +104,8 @@ impl Plugin for UiPlugin {
                     update_burner_drill_indicators,
                     update_machine_guidance.after(sync_container_window),
                     sync_objectives_panel,
+                    handle_threat_alert_clicks.in_set(AppSet::UiInteraction),
+                    sync_threat_ui.after(handle_threat_alert_clicks),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
                     handle_manual_crafting_tab_buttons.in_set(AppSet::UiInteraction),

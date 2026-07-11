@@ -106,6 +106,25 @@ impl Simulation {
     /// violently destroyed (no item recovery). Entities without health state
     /// are indestructible. Returns true when the entity was destroyed.
     pub(crate) fn damage_entity(&mut self, entity_id: EntityId, amount: u32) -> bool {
+        let warning_location = self
+            .entities
+            .placed_entities
+            .get(&entity_id)
+            .and_then(|placed| {
+                self.world
+                    .prototypes
+                    .entity(placed.prototype_id)
+                    .filter(|prototype| {
+                        !matches!(
+                            prototype.entity_kind,
+                            EntityKind::EnemySpawner | EntityKind::ResourcePatch
+                        )
+                    })
+                    .map(|_| (placed.x, placed.y))
+            });
+        if let Some((x, y)) = warning_location {
+            self.emit_structure_damage_warning(x, y);
+        }
         let Some(health) = self.entities.entity_health.get_mut(&entity_id) else {
             return false;
         };

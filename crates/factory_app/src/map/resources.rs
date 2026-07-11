@@ -11,6 +11,7 @@ pub enum MapLayer {
     Surface,
     Resources,
     Entities,
+    Threat,
 }
 
 #[derive(Resource)]

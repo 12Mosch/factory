@@ -6,6 +6,15 @@ use super::*;
 
 impl Simulation {
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
+        Self::new_with_config(seed, prototypes, SimulationConfig::default())
+    }
+
+    pub fn new_with_config(
+        seed: u64,
+        prototypes: PrototypeCatalog,
+        config: SimulationConfig,
+    ) -> Self {
+        assert!(config.is_valid(), "invalid enemy simulation configuration");
         let world = WorldSim::new(seed, prototypes);
         let research = ResearchState::from_catalog(&world.prototypes);
         let entities = EntityStore::new_test_entities(seed);
@@ -40,6 +49,7 @@ impl Simulation {
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
             enemies: EnemySubsystem::default(),
+            config,
             transport: TransportLaneCache::default(),
         };
         sim.reveal_chunks_around_player();
@@ -104,6 +114,7 @@ impl Simulation {
             self.advance_enemy_spawners();
             self.advance_enemies();
             self.advance_gun_turrets();
+            self.cleanup_enemy_groups();
         });
     }
 
@@ -162,6 +173,7 @@ impl Simulation {
         self.fluids.networks.hash(&mut hasher);
         self.pollution.hash(&mut hasher);
         self.enemies.hash(&mut hasher);
+        self.config.hash(&mut hasher);
         hasher.finish()
     }
 

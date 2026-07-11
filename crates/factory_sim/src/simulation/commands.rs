@@ -7,6 +7,7 @@ use super::*;
 /// lockstep multiplayer).
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum SimCommand {
+    SetEnemyRuntimeSettings(EnemyRuntimeSettings),
     MovePlayer {
         direction_x: f32,
         direction_y: f32,
@@ -167,6 +168,10 @@ impl Simulation {
         command: &SimCommand,
     ) -> Result<SimCommandEffect, SimCommandError> {
         match *command {
+            SimCommand::SetEnemyRuntimeSettings(settings) => {
+                self.set_enemy_runtime_settings(settings);
+                Ok(SimCommandEffect::None)
+            }
             SimCommand::MovePlayer {
                 direction_x,
                 direction_y,
