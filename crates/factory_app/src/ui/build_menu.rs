@@ -333,7 +333,7 @@ fn empty_message(state: &BuildMenuState, query: &str) -> String {
         format!("No buildings in {view}.")
     } else {
         format!(
-            "No buildings match ‘{}’ in {view}.",
+            "No buildings match '{}' in {view}.",
             state.search_query.trim()
         )
     }
@@ -394,7 +394,7 @@ fn spawn_contents(
                 });
             });
             if let Some(message) = &snapshot.message { panel.spawn((Text::new(message.clone()), TextFont::from_font_size(12.0), TextColor(Color::srgb(0.98, 0.72, 0.28)))); }
-            panel.spawn((Text::new("Click an unlocked card to build • ★ toggles hotbar favorite • 1–0 select favorites outside catalog"), TextFont::from_font_size(11.0), TextColor(Color::srgb(0.68, 0.70, 0.66))));
+            panel.spawn((Text::new("Click an unlocked card to build | +/- toggles hotbar favorite | 1-0 select favorites outside catalog"), TextFont::from_font_size(11.0), TextColor(Color::srgb(0.68, 0.70, 0.66))));
         });
 }
 
@@ -420,7 +420,7 @@ fn spawn_header(
                 TextColor(Color::srgb(0.94, 0.93, 0.86)),
             ));
             let search = if snapshot.search_query.is_empty() {
-                "Search buildings…".into()
+                "Search buildings...".into()
             } else {
                 snapshot.search_query.clone()
             };
@@ -506,7 +506,7 @@ fn spawn_navigation(
             .with_children(|button| {
                 button.spawn((
                     Text::new(if favorite {
-                        format!("★ {}", view_name(*view))
+                        format!("* {}", view_name(*view))
                     } else {
                         view_name(*view).into()
                     }),
@@ -623,7 +623,7 @@ fn spawn_entry(grid: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, entry: &Bu
             },
         ))
         .with_child((
-            Text::new(if favorite { "★" } else { "☆" }),
+            Text::new(if favorite { "-" } else { "+" }),
             TextFont::from_font_size(18.0),
             TextColor(if favorite {
                 Color::srgb(0.98, 0.72, 0.28)
