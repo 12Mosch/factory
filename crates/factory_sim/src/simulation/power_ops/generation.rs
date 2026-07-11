@@ -112,9 +112,11 @@ impl Simulation {
 
         self.entities.steam_engines.keys().any(|&engine_id| {
             network_ids_by_entity.contains_key(&engine_id)
-                && self.steam_engine_prototype(engine_id).is_some_and(|prototype| {
-                    per_tick_milliunits(prototype.steam_consumption_per_second_milliunits) > 0
-                })
+                && self
+                    .steam_engine_prototype(engine_id)
+                    .is_some_and(|prototype| {
+                        per_tick_milliunits(prototype.steam_consumption_per_second_milliunits) > 0
+                    })
                 && self
                     .fluid_network_id_for_box_key(FluidBoxKey {
                         entity_id: engine_id,

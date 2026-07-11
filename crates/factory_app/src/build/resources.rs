@@ -1,4 +1,5 @@
 use bevy::prelude::Resource;
+use factory_data::BuildingCategory;
 use factory_data::{EntityPrototypeId, ItemId};
 use factory_sim::{Blueprint, Direction, WorldTileCoord};
 
@@ -48,10 +49,36 @@ impl HotbarState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuildingMenuView {
+    #[default]
+    All,
+    Favorites,
+    Category(BuildingCategory),
+}
+
 #[derive(Resource, Default)]
 pub struct BuildMenuState {
     pub open: bool,
     pub message: Option<String>,
+    pub selected_view: BuildingMenuView,
+    pub search_query: String,
+}
+
+impl BuildMenuState {
+    pub fn open_fresh(&mut self) {
+        self.open = true;
+        self.message = None;
+        self.selected_view = BuildingMenuView::All;
+        self.search_query.clear();
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.message = None;
+        self.selected_view = BuildingMenuView::All;
+        self.search_query.clear();
+    }
 }
 
 #[derive(Resource, Default)]

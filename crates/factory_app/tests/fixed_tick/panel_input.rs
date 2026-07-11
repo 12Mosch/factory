@@ -1,4 +1,6 @@
 use super::common::{first_available_hotbar_slot, hotbar_key_for_slot, test_app};
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use factory_app::audio::AudioSettingsWindowState;
@@ -32,6 +34,28 @@ fn technology_screen_toggles_with_t() {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyT);
+    app.update();
+
+    assert!(app.world().resource::<TechnologyWindowState>().open);
+}
+
+#[test]
+fn t_does_not_toggle_technology_window_while_build_menu_is_open() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    press_key(&mut app, KeyCode::KeyB);
+    app.update();
+    release_key(&mut app, KeyCode::KeyB);
+    press_key(&mut app, KeyCode::KeyT);
+    app.update();
+
+    assert!(app.world().resource::<BuildMenuState>().open);
+    assert!(!app.world().resource::<TechnologyWindowState>().open);
+
+    release_key(&mut app, KeyCode::KeyT);
+    app.world_mut().resource_mut::<TechnologyWindowState>().open = true;
+    press_key(&mut app, KeyCode::KeyT);
     app.update();
 
     assert!(app.world().resource::<TechnologyWindowState>().open);
@@ -385,7 +409,7 @@ fn open_settings_suppresses_build_hotbar_selection() {
 }
 
 #[test]
-fn b_toggles_build_menu_and_blocks_world_input() {
+fn b_opens_build_menu_and_types_into_search_while_open() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
 
@@ -406,9 +430,19 @@ fn b_toggles_build_menu_and_blocks_world_input() {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyB);
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::KeyB,
+        logical_key: Key::Character("b".into()),
+        state: ButtonState::Pressed,
+        text: Some("b".into()),
+        repeat: false,
+        window: Entity::PLACEHOLDER,
+    });
     app.update();
 
-    assert!(!app.world().resource::<BuildMenuState>().open);
+    let menu = app.world().resource::<BuildMenuState>();
+    assert!(menu.open);
+    assert_eq!(menu.search_query, "b");
 }
 
 #[test]

@@ -53,6 +53,8 @@ pub struct EntityPrototype {
     pub size: IVec2,
     pub collision_mask: CollisionMask,
     pub build_item: Option<ItemId>,
+    pub building_category: Option<BuildingCategory>,
+    pub building_menu_order: Option<u16>,
     pub inventory_slot_count: Option<usize>,
     pub burner: Option<BurnerPrototype>,
     pub mining_drill: Option<MiningDrillPrototype>,
@@ -74,6 +76,16 @@ pub struct EntityPrototype {
     pub pollution_per_minute_milli: Option<u32>,
     pub gun_turret: Option<GunTurretPrototype>,
     pub enemy_spawner: Option<EnemySpawnerPrototype>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize, PartialOrd, Ord)]
+pub enum BuildingCategory {
+    Logistics,
+    Production,
+    Power,
+    Fluids,
+    Storage,
+    Defense,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

@@ -1,4 +1,7 @@
-use factory_data::{EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog};
+use factory_data::{
+    BuildingCategory, EntityKind, EntityPrototypeId, ItemId, PrototypeCatalog, TechnologyEffect,
+    TechnologyId,
+};
 use factory_sim::{
     BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview,
     ConstructionError, Direction, EntityDestroyError, PlayerBuildError, Simulation,
@@ -11,6 +14,9 @@ pub struct BuildablePrototype {
     pub prototype_id: EntityPrototypeId,
     pub item_id: ItemId,
     pub display_name: String,
+    pub category: BuildingCategory,
+    pub menu_order: u16,
+    pub required_technology: Option<TechnologyId>,
 }
 
 impl BuildablePrototype {
@@ -40,10 +46,37 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
             prototype_id: entity.id,
             item_id,
             display_name: display_name(&entity.name),
+            category: entity
+                .building_category
+                .expect("validated buildable has a building category"),
+            menu_order: entity
+                .building_menu_order
+                .expect("validated buildable has a building menu order"),
+            required_technology: required_technology(catalog, item_id),
         });
     }
 
     buildables
+}
+
+fn required_technology(catalog: &PrototypeCatalog, item_id: ItemId) -> Option<TechnologyId> {
+    catalog
+        .recipes
+        .iter()
+        .filter(|recipe| {
+            recipe
+                .products
+                .iter()
+                .any(|product| product.item == item_id)
+        })
+        .flat_map(|recipe| {
+            catalog.technologies.iter().filter_map(move |technology| {
+                technology.effects.iter().any(|effect| {
+                    matches!(effect, TechnologyEffect::UnlockRecipe(id) if *id == recipe.id)
+                }).then_some(technology.id)
+            })
+        })
+        .min()
 }
 
 pub fn default_hotbar_slots(
@@ -275,7 +308,7 @@ fn item_display_name(catalog: &PrototypeCatalog, item_id: ItemId) -> Option<Stri
         .map(|prototype| display_name(&prototype.name))
 }
 
-fn display_name(name: &str) -> String {
+pub(crate) fn display_name(name: &str) -> String {
     name.split('_')
         .map(|part| {
             let mut chars = part.chars();
@@ -360,6 +393,48 @@ mod tests {
         assert_eq!(
             status,
             BuildPlacementStatus::CannotPlace("Offshore pump needs adjacent water".to_string())
+        );
+    }
+
+    #[test]
+    fn buildables_derive_starter_and_unlocking_technologies() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let buildables = buildable_prototypes(&catalog);
+        let technology_name = |entity_name: &str| {
+            let buildable = buildables
+                .iter()
+                .find(|buildable| {
+                    catalog
+                        .entity(buildable.prototype_id)
+                        .is_some_and(|entity| entity.name == entity_name)
+                })
+                .expect("buildable should exist");
+            buildable
+                .required_technology
+                .and_then(|id| catalog.technology(id))
+                .map(|technology| technology.name.as_str())
+        };
+        assert_eq!(technology_name("stone_furnace"), None);
+        assert_eq!(technology_name("splitter"), Some("logistics"));
+        assert_eq!(technology_name("assembling_machine"), Some("automation"));
+        assert_eq!(technology_name("storage_tank"), Some("fluid_handling"));
+    }
+
+    #[test]
+    fn multiple_unlocking_technologies_choose_lowest_id() {
+        let catalog = PrototypeCatalog::from_ron_str(r#"(
+            items: [(id: 0, name: "machine", stack_size: 50)],
+            recipes: [(id: 0, name: "machine", category: Crafting, crafting_time_ticks: 1, products: [(item: "machine", amount: 1)])],
+            entities: [(id: 0, name: "machine", entity_kind: AssemblingMachine, build_item: Some("machine"), building_category: Some(Production), building_menu_order: Some(1), size: (x: 1, y: 1), collision_mask: (layers: ["building"]))],
+            tiles: [],
+            technologies: [
+                (id: 0, name: "first", prerequisites: [], science_packs: [], required_units: 1, research_time_ticks: 1, effects: [UnlockRecipe("machine")]),
+                (id: 1, name: "second", prerequisites: [], science_packs: [], required_units: 1, research_time_ticks: 1, effects: [UnlockRecipe("machine")]),
+            ],
+        )"#).expect("catalog should load");
+        assert_eq!(
+            buildable_prototypes(&catalog)[0].required_technology,
+            Some(TechnologyId::new(0))
         );
     }
 }
