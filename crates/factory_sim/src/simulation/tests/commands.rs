@@ -64,6 +64,42 @@ fn apply_command_reports_manually_mined_item_and_inventory_total() {
 }
 
 #[test]
+fn apply_command_reports_deconstructed_item_and_inventory_total() {
+    let mut sim = Simulation::new_test_world(123);
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let chest_item = item_id_by_name(&sim.world.prototypes, "chest");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+    let entity_id = place_at(&mut sim, chest, x, y, Direction::North);
+    crate::entity_access::inventory_mut(&mut sim, entity_id)
+        .expect("chest should expose its inventory")
+        .slots[0] = Some(ItemStack {
+        item_id: chest_item,
+        count: 1,
+    });
+    let count_before = sim.player_inventory.count(chest_item);
+
+    sim.apply_command(&SimCommand::MarkDeconstruction {
+        min_x: x,
+        min_y: y,
+        max_x: x + 1,
+        max_y: y + 1,
+    })
+    .expect("entity should be marked for deconstruction");
+    let effect = sim
+        .apply_command(&SimCommand::DeconstructEntity { entity_id })
+        .expect("marked entity should deconstruct");
+
+    assert_eq!(
+        effect,
+        SimCommandEffect::PlayerItemGained {
+            item_id: chest_item,
+            amount: 2,
+            total: count_before + 2,
+        }
+    );
+}
+
+#[test]
 fn apply_command_start_manual_craft_consumes_ingredients() {
     let mut sim = Simulation::new_test_world(123);
     let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");

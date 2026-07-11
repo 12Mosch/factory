@@ -363,7 +363,7 @@ fn item_gain_effect(
     } else {
         SimCommandEffect::PlayerItemGained {
             item_id,
-            amount: 1,
+            amount: total - count_before,
             total,
         }
     }
