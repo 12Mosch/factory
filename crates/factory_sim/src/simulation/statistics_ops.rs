@@ -191,6 +191,9 @@ impl Simulation {
     pub(super) fn record_item_produced(&mut self, item_id: ItemId, amount: u64) {
         StatisticsContext::new(self.tick, &mut self.statistics)
             .record_item_produced(item_id, amount);
+        let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
+        self.onboarding_progress
+            .record_item_produced(&base, item_id, amount);
     }
 
     pub(super) fn record_item_consumed(&mut self, item_id: ItemId, amount: u64) {
@@ -201,6 +204,15 @@ impl Simulation {
     pub(super) fn record_fluid_produced(&mut self, fluid_id: FluidId, amount: u64) {
         StatisticsContext::new(self.tick, &mut self.statistics)
             .record_fluid_produced(fluid_id, amount);
+        let petroleum = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
+            .fluids
+            .petroleum_gas;
+        if fluid_id == petroleum {
+            self.onboarding_progress.record_counter(
+                |progress| &mut progress.petroleum_gas_produced,
+                amount / 1_000,
+            );
+        }
     }
 
     pub(super) fn record_fluid_consumed(&mut self, fluid_id: FluidId, amount: u64) {

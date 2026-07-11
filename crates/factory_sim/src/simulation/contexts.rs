@@ -180,7 +180,7 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) research: &'a mut ResearchState,
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) statistics: StatisticsContext<'a>,
-    pub(super) early_game_progress: &'a mut EarlyGameProgress,
+    pub(super) onboarding_progress: &'a mut OnboardingProgress,
 }
 
 impl<'a> MachineTickContext<'a> {
@@ -190,6 +190,9 @@ impl<'a> MachineTickContext<'a> {
 
     pub(super) fn record_item_produced(&mut self, item_id: ItemId, amount: u64) {
         self.statistics.record_item_produced(item_id, amount);
+        let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
+        self.onboarding_progress
+            .record_item_produced(&base, item_id, amount);
     }
 
     pub(super) fn record_item_consumed(&mut self, item_id: ItemId, amount: u64) {
@@ -200,7 +203,14 @@ impl<'a> MachineTickContext<'a> {
         &mut self,
         units: u32,
     ) -> Result<ResearchProgressResult, ResearchError> {
-        add_research_units_to_state(&self.world.prototypes, self.research, units)
+        let result = add_research_units_to_state(&self.world.prototypes, self.research, units)?;
+        if let ResearchProgressResult::Completed { technology_id } = result
+            && let Some(technology) = self.world.prototypes.technology(technology_id)
+        {
+            self.onboarding_progress
+                .record_research_completed(&technology.name);
+        }
+        Ok(result)
     }
 }
 

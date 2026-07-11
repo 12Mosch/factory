@@ -104,6 +104,9 @@ impl Simulation {
         self.refresh_fluid_networks_after_dynamic_changes();
         self.power.networks = network_snapshots(&networks);
         self.power.summary = aggregate_power_summary(&self.power.networks);
+        if self.power.summary.production_watts > 0 {
+            self.onboarding_progress.record_electricity_generated();
+        }
         for status in self.power.entity_statuses.values_mut() {
             status.satisfaction_permyriad = status
                 .network_id

@@ -17,7 +17,7 @@ impl Simulation {
             research: &mut self.research,
             power: &mut self.power,
             statistics: StatisticsContext::new(self.tick, &mut self.statistics),
-            early_game_progress: &mut self.early_game_progress,
+            onboarding_progress: &mut self.onboarding_progress,
         }
     }
 

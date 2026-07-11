@@ -33,7 +33,7 @@ impl Simulation {
             player_inventory,
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
-            early_game_progress: EarlyGameProgress::default(),
+            onboarding_progress: OnboardingProgress::default(),
             research,
             power: PowerSubsystem::default(),
             fluids: FluidSubsystem::default(),
@@ -47,8 +47,8 @@ impl Simulation {
         sim
     }
 
-    pub fn early_game_progress(&self) -> EarlyGameProgress {
-        self.early_game_progress
+    pub fn onboarding_progress(&self) -> OnboardingProgress {
+        self.onboarding_progress
     }
 
     pub fn new_test_world(seed: u64) -> Self {
@@ -152,6 +152,7 @@ impl Simulation {
         self.player_inventory.hash(&mut hasher);
         self.manual_mining_progress.hash(&mut hasher);
         self.crafting_queue.hash(&mut hasher);
+        self.onboarding_progress.hash(&mut hasher);
         self.research.active.hash(&mut hasher);
         self.research.queue.hash(&mut hasher);
         self.research.technologies.hash(&mut hasher);
@@ -314,7 +315,15 @@ impl Simulation {
         &mut self,
         units: u32,
     ) -> Result<ResearchProgressResult, ResearchError> {
-        add_research_units_to_state(&self.world.prototypes, &mut self.research, units)
+        let result =
+            add_research_units_to_state(&self.world.prototypes, &mut self.research, units)?;
+        if let ResearchProgressResult::Completed { technology_id } = result
+            && let Some(technology) = self.world.prototypes.technology(technology_id)
+        {
+            self.onboarding_progress
+                .record_research_completed(&technology.name);
+        }
+        Ok(result)
     }
 
     pub fn is_recipe_unlocked(&self, recipe_id: RecipeId) -> bool {
