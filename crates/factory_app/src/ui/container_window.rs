@@ -11,7 +11,7 @@ use crate::ui::inventory_panel::{
     spawn_slot_button,
 };
 use crate::ui::machine_indicators::{
-    spawn_boiler_panel, spawn_burner_drill_panel, spawn_furnace_panel,
+    spawn_boiler_panel, spawn_burner_drill_panel, spawn_furnace_panel, spawn_machine_guidance,
 };
 use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
@@ -79,39 +79,71 @@ fn spawn_container_window_contents(
 ) {
     let entity_id = snapshot.entity_id;
     spawn_player_inventory_panel(root);
-    match snapshot.kind {
-        OpenMachineKind::Chest => {
-            spawn_container_inventory_panel(root, "Chest", container_slot_count(sim, entity_id))
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(machine_panel_width(snapshot.kind)),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|machine_panel| {
+        match snapshot.kind {
+            OpenMachineKind::Chest => spawn_container_inventory_panel(
+                machine_panel,
+                "Chest",
+                container_slot_count(sim, entity_id),
+            ),
+            OpenMachineKind::Lab => spawn_container_inventory_panel(
+                machine_panel,
+                "Lab",
+                container_slot_count(sim, entity_id),
+            ),
+            OpenMachineKind::Turret => spawn_container_inventory_panel(
+                machine_panel,
+                "Gun Turret",
+                container_slot_count(sim, entity_id),
+            ),
+            OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(machine_panel),
+            OpenMachineKind::Furnace => spawn_furnace_panel(machine_panel),
+            OpenMachineKind::Boiler => spawn_boiler_panel(machine_panel),
+            OpenMachineKind::Assembler => {
+                let state = factory_sim::entity_access::assembler_state(sim, entity_id)
+                    .expect("open assembler should expose state");
+                let prototype = sim
+                    .entities()
+                    .placed_entity(entity_id)
+                    .and_then(|placed| sim.catalog().entity(placed.prototype_id));
+                let machine_category = prototype
+                    .and_then(|prototype| prototype.assembling_machine.as_ref())
+                    .map(|assembling_machine| assembling_machine.crafting_category)
+                    .unwrap_or(CraftingCategory::Crafting);
+                let title = prototype
+                    .map(|prototype| format_recipe_display_name(&prototype.name))
+                    .unwrap_or_else(|| "Assembling Machine".to_string());
+                spawn_assembler_panel(
+                    machine_panel,
+                    sim.catalog(),
+                    state,
+                    machine_category,
+                    &title,
+                );
+            }
         }
-        OpenMachineKind::Lab => {
-            spawn_container_inventory_panel(root, "Lab", container_slot_count(sim, entity_id))
+        if let Some(status) = sim.machine_status_for_entity(entity_id) {
+            spawn_machine_guidance(machine_panel, status);
         }
-        OpenMachineKind::Turret => spawn_container_inventory_panel(
-            root,
-            "Gun Turret",
-            container_slot_count(sim, entity_id),
-        ),
-        OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(root),
-        OpenMachineKind::Furnace => spawn_furnace_panel(root),
-        OpenMachineKind::Boiler => spawn_boiler_panel(root),
-        OpenMachineKind::Assembler => {
-            let state = factory_sim::entity_access::assembler_state(sim, entity_id)
-                .expect("open assembler should expose state");
-            let prototype = sim
-                .entities()
-                .placed_entity(entity_id)
-                .and_then(|placed| sim.catalog().entity(placed.prototype_id));
-            let machine_category = prototype
-                .and_then(|prototype| prototype.assembling_machine.as_ref())
-                .map(|assembling_machine| assembling_machine.crafting_category)
-                .unwrap_or(CraftingCategory::Crafting);
-            let title = prototype
-                .map(|prototype| format_recipe_display_name(&prototype.name))
-                .unwrap_or_else(|| "Assembling Machine".to_string());
-            spawn_assembler_panel(root, sim.catalog(), state, machine_category, &title)
-        }
+        spawn_inventory_transfer_feedback(machine_panel);
+    });
+}
+
+fn machine_panel_width(kind: OpenMachineKind) -> f32 {
+    match kind {
+        OpenMachineKind::Assembler => 420.0,
+        OpenMachineKind::Chest | OpenMachineKind::Lab | OpenMachineKind::Turret => 244.0,
+        OpenMachineKind::BurnerDrill | OpenMachineKind::Furnace | OpenMachineKind::Boiler => 220.0,
     }
-    spawn_inventory_transfer_feedback(root);
 }
 
 fn container_slot_count(sim: &factory_sim::Simulation, entity_id: EntityId) -> usize {

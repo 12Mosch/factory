@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use factory_sim::{
     BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
     BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
-    FURNACE_OUTPUT_SLOT_INDEX,
+    FURNACE_OUTPUT_SLOT_INDEX, MachineStatus,
 };
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
@@ -16,6 +16,70 @@ pub(crate) struct BurnerEnergyText;
 
 #[derive(Component)]
 pub(crate) struct BurnerProgressFill;
+
+#[derive(Component)]
+pub(crate) struct MachineGuidanceText;
+
+pub(crate) fn spawn_machine_guidance(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    status: MachineStatus,
+) {
+    root.spawn((
+        Text::new(format_machine_guidance(status)),
+        TextFont::from_font_size(11.0),
+        TextColor(machine_guidance_color(status)),
+        TextLayout::justify(Justify::Left),
+        Node {
+            width: Val::Percent(100.0),
+            ..default()
+        },
+        MachineGuidanceText,
+    ));
+}
+
+pub(crate) fn format_machine_guidance(status: MachineStatus) -> &'static str {
+    match status {
+        MachineStatus::Working => "Working — machine is operating normally.",
+        MachineStatus::Idle => "Idle — give this machine work to do.",
+        MachineStatus::NoRecipe => "Missing recipe — select a recipe above to begin crafting.",
+        MachineStatus::NoResearch => {
+            "No research — select research or unlock the required technology."
+        }
+        MachineStatus::NoFuel => "Needs fuel — add a burnable item to the Fuel slot.",
+        MachineStatus::NoPower => "No power — connect the machine to a powered electric network.",
+        MachineStatus::NoInput => "Missing input — add the required ingredients or resources.",
+        MachineStatus::NoFluid => "Missing fluid — connect a pipe carrying the required fluid.",
+        MachineStatus::OutputFull => {
+            "Output blocked — clear the output or connect space for products."
+        }
+    }
+}
+
+fn machine_guidance_color(status: MachineStatus) -> Color {
+    match status {
+        MachineStatus::Working => Color::srgb(0.42, 0.84, 0.55),
+        MachineStatus::Idle => Color::srgb(0.72, 0.74, 0.72),
+        _ => Color::srgb(1.0, 0.72, 0.30),
+    }
+}
+
+pub(crate) fn update_machine_guidance(
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut guidance: Query<(&mut Text, &mut TextColor), With<MachineGuidanceText>>,
+) {
+    let status = open_container
+        .entity_id
+        .and_then(|entity_id| sim.read().machine_status_for_entity(entity_id));
+    let Some(status) = status else {
+        return;
+    };
+
+    for (mut text, mut color) in &mut guidance {
+        text.0 = format_machine_guidance(status).to_string();
+        color.0 = machine_guidance_color(status);
+    }
+}
 
 pub(crate) fn spawn_burner_drill_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
     root.spawn((
@@ -257,5 +321,30 @@ pub(crate) fn update_burner_drill_indicators(
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
         node.width = Val::Px(MACHINE_BAR_WIDTH * progress);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn machine_guidance_explains_common_blockers_and_resolution() {
+        assert_eq!(
+            format_machine_guidance(MachineStatus::NoFuel),
+            "Needs fuel — add a burnable item to the Fuel slot."
+        );
+        assert_eq!(
+            format_machine_guidance(MachineStatus::NoPower),
+            "No power — connect the machine to a powered electric network."
+        );
+        assert_eq!(
+            format_machine_guidance(MachineStatus::OutputFull),
+            "Output blocked — clear the output or connect space for products."
+        );
+        assert_eq!(
+            format_machine_guidance(MachineStatus::NoRecipe),
+            "Missing recipe — select a recipe above to begin crafting."
+        );
     }
 }
