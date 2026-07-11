@@ -1,12 +1,10 @@
 use bevy::prelude::*;
-use factory_data::{BasePrototypeIds, EntityPrototypeId, entity_prototype_id_by_name};
-use factory_sim::Simulation;
+use factory_sim::EarlyGameProgress;
 
 use crate::resources::SimResource;
 use crate::ui::map_view::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET, MINIMAP_TOP_OFFSET};
 
 const OBJECTIVE_COUNT: usize = 6;
-const STOCKPILE_OBJECTIVE_INDEX: usize = 4;
 const MINIMAP_PANEL_GAP: f32 = 12.0;
 const OBJECTIVES_PANEL_RIGHT: f32 = MINIMAP_RIGHT_OFFSET + MINIMAP_FRAME_SIZE + MINIMAP_PANEL_GAP;
 
@@ -86,27 +84,10 @@ impl ObjectivesSnapshot {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ObjectivePrototypeIds {
-    base: BasePrototypeIds,
-    furnace: EntityPrototypeId,
-    drill: EntityPrototypeId,
-}
-
-impl ObjectivePrototypeIds {
-    fn from_simulation(sim: &Simulation) -> Self {
-        Self {
-            base: BasePrototypeIds::from_catalog(sim.catalog()),
-            furnace: entity_prototype_id_by_name(sim.catalog(), "stone_furnace"),
-            drill: entity_prototype_id_by_name(sim.catalog(), "burner_mining_drill"),
-        }
-    }
-}
-
 #[derive(Resource, Default)]
 pub(crate) struct ObjectivesPanelState {
     snapshot: ObjectivesSnapshot,
-    prototype_ids: Option<ObjectivePrototypeIds>,
+    progress_revision: u64,
 }
 
 #[derive(Component)]
@@ -131,9 +112,9 @@ pub(crate) fn setup_objectives_panel(
     mut state: ResMut<ObjectivesPanelState>,
 ) {
     let sim = sim.read();
-    let prototype_ids = ObjectivePrototypeIds::from_simulation(&sim);
-    state.snapshot = objectives_snapshot(&sim, prototype_ids);
-    state.prototype_ids = Some(prototype_ids);
+    let progress = sim.early_game_progress();
+    state.snapshot = objectives_snapshot(progress);
+    state.progress_revision = progress.revision;
     let snapshot = state.snapshot.clone();
 
     commands
@@ -226,14 +207,12 @@ pub(crate) fn sync_objectives_panel(
     mut hints: Query<&mut Text, (With<ObjectiveHintText>, Without<ObjectiveRowText>)>,
     mut roots: Query<&mut Visibility, With<ObjectivesPanelRoot>>,
 ) {
-    if !sim.is_changed() {
+    let progress = sim.read().early_game_progress();
+    if progress.revision == state.progress_revision {
         return;
     }
-
-    let prototype_ids = state
-        .prototype_ids
-        .expect("objectives panel prototype ids should be initialized at startup");
-    let next = objectives_snapshot(&sim.read(), prototype_ids);
+    state.progress_revision = progress.revision;
+    let next = objectives_snapshot(progress);
     if next == state.snapshot {
         return;
     }
@@ -263,77 +242,31 @@ pub(crate) fn sync_objectives_panel(
     }
 }
 
-fn objectives_snapshot(sim: &Simulation, ids: ObjectivePrototypeIds) -> ObjectivesSnapshot {
-    let statistics = sim.item_statistics();
-    let produced = |item_id| {
-        statistics
-            .rows
-            .iter()
-            .find(|row| row.item_id == item_id)
-            .map_or(0, |row| row.produced_total)
-    };
-
-    let furnace_count = sim
-        .entities()
-        .placed_entities()
-        .filter(|entity| entity.prototype_id == ids.furnace)
-        .count() as u64;
-    let drill_count = sim
-        .entities()
-        .placed_entities()
-        .filter(|entity| entity.prototype_id == ids.drill)
-        .count() as u64;
-
-    objectives_from_evidence(ObjectiveEvidence {
-        iron_ore_produced: produced(ids.base.items.iron_ore),
-        iron_plate_produced: produced(ids.base.items.iron_plate),
-        transport_belts_produced: produced(ids.base.items.transport_belt),
-        furnace_count,
-        drill_count,
-    })
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ObjectiveEvidence {
-    iron_ore_produced: u64,
-    iron_plate_produced: u64,
-    transport_belts_produced: u64,
-    furnace_count: u64,
-    drill_count: u64,
-}
-
-fn objectives_from_evidence(evidence: ObjectiveEvidence) -> ObjectivesSnapshot {
-    let furnace_placed = evidence
-        .furnace_count
-        .max(u64::from(evidence.iron_plate_produced > 0));
-    let drill_placed = evidence.drill_count.max(u64::from(
-        evidence.iron_ore_produced >= OBJECTIVES[STOCKPILE_OBJECTIVE_INDEX].target,
-    ));
-
+fn objectives_snapshot(progress: EarlyGameProgress) -> ObjectivesSnapshot {
     ObjectivesSnapshot {
         progress: [
             ObjectiveProgress {
-                current: evidence.iron_ore_produced,
+                current: progress.iron_ore_manually_mined,
                 target: OBJECTIVES[0].target,
             },
             ObjectiveProgress {
-                current: furnace_placed,
+                current: progress.stone_furnaces_placed,
                 target: OBJECTIVES[1].target,
             },
             ObjectiveProgress {
-                current: evidence.iron_plate_produced,
+                current: progress.iron_plates_smelted,
                 target: OBJECTIVES[2].target,
             },
             ObjectiveProgress {
-                current: drill_placed,
+                current: progress.burner_mining_drills_placed,
                 target: OBJECTIVES[3].target,
             },
             ObjectiveProgress {
-                current: evidence.iron_ore_produced,
+                current: progress.iron_ore_drill_mined,
                 target: OBJECTIVES[4].target,
             },
             ObjectiveProgress {
-                current: evidence.transport_belts_produced,
+                current: progress.transport_belts_manually_crafted,
                 target: OBJECTIVES[5].target,
             },
         ],
@@ -404,10 +337,10 @@ mod tests {
 
     #[test]
     fn objectives_advance_in_early_game_order() {
-        let snapshot = objectives_from_evidence(ObjectiveEvidence {
-            iron_ore_produced: 12,
-            furnace_count: 1,
-            iron_plate_produced: 4,
+        let snapshot = objectives_snapshot(EarlyGameProgress {
+            iron_ore_manually_mined: 12,
+            stone_furnaces_placed: 1,
+            iron_plates_smelted: 4,
             ..default()
         });
 
@@ -422,28 +355,29 @@ mod tests {
     }
 
     #[test]
-    fn durable_production_evidence_preserves_placement_milestones() {
-        let snapshot = objectives_from_evidence(ObjectiveEvidence {
-            iron_ore_produced: 25,
-            iron_plate_produced: 10,
-            furnace_count: 0,
-            drill_count: 0,
+    fn production_does_not_infer_unrelated_objectives() {
+        let snapshot = objectives_snapshot(EarlyGameProgress {
+            iron_plates_smelted: 10,
+            iron_ore_drill_mined: 25,
             ..default()
         });
 
-        assert!(snapshot.progress[1].is_complete());
-        assert!(snapshot.progress[3].is_complete());
+        assert!(!snapshot.progress[0].is_complete());
+        assert!(!snapshot.progress[1].is_complete());
+        assert!(!snapshot.progress[3].is_complete());
         assert!(snapshot.progress[4].is_complete());
     }
 
     #[test]
     fn completed_panel_replaces_next_step_with_growth_message() {
-        let snapshot = objectives_from_evidence(ObjectiveEvidence {
-            iron_ore_produced: 25,
-            iron_plate_produced: 10,
-            transport_belts_produced: 10,
-            furnace_count: 1,
-            drill_count: 1,
+        let snapshot = objectives_snapshot(EarlyGameProgress {
+            iron_ore_manually_mined: 10,
+            stone_furnaces_placed: 1,
+            iron_plates_smelted: 10,
+            burner_mining_drills_placed: 1,
+            iron_ore_drill_mined: 25,
+            transport_belts_manually_crafted: 10,
+            ..default()
         });
 
         assert_eq!(snapshot.active_index(), None);

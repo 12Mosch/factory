@@ -180,28 +180,10 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) research: &'a mut ResearchState,
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) statistics: StatisticsContext<'a>,
+    pub(super) early_game_progress: &'a mut EarlyGameProgress,
 }
 
 impl<'a> MachineTickContext<'a> {
-    pub(super) fn new(
-        tick: u64,
-        world: &'a mut WorldSim,
-        entities: &'a mut EntityStore,
-        transport: &'a mut TransportLaneCache,
-        research: &'a mut ResearchState,
-        power: &'a mut PowerSubsystem,
-        statistics: &'a mut StatisticsSubsystem,
-    ) -> Self {
-        Self {
-            world,
-            entities,
-            transport,
-            research,
-            power,
-            statistics: StatisticsContext::new(tick, statistics),
-        }
-    }
-
     pub(super) fn electric_work_allowed(&mut self, entity_id: EntityId) -> bool {
         electric_work_allowed_for(self.power, &mut self.entities.electric_consumers, entity_id)
     }

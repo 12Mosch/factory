@@ -10,15 +10,15 @@ mod pumpjacks;
 
 impl Simulation {
     fn machine_tick_context(&mut self) -> MachineTickContext<'_> {
-        MachineTickContext::new(
-            self.tick,
-            &mut self.world,
-            &mut self.entities,
-            &mut self.transport,
-            &mut self.research,
-            &mut self.power,
-            &mut self.statistics,
-        )
+        MachineTickContext {
+            world: &mut self.world,
+            entities: &mut self.entities,
+            transport: &mut self.transport,
+            research: &mut self.research,
+            power: &mut self.power,
+            statistics: StatisticsContext::new(self.tick, &mut self.statistics),
+            early_game_progress: &mut self.early_game_progress,
+        }
     }
 
     pub(super) fn advance_machines<P: TickProfiler>(&mut self, profiler: &mut P) {
