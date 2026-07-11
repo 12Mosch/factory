@@ -138,9 +138,13 @@ pub enum SimCommandError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimCommandEffect {
     None,
+    PlayerItemGained {
+        item_id: ItemId,
+        amount: u32,
+        total: u32,
+    },
     EntityPlaced(EntityId),
     GhostPlaced(GhostId),
-    EntityDeconstructed(EntityId),
     DeconstructionMarked {
         marked: usize,
         ghosts_removed: usize,
@@ -172,8 +176,19 @@ impl Simulation {
                 Ok(SimCommandEffect::None)
             }
             SimCommand::SetManualMiningTarget(target) => {
+                let gained_item = target.and_then(|target| {
+                    if let Some(entity_id) = self.entities.occupancy.entity_at(target.x, target.y) {
+                        let placed = self.entities.placed_entity(entity_id)?;
+                        entity_recovery_ops::build_item_for_entity(self, placed.prototype_id).ok()
+                    } else {
+                        self.world
+                            .tile_at(target.x, target.y)
+                            .and_then(|tile| tile.resource.map(|resource| resource.resource_item))
+                    }
+                });
+                let count_before = gained_item.map(|item_id| self.player_inventory.count(item_id));
                 self.update_manual_mining(target);
-                Ok(SimCommandEffect::None)
+                Ok(item_gain_effect(self, gained_item, count_before))
             }
             SimCommand::StartManualCraft(recipe_id) => {
                 self.start_manual_craft(recipe_id)
@@ -290,9 +305,13 @@ impl Simulation {
                 Ok(SimCommandEffect::DeconstructionCancelled { cancelled })
             }
             SimCommand::DeconstructEntity { entity_id } => {
+                let item_id = self.entities.placed_entity(entity_id).and_then(|placed| {
+                    entity_recovery_ops::build_item_for_entity(self, placed.prototype_id).ok()
+                });
+                let count_before = item_id.map(|item_id| self.player_inventory.count(item_id));
                 construction_ops::deconstruct_marked(self, entity_id)
                     .map_err(SimCommandError::Construction)?;
-                Ok(SimCommandEffect::EntityDeconstructed(entity_id))
+                Ok(item_gain_effect(self, item_id, count_before))
             }
             SimCommand::RepairEntity { entity_id } => {
                 self.repair_entity(entity_id)
@@ -326,6 +345,26 @@ impl Simulation {
                 self.build_red_science_research_fixture();
                 Ok(SimCommandEffect::None)
             }
+        }
+    }
+}
+
+fn item_gain_effect(
+    sim: &Simulation,
+    item_id: Option<ItemId>,
+    count_before: Option<u32>,
+) -> SimCommandEffect {
+    let Some((item_id, count_before)) = item_id.zip(count_before) else {
+        return SimCommandEffect::None;
+    };
+    let total = sim.player_inventory.count(item_id);
+    if total <= count_before {
+        SimCommandEffect::None
+    } else {
+        SimCommandEffect::PlayerItemGained {
+            item_id,
+            amount: total - count_before,
+            total,
         }
     }
 }
