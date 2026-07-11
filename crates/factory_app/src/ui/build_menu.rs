@@ -1,31 +1,42 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
+use factory_data::{BuildingCategory, PrototypeCatalog};
+use factory_sim::Simulation;
 
 use crate::audio::SoundEvent;
 use crate::build::resources::{
-    BuildMenuState, BuildPlacementState, BuildPlacementStatus, BuildSelection, HotbarState,
+    BuildMenuState, BuildPlacementState, BuildSelection, BuildingMenuView, HotbarState,
     PlannerState,
 };
 use crate::input::build::{select_build_selection, technology_window_open};
-use crate::placement::build::buildable_prototypes;
+use crate::placement::build::{BuildablePrototype, buildable_prototypes, display_name};
 use crate::resources::SimResource;
 use crate::ui::build_bar::{BuildMenuButton, slot_key_label};
 use crate::ui::resources::{OpenContainer, TechnologyWindowState};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 use crate::utils::compact_item_name;
-use factory_sim::Simulation;
 
-const CELL_WIDTH: f32 = 150.0;
-const CELL_HEIGHT: f32 = 62.0;
-const CELL_GAP: f32 = 6.0;
-const GRID_COLUMNS: f32 = 5.0;
-// A definite grid width is required for correct flex-wrap sizing: without it
-// the wrapped height is under-measured and the panel collapses.
-const GRID_WIDTH: f32 = GRID_COLUMNS * CELL_WIDTH + (GRID_COLUMNS - 1.0) * CELL_GAP;
+const CATEGORIES: [BuildingCategory; 6] = [
+    BuildingCategory::Logistics,
+    BuildingCategory::Production,
+    BuildingCategory::Power,
+    BuildingCategory::Fluids,
+    BuildingCategory::Storage,
+    BuildingCategory::Defense,
+];
+const CELL_WIDTH: f32 = 168.0;
+const CELL_HEIGHT: f32 = 92.0;
+const CELL_GAP: f32 = 7.0;
+const GRID_COLUMNS: f32 = 3.0;
+const GRID_PADDING: f32 = 8.0;
+const GRID_WIDTH: f32 =
+    GRID_COLUMNS * CELL_WIDTH + (GRID_COLUMNS - 1.0) * CELL_GAP + 2.0 * GRID_PADDING;
 
 #[derive(Component)]
 pub(crate) struct BuildMenuSelectButton {
     selection: BuildSelection,
+    lock_message: Option<String>,
 }
 
 #[derive(Component)]
@@ -34,52 +45,48 @@ pub(crate) struct BuildMenuHotbarToggleButton {
 }
 
 #[derive(Component)]
+pub(crate) struct BuildMenuViewButton(BuildingMenuView);
+
+#[derive(Component)]
 pub(crate) struct BuildMenuCloseButton;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BuildMenuSnapshot {
-    entries: Vec<BuildMenuEntry>,
-    message: Option<String>,
+    pub(crate) entries: Vec<BuildMenuEntry>,
+    pub(crate) navigation: Vec<(BuildingMenuView, usize)>,
+    pub(crate) selected_view: BuildingMenuView,
+    pub(crate) search_query: String,
+    pub(crate) message: Option<String>,
+    pub(crate) empty_message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct BuildMenuEntry {
-    selection: BuildSelection,
-    display_name: String,
-    compact_name: String,
-    count: String,
-    unlocked: bool,
-    hotbar_slot: Option<usize>,
+pub(crate) struct BuildMenuEntry {
+    pub(crate) selection: BuildSelection,
+    pub(crate) display_name: String,
+    pub(crate) internal_name: String,
+    pub(crate) compact_name: String,
+    pub(crate) category: BuildingCategory,
+    pub(crate) progression: String,
+    pub(crate) count: u32,
+    pub(crate) unlocked: bool,
+    pub(crate) hotbar_slot: Option<usize>,
 }
 
-type BuildMenuToggleInteractionQuery<'w, 's> = Query<
-    'w,
-    's,
-    &'static Interaction,
-    (Changed<Interaction>, With<Button>, With<BuildMenuButton>),
->;
-type BuildMenuCloseInteractionQuery<'w, 's> = Query<
-    'w,
-    's,
-    &'static Interaction,
-    (
-        Changed<Interaction>,
-        With<Button>,
-        With<BuildMenuCloseButton>,
-    ),
->;
-type BuildMenuSelectInteractionQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static Interaction, &'static BuildMenuSelectButton),
-    (Changed<Interaction>, With<Button>),
->;
-type BuildMenuHotbarToggleInteractionQuery<'w, 's> = Query<
+type ToggleQuery<'w, 's> =
+    Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<BuildMenuButton>)>;
+type CloseQuery<'w, 's> =
+    Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<BuildMenuCloseButton>)>;
+type SelectQuery<'w, 's> =
+    Query<'w, 's, (&'static Interaction, &'static BuildMenuSelectButton), Changed<Interaction>>;
+type FavoriteQuery<'w, 's> = Query<
     'w,
     's,
     (&'static Interaction, &'static BuildMenuHotbarToggleButton),
-    (Changed<Interaction>, With<Button>),
+    Changed<Interaction>,
 >;
+type ViewQuery<'w, 's> =
+    Query<'w, 's, (&'static Interaction, &'static BuildMenuViewButton), Changed<Interaction>>;
 
 #[derive(SystemParam)]
 pub(crate) struct BuildMenuButtonState<'w> {
@@ -94,47 +101,48 @@ pub(crate) struct BuildMenuButtonState<'w> {
 }
 
 pub(crate) fn handle_build_menu_buttons(
-    mut toggle_interactions: BuildMenuToggleInteractionQuery,
-    mut close_interactions: BuildMenuCloseInteractionQuery,
-    mut select_interactions: BuildMenuSelectInteractionQuery,
-    mut hotbar_toggle_interactions: BuildMenuHotbarToggleInteractionQuery,
+    mut toggles: ToggleQuery,
+    mut closes: CloseQuery,
+    mut selections: SelectQuery,
+    mut favorites: FavoriteQuery,
+    mut views: ViewQuery,
     mut state: BuildMenuButtonState,
 ) {
-    // The build menu itself blocks world input, so unlike the build bar this
-    // only guards against the technology window layering on top of the menu.
     if technology_window_open(state.technology_window.as_deref()) {
         return;
     }
-
-    let toggle_pressed = toggle_interactions
-        .iter_mut()
-        .any(|interaction| *interaction == Interaction::Pressed);
-    let close_pressed = close_interactions
-        .iter_mut()
-        .any(|interaction| *interaction == Interaction::Pressed);
-    if toggle_pressed || close_pressed {
+    let toggle = toggles.iter_mut().any(pressed);
+    let close = closes.iter_mut().any(pressed);
+    if toggle || close {
         state.sounds.write(SoundEvent::UiClick);
         if state.menu.open {
-            state.menu.open = false;
-            state.menu.message = None;
-        } else if toggle_pressed {
-            state.menu.open = true;
-            state.menu.message = None;
+            state.menu.close();
+        } else if toggle {
+            state.menu.open_fresh();
             state.build_state.selected = None;
             state.open_container.entity_id = None;
         }
         return;
     }
-
     if !state.menu.open {
         return;
     }
-
-    for (interaction, button) in &mut select_interactions {
+    for (interaction, button) in &mut views {
+        if *interaction == Interaction::Pressed {
+            state.menu.selected_view = button.0;
+            state.menu.message = None;
+            state.sounds.write(SoundEvent::UiClick);
+        }
+    }
+    for (interaction, button) in &mut selections {
         if *interaction != Interaction::Pressed {
             continue;
         }
         state.sounds.write(SoundEvent::UiClick);
+        if let Some(message) = &button.lock_message {
+            state.menu.message = Some(message.clone());
+            continue;
+        }
         if select_build_selection(
             &state.sim.read(),
             state.technology_window.as_deref(),
@@ -142,14 +150,10 @@ pub(crate) fn handle_build_menu_buttons(
             &mut state.planner,
             button.selection,
         ) {
-            state.menu.open = false;
-            state.menu.message = None;
-        } else {
-            state.menu.message = status_message(&state.build_state.last_status);
+            state.menu.close();
         }
     }
-
-    for (interaction, button) in &mut hotbar_toggle_interactions {
+    for (interaction, button) in &mut favorites {
         if *interaction != Interaction::Pressed {
             continue;
         }
@@ -162,20 +166,13 @@ pub(crate) fn handle_build_menu_buttons(
         {
             state.menu.message = None;
         } else {
-            state.menu.message =
-                Some("Hotbar is full - remove a building from it first".to_string());
+            state.menu.message = Some("Hotbar is full - remove a building from it first".into());
         }
     }
 }
 
-fn status_message(status: &BuildPlacementStatus) -> Option<String> {
-    match status {
-        BuildPlacementStatus::Ready => None,
-        BuildPlacementStatus::Placed(message)
-        | BuildPlacementStatus::CannotPlace(message)
-        | BuildPlacementStatus::MissingInventory(message)
-        | BuildPlacementStatus::Locked(message) => Some(message.clone()),
-    }
+fn pressed(interaction: &Interaction) -> bool {
+    *interaction == Interaction::Pressed
 }
 
 pub(crate) fn sync_build_menu(
@@ -192,35 +189,162 @@ pub(crate) fn sync_build_menu(
         sim.is_changed() || hotbar.is_changed() || state.is_changed(),
         || build_menu_snapshot(&sim.read(), &hotbar, &state),
         build_menu_root,
-        spawn_build_menu_contents,
+        spawn_contents,
     );
 }
 
-fn build_menu_snapshot(
+pub(crate) fn build_menu_snapshot(
     sim: &Simulation,
     hotbar: &HotbarState,
     state: &BuildMenuState,
 ) -> BuildMenuSnapshot {
-    let entries = buildable_prototypes(sim.catalog())
+    let catalog = sim.catalog();
+    let mut buildables = buildable_prototypes(catalog);
+    buildables.sort_by(|left, right| {
+        left.category
+            .cmp(&right.category)
+            .then_with(|| left.menu_order.cmp(&right.menu_order))
+            .then_with(|| normalize(&left.display_name).cmp(&normalize(&right.display_name)))
+            .then_with(|| left.prototype_id.cmp(&right.prototype_id))
+    });
+    let query = normalize(&state.search_query);
+    let search_matches =
+        |buildable: &BuildablePrototype| matches_search(buildable, catalog, &query);
+    let mut navigation = vec![
+        (
+            BuildingMenuView::All,
+            buildables.iter().filter(|b| search_matches(b)).count(),
+        ),
+        (
+            BuildingMenuView::Favorites,
+            buildables
+                .iter()
+                .filter(|b| hotbar.slot_of(b.selection()).is_some() && search_matches(b))
+                .count(),
+        ),
+    ];
+    navigation.extend(CATEGORIES.map(|category| {
+        (
+            BuildingMenuView::Category(category),
+            buildables
+                .iter()
+                .filter(|b| b.category == category && search_matches(b))
+                .count(),
+        )
+    }));
+    let entries = buildables
         .into_iter()
-        .map(|buildable| {
-            let selection = buildable.selection();
-            BuildMenuEntry {
-                selection,
-                compact_name: compact_item_name(
-                    &buildable.display_name.to_lowercase().replace(' ', "_"),
-                ),
-                display_name: buildable.display_name,
-                count: sim.player_inventory().count(selection.item_id).to_string(),
-                unlocked: sim.is_entity_unlocked(selection.prototype_id),
-                hotbar_slot: hotbar.slot_of(selection),
-            }
+        .filter(|buildable| match state.selected_view {
+            BuildingMenuView::All => true,
+            BuildingMenuView::Favorites => hotbar.slot_of(buildable.selection()).is_some(),
+            BuildingMenuView::Category(category) => buildable.category == category,
         })
-        .collect();
-
+        .filter(search_matches)
+        .map(|buildable| entry_from_buildable(sim, hotbar, catalog, buildable))
+        .collect::<Vec<_>>();
+    let empty_message = entries.is_empty().then(|| empty_message(state, &query));
     BuildMenuSnapshot {
         entries,
+        navigation,
+        selected_view: state.selected_view,
+        search_query: state.search_query.clone(),
         message: state.message.clone(),
+        empty_message,
+    }
+}
+
+fn entry_from_buildable(
+    sim: &Simulation,
+    hotbar: &HotbarState,
+    catalog: &PrototypeCatalog,
+    buildable: BuildablePrototype,
+) -> BuildMenuEntry {
+    let selection = buildable.selection();
+    let required = buildable
+        .required_technology
+        .and_then(|id| catalog.technology(id))
+        .map(|technology| display_name(&technology.name));
+    let unlocked = sim.is_entity_unlocked(selection.prototype_id);
+    let progression = required.unwrap_or_else(|| {
+        if unlocked {
+            "Starter"
+        } else {
+            "Technology required"
+        }
+        .to_string()
+    });
+    BuildMenuEntry {
+        selection,
+        internal_name: catalog
+            .entity(selection.prototype_id)
+            .map_or_else(String::new, |e| e.name.clone()),
+        compact_name: compact_item_name(&buildable.display_name.to_lowercase().replace(' ', "_")),
+        display_name: buildable.display_name,
+        category: buildable.category,
+        progression,
+        count: sim.player_inventory().count(selection.item_id),
+        unlocked,
+        hotbar_slot: hotbar.slot_of(selection),
+    }
+}
+
+fn matches_search(buildable: &BuildablePrototype, catalog: &PrototypeCatalog, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let internal = catalog
+        .entity(buildable.prototype_id)
+        .map_or("", |e| e.name.as_str());
+    let technology = buildable
+        .required_technology
+        .and_then(|id| catalog.technology(id))
+        .map_or_else(String::new, |technology| display_name(&technology.name));
+    [
+        buildable.display_name.as_str(),
+        internal,
+        category_name(buildable.category),
+        technology.as_str(),
+    ]
+    .iter()
+    .any(|candidate| normalize(candidate).contains(query))
+}
+
+fn normalize(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn empty_message(state: &BuildMenuState, query: &str) -> String {
+    let view = view_name(state.selected_view);
+    if query.is_empty() {
+        format!("No buildings in {view}.")
+    } else {
+        format!(
+            "No buildings match ‘{}’ in {view}.",
+            state.search_query.trim()
+        )
+    }
+}
+
+fn category_name(category: BuildingCategory) -> &'static str {
+    match category {
+        BuildingCategory::Logistics => "Logistics",
+        BuildingCategory::Production => "Production",
+        BuildingCategory::Power => "Power",
+        BuildingCategory::Fluids => "Fluids",
+        BuildingCategory::Storage => "Storage",
+        BuildingCategory::Defense => "Defense",
+    }
+}
+
+fn view_name(view: BuildingMenuView) -> &'static str {
+    match view {
+        BuildingMenuView::All => "All",
+        BuildingMenuView::Favorites => "Favorites",
+        BuildingMenuView::Category(category) => category_name(category),
     }
 }
 
@@ -228,99 +352,98 @@ fn build_menu_root() -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            right: Val::Px(0.0),
-            top: Val::Px(0.0),
-            bottom: Val::Px(0.0),
+            left: Val::ZERO,
+            right: Val::ZERO,
+            top: Val::ZERO,
+            bottom: Val::ZERO,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.40)),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.48)),
         GlobalZIndex(2200),
     )
 }
 
-fn spawn_build_menu_contents(
+fn spawn_contents(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &BuildMenuSnapshot,
 ) {
-    root.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(10.0),
-            padding: UiRect::all(Val::Px(14.0)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.035, 0.038, 0.040, 0.97)),
-        BorderColor::all(Color::srgba(0.44, 0.43, 0.39, 0.70)),
-    ))
-    .with_children(|panel| {
-        spawn_build_menu_header(panel);
-        panel.spawn((
-            Text::new(
-                "Click a building to start placing it. + adds it to the hotbar, - removes it.",
-            ),
-            TextFont::from_font_size(11.0),
-            TextColor(Color::srgb(0.68, 0.70, 0.66)),
-        ));
-        if let Some(message) = &snapshot.message {
-            panel.spawn((
-                Text::new(message.clone()),
-                TextFont::from_font_size(12.0),
-                TextColor(Color::srgb(0.98, 0.72, 0.28)),
-            ));
-        }
-        panel
-            .spawn((
-                Node {
-                    width: Val::Px(GRID_WIDTH),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
-                    column_gap: Val::Px(CELL_GAP),
-                    row_gap: Val::Px(CELL_GAP),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|grid| {
-                for entry in &snapshot.entries {
-                    spawn_build_menu_entry(grid, entry);
-                }
+    root.spawn((Node { width: Val::Px(750.0), max_width: Val::Vw(92.0), height: Val::Vh(72.0), max_height: Val::Px(720.0), flex_direction: FlexDirection::Column, row_gap: Val::Px(10.0), padding: UiRect::all(Val::Px(14.0)), border: UiRect::all(Val::Px(1.0)), overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::srgba(0.035, 0.038, 0.040, 0.98)), BorderColor::all(Color::srgba(0.49, 0.48, 0.42, 0.8))))
+        .with_children(|panel| {
+            spawn_header(panel, snapshot);
+            panel.spawn((Node { flex_grow: 1.0, flex_direction: FlexDirection::Row, column_gap: Val::Px(12.0), min_height: Val::ZERO, ..default() }, BackgroundColor(Color::NONE))).with_children(|body| {
+                spawn_navigation(body, snapshot);
+                body.spawn((Node { flex_grow: 1.0, min_width: Val::Px(GRID_WIDTH), height: Val::Percent(100.0), overflow: Overflow::scroll_y(), scrollbar_width: 10.0, padding: UiRect::right(Val::Px(4.0)), ..default() }, BackgroundColor(Color::srgba(0.02, 0.022, 0.023, 0.75)), ScrollArea)).with_children(|viewport| {
+                    viewport.spawn((Node { width: Val::Px(GRID_WIDTH), flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap, align_content: AlignContent::FlexStart, column_gap: Val::Px(CELL_GAP), row_gap: Val::Px(CELL_GAP), padding: UiRect::all(Val::Px(GRID_PADDING)), ..default() }, BackgroundColor(Color::NONE))).with_children(|grid| {
+                        if let Some(message) = &snapshot.empty_message {
+                            grid.spawn((Text::new(message.clone()), TextFont::from_font_size(14.0), TextColor(Color::srgb(0.72, 0.72, 0.67))));
+                        }
+                        for entry in &snapshot.entries { spawn_entry(grid, entry); }
+                    });
+                });
             });
-    });
+            if let Some(message) = &snapshot.message { panel.spawn((Text::new(message.clone()), TextFont::from_font_size(12.0), TextColor(Color::srgb(0.98, 0.72, 0.28)))); }
+            panel.spawn((Text::new("Click an unlocked card to build • ★ toggles hotbar favorite • 1–0 select favorites outside catalog"), TextFont::from_font_size(11.0), TextColor(Color::srgb(0.68, 0.70, 0.66))));
+        });
 }
 
-fn spawn_build_menu_header(panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+fn spawn_header(
+    panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    snapshot: &BuildMenuSnapshot,
+) {
     panel
         .spawn((
             Node {
+                height: Val::Px(42.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(14.0),
                 ..default()
             },
             BackgroundColor(Color::NONE),
         ))
         .with_children(|header| {
             header.spawn((
-                Text::new("Buildings"),
-                TextFont::from_font_size(18.0),
-                TextColor(Color::srgb(0.92, 0.93, 0.88)),
+                Text::new("Building Catalog"),
+                TextFont::from_font_size(20.0),
+                TextColor(Color::srgb(0.94, 0.93, 0.86)),
             ));
+            let search = if snapshot.search_query.is_empty() {
+                "Search buildings…".into()
+            } else {
+                snapshot.search_query.clone()
+            };
             header
                 .spawn((
-                    Button,
                     Node {
-                        height: Val::Px(26.0),
+                        flex_grow: 1.0,
+                        height: Val::Px(30.0),
                         align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
                         padding: UiRect::horizontal(Val::Px(10.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         ..default()
                     },
+                    BackgroundColor(Color::srgba(0.07, 0.08, 0.08, 0.96)),
+                    BorderColor::all(Color::srgba(0.48, 0.55, 0.48, 0.8)),
+                ))
+                .with_child((
+                    Text::new(search),
+                    TextFont::from_font_size(12.0),
+                    TextColor(Color::srgb(0.78, 0.82, 0.75)),
+                ));
+            header
+                .spawn((
+                    Button,
+                    Node {
+                        height: Val::Px(28.0),
+                        padding: UiRect::horizontal(Val::Px(10.0)),
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
                     BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.95)),
-                    BorderColor::all(Color::srgba(0.44, 0.43, 0.39, 0.70)),
+                    BorderColor::all(Color::srgba(0.44, 0.43, 0.39, 0.7)),
                     BuildMenuCloseButton,
                 ))
                 .with_child((
@@ -331,31 +454,79 @@ fn spawn_build_menu_header(panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommand
         });
 }
 
-fn spawn_build_menu_entry(
-    grid: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    entry: &BuildMenuEntry,
+fn spawn_navigation(
+    body: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    snapshot: &BuildMenuSnapshot,
 ) {
-    let on_hotbar = entry.hotbar_slot.is_some();
-    let border_color = if on_hotbar {
-        Color::srgba(0.94, 0.66, 0.20, 0.75)
-    } else {
-        Color::srgba(0.44, 0.43, 0.39, 0.70)
-    };
-    let name_color = if entry.unlocked {
-        Color::WHITE
-    } else {
-        Color::srgb(0.56, 0.55, 0.52)
-    };
-    let title = match entry.hotbar_slot {
-        Some(slot_index) => format!("{} [{}]", entry.compact_name, slot_key_label(slot_index)),
-        None => entry.compact_name.clone(),
-    };
-    let detail = if entry.unlocked {
-        format!("x{}", entry.count)
-    } else {
-        "Locked".to_string()
-    };
+    body.spawn((
+        Node {
+            width: Val::Px(145.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(5.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|rail| {
+        for (view, count) in &snapshot.navigation {
+            let selected = *view == snapshot.selected_view;
+            let favorite = *view == BuildingMenuView::Favorites;
+            rail.spawn((
+                Button,
+                Node {
+                    height: Val::Px(34.0),
+                    padding: UiRect::horizontal(Val::Px(9.0)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::SpaceBetween,
+                    border: UiRect::left(Val::Px(if selected { 4.0 } else { 1.0 })),
+                    ..default()
+                },
+                BackgroundColor(if selected {
+                    Color::srgba(0.18, 0.30, 0.22, 0.98)
+                } else {
+                    Color::srgba(0.09, 0.10, 0.10, 0.95)
+                }),
+                BorderColor::all(if favorite {
+                    Color::srgb(0.94, 0.66, 0.20)
+                } else {
+                    Color::srgb(0.38, 0.62, 0.44)
+                }),
+                BuildMenuViewButton(*view),
+            ))
+            .with_children(|button| {
+                button.spawn((
+                    Text::new(if favorite {
+                        format!("★ {}", view_name(*view))
+                    } else {
+                        view_name(*view).into()
+                    }),
+                    TextFont::from_font_size(12.0),
+                    TextColor(Color::srgb(0.88, 0.89, 0.83)),
+                ));
+                button.spawn((
+                    Text::new(count.to_string()),
+                    TextFont::from_font_size(11.0),
+                    TextColor(Color::srgb(0.64, 0.68, 0.62)),
+                ));
+            });
+        }
+    });
+}
 
+fn spawn_entry(grid: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, entry: &BuildMenuEntry) {
+    let favorite = entry.hotbar_slot.is_some();
+    let border = if favorite {
+        Color::srgba(0.94, 0.66, 0.20, 0.85)
+    } else {
+        Color::srgba(0.44, 0.43, 0.39, 0.72)
+    };
+    let lock_message = (!entry.unlocked).then(|| {
+        if entry.progression == "Technology required" {
+            entry.progression.clone()
+        } else {
+            format!("Requires {}", entry.progression)
+        }
+    });
     grid.spawn((
         Node {
             width: Val::Px(CELL_WIDTH),
@@ -365,7 +536,7 @@ fn spawn_build_menu_entry(
             ..default()
         },
         BackgroundColor(Color::NONE),
-        BorderColor::all(border_color),
+        BorderColor::all(border),
     ))
     .with_children(|cell| {
         cell.spawn((
@@ -374,67 +545,140 @@ fn spawn_build_menu_entry(
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::SpaceBetween,
-                padding: UiRect::all(Val::Px(5.0)),
+                padding: UiRect::all(Val::Px(7.0)),
                 overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(if entry.unlocked {
-                Color::srgba(0.13, 0.13, 0.13, 0.95)
+                Color::srgba(0.13, 0.14, 0.13, 0.97)
             } else {
-                Color::srgba(0.075, 0.075, 0.075, 0.86)
+                Color::srgba(0.07, 0.075, 0.07, 0.94)
             }),
             BuildMenuSelectButton {
                 selection: entry.selection,
+                lock_message,
             },
         ))
         .with_children(|button| {
+            let key = entry
+                .hotbar_slot
+                .map(|slot| format!(" [{}]", slot_key_label(slot)))
+                .unwrap_or_default();
             button.spawn((
-                Text::new(title),
+                Text::new(format!("{}{}", entry.compact_name, key)),
                 TextFont::from_font_size(12.0),
-                TextColor(name_color),
+                TextColor(if entry.unlocked {
+                    Color::WHITE
+                } else {
+                    Color::srgb(0.58, 0.58, 0.54)
+                }),
             ));
             button.spawn((
                 Text::new(entry.display_name.clone()),
                 TextFont::from_font_size(9.0),
-                TextColor(Color::srgb(0.68, 0.70, 0.66)),
+                TextColor(Color::srgb(0.67, 0.70, 0.64)),
             ));
             button.spawn((
-                Text::new(detail),
-                TextFont::from_font_size(10.0),
-                TextColor(if entry.unlocked && entry.count != "0" {
-                    Color::srgb(0.91, 0.92, 0.86)
+                Text::new(if entry.unlocked {
+                    format!("Inventory: {}", entry.count)
                 } else {
-                    Color::srgb(0.62, 0.58, 0.52)
+                    "Locked".into()
                 }),
+                TextFont::from_font_size(10.0),
+                TextColor(Color::srgb(0.78, 0.74, 0.64)),
+            ));
+            button.spawn((
+                Text::new(entry.progression.clone()),
+                TextFont::from_font_size(9.0),
+                TextColor(Color::srgb(0.48, 0.70, 0.52)),
             ));
         });
         cell.spawn((
             Button,
             Node {
-                width: Val::Px(22.0),
+                width: Val::Px(27.0),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 border: UiRect::left(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(if on_hotbar {
-                Color::srgba(0.27, 0.20, 0.10, 0.95)
+            BackgroundColor(if favorite {
+                Color::srgba(0.27, 0.20, 0.10, 0.98)
             } else {
-                Color::srgba(0.10, 0.13, 0.10, 0.95)
+                Color::srgba(0.09, 0.11, 0.09, 0.98)
             }),
-            BorderColor::all(border_color),
+            BorderColor::all(border),
             BuildMenuHotbarToggleButton {
                 selection: entry.selection,
             },
         ))
         .with_child((
-            Text::new(if on_hotbar { "-" } else { "+" }),
-            TextFont::from_font_size(15.0),
-            TextColor(if on_hotbar {
+            Text::new(if favorite { "★" } else { "☆" }),
+            TextFont::from_font_size(18.0),
+            TextColor(if favorite {
                 Color::srgb(0.98, 0.72, 0.28)
             } else {
-                Color::srgb(0.56, 0.92, 0.55)
+                Color::srgb(0.65, 0.72, 0.63)
             }),
         ));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalization_trims_collapses_and_lowercases() {
+        assert_eq!(normalize("  Fast   BELT  "), "fast belt");
+    }
+
+    #[test]
+    fn snapshots_filter_views_search_and_keep_locked_entries() {
+        let sim = Simulation::new(
+            7,
+            PrototypeCatalog::load_base().expect("base catalog should load"),
+        );
+        let catalog_count = buildable_prototypes(sim.catalog()).len();
+        let mut hotbar = HotbarState::default();
+        let favorite = buildable_prototypes(sim.catalog())[0].selection();
+        hotbar.slots[4] = Some(favorite);
+        let mut state = BuildMenuState::default();
+
+        let all = build_menu_snapshot(&sim, &hotbar, &state);
+        assert_eq!(all.entries.len(), catalog_count);
+        assert!(all.entries.iter().any(|entry| !entry.unlocked));
+
+        state.selected_view = BuildingMenuView::Favorites;
+        assert_eq!(build_menu_snapshot(&sim, &hotbar, &state).entries.len(), 1);
+        state.selected_view = BuildingMenuView::Category(BuildingCategory::Defense);
+        assert!(
+            build_menu_snapshot(&sim, &hotbar, &state)
+                .entries
+                .iter()
+                .all(|entry| entry.category == BuildingCategory::Defense)
+        );
+
+        state.selected_view = BuildingMenuView::All;
+        state.search_query = "LoGiStIcS".into();
+        assert!(
+            build_menu_snapshot(&sim, &hotbar, &state)
+                .entries
+                .iter()
+                .all(|entry| entry.category == BuildingCategory::Logistics)
+        );
+        state.search_query = "automation".into();
+        assert!(
+            build_menu_snapshot(&sim, &hotbar, &state)
+                .entries
+                .iter()
+                .any(|entry| entry.internal_name == "assembling_machine")
+        );
+        state.search_query = "does not exist".into();
+        assert!(
+            build_menu_snapshot(&sim, &hotbar, &state)
+                .empty_message
+                .is_some()
+        );
+    }
 }

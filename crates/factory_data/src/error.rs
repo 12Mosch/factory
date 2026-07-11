@@ -25,6 +25,10 @@ pub enum PrototypeLoadError {
         entity: String,
         item: String,
     },
+    InvalidBuildingMenuMetadata {
+        entity: String,
+        detail: &'static str,
+    },
     MissingFluidReference {
         owner: String,
         fluid: String,
@@ -126,6 +130,10 @@ impl fmt::Display for PrototypeLoadError {
                     "entity {entity:?} references missing build item {item:?}"
                 )
             }
+            Self::InvalidBuildingMenuMetadata { entity, detail } => write!(
+                formatter,
+                "entity {entity:?} has invalid building menu metadata: {detail}"
+            ),
             Self::MissingFluidReference { owner, fluid } => {
                 write!(
                     formatter,

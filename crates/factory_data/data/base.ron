@@ -542,6 +542,8 @@
         (
             id: 4,
             name: "stone_furnace",
+            building_category: Some(Production),
+            building_menu_order: Some(10),
             entity_kind: Furnace,
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),
@@ -552,6 +554,8 @@
         (
             id: 5,
             name: "assembling_machine",
+            building_category: Some(Production),
+            building_menu_order: Some(20),
             entity_kind: AssemblingMachine,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
@@ -568,6 +572,8 @@
         (
             id: 6,
             name: "inserter",
+            building_category: Some(Logistics),
+            building_menu_order: Some(40),
             entity_kind: Inserter,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -583,6 +589,8 @@
         (
             id: 7,
             name: "transport_belt",
+            building_category: Some(Logistics),
+            building_menu_order: Some(10),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -594,6 +602,8 @@
         (
             id: 8,
             name: "burner_mining_drill",
+            building_category: Some(Production),
+            building_menu_order: Some(5),
             entity_kind: MiningDrill,
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),
@@ -605,6 +615,8 @@
         (
             id: 9,
             name: "lab",
+            building_category: Some(Production),
+            building_menu_order: Some(30),
             entity_kind: Lab,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
@@ -615,6 +627,8 @@
         (
             id: 10,
             name: "chest",
+            building_category: Some(Storage),
+            building_menu_order: Some(10),
             entity_kind: Chest,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -624,6 +638,8 @@
         (
             id: 11,
             name: "underground_belt_entrance",
+            building_category: Some(Logistics),
+            building_menu_order: Some(20),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -637,6 +653,8 @@
         (
             id: 12,
             name: "underground_belt_exit",
+            building_category: Some(Logistics),
+            building_menu_order: Some(20),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -650,6 +668,8 @@
         (
             id: 13,
             name: "splitter",
+            building_category: Some(Logistics),
+            building_menu_order: Some(30),
             entity_kind: Splitter,
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -659,6 +679,8 @@
         (
             id: 14,
             name: "fast_transport_belt",
+            building_category: Some(Logistics),
+            building_menu_order: Some(50),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -670,6 +692,8 @@
         (
             id: 15,
             name: "express_transport_belt",
+            building_category: Some(Logistics),
+            building_menu_order: Some(80),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -681,6 +705,8 @@
         (
             id: 16,
             name: "fast_underground_belt_entrance",
+            building_category: Some(Logistics),
+            building_menu_order: Some(60),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -694,6 +720,8 @@
         (
             id: 17,
             name: "fast_underground_belt_exit",
+            building_category: Some(Logistics),
+            building_menu_order: Some(60),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -707,6 +735,8 @@
         (
             id: 18,
             name: "express_underground_belt_entrance",
+            building_category: Some(Logistics),
+            building_menu_order: Some(90),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -720,6 +750,8 @@
         (
             id: 19,
             name: "express_underground_belt_exit",
+            building_category: Some(Logistics),
+            building_menu_order: Some(90),
             entity_kind: TransportBelt,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -733,6 +765,8 @@
         (
             id: 20,
             name: "fast_splitter",
+            building_category: Some(Logistics),
+            building_menu_order: Some(70),
             entity_kind: Splitter,
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -742,6 +776,8 @@
         (
             id: 21,
             name: "express_splitter",
+            building_category: Some(Logistics),
+            building_menu_order: Some(100),
             entity_kind: Splitter,
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "transport"]),
@@ -751,6 +787,8 @@
         (
             id: 22,
             name: "fast_inserter",
+            building_category: Some(Logistics),
+            building_menu_order: Some(120),
             entity_kind: Inserter,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -766,6 +804,8 @@
         (
             id: 23,
             name: "long_handed_inserter",
+            building_category: Some(Logistics),
+            building_menu_order: Some(110),
             entity_kind: Inserter,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -781,6 +821,8 @@
         (
             id: 24,
             name: "small_electric_pole",
+            building_category: Some(Power),
+            building_menu_order: Some(10),
             entity_kind: ElectricPole,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -793,6 +835,8 @@
         (
             id: 25,
             name: "steam_engine",
+            building_category: Some(Power),
+            building_menu_order: Some(30),
             entity_kind: SteamEngine,
             size: (x: 3, y: 5),
             collision_mask: (layers: ["ground", "building"]),
@@ -814,6 +858,8 @@
         (
             id: 26,
             name: "boiler",
+            building_category: Some(Power),
+            building_menu_order: Some(20),
             entity_kind: Boiler,
             size: (x: 2, y: 3),
             collision_mask: (layers: ["ground", "building"]),
@@ -845,6 +891,8 @@
         (
             id: 27,
             name: "offshore_pump",
+            building_category: Some(Fluids),
+            building_menu_order: Some(10),
             entity_kind: OffshorePump,
             size: (x: 2, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -865,6 +913,8 @@
         (
             id: 28,
             name: "pipe",
+            building_category: Some(Fluids),
+            building_menu_order: Some(20),
             entity_kind: Pipe,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -884,6 +934,8 @@
         (
             id: 29,
             name: "storage_tank",
+            building_category: Some(Storage),
+            building_menu_order: Some(20),
             entity_kind: StorageTank,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
@@ -910,6 +962,8 @@
         (
             id: 31,
             name: "pumpjack",
+            building_category: Some(Fluids),
+            building_menu_order: Some(30),
             entity_kind: Pumpjack,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
@@ -935,6 +989,8 @@
         (
             id: 32,
             name: "oil_refinery",
+            building_category: Some(Production),
+            building_menu_order: Some(40),
             entity_kind: AssemblingMachine,
             size: (x: 5, y: 5),
             collision_mask: (layers: ["ground", "building"]),
@@ -970,6 +1026,8 @@
         (
             id: 33,
             name: "chemical_plant",
+            building_category: Some(Production),
+            building_menu_order: Some(50),
             entity_kind: AssemblingMachine,
             size: (x: 3, y: 3),
             collision_mask: (layers: ["ground", "building"]),
@@ -1010,6 +1068,8 @@
         (
             id: 34,
             name: "wall",
+            building_category: Some(Defense),
+            building_menu_order: Some(10),
             entity_kind: Wall,
             size: (x: 1, y: 1),
             collision_mask: (layers: ["ground", "building"]),
@@ -1018,6 +1078,8 @@
         (
             id: 35,
             name: "gun_turret",
+            building_category: Some(Defense),
+            building_menu_order: Some(20),
             entity_kind: GunTurret,
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),

@@ -1,4 +1,6 @@
 use bevy::ecs::system::SystemParam;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -138,9 +140,10 @@ pub(crate) fn handle_panel_input(
         }
     }
     if keyboard.just_pressed(KeyCode::KeyB) && !control_held {
-        resources.build_menu.open = !resources.build_menu.open;
-        resources.build_menu.message = None;
         if resources.build_menu.open {
+            resources.build_menu.close();
+        } else {
+            resources.build_menu.open_fresh();
             resources.build_state.selected = None;
             resources.open_container.entity_id = None;
         }
@@ -167,8 +170,12 @@ pub(crate) fn handle_panel_input(
             resources.technology.open = false;
             resources.input_state.escape_consumed = true;
         } else if resources.build_menu.open {
-            resources.build_menu.open = false;
-            resources.build_menu.message = None;
+            if resources.build_menu.search_query.is_empty() {
+                resources.build_menu.close();
+            } else {
+                resources.build_menu.search_query.clear();
+                resources.build_menu.message = None;
+            }
             resources.input_state.escape_consumed = true;
         } else if resources.blueprint_library.open {
             resources.blueprint_library.open = false;
@@ -202,6 +209,75 @@ pub(crate) fn handle_panel_input(
         resources.build_menu.open,
         resources.blueprint_library.open,
     );
+}
+
+pub(crate) fn handle_build_menu_search_input(
+    mut inputs: MessageReader<KeyboardInput>,
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut menu: ResMut<BuildMenuState>,
+) {
+    if !menu.open {
+        return;
+    }
+    let control_held = keyboard.as_deref().is_some_and(|keys| {
+        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
+    });
+    for input in inputs.read() {
+        if input.state != ButtonState::Pressed
+            || matches!(input.key_code, KeyCode::KeyB | KeyCode::Escape)
+        {
+            continue;
+        }
+        if input.key_code == KeyCode::Backspace {
+            if control_held {
+                remove_previous_word(&mut menu.search_query);
+            } else {
+                menu.search_query.pop();
+            }
+            menu.message = None;
+            continue;
+        }
+        if control_held {
+            continue;
+        }
+        if let Some(text) = &input.text {
+            menu.search_query
+                .extend(text.chars().filter(|character| !character.is_control()));
+            menu.message = None;
+        }
+    }
+}
+
+fn remove_previous_word(text: &mut String) {
+    while text.ends_with(char::is_whitespace) {
+        text.pop();
+    }
+    while text
+        .chars()
+        .last()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        text.pop();
+    }
+}
+
+#[cfg(test)]
+mod build_menu_input_tests {
+    use super::remove_previous_word;
+
+    #[test]
+    fn control_backspace_removes_trailing_space_and_previous_word() {
+        let mut query = "fast belt   ".to_string();
+        remove_previous_word(&mut query);
+        assert_eq!(query, "fast ");
+    }
+
+    #[test]
+    fn unicode_backspace_removes_one_scalar() {
+        let mut query = "belt 🏭".to_string();
+        query.pop();
+        assert_eq!(query, "belt ");
+    }
 }
 
 #[derive(SystemParam)]

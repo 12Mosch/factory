@@ -198,6 +198,25 @@ fn load_entities(
             let name = entity.name;
             let size = IVec2::new(entity.size.x, entity.size.y);
             let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
+            match (
+                build_item.is_some(),
+                entity.building_category,
+                entity.building_menu_order,
+            ) {
+                (true, Some(_), Some(_)) | (false, None, None) => {}
+                (true, _, _) => {
+                    return Err(PrototypeLoadError::InvalidBuildingMenuMetadata {
+                        entity: name,
+                        detail: "buildable entities require category and menu order",
+                    });
+                }
+                (false, _, _) => {
+                    return Err(PrototypeLoadError::InvalidBuildingMenuMetadata {
+                        entity: name,
+                        detail: "non-buildable entities must not define category or menu order",
+                    });
+                }
+            }
             let fluid_boxes =
                 resolve_fluid_boxes(&name, size, entity.fluid_boxes, fluid_ids_by_name)?;
             let pumpjack =
@@ -216,6 +235,8 @@ fn load_entities(
                 size,
                 collision_mask: resolve_collision_mask(name, entity.collision_mask)?,
                 build_item,
+                building_category: entity.building_category,
+                building_menu_order: entity.building_menu_order,
                 inventory_slot_count: entity.inventory_slot_count,
                 burner: entity.burner,
                 mining_drill: entity

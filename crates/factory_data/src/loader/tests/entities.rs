@@ -420,3 +420,17 @@ fn splitter_tiers_load_speed_metadata() {
         );
     }
 }
+
+#[test]
+fn base_entities_have_valid_building_menu_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    for entity in &catalog.entities {
+        assert_eq!(
+            entity.build_item.is_some(),
+            entity.building_category.is_some() && entity.building_menu_order.is_some(),
+            "metadata validity differs for {}",
+            entity.name
+        );
+    }
+}

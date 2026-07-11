@@ -28,6 +28,30 @@ fn duplicate_ids_fail() {
 }
 
 #[test]
+fn buildable_entity_missing_menu_metadata_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "chest", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "chest", entity_kind: Chest, size: (x: 1, y: 1), collision_mask: (layers: ["building"]))],
+        tiles: [],
+    )"#).expect_err("buildable metadata should be required");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidBuildingMenuMetadata { entity, .. } if entity == "chest")
+    );
+}
+
+#[test]
+fn non_buildable_entity_with_menu_metadata_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [], recipes: [],
+        entities: [(id: 0, name: "ore_patch", entity_kind: ResourcePatch, building_category: Some(Production), building_menu_order: Some(1), size: (x: 1, y: 1), collision_mask: (layers: ["resource"]))],
+        tiles: [],
+    )"#).expect_err("non-buildable metadata should be rejected");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidBuildingMenuMetadata { entity, .. } if entity == "ore_patch")
+    );
+}
+
+#[test]
 fn duplicate_names_fail() {
     let error = PrototypeCatalog::from_ron_str(
         r#"
