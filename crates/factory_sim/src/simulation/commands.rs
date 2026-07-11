@@ -248,6 +248,7 @@ impl Simulation {
                     },
                 )
                 .map_err(SimCommandError::Build)?;
+                self.record_early_game_placement(item_id);
                 Ok(SimCommandEffect::EntityPlaced(entity_id))
             }
             SimCommand::PlaceGhost {
@@ -277,6 +278,15 @@ impl Simulation {
             SimCommand::BuildGhost { ghost_id } => {
                 let entity_id = construction_ops::build_ghost_from_player_inventory(self, ghost_id)
                     .map_err(SimCommandError::Construction)?;
+                let item_id = entity_recovery_ops::build_item_for_entity(
+                    self,
+                    self.entities
+                        .placed_entity(entity_id)
+                        .expect("newly built ghost should be placed")
+                        .prototype_id,
+                )
+                .expect("placed entity should have a build item");
+                self.record_early_game_placement(item_id);
                 Ok(SimCommandEffect::EntityPlaced(entity_id))
             }
             SimCommand::MarkDeconstruction {
@@ -345,6 +355,25 @@ impl Simulation {
                 self.build_red_science_research_fixture();
                 Ok(SimCommandEffect::None)
             }
+        }
+    }
+}
+
+impl Simulation {
+    fn record_early_game_placement(&mut self, item_id: ItemId) {
+        let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
+        if item_id == base.items.stone_furnace {
+            self.early_game_progress.stone_furnaces_placed = self
+                .early_game_progress
+                .stone_furnaces_placed
+                .saturating_add(1);
+            self.early_game_progress.changed();
+        } else if item_id == base.items.burner_mining_drill {
+            self.early_game_progress.burner_mining_drills_placed = self
+                .early_game_progress
+                .burner_mining_drills_placed
+                .saturating_add(1);
+            self.early_game_progress.changed();
         }
     }
 }

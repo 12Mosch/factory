@@ -5,7 +5,8 @@ use bincode::Options;
 // became part of deterministic simulation state and no v8 migration is kept.
 // v12: pollution and enemy state (spawners, units, health, turrets) joined
 // the snapshot and the entity state registry.
-pub const SAVE_VERSION: u32 = 12;
+// v13: durable, action-specific early-game objective progress joined the snapshot.
+pub const SAVE_VERSION: u32 = 13;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -55,6 +56,7 @@ struct SimulationSnapshotOwned {
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
+    early_game_progress: EarlyGameProgress,
     research: ResearchState,
     power_summary: PowerSummary,
     power_networks: Vec<PowerNetworkSnapshot>,
@@ -180,6 +182,7 @@ struct SimulationSnapshotRef<'a> {
     player_inventory: &'a Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: &'a CraftingQueue,
+    early_game_progress: EarlyGameProgress,
     research: &'a ResearchState,
     power_summary: PowerSummary,
     power_networks: &'a Vec<PowerNetworkSnapshot>,
@@ -206,6 +209,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             player_inventory: &sim.player_inventory,
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: &sim.crafting_queue,
+            early_game_progress: sim.early_game_progress,
             research: &sim.research,
             power_summary: sim.power.summary,
             power_networks: &sim.power.networks,
@@ -238,6 +242,7 @@ impl SimulationSnapshotOwned {
             player_inventory: self.player_inventory,
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,
+            early_game_progress: self.early_game_progress,
             research: self.research,
             power: PowerSubsystem {
                 summary: self.power_summary,

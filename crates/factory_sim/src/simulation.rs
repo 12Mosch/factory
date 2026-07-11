@@ -118,6 +118,7 @@ pub struct Simulation {
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
+    early_game_progress: EarlyGameProgress,
     pub research: ResearchState,
 
     power: PowerSubsystem,
@@ -128,6 +129,23 @@ pub struct Simulation {
 
     #[serde(skip)]
     transport: TransportLaneCache,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct EarlyGameProgress {
+    pub revision: u64,
+    pub iron_ore_manually_mined: u64,
+    pub stone_furnaces_placed: u64,
+    pub iron_plates_smelted: u64,
+    pub burner_mining_drills_placed: u64,
+    pub iron_ore_drill_mined: u64,
+    pub transport_belts_manually_crafted: u64,
+}
+
+impl EarlyGameProgress {
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]

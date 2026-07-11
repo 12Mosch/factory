@@ -33,6 +33,7 @@ impl Simulation {
             player_inventory,
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
+            early_game_progress: EarlyGameProgress::default(),
             research,
             power: PowerSubsystem::default(),
             fluids: FluidSubsystem::default(),
@@ -44,6 +45,10 @@ impl Simulation {
         sim.reveal_chunks_around_player();
         sim.seed_enemy_spawners_in_new_chunks();
         sim
+    }
+
+    pub fn early_game_progress(&self) -> EarlyGameProgress {
+        self.early_game_progress
     }
 
     pub fn new_test_world(seed: u64) -> Self {
