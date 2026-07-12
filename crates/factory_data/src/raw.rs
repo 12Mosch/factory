@@ -2,9 +2,10 @@ use serde::Deserialize;
 
 use crate::model::{
     AmmoPrototype, AssemblingMachinePrototype, BoilerPrototype, BuildingCategory, BurnerPrototype,
-    CraftingCategory, ElectricEnergySourcePrototype, EntityKind, FluidBoxIo, FluidConnectionSide,
-    GunTurretPrototype, OffshorePumpPrototype, RepairToolPrototype, ResourceExtraction,
-    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UnitPrototype,
+    CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig, EntityKind, FluidBoxIo,
+    FluidConnectionSide, GunTurretPrototype, OffshorePumpPrototype, RepairToolPrototype,
+    ResourceExtraction, SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
+    UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -20,6 +21,8 @@ pub(crate) struct RawPrototypeCatalog {
     pub(crate) technologies: Vec<RawTechnologyPrototype>,
     #[serde(default)]
     pub(crate) world_generation: Option<RawWorldGenerationConfig>,
+    #[serde(default)]
+    pub(crate) enemy_gameplay: Option<EnemyGameplayConfig>,
 }
 
 #[derive(Debug, Deserialize)]

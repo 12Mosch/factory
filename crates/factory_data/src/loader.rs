@@ -62,6 +62,7 @@ impl PrototypeCatalog {
             tiles,
             technologies,
             world_generation,
+            enemy_gameplay: raw.enemy_gameplay,
         })
     }
 }
@@ -74,10 +75,14 @@ struct ValidatedRawCatalog {
     tiles: Vec<RawTilePrototype>,
     technologies: Vec<RawTechnologyPrototype>,
     world_generation: Option<RawWorldGenerationConfig>,
+    enemy_gameplay: Option<crate::model::EnemyGameplayConfig>,
 }
 
 impl ValidatedRawCatalog {
     fn from_raw(raw: RawPrototypeCatalog) -> Result<Self, PrototypeLoadError> {
+        if let Some(config) = raw.enemy_gameplay.as_ref() {
+            validate_enemy_gameplay(config)?;
+        }
         let mut items = raw.items;
         validate_group(&mut items, "items")?;
 
@@ -104,6 +109,37 @@ impl ValidatedRawCatalog {
             tiles,
             technologies,
             world_generation: raw.world_generation,
+            enemy_gameplay: raw.enemy_gameplay,
+        })
+    }
+}
+
+fn validate_enemy_gameplay(
+    config: &crate::model::EnemyGameplayConfig,
+) -> Result<(), PrototypeLoadError> {
+    let valid = config.generated_colony_min_spawners > 0
+        && config.generated_colony_min_spawners <= config.generated_colony_max_spawners
+        && config.generated_colony_max_spawners <= config.max_spawners_per_colony
+        && config.colony_spawner_radius_tiles > 0
+        && config.outpost_growth_interval_ticks > 0
+        && config.raid_staging_timeout_ticks > 0
+        && config.raid_cooldown_ticks > 0
+        && config.expansion_minimum_age_ticks > 0
+        && config.expansion_interval_ticks > 0
+        && config.expansion_retry_ticks > 0
+        && config.expansion_min_distance_chunks > 0
+        && config.expansion_min_distance_chunks <= config.expansion_max_distance_chunks
+        && config.expansion_candidate_limit > 0
+        && config.expansion_colony_spacing_chunks > 0
+        && config.expansion_player_spacing_tiles > 0
+        && config.evolution_time_interval_ticks > 0
+        && config.evolution_time_points > 0
+        && config.evolution_pollution_units_per_point > 0;
+    if valid {
+        Ok(())
+    } else {
+        Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "enemy gameplay intervals and ranges must be non-zero and ordered",
         })
     }
 }

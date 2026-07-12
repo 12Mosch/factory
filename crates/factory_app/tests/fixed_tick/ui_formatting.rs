@@ -59,6 +59,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
             inserter_count: 6,
             active_machines: 2,
             idle_machines: 3,
+            ..SimulationCounts::default()
         },
         power: PowerSummary {
             production_watts: 0,

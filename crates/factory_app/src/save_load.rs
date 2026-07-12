@@ -16,6 +16,7 @@ use crate::rendering::resources::VisibleEntityIds;
 use crate::resources::{SimAccessError, SimResource};
 use crate::simulation::{SimCommandBacklog, SimCommandRequest, SimCommandResult};
 use crate::ui::resources::OpenContainer;
+use crate::world_setup::AppMode;
 
 pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [
     SaveSlotKind::Manual(1),
@@ -333,6 +334,7 @@ pub(crate) fn run_autosave(
 
 #[derive(SystemParam)]
 pub(crate) struct LoadState<'w> {
+    pub(crate) next_mode: ResMut<'w, NextState<AppMode>>,
     pub(crate) sim: ResMut<'w, SimResource>,
     pub(crate) window: ResMut<'w, SaveLoadWindowState>,
     pub(crate) autosave: ResMut<'w, AutosaveState>,
@@ -426,6 +428,7 @@ pub(crate) fn load_slot(
             *state.resource_cache = ResourceRenderCache::default();
             *state.visible_entity_ids = VisibleEntityIds::default();
             state.reload_token.value = state.reload_token.value.wrapping_add(1);
+            state.next_mode.set(AppMode::InGame);
 
             status.message = Some(format!("{} loaded.", slot_display_name(slot)));
             status.kind = SaveLoadStatusKind::Success;

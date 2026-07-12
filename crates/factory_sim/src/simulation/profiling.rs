@@ -11,6 +11,11 @@ pub struct SimulationCounts {
     pub inserter_count: usize,
     pub active_machines: usize,
     pub idle_machines: usize,
+    pub enemy_base_count: usize,
+    pub staged_enemy_count: usize,
+    pub raid_count: usize,
+    pub expansion_count: usize,
+    pub threat_event_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -162,6 +167,16 @@ impl Simulation {
             inserter_count: self.entities.inserters.len(),
             active_machines,
             idle_machines: machine_count.saturating_sub(active_machines),
+            enemy_base_count: self.enemies.bases.len(),
+            staged_enemy_count: self
+                .enemies
+                .bases
+                .values()
+                .map(|base| base.staged_units.len())
+                .sum(),
+            raid_count: self.enemies.raids.len(),
+            expansion_count: self.enemies.expansions.len(),
+            threat_event_count: self.enemies.threat_events.len(),
         }
     }
 

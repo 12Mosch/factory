@@ -22,6 +22,7 @@ OUT_DIR = os.path.join(
     "assets",
     "audio",
 )
+MIRROR_OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "audio")
 
 # Reseeded per sound from its name (see main()), so each generator's output
 # is independent of SOUNDS ordering and of rng usage in other generators.
@@ -118,14 +119,15 @@ def place_at(buf, x, at_s, gain=1.0):
 
 
 def write_wav(name, x):
-    os.makedirs(OUT_DIR, exist_ok=True)
-    path = os.path.join(OUT_DIR, name)
     data = (np.clip(x, -1.0, 1.0) * 32767).astype("<i2")
-    with wave.open(path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes(data.tobytes())
+    for output_dir in (OUT_DIR, MIRROR_OUT_DIR):
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, name)
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes(data.tobytes())
     print(f"  {name}: {len(x) / SR:.2f}s, peak {np.max(np.abs(x)):.2f}")
 
 
@@ -253,6 +255,20 @@ def research_complete():
     return fade_out(normalize(x), 120)
 
 
+def enemy_warning():
+    """Urgent two-pulse industrial klaxon without a piercing high end."""
+    dur = 1.25
+    tt = t(dur)
+    x = np.zeros_like(tt)
+    for start in (0.0, 0.58):
+        local = np.maximum(tt - start, 0.0)
+        gate = ((tt >= start) & (tt < start + 0.46)).astype(float)
+        envelope = np.minimum(local / 0.025, 1.0) * np.exp(-local / 0.32) * gate
+        wobble = 1.0 + 0.18 * np.sin(2 * np.pi * 7 * local)
+        x += envelope * wobble * (np.sin(2 * np.pi * 220 * local) + 0.45 * np.sin(2 * np.pi * 330 * local))
+    return fade_out(normalize(x, 0.82), 50)
+
+
 # --- machine loops ------------------------------------------------------------
 # Tonal components use frequencies that are integer multiples of 1/duration and
 # noise is shaped with circular FFT filters, so both loops wrap seamlessly.
@@ -326,6 +342,7 @@ SOUNDS = {
     "manual_mine_complete.wav": manual_mine_complete,
     "craft_complete.wav": craft_complete,
     "research_complete.wav": research_complete,
+    "enemy_warning.wav": enemy_warning,
     "machine_burner_loop.wav": machine_burner_loop,
     "machine_electric_loop.wav": machine_electric_loop,
 }

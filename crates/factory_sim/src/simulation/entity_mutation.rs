@@ -21,6 +21,14 @@ pub fn rotate(
 pub fn remove(sim: &mut Simulation, entity_id: EntityId) -> Option<PlacedEntity> {
     let removed = sim.entities.remove_placed_entity(entity_id);
     if let Some(removed) = &removed {
+        if sim
+            .world
+            .prototypes
+            .entity(removed.prototype_id)
+            .is_some_and(|prototype| prototype.entity_kind == EntityKind::EnemySpawner)
+        {
+            sim.on_enemy_spawner_removed(entity_id, removed.x, removed.y);
+        }
         construction_ops::clear_construction_state_for_removed_entity(sim, entity_id);
         let impact = impact_for_prototype(sim, removed.prototype_id);
         apply_entity_topology_change(sim, impact);

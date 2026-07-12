@@ -8,6 +8,7 @@ use crate::save_load::{
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
+use crate::world_setup::AppMode;
 
 #[derive(Component)]
 pub struct SaveLoadTabButton {
@@ -25,6 +26,12 @@ pub struct SaveLoadModal;
 
 #[derive(Component)]
 pub struct SaveLoadSlotList;
+#[derive(Component)]
+pub struct NewWorldButton;
+#[derive(Resource, Default)]
+pub struct NewWorldConfirmation {
+    pub awaiting_confirmation: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SaveSlotAction {
@@ -37,6 +44,7 @@ pub(crate) struct SaveLoadSnapshot {
     window: SaveLoadWindowState,
     status: SaveLoadStatus,
     rows: Vec<SlotRowSnapshot>,
+    new_world_confirmation: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,20 +119,51 @@ pub(crate) fn handle_save_load_buttons(
     }
 }
 
+type NewWorldQuery<'w, 's> =
+    Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<Button>, With<NewWorldButton>)>;
+pub(crate) fn handle_new_world_button(
+    mut buttons: NewWorldQuery,
+    mut confirmation: ResMut<NewWorldConfirmation>,
+    mut window: ResMut<SaveLoadWindowState>,
+    mut next: ResMut<NextState<AppMode>>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    for interaction in &mut buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        sounds.write(SoundEvent::UiClick);
+        if confirmation.awaiting_confirmation {
+            window.open = false;
+            confirmation.awaiting_confirmation = false;
+            next.set(AppMode::WorldSetup);
+        } else {
+            confirmation.awaiting_confirmation = true;
+        }
+    }
+}
+
 pub(crate) fn sync_save_load_window(
     mut commands: Commands,
     state: Res<SaveLoadWindowState>,
     config: Res<SaveLoadConfig>,
     pending_jobs: Res<PendingSaveJobs>,
     status: Res<SaveLoadStatus>,
+    mut confirmation: ResMut<NewWorldConfirmation>,
     mut roots: WindowRootQuery<SaveLoadSnapshot>,
 ) {
+    // The window can be dismissed through several independent paths (Escape,
+    // successful load, confirming New World), so reset the confirmation here
+    // rather than at each closing call site.
+    if !state.open {
+        confirmation.awaiting_confirmation = false;
+    }
     sync_window(
         &mut commands,
         &mut roots,
         state.open,
         true,
-        || save_load_snapshot(&state, &config, &pending_jobs, &status),
+        || save_load_snapshot(&state, &config, &pending_jobs, &status, &confirmation),
         save_load_root,
         spawn_save_load_modal,
     );
@@ -135,6 +174,7 @@ fn save_load_snapshot(
     config: &SaveLoadConfig,
     pending_jobs: &PendingSaveJobs,
     status: &SaveLoadStatus,
+    confirmation: &NewWorldConfirmation,
 ) -> SaveLoadSnapshot {
     SaveLoadSnapshot {
         window: state.clone(),
@@ -148,6 +188,7 @@ fn save_load_snapshot(
                 pending: pending_jobs.is_slot_pending(slot),
             })
             .collect(),
+        new_world_confirmation: confirmation.awaiting_confirmation,
     }
 }
 
@@ -200,6 +241,28 @@ fn spawn_save_load_modal(
             SaveLoadTab::Load => spawn_load_tab(modal, snapshot),
         }
         spawn_status(modal, &snapshot.status);
+        modal
+            .spawn((
+                Button,
+                Node {
+                    height: Val::Px(34.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.18, 0.08, 0.06, 0.95)),
+                BorderColor::all(Color::srgba(0.8, 0.32, 0.2, 0.8)),
+                NewWorldButton,
+            ))
+            .with_child((
+                Text::new(if snapshot.new_world_confirmation {
+                    "Confirm New World (current game remains until Start)"
+                } else {
+                    "New World"
+                }),
+                TextFont::from_font_size(13.0),
+            ));
     });
 }
 

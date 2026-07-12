@@ -301,7 +301,12 @@ mod tests {
     fn assert_incremental_update_matches_full_render_after_streaming_chunk(
         settings: MapDisplaySettings,
     ) {
-        let layers = [MapLayer::Surface, MapLayer::Resources, MapLayer::Entities];
+        let layers = [
+            MapLayer::Surface,
+            MapLayer::Resources,
+            MapLayer::Entities,
+            MapLayer::Threat,
+        ];
         let mut sim = Simulation::new_test_world(123);
         let mut caches = layers.map(|layer| {
             let initial = generate_map_pixels_for_layer(&sim, &settings, layer);

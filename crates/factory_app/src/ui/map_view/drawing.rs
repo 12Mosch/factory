@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_sim::{CHUNK_SIZE, ChunkCoord, EntityFootprint, Simulation};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, EntityFootprint, Simulation, ThreatLocation};
 
 use crate::map::resources::{MapDisplaySettings, MapLayer, MapOverlayMarkers, MapTextureBounds};
 use crate::rendering::entities::entity_prototype_render_style;
@@ -88,6 +88,7 @@ pub(super) fn rebuild_map_overlay(
 
             spawn_pollution_overlays(overlay, &context);
             spawn_entity_overlays(overlay, &context);
+            spawn_threat_overlays(overlay, &context);
 
             spawn_point_overlay(
                 overlay,
@@ -151,13 +152,78 @@ fn spawn_pollution_overlays(
             continue;
         };
 
-        let strength = (amount_micro as f32 / FULL_HAZE_POLLUTION_MICRO as f32).clamp(0.06, 1.0);
+        let strength = ((amount_micro as f32 / MIN_VISIBLE_POLLUTION_MICRO as f32).ln_1p()
+            / (FULL_HAZE_POLLUTION_MICRO as f32 / MIN_VISIBLE_POLLUTION_MICRO as f32).ln_1p())
+        .clamp(0.06, 1.0);
         spawn_rect_overlay(
             parent,
             rect,
             Color::NONE,
             Color::srgba(0.82, 0.20, 0.16, 0.30 * strength),
             0.0,
+        );
+    }
+}
+
+fn spawn_threat_overlays(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    context: &MapOverlayContext,
+) {
+    if context.layer == MapLayer::Resources || context.layer == MapLayer::Entities {
+        return;
+    }
+    let snapshot = context.sim.enemy_map_snapshot();
+    for coord in snapshot.contacted_sectors {
+        if let Some(rect) = map_rect_for_chunk(context.crop_bounds, context.image_size, coord) {
+            spawn_rect_overlay(
+                parent,
+                rect,
+                Color::srgba(1.0, 0.38, 0.18, 0.82),
+                Color::srgba(0.8, 0.12, 0.06, 0.14),
+                1.0,
+            );
+        }
+    }
+    for (_, x, y) in snapshot.known_bases {
+        spawn_point_overlay(
+            parent,
+            context.crop_bounds,
+            context.image_size,
+            Vec2::new(x as f32, y as f32),
+            10.0,
+            Color::srgb(0.95, 0.16, 0.08),
+            Color::BLACK,
+        );
+    }
+    for location in snapshot
+        .raids
+        .into_iter()
+        .map(|(_, location)| location)
+        .chain(
+            snapshot
+                .expansions
+                .into_iter()
+                .map(|(_, location)| location),
+        )
+    {
+        let position = match location {
+            ThreatLocation::Exact { x, y } => Vec2::new(x as f32, y as f32),
+            ThreatLocation::Sector(coord) => {
+                let (x, y) = coord.min_tile();
+                Vec2::new(
+                    (x + i64::from(CHUNK_SIZE) / 2) as f32,
+                    (y + i64::from(CHUNK_SIZE) / 2) as f32,
+                )
+            }
+        };
+        spawn_point_overlay(
+            parent,
+            context.crop_bounds,
+            context.image_size,
+            position,
+            8.0,
+            Color::srgb(1.0, 0.6, 0.12),
+            Color::BLACK,
         );
     }
 }
@@ -382,6 +448,7 @@ pub(super) fn spawn_full_map(
                 spawn_layer_button(bar, MapLayer::Surface, "Surface", selected_layer);
                 spawn_layer_button(bar, MapLayer::Resources, "Resources", selected_layer);
                 spawn_layer_button(bar, MapLayer::Entities, "Entities", selected_layer);
+                spawn_layer_button(bar, MapLayer::Threat, "Threat", selected_layer);
                 spawn_recenter_button(bar);
             });
         });

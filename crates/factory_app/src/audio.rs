@@ -1,7 +1,8 @@
+use crate::save_load::PresentationReloadToken;
 use bevy::audio::{AudioSink, AudioSinkPlayback, Volume};
 use bevy::prelude::*;
 use factory_data::EntityKind;
-use factory_sim::{CraftingJob, EntityId, MachineStatus, ManualMiningProgress};
+use factory_sim::{CraftingJob, EntityId, MachineStatus, ManualMiningProgress, ThreatEventKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -26,6 +27,7 @@ pub enum SoundEvent {
     ManualMineComplete,
     CraftComplete,
     ResearchComplete,
+    EnemyWarning,
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
@@ -83,6 +85,7 @@ pub struct AudioAssets {
     pub machine_burner_loop: Option<Handle<AudioSource>>,
     pub machine_electric_loop: Option<Handle<AudioSource>>,
     pub research_complete: Option<Handle<AudioSource>>,
+    pub enemy_warning: Option<Handle<AudioSource>>,
 }
 
 #[derive(Resource, Default)]
@@ -111,6 +114,13 @@ pub struct CraftingAudioObserver {
 pub struct ResearchAudioObserver {
     initialized: bool,
     unlocked: HashSet<factory_data::TechnologyId>,
+}
+
+#[derive(Resource, Default)]
+pub struct ThreatAudioObserver {
+    initialized: bool,
+    cursor: u64,
+    reload_token: u64,
 }
 
 #[derive(Resource, Default)]
@@ -155,6 +165,7 @@ pub(crate) fn load_audio_assets(
     assets.machine_burner_loop = Some(asset_server.load("audio/machine_burner_loop.wav"));
     assets.machine_electric_loop = Some(asset_server.load("audio/machine_electric_loop.wav"));
     assets.research_complete = Some(asset_server.load("audio/research_complete.wav"));
+    assets.enemy_warning = Some(asset_server.load("audio/enemy_warning.wav"));
 }
 
 pub(crate) fn load_persisted_audio_settings(
@@ -339,6 +350,37 @@ pub(crate) fn observe_research_audio(
     observer.unlocked = unlocked;
 }
 
+pub(crate) fn observe_threat_audio(
+    sim: Res<SimResource>,
+    reload: Option<Res<PresentationReloadToken>>,
+    mut observer: ResMut<ThreatAudioObserver>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let reload_token = reload.as_deref().map_or(0, |token| token.value);
+    let simulation = sim.read();
+    let events = simulation.threat_events_after(0);
+    if !observer.initialized || reload_token != observer.reload_token {
+        observer.initialized = true;
+        observer.reload_token = reload_token;
+        observer.cursor = events.last().map_or(0, |event| event.sequence);
+        return;
+    }
+    for event in events
+        .iter()
+        .filter(|event| event.sequence > observer.cursor)
+    {
+        if matches!(
+            event.kind,
+            ThreatEventKind::RaidLaunched | ThreatEventKind::StructureUnderAttack
+        ) {
+            sounds.write(SoundEvent::EnemyWarning);
+        }
+    }
+    if let Some(event) = events.last() {
+        observer.cursor = event.sequence;
+    }
+}
+
 pub(crate) fn sync_machine_audio_loops(
     mut commands: Commands,
     sim: Res<SimResource>,
@@ -450,6 +492,7 @@ fn sound_handle(assets: &AudioAssets, event: SoundEvent) -> Option<&Handle<Audio
         SoundEvent::ManualMineComplete => assets.manual_mine_complete.as_ref(),
         SoundEvent::CraftComplete => assets.craft_complete.as_ref(),
         SoundEvent::ResearchComplete => assets.research_complete.as_ref(),
+        SoundEvent::EnemyWarning => assets.enemy_warning.as_ref(),
     }
 }
 
@@ -462,6 +505,7 @@ fn one_shot_gain(event: SoundEvent) -> f32 {
         SoundEvent::ManualMineComplete => 0.75,
         SoundEvent::CraftComplete => 0.75,
         SoundEvent::ResearchComplete => 0.85,
+        SoundEvent::EnemyWarning => 0.9,
     }
 }
 
@@ -470,6 +514,7 @@ fn sound_cooldown_ticks(event: SoundEvent) -> u64 {
         SoundEvent::ManualMineTick => 12,
         SoundEvent::PlaceError => 4,
         SoundEvent::UiClick => 1,
+        SoundEvent::EnemyWarning => 600,
         _ => 0,
     }
 }

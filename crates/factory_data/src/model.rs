@@ -125,6 +125,31 @@ pub struct UnitPrototype {
     pub aggro_radius_tiles: u32,
 }
 
+/// Deterministic enemy simulation tuning stored in the prototype catalog.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct EnemyGameplayConfig {
+    pub generated_colony_min_spawners: u8,
+    pub generated_colony_max_spawners: u8,
+    pub max_spawners_per_colony: u8,
+    pub colony_spawner_radius_tiles: u8,
+    pub outpost_growth_interval_ticks: u32,
+    pub raid_staging_timeout_ticks: u32,
+    pub raid_cooldown_ticks: u32,
+    pub expansion_minimum_age_ticks: u32,
+    pub expansion_interval_ticks: u32,
+    pub expansion_retry_ticks: u32,
+    pub expansion_min_distance_chunks: u8,
+    pub expansion_max_distance_chunks: u8,
+    pub expansion_candidate_limit: u16,
+    pub expansion_colony_spacing_chunks: u8,
+    pub expansion_player_spacing_tiles: u16,
+    pub evolution_time_interval_ticks: u32,
+    pub evolution_time_points: u16,
+    pub evolution_pollution_units_per_point: u16,
+    pub evolution_spawner_destroyed_points: u16,
+    pub evolution_colony_destroyed_points: u16,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct FluidBoxPrototype {
     pub capacity_milliunits: u64,

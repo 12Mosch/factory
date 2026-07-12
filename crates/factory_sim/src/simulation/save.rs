@@ -7,11 +7,13 @@ use bincode::Options;
 // the snapshot and the entity state registry.
 // v13: durable, action-specific early-game objective progress joined the snapshot.
 // v14: early-game progress expanded into durable onboarding progress.
-pub const SAVE_VERSION: u32 = 14;
+// v15: enemy settings, colonies, missions, evolution and threat events.
+pub const SAVE_VERSION: u32 = 15;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 10;
+// v11: PrototypeCatalog gained the optional enemy_gameplay config section.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 11;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 const SAVE_HEADER_LEN: usize = 8 + 4 + 4 + 8;
@@ -65,6 +67,7 @@ struct SimulationSnapshotOwned {
     fluid_networks: Vec<FluidNetworkSnapshot>,
     pollution: PollutionState,
     enemies: EnemySubsystem,
+    config: SimulationConfig,
 }
 
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
@@ -191,6 +194,7 @@ struct SimulationSnapshotRef<'a> {
     fluid_networks: &'a Vec<FluidNetworkSnapshot>,
     pollution: &'a PollutionState,
     enemies: &'a EnemySubsystem,
+    config: SimulationConfig,
 }
 
 impl<'a> SimulationSnapshotRef<'a> {
@@ -218,6 +222,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             fluid_networks: &sim.fluids.networks,
             pollution: &sim.pollution,
             enemies: &sim.enemies,
+            config: sim.config,
         }
     }
 }
@@ -262,6 +267,7 @@ impl SimulationSnapshotOwned {
             },
             pollution: self.pollution,
             enemies: self.enemies,
+            config: self.config,
             transport: TransportLaneCache::default(),
         };
         sim.ensure_fluid_network_topology();
