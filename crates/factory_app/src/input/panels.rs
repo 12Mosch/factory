@@ -13,6 +13,7 @@ use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapLayer, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::SaveLoadWindowState;
+use crate::simulation::SimCommandRequest;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
     fullscreen_map_display_size, fullscreen_map_image_size,
@@ -20,6 +21,7 @@ use crate::ui::map_view::{
 use crate::ui::resources::{
     CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
+use factory_sim::SimCommand;
 
 #[derive(SystemParam)]
 pub(crate) struct WorldBlockingWindows<'w> {
@@ -155,8 +157,10 @@ pub(crate) fn handle_panel_input(
         }
     }
     if keyboard.just_pressed(KeyCode::KeyB) && control_held {
-        resources.blueprint_library.open = !resources.blueprint_library.open;
         if resources.blueprint_library.open {
+            resources.blueprint_library.close();
+        } else {
+            resources.blueprint_library.open = true;
             resources.build_state.selected = None;
             resources.open_container.entity_id = None;
         }
@@ -188,7 +192,12 @@ pub(crate) fn handle_panel_input(
             resources.technology.open = false;
             resources.input_state.escape_consumed = true;
         } else if resources.blueprint_library.open {
-            resources.blueprint_library.open = false;
+            if resources.blueprint_library.editing_index.is_some() {
+                resources.blueprint_library.editing_index = None;
+                resources.blueprint_library.rename_buffer.clear();
+            } else {
+                resources.blueprint_library.close();
+            }
             resources.input_state.escape_consumed = true;
         } else if resources.open_container.entity_id.is_some() {
             resources.open_container.entity_id = None;
@@ -252,6 +261,53 @@ pub(crate) fn handle_build_menu_search_input(
             menu.search_query
                 .extend(text.chars().filter(|character| !character.is_control()));
             menu.message = None;
+        }
+    }
+}
+
+/// Text entry for the blueprint library's in-progress rename. Escape is left
+/// unhandled here; it is handled by [`handle_panel_input`]'s escape chain so
+/// cancelling a rename cooperates with the rest of the window priorities.
+pub(crate) fn handle_blueprint_rename_input(
+    mut inputs: MessageReader<KeyboardInput>,
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut window: ResMut<BlueprintLibraryWindowState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    let Some(index) = window.editing_index else {
+        return;
+    };
+    let control_held = keyboard.as_deref().is_some_and(|keys| {
+        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
+    });
+    for input in inputs.read() {
+        if input.state != ButtonState::Pressed || input.key_code == KeyCode::Escape {
+            continue;
+        }
+        match input.key_code {
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let name = window.rename_buffer.trim().to_string();
+                if !name.is_empty() {
+                    commands.write(SimCommandRequest(SimCommand::RenameBlueprint {
+                        index,
+                        name,
+                    }));
+                }
+                window.editing_index = None;
+                window.rename_buffer.clear();
+            }
+            KeyCode::Backspace if control_held => remove_previous_word(&mut window.rename_buffer),
+            KeyCode::Backspace => {
+                window.rename_buffer.pop();
+            }
+            _ if !control_held => {
+                if let Some(text) = &input.text {
+                    window
+                        .rename_buffer
+                        .extend(text.chars().filter(|character| !character.is_control()));
+                }
+            }
+            _ => {}
         }
     }
 }

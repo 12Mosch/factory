@@ -344,6 +344,28 @@ fn blueprint_library_saves_and_deletes_entries() {
 }
 
 #[test]
+fn blueprint_library_renames_entries() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let (x, y) = first_buildable_rect(&sim.world, 2, 2);
+    place_at(&mut sim, furnace, x, y, Direction::North);
+
+    let index = construction_ops::save_blueprint_from_area(&mut sim, "smelter", x, y, x + 1, y + 1)
+        .expect("area with a furnace should save");
+
+    assert!(matches!(
+        construction_ops::rename_blueprint(&mut sim, 5, "renamed".to_string()),
+        Err(ConstructionError::MissingBlueprint { index: 5 })
+    ));
+
+    construction_ops::rename_blueprint(&mut sim, index, "renamed".to_string())
+        .expect("blueprint should rename");
+    assert_eq!(sim.construction().blueprints()[index].name, "renamed");
+    sim.validate_state()
+        .expect("simulation with a renamed blueprint should validate");
+}
+
+#[test]
 fn blueprint_captures_assembler_recipes_onto_ghosts() {
     let mut sim = Simulation::new_test_world(123);
     sim.apply_command(&SimCommand::BuildRedScienceResearchFixture)

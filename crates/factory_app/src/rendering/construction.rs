@@ -4,7 +4,7 @@ use bevy::window::PrimaryWindow;
 use factory_sim::{EntityFootprint, EntityId, GhostId};
 use std::collections::HashSet;
 
-use crate::build::resources::{PlannerState, PlannerTool};
+use crate::build::resources::{PastePlacementPreviewState, PlannerState, PlannerTool};
 use crate::constants::TILE_SIZE;
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
@@ -17,6 +17,10 @@ use crate::resources::SimResource;
 
 /// Tint multiplied over the entity visual for planned (ghost) buildings.
 const GHOST_TINT: Color = Color::srgba(0.62, 0.80, 1.0, 0.55);
+/// Tint for paste-preview entities that cannot be placed at the current
+/// cursor position. Matches the invalid-placement tint used for the
+/// single-building placement preview (`rendering/build_preview.rs`).
+const PASTE_PREVIEW_INVALID_TINT: Color = Color::srgba(1.0, 0.20, 0.16, 0.42);
 /// Overlay drawn across entities marked for deconstruction.
 const DECONSTRUCTION_OVERLAY_COLOR: Color = Color::srgba(1.0, 0.18, 0.12, 0.34);
 
@@ -268,8 +272,11 @@ pub(crate) struct PastePreviewInputs<'w> {
     planner: Res<'w, PlannerState>,
 }
 
-/// Draws the clipboard blueprint as translucent sprites following the cursor
-/// while the paste tool is active.
+/// Draws the clipboard blueprint (rotated by the planner's current rotation)
+/// as translucent sprites following the cursor while the paste tool is
+/// active, tinting entities that cannot be placed at their candidate tile,
+/// and records the aggregate per-entity issues into
+/// [`PastePlacementPreviewState`] for the status line.
 pub(crate) fn update_paste_preview(
     mut commands: Commands,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -277,6 +284,7 @@ pub(crate) fn update_paste_preview(
     inputs: PastePreviewInputs,
     mut visual_assets: VisualAssets,
     mut sprites: PastePreviewQuery,
+    mut preview_state: ResMut<PastePlacementPreviewState>,
 ) {
     let PastePreviewInputs {
         input_state,
@@ -291,43 +299,72 @@ pub(crate) fn update_paste_preview(
         for (_, _, mut visibility) in &mut sprites {
             *visibility = Visibility::Hidden;
         }
+        preview_state.active = false;
+        preview_state.issues.clear();
         return;
     };
 
     let sim = sim.read();
     let catalog = sim.catalog();
-    let mut entries = blueprint.entities.iter().filter_map(|entity| {
+    let rotated_entities = factory_sim::construction::rotate_blueprint_entities(
+        &blueprint.entities,
+        planner.rotation_steps,
+    );
+    let mut collected_issues = Vec::new();
+    let mut entries = rotated_entities.iter().filter_map(|entity| {
         let style = entity_prototype_visual_style(catalog, entity.prototype_id, entity.direction)?;
         let prototype = catalog.entity(entity.prototype_id)?;
+        let entity_x = x + i64::from(entity.dx);
+        let entity_y = y + i64::from(entity.dy);
         let footprint = EntityFootprint::from_size(
-            x + i64::from(entity.dx),
-            y + i64::from(entity.dy),
+            entity_x,
+            entity_y,
             prototype.size.x,
             prototype.size.y,
             entity.direction,
         );
-        Some((style, footprint))
+        let entity_preview = factory_sim::construction_ops::preview_ghost_placement(
+            &sim,
+            entity.prototype_id,
+            entity_x,
+            entity_y,
+            entity.direction,
+        );
+        let invalid = !entity_preview.issues.is_empty();
+        collected_issues.extend(entity_preview.issues);
+        Some((style, footprint, invalid))
     });
 
     let mut sprite_iter = sprites.iter_mut();
     for (mut transform, mut sprite, mut visibility) in &mut sprite_iter {
         match entries.next() {
-            Some((style, footprint)) => {
+            Some((style, footprint, invalid)) => {
                 transform.translation = entity_translation(&footprint, PASTE_PREVIEW_Z);
                 *sprite = visual_assets.entity_sprite(style);
-                sprite.color = GHOST_TINT;
+                sprite.color = if invalid {
+                    PASTE_PREVIEW_INVALID_TINT
+                } else {
+                    GHOST_TINT
+                };
                 *visibility = Visibility::Visible;
             }
             None => *visibility = Visibility::Hidden,
         }
     }
-    for (style, footprint) in entries {
+    for (style, footprint, invalid) in entries {
         let mut sprite = visual_assets.entity_sprite(style);
-        sprite.color = GHOST_TINT;
+        sprite.color = if invalid {
+            PASTE_PREVIEW_INVALID_TINT
+        } else {
+            GHOST_TINT
+        };
         commands.spawn((
             sprite,
             Transform::from_translation(entity_translation(&footprint, PASTE_PREVIEW_Z)),
             PastePreviewSprite,
         ));
     }
+
+    preview_state.active = true;
+    preview_state.issues = collected_issues;
 }

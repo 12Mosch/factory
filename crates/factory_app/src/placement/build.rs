@@ -221,8 +221,16 @@ pub(crate) fn build_status_from_preview(
     catalog: &PrototypeCatalog,
     preview: &BuildPlacementPreview,
 ) -> Option<BuildPlacementStatus> {
-    preview
-        .issues
+    build_status_from_issues(catalog, &preview.issues)
+}
+
+/// Picks the worst issue across a set of placement issues (e.g. every entity
+/// of a blueprint paste preview) and maps it to a status message.
+pub(crate) fn build_status_from_issues(
+    catalog: &PrototypeCatalog,
+    issues: &[BuildPlacementIssue],
+) -> Option<BuildPlacementStatus> {
+    issues
         .iter()
         .min_by_key(|issue| preview_issue_priority(issue))
         .map(|issue| build_status_from_preview_issue(catalog, issue))

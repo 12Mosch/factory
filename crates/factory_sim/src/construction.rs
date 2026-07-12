@@ -72,13 +72,99 @@ impl Blueprint {
     /// Tile extents of the blueprint entities' origins, as `(width, height)`.
     /// Entity footprints may extend further right/up than the origin extents.
     pub fn origin_extents(&self) -> (i32, i32) {
-        let mut width = 0;
-        let mut height = 0;
-        for entity in &self.entities {
-            width = width.max(entity.dx + 1);
-            height = height.max(entity.dy + 1);
+        blueprint_entity_extents(&self.entities)
+    }
+}
+
+fn blueprint_entity_extents(entities: &[BlueprintEntity]) -> (i32, i32) {
+    let mut width = 0;
+    let mut height = 0;
+    for entity in entities {
+        width = width.max(entity.dx + 1);
+        height = height.max(entity.dy + 1);
+    }
+    (width, height)
+}
+
+/// Rotates blueprint entity offsets and directions 90 degrees clockwise
+/// around their bounding box, `steps` times (`steps % 4`). Pure and
+/// idempotent after four steps. This is paste-time-only: callers recompute
+/// it from the canonical (unrotated) blueprint for preview and paste alike;
+/// it is never written back into a saved [`Blueprint`].
+pub fn rotate_blueprint_entities(entities: &[BlueprintEntity], steps: u8) -> Vec<BlueprintEntity> {
+    let mut current = entities.to_vec();
+    for _ in 0..(steps % 4) {
+        current = rotate_blueprint_entities_once(&current);
+    }
+    current
+}
+
+fn rotate_blueprint_entities_once(entities: &[BlueprintEntity]) -> Vec<BlueprintEntity> {
+    let (width, _height) = blueprint_entity_extents(entities);
+    entities
+        .iter()
+        .map(|entity| BlueprintEntity {
+            prototype_id: entity.prototype_id,
+            dx: entity.dy,
+            dy: width - 1 - entity.dx,
+            direction: rotate_direction_clockwise(entity.direction),
+            recipe: entity.recipe,
+        })
+        .collect()
+}
+
+fn rotate_direction_clockwise(direction: Direction) -> Direction {
+    match direction {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entity(prototype_id: u16, dx: i32, dy: i32, direction: Direction) -> BlueprintEntity {
+        BlueprintEntity {
+            prototype_id: EntityPrototypeId::new(prototype_id),
+            dx,
+            dy,
+            direction,
+            recipe: None,
         }
-        (width, height)
+    }
+
+    #[test]
+    fn four_rotations_return_to_the_original_blueprint() {
+        let entities = vec![
+            entity(0, 0, 0, Direction::North),
+            entity(1, 2, 0, Direction::East),
+            entity(2, 1, 3, Direction::South),
+        ];
+
+        let rotated = rotate_blueprint_entities(&entities, 4);
+
+        assert_eq!(rotated, entities);
+    }
+
+    #[test]
+    fn rotating_a_vertical_bar_matches_expected_offsets_and_directions() {
+        let entities = vec![
+            entity(0, 0, 0, Direction::North),
+            entity(0, 0, 1, Direction::South),
+        ];
+
+        let rotated = rotate_blueprint_entities(&entities, 1);
+
+        assert_eq!(
+            rotated,
+            vec![
+                entity(0, 0, 0, Direction::East),
+                entity(0, 1, 0, Direction::West),
+            ]
+        );
     }
 }
 

@@ -164,3 +164,111 @@ fn ghost_commands_flow_through_the_fixed_tick() {
         "built ghost should place a real entity"
     );
 }
+
+#[test]
+fn r_key_rotates_the_paste_tool_while_active() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    press_key(&mut app, KeyCode::KeyR);
+    app.update();
+    assert_eq!(
+        app.world().resource::<PlannerState>().rotation_steps,
+        0,
+        "R should do nothing while no planner tool is active"
+    );
+    release_key(&mut app, KeyCode::KeyR);
+
+    app.world_mut()
+        .resource_mut::<PlannerState>()
+        .set_tool(PlannerTool::Paste);
+
+    for expected in [1u8, 2, 3, 0] {
+        press_key(&mut app, KeyCode::KeyR);
+        app.update();
+        assert_eq!(
+            app.world().resource::<PlannerState>().rotation_steps,
+            expected
+        );
+        release_key(&mut app, KeyCode::KeyR);
+    }
+}
+
+#[test]
+fn rename_command_round_trips_through_the_fixed_tick() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    let (furnace, x, y) = {
+        let sim = &app.world().resource::<SimResource>().read();
+        let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+        let (x, y) = first_buildable_rect(sim, furnace);
+        (furnace, x, y)
+    };
+
+    app.world_mut()
+        .write_message(SimCommandRequest(SimCommand::PlaceGhost {
+            prototype_id: furnace,
+            x,
+            y,
+            direction: factory_sim::Direction::North,
+        }));
+    app.update();
+
+    app.world_mut()
+        .write_message(SimCommandRequest(SimCommand::SaveBlueprint {
+            name: "original".to_string(),
+            min_x: x,
+            min_y: y,
+            max_x: x + 1,
+            max_y: y + 1,
+        }));
+    app.update();
+
+    {
+        let sim = &app.world().resource::<SimResource>().read();
+        assert_eq!(sim.construction().blueprints().len(), 1);
+        assert_eq!(sim.construction().blueprints()[0].name, "original");
+    }
+
+    app.world_mut()
+        .write_message(SimCommandRequest(SimCommand::RenameBlueprint {
+            index: 0,
+            name: "renamed".to_string(),
+        }));
+    app.update();
+
+    let sim = &app.world().resource::<SimResource>().read();
+    assert_eq!(sim.construction().blueprints()[0].name, "renamed");
+}
+
+#[test]
+fn escape_cancels_rename_without_closing_the_library() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    {
+        let mut window = app
+            .world_mut()
+            .resource_mut::<BlueprintLibraryWindowState>();
+        window.open = true;
+        window.editing_index = Some(0);
+        window.rename_buffer = "draft".to_string();
+    }
+
+    press_key(&mut app, KeyCode::Escape);
+    app.update();
+
+    {
+        let window = app.world().resource::<BlueprintLibraryWindowState>();
+        assert!(window.open, "first escape should only cancel the rename");
+        assert_eq!(window.editing_index, None);
+        assert!(window.rename_buffer.is_empty());
+    }
+
+    release_key(&mut app, KeyCode::Escape);
+    press_key(&mut app, KeyCode::Escape);
+    app.update();
+
+    assert!(!app.world().resource::<BlueprintLibraryWindowState>().open);
+}

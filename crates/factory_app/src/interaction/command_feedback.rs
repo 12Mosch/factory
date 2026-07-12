@@ -204,6 +204,19 @@ pub(crate) fn handle_sim_command_results(
                     Err(_) => continue,
                 };
             }
+            (SimCommand::RenameBlueprint { name, .. }, result) => {
+                build_state.last_status = match result {
+                    Ok(_) => {
+                        sounds.write(SoundEvent::UiClick);
+                        BuildPlacementStatus::Placed(format!("Renamed to {name}"))
+                    }
+                    Err(SimCommandError::Construction(error)) => {
+                        sounds.write(SoundEvent::PlaceError);
+                        construction_status_from_error(sim.read().catalog(), *error)
+                    }
+                    Err(_) => continue,
+                };
+            }
             _ => {}
         }
     }

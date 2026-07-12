@@ -1,7 +1,9 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use factory_sim::SimCommand;
+use factory_data::{ItemId, PrototypeCatalog};
+use factory_sim::{Blueprint, Inventory, SimCommand};
+use std::collections::BTreeMap;
 
 use crate::audio::SoundEvent;
 use crate::build::resources::{
@@ -10,6 +12,7 @@ use crate::build::resources::{
 use crate::input::planner::activate_planner_tool;
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
+use crate::ui::formatting::format_item_display_name;
 use crate::ui::resources::OpenContainer;
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
@@ -30,18 +33,29 @@ pub(crate) enum BlueprintLibraryAction {
     Delete {
         index: usize,
     },
+    /// Start editing a blueprint's name.
+    Rename {
+        index: usize,
+    },
+    /// Commit the in-progress rename.
+    ConfirmRename,
+    /// Discard the in-progress rename.
+    CancelRename,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct BlueprintLibrarySnapshot {
     rows: Vec<BlueprintRowSnapshot>,
     clipboard: Option<(String, usize)>,
+    /// (index, current buffer) of the blueprint being renamed, if any.
+    editing: Option<(usize, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct BlueprintRowSnapshot {
     name: String,
     entity_count: usize,
+    materials: String,
 }
 
 type BlueprintLibraryButtonQuery<'w, 's> = Query<
@@ -78,10 +92,10 @@ pub(crate) fn handle_blueprint_library_buttons(
         state.sounds.write(SoundEvent::UiClick);
         match button.action {
             BlueprintLibraryAction::Close => {
-                state.window.open = false;
+                state.window.close();
             }
             BlueprintLibraryAction::CaptureNew => {
-                state.window.open = false;
+                state.window.close();
                 activate_planner_tool(
                     &mut state.planner,
                     &mut state.build_state,
@@ -95,7 +109,7 @@ pub(crate) fn handle_blueprint_library_buttons(
                     continue;
                 };
                 state.planner.clipboard = Some(blueprint.clone());
-                state.window.open = false;
+                state.window.close();
                 activate_planner_tool(
                     &mut state.planner,
                     &mut state.build_state,
@@ -114,9 +128,38 @@ pub(crate) fn handle_blueprint_library_buttons(
                 {
                     continue;
                 }
+                state.window.editing_index = None;
+                state.window.rename_buffer.clear();
                 state
                     .commands
                     .write(SimCommandRequest(SimCommand::DeleteBlueprint { index }));
+            }
+            BlueprintLibraryAction::Rename { index } => {
+                let sim = state.sim.read();
+                let Some(blueprint) = sim.construction().blueprints().get(index) else {
+                    continue;
+                };
+                state.window.editing_index = Some(index);
+                state.window.rename_buffer = blueprint.name.clone();
+            }
+            BlueprintLibraryAction::ConfirmRename => {
+                if let Some(index) = state.window.editing_index {
+                    let name = state.window.rename_buffer.trim().to_string();
+                    if !name.is_empty() {
+                        state
+                            .commands
+                            .write(SimCommandRequest(SimCommand::RenameBlueprint {
+                                index,
+                                name,
+                            }));
+                    }
+                }
+                state.window.editing_index = None;
+                state.window.rename_buffer.clear();
+            }
+            BlueprintLibraryAction::CancelRename => {
+                state.window.editing_index = None;
+                state.window.rename_buffer.clear();
             }
         }
     }
@@ -134,7 +177,7 @@ pub(crate) fn sync_blueprint_library_window(
         &mut roots,
         window.open,
         true,
-        || blueprint_library_snapshot(&sim, &planner),
+        || blueprint_library_snapshot(&sim, &planner, &window),
         blueprint_library_root,
         spawn_blueprint_library_modal,
     );
@@ -143,23 +186,65 @@ pub(crate) fn sync_blueprint_library_window(
 fn blueprint_library_snapshot(
     sim: &SimResource,
     planner: &PlannerState,
+    window: &BlueprintLibraryWindowState,
 ) -> BlueprintLibrarySnapshot {
+    let sim = sim.read();
+    let catalog = sim.catalog();
+    let inventory = sim.player_inventory();
     BlueprintLibrarySnapshot {
         rows: sim
-            .read()
             .construction()
             .blueprints()
             .iter()
             .map(|blueprint| BlueprintRowSnapshot {
                 name: blueprint.name.clone(),
                 entity_count: blueprint.entities.len(),
+                materials: blueprint_materials_line(catalog, inventory, blueprint),
             })
             .collect(),
         clipboard: planner
             .clipboard
             .as_ref()
             .map(|blueprint| (blueprint.name.clone(), blueprint.entities.len())),
+        editing: window
+            .editing_index
+            .map(|index| (index, window.rename_buffer.clone())),
     }
+}
+
+/// Aggregates the flat `build_item` shopping list needed to build every
+/// entity in `blueprint`, formatted as `"item have/need"` pairs against the
+/// player's current inventory.
+fn blueprint_materials_line(
+    catalog: &PrototypeCatalog,
+    inventory: &Inventory,
+    blueprint: &Blueprint,
+) -> String {
+    let mut needed: BTreeMap<ItemId, u32> = BTreeMap::new();
+    for entity in &blueprint.entities {
+        if let Some(item_id) = catalog
+            .entity(entity.prototype_id)
+            .and_then(|prototype| prototype.build_item)
+        {
+            *needed.entry(item_id).or_insert(0) += 1;
+        }
+    }
+    if needed.is_empty() {
+        return "Materials: <none>".to_string();
+    }
+    format!(
+        "Materials: {}",
+        needed
+            .iter()
+            .map(|(item_id, count)| format!(
+                "{} {}/{}",
+                format_item_display_name(catalog, *item_id),
+                inventory.count(*item_id),
+                count
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn blueprint_library_root() -> impl Bundle {
@@ -242,13 +327,16 @@ fn spawn_blueprint_library_modal(
             ));
         }
         for (index, row) in snapshot.rows.iter().enumerate() {
+            let editing_buffer = snapshot
+                .editing
+                .as_ref()
+                .filter(|(editing_index, _)| *editing_index == index)
+                .map(|(_, buffer)| buffer.clone());
             modal
                 .spawn((
                     Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::SpaceBetween,
-                        column_gap: Val::Px(8.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(4.0),
                         padding: UiRect::all(Val::Px(6.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         ..default()
@@ -257,34 +345,102 @@ fn spawn_blueprint_library_modal(
                     BorderColor::all(Color::srgba(0.30, 0.30, 0.28, 0.60)),
                 ))
                 .with_children(|row_node| {
-                    row_node.spawn((
-                        Text::new(format!("{} ({} entities)", row.name, row.entity_count)),
-                        TextFont::from_font_size(13.0),
-                        TextColor(Color::srgb(0.91, 0.92, 0.86)),
-                    ));
                     row_node
                         .spawn((
                             Node {
                                 flex_direction: FlexDirection::Row,
-                                column_gap: Val::Px(6.0),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::SpaceBetween,
+                                column_gap: Val::Px(8.0),
                                 ..default()
                             },
                             BackgroundColor(Color::NONE),
                         ))
-                        .with_children(|actions| {
-                            spawn_library_button(
-                                actions,
-                                "Paste",
-                                BlueprintLibraryAction::Paste { index },
-                                64.0,
-                            );
-                            spawn_library_button(
-                                actions,
-                                "Delete",
-                                BlueprintLibraryAction::Delete { index },
-                                64.0,
-                            );
+                        .with_children(|header_row| {
+                            if let Some(buffer) = &editing_buffer {
+                                let text = if buffer.is_empty() {
+                                    "Blueprint name...".to_string()
+                                } else {
+                                    buffer.clone()
+                                };
+                                header_row
+                                    .spawn((
+                                        Node {
+                                            flex_grow: 1.0,
+                                            height: Val::Px(26.0),
+                                            align_items: AlignItems::Center,
+                                            padding: UiRect::horizontal(Val::Px(8.0)),
+                                            border: UiRect::all(Val::Px(1.0)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgba(0.07, 0.08, 0.08, 0.96)),
+                                        BorderColor::all(Color::srgba(0.48, 0.55, 0.48, 0.8)),
+                                    ))
+                                    .with_child((
+                                        Text::new(text),
+                                        TextFont::from_font_size(13.0),
+                                        TextColor(Color::srgb(0.91, 0.92, 0.86)),
+                                    ));
+                            } else {
+                                header_row.spawn((
+                                    Text::new(format!(
+                                        "{} ({} entities)",
+                                        row.name, row.entity_count
+                                    )),
+                                    TextFont::from_font_size(13.0),
+                                    TextColor(Color::srgb(0.91, 0.92, 0.86)),
+                                ));
+                            }
+                            header_row
+                                .spawn((
+                                    Node {
+                                        flex_direction: FlexDirection::Row,
+                                        column_gap: Val::Px(6.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::NONE),
+                                ))
+                                .with_children(|actions| {
+                                    if editing_buffer.is_some() {
+                                        spawn_library_button(
+                                            actions,
+                                            "Save",
+                                            BlueprintLibraryAction::ConfirmRename,
+                                            56.0,
+                                        );
+                                        spawn_library_button(
+                                            actions,
+                                            "Cancel",
+                                            BlueprintLibraryAction::CancelRename,
+                                            56.0,
+                                        );
+                                    } else {
+                                        spawn_library_button(
+                                            actions,
+                                            "Paste",
+                                            BlueprintLibraryAction::Paste { index },
+                                            56.0,
+                                        );
+                                        spawn_library_button(
+                                            actions,
+                                            "Rename",
+                                            BlueprintLibraryAction::Rename { index },
+                                            56.0,
+                                        );
+                                        spawn_library_button(
+                                            actions,
+                                            "Delete",
+                                            BlueprintLibraryAction::Delete { index },
+                                            56.0,
+                                        );
+                                    }
+                                });
                         });
+                    row_node.spawn((
+                        Text::new(row.materials.clone()),
+                        TextFont::from_font_size(11.0),
+                        TextColor(Color::srgb(0.68, 0.70, 0.66)),
+                    ));
                 });
         }
     });
