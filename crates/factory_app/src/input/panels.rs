@@ -13,6 +13,8 @@ use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapLayer, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::SaveLoadWindowState;
+use crate::simulation::SimCommandRequest;
+use crate::ui::enemy_settings::EnemySettingsWindowState;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
     fullscreen_map_display_size, fullscreen_map_image_size,
@@ -20,6 +22,7 @@ use crate::ui::map_view::{
 use crate::ui::resources::{
     CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
+use factory_sim::SimCommand;
 
 #[derive(SystemParam)]
 pub(crate) struct WorldBlockingWindows<'w> {
@@ -27,6 +30,7 @@ pub(crate) struct WorldBlockingWindows<'w> {
     stats: Res<'w, ProductionStatsWindowState>,
     crafting: Res<'w, CraftingWindowState>,
     audio_settings: Res<'w, AudioSettingsWindowState>,
+    enemy_settings: Res<'w, EnemySettingsWindowState>,
     save_load: Res<'w, SaveLoadWindowState>,
     build_menu: Res<'w, BuildMenuState>,
     blueprint_library: Res<'w, BlueprintLibraryWindowState>,
@@ -39,6 +43,7 @@ impl WorldBlockingWindows<'_> {
             self.stats.open,
             self.crafting.open,
             self.audio_settings.open,
+            self.enemy_settings.open,
             self.save_load.open,
             self.build_menu.open,
             self.blueprint_library.open,
@@ -46,11 +51,13 @@ impl WorldBlockingWindows<'_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn world_blocking_windows_open(
     map_open: bool,
     stats_open: bool,
     crafting_open: bool,
     audio_settings_open: bool,
+    enemy_settings_open: bool,
     save_load_open: bool,
     build_menu_open: bool,
     blueprint_library_open: bool,
@@ -59,6 +66,7 @@ fn world_blocking_windows_open(
         || stats_open
         || crafting_open
         || audio_settings_open
+        || enemy_settings_open
         || save_load_open
         || build_menu_open
         || blueprint_library_open
@@ -81,6 +89,7 @@ pub(crate) struct PanelInputResources<'w> {
     stats: ResMut<'w, ProductionStatsWindowState>,
     crafting: ResMut<'w, CraftingWindowState>,
     audio_settings: ResMut<'w, AudioSettingsWindowState>,
+    enemy_settings: ResMut<'w, EnemySettingsWindowState>,
     technology: ResMut<'w, TechnologyWindowState>,
     save_load: ResMut<'w, SaveLoadWindowState>,
     build_menu: ResMut<'w, BuildMenuState>,
@@ -113,6 +122,7 @@ pub(crate) fn handle_panel_input(
             resources.stats.open,
             resources.crafting.open,
             resources.audio_settings.open,
+            resources.enemy_settings.open,
             resources.save_load.open,
             resources.build_menu.open,
             resources.blueprint_library.open,
@@ -154,9 +164,18 @@ pub(crate) fn handle_panel_input(
             resources.open_container.entity_id = None;
         }
     }
+    if keyboard.just_pressed(KeyCode::KeyN) {
+        resources.enemy_settings.open = !resources.enemy_settings.open;
+        if resources.enemy_settings.open {
+            resources.build_state.selected = None;
+            resources.open_container.entity_id = None;
+        }
+    }
     if keyboard.just_pressed(KeyCode::KeyB) && control_held {
-        resources.blueprint_library.open = !resources.blueprint_library.open;
         if resources.blueprint_library.open {
+            resources.blueprint_library.close();
+        } else {
+            resources.blueprint_library.open = true;
             resources.build_state.selected = None;
             resources.open_container.entity_id = None;
         }
@@ -184,11 +203,18 @@ pub(crate) fn handle_panel_input(
         } else if resources.audio_settings.open {
             resources.audio_settings.open = false;
             resources.input_state.escape_consumed = true;
+        } else if resources.enemy_settings.open {
+            resources.enemy_settings.open = false;
+            resources.input_state.escape_consumed = true;
         } else if resources.technology.open {
             resources.technology.open = false;
             resources.input_state.escape_consumed = true;
         } else if resources.blueprint_library.open {
-            resources.blueprint_library.open = false;
+            if resources.blueprint_library.editing_index.is_some() {
+                resources.blueprint_library.cancel_rename();
+            } else {
+                resources.blueprint_library.close();
+            }
             resources.input_state.escape_consumed = true;
         } else if resources.open_container.entity_id.is_some() {
             resources.open_container.entity_id = None;
@@ -215,6 +241,7 @@ pub(crate) fn handle_panel_input(
         resources.stats.open,
         resources.crafting.open,
         resources.audio_settings.open,
+        resources.enemy_settings.open,
         resources.save_load.open,
         resources.build_menu.open,
         resources.blueprint_library.open,
@@ -252,6 +279,52 @@ pub(crate) fn handle_build_menu_search_input(
             menu.search_query
                 .extend(text.chars().filter(|character| !character.is_control()));
             menu.message = None;
+        }
+    }
+}
+
+/// Text entry for the blueprint library's in-progress rename. Escape is left
+/// unhandled here; it is handled by [`handle_panel_input`]'s escape chain so
+/// cancelling a rename cooperates with the rest of the window priorities.
+pub(crate) fn handle_blueprint_rename_input(
+    mut inputs: MessageReader<KeyboardInput>,
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut window: ResMut<BlueprintLibraryWindowState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    let Some(index) = window.editing_index else {
+        return;
+    };
+    let control_held = keyboard.as_deref().is_some_and(|keys| {
+        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
+    });
+    for input in inputs.read() {
+        if input.state != ButtonState::Pressed || input.key_code == KeyCode::Escape {
+            continue;
+        }
+        match input.key_code {
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let name = window.rename_buffer.trim().to_string();
+                if !name.is_empty() {
+                    commands.write(SimCommandRequest(SimCommand::RenameBlueprint {
+                        index,
+                        name,
+                    }));
+                }
+                window.cancel_rename();
+            }
+            KeyCode::Backspace if control_held => remove_previous_word(&mut window.rename_buffer),
+            KeyCode::Backspace => {
+                window.rename_buffer.pop();
+            }
+            _ if !control_held => {
+                if let Some(text) = &input.text {
+                    window
+                        .rename_buffer
+                        .extend(text.chars().filter(|character| !character.is_control()));
+                }
+            }
+            _ => {}
         }
     }
 }

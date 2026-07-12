@@ -8,7 +8,7 @@ use crate::save_load::{
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
-use crate::world_setup::AppMode;
+use crate::world_setup::{AppMode, WorldSetupState};
 
 #[derive(Component)]
 pub struct SaveLoadTabButton {
@@ -125,6 +125,7 @@ pub(crate) fn handle_new_world_button(
     mut buttons: NewWorldQuery,
     mut confirmation: ResMut<NewWorldConfirmation>,
     mut window: ResMut<SaveLoadWindowState>,
+    mut setup: ResMut<WorldSetupState>,
     mut next: ResMut<NextState<AppMode>>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
@@ -136,6 +137,9 @@ pub(crate) fn handle_new_world_button(
         if confirmation.awaiting_confirmation {
             window.open = false;
             confirmation.awaiting_confirmation = false;
+            // Coming from a running game: the setup screen offers a way back
+            // that keeps the current session.
+            setup.allow_cancel = true;
             next.set(AppMode::WorldSetup);
         } else {
             confirmation.awaiting_confirmation = true;

@@ -31,13 +31,21 @@ impl Simulation {
         self.config
     }
 
+    /// Threat events with a sequence beyond `sequence`, oldest first. The log
+    /// is ordered, so the scan starts at the cursor instead of walking the
+    /// whole log.
     pub fn threat_events_after(&self, sequence: u64) -> Vec<ThreatEvent> {
-        self.enemies
+        let start = self
+            .enemies
             .threat_events
-            .iter()
-            .copied()
-            .filter(|event| event.sequence > sequence)
-            .collect()
+            .partition_point(|event| event.sequence <= sequence);
+        self.enemies.threat_events.range(start..).copied().collect()
+    }
+
+    /// Sequence of the most recently emitted threat event; the starting
+    /// cursor for observers that only care about events from now on.
+    pub fn latest_threat_sequence(&self) -> u64 {
+        self.enemies.threat_sequence
     }
 
     pub fn threat_snapshot(&self) -> ThreatSnapshot {
@@ -119,15 +127,19 @@ impl Simulation {
             }
         }
         for raid in self.enemies.raids.values() {
+            // Only reveal a raid's exact position once it marches into
+            // charted territory; until then the map shows its home sector.
             let member_location = raid
                 .members
                 .iter()
                 .next()
                 .and_then(|id| self.enemies.enemies.get(id))
-                .map(|unit| ThreatLocation::Exact {
-                    x: unit.tile().0,
-                    y: unit.tile().1,
-                });
+                .map(|unit| unit.tile())
+                .filter(|&(x, y)| {
+                    ChunkCoord::from_tile(x, y)
+                        .is_some_and(|chunk| self.chart.revealed_chunks.contains(&chunk))
+                })
+                .map(|(x, y)| ThreatLocation::Exact { x, y });
             let Some(location) = member_location.or_else(|| {
                 self.enemies
                     .bases
@@ -158,6 +170,10 @@ impl Simulation {
         snapshot
     }
 
+    /// The catalog's enemy gameplay tuning. Catalog loading rejects enemy
+    /// content (spawner prototypes or base generation) without this section,
+    /// so the `None` early-returns downstream only fire for catalogs that
+    /// genuinely have no enemies.
     fn gameplay(&self) -> Option<&EnemyGameplayConfig> {
         self.world.prototypes.enemy_gameplay.as_ref()
     }
@@ -175,17 +191,17 @@ impl Simulation {
             return;
         };
         for base in self.enemies.bases.values_mut() {
-            base.next_raid_tick = self.tick
-                + scaled_interval(
-                    gameplay.raid_cooldown_ticks,
-                    settings.raid_frequency_percent,
-                );
+            base.next_raid_tick = next_scaled_tick(
+                self.tick,
+                gameplay.raid_cooldown_ticks,
+                settings.raid_frequency_percent,
+            );
             base.next_expansion_tick = if settings.expansion {
-                self.tick
-                    + scaled_interval(
-                        gameplay.expansion_interval_ticks,
-                        settings.expansion_frequency_percent,
-                    )
+                next_scaled_tick(
+                    self.tick,
+                    gameplay.expansion_interval_ticks,
+                    settings.expansion_frequency_percent,
+                )
             } else {
                 u64::MAX
             };
@@ -195,6 +211,8 @@ impl Simulation {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
                         unit.mode = EnemyMode::Guard;
                         unit.mission = EnemyMission::Guard;
+                        unit.target = None;
+                        unit.path.clear();
                     }
                 }
                 base.staging_started_tick = None;
@@ -285,12 +303,16 @@ impl Simulation {
                 attack_budget_micro: 0,
                 staged_units: BTreeSet::new(),
                 staging_started_tick: None,
-                next_raid_tick: self.tick,
-                next_expansion_tick: self.tick
-                    + scaled_interval(
-                        gameplay.expansion_interval_ticks,
-                        self.config.runtime.expansion_frequency_percent,
-                    ),
+                next_raid_tick: next_scaled_tick(
+                    self.tick,
+                    gameplay.raid_cooldown_ticks,
+                    self.config.runtime.raid_frequency_percent,
+                ),
+                next_expansion_tick: next_scaled_tick(
+                    self.tick,
+                    gameplay.expansion_interval_ticks,
+                    self.config.runtime.expansion_frequency_percent,
+                ),
                 next_growth_tick: self.tick + u64::from(gameplay.outpost_growth_interval_ticks),
                 pollution_contact: false,
             },
@@ -380,11 +402,14 @@ impl Simulation {
                 continue;
             };
             let cap = u64::from(config.unit_spawn_pollution_cost_milli) * 1000 * raid_size * 10;
+            // Count what sibling spawners of this base already absorbed this
+            // pass, so a multi-spawner base cannot overshoot its budget cap.
             let budget = self
                 .enemies
                 .bases
                 .get(&base_id)
-                .map_or(0, |base| base.attack_budget_micro);
+                .map_or(0, |base| base.attack_budget_micro)
+                .saturating_add(absorbed_by_base.get(&base_id).copied().unwrap_or(0));
             let absorption = u64::from(config.pollution_absorption_per_tick_milli)
                 * 1000
                 * u64::from(self.config.runtime.pollution_sensitivity_percent)
@@ -395,7 +420,6 @@ impl Simulation {
                 0
             };
             *absorbed_by_base.entry(base_id).or_default() += absorbed;
-            state.absorbed_pollution_micro = 0;
 
             let alive = alive_by_spawner.get(&spawner_id).copied().unwrap_or(0);
             let guards = guards_by_spawner.get(&spawner_id).copied().unwrap_or(0);
@@ -653,13 +677,19 @@ impl Simulation {
                     attack_budget_micro: 0,
                     staged_units: BTreeSet::new(),
                     staging_started_tick: None,
-                    next_raid_tick: self.tick,
+                    next_raid_tick: gameplay.map_or(u64::MAX, |cfg| {
+                        next_scaled_tick(
+                            self.tick,
+                            cfg.raid_cooldown_ticks,
+                            self.config.runtime.raid_frequency_percent,
+                        )
+                    }),
                     next_expansion_tick: gameplay.map_or(u64::MAX, |cfg| {
-                        self.tick
-                            + scaled_interval(
-                                cfg.expansion_interval_ticks,
-                                self.config.runtime.expansion_frequency_percent,
-                            )
+                        next_scaled_tick(
+                            self.tick,
+                            cfg.expansion_interval_ticks,
+                            self.config.runtime.expansion_frequency_percent,
+                        )
                     }),
                     next_growth_tick: gameplay.map_or(u64::MAX, |cfg| {
                         self.tick + u64::from(cfg.outpost_growth_interval_ticks)
@@ -684,10 +714,12 @@ impl Simulation {
         let Some(base_id) = self.enemies.spawner_bases.remove(&entity_id) else {
             return;
         };
-        let destroyed = self
+        if let Some(destroyed) = self
             .gameplay()
-            .map_or(100, |cfg| cfg.evolution_spawner_destroyed_points);
-        self.add_evolution_points(u32::from(destroyed));
+            .map(|cfg| cfg.evolution_spawner_destroyed_points)
+        {
+            self.add_evolution_points(u32::from(destroyed));
+        }
         let empty = self.enemies.bases.get_mut(&base_id).is_some_and(|base| {
             base.spawners.remove(&entity_id);
             base.spawners.is_empty()
@@ -723,13 +755,17 @@ impl Simulation {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
                         unit.mission = EnemyMission::Guard;
                         unit.mode = EnemyMode::Guard;
+                        unit.target = None;
+                        unit.path.clear();
                     }
                 }
             }
-            let bonus = self
+            if let Some(bonus) = self
                 .gameplay()
-                .map_or(200, |cfg| cfg.evolution_colony_destroyed_points);
-            self.add_evolution_points(u32::from(bonus));
+                .map(|cfg| cfg.evolution_colony_destroyed_points)
+            {
+                self.add_evolution_points(u32::from(bonus));
+            }
             self.enemies.bases.remove(&base_id);
             self.emit_event(
                 ThreatEventKind::BaseDestroyed,
@@ -872,11 +908,11 @@ impl Simulation {
                     .get_mut(&base_id)
                     .expect("launch base must exist");
                 base.staging_started_tick = None;
-                base.next_raid_tick = self.tick
-                    + scaled_interval(
-                        cfg.raid_cooldown_ticks,
-                        self.config.runtime.raid_frequency_percent,
-                    );
+                base.next_raid_tick = next_scaled_tick(
+                    self.tick,
+                    cfg.raid_cooldown_ticks,
+                    self.config.runtime.raid_frequency_percent,
+                );
                 std::mem::take(&mut base.staged_units)
             };
             for id in &members {
@@ -903,6 +939,11 @@ impl Simulation {
         for base in self.enemies.bases.values_mut() {
             base.staged_units
                 .retain(|id| self.enemies.enemies.contains_key(id));
+            // A wiped-out staging wave must not leave its timer behind, or
+            // the next wave would skip RaidPreparing and time out instantly.
+            if base.staged_units.is_empty() {
+                base.staging_started_tick = None;
+            }
         }
         self.enemies.raids.retain(|_, raid| {
             raid.members
@@ -948,11 +989,11 @@ impl Simulation {
                 if let Some(destination) = self.find_expansion_site(base_id, cfg) {
                     self.dispatch_expansion(base_id, destination);
                     if let Some(base) = self.enemies.bases.get_mut(&base_id) {
-                        base.next_expansion_tick = self.tick
-                            + scaled_interval(
-                                cfg.expansion_interval_ticks,
-                                self.config.runtime.expansion_frequency_percent,
-                            );
+                        base.next_expansion_tick = next_scaled_tick(
+                            self.tick,
+                            cfg.expansion_interval_ticks,
+                            self.config.runtime.expansion_frequency_percent,
+                        );
                     }
                 } else if let Some(base) = self.enemies.bases.get_mut(&base_id) {
                     base.next_expansion_tick = self.tick + u64::from(cfg.expansion_retry_ticks);
@@ -1217,12 +1258,16 @@ impl Simulation {
                     attack_budget_micro: 0,
                     staged_units: BTreeSet::new(),
                     staging_started_tick: None,
-                    next_raid_tick: self.tick,
-                    next_expansion_tick: self.tick
-                        + scaled_interval(
-                            cfg.expansion_interval_ticks,
-                            self.config.runtime.expansion_frequency_percent,
-                        ),
+                    next_raid_tick: next_scaled_tick(
+                        self.tick,
+                        cfg.raid_cooldown_ticks,
+                        self.config.runtime.raid_frequency_percent,
+                    ),
+                    next_expansion_tick: next_scaled_tick(
+                        self.tick,
+                        cfg.expansion_interval_ticks,
+                        self.config.runtime.expansion_frequency_percent,
+                    ),
                     next_growth_tick: self.tick + u64::from(cfg.outpost_growth_interval_ticks),
                     pollution_contact: false,
                 },
@@ -1260,14 +1305,17 @@ impl Simulation {
     }
 }
 
-fn scaled_interval(base_ticks: u32, percent: u16) -> u64 {
+/// Next tick a frequency-scaled schedule fires: `base_ticks` stretched by the
+/// inverse of `percent`. Owns the "never" semantics — a zero percent (and any
+/// overflow) saturates to `u64::MAX` instead of wrapping past `tick`.
+fn next_scaled_tick(tick: u64, base_ticks: u32, percent: u16) -> u64 {
     if percent == 0 {
-        u64::MAX
-    } else {
-        (u64::from(base_ticks) * 100)
-            .div_ceil(u64::from(percent))
-            .max(1)
+        return u64::MAX;
     }
+    let interval = (u64::from(base_ticks) * 100)
+        .div_ceil(u64::from(percent))
+        .max(1);
+    tick.saturating_add(interval)
 }
 
 fn scale_stat(base: u32, strength_percent: u32, evolution_percent: u32) -> u32 {
@@ -1771,6 +1819,57 @@ mod enemy_feature_tests {
         assert_eq!(sim.enemy_settings().world, world);
         assert_eq!(sim.enemy_settings().runtime, runtime);
         assert_eq!(sim.enemy_settings().preset, EnemyDifficultyPreset::Custom);
+    }
+
+    #[test]
+    fn zero_frequency_percent_schedules_never_without_overflow() {
+        assert_eq!(next_scaled_tick(u64::MAX - 5, 3_600, 0), u64::MAX);
+        assert_eq!(next_scaled_tick(u64::MAX - 5, 3_600, 100), u64::MAX);
+        assert_eq!(next_scaled_tick(100, 3_600, 100), 3_700);
+        assert_eq!(next_scaled_tick(100, 3_600, 200), 1_900);
+    }
+
+    #[test]
+    fn peaceful_runtime_settings_never_schedule_raids_on_existing_bases() {
+        let mut sim = Simulation::new_test_world(123);
+        let base_id = EnemyBaseId::new(1);
+        sim.enemies.bases.insert(
+            base_id,
+            EnemyBase {
+                id: base_id,
+                anchor: ChunkCoord { x: 4, y: 4 },
+                spawners: BTreeSet::new(),
+                creation_tick: 0,
+                attack_budget_micro: 0,
+                staged_units: BTreeSet::new(),
+                staging_started_tick: None,
+                next_raid_tick: 0,
+                next_expansion_tick: 0,
+                next_growth_tick: 0,
+                pollution_contact: false,
+            },
+        );
+        let runtime = EnemyDifficultyPreset::Peaceful.config().runtime;
+        sim.apply_command(&SimCommand::SetEnemyRuntimeSettings(runtime))
+            .unwrap();
+        let base = &sim.enemies.bases[&base_id];
+        assert_eq!(base.next_raid_tick, u64::MAX);
+        assert_eq!(base.next_expansion_tick, u64::MAX);
+    }
+
+    #[test]
+    fn new_bases_never_schedule_raids_at_zero_raid_frequency() {
+        let mut sim = Simulation::new_test_world(123);
+        let mut runtime = sim.enemy_settings().runtime;
+        runtime.raid_frequency_percent = 0;
+        sim.apply_command(&SimCommand::SetEnemyRuntimeSettings(runtime))
+            .unwrap();
+
+        let spawner = EntityId::new(9_999);
+        sim.on_enemy_spawner_placed(spawner, 40, 40);
+
+        let base_id = sim.enemies.spawner_bases[&spawner];
+        assert_eq!(sim.enemies.bases[&base_id].next_raid_tick, u64::MAX);
     }
 
     #[test]

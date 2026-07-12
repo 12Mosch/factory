@@ -1,8 +1,11 @@
 use bevy::prelude::*;
 
-use super::AppSet;
-use crate::build::resources::{BlueprintLibraryWindowState, PlannerState};
+use super::{AppSet, InGameSet};
+use crate::build::resources::{
+    BlueprintLibraryWindowState, PastePlacementPreviewState, PlannerState,
+};
 use crate::input::build::handle_build_world_click;
+use crate::input::panels::handle_blueprint_rename_input;
 use crate::input::planner::{
     handle_ghost_click, handle_paste_click, handle_planner_drag, handle_planner_keys,
 };
@@ -22,6 +25,7 @@ impl Plugin for ConstructionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlannerState>()
             .init_resource::<BlueprintLibraryWindowState>()
+            .init_resource::<PastePlacementPreviewState>()
             .init_resource::<ConstructionRenderState>()
             .add_systems(Startup, spawn_planner_selection_rect)
             .add_systems(
@@ -44,11 +48,15 @@ impl Plugin for ConstructionPlugin {
                 Update,
                 (
                     handle_blueprint_library_buttons.in_set(AppSet::UiInteraction),
-                    sync_blueprint_library_window.after(handle_blueprint_library_buttons),
+                    handle_blueprint_rename_input
+                        .in_set(AppSet::UiInteraction)
+                        .after(handle_blueprint_library_buttons),
+                    sync_blueprint_library_window.after(handle_blueprint_rename_input),
                     sync_construction_rendering
                         .in_set(AppSet::RenderSync)
                         .after(AppSet::VisibleEntities),
-                ),
+                )
+                    .in_set(InGameSet),
             );
     }
 }

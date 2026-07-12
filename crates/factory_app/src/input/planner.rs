@@ -85,6 +85,10 @@ pub(crate) fn handle_planner_keys(
         return;
     };
 
+    if state.planner.tool == PlannerTool::Paste && keyboard.just_pressed(KeyCode::KeyR) {
+        state.planner.rotation_steps = (state.planner.rotation_steps + 1) % 4;
+    }
+
     let requested = if control_pressed(&keyboard) && keyboard.just_pressed(KeyCode::KeyC) {
         Some(PlannerTool::Copy)
     } else if control_pressed(&keyboard) && keyboard.just_pressed(KeyCode::KeyV) {
@@ -250,6 +254,7 @@ pub(crate) fn handle_planner_drag(
 pub(crate) struct PasteClickState<'w> {
     input_state: Option<Res<'w, AppInputState>>,
     technology_window: Option<Res<'w, TechnologyWindowState>>,
+    sim: Res<'w, SimResource>,
     planner: Res<'w, PlannerState>,
     commands: MessageWriter<'w, SimCommandRequest>,
 }
@@ -282,11 +287,20 @@ pub(crate) fn handle_paste_click(
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
         return;
     };
+    let entities = {
+        let sim = state.sim.read();
+        let catalog = sim.catalog();
+        factory_sim::construction::rotate_blueprint_entities(
+            &blueprint.entities,
+            state.planner.rotation_steps,
+            |prototype_id| crate::utils::prototype_footprint_size(catalog, prototype_id),
+        )
+    };
 
     state
         .commands
         .write(SimCommandRequest(SimCommand::PasteBlueprint {
-            entities: blueprint.entities.clone(),
+            entities,
             x,
             y,
         }));

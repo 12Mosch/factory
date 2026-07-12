@@ -400,6 +400,20 @@ pub(crate) fn delete_blueprint(
     Ok(sim.construction.blueprints.remove(index))
 }
 
+pub(crate) fn rename_blueprint(
+    sim: &mut Simulation,
+    index: usize,
+    name: String,
+) -> Result<(), ConstructionError> {
+    let blueprint = sim
+        .construction
+        .blueprints
+        .get_mut(index)
+        .ok_or(ConstructionError::MissingBlueprint { index })?;
+    blueprint.name = name;
+    Ok(())
+}
+
 /// Places one ghost per blueprint entry with the blueprint origin at
 /// `(x, y)`. Entries that cannot be placed (occupied tiles, invalid terrain,
 /// locked or unknown prototypes) are skipped. Returns `(placed, skipped)`.

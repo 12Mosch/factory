@@ -130,16 +130,45 @@ pub struct PlannerState {
     pub tool: PlannerTool,
     pub drag_start: Option<(WorldTileCoord, WorldTileCoord)>,
     pub clipboard: Option<Blueprint>,
+    /// Paste-time-only rotation applied to the clipboard blueprint before
+    /// preview/paste, in 90-degree clockwise steps (0..=3). Never persisted
+    /// to the saved blueprint.
+    pub rotation_steps: u8,
 }
 
 impl PlannerState {
     pub fn set_tool(&mut self, tool: PlannerTool) {
         self.tool = tool;
         self.drag_start = None;
+        self.rotation_steps = 0;
     }
 }
 
 #[derive(Resource, Default)]
 pub struct BlueprintLibraryWindowState {
     pub open: bool,
+    /// Index of the blueprint currently being renamed, if any.
+    pub editing_index: Option<usize>,
+    pub rename_buffer: String,
+}
+
+impl BlueprintLibraryWindowState {
+    pub fn close(&mut self) {
+        self.open = false;
+        self.cancel_rename();
+    }
+
+    /// Discards any in-progress rename.
+    pub fn cancel_rename(&mut self) {
+        self.editing_index = None;
+        self.rename_buffer.clear();
+    }
+}
+
+/// Live per-entity placement issues for the blueprint currently being
+/// previewed under the cursor while [`PlannerTool::Paste`] is active.
+#[derive(Resource, Default)]
+pub struct PastePlacementPreviewState {
+    pub active: bool,
+    pub issues: Vec<factory_sim::BuildPlacementIssue>,
 }

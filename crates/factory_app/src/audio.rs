@@ -12,6 +12,7 @@ use crate::rendering::resources::VisibleEntityIds;
 use crate::rendering::transforms::entity_translation;
 use crate::resources::SimResource;
 use crate::save_load::SaveLoadConfig;
+use crate::threat_events::ThreatEventCursor;
 
 const DEFAULT_VOLUME: f32 = 0.65;
 const VOLUME_STEP: f32 = 0.10;
@@ -118,9 +119,7 @@ pub struct ResearchAudioObserver {
 
 #[derive(Resource, Default)]
 pub struct ThreatAudioObserver {
-    initialized: bool,
-    cursor: u64,
-    reload_token: u64,
+    cursor: ThreatEventCursor,
 }
 
 #[derive(Resource, Default)]
@@ -357,27 +356,14 @@ pub(crate) fn observe_threat_audio(
     mut sounds: MessageWriter<SoundEvent>,
 ) {
     let reload_token = reload.as_deref().map_or(0, |token| token.value);
-    let simulation = sim.read();
-    let events = simulation.threat_events_after(0);
-    if !observer.initialized || reload_token != observer.reload_token {
-        observer.initialized = true;
-        observer.reload_token = reload_token;
-        observer.cursor = events.last().map_or(0, |event| event.sequence);
-        return;
-    }
-    for event in events
-        .iter()
-        .filter(|event| event.sequence > observer.cursor)
-    {
+    let poll = observer.cursor.poll_new(&sim.read(), reload_token);
+    for event in &poll.events {
         if matches!(
             event.kind,
             ThreatEventKind::RaidLaunched | ThreatEventKind::StructureUnderAttack
         ) {
             sounds.write(SoundEvent::EnemyWarning);
         }
-    }
-    if let Some(event) = events.last() {
-        observer.cursor = event.sequence;
     }
 }
 

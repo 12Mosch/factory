@@ -650,3 +650,38 @@ fn technology_prerequisite_cycles_fail() {
         PrototypeLoadError::TechnologyPrerequisiteCycle { .. }
     ));
 }
+
+#[test]
+fn enemy_spawner_without_enemy_gameplay_section_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"(
+        items: [], recipes: [],
+        entities: [(
+            id: 0, name: "spawner", entity_kind: EnemySpawner,
+            size: (x: 2, y: 2), collision_mask: (layers: ["building"]),
+            max_health: Some(300),
+            enemy_spawner: Some((
+                max_alive_units: 15,
+                guard_units: 3,
+                free_spawn_interval_ticks: 1800,
+                unit_spawn_pollution_cost_milli: 4000,
+                pollution_absorption_per_tick_milli: 20,
+                unit: (
+                    max_health: 30,
+                    damage: 15,
+                    attack_cooldown_ticks: 60,
+                    speed_fixed_per_tick: 40,
+                    aggro_radius_tiles: 12,
+                ),
+            )),
+        )],
+        tiles: [],
+    )"#,
+    )
+    .expect_err("enemy content without enemy_gameplay should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::MissingEnemyGameplayConfig
+    ));
+}

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::AppSet;
+use super::{AppSet, InGameSet};
 use crate::input::build::handle_build_world_click;
 use crate::interaction::command_feedback::{
     ItemGainFeedback, expire_item_gain_feedback, handle_sim_command_results,
@@ -18,6 +18,9 @@ use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{
     DebugOverlayVisible, apply_debug_overlay_visibility, setup_debug_overlay, toggle_debug_overlay,
     update_debug_overlay, update_ups_stats,
+};
+use crate::ui::enemy_settings::{
+    EnemySettingsWindowState, handle_enemy_settings_buttons, sync_enemy_settings_window,
 };
 use crate::ui::inventory_panel::{
     handle_container_slot_clicks, update_container_slot_text,
@@ -59,6 +62,7 @@ impl Plugin for UiPlugin {
             .init_resource::<CraftingWindowState>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<ObjectivesPanelState>()
+            .init_resource::<EnemySettingsWindowState>()
             .init_resource::<ThreatUiState>()
             .add_systems(
                 Startup,
@@ -106,6 +110,8 @@ impl Plugin for UiPlugin {
                     sync_objectives_panel,
                     handle_threat_alert_clicks.in_set(AppSet::UiInteraction),
                     sync_threat_ui.after(handle_threat_alert_clicks),
+                    handle_enemy_settings_buttons.in_set(AppSet::UiInteraction),
+                    sync_enemy_settings_window.after(handle_enemy_settings_buttons),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
                     handle_manual_crafting_tab_buttons.in_set(AppSet::UiInteraction),
@@ -113,7 +119,8 @@ impl Plugin for UiPlugin {
                     sync_manual_crafting_panel
                         .after(handle_manual_crafting_tab_buttons)
                         .after(handle_manual_crafting_recipe_buttons),
-                ),
+                )
+                    .in_set(InGameSet),
             )
             .add_systems(
                 Update,
@@ -123,7 +130,8 @@ impl Plugin for UiPlugin {
                         .after(sync_container_window),
                     update_assembler_detail_text.after(sync_container_window),
                     update_assembler_recipe_button_colors.after(sync_container_window),
-                ),
+                )
+                    .in_set(InGameSet),
             );
     }
 }

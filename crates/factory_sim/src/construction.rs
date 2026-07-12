@@ -72,13 +72,193 @@ impl Blueprint {
     /// Tile extents of the blueprint entities' origins, as `(width, height)`.
     /// Entity footprints may extend further right/up than the origin extents.
     pub fn origin_extents(&self) -> (i32, i32) {
-        let mut width = 0;
-        let mut height = 0;
-        for entity in &self.entities {
-            width = width.max(entity.dx + 1);
-            height = height.max(entity.dy + 1);
+        blueprint_entity_extents(&self.entities)
+    }
+}
+
+fn blueprint_entity_extents(entities: &[BlueprintEntity]) -> (i32, i32) {
+    let mut width = 0;
+    let mut height = 0;
+    for entity in entities {
+        width = width.max(entity.dx + 1);
+        height = height.max(entity.dy + 1);
+    }
+    (width, height)
+}
+
+/// Rotates blueprint entity offsets and directions 90 degrees clockwise
+/// around their occupied-tile bounding box, `steps` times (`steps % 4`).
+/// `base_size` supplies each prototype's unrotated `(width, height)`
+/// footprint; rotation happens in footprint space so mixed-size blueprints
+/// keep their relative layout (each entity's occupied rectangle is rotated
+/// and its origin re-anchored at the rectangle's new minimum corner). Pure
+/// and idempotent after four steps. This is paste-time-only: callers
+/// recompute it from the canonical (unrotated) blueprint for preview and
+/// paste alike; it is never written back into a saved [`Blueprint`].
+pub fn rotate_blueprint_entities(
+    entities: &[BlueprintEntity],
+    steps: u8,
+    base_size: impl Fn(EntityPrototypeId) -> (i32, i32),
+) -> Vec<BlueprintEntity> {
+    let mut current = entities.to_vec();
+    for _ in 0..(steps % 4) {
+        current = rotate_blueprint_entities_once(&current, &base_size);
+    }
+    current
+}
+
+/// An entity's occupied `(width, height)` in blueprint tiles: the prototype's
+/// base size, swapped for east/west just like [`EntityFootprint`] placement.
+fn oriented_footprint_size(
+    entity: &BlueprintEntity,
+    base_size: impl Fn(EntityPrototypeId) -> (i32, i32),
+) -> (i32, i32) {
+    let (width, height) = base_size(entity.prototype_id);
+    match entity.direction {
+        Direction::North | Direction::South => (width, height),
+        Direction::East | Direction::West => (height, width),
+    }
+}
+
+fn rotate_blueprint_entities_once(
+    entities: &[BlueprintEntity],
+    base_size: impl Fn(EntityPrototypeId) -> (i32, i32) + Copy,
+) -> Vec<BlueprintEntity> {
+    // Width of the occupied-tile bounding box, not just the origin extents:
+    // footprints reach right of their origins, and a rectangle's new origin
+    // after rotation depends on how far its right edge sat from that box.
+    let width = entities
+        .iter()
+        .map(|entity| entity.dx + oriented_footprint_size(entity, base_size).0)
+        .max()
+        .unwrap_or(0);
+    entities
+        .iter()
+        .map(|entity| {
+            let (entity_width, _) = oriented_footprint_size(entity, base_size);
+            BlueprintEntity {
+                prototype_id: entity.prototype_id,
+                dx: entity.dy,
+                dy: width - entity.dx - entity_width,
+                direction: rotate_direction_clockwise(entity.direction),
+                recipe: entity.recipe,
+            }
+        })
+        .collect()
+}
+
+fn rotate_direction_clockwise(direction: Direction) -> Direction {
+    match direction {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entity(prototype_id: u16, dx: i32, dy: i32, direction: Direction) -> BlueprintEntity {
+        BlueprintEntity {
+            prototype_id: EntityPrototypeId::new(prototype_id),
+            dx,
+            dy,
+            direction,
+            recipe: None,
         }
-        (width, height)
+    }
+
+    /// Occupied blueprint tiles of every entity, for overlap and layout
+    /// assertions that hold regardless of how origins move.
+    fn occupied_tiles(
+        entities: &[BlueprintEntity],
+        base_size: impl Fn(EntityPrototypeId) -> (i32, i32) + Copy,
+    ) -> Vec<(i32, i32)> {
+        let mut tiles = Vec::new();
+        for entity in entities {
+            let (width, height) = oriented_footprint_size(entity, base_size);
+            for dy in 0..height {
+                for dx in 0..width {
+                    tiles.push((entity.dx + dx, entity.dy + dy));
+                }
+            }
+        }
+        tiles.sort_unstable();
+        tiles
+    }
+
+    #[test]
+    fn four_rotations_return_to_the_original_blueprint() {
+        let entities = vec![
+            entity(0, 0, 0, Direction::North),
+            entity(1, 2, 0, Direction::East),
+            entity(2, 1, 3, Direction::South),
+        ];
+
+        let rotated = rotate_blueprint_entities(&entities, 4, |_| (1, 1));
+
+        assert_eq!(rotated, entities);
+    }
+
+    #[test]
+    fn rotating_a_vertical_bar_matches_expected_offsets_and_directions() {
+        let entities = vec![
+            entity(0, 0, 0, Direction::North),
+            entity(0, 0, 1, Direction::South),
+        ];
+
+        let rotated = rotate_blueprint_entities(&entities, 1, |_| (1, 1));
+
+        assert_eq!(
+            rotated,
+            vec![
+                entity(0, 0, 0, Direction::East),
+                entity(0, 1, 0, Direction::West),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_size_blueprints_rotate_without_overlaps_or_gaps() {
+        // A 1x1 machine left of a 2x2 furnace, plus a 1x2 belt below them.
+        let base_size = |prototype_id: EntityPrototypeId| match prototype_id.raw() {
+            1 => (2, 2),
+            2 => (1, 2),
+            _ => (1, 1),
+        };
+        let entities = vec![
+            entity(0, 0, 0, Direction::North),
+            entity(1, 1, 0, Direction::North),
+            entity(2, 0, 2, Direction::North),
+        ];
+        let original_tiles = occupied_tiles(&entities, base_size);
+        assert_eq!(original_tiles.len(), 7);
+
+        let mut current = entities.clone();
+        for _ in 0..4 {
+            current = rotate_blueprint_entities(&current, 1, base_size);
+            let tiles = occupied_tiles(&current, base_size);
+            let unique: BTreeSet<_> = tiles.iter().copied().collect();
+            assert_eq!(unique.len(), tiles.len(), "rotation must not overlap");
+            assert_eq!(tiles.len(), original_tiles.len());
+        }
+        assert_eq!(current, entities, "four rotations must round-trip");
+    }
+
+    #[test]
+    fn rotating_a_tall_entity_reanchors_its_footprint_origin() {
+        // 1x2 entity facing north occupies (0,0)-(0,1); after one clockwise
+        // step it faces east and must occupy (0,0)-(1,0), not hang past the
+        // bounding box.
+        let base_size = |_| (1, 2);
+        let entities = vec![entity(0, 0, 0, Direction::North)];
+
+        let rotated = rotate_blueprint_entities(&entities, 1, base_size);
+
+        assert_eq!(rotated, vec![entity(0, 0, 0, Direction::East)]);
+        assert_eq!(occupied_tiles(&rotated, base_size), vec![(0, 0), (1, 0)]);
     }
 }
 

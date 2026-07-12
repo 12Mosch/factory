@@ -141,7 +141,8 @@ mod tests {
         // only for intentional format changes.
         // v12: gun turret, enemy spawner, and health state maps joined the
         // registry.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xb651_6127_9811_1adb;
+        // v16: EnemySpawnerState dropped absorbed_pollution_micro.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x0994_95d2_abe6_6160;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -346,7 +347,6 @@ mod tests {
         store.enemy_spawners.insert(
             EntityId::new(17),
             EnemySpawnerState {
-                absorbed_pollution_micro: 987_654,
                 next_free_spawn_tick: 1_800,
             },
         );

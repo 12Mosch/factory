@@ -1,10 +1,16 @@
 use bevy::prelude::*;
-use factory_sim::{CHUNK_SIZE, ThreatEvent, ThreatEventKind, ThreatLocation};
+use factory_sim::{CHUNK_SIZE, ThreatEvent, ThreatEventKind, ThreatLocation, ThreatSnapshot};
 use std::collections::VecDeque;
 
+use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::map::resources::{MapLayer, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
+use crate::threat_events::ThreatEventCursor;
+
+const TICKS_PER_SECOND: u64 = SIM_TICKS_PER_SECOND as u64;
+/// How long an alert card stays on screen before it expires.
+const ALERT_LIFETIME_TICKS: u64 = 10 * TICKS_PER_SECOND;
 
 #[derive(Component)]
 pub struct ThreatPanelText;
@@ -17,10 +23,13 @@ pub struct ThreatAlertCard {
 
 #[derive(Resource, Default)]
 pub struct ThreatUiState {
-    cursor: u64,
-    reload_token: u64,
-    initialized: bool,
+    cursor: ThreatEventCursor,
     cards: VecDeque<ThreatEvent>,
+    /// The cards the alert root's children were last built from; the root is
+    /// only rebuilt when `cards` diverges from this.
+    rendered_cards: VecDeque<ThreatEvent>,
+    /// The snapshot the HUD panel text was last formatted from.
+    rendered_panel: Option<ThreatSnapshot>,
 }
 
 pub fn setup_threat_ui(mut commands: Commands) {
@@ -71,35 +80,32 @@ pub fn sync_threat_ui(
 ) {
     let reload_token = reload.as_deref().map_or(0, |token| token.value);
     let simulation = sim.read();
+
     let snapshot = simulation.threat_snapshot();
-    for mut text in &mut panel {
-        **text = format!("THREAT: {:?}\nEvolution {}% · Pollution {:.1}\n{} active bases · {} staged ({}s)\n{} inbound · {} expansions", snapshot.tier, snapshot.evolution_percent, snapshot.total_pollution_micro as f64 / 1_000_000.0, snapshot.pollution_active_colonies, snapshot.staged_units, snapshot.maximum_launch_countdown_ticks / 60, snapshot.inbound_raids, snapshot.spotted_expansions).to_uppercase();
+    if state.rendered_panel != Some(snapshot) {
+        state.rendered_panel = Some(snapshot);
+        for mut text in &mut panel {
+            **text = format!("THREAT: {:?}\nEvolution {}% · Pollution {:.1}\n{} active bases · {} staged ({}s)\n{} inbound · {} expansions", snapshot.tier, snapshot.evolution_percent, snapshot.total_pollution_micro as f64 / 1_000_000.0, snapshot.pollution_active_colonies, snapshot.staged_units, snapshot.maximum_launch_countdown_ticks / TICKS_PER_SECOND, snapshot.inbound_raids, snapshot.spotted_expansions).to_uppercase();
+        }
     }
-    let events = simulation.threat_events_after(0);
-    if !state.initialized || state.reload_token != reload_token {
-        state.initialized = true;
-        state.reload_token = reload_token;
-        state.cursor = events.last().map_or(0, |event| event.sequence);
+
+    let poll = state.cursor.poll_new(&simulation, reload_token);
+    if poll.reset {
         state.cards.clear();
-    } else {
-        let cursor = state.cursor;
-        for event in events.iter().filter(|event| event.sequence > cursor) {
-            state.cards.push_back(*event);
-        }
-        if let Some(event) = events.last() {
-            state.cursor = event.sequence;
-        }
     }
-    while state
-        .cards
-        .front()
-        .is_some_and(|event| simulation.tick_count().saturating_sub(event.tick) > 600)
-    {
+    state.cards.extend(poll.events);
+    while state.cards.front().is_some_and(|event| {
+        simulation.tick_count().saturating_sub(event.tick) > ALERT_LIFETIME_TICKS
+    }) {
         state.cards.pop_front();
     }
     while state.cards.len() > 3 {
         state.cards.pop_front();
     }
+    if state.cards == state.rendered_cards {
+        return;
+    }
+    state.rendered_cards = state.cards.clone();
     for root in &roots {
         commands
             .entity(root)

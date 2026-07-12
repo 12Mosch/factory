@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::AppSet;
+use super::{AppSet, InGameSet};
 use crate::save_load::{
     AutosaveState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadMetrics,
     SaveLoadStatus, SaveLoadWindowState, handle_save_load_shortcuts, initialize_autosave_tick,
@@ -27,12 +27,14 @@ impl Plugin for SaveLoadPlugin {
             .add_systems(
                 Update,
                 (
-                    handle_save_load_shortcuts,
+                    handle_save_load_shortcuts.in_set(InGameSet),
                     handle_save_load_buttons.in_set(AppSet::UiInteraction),
                     handle_new_world_button.in_set(AppSet::UiInteraction),
-                    run_autosave,
+                    run_autosave.in_set(InGameSet),
+                    // Save workers finish on their own thread; keep joining
+                    // and reporting them even on the world-setup screen.
                     poll_save_jobs,
-                    sync_save_load_window,
+                    sync_save_load_window.in_set(InGameSet),
                 )
                     .chain()
                     // A load applied by `poll_save_jobs` must be reflected by

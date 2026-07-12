@@ -32,12 +32,11 @@ impl Default for GunTurretState {
     }
 }
 
-/// Runtime state of an enemy spawner: pollution it has soaked up from its
-/// chunk (spent on spawning attackers) and the schedule for free guard
-/// spawns.
+/// Runtime state of an enemy spawner: the schedule for free guard spawns.
+/// Pollution absorbed by a spawner is pooled on the owning base's
+/// `attack_budget_micro`, not tracked per spawner.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct EnemySpawnerState {
-    pub absorbed_pollution_micro: u64,
     pub next_free_spawn_tick: u64,
 }
 

@@ -94,6 +94,11 @@ pub enum SimCommand {
     DeleteBlueprint {
         index: usize,
     },
+    /// Renames a saved blueprint in the library.
+    RenameBlueprint {
+        index: usize,
+        name: String,
+    },
     BuildRedScienceResearchFixture,
 }
 
@@ -353,6 +358,11 @@ impl Simulation {
             }
             SimCommand::DeleteBlueprint { index } => {
                 construction_ops::delete_blueprint(self, index)
+                    .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::RenameBlueprint { index, ref name } => {
+                construction_ops::rename_blueprint(self, index, name.clone())
                     .map_err(SimCommandError::Construction)?;
                 Ok(SimCommandEffect::None)
             }

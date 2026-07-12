@@ -80,8 +80,23 @@ struct ValidatedRawCatalog {
 
 impl ValidatedRawCatalog {
     fn from_raw(raw: RawPrototypeCatalog) -> Result<Self, PrototypeLoadError> {
-        if let Some(config) = raw.enemy_gameplay.as_ref() {
-            validate_enemy_gameplay(config)?;
+        match raw.enemy_gameplay.as_ref() {
+            Some(config) => validate_enemy_gameplay(config)?,
+            // A catalog with enemy content but no gameplay section would
+            // silently run without any enemy simulation; fail loudly instead.
+            None => {
+                let has_enemy_content = raw
+                    .entities
+                    .iter()
+                    .any(|entity| entity.enemy_spawner.is_some())
+                    || raw
+                        .world_generation
+                        .as_ref()
+                        .is_some_and(|config| config.enemy_bases.is_some());
+                if has_enemy_content {
+                    return Err(PrototypeLoadError::MissingEnemyGameplayConfig);
+                }
+            }
         }
         let mut items = raw.items;
         validate_group(&mut items, "items")?;
@@ -134,11 +149,13 @@ fn validate_enemy_gameplay(
         && config.expansion_player_spacing_tiles > 0
         && config.evolution_time_interval_ticks > 0
         && config.evolution_time_points > 0
-        && config.evolution_pollution_units_per_point > 0;
+        && config.evolution_pollution_units_per_point > 0
+        && config.evolution_spawner_destroyed_points > 0
+        && config.evolution_colony_destroyed_points > 0;
     if valid {
         Ok(())
     } else {
-        Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+        Err(PrototypeLoadError::InvalidEnemyGameplayConfig {
             detail: "enemy gameplay intervals and ranges must be non-zero and ordered",
         })
     }

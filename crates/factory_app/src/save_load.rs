@@ -396,7 +396,7 @@ pub(crate) fn load_slot(
     match load_from_bytes(&bytes) {
         Ok(loaded) => {
             let tick = loaded.tick_count();
-            let (player_x, player_y) = loaded.player().position_tiles();
+            let player_tile = loaded.player().position_tiles();
             if let Err(error) = state.sim.replace(loaded) {
                 status.message = Some(match error {
                     SimAccessError::Busy => "Cannot load while a save is in progress.".to_string(),
@@ -408,27 +408,7 @@ pub(crate) fn load_slot(
                 status.last_completed_slot = None;
                 return false;
             }
-            // Commands queued against the previous world must not apply to
-            // the loaded one, and results already produced by this frame's
-            // fixed tick (which ran before this `Update` system) must not be
-            // read as feedback for the loaded world either.
-            state.pending_commands.clear();
-            state.pending_results.clear();
-            state.command_backlog.0.clear();
-            state.build_state.selected = None;
-            state.build_state.last_status = Default::default();
-            state.open_container.entity_id = None;
-            state.window.open = false;
-            state.autosave.last_autosave_tick = tick;
-            *state.map_cache = MapTextureCache::default();
-            state.map_uploads.commands.clear();
-            state.map_view.center_tile = Vec2::new(player_x, player_y);
-            state.map_view.zoom = 1.0;
-            state.map_view.follow_player = true;
-            *state.resource_cache = ResourceRenderCache::default();
-            *state.visible_entity_ids = VisibleEntityIds::default();
-            state.reload_token.value = state.reload_token.value.wrapping_add(1);
-            state.next_mode.set(AppMode::InGame);
+            enter_swapped_world(state, tick, player_tile);
 
             status.message = Some(format!("{} loaded.", slot_display_name(slot)));
             status.kind = SaveLoadStatusKind::Success;
@@ -442,6 +422,32 @@ pub(crate) fn load_slot(
             false
         }
     }
+}
+
+/// Resets the presentation and queued-input state that referenced the
+/// previous world, then enters the game. Shared by loading a save and
+/// starting a new world: commands queued against the old world must not
+/// apply to the new one, results already produced by this frame's fixed tick
+/// must not be read as feedback for it, and caches keyed on the old world's
+/// chunks and entities must be rebuilt.
+pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile: (f32, f32)) {
+    state.pending_commands.clear();
+    state.pending_results.clear();
+    state.command_backlog.0.clear();
+    state.build_state.selected = None;
+    state.build_state.last_status = Default::default();
+    state.open_container.entity_id = None;
+    state.window.open = false;
+    state.autosave.last_autosave_tick = tick;
+    *state.map_cache = MapTextureCache::default();
+    state.map_uploads.commands.clear();
+    state.map_view.center_tile = Vec2::new(player_tile.0, player_tile.1);
+    state.map_view.zoom = 1.0;
+    state.map_view.follow_player = true;
+    *state.resource_cache = ResourceRenderCache::default();
+    *state.visible_entity_ids = VisibleEntityIds::default();
+    state.reload_token.value = state.reload_token.value.wrapping_add(1);
+    state.next_mode.set(AppMode::InGame);
 }
 
 pub fn format_save_load_error(error: SaveLoadError) -> String {

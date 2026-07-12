@@ -11,12 +11,14 @@ use super::style::{
 use crate::audio::SoundEvent;
 use crate::build::resources::{
     BuildPlacementPreviewState, BuildPlacementState, BuildPlacementStatus, HotbarState,
-    PlannerState,
+    PastePlacementPreviewState, PlannerState, PlannerTool,
 };
 use crate::input::build::select_build_slot;
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
-use crate::placement::build::{build_status_from_preview, next_direction};
+use crate::placement::build::{
+    build_status_from_issues, build_status_from_preview, next_direction,
+};
 use crate::resources::SimResource;
 use crate::ui::resources::TechnologyWindowState;
 use crate::utils::compact_item_name;
@@ -273,13 +275,30 @@ pub(crate) fn update_build_bar_action_visuals(
 pub(crate) fn update_build_status_text(
     build_state: Res<BuildPlacementState>,
     preview_state: Res<BuildPlacementPreviewState>,
+    planner: Res<PlannerState>,
+    paste_preview: Res<PastePlacementPreviewState>,
     sim: Res<SimResource>,
     mut texts: Query<(&mut Text, &mut TextColor), With<BuildStatusText>>,
 ) {
-    let live_status = build_state
-        .selected
-        .and(preview_state.preview.as_ref())
-        .and_then(|preview| build_status_from_preview(sim.read().catalog(), preview));
+    let paste_status = (planner.tool == PlannerTool::Paste && paste_preview.active).then(|| {
+        if paste_preview.issues.is_empty() {
+            let count = planner
+                .clipboard
+                .as_ref()
+                .map(|blueprint| blueprint.entities.len())
+                .unwrap_or(0);
+            BuildPlacementStatus::Placed(format!("Ready to paste {count} entities"))
+        } else {
+            build_status_from_issues(sim.read().catalog(), &paste_preview.issues)
+                .unwrap_or(BuildPlacementStatus::Ready)
+        }
+    });
+    let live_status = paste_status.or_else(|| {
+        build_state
+            .selected
+            .and(preview_state.preview.as_ref())
+            .and_then(|preview| build_status_from_preview(sim.read().catalog(), preview))
+    });
     let status = live_status.as_ref().unwrap_or(&build_state.last_status);
 
     let (message, color) = match status {
