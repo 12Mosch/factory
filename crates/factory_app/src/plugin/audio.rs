@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::AppSet;
+use super::{AppSet, InGameSet};
 use crate::audio::{
     AudioAssets, AudioEventDedupe, AudioSettings, AudioSettingsPersistenceState,
     AudioSettingsWindowState, CraftingAudioObserver, MachineAudioLoops, ManualMiningAudioObserver,
@@ -43,7 +43,7 @@ impl Plugin for AudioPlugin {
                 (
                     handle_audio_settings_buttons.in_set(AppSet::UiInteraction),
                     save_audio_settings_if_changed,
-                    sync_audio_settings_window,
+                    sync_audio_settings_window.in_set(InGameSet),
                     apply_audio_settings_to_sinks,
                 )
                     .chain()
@@ -52,7 +52,9 @@ impl Plugin for AudioPlugin {
             .add_systems(
                 Update,
                 (
-                    sync_machine_audio_loops.after(AppSet::VisibleEntities),
+                    sync_machine_audio_loops
+                        .after(AppSet::VisibleEntities)
+                        .in_set(InGameSet),
                     play_sound_events.after(AppSet::UiInteraction),
                 ),
             );

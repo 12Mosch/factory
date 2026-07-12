@@ -309,6 +309,11 @@ pub(crate) fn update_paste_preview(
     let rotated_entities = factory_sim::construction::rotate_blueprint_entities(
         &blueprint.entities,
         planner.rotation_steps,
+        |prototype_id| {
+            catalog
+                .entity(prototype_id)
+                .map_or((1, 1), |prototype| (prototype.size.x, prototype.size.y))
+        },
     );
     let mut collected_issues = Vec::new();
     let mut entries = rotated_entities.iter().filter_map(|entity| {

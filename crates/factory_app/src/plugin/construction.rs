@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::AppSet;
+use super::{AppSet, InGameSet};
 use crate::build::resources::{
     BlueprintLibraryWindowState, PastePlacementPreviewState, PlannerState,
 };
@@ -55,7 +55,8 @@ impl Plugin for ConstructionPlugin {
                     sync_construction_rendering
                         .in_set(AppSet::RenderSync)
                         .after(AppSet::VisibleEntities),
-                ),
+                )
+                    .in_set(InGameSet),
             );
     }
 }

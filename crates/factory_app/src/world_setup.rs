@@ -524,4 +524,32 @@ mod tests {
         );
         assert_eq!(app.world().resource::<SimResource>().read().tick_count(), 0);
     }
+
+    #[test]
+    fn world_setup_mode_blocks_save_shortcuts() {
+        let save_root =
+            std::env::temp_dir().join(format!("factory-world-setup-gating-{}", std::process::id()));
+        let mut app = App::new();
+        app.insert_resource(StartInWorldSetup)
+            .add_plugins(MinimalPlugins)
+            .add_plugins(crate::FactoryAppPlugin)
+            .insert_resource(crate::save_load::SaveLoadConfig {
+                root_dir: save_root.clone(),
+                autosave_interval_ticks: u64::MAX,
+            });
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F5);
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<crate::save_load::PendingSaveJobs>()
+                .is_empty(),
+            "the quicksave shortcut must not run on the world-setup screen"
+        );
+        let _ = std::fs::remove_dir_all(save_root);
+    }
 }

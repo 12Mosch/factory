@@ -106,6 +106,11 @@ impl Simulation {
     /// violently destroyed (no item recovery). Entities without health state
     /// are indestructible. Returns true when the entity was destroyed.
     pub(crate) fn damage_entity(&mut self, entity_id: EntityId, amount: u32) -> bool {
+        // Entities without health state shrug the hit off entirely, so they
+        // must not raise an under-attack alarm either.
+        if !self.entities.entity_health.contains_key(&entity_id) {
+            return false;
+        }
         let warning_location = self
             .entities
             .placed_entities

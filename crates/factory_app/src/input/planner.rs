@@ -254,6 +254,7 @@ pub(crate) fn handle_planner_drag(
 pub(crate) struct PasteClickState<'w> {
     input_state: Option<Res<'w, AppInputState>>,
     technology_window: Option<Res<'w, TechnologyWindowState>>,
+    sim: Res<'w, SimResource>,
     planner: Res<'w, PlannerState>,
     commands: MessageWriter<'w, SimCommandRequest>,
 }
@@ -286,10 +287,19 @@ pub(crate) fn handle_paste_click(
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
         return;
     };
-    let entities = factory_sim::construction::rotate_blueprint_entities(
-        &blueprint.entities,
-        state.planner.rotation_steps,
-    );
+    let entities = {
+        let sim = state.sim.read();
+        let catalog = sim.catalog();
+        factory_sim::construction::rotate_blueprint_entities(
+            &blueprint.entities,
+            state.planner.rotation_steps,
+            |prototype_id| {
+                catalog
+                    .entity(prototype_id)
+                    .map_or((1, 1), |prototype| (prototype.size.x, prototype.size.y))
+            },
+        )
+    };
 
     state
         .commands

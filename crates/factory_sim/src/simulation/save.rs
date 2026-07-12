@@ -8,7 +8,9 @@ use bincode::Options;
 // v13: durable, action-specific early-game objective progress joined the snapshot.
 // v14: early-game progress expanded into durable onboarding progress.
 // v15: enemy settings, colonies, missions, evolution and threat events.
-pub const SAVE_VERSION: u32 = 15;
+// v16: EnemySpawnerState dropped its unused absorbed_pollution_micro field
+// (absorbed pollution is pooled on EnemyBase::attack_budget_micro).
+pub const SAVE_VERSION: u32 = 16;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

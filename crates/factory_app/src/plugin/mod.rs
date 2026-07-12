@@ -56,6 +56,16 @@ pub(crate) enum AppSet {
     VisibleEntities,
 }
 
+/// Umbrella set for systems that only make sense while a world is being
+/// played. It carries the `in_state(AppMode::InGame)` run condition in every
+/// schedule it is configured for, so gameplay systems are gated in one place:
+/// membership (direct or via an [`AppSet`] configured into it) is what keeps
+/// a system from running on the world-setup screen. New in-game systems
+/// should join it (or one of its member sets) rather than adding their own
+/// `run_if`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SystemSet)]
+pub(crate) struct InGameSet;
+
 pub struct FactoryAppPlugin;
 
 impl Plugin for FactoryAppPlugin {
@@ -79,19 +89,26 @@ impl Plugin for FactoryAppPlugin {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
 
-        app.configure_sets(PreUpdate, AppSet::PanelInput.after(InputSystems))
+        app.configure_sets(PreUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
+            .configure_sets(FixedUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
+            .configure_sets(Update, InGameSet.run_if(in_state(AppMode::InGame)))
+            .configure_sets(
+                PreUpdate,
+                AppSet::PanelInput.after(InputSystems).in_set(InGameSet),
+            )
             .configure_sets(
                 FixedUpdate,
                 (AppSet::SimInput, AppSet::SimTick, AppSet::PostTick)
                     .chain()
-                    .run_if(in_state(AppMode::InGame)),
+                    .in_set(InGameSet),
             )
             .configure_sets(
                 Update,
                 (AppSet::TechnologyWindow, AppSet::WorldInput)
                     .chain()
-                    .run_if(in_state(AppMode::InGame)),
+                    .in_set(InGameSet),
             )
+            .configure_sets(Update, AppSet::UiInteraction.in_set(InGameSet))
             .configure_sets(Update, (AppSet::MapTexture, AppSet::RenderSync).chain());
 
         // SimulationPlugin must come first: BuildPlugin reads the prototype

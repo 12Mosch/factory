@@ -80,8 +80,23 @@ struct ValidatedRawCatalog {
 
 impl ValidatedRawCatalog {
     fn from_raw(raw: RawPrototypeCatalog) -> Result<Self, PrototypeLoadError> {
-        if let Some(config) = raw.enemy_gameplay.as_ref() {
-            validate_enemy_gameplay(config)?;
+        match raw.enemy_gameplay.as_ref() {
+            Some(config) => validate_enemy_gameplay(config)?,
+            // A catalog with enemy content but no gameplay section would
+            // silently run without any enemy simulation; fail loudly instead.
+            None => {
+                let has_enemy_content = raw
+                    .entities
+                    .iter()
+                    .any(|entity| entity.enemy_spawner.is_some())
+                    || raw
+                        .world_generation
+                        .as_ref()
+                        .is_some_and(|config| config.enemy_bases.is_some());
+                if has_enemy_content {
+                    return Err(PrototypeLoadError::MissingEnemyGameplayConfig);
+                }
+            }
         }
         let mut items = raw.items;
         validate_group(&mut items, "items")?;

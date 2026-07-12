@@ -3,6 +3,7 @@ pub mod audio;
 mod plugin;
 pub mod save_load;
 pub mod simulation;
+mod threat_events;
 mod utils;
 pub mod world_setup;
 

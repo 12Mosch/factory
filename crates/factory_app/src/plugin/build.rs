@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::AppSet;
+use super::{AppSet, InGameSet};
 use crate::build::resources::{
     BuildMenuState, BuildPlacementPreviewState, BuildPlacementState, HotbarState,
 };
@@ -56,7 +56,8 @@ impl Plugin for BuildPlugin {
                         .after(update_paste_preview),
                     handle_build_menu_buttons.in_set(AppSet::UiInteraction),
                     sync_build_menu.after(handle_build_menu_buttons),
-                ),
+                )
+                    .in_set(InGameSet),
             );
     }
 }
