@@ -149,11 +149,13 @@ fn validate_enemy_gameplay(
         && config.expansion_player_spacing_tiles > 0
         && config.evolution_time_interval_ticks > 0
         && config.evolution_time_points > 0
-        && config.evolution_pollution_units_per_point > 0;
+        && config.evolution_pollution_units_per_point > 0
+        && config.evolution_spawner_destroyed_points > 0
+        && config.evolution_colony_destroyed_points > 0;
     if valid {
         Ok(())
     } else {
-        Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+        Err(PrototypeLoadError::InvalidEnemyGameplayConfig {
             detail: "enemy gameplay intervals and ranges must be non-zero and ordered",
         })
     }

@@ -1,3 +1,14 @@
+/// Unrotated `(width, height)` footprint of an entity prototype in tiles;
+/// unknown prototypes fall back to a single tile.
+pub(crate) fn prototype_footprint_size(
+    catalog: &factory_data::PrototypeCatalog,
+    prototype_id: factory_data::EntityPrototypeId,
+) -> (i32, i32) {
+    catalog
+        .entity(prototype_id)
+        .map_or((1, 1), |prototype| (prototype.size.x, prototype.size.y))
+}
+
 pub(crate) fn compact_item_name(name: &str) -> String {
     name.split('_')
         .filter_map(|part| part.chars().next())

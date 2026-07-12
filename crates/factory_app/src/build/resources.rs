@@ -155,6 +155,11 @@ pub struct BlueprintLibraryWindowState {
 impl BlueprintLibraryWindowState {
     pub fn close(&mut self) {
         self.open = false;
+        self.cancel_rename();
+    }
+
+    /// Discards any in-progress rename.
+    pub fn cancel_rename(&mut self) {
         self.editing_index = None;
         self.rename_buffer.clear();
     }

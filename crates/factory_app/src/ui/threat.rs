@@ -2,10 +2,15 @@ use bevy::prelude::*;
 use factory_sim::{CHUNK_SIZE, ThreatEvent, ThreatEventKind, ThreatLocation, ThreatSnapshot};
 use std::collections::VecDeque;
 
+use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::map::resources::{MapLayer, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 use crate::threat_events::ThreatEventCursor;
+
+const TICKS_PER_SECOND: u64 = SIM_TICKS_PER_SECOND as u64;
+/// How long an alert card stays on screen before it expires.
+const ALERT_LIFETIME_TICKS: u64 = 10 * TICKS_PER_SECOND;
 
 #[derive(Component)]
 pub struct ThreatPanelText;
@@ -80,7 +85,7 @@ pub fn sync_threat_ui(
     if state.rendered_panel != Some(snapshot) {
         state.rendered_panel = Some(snapshot);
         for mut text in &mut panel {
-            **text = format!("THREAT: {:?}\nEvolution {}% · Pollution {:.1}\n{} active bases · {} staged ({}s)\n{} inbound · {} expansions", snapshot.tier, snapshot.evolution_percent, snapshot.total_pollution_micro as f64 / 1_000_000.0, snapshot.pollution_active_colonies, snapshot.staged_units, snapshot.maximum_launch_countdown_ticks / 60, snapshot.inbound_raids, snapshot.spotted_expansions).to_uppercase();
+            **text = format!("THREAT: {:?}\nEvolution {}% · Pollution {:.1}\n{} active bases · {} staged ({}s)\n{} inbound · {} expansions", snapshot.tier, snapshot.evolution_percent, snapshot.total_pollution_micro as f64 / 1_000_000.0, snapshot.pollution_active_colonies, snapshot.staged_units, snapshot.maximum_launch_countdown_ticks / TICKS_PER_SECOND, snapshot.inbound_raids, snapshot.spotted_expansions).to_uppercase();
         }
     }
 
@@ -89,11 +94,9 @@ pub fn sync_threat_ui(
         state.cards.clear();
     }
     state.cards.extend(poll.events);
-    while state
-        .cards
-        .front()
-        .is_some_and(|event| simulation.tick_count().saturating_sub(event.tick) > 600)
-    {
+    while state.cards.front().is_some_and(|event| {
+        simulation.tick_count().saturating_sub(event.tick) > ALERT_LIFETIME_TICKS
+    }) {
         state.cards.pop_front();
     }
     while state.cards.len() > 3 {

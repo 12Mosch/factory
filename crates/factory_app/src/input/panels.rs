@@ -211,8 +211,7 @@ pub(crate) fn handle_panel_input(
             resources.input_state.escape_consumed = true;
         } else if resources.blueprint_library.open {
             if resources.blueprint_library.editing_index.is_some() {
-                resources.blueprint_library.editing_index = None;
-                resources.blueprint_library.rename_buffer.clear();
+                resources.blueprint_library.cancel_rename();
             } else {
                 resources.blueprint_library.close();
             }
@@ -312,8 +311,7 @@ pub(crate) fn handle_blueprint_rename_input(
                         name,
                     }));
                 }
-                window.editing_index = None;
-                window.rename_buffer.clear();
+                window.cancel_rename();
             }
             KeyCode::Backspace if control_held => remove_previous_word(&mut window.rename_buffer),
             KeyCode::Backspace => {

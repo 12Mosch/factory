@@ -98,6 +98,9 @@ pub enum PrototypeLoadError {
         detail: &'static str,
     },
     MissingEnemyGameplayConfig,
+    InvalidEnemyGameplayConfig {
+        detail: &'static str,
+    },
 }
 
 impl fmt::Display for PrototypeLoadError {
@@ -233,6 +236,9 @@ impl fmt::Display for PrototypeLoadError {
                 formatter,
                 "catalog defines enemy spawners or enemy base generation but no enemy_gameplay section"
             ),
+            Self::InvalidEnemyGameplayConfig { detail } => {
+                write!(formatter, "invalid enemy gameplay config: {detail}")
+            }
         }
     }
 }

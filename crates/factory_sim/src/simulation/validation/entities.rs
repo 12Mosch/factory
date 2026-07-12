@@ -164,6 +164,16 @@ pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationErro
             return Err(SimValidationError::InvalidEnemyState);
         }
     }
+    // The reverse direction: every spawner with runtime state must belong to
+    // a base (the loop above then guarantees that base lists it back).
+    for spawner in sim.entities.enemy_spawners.keys() {
+        if !sim.enemies.spawner_bases.contains_key(spawner) {
+            return Err(SimValidationError::InvalidEnemyState);
+        }
+    }
+    // `grouped` spans staged, raid, and expansion membership: a unit may be
+    // claimed by at most one group across all three.
+    let mut grouped = BTreeSet::new();
     for base in sim.enemies.bases.values() {
         if base.spawners.is_empty()
             || base
@@ -173,8 +183,18 @@ pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationErro
         {
             return Err(SimValidationError::InvalidEnemyState);
         }
+        for id in &base.staged_units {
+            if !grouped.insert(*id)
+                || !sim
+                    .enemies
+                    .enemies
+                    .get(id)
+                    .is_some_and(|unit| unit.mission == EnemyMission::Staging(base.id))
+            {
+                return Err(SimValidationError::InvalidEnemyState);
+            }
+        }
     }
-    let mut grouped = BTreeSet::new();
     for raid in sim.enemies.raids.values() {
         for id in &raid.members {
             if !grouped.insert(*id)

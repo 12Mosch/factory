@@ -128,8 +128,7 @@ pub(crate) fn handle_blueprint_library_buttons(
                 {
                     continue;
                 }
-                state.window.editing_index = None;
-                state.window.rename_buffer.clear();
+                state.window.cancel_rename();
                 state
                     .commands
                     .write(SimCommandRequest(SimCommand::DeleteBlueprint { index }));
@@ -154,12 +153,10 @@ pub(crate) fn handle_blueprint_library_buttons(
                             }));
                     }
                 }
-                state.window.editing_index = None;
-                state.window.rename_buffer.clear();
+                state.window.cancel_rename();
             }
             BlueprintLibraryAction::CancelRename => {
-                state.window.editing_index = None;
-                state.window.rename_buffer.clear();
+                state.window.cancel_rename();
             }
         }
     }

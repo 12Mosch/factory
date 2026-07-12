@@ -4,12 +4,10 @@ use bevy::prelude::*;
 use factory_data::PrototypeCatalog;
 use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 
-use crate::resources::SimResource;
 use crate::save_load::{
-    LoadState, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig, SaveLoadStatus,
-    SaveSlotKind, load_slot, slot_display_name, slot_exists,
+    LoadState, PendingSaveJobs, SaveLoadConfig, SaveLoadStatus, SaveSlotKind, enter_swapped_world,
+    load_slot, slot_display_name, slot_exists,
 };
-use crate::simulation::SimCommandBacklog;
 
 #[derive(States, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AppMode {
@@ -26,6 +24,10 @@ pub struct WorldSetupState {
     pub seed_text: String,
     pub config: SimulationConfig,
     pub validation_error: Option<String>,
+    /// True when the setup screen was opened from a running game (New
+    /// World), so it offers a way back that keeps the current session. At
+    /// application startup there is no session to return to.
+    pub allow_cancel: bool,
 }
 
 impl Default for WorldSetupState {
@@ -34,6 +36,7 @@ impl Default for WorldSetupState {
             seed_text: "123".into(),
             config: SimulationConfig::default(),
             validation_error: None,
+            allow_cancel: false,
         }
     }
 }
@@ -61,12 +64,15 @@ pub enum WorldSetupAction {
     ToggleExpansion,
     LoadSlot(SaveSlotKind),
     Start,
+    /// Return to the running game without touching the simulation.
+    Cancel,
 }
 
 pub fn build_world_setup_ui(
     mut commands: Commands,
     existing: Query<Entity, With<WorldSetupRoot>>,
     saves: Res<SaveLoadConfig>,
+    setup: Res<WorldSetupState>,
 ) {
     for entity in &existing {
         commands.entity(entity).despawn();
@@ -241,6 +247,9 @@ pub fn build_world_setup_ui(
                     TextColor(Color::srgb(1.0, 0.4, 0.35)),
                 ));
                 spawn_button(panel, "Start", WorldSetupAction::Start);
+                if setup.allow_cancel {
+                    spawn_button(panel, "Back to game", WorldSetupAction::Cancel);
+                }
             });
         });
 }
@@ -304,13 +313,10 @@ type SetupButtons<'w, 's> = Query<
     (Changed<Interaction>, With<Button>),
 >;
 
-pub fn handle_world_setup_buttons(
+pub(crate) fn handle_world_setup_buttons(
     mut buttons: SetupButtons,
     mut setup: ResMut<WorldSetupState>,
-    mut sim: ResMut<SimResource>,
-    mut backlog: ResMut<SimCommandBacklog>,
-    mut next: ResMut<NextState<AppMode>>,
-    mut reload: Option<ResMut<PresentationReloadToken>>,
+    mut load_state: LoadState,
 ) {
     for (interaction, action) in &mut buttons {
         if *interaction != Interaction::Pressed {
@@ -400,18 +406,18 @@ pub fn handle_world_setup_buttons(
                 }
                 let catalog =
                     PrototypeCatalog::load_base().expect("base prototype catalog should load");
-                if sim
-                    .replace(Simulation::new_with_config(seed, catalog, setup.config))
-                    .is_err()
-                {
+                let new_world = Simulation::new_with_config(seed, catalog, setup.config);
+                let tick = new_world.tick_count();
+                let player_tile = new_world.player().position_tiles();
+                if load_state.sim.replace(new_world).is_err() {
                     setup.validation_error = Some("Simulation is busy; try Start again".into());
                     continue;
                 }
-                backlog.0.clear();
-                if let Some(reload) = reload.as_deref_mut() {
-                    reload.value = reload.value.wrapping_add(1);
-                }
-                next.set(AppMode::InGame);
+                enter_swapped_world(&mut load_state, tick, player_tile);
+            }
+            WorldSetupAction::Cancel => {
+                setup.validation_error = None;
+                load_state.next_mode.set(AppMode::InGame);
             }
         }
     }
@@ -503,6 +509,7 @@ fn splitmix64(mut value: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::SimResource;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
 

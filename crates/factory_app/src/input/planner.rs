@@ -293,11 +293,7 @@ pub(crate) fn handle_paste_click(
         factory_sim::construction::rotate_blueprint_entities(
             &blueprint.entities,
             state.planner.rotation_steps,
-            |prototype_id| {
-                catalog
-                    .entity(prototype_id)
-                    .map_or((1, 1), |prototype| (prototype.size.x, prototype.size.y))
-            },
+            |prototype_id| crate::utils::prototype_footprint_size(catalog, prototype_id),
         )
     };
 
