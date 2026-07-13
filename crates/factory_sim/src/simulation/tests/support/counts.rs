@@ -50,7 +50,9 @@ pub(in crate::simulation::tests) fn total_item_count_in_sim(
             .inserters
             .values()
             .map(|state| match state {
-                InserterState::Holding { item } if item.item_id == item_id => u32::from(item.count),
+                InserterState::Holding { item } if item.item_id() == item_id => {
+                    u32::from(item.count())
+                }
                 _ => 0,
             })
             .sum::<u32>()
@@ -96,7 +98,7 @@ pub(in crate::simulation::tests) fn count_slot_item(
     item_id: ItemId,
 ) -> u32 {
     match slot {
-        Some(stack) if stack.item_id == item_id => u32::from(stack.count),
+        Some(stack) if stack.item_id() == item_id => u32::from(stack.count()),
         _ => 0,
     }
 }

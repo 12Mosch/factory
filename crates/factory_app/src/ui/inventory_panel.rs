@@ -202,11 +202,11 @@ pub(crate) fn update_container_slot_text(
         let stack = match marker.panel {
             InventoryPanel::Player => sim
                 .player_inventory()
-                .slots
+                .slots()
                 .get(marker.slot_index)
                 .and_then(|slot| *slot),
             InventoryPanel::Container => container_inventory
-                .and_then(|inventory| inventory.slots.get(marker.slot_index))
+                .and_then(|inventory| inventory.slots().get(marker.slot_index))
                 .and_then(|slot| *slot),
             InventoryPanel::BurnerFuel => burner_drill_state.and_then(|state| {
                 (marker.slot_index == BURNER_MINING_DRILL_FUEL_SLOT_INDEX)
@@ -239,10 +239,10 @@ pub(crate) fn update_container_slot_text(
                     .flatten()
             }),
             InventoryPanel::AssemblerInput => assembler_state
-                .and_then(|state| state.input_inventory.slots.get(marker.slot_index))
+                .and_then(|state| state.input_inventory.slots().get(marker.slot_index))
                 .and_then(|slot| *slot),
             InventoryPanel::AssemblerOutput => assembler_state
-                .and_then(|state| state.output_inventory.slots.get(marker.slot_index))
+                .and_then(|state| state.output_inventory.slots().get(marker.slot_index))
                 .and_then(|slot| *slot),
         };
         text.0 = stack

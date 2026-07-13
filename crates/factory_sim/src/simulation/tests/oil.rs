@@ -309,10 +309,7 @@ fn chemical_plant_crafts_plastic_from_coal_and_petroleum_gas() {
         .expect("chemical plant should accept plastic bar recipe");
     set_fluid_box(&mut sim, plant_id, 0, petroleum_gas, 100_000);
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: coal,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, coal, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, plant_id, 0)
         .expect("chemical plant should accept coal");
 
@@ -374,10 +371,7 @@ fn chemical_plant_stalls_without_fluid_ingredients() {
     sim.select_assembler_recipe(plant_id, recipe)
         .expect("chemical plant should accept plastic bar recipe");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: coal,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, coal, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, plant_id, 0)
         .expect("chemical plant should accept coal");
 

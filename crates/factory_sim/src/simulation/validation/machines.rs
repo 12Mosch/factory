@@ -17,13 +17,13 @@ pub(in crate::simulation) fn validate_burner_mining_drill(
                 .resources
                 .iter()
                 .any(|resource| {
-                    resource.resource_item == stack.item_id
+                    resource.resource_item == stack.item_id()
                         && resource.extraction == ResourceExtraction::Solid
                 });
         if !is_solid_resource {
             return Err(SimValidationError::InvalidMachineItem {
                 entity_id,
-                item_id: stack.item_id,
+                item_id: stack.item_id(),
             });
         }
     }
@@ -60,11 +60,11 @@ pub(in crate::simulation) fn validate_boiler(
     validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
 
     if let Some(stack) = state.energy.fuel_slot
-        && fuel_value_joules(&sim.world.prototypes, stack.item_id).is_none()
+        && fuel_value_joules(&sim.world.prototypes, stack.item_id()).is_none()
     {
         return Err(SimValidationError::InvalidMachineItem {
             entity_id,
-            item_id: stack.item_id,
+            item_id: stack.item_id(),
         });
     }
 
@@ -103,11 +103,11 @@ pub(in crate::simulation) fn validate_lab(
     state: &LabState,
 ) -> Result<(), SimValidationError> {
     validate_inventory(&sim.world.prototypes, &state.inventory)?;
-    for stack in state.inventory.slots.iter().flatten() {
-        if !lab_can_accept_item(&sim.world.prototypes, stack.item_id) {
+    for stack in state.inventory.slots().iter().flatten() {
+        if !lab_can_accept_item(&sim.world.prototypes, stack.item_id()) {
             return Err(SimValidationError::InvalidMachineItem {
                 entity_id,
-                item_id: stack.item_id,
+                item_id: stack.item_id(),
             });
         }
     }
@@ -213,13 +213,28 @@ fn validate_transport_lane_items(
 ) -> Result<(), SimValidationError> {
     let mut previous_position = None;
     for item in &lane.items {
-        validate_item_stack(
-            &sim.world.prototypes,
-            ItemStack {
-                item_id: item.item_id,
-                count: 1,
-            },
-        )?;
+        let stack =
+            ItemStack::new(&sim.world.prototypes, item.item_id, 1).map_err(
+                |error| match error {
+                    InventoryError::UnknownItem(item_id) => {
+                        SimValidationError::UnknownItem(item_id)
+                    }
+                    InventoryError::EmptyItemStack(item_id) => {
+                        SimValidationError::EmptyItemStack(item_id)
+                    }
+                    InventoryError::StackExceedsLimit {
+                        item_id,
+                        count,
+                        stack_size,
+                    } => SimValidationError::StackExceedsLimit {
+                        item_id,
+                        count,
+                        stack_size,
+                    },
+                    _ => unreachable!("stack construction cannot report inventory capacity errors"),
+                },
+            )?;
+        validate_item_stack(&sim.world.prototypes, stack)?;
         if item.position_subtile >= BELT_SUBTILES_PER_TILE {
             return Err(SimValidationError::InvalidBeltItemPosition {
                 entity_id,

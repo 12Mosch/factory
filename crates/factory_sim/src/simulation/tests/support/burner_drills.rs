@@ -224,10 +224,7 @@ pub(in crate::simulation::tests) fn add_fuel_to_burner_drill(
     count: u16,
 ) {
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: fuel_item,
-        count,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, fuel_item, count);
     crate::entity_transfer::player_slot_to_burner_drill_fuel(sim, entity_id, 0)
         .expect("fuel should transfer to burner drill");
 }

@@ -77,15 +77,16 @@ fn machine_statuses_classify_power_input_and_output_blocks() {
     let assembler_id = place_assembling_machine(&mut output_full);
     add_assembler_gear_job(&mut output_full, assembler_id);
     let gear = item_id(&output_full.world.prototypes, "iron_gear_wheel");
-    output_full
-        .entities
-        .assembler_state_mut(assembler_id)
-        .expect("assembler should exist")
-        .output_inventory
-        .slots[0] = Some(ItemStack {
-        item_id: gear,
-        count: 100,
-    });
+    set_inventory_slot(
+        &mut output_full
+            .entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should exist")
+            .output_inventory,
+        0,
+        gear,
+        100,
+    );
     output_full.tick();
     assert_eq!(status_count(&output_full, MachineStatus::OutputFull), 1);
 }

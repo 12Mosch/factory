@@ -15,13 +15,17 @@ pub(crate) fn destroy_to_player_inventory(
 
     for stack in recovery_stacks {
         player_inventory
-            .insert(&sim.world.prototypes, stack.item_id, stack.count)
+            .insert_stack(&sim.world.prototypes, stack)
             .map_err(|error| match error {
                 InventoryError::InsufficientSpace => EntityDestroyError::InsufficientInventory {
-                    item_id: stack.item_id,
+                    item_id: stack.item_id(),
                 },
-                InventoryError::UnknownItem => EntityDestroyError::UnknownItem(stack.item_id),
-                InventoryError::InsufficientItems => {
+                InventoryError::UnknownItem(item_id) => EntityDestroyError::UnknownItem(item_id),
+                InventoryError::InsufficientItems
+                | InventoryError::EmptyItemStack(_)
+                | InventoryError::StackExceedsLimit { .. }
+                | InventoryError::InvalidSlot { .. }
+                | InventoryError::EmptySlot { .. } => {
                     unreachable!("destroy recovery only inserts items")
                 }
             })?;
@@ -46,11 +50,15 @@ pub(crate) fn entity_recovery_stacks(
     placed: &PlacedEntity,
 ) -> Result<Vec<ItemStack>, EntityDestroyError> {
     let mut stacks = Vec::new();
-    stacks.push(ItemStack {
-        item_id: build_item_for_entity(sim, placed.prototype_id)?,
-        count: 1,
-    });
-    push_entity_state_recovery_stacks(&sim.entities, placed.id, &mut stacks);
+    stacks.push(
+        ItemStack::new(
+            &sim.world.prototypes,
+            build_item_for_entity(sim, placed.prototype_id)?,
+            1,
+        )
+        .expect("an entity's validated build item should form a valid stack"),
+    );
+    push_entity_state_recovery_stacks(&sim.world.prototypes, &sim.entities, placed.id, &mut stacks);
 
     Ok(stacks)
 }
@@ -81,13 +89,14 @@ macro_rules! define_push_entity_state_recovery_stacks {
         /// Collects the items recovered from every state entry owned by
         /// `entity_id` when the entity is destroyed.
         pub(crate) fn push_entity_state_recovery_stacks(
+            catalog: &PrototypeCatalog,
             entities: &EntityStore,
             entity_id: EntityId,
             stacks: &mut Vec<ItemStack>,
         ) {
             $(
                 if let Some(state) = entities.$field.get(&entity_id) {
-                    EntityStateBehavior::push_recovery_stacks(state, stacks);
+                    EntityStateBehavior::push_recovery_stacks(state, catalog, stacks);
                 }
             )*
         }

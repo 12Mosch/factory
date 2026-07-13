@@ -70,12 +70,13 @@ fn apply_command_reports_deconstructed_item_and_inventory_total() {
     let chest_item = item_id_by_name(&sim.world.prototypes, "chest");
     let (x, y) = first_buildable_rect(&sim.world, 1, 1);
     let entity_id = place_at(&mut sim, chest, x, y, Direction::North);
-    crate::entity_access::inventory_mut(&mut sim, entity_id)
-        .expect("chest should expose its inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: chest_item,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, entity_id)
+            .expect("chest should expose its inventory"),
+        0,
+        chest_item,
+        1,
+    );
     let count_before = sim.player_inventory.count(chest_item);
 
     sim.apply_command(&SimCommand::MarkDeconstruction {
@@ -183,14 +184,8 @@ fn apply_command_transfer_slot_routes_player_input_by_machine_kind() {
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let coal = item_id(&sim.world.prototypes, "coal");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
-    sim.player_inventory.slots[1] = Some(ItemStack {
-        item_id: coal,
-        count: 1,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_ore, 1);
+    set_inventory_slot(&mut sim.player_inventory, 1, coal, 1);
 
     sim.apply_command(&SimCommand::TransferSlot {
         entity_id,
@@ -207,20 +202,8 @@ fn apply_command_transfer_slot_routes_player_input_by_machine_kind() {
 
     let furnace_state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
-    assert_eq!(
-        furnace_state.input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: 1
-        })
-    );
-    assert_eq!(
-        furnace_state.energy.fuel_slot,
-        Some(ItemStack {
-            item_id: coal,
-            count: 1
-        })
-    );
+    assert_eq!(furnace_state.input_slot, Some(test_stack(iron_ore, 1)));
+    assert_eq!(furnace_state.energy.fuel_slot, Some(test_stack(coal, 1)));
 }
 
 #[test]
@@ -229,10 +212,7 @@ fn apply_command_transfer_slot_reports_typed_error() {
     let entity_id = place_stone_furnace(&mut sim);
     let inserter = item_id(&sim.world.prototypes, "inserter");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: inserter,
-        count: 1,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, inserter, 1);
 
     let error = sim
         .apply_command(&SimCommand::TransferSlot {

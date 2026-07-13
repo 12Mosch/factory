@@ -59,34 +59,34 @@ pub(in crate::simulation) fn peek_inserter_source_item(
 
     if let Some(inventory) = entities.entity_inventories.get(&entity_id) {
         return inventory
-            .slots
+            .slots()
             .iter()
             .flatten()
-            .map(|stack| stack.item_id)
+            .map(|stack| stack.item_id())
             .next();
     }
 
     if let Some(lab) = entities.labs.get(&entity_id) {
         return lab
             .inventory
-            .slots
+            .slots()
             .iter()
             .flatten()
-            .map(|stack| stack.item_id)
+            .map(|stack| stack.item_id())
             .next();
     }
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
-        return furnace.output_slot.map(|stack| stack.item_id);
+        return furnace.output_slot.map(|stack| stack.item_id());
     }
 
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
         return assembler
             .output_inventory
-            .slots
+            .slots()
             .iter()
             .flatten()
-            .map(|stack| stack.item_id)
+            .map(|stack| stack.item_id())
             .next();
     }
 
@@ -114,17 +114,21 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     };
 
     if let Some(inventory) = entities.entity_inventories.get(&entity_id) {
-        return inventory.can_insert(catalog, item.item_id, item.count);
+        return inventory.can_insert(catalog, item.item_id(), item.count());
     }
 
     if let Some(lab) = entities.labs.get(&entity_id) {
-        return lab_can_accept_item(catalog, item.item_id)
-            && lab.inventory.can_insert(catalog, item.item_id, item.count);
+        return lab_can_accept_item(catalog, item.item_id())
+            && lab
+                .inventory
+                .can_insert(catalog, item.item_id(), item.count());
     }
 
     if let Some(turret) = entities.gun_turrets.get(&entity_id) {
-        return item_is_ammo(catalog, item.item_id)
-            && turret.ammo.can_insert(catalog, item.item_id, item.count);
+        return item_is_ammo(catalog, item.item_id())
+            && turret
+                .ammo
+                .can_insert(catalog, item.item_id(), item.count());
     }
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
@@ -141,14 +145,14 @@ pub(in crate::simulation) fn inserter_target_can_accept(
         return assembler_input_can_accept(catalog, research, machine_category, assembler, item)
             && assembler
                 .input_inventory
-                .can_insert(catalog, item.item_id, item.count);
+                .can_insert(catalog, item.item_id(), item.count());
     }
 
     entities
         .transport_belts
         .get(&entity_id)
         .is_some_and(|segment| {
-            item.count == 1 && belt_output_lane_index(segment, item.item_id).is_some()
+            item.count() == 1 && belt_output_lane_index(segment, item.item_id()).is_some()
         })
         || entities.splitters.get(&entity_id).is_some_and(|state| {
             let Some(input_port) =
@@ -156,11 +160,13 @@ pub(in crate::simulation) fn inserter_target_can_accept(
             else {
                 return false;
             };
-            item.count == 1 && splitter_output_lane_index(state, input_port, item.item_id).is_some()
+            item.count() == 1
+                && splitter_output_lane_index(state, input_port, item.item_id()).is_some()
         })
 }
 
 pub(in crate::simulation) fn try_take_inserter_source_item(
+    catalog: &PrototypeCatalog,
     entities: &mut EntityStore,
     transport: &mut TransportLaneCache,
     pickup_tile: (WorldTileCoord, WorldTileCoord),
@@ -170,22 +176,22 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
 
     if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
         inventory.remove(item_id, 1).ok()?;
-        return Some(ItemStack { item_id, count: 1 });
+        return ItemStack::new(catalog, item_id, 1).ok();
     }
 
     if let Some(lab) = entities.labs.get_mut(&entity_id) {
         lab.inventory.remove(item_id, 1).ok()?;
-        return Some(ItemStack { item_id, count: 1 });
+        return ItemStack::new(catalog, item_id, 1).ok();
     }
 
     if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
         remove_from_single_slot(&mut furnace.output_slot, item_id, 1).ok()?;
-        return Some(ItemStack { item_id, count: 1 });
+        return ItemStack::new(catalog, item_id, 1).ok();
     }
 
     if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
         assembler.output_inventory.remove(item_id, 1).ok()?;
-        return Some(ItemStack { item_id, count: 1 });
+        return ItemStack::new(catalog, item_id, 1).ok();
     }
 
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id)
@@ -195,7 +201,7 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
             entity_id,
             lane_index,
         });
-        return Some(ItemStack { item_id, count: 1 });
+        return ItemStack::new(catalog, item_id, 1).ok();
     }
 
     if let Some(state) = entities.splitters.get_mut(&entity_id)
@@ -206,7 +212,7 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
             input_port,
             lane_index,
         });
-        return Some(ItemStack { item_id, count: 1 });
+        return ItemStack::new(catalog, item_id, 1).ok();
     }
 
     None
@@ -225,39 +231,43 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     };
 
     if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
-        return inventory.insert(catalog, item.item_id, item.count).is_ok();
+        return inventory
+            .insert(catalog, item.item_id(), item.count())
+            .is_ok();
     }
 
     if let Some(lab) = entities.labs.get_mut(&entity_id) {
-        if !lab_can_accept_item(catalog, item.item_id) {
+        if !lab_can_accept_item(catalog, item.item_id()) {
             return false;
         }
 
         return lab
             .inventory
-            .insert(catalog, item.item_id, item.count)
+            .insert(catalog, item.item_id(), item.count())
             .is_ok();
     }
 
     if let Some(turret) = entities.gun_turrets.get_mut(&entity_id) {
-        if !item_is_ammo(catalog, item.item_id) {
+        if !item_is_ammo(catalog, item.item_id()) {
             return false;
         }
 
         return turret
             .ammo
-            .insert(catalog, item.item_id, item.count)
+            .insert(catalog, item.item_id(), item.count())
             .is_ok();
     }
 
     if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
         if burner_fuel_slot_can_accept(catalog, furnace.energy.fuel_slot, item) {
-            insert_into_single_slot(&mut furnace.energy.fuel_slot, item);
+            insert_into_single_slot(catalog, &mut furnace.energy.fuel_slot, item)
+                .expect("the checked furnace fuel slot should accept the item");
             return true;
         }
 
         if input_slot_can_accept(catalog, research, furnace.input_slot, item) {
-            insert_into_single_slot(&mut furnace.input_slot, item);
+            insert_into_single_slot(catalog, &mut furnace.input_slot, item)
+                .expect("the checked furnace input slot should accept the item");
             return true;
         }
 
@@ -266,7 +276,8 @@ pub(in crate::simulation) fn try_drop_inserter_item(
 
     if let Some(boiler) = entities.boilers.get_mut(&entity_id) {
         if burner_fuel_slot_can_accept(catalog, boiler.energy.fuel_slot, item) {
-            insert_into_single_slot(&mut boiler.energy.fuel_slot, item);
+            insert_into_single_slot(catalog, &mut boiler.energy.fuel_slot, item)
+                .expect("the checked boiler fuel slot should accept the item");
             return true;
         }
 
@@ -285,19 +296,19 @@ pub(in crate::simulation) fn try_drop_inserter_item(
 
         return assembler
             .input_inventory
-            .insert(catalog, item.item_id, item.count)
+            .insert(catalog, item.item_id(), item.count())
             .is_ok();
     }
 
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id) {
-        if item.count != 1 {
+        if item.count() != 1 {
             return false;
         }
 
-        let Some(lane_index) = belt_output_lane_index(segment, item.item_id) else {
+        let Some(lane_index) = belt_output_lane_index(segment, item.item_id()) else {
             return false;
         };
-        insert_lane_item_at_entry(&mut segment.lanes[lane_index], item.item_id, 0);
+        insert_lane_item_at_entry(&mut segment.lanes[lane_index], item.item_id(), 0);
         transport.mark_active(TransportLaneKey::Belt {
             entity_id,
             lane_index,
@@ -307,19 +318,19 @@ pub(in crate::simulation) fn try_drop_inserter_item(
 
     let splitter_input_port = splitter_input_port_for_occupied_tile(entities, entity_id, drop_tile);
     if let Some(state) = entities.splitters.get_mut(&entity_id) {
-        if item.count != 1 {
+        if item.count() != 1 {
             return false;
         }
 
         let Some(input_port) = splitter_input_port else {
             return false;
         };
-        let Some(lane_index) = splitter_output_lane_index(state, input_port, item.item_id) else {
+        let Some(lane_index) = splitter_output_lane_index(state, input_port, item.item_id()) else {
             return false;
         };
         insert_lane_item_at_entry(
             &mut state.input_lanes[input_port][lane_index],
-            item.item_id,
+            item.item_id(),
             0,
         );
         transport.mark_active(TransportLaneKey::Splitter {

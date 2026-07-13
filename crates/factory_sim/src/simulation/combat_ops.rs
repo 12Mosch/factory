@@ -16,10 +16,10 @@ impl Simulation {
             && self.entities.gun_turrets.iter().any(|(entity_id, state)| {
                 self.entities.placed_entities.contains_key(entity_id)
                     && (state.loaded_shots > 0
-                        || state.ammo.slots.iter().flatten().any(|stack| {
+                        || state.ammo.slots().iter().flatten().any(|stack| {
                             self.world
                                 .prototypes
-                                .item(stack.item_id)
+                                .item(stack.item_id())
                                 .is_some_and(|item| item.ammo.is_some())
                         }))
             })
@@ -267,10 +267,10 @@ impl Simulation {
         if self.player.repair_remaining_health == 0 {
             let repair_item = self
                 .player_inventory
-                .slots
+                .slots()
                 .iter()
                 .flatten()
-                .map(|stack| stack.item_id)
+                .map(|stack| stack.item_id())
                 .find(|item_id| {
                     self.world
                         .prototypes
@@ -315,12 +315,12 @@ impl Simulation {
 
 /// Breaks one magazine out of the turret's ammo inventory into loose shots.
 fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
-    let Some((item_id, ammo)) = state.ammo.slots.iter().flatten().find_map(|stack| {
+    let Some((item_id, ammo)) = state.ammo.slots().iter().flatten().find_map(|stack| {
         world
             .prototypes
-            .item(stack.item_id)
+            .item(stack.item_id())
             .and_then(|item| item.ammo)
-            .map(|ammo| (stack.item_id, ammo))
+            .map(|ammo| (stack.item_id(), ammo))
     }) else {
         return;
     };

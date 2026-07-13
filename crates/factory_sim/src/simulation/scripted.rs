@@ -53,10 +53,10 @@ impl Simulation {
             .boiler_state_mut(boiler_id)
             .expect("placed boiler should expose boiler state")
             .energy
-            .fuel_slot = Some(ItemStack {
-            item_id: coal,
-            count: 10,
-        });
+            .fuel_slot = Some(
+            ItemStack::new(&self.world.prototypes, coal, 10)
+                .expect("scripted coal should form a valid stack"),
+        );
         self.entities
             .lab_state_mut(lab_id)
             .expect("placed lab should expose lab state")

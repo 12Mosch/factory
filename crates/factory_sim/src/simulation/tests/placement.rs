@@ -483,7 +483,7 @@ fn chest_placement_creates_sixteen_inventory_slots() {
     assert_eq!(
         crate::entity_access::inventory(&sim, entity_id)
             .expect("chest should have an inventory")
-            .slots
+            .slots()
             .len(),
         16
     );
@@ -705,12 +705,13 @@ fn destroying_entity_returns_building_and_contents_to_player() {
         },
     )
     .expect("chest should be placeable");
-    crate::entity_access::inventory_mut(&mut sim, entity_id)
-        .expect("chest should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 7,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, entity_id)
+            .expect("chest should expose inventory"),
+        0,
+        iron_plate,
+        7,
+    );
     sim.player_inventory = Inventory::player();
 
     let removed = crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id)
@@ -743,10 +744,7 @@ fn destroying_entity_keeps_world_unchanged_when_inventory_is_full() {
     )
     .expect("chest should be placeable");
     sim.player_inventory = Inventory::with_slot_count(1);
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: iron_stack_size,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, iron_stack_size);
 
     let result = crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id);
 

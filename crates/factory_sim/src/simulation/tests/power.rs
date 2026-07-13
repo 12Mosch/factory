@@ -23,10 +23,7 @@ fn unpowered_assembler_does_not_craft() {
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
@@ -58,10 +55,7 @@ fn powered_assembler_crafts() {
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
@@ -117,10 +111,7 @@ fn insufficient_power_slows_machine_progress() {
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
@@ -160,10 +151,7 @@ fn disconnected_networks_do_not_share_power() {
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
@@ -304,12 +292,13 @@ fn inserter_does_not_move_without_electricity() {
     let mut sim = Simulation::new_test_world(123);
     let (chest_id, inserter_id, furnace_id) = place_unpowered_chest_inserter_furnace_line(&mut sim);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should expose inventory"),
+        0,
+        iron_ore,
+        1,
+    );
 
     for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) * 2 {
         sim.tick();
@@ -354,12 +343,12 @@ fn lab_does_not_research_without_electricity() {
     .expect("lab should be placeable");
     sim.select_research(logistics)
         .expect("logistics should be selectable");
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .expect("lab should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: science_pack,
-        count: 10,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).expect("lab should expose inventory"),
+        0,
+        science_pack,
+        10,
+    );
 
     for _ in 0..1_200 {
         sim.tick();

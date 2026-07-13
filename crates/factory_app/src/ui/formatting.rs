@@ -5,10 +5,10 @@ use crate::utils::compact_item_name;
 
 pub(crate) fn format_item_stack(stack: ItemStack, catalog: &PrototypeCatalog) -> String {
     let name = catalog
-        .item(stack.item_id)
+        .item(stack.item_id())
         .map(|item| item.name.as_str())
         .unwrap_or("unknown");
-    format!("{}\n{}", compact_item_name(name), stack.count)
+    format!("{}\n{}", compact_item_name(name), stack.count())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

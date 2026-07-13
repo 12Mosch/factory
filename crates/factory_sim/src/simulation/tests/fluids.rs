@@ -80,10 +80,7 @@ fn boiler_validation_rejects_non_fuel_in_fuel_slot() {
         .boiler_state_mut(boiler_id)
         .expect("boiler should exist")
         .energy
-        .fuel_slot = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+        .fuel_slot = Some(test_stack(iron_ore, 1));
 
     assert_eq!(
         sim.validate(),
@@ -241,7 +238,7 @@ fn boiler_consumes_water_and_fuel_and_outputs_steam() {
     sim.tick();
 
     let boiler = crate::entity_access::boiler_state(&sim, boiler_id).expect("boiler should exist");
-    assert_eq!(boiler.energy.fuel_slot.map(|stack| stack.count), Some(49));
+    assert_eq!(boiler.energy.fuel_slot.map(|stack| stack.count()), Some(49));
     assert!(boiler.energy.energy_remaining_joules > 0.0);
     assert_eq!(
         sim.entities.fluid_boxes[&boiler_id][1].fluid_id,
@@ -284,10 +281,7 @@ fn boiler_does_not_consume_fuel_without_water_or_when_steam_output_is_full() {
         .boiler_state_mut(boiler_id)
         .unwrap()
         .energy
-        .fuel_slot = Some(ItemStack {
-        item_id: coal,
-        count: 1,
-    });
+        .fuel_slot = Some(test_stack(coal, 1));
     let before = crate::entity_access::boiler_state(&no_water, boiler_id)
         .unwrap()
         .clone();

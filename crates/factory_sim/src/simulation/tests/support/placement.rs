@@ -28,16 +28,15 @@ pub(in crate::simulation::tests) fn fill_inventory_with(
     entity_id: EntityId,
     item_id: ItemId,
 ) {
-    let stack_size = item_stack_size(&sim.world.prototypes, item_id)
-        .expect("test item should have a stack size");
+    let catalog = sim.world.prototypes.clone();
+    let stack_size =
+        item_stack_size(&catalog, item_id).expect("test item should have a stack size");
     let inventory = crate::entity_access::inventory_mut(sim, entity_id)
         .expect("test entity should have inventory");
-    for slot in &mut inventory.slots {
-        *slot = Some(ItemStack {
-            item_id,
-            count: stack_size,
-        });
-    }
+    let stack = ItemStack::new(&catalog, item_id, stack_size)
+        .expect("test item should form a full valid stack");
+    *inventory = Inventory::from_slots(&catalog, vec![Some(stack); inventory.slots().len()])
+        .expect("filled test inventory should be valid");
 }
 
 pub(in crate::simulation::tests) fn first_buildable_rect_without_resource(

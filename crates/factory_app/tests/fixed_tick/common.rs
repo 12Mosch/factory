@@ -35,6 +35,51 @@ pub fn sim_tick_and_hash(app: &App) -> (u64, u64) {
     (sim.tick_count(), sim.state_hash())
 }
 
+pub fn set_player_inventory_slot(
+    sim: &mut Simulation,
+    slot_index: usize,
+    item_id: ItemId,
+    count: u16,
+) {
+    let catalog = sim.catalog().clone();
+    set_inventory_slot(
+        &catalog,
+        sim.player_inventory_mut(),
+        slot_index,
+        item_id,
+        count,
+    );
+}
+
+pub fn set_entity_inventory_slot(
+    sim: &mut Simulation,
+    entity_id: EntityId,
+    slot_index: usize,
+    item_id: ItemId,
+    count: u16,
+) {
+    let catalog = sim.catalog().clone();
+    let inventory = factory_sim::entity_access::inventory_mut(sim, entity_id)
+        .expect("fixed-tick test entity should expose inventory");
+    set_inventory_slot(&catalog, inventory, slot_index, item_id, count);
+}
+
+fn set_inventory_slot(
+    catalog: &PrototypeCatalog,
+    inventory: &mut Inventory,
+    slot_index: usize,
+    item_id: ItemId,
+    count: u16,
+) {
+    let mut slots = inventory.slots().to_vec();
+    slots[slot_index] = Some(
+        ItemStack::new(catalog, item_id, count)
+            .expect("fixed-tick test stack should satisfy catalog invariants"),
+    );
+    *inventory = Inventory::from_slots(catalog, slots)
+        .expect("fixed-tick test inventory layout should satisfy catalog invariants");
+}
+
 pub fn pixel_at(map: &factory_app::rendering::map_texture::MapPixels, tile: (i64, i64)) -> [u8; 4] {
     let local_x = (tile.0 - map.bounds.min_x) as u32;
     let local_y = (tile.1 - map.bounds.min_y) as u32;
@@ -180,10 +225,7 @@ pub fn place_powered_fixture_origin(
             .expect("validated target pole fixture should be placeable");
 
         *sim.player_inventory_mut() = Inventory::player();
-        sim.player_inventory_mut().slots[0] = Some(ItemStack {
-            item_id: coal,
-            count: 50,
-        });
+        set_player_inventory_slot(sim, 0, coal, 50);
         factory_sim::entity_transfer::player_slot_to_boiler_fuel(sim, boiler_id, 0)
             .expect("boiler should accept coal fuel");
 

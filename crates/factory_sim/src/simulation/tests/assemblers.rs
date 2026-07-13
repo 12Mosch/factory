@@ -36,10 +36,7 @@ fn assembler_crafts_gears_from_iron_plates() {
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 
@@ -66,10 +63,7 @@ fn assembler_blocks_without_inputs() {
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 1);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept partial ingredients");
 
@@ -97,20 +91,19 @@ fn assembler_blocks_when_output_full() {
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 2);
     crate::entity_transfer::player_slot_to_assembler_input(&mut sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
-    sim.entities
-        .assembler_state_mut(assembler_id)
-        .expect("assembler should expose mutable state")
-        .output_inventory
-        .slots[0] = Some(ItemStack {
-        item_id: iron_gear_wheel,
-        count: stack_size,
-    });
+    set_inventory_slot(
+        &mut sim
+            .entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .output_inventory,
+        0,
+        iron_gear_wheel,
+        stack_size,
+    );
 
     for _ in 0..60 {
         sim.tick();
@@ -177,10 +170,7 @@ fn selecting_same_assembler_recipe_while_non_empty_preserves_progress() {
             .entities
             .assembler_state_mut(assembler_id)
             .expect("assembler should expose mutable state");
-        state.input_inventory.slots[0] = Some(ItemStack {
-            item_id: iron_plate,
-            count: 1,
-        });
+        set_inventory_slot(&mut state.input_inventory, 0, iron_plate, 1);
         state.crafting_progress_ticks = 17;
     }
     let before = crate::entity_access::assembler_state(&sim, assembler_id)
@@ -207,14 +197,16 @@ fn selecting_different_assembler_recipe_with_input_items_fails_without_mutation(
 
     sim.select_assembler_recipe(assembler_id, gear_recipe)
         .expect("initial recipe should be accepted");
-    sim.entities
-        .assembler_state_mut(assembler_id)
-        .expect("assembler should expose mutable state")
-        .input_inventory
-        .slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+    set_inventory_slot(
+        &mut sim
+            .entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .input_inventory,
+        0,
+        iron_plate,
+        1,
+    );
     let before = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state")
         .clone();
@@ -242,14 +234,16 @@ fn selecting_different_assembler_recipe_with_output_items_fails_without_mutation
 
     sim.select_assembler_recipe(assembler_id, gear_recipe)
         .expect("initial recipe should be accepted");
-    sim.entities
-        .assembler_state_mut(assembler_id)
-        .expect("assembler should expose mutable state")
-        .output_inventory
-        .slots[0] = Some(ItemStack {
-        item_id: iron_gear_wheel,
-        count: 1,
-    });
+    set_inventory_slot(
+        &mut sim
+            .entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .output_inventory,
+        0,
+        iron_gear_wheel,
+        1,
+    );
     let before = crate::entity_access::assembler_state(&sim, assembler_id)
         .expect("assembler should expose state")
         .clone();
@@ -306,14 +300,16 @@ fn assembler_ingredient_status_reports_partial_ingredients() {
 
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
-    sim.entities
-        .assembler_state_mut(assembler_id)
-        .expect("assembler should expose mutable state")
-        .input_inventory
-        .slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+    set_inventory_slot(
+        &mut sim
+            .entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .input_inventory,
+        0,
+        iron_plate,
+        1,
+    );
 
     assert_eq!(
         sim.assembler_ingredient_status(assembler_id)
@@ -335,12 +331,13 @@ fn inserter_moves_ingredients_from_chest_to_assembler() {
     let (chest_id, inserter_id, assembler_id) = place_chest_inserter_assembler_line(&mut sim);
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_plate,
+        1,
+    );
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -364,14 +361,16 @@ fn inserter_removes_assembler_output_to_chest() {
     let mut sim = Simulation::new_test_world(123);
     let iron_gear_wheel = item_id(&sim.world.prototypes, "iron_gear_wheel");
     let (assembler_id, inserter_id, chest_id) = place_assembler_inserter_chest_line(&mut sim);
-    sim.entities
-        .assembler_state_mut(assembler_id)
-        .expect("assembler should expose mutable state")
-        .output_inventory
-        .slots[0] = Some(ItemStack {
-        item_id: iron_gear_wheel,
-        count: 1,
-    });
+    set_inventory_slot(
+        &mut sim
+            .entities
+            .assembler_state_mut(assembler_id)
+            .expect("assembler should expose mutable state")
+            .output_inventory,
+        0,
+        iron_gear_wheel,
+        1,
+    );
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
