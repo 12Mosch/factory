@@ -19,6 +19,7 @@ impl Simulation {
             power: &mut self.power,
             statistics: StatisticsContext::new(self.tick, &mut self.statistics),
             onboarding_progress: &mut self.onboarding_progress,
+            pollution_emitters: &mut self.pollution_emitters,
             base,
         }
     }

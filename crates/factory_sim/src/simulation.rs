@@ -49,6 +49,7 @@ pub use crate::machines::{
     MachineStatus, PumpjackState,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
+pub(crate) use crate::pollution::PollutionEmissionRate;
 pub use crate::pollution::PollutionState;
 pub use crate::power::{
     BoilerError, BoilerState, ElectricConsumerState, ElectricPoleState, EntityPowerStatus,
@@ -135,6 +136,8 @@ pub struct Simulation {
     fluids: FluidSubsystem,
     statistics: StatisticsSubsystem,
     pollution: PollutionState,
+    #[serde(skip, default)]
+    pollution_emitters: PollutionEmitterIndex,
     enemies: EnemySubsystem,
     config: SimulationConfig,
 
@@ -144,6 +147,38 @@ pub struct Simulation {
     enemy_navigation: enemy_navigation::EnemyNavigation,
     #[serde(skip)]
     transport: TransportLaneCache,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PollutionEmitter {
+    chunk: ChunkCoord,
+    rate: PollutionEmissionRate,
+    active: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+struct PollutionEmitterIndex {
+    emitters: BTreeMap<EntityId, PollutionEmitter>,
+    active_emitters: Vec<EntityId>,
+}
+
+impl PollutionEmitterIndex {
+    fn begin_tick(&mut self) {
+        for entity_id in self.active_emitters.drain(..) {
+            if let Some(emitter) = self.emitters.get_mut(&entity_id) {
+                emitter.active = false;
+            }
+        }
+    }
+
+    fn mark_active(&mut self, entity_id: EntityId) {
+        if let Some(emitter) = self.emitters.get_mut(&entity_id)
+            && !emitter.active
+        {
+            emitter.active = true;
+            self.active_emitters.push(entity_id);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]

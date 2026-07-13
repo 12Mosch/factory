@@ -48,6 +48,7 @@ impl Simulation {
             fluids: FluidSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
+            pollution_emitters: PollutionEmitterIndex::default(),
             enemies: EnemySubsystem::default(),
             config,
             attack_targets: enemy_ops::AttackTargetCache::default(),
@@ -83,6 +84,7 @@ impl Simulation {
         self.advance_statistics_to_current_tick();
         self.reveal_chunks_around_player();
         self.seed_enemy_spawners_in_new_chunks();
+        self.pollution_emitters.begin_tick();
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });

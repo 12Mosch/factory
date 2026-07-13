@@ -5,6 +5,25 @@ use std::collections::BTreeMap;
 /// Ticks per minute at the fixed 60 Hz simulation rate.
 pub(crate) const POLLUTION_TICKS_PER_MINUTE: u64 = 3600;
 
+/// A pollution rate converted to the fixed-tick representation used while
+/// emitting. Keeping this alongside the emitter avoids repeating prototype
+/// lookups and unit conversion in the hot path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PollutionEmissionRate {
+    whole_micro_per_tick: u64,
+    remainder_per_tick: u64,
+}
+
+impl PollutionEmissionRate {
+    pub(crate) fn from_per_minute_milli(per_minute_milli: u32) -> Self {
+        let numerator_per_tick = u64::from(per_minute_milli) * 1_000;
+        Self {
+            whole_micro_per_tick: numerator_per_tick / POLLUTION_TICKS_PER_MINUTE,
+            remainder_per_tick: numerator_per_tick % POLLUTION_TICKS_PER_MINUTE,
+        }
+    }
+}
+
 /// Chunk-level pollution field. Amounts are stored in micro-pollution-units
 /// (one millionth of a pollution unit) so per-tick emission and absorption
 /// stay in integer arithmetic. Fractional micro-units are carried between
@@ -55,14 +74,19 @@ impl PollutionState {
     pub(crate) fn accrue_machine_emission(
         &mut self,
         entity_id: EntityId,
-        per_minute_milli: u64,
+        rate: PollutionEmissionRate,
     ) -> u64 {
-        accrue_rate(
-            &mut self.machine_emission_remainders,
-            entity_id,
-            per_minute_milli,
-            1,
-        )
+        let remainder = self
+            .machine_emission_remainders
+            .entry(entity_id)
+            .or_default();
+        let numerator = rate.remainder_per_tick + *remainder;
+        let amount = rate.whole_micro_per_tick + numerator / POLLUTION_TICKS_PER_MINUTE;
+        *remainder = numerator % POLLUTION_TICKS_PER_MINUTE;
+        if *remainder == 0 {
+            self.machine_emission_remainders.remove(&entity_id);
+        }
+        amount
     }
 
     pub(crate) fn remove_machine_emission_remainder(&mut self, entity_id: EntityId) {

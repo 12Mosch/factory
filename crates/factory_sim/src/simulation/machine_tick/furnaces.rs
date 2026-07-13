@@ -52,6 +52,9 @@ impl MachineTickContext<'_> {
             if let Some(item_id) = advance.consumed_fuel {
                 self.record_item_consumed(item_id, 1);
             }
+            if !matches!(advance.result, ProgressAdvance::Blocked) {
+                self.mark_pollution_emitter_active(entity_id);
+            }
 
             if !matches!(advance.result, ProgressAdvance::Completed) {
                 continue;
