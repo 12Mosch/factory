@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::btree_map::Entry;
 
 impl Simulation {
     pub fn pollution(&self) -> &PollutionState {
@@ -114,18 +115,19 @@ impl Simulation {
             .retain(|_, amount| *amount >= POLLUTION_MIN_RETAINED_MICRO);
     }
 
-    fn spread_pollution_to_neighbors(&mut self) {
-        // Outflows are computed from a snapshot so a chunk's outgoing share
-        // is based on its pre-spread amount regardless of map order.
-        let snapshot: Vec<(ChunkCoord, u64)> = self
+    pub(super) fn spread_pollution_to_neighbors(&mut self) {
+        // Accumulate against the unchanged field so every outflow uses the
+        // pre-spread amount. The scratch allocations are retained between
+        // passes and each affected BTreeMap entry is updated only once.
+        self.pollution_diffusion.deltas.clear();
+        self.pollution_diffusion.ordered_deltas.clear();
+
+        for (&coord, &amount) in self
             .pollution
             .chunks
             .iter()
             .filter(|(_, amount)| **amount >= POLLUTION_MIN_TO_SPREAD_MICRO)
-            .map(|(coord, amount)| (*coord, *amount))
-            .collect();
-
-        for (coord, amount) in snapshot {
+        {
             let share = amount / 1000 * POLLUTION_SPREAD_PER_NEIGHBOR_PERMILLE;
             if share == 0 {
                 continue;
@@ -135,10 +137,59 @@ impl Simulation {
                 let (Some(x), Some(y)) = (coord.x.checked_add(dx), coord.y.checked_add(dy)) else {
                     continue;
                 };
-                self.pollution.add_micro(ChunkCoord { x, y }, share);
+                let destination = ChunkCoord { x, y };
+                let delta = self
+                    .pollution_diffusion
+                    .deltas
+                    .entry(destination)
+                    .or_default();
+                if coord < destination {
+                    delta.incoming_before_outflow =
+                        delta.incoming_before_outflow.saturating_add(share);
+                } else {
+                    delta.incoming_after_outflow =
+                        delta.incoming_after_outflow.saturating_add(share);
+                }
                 moved += share;
             }
-            self.pollution.remove_micro(coord, moved);
+            self.pollution_diffusion
+                .deltas
+                .entry(coord)
+                .or_default()
+                .outgoing = moved;
+        }
+
+        self.pollution_diffusion
+            .ordered_deltas
+            .extend(self.pollution_diffusion.deltas.drain());
+        self.pollution_diffusion
+            .ordered_deltas
+            .sort_unstable_by_key(|(coord, _)| *coord);
+
+        for (coord, delta) in self.pollution_diffusion.ordered_deltas.drain(..) {
+            match self.pollution.chunks.entry(coord) {
+                Entry::Occupied(mut entry) => {
+                    let amount = entry
+                        .get()
+                        .saturating_add(delta.incoming_before_outflow)
+                        .saturating_sub(delta.outgoing)
+                        .saturating_add(delta.incoming_after_outflow);
+                    if amount == 0 {
+                        entry.remove();
+                    } else {
+                        entry.insert(amount);
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    debug_assert_eq!(delta.outgoing, 0);
+                    let amount = delta
+                        .incoming_before_outflow
+                        .saturating_add(delta.incoming_after_outflow);
+                    if amount != 0 {
+                        entry.insert(amount);
+                    }
+                }
+            }
         }
     }
 

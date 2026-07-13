@@ -6,7 +6,8 @@ use factory_data::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId};
 use serde::{Deserialize, Serialize};
 pub(crate) use smallvec::SmallVec;
 pub(crate) use std::collections::VecDeque;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::BuildHasherDefault;
 pub(crate) use std::hash::{Hash, Hasher};
 
 pub use crate::combat::{
@@ -138,6 +139,8 @@ pub struct Simulation {
     pollution: PollutionState,
     #[serde(skip, default)]
     pollution_emitters: PollutionEmitterIndex,
+    #[serde(skip)]
+    pollution_diffusion: PollutionDiffusionBuffer,
     enemies: EnemySubsystem,
     config: SimulationConfig,
 
@@ -160,6 +163,34 @@ struct PollutionEmitter {
 struct PollutionEmitterIndex {
     emitters: BTreeMap<EntityId, PollutionEmitter>,
     active_emitters: Vec<EntityId>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PollutionChunkDelta {
+    incoming_before_outflow: u64,
+    outgoing: u64,
+    incoming_after_outflow: u64,
+}
+
+/// Reusable scratch storage for coalescing a diffusion pass before touching
+/// the ordered pollution field. Sorted application makes the result
+/// independent of hash-table iteration order.
+#[derive(Clone, Debug, Default)]
+struct PollutionDiffusionBuffer {
+    deltas: HashMap<ChunkCoord, PollutionChunkDelta, BuildHasherDefault<StableHasher>>,
+    ordered_deltas: Vec<(ChunkCoord, PollutionChunkDelta)>,
+}
+
+// Diffusion scratch is transient and is empty between passes, so retained
+// allocation capacity does not participate in durable simulation identity.
+impl PartialEq for PollutionDiffusionBuffer {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Hash for PollutionDiffusionBuffer {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
 impl PollutionEmitterIndex {
