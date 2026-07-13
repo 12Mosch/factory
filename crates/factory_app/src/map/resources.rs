@@ -6,12 +6,75 @@ const MAX_DIRTY_REGION_RECTS: usize = 512;
 pub const MAX_MAP_TEXTURE_SIDE_TILES: u32 = 2048;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum MapLayer {
+pub enum MapTextureLayer {
     #[default]
     Surface,
     Resources,
-    Entities,
-    Threat,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MapOverlay {
+    Pollution,
+    Resources,
+    PowerNetworks,
+    ProductionProblems,
+    Enemies,
+    ConstructionPlans,
+}
+
+impl MapOverlay {
+    pub const ALL: [Self; 6] = [
+        Self::Pollution,
+        Self::Resources,
+        Self::PowerNetworks,
+        Self::ProductionProblems,
+        Self::Enemies,
+        Self::ConstructionPlans,
+    ];
+}
+
+const MAP_OVERLAY_COUNT: usize = MapOverlay::ALL.len();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapOverlaySettings {
+    enabled: [bool; MAP_OVERLAY_COUNT],
+}
+
+impl Default for MapOverlaySettings {
+    fn default() -> Self {
+        let mut settings = Self {
+            enabled: [false; MAP_OVERLAY_COUNT],
+        };
+        settings.set_enabled(MapOverlay::Resources, true);
+        settings.set_enabled(MapOverlay::Enemies, true);
+        settings.set_enabled(MapOverlay::ConstructionPlans, true);
+        settings
+    }
+}
+
+impl MapOverlaySettings {
+    pub fn is_enabled(self, overlay: MapOverlay) -> bool {
+        self.enabled[overlay as usize]
+    }
+
+    pub fn set_enabled(&mut self, overlay: MapOverlay, enabled: bool) {
+        self.enabled[overlay as usize] = enabled;
+    }
+
+    pub fn toggle(&mut self, overlay: MapOverlay) -> bool {
+        let enabled = !self.is_enabled(overlay);
+        self.set_enabled(overlay, enabled);
+        enabled
+    }
+
+    pub(crate) fn enabled_bits(self) -> u64 {
+        self.enabled
+            .into_iter()
+            .enumerate()
+            .fold(0, |bits, (index, enabled)| {
+                bits | (u64::from(enabled) << index)
+            })
+    }
 }
 
 #[derive(Resource)]
@@ -20,7 +83,6 @@ pub struct MapViewState {
     pub center_tile: Vec2,
     pub zoom: f32,
     pub follow_player: bool,
-    pub selected_layer: MapLayer,
 }
 
 impl Default for MapViewState {
@@ -30,7 +92,6 @@ impl Default for MapViewState {
             center_tile: Vec2::ZERO,
             zoom: 1.0,
             follow_player: true,
-            selected_layer: MapLayer::Surface,
         }
     }
 }
@@ -47,10 +108,51 @@ pub struct MapOverlayMarkers {
     pub waypoints: Vec<MapPointMarker>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MapDetailCacheKey {
+    pub crop_bounds: MapTextureBounds,
+    pub image_size_bits: (u32, u32),
+    pub player_bits: (u32, u32),
+    pub camera_bits: Option<(u32, u32, u32, u32)>,
+    pub chunk_cursor: Option<ChunkCoord>,
+    pub overlay_bits: u64,
+    pub debug_reveal_all: bool,
+    pub reveal_revision: u64,
+    pub topology_revision: u64,
+    pub simulation_tick: u64,
+    pub ping_count: usize,
+    pub waypoint_count: usize,
+}
+
+#[derive(Resource, Default)]
+pub struct MapDetailCache {
+    entries: BTreeMap<bevy::prelude::Entity, MapDetailCacheKey>,
+}
+
+impl MapDetailCache {
+    pub(crate) fn needs_rebuild(
+        &mut self,
+        root: bevy::prelude::Entity,
+        key: MapDetailCacheKey,
+    ) -> bool {
+        if self.entries.get(&root) == Some(&key) {
+            false
+        } else {
+            self.entries.insert(root, key);
+            true
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Resource, Default)]
 pub struct MapDisplaySettings {
     pub debug_reveal_all: bool,
     pub show_chunk_grid: bool,
+    pub overlays: MapOverlaySettings,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,6 +190,31 @@ impl MapTextureBounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_defaults_enable_resources_enemies_and_plans_only() {
+        let settings = MapOverlaySettings::default();
+        for overlay in MapOverlay::ALL {
+            assert_eq!(
+                settings.is_enabled(overlay),
+                matches!(
+                    overlay,
+                    MapOverlay::Resources | MapOverlay::Enemies | MapOverlay::ConstructionPlans
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_toggles_are_independent() {
+        let mut settings = MapOverlaySettings::default();
+        settings.toggle(MapOverlay::Pollution);
+        assert!(settings.is_enabled(MapOverlay::Pollution));
+        assert!(settings.is_enabled(MapOverlay::Resources));
+        settings.set_enabled(MapOverlay::Enemies, false);
+        assert!(!settings.is_enabled(MapOverlay::Enemies));
+        assert!(settings.is_enabled(MapOverlay::ConstructionPlans));
+    }
 
     #[test]
     fn map_texture_bounds_contains_tile_handles_extreme_edges() {
@@ -171,19 +298,19 @@ mod tests {
 
 #[derive(Resource, Default)]
 pub struct MapTextureCache {
-    pub layers: BTreeMap<MapLayer, MapLayerTextureCache>,
+    pub layers: BTreeMap<MapTextureLayer, MapLayerTextureCache>,
 }
 
 impl MapTextureCache {
-    pub fn layer(&self, layer: MapLayer) -> Option<&MapLayerTextureCache> {
+    pub fn layer(&self, layer: MapTextureLayer) -> Option<&MapLayerTextureCache> {
         self.layers.get(&layer)
     }
 
     pub fn surface(&self) -> Option<&MapLayerTextureCache> {
-        self.layer(MapLayer::Surface)
+        self.layer(MapTextureLayer::Surface)
     }
 
-    pub fn layer_mut(&mut self, layer: MapLayer) -> &mut MapLayerTextureCache {
+    pub fn layer_mut(&mut self, layer: MapTextureLayer) -> &mut MapLayerTextureCache {
         self.layers.entry(layer).or_default()
     }
 }

@@ -10,7 +10,7 @@ use crate::build::resources::{
     BlueprintLibraryWindowState, BuildMenuState, BuildPlacementState, PlannerState, PlannerTool,
 };
 use crate::input::resources::AppInputState;
-use crate::map::resources::{MapDisplaySettings, MapLayer, MapTextureCache, MapViewState};
+use crate::map::resources::{MapDisplaySettings, MapOverlay, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::SaveLoadWindowState;
 use crate::simulation::SimCommandRequest;
@@ -372,6 +372,7 @@ pub(crate) struct FullscreenMapInputResources<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     ui_buttons: Query<'w, 's, &'static Interaction, With<Button>>,
     state: ResMut<'w, MapViewState>,
+    settings: ResMut<'w, MapDisplaySettings>,
 }
 
 pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResources) {
@@ -390,14 +391,17 @@ pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResou
             resources.state.center_tile = player_center;
             resources.state.follow_player = true;
         }
-        if keyboard.just_pressed(KeyCode::Digit1) {
-            resources.state.selected_layer = MapLayer::Surface;
-        }
-        if keyboard.just_pressed(KeyCode::Digit2) {
-            resources.state.selected_layer = MapLayer::Resources;
-        }
-        if keyboard.just_pressed(KeyCode::Digit3) {
-            resources.state.selected_layer = MapLayer::Entities;
+        for (key, overlay) in [
+            (KeyCode::Digit1, MapOverlay::Pollution),
+            (KeyCode::Digit2, MapOverlay::Resources),
+            (KeyCode::Digit3, MapOverlay::PowerNetworks),
+            (KeyCode::Digit4, MapOverlay::ProductionProblems),
+            (KeyCode::Digit5, MapOverlay::Enemies),
+            (KeyCode::Digit6, MapOverlay::ConstructionPlans),
+        ] {
+            if keyboard.just_pressed(key) {
+                resources.settings.overlays.toggle(overlay);
+            }
         }
     }
 

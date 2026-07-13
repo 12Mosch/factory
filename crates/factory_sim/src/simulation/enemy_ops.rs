@@ -22,6 +22,48 @@ const SPAWN_SEARCH_RINGS: i64 = 3;
 /// independent of terrain and resource noise.
 const SPAWNER_PLACEMENT_SALT: u64 = 0x656e_656d_795f_6261;
 
+#[derive(Clone, Copy)]
+struct EnemyMapBounds {
+    min_x: WorldTileCoord,
+    max_x: WorldTileCoord,
+    min_y: WorldTileCoord,
+    max_y: WorldTileCoord,
+}
+
+impl EnemyMapBounds {
+    fn new(
+        min_x: WorldTileCoord,
+        max_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_y: WorldTileCoord,
+    ) -> Option<Self> {
+        (min_x <= max_x && min_y <= max_y).then_some(Self {
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        })
+    }
+
+    fn contains_point(self, x: WorldTileCoord, y: WorldTileCoord) -> bool {
+        x >= self.min_x && x <= self.max_x && y >= self.min_y && y <= self.max_y
+    }
+
+    fn intersects_sector(self, coord: ChunkCoord) -> bool {
+        let (x, y) = coord.min_tile();
+        let chunk_max_x = x + i64::from(CHUNK_SIZE) - 1;
+        let chunk_max_y = y + i64::from(CHUNK_SIZE) - 1;
+        x <= self.max_x && chunk_max_x >= self.min_x && y <= self.max_y && chunk_max_y >= self.min_y
+    }
+
+    fn intersects_location(self, location: ThreatLocation) -> bool {
+        match location {
+            ThreatLocation::Exact { x, y } => self.contains_point(x, y),
+            ThreatLocation::Sector(coord) => self.intersects_sector(coord),
+        }
+    }
+}
+
 impl Simulation {
     pub fn enemies(&self) -> &EnemySubsystem {
         &self.enemies
@@ -111,9 +153,28 @@ impl Simulation {
     }
 
     pub fn enemy_map_snapshot(&self) -> EnemyMapSnapshot {
+        self.build_enemy_map_snapshot(None)
+    }
+
+    pub fn enemy_map_snapshot_in_tile_rect(
+        &self,
+        min_x: WorldTileCoord,
+        max_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_y: WorldTileCoord,
+    ) -> EnemyMapSnapshot {
+        let Some(bounds) = EnemyMapBounds::new(min_x, max_x, min_y, max_y) else {
+            return EnemyMapSnapshot::default();
+        };
+        self.build_enemy_map_snapshot(Some(bounds))
+    }
+
+    fn build_enemy_map_snapshot(&self, bounds: Option<EnemyMapBounds>) -> EnemyMapSnapshot {
         let mut snapshot = EnemyMapSnapshot::default();
         for base in self.enemies.bases.values() {
-            if base.pollution_contact {
+            if base.pollution_contact
+                && bounds.is_none_or(|bounds| bounds.intersects_sector(base.anchor))
+            {
                 snapshot.contacted_sectors.push(base.anchor);
             }
             if self.chart.revealed_chunks.contains(&base.anchor)
@@ -122,6 +183,7 @@ impl Simulation {
                     .iter()
                     .next()
                     .and_then(|id| self.entities.placed_entities.get(id))
+                && bounds.is_none_or(|bounds| bounds.contains_point(spawner.x, spawner.y))
             {
                 snapshot.known_bases.push((base.id, spawner.x, spawner.y));
             }
@@ -148,17 +210,20 @@ impl Simulation {
             }) else {
                 continue;
             };
+            if bounds.is_some_and(|bounds| !bounds.intersects_location(location)) {
+                continue;
+            }
             snapshot.raids.push((raid.id, location));
             if let Some(target) = raid.target {
                 snapshot.raid_targets.push((raid.id, target));
             }
         }
-        for party in self
-            .enemies
-            .expansions
-            .values()
-            .filter(|party| party.spotted)
-        {
+        for party in self.enemies.expansions.values().filter(|party| {
+            party.spotted
+                && bounds.is_none_or(|bounds| {
+                    bounds.contains_point(party.destination.0, party.destination.1)
+                })
+        }) {
             snapshot.expansions.push((
                 party.id,
                 ThreatLocation::Exact {

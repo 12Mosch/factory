@@ -1,12 +1,16 @@
 use bevy::prelude::*;
-use factory_sim::{CHUNK_SIZE, ChunkCoord, EntityFootprint, Simulation, ThreatLocation};
+use factory_data::EntityKind;
+use factory_sim::{
+    CHUNK_SIZE, ChunkCoord, EntityFootprint, MachineStatus, Simulation, ThreatLocation,
+};
 
-use crate::map::resources::{MapDisplaySettings, MapLayer, MapOverlayMarkers, MapTextureBounds};
+use crate::map::resources::{MapDisplaySettings, MapOverlay, MapOverlayMarkers, MapTextureBounds};
 use crate::rendering::entities::entity_prototype_render_style;
 
 use super::components::{
-    FullMapImage, FullMapLayerButton, FullMapOverlayRoot, FullMapRecenterButton, FullMapRoot,
-    MinimapImage, MinimapOverlayRoot, MinimapRoot,
+    FullMapImage, FullMapOverlayButton, FullMapOverlayRoot, FullMapRecenterButton,
+    FullMapResourceImage, FullMapRoot, MinimapImage, MinimapOverlayRoot, MinimapResourceImage,
+    MinimapRoot,
 };
 use super::layout::{
     MapTileRect, MapUiRect, map_point_for_world_position, map_rect_for_chunk,
@@ -46,7 +50,6 @@ pub(super) struct MapOverlayContext<'a> {
     pub(super) player_position: Vec2,
     pub(super) sim: &'a Simulation,
     pub(super) settings: &'a MapDisplaySettings,
-    pub(super) layer: MapLayer,
     pub(super) camera_rect: Option<MapTileRect>,
     pub(super) chunk_cursor: Option<ChunkCoord>,
     pub(super) markers: &'a MapOverlayMarkers,
@@ -88,7 +91,10 @@ pub(super) fn rebuild_map_overlay(
 
             spawn_pollution_overlays(overlay, &context);
             spawn_entity_overlays(overlay, &context);
+            spawn_power_overlays(overlay, &context);
+            spawn_production_problem_overlays(overlay, &context);
             spawn_threat_overlays(overlay, &context);
+            spawn_construction_overlays(overlay, &context);
 
             spawn_point_overlay(
                 overlay,
@@ -137,11 +143,15 @@ fn spawn_pollution_overlays(
     // Pollution level rendered at full haze opacity (10 pollution units).
     const FULL_HAZE_POLLUTION_MICRO: u64 = 10_000_000;
 
-    if context.layer == MapLayer::Resources {
+    if !context.settings.overlays.is_enabled(MapOverlay::Pollution) {
         return;
     }
 
-    for (coord, amount_micro) in context.sim.pollution().polluted_chunks() {
+    for coord in crop_chunk_coords(context.crop_bounds) {
+        if !context.sim.world().chunks.contains_key(&coord) {
+            continue;
+        }
+        let amount_micro = context.sim.pollution().amount_micro(coord);
         if amount_micro < MIN_VISIBLE_POLLUTION_MICRO {
             continue;
         }
@@ -169,10 +179,17 @@ fn spawn_threat_overlays(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
     context: &MapOverlayContext,
 ) {
-    if context.layer == MapLayer::Resources || context.layer == MapLayer::Entities {
+    if !context.settings.overlays.is_enabled(MapOverlay::Enemies) {
         return;
     }
-    let snapshot = context.sim.enemy_map_snapshot();
+    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
+    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    let snapshot = context.sim.enemy_map_snapshot_in_tile_rect(
+        context.crop_bounds.min_x,
+        max_x,
+        context.crop_bounds.min_y,
+        max_y,
+    );
     for coord in snapshot.contacted_sectors {
         if let Some(rect) = map_rect_for_chunk(context.crop_bounds, context.image_size, coord) {
             spawn_rect_overlay(
@@ -228,14 +245,291 @@ fn spawn_threat_overlays(
     }
 }
 
+fn spawn_power_overlays(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    context: &MapOverlayContext,
+) {
+    if !context
+        .settings
+        .overlays
+        .is_enabled(MapOverlay::PowerNetworks)
+        || context.crop_bounds.width == 0
+        || context.crop_bounds.height == 0
+    {
+        return;
+    }
+    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
+    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    let snapshot = context.sim.power_map_snapshot_in_tile_rect(
+        context.crop_bounds.min_x,
+        max_x,
+        context.crop_bounds.min_y,
+        max_y,
+    );
+    let poles = snapshot
+        .poles
+        .iter()
+        .filter(|pole| {
+            context
+                .sim
+                .entities()
+                .placed_entity(pole.entity_id)
+                .is_some_and(|placed| {
+                    entity_footprint_is_visible(context.sim, context.settings, placed.footprint)
+                })
+        })
+        .map(|pole| {
+            (
+                pole.entity_id,
+                Vec2::new(pole.center_x2 as f32 * 0.5, pole.center_y2 as f32 * 0.5),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for connection in snapshot.connections {
+        let (Some(start), Some(end)) = (
+            poles.get(&connection.first_pole_id),
+            poles.get(&connection.second_pole_id),
+        ) else {
+            continue;
+        };
+        let color = power_network_color(connection.network_id, connection.satisfaction_permyriad);
+        spawn_world_line(
+            parent,
+            context.crop_bounds,
+            context.image_size,
+            *start,
+            *end,
+            1.5,
+            color,
+        );
+    }
+    for pole in snapshot.poles {
+        if !poles.contains_key(&pole.entity_id) {
+            continue;
+        }
+        spawn_point_overlay(
+            parent,
+            context.crop_bounds,
+            context.image_size,
+            Vec2::new(pole.center_x2 as f32 * 0.5, pole.center_y2 as f32 * 0.5),
+            6.0,
+            power_network_color(pole.network_id, pole.satisfaction_permyriad),
+            Color::BLACK,
+        );
+    }
+    for consumer in snapshot.consumers {
+        if !entity_footprint_is_visible(context.sim, context.settings, consumer.footprint) {
+            continue;
+        }
+        if consumer.network_id.is_none() {
+            let center = Vec2::new(
+                consumer.footprint.x as f32 + consumer.footprint.width as f32 * 0.5,
+                consumer.footprint.y as f32 + consumer.footprint.height as f32 * 0.5,
+            );
+            spawn_point_overlay(
+                parent,
+                context.crop_bounds,
+                context.image_size,
+                center,
+                7.0,
+                Color::srgb(0.95, 0.10, 0.08),
+                Color::BLACK,
+            );
+        }
+    }
+}
+
+fn power_network_color(network_id: u32, satisfaction_permyriad: u32) -> Color {
+    if satisfaction_permyriad < 5_000 {
+        return Color::srgb(0.95, 0.12, 0.08);
+    }
+    if satisfaction_permyriad < 9_500 {
+        return Color::srgb(1.0, 0.58, 0.08);
+    }
+    const COLORS: [[f32; 3]; 8] = [
+        [0.24, 0.78, 1.0],
+        [0.38, 0.92, 0.52],
+        [0.84, 0.52, 1.0],
+        [1.0, 0.82, 0.26],
+        [0.20, 0.90, 0.82],
+        [0.96, 0.44, 0.68],
+        [0.62, 0.72, 1.0],
+        [0.72, 0.94, 0.30],
+    ];
+    let rgb = COLORS[network_id as usize % COLORS.len()];
+    Color::srgb(rgb[0], rgb[1], rgb[2])
+}
+
+fn spawn_production_problem_overlays(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    context: &MapOverlayContext,
+) {
+    if !context
+        .settings
+        .overlays
+        .is_enabled(MapOverlay::ProductionProblems)
+        || context.crop_bounds.width == 0
+        || context.crop_bounds.height == 0
+    {
+        return;
+    }
+    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
+    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    for entity_id in context.sim.entities().occupancy().entity_ids_in_tile_rect(
+        context.crop_bounds.min_x,
+        max_x,
+        context.crop_bounds.min_y,
+        max_y,
+    ) {
+        let Some(status) = context.sim.machine_status_for_entity(entity_id) else {
+            continue;
+        };
+        if matches!(status, MachineStatus::Working | MachineStatus::Idle) {
+            continue;
+        }
+        let Some(placed) = context.sim.entities().placed_entity(entity_id) else {
+            continue;
+        };
+        if context
+            .sim
+            .catalog()
+            .entity(placed.prototype_id)
+            .is_some_and(|prototype| {
+                matches!(
+                    prototype.entity_kind,
+                    EntityKind::EnemySpawner | EntityKind::ResourcePatch
+                )
+            })
+        {
+            continue;
+        }
+        if !entity_footprint_is_visible(context.sim, context.settings, placed.footprint) {
+            continue;
+        }
+        let color = if status == MachineStatus::NoPower {
+            Color::srgb(0.96, 0.12, 0.08)
+        } else {
+            Color::srgb(1.0, 0.58, 0.08)
+        };
+        let center = Vec2::new(
+            placed.footprint.x as f32 + placed.footprint.width as f32 * 0.5,
+            placed.footprint.y as f32 + placed.footprint.height as f32 * 0.5,
+        );
+        spawn_point_overlay(
+            parent,
+            context.crop_bounds,
+            context.image_size,
+            center,
+            7.0,
+            color,
+            Color::BLACK,
+        );
+    }
+}
+
+fn spawn_construction_overlays(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    context: &MapOverlayContext,
+) {
+    if !context
+        .settings
+        .overlays
+        .is_enabled(MapOverlay::ConstructionPlans)
+        || context.crop_bounds.width == 0
+        || context.crop_bounds.height == 0
+    {
+        return;
+    }
+    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
+    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    let construction = context.sim.construction();
+    for ghost_id in construction.ghost_ids_in_tile_rect(
+        context.crop_bounds.min_x,
+        max_x,
+        context.crop_bounds.min_y,
+        max_y,
+    ) {
+        let Some(ghost) = construction.ghost(ghost_id) else {
+            continue;
+        };
+        if !entity_footprint_is_visible(context.sim, context.settings, ghost.footprint) {
+            continue;
+        }
+        if let Some(rect) =
+            map_rect_for_footprint(context.crop_bounds, context.image_size, ghost.footprint)
+        {
+            spawn_rect_overlay(
+                parent,
+                rect,
+                Color::srgba(0.22, 0.70, 1.0, 0.95),
+                Color::srgba(0.18, 0.58, 1.0, 0.16),
+                1.5,
+            );
+        }
+    }
+    for entity_id in context.sim.entities().occupancy().entity_ids_in_tile_rect(
+        context.crop_bounds.min_x,
+        max_x,
+        context.crop_bounds.min_y,
+        max_y,
+    ) {
+        if !construction.is_marked_for_deconstruction(entity_id) {
+            continue;
+        }
+        let Some(placed) = context.sim.entities().placed_entity(entity_id) else {
+            continue;
+        };
+        if !entity_footprint_is_visible(context.sim, context.settings, placed.footprint) {
+            continue;
+        }
+        if let Some(rect) =
+            map_rect_for_footprint(context.crop_bounds, context.image_size, placed.footprint)
+        {
+            let red = Color::srgba(1.0, 0.18, 0.12, 0.95);
+            spawn_rect_overlay(parent, rect, red, Color::srgba(0.82, 0.08, 0.05, 0.10), 1.5);
+            spawn_ui_line(
+                parent,
+                Vec2::new(rect.left, rect.top),
+                Vec2::new(rect.left + rect.width, rect.top + rect.height),
+                1.5,
+                red,
+            );
+            spawn_ui_line(
+                parent,
+                Vec2::new(rect.left + rect.width, rect.top),
+                Vec2::new(rect.left, rect.top + rect.height),
+                1.5,
+                red,
+            );
+        }
+    }
+}
+
+fn crop_chunk_coords(bounds: MapTextureBounds) -> impl Iterator<Item = ChunkCoord> {
+    if bounds.width == 0 || bounds.height == 0 {
+        return Vec::new().into_iter();
+    }
+    let max_x = bounds.min_x + i64::from(bounds.width.saturating_sub(1));
+    let max_y = bounds.min_y + i64::from(bounds.height.saturating_sub(1));
+    let mut coords = Vec::new();
+    if let (Some(min), Some(max)) = (
+        ChunkCoord::from_tile(bounds.min_x, bounds.min_y),
+        ChunkCoord::from_tile(max_x, max_y),
+    ) {
+        for y in min.y..=max.y {
+            for x in min.x..=max.x {
+                coords.push(ChunkCoord { x, y });
+            }
+        }
+    }
+    coords.into_iter()
+}
+
 fn spawn_entity_overlays(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
     context: &MapOverlayContext,
 ) {
-    if context.layer == MapLayer::Resources
-        || context.crop_bounds.width == 0
-        || context.crop_bounds.height == 0
-    {
+    if context.crop_bounds.width == 0 || context.crop_bounds.height == 0 {
         return;
     }
 
@@ -342,7 +636,94 @@ fn spawn_rect_overlay(
     ));
 }
 
-pub(super) fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, texture_rect: Rect) {
+fn spawn_world_line(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    bounds: MapTextureBounds,
+    image_size: Vec2,
+    start: Vec2,
+    end: Vec2,
+    width: f32,
+    color: Color,
+) {
+    let Some((start, end)) = clip_line_to_bounds(bounds, start, end) else {
+        return;
+    };
+    let Some(start) = map_point_for_world_position(bounds, image_size, start) else {
+        return;
+    };
+    let Some(end) = map_point_for_world_position(bounds, image_size, end) else {
+        return;
+    };
+    spawn_ui_line(parent, start, end, width, color);
+}
+
+fn spawn_ui_line(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    start: Vec2,
+    end: Vec2,
+    width: f32,
+    color: Color,
+) {
+    let delta = end - start;
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+    let midpoint = (start + end) * 0.5;
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(midpoint.x - length * 0.5),
+            top: Val::Px(midpoint.y - width * 0.5),
+            width: Val::Px(length),
+            height: Val::Px(width),
+            ..default()
+        },
+        BackgroundColor(color),
+        UiTransform::from_rotation(Rot2::radians(delta.y.atan2(delta.x))),
+    ));
+}
+
+fn clip_line_to_bounds(bounds: MapTextureBounds, start: Vec2, end: Vec2) -> Option<(Vec2, Vec2)> {
+    let min = Vec2::new(bounds.min_x as f32, bounds.min_y as f32);
+    let max = Vec2::new(
+        (bounds.min_x + i64::from(bounds.width)) as f32 - f32::EPSILON,
+        (bounds.min_y + i64::from(bounds.height)) as f32 - f32::EPSILON,
+    );
+    let delta = end - start;
+    let mut enter = 0.0_f32;
+    let mut exit = 1.0_f32;
+    for (p, q) in [
+        (-delta.x, start.x - min.x),
+        (delta.x, max.x - start.x),
+        (-delta.y, start.y - min.y),
+        (delta.y, max.y - start.y),
+    ] {
+        if p.abs() <= f32::EPSILON {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            enter = enter.max(t);
+        } else {
+            exit = exit.min(t);
+        }
+        if enter > exit {
+            return None;
+        }
+    }
+    Some((start + delta * enter, start + delta * exit))
+}
+
+pub(super) fn spawn_minimap(
+    commands: &mut Commands,
+    surface: Handle<Image>,
+    resources: Option<Handle<Image>>,
+    texture_rect: Rect,
+) {
     commands
         .spawn((
             Node {
@@ -374,7 +755,7 @@ pub(super) fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, text
             .with_children(|map| {
                 map.spawn((
                     ImageNode {
-                        image: handle,
+                        image: surface,
                         rect: Some(texture_rect),
                         image_mode: NodeImageMode::Stretch,
                         ..default()
@@ -389,6 +770,23 @@ pub(super) fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, text
                     },
                     MinimapImage,
                 ));
+                if let Some(image) = resources {
+                    map.spawn((
+                        ImageNode {
+                            image,
+                            rect: Some(texture_rect),
+                            image_mode: NodeImageMode::Stretch,
+                            ..default()
+                        },
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: Val::Percent(100.0),
+                            height: Val::Percent(100.0),
+                            ..default()
+                        },
+                        MinimapResourceImage,
+                    ));
+                }
                 spawn_overlay_root(map, MinimapOverlayRoot);
             });
         });
@@ -396,10 +794,11 @@ pub(super) fn spawn_minimap(commands: &mut Commands, handle: Handle<Image>, text
 
 pub(super) fn spawn_full_map(
     commands: &mut Commands,
-    handle: Handle<Image>,
+    surface: Handle<Image>,
+    resources: Option<Handle<Image>>,
     texture_rect: Rect,
     display_size: Vec2,
-    selected_layer: MapLayer,
+    overlays: crate::map::resources::MapOverlaySettings,
 ) {
     commands
         .spawn((
@@ -421,7 +820,7 @@ pub(super) fn spawn_full_map(
         .with_children(|root| {
             root.spawn((
                 ImageNode {
-                    image: handle,
+                    image: surface,
                     rect: Some(texture_rect),
                     image_mode: NodeImageMode::Stretch,
                     ..default()
@@ -431,6 +830,23 @@ pub(super) fn spawn_full_map(
                 FullMapImage,
             ))
             .with_children(|image| {
+                if let Some(resource_image) = resources {
+                    image.spawn((
+                        ImageNode {
+                            image: resource_image,
+                            rect: Some(texture_rect),
+                            image_mode: NodeImageMode::Stretch,
+                            ..default()
+                        },
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: Val::Percent(100.0),
+                            height: Val::Percent(100.0),
+                            ..default()
+                        },
+                        FullMapResourceImage,
+                    ));
+                }
                 spawn_overlay_root(image, FullMapOverlayRoot);
             });
             root.spawn((
@@ -439,16 +855,21 @@ pub(super) fn spawn_full_map(
                     left: Val::Px(28.0),
                     top: Val::Px(24.0),
                     column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    max_width: Val::Percent(90.0),
                     align_items: AlignItems::Center,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
             ))
             .with_children(|bar| {
-                spawn_layer_button(bar, MapLayer::Surface, "Surface", selected_layer);
-                spawn_layer_button(bar, MapLayer::Resources, "Resources", selected_layer);
-                spawn_layer_button(bar, MapLayer::Entities, "Entities", selected_layer);
-                spawn_layer_button(bar, MapLayer::Threat, "Threat", selected_layer);
+                spawn_overlay_button(bar, MapOverlay::Pollution, "1 Pollution", overlays);
+                spawn_overlay_button(bar, MapOverlay::Resources, "2 Resources", overlays);
+                spawn_overlay_button(bar, MapOverlay::PowerNetworks, "3 Power", overlays);
+                spawn_overlay_button(bar, MapOverlay::ProductionProblems, "4 Problems", overlays);
+                spawn_overlay_button(bar, MapOverlay::Enemies, "5 Enemies", overlays);
+                spawn_overlay_button(bar, MapOverlay::ConstructionPlans, "6 Plans", overlays);
                 spawn_recenter_button(bar);
             });
         });
@@ -468,13 +889,13 @@ pub(super) fn full_map_image_node(display_size: Vec2) -> Node {
     }
 }
 
-pub(super) fn spawn_layer_button(
+pub(super) fn spawn_overlay_button(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
-    layer: MapLayer,
+    overlay: MapOverlay,
     label: &'static str,
-    selected_layer: MapLayer,
+    overlays: crate::map::resources::MapOverlaySettings,
 ) {
-    let selected = layer == selected_layer;
+    let selected = overlays.is_enabled(overlay);
     parent
         .spawn((
             Button,
@@ -488,7 +909,7 @@ pub(super) fn spawn_layer_button(
             },
             BackgroundColor(layer_button_color(Interaction::None, selected)),
             BorderColor::all(layer_button_border_color(selected)),
-            FullMapLayerButton { layer },
+            FullMapOverlayButton { overlay },
         ))
         .with_child((
             Text::new(label),

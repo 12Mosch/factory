@@ -2,19 +2,19 @@ use bevy::color::Srgba;
 use bevy::prelude::{Color, ColorToPacked};
 use factory_sim::Simulation;
 
-use crate::map::resources::MapLayer;
+use crate::map::resources::MapTextureLayer;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color_variant, tile_color};
 use crate::rendering::map_texture::UNREVEALED_PIXEL;
 
 #[derive(Clone, Copy)]
 pub(super) struct MapLayerPainter {
-    layer: MapLayer,
+    layer: MapTextureLayer,
     ids: RenderPrototypeIds,
     seed: u64,
 }
 
 impl MapLayerPainter {
-    pub(super) fn new(layer: MapLayer, sim: &Simulation) -> Self {
+    pub(super) fn new(layer: MapTextureLayer, sim: &Simulation) -> Self {
         Self {
             layer,
             ids: RenderPrototypeIds::from_catalog(sim.catalog()),
@@ -31,6 +31,8 @@ impl MapLayerPainter {
     ) -> [u8; 4] {
         if revealed {
             self.revealed_tile_pixel(tile, x, y)
+        } else if self.layer == MapTextureLayer::Resources {
+            [0; 4]
         } else {
             UNREVEALED_PIXEL
         }
@@ -38,26 +40,15 @@ impl MapLayerPainter {
 
     fn revealed_tile_pixel(self, tile: &factory_sim::TileCell, x: i64, y: i64) -> [u8; 4] {
         match self.layer {
-            MapLayer::Surface => {
-                let terrain = darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.58);
-                tile.resource
-                    .map(|resource| {
-                        color_to_pixel(resource_color_variant(resource, self.ids, self.seed, x, y))
-                    })
-                    .unwrap_or(terrain)
+            MapTextureLayer::Surface => {
+                darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.58)
             }
-            MapLayer::Resources => tile
+            MapTextureLayer::Resources => tile
                 .resource
                 .map(|resource| {
                     color_to_pixel(resource_color_variant(resource, self.ids, self.seed, x, y))
                 })
-                .unwrap_or_else(|| {
-                    darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.24)
-                }),
-            MapLayer::Entities => {
-                darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.30)
-            }
-            MapLayer::Threat => darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.16),
+                .unwrap_or([0; 4]),
         }
     }
 }
@@ -92,14 +83,14 @@ mod tests {
             .and_then(|chunk| chunk.tiles.first())
             .expect("test world should contain at least one tile");
 
-        for layer in [
-            MapLayer::Surface,
-            MapLayer::Resources,
-            MapLayer::Entities,
-            MapLayer::Threat,
-        ] {
+        for layer in [MapTextureLayer::Surface, MapTextureLayer::Resources] {
             let painter = MapLayerPainter::new(layer, &sim);
-            assert_eq!(painter.pixel_for_tile(tile, 0, 0, false), UNREVEALED_PIXEL);
+            let expected = if layer == MapTextureLayer::Resources {
+                [0; 4]
+            } else {
+                UNREVEALED_PIXEL
+            };
+            assert_eq!(painter.pixel_for_tile(tile, 0, 0, false), expected);
         }
     }
 }

@@ -3,7 +3,7 @@ use factory_sim::{CHUNK_SIZE, ThreatEvent, ThreatEventKind, ThreatLocation, Thre
 use std::collections::VecDeque;
 
 use crate::constants::SIM_TICKS_PER_SECOND;
-use crate::map::resources::{MapLayer, MapViewState};
+use crate::map::resources::{MapDisplaySettings, MapOverlay, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 use crate::threat_events::ThreatEventCursor;
@@ -19,6 +19,7 @@ pub struct ThreatAlertRoot;
 #[derive(Component, Clone, Copy)]
 pub struct ThreatAlertCard {
     pub location: ThreatLocation,
+    pub kind: ThreatEventKind,
 }
 
 #[derive(Resource, Default)]
@@ -128,6 +129,7 @@ pub fn sync_threat_ui(
                             BorderColor::all(color),
                             ThreatAlertCard {
                                 location: event.location,
+                                kind: event.kind,
                             },
                         ))
                         .with_child((
@@ -146,13 +148,20 @@ type AlertClicks<'w, 's> = Query<
     (&'static Interaction, &'static ThreatAlertCard),
     (Changed<Interaction>, With<Button>),
 >;
-pub fn handle_threat_alert_clicks(mut clicks: AlertClicks, mut map: ResMut<MapViewState>) {
+pub fn handle_threat_alert_clicks(
+    mut clicks: AlertClicks,
+    mut map: ResMut<MapViewState>,
+    mut settings: ResMut<MapDisplaySettings>,
+) {
     for (interaction, card) in &mut clicks {
         if *interaction != Interaction::Pressed {
             continue;
         }
         map.open = true;
-        map.selected_layer = MapLayer::Threat;
+        settings.overlays.set_enabled(MapOverlay::Enemies, true);
+        if card.kind == ThreatEventKind::PollutionContact {
+            settings.overlays.set_enabled(MapOverlay::Pollution, true);
+        }
         map.follow_player = false;
         map.center_tile = match card.location {
             ThreatLocation::Exact { x, y } => Vec2::new(x as f32, y as f32),

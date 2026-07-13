@@ -7,7 +7,8 @@ use factory_app::audio::AudioSettingsWindowState;
 use factory_app::build::resources::{BuildMenuState, BuildPlacementState};
 use factory_app::input::resources::AppInputState;
 use factory_app::map::resources::{
-    MapDisplaySettings, MapLayer, MapTextureBounds, MapTextureCache, MapViewState,
+    MapDisplaySettings, MapOverlay, MapTextureBounds, MapTextureCache, MapTextureLayer,
+    MapViewState,
 };
 use factory_app::resources::SimResource;
 use factory_app::ui::resources::{
@@ -23,7 +24,11 @@ fn map_view_state_default_values() {
     assert_eq!(state.center_tile, Vec2::ZERO);
     assert_eq!(state.zoom, 1.0);
     assert!(state.follow_player);
-    assert_eq!(state.selected_layer, MapLayer::Surface);
+    let overlays = MapDisplaySettings::default().overlays;
+    assert!(overlays.is_enabled(MapOverlay::Resources));
+    assert!(overlays.is_enabled(MapOverlay::Enemies));
+    assert!(overlays.is_enabled(MapOverlay::ConstructionPlans));
+    assert!(!overlays.is_enabled(MapOverlay::Pollution));
 }
 
 #[test]
@@ -215,7 +220,7 @@ fn fullscreen_map_f_recenters_and_reenables_follow() {
 }
 
 #[test]
-fn fullscreen_map_digit_keys_select_layers() {
+fn fullscreen_map_digit_keys_toggle_overlays_independently() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     seed_map_bounds(&mut app);
     app.update();
@@ -223,26 +228,40 @@ fn fullscreen_map_digit_keys_select_layers() {
 
     press_key(&mut app, KeyCode::Digit2);
     app.update();
-    assert_eq!(
-        app.world().resource::<MapViewState>().selected_layer,
-        MapLayer::Resources
-    );
+    assert_overlay_states(&app, [false, false, false, false, true, true]);
 
     release_key(&mut app, KeyCode::Digit2);
     press_key(&mut app, KeyCode::Digit3);
     app.update();
-    assert_eq!(
-        app.world().resource::<MapViewState>().selected_layer,
-        MapLayer::Entities
-    );
+    assert_overlay_states(&app, [false, false, true, false, true, true]);
 
     release_key(&mut app, KeyCode::Digit3);
     press_key(&mut app, KeyCode::Digit1);
     app.update();
-    assert_eq!(
-        app.world().resource::<MapViewState>().selected_layer,
-        MapLayer::Surface
-    );
+    assert_overlay_states(&app, [true, false, true, false, true, true]);
+
+    release_key(&mut app, KeyCode::Digit1);
+    press_key(&mut app, KeyCode::Digit4);
+    app.update();
+    assert_overlay_states(&app, [true, false, true, true, true, true]);
+
+    release_key(&mut app, KeyCode::Digit4);
+    press_key(&mut app, KeyCode::Digit5);
+    app.update();
+    assert_overlay_states(&app, [true, false, true, true, false, true]);
+
+    release_key(&mut app, KeyCode::Digit5);
+    press_key(&mut app, KeyCode::Digit6);
+    app.update();
+    assert_overlay_states(&app, [true, false, true, true, false, false]);
+    release_key(&mut app, KeyCode::Digit6);
+}
+
+fn assert_overlay_states(app: &App, expected: [bool; 6]) {
+    let overlays = app.world().resource::<MapDisplaySettings>().overlays;
+    for (overlay, expected) in MapOverlay::ALL.into_iter().zip(expected) {
+        assert_eq!(overlays.is_enabled(overlay), expected, "{overlay:?}");
+    }
 }
 
 #[test]
@@ -518,7 +537,7 @@ fn escape_closes_settings_panel() {
 fn seed_map_bounds(app: &mut App) {
     app.world_mut()
         .resource_mut::<MapTextureCache>()
-        .layer_mut(MapLayer::Surface)
+        .layer_mut(MapTextureLayer::Surface)
         .bounds = Some(MapTextureBounds {
         min_x: -128,
         min_y: -128,
