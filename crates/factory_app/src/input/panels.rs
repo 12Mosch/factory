@@ -12,7 +12,7 @@ use crate::build::resources::{
 use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapOverlay, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
-use crate::save_load::SaveLoadWindowState;
+use crate::save_load::{PendingSaveConfirmation, SaveLoadWindowState};
 use crate::simulation::SimCommandRequest;
 use crate::ui::enemy_settings::EnemySettingsWindowState;
 use crate::ui::map_view::{
@@ -22,6 +22,7 @@ use crate::ui::map_view::{
 use crate::ui::resources::{
     CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
 };
+use crate::utils::remove_previous_word;
 use factory_sim::SimCommand;
 
 #[derive(SystemParam)]
@@ -92,6 +93,7 @@ pub(crate) struct PanelInputResources<'w> {
     enemy_settings: ResMut<'w, EnemySettingsWindowState>,
     technology: ResMut<'w, TechnologyWindowState>,
     save_load: ResMut<'w, SaveLoadWindowState>,
+    save_confirmation: ResMut<'w, PendingSaveConfirmation>,
     build_menu: ResMut<'w, BuildMenuState>,
     open_container: ResMut<'w, OpenContainer>,
     build_state: ResMut<'w, BuildPlacementState>,
@@ -227,11 +229,16 @@ pub(crate) fn handle_panel_input(
             resources.build_state.last_status = Default::default();
             resources.input_state.escape_consumed = true;
         } else if resources.save_load.open {
-            resources.save_load.open = false;
+            if *resources.save_confirmation != PendingSaveConfirmation::None {
+                *resources.save_confirmation = PendingSaveConfirmation::None;
+            } else {
+                resources.save_load.open = false;
+            }
             resources.input_state.escape_consumed = true;
         } else {
             resources.save_load.open = true;
             resources.save_load.tab = crate::save_load::SaveLoadTab::Save;
+            resources.save_load.refresh_on_open = true;
             resources.input_state.escape_consumed = true;
         }
     }
@@ -329,22 +336,9 @@ pub(crate) fn handle_blueprint_rename_input(
     }
 }
 
-fn remove_previous_word(text: &mut String) {
-    while text.ends_with(char::is_whitespace) {
-        text.pop();
-    }
-    while text
-        .chars()
-        .last()
-        .is_some_and(|character| !character.is_whitespace())
-    {
-        text.pop();
-    }
-}
-
 #[cfg(test)]
 mod build_menu_input_tests {
-    use super::remove_previous_word;
+    use crate::utils::remove_previous_word;
 
     #[test]
     fn control_backspace_removes_trailing_space_and_previous_word() {

@@ -16,6 +16,19 @@ pub(crate) fn compact_item_name(name: &str) -> String {
         .to_uppercase()
 }
 
+pub(crate) fn remove_previous_word(text: &mut String) {
+    while text.ends_with(char::is_whitespace) {
+        text.pop();
+    }
+    while text
+        .chars()
+        .last()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        text.pop();
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn find_entity_prototype_id(
     catalog: &factory_data::PrototypeCatalog,

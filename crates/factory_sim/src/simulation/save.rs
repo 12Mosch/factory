@@ -18,7 +18,7 @@ pub const SAVE_VERSION: u32 = 16;
 pub const PROTOTYPE_FORMAT_VERSION: u32 = 11;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
-const SAVE_HEADER_LEN: usize = 8 + 4 + 4 + 8;
+pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
 const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -35,6 +35,13 @@ impl From<bincode::Error> for SaveLoadError {
     fn from(error: bincode::Error) -> Self {
         Self::Codec(error)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveHeaderInfo {
+    pub save_version: u32,
+    pub prototype_format_version: u32,
+    pub prototype_hash: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -74,7 +81,7 @@ struct SimulationSnapshotOwned {
 
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
     let prototype_hash = prototype_hash(&sim.world.prototypes);
-    let mut bytes = Vec::with_capacity(SAVE_HEADER_LEN);
+    let mut bytes = Vec::with_capacity(SAVE_HEADER_SIZE);
     bytes.extend_from_slice(&SAVE_MAGIC);
     bytes.extend_from_slice(&SAVE_VERSION.to_le_bytes());
     bytes.extend_from_slice(&PROTOTYPE_FORMAT_VERSION.to_le_bytes());
@@ -132,7 +139,7 @@ pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
 }
 
 fn read_header(bytes: &[u8]) -> Result<(SaveHeader, &[u8]), SaveLoadError> {
-    if bytes.len() < SAVE_HEADER_LEN {
+    if bytes.len() < SAVE_HEADER_SIZE {
         return Err(unexpected_eof_error("save header is truncated"));
     }
 
@@ -148,7 +155,23 @@ fn read_header(bytes: &[u8]) -> Result<(SaveHeader, &[u8]), SaveLoadError> {
         ]),
     };
 
-    Ok((header, &bytes[SAVE_HEADER_LEN..]))
+    Ok((header, &bytes[SAVE_HEADER_SIZE..]))
+}
+
+/// Inspects only the fixed simulation header. Version mismatches are returned
+/// to the caller so catalogs can explain compatibility without deserializing.
+pub fn inspect_save_header(bytes: &[u8]) -> Result<SaveHeaderInfo, SaveLoadError> {
+    let (header, _) = read_header(bytes)?;
+    if header.magic != SAVE_MAGIC {
+        return Err(SaveLoadError::InvalidMagic {
+            found: header.magic,
+        });
+    }
+    Ok(SaveHeaderInfo {
+        save_version: header.save_version,
+        prototype_format_version: header.prototype_format_version,
+        prototype_hash: header.prototype_hash,
+    })
 }
 
 fn size_limit_error() -> SaveLoadError {
@@ -294,7 +317,7 @@ mod tests {
         let sim = Simulation::new_test_world(123);
         let mut bytes = save_to_bytes(&sim).unwrap();
         bytes[0] = b'X';
-        bytes.truncate(SAVE_HEADER_LEN + 1);
+        bytes.truncate(SAVE_HEADER_SIZE + 1);
 
         let result = load_from_bytes(&bytes);
 
@@ -345,6 +368,34 @@ mod tests {
             PROTOTYPE_FORMAT_VERSION
         );
         assert!(load_from_bytes(&bytes).is_ok());
+    }
+
+    #[test]
+    fn header_inspection_reports_versions_without_rejecting_them() {
+        let sim = Simulation::new_test_world(42);
+        let bytes = save_to_bytes(&sim).unwrap();
+        let expected = inspect_save_header(&bytes).unwrap();
+        assert_eq!(expected.save_version, SAVE_VERSION);
+
+        for version in [SAVE_VERSION - 1, SAVE_VERSION + 1] {
+            let mut changed = bytes[..SAVE_HEADER_SIZE].to_vec();
+            changed[8..12].copy_from_slice(&version.to_le_bytes());
+            assert_eq!(inspect_save_header(&changed).unwrap().save_version, version);
+        }
+    }
+
+    #[test]
+    fn header_inspection_rejects_truncation_and_invalid_magic() {
+        assert!(matches!(
+            inspect_save_header(&[0; SAVE_HEADER_SIZE - 1]),
+            Err(SaveLoadError::Codec(_))
+        ));
+        let mut header = [0; SAVE_HEADER_SIZE];
+        header[..8].copy_from_slice(b"NOTASAVE");
+        assert!(matches!(
+            inspect_save_header(&header),
+            Err(SaveLoadError::InvalidMagic { .. })
+        ));
     }
 
     #[test]

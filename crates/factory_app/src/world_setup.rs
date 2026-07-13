@@ -5,9 +5,11 @@ use factory_data::PrototypeCatalog;
 use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 
 use crate::save_load::{
-    LoadState, PendingSaveJobs, SaveLoadConfig, SaveLoadStatus, SaveSlotKind, enter_swapped_world,
-    load_slot, slot_display_name, slot_exists,
+    LoadState, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveId, SaveKind,
+    SaveLoadConfig, SaveLoadStatus, delete_save, enter_swapped_world, load_save, refresh_catalog,
 };
+use crate::ui::layout::scroll_column;
+use crate::ui::save_load::format_timestamp;
 
 #[derive(States, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AppMode {
@@ -49,7 +51,14 @@ pub struct WorldSetupSeedText;
 pub struct WorldSetupErrorText;
 #[derive(Component)]
 pub struct WorldSetupSettingsText;
-#[derive(Component, Clone, Copy)]
+#[derive(Component)]
+pub struct WorldSetupSaveList;
+#[derive(Resource, Default)]
+pub struct WorldSetupSaveListState {
+    revision: u64,
+    confirmation: PendingSaveConfirmation,
+}
+#[derive(Component, Clone)]
 pub enum WorldSetupAction {
     Randomize,
     SelectPreset(EnemyDifficultyPreset),
@@ -62,18 +71,30 @@ pub enum WorldSetupAction {
     ExpansionRate(i16),
     ToggleRaids,
     ToggleExpansion,
-    LoadSlot(SaveSlotKind),
+    LoadSave(SaveId),
+    DeleteSave(SaveId),
+    ConfirmSaveAction(bool),
     Start,
     /// Return to the running game without touching the simulation.
     Cancel,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_world_setup_ui(
     mut commands: Commands,
     existing: Query<Entity, With<WorldSetupRoot>>,
     saves: Res<SaveLoadConfig>,
+    mut catalog: ResMut<SaveCatalog>,
+    mut status: ResMut<SaveLoadStatus>,
+    confirmation: Res<PendingSaveConfirmation>,
+    mut list_state: ResMut<WorldSetupSaveListState>,
     setup: Res<WorldSetupState>,
 ) {
+    if let Err(error) = refresh_catalog(&saves, &mut catalog) {
+        status.message = Some(format!("Cannot refresh save catalog: {error}"));
+    }
+    list_state.revision = catalog.revision;
+    list_state.confirmation = confirmation.clone();
     for entity in &existing {
         commands.entity(entity).despawn();
     }
@@ -96,7 +117,8 @@ pub fn build_world_setup_ui(
         .with_children(|root| {
             root.spawn((
                 Node {
-                    width: Val::Px(620.0),
+                    width: Val::Px(720.0),
+                    max_height: Val::Vh(94.0),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(14.0),
                     padding: UiRect::all(Val::Px(24.0)),
@@ -112,31 +134,17 @@ pub fn build_world_setup_ui(
                     TextFont::from_font_size(28.0),
                     TextColor(Color::srgb(0.85, 0.94, 0.78)),
                 ));
-                panel.spawn((Text::new("Existing saves"), TextFont::from_font_size(14.0)));
+                panel.spawn((
+                    Text::new("EXISTING WORLDS"),
+                    TextFont::from_font_size(13.0),
+                    TextColor(Color::srgb(0.68, 0.78, 0.60)),
+                ));
+                let mut save_list = scroll_column();
+                save_list.height = Val::Px(190.0);
+                save_list.flex_grow = 0.0;
                 panel
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        flex_wrap: FlexWrap::Wrap,
-                        column_gap: Val::Px(6.0),
-                        row_gap: Val::Px(6.0),
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        for slot in [
-                            SaveSlotKind::Manual(1),
-                            SaveSlotKind::Manual(2),
-                            SaveSlotKind::Manual(3),
-                            SaveSlotKind::Quick,
-                            SaveSlotKind::Auto,
-                        ] {
-                            let label = if slot_exists(&saves, slot) {
-                                format!("Load {}", slot_display_name(slot))
-                            } else {
-                                format!("{} empty", slot_display_name(slot))
-                            };
-                            spawn_button(row, &label, WorldSetupAction::LoadSlot(slot));
-                        }
-                    });
+                    .spawn((save_list, WorldSetupSaveList))
+                    .with_children(|list| spawn_world_setup_catalog(list, &catalog, &confirmation));
                 panel.spawn((
                     Text::new("Seed: 123"),
                     WorldSetupSeedText,
@@ -393,7 +401,9 @@ pub(crate) fn handle_world_setup_buttons(
                 setup.config.runtime.expansion = !setup.config.runtime.expansion;
                 setup.config.preset = EnemyDifficultyPreset::Custom;
             }
-            WorldSetupAction::LoadSlot(_) => {}
+            WorldSetupAction::LoadSave(_)
+            | WorldSetupAction::DeleteSave(_)
+            | WorldSetupAction::ConfirmSaveAction(_) => {}
             WorldSetupAction::Start => {
                 let Ok(seed) = setup.seed_text.parse::<u64>() else {
                     setup.validation_error = Some("Seed must be a decimal u64".into());
@@ -423,23 +433,169 @@ pub(crate) fn handle_world_setup_buttons(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_world_setup_load_buttons(
     mut buttons: SetupButtons,
     config: Res<SaveLoadConfig>,
     pending: Res<PendingSaveJobs>,
+    mut catalog: ResMut<SaveCatalog>,
+    mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
     mut setup: ResMut<WorldSetupState>,
 ) {
     for (interaction, action) in &mut buttons {
-        let WorldSetupAction::LoadSlot(slot) = action else {
+        if *interaction != Interaction::Pressed {
             continue;
-        };
-        if *interaction == Interaction::Pressed
-            && !load_slot(*slot, &config, &pending, &mut status, &mut load_state)
-        {
-            setup.validation_error = status.message.clone();
         }
+        match action {
+            WorldSetupAction::LoadSave(id) => {
+                if !load_save(id, &catalog, &pending, &mut status, &mut load_state) {
+                    setup.validation_error = status.message.clone();
+                }
+            }
+            WorldSetupAction::DeleteSave(id) => {
+                *confirmation = PendingSaveConfirmation::Delete(id.clone())
+            }
+            WorldSetupAction::ConfirmSaveAction(confirm) => {
+                let pending_action = std::mem::take(&mut *confirmation);
+                if *confirm
+                    && let PendingSaveConfirmation::Delete(id) = pending_action
+                    && !delete_save(&id, &config, &mut catalog, &pending, &mut status)
+                {
+                    setup.validation_error = status.message.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn sync_world_setup_save_list(
+    mut commands: Commands,
+    catalog: Res<SaveCatalog>,
+    confirmation: Res<PendingSaveConfirmation>,
+    mut state: ResMut<WorldSetupSaveListState>,
+    lists: Query<Entity, With<WorldSetupSaveList>>,
+) {
+    if state.revision == catalog.revision && state.confirmation == *confirmation {
+        return;
+    }
+    state.revision = catalog.revision;
+    state.confirmation = confirmation.clone();
+    for entity in &lists {
+        commands
+            .entity(entity)
+            .despawn_related::<Children>()
+            .with_children(|list| spawn_world_setup_catalog(list, &catalog, &confirmation));
+    }
+}
+
+fn spawn_world_setup_catalog(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    catalog: &SaveCatalog,
+    confirmation: &PendingSaveConfirmation,
+) {
+    for (group_index, heading) in [(0, "NAMED"), (1, "QUICKSAVE"), (2, "AUTOSAVES")] {
+        parent.spawn((
+            Text::new(heading),
+            TextFont::from_font_size(10.0),
+            TextColor(Color::srgb(0.58, 0.68, 0.52)),
+            Node {
+                margin: UiRect::top(Val::Px(5.0)),
+                ..default()
+            },
+        ));
+        for entry in catalog
+            .entries()
+            .iter()
+            .filter(|entry| match entry.metadata.kind {
+                SaveKind::Named => group_index == 0,
+                SaveKind::Quicksave => group_index == 1,
+                SaveKind::Autosave { .. } => group_index == 2,
+            })
+        {
+            parent
+                .spawn((
+                    Node {
+                        min_height: Val::Px(40.0),
+                        flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(7.0),
+                        padding: UiRect::horizontal(Val::Px(7.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.075, 0.09, 0.078)),
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Node {
+                            width: Val::Px(165.0),
+                            ..default()
+                        },
+                        Text::new(entry.metadata.display_name.clone()),
+                        TextFont::from_font_size(12.0),
+                    ));
+                    let mut details = format!(
+                        "{} · {}",
+                        format_timestamp(entry.metadata.completed_at_unix_ms),
+                        entry.compatibility.short_label()
+                    );
+                    if !entry.metadata_available {
+                        details.push_str(" · metadata unavailable");
+                    }
+                    row.spawn((
+                        Node {
+                            flex_grow: 1.0,
+                            flex_basis: Val::Px(260.0),
+                            ..default()
+                        },
+                        Text::new(details),
+                        TextFont::from_font_size(10.0),
+                        TextColor(if entry.compatibility.can_load() {
+                            Color::srgb(0.68, 0.76, 0.64)
+                        } else {
+                            Color::srgb(0.94, 0.42, 0.34)
+                        }),
+                    ));
+                    if entry.compatibility.can_load() {
+                        spawn_button(row, "Load", WorldSetupAction::LoadSave(entry.id.clone()));
+                    }
+                    spawn_button(
+                        row,
+                        "Delete",
+                        WorldSetupAction::DeleteSave(entry.id.clone()),
+                    );
+                });
+        }
+    }
+    if let PendingSaveConfirmation::Delete(id) = confirmation
+        && let Some(entry) = catalog.get(id)
+    {
+        parent.spawn((
+            Text::new(format!(
+                "Delete “{}” saved {}?",
+                entry.metadata.display_name,
+                format_timestamp(entry.metadata.completed_at_unix_ms)
+            )),
+            TextFont::from_font_size(11.0),
+            TextColor(Color::srgb(1.0, 0.38, 0.28)),
+        ));
+        parent
+            .spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(6.0),
+                ..default()
+            })
+            .with_children(|row| {
+                spawn_button(row, "Cancel", WorldSetupAction::ConfirmSaveAction(false));
+                spawn_button(
+                    row,
+                    "Confirm Delete",
+                    WorldSetupAction::ConfirmSaveAction(true),
+                );
+            });
     }
 }
 
@@ -543,6 +699,7 @@ mod tests {
             .insert_resource(crate::save_load::SaveLoadConfig {
                 root_dir: save_root.clone(),
                 autosave_interval_ticks: u64::MAX,
+                autosave_slot_count: 5,
             });
         app.update();
 
