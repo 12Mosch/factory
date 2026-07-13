@@ -213,28 +213,20 @@ fn validate_transport_lane_items(
 ) -> Result<(), SimValidationError> {
     let mut previous_position = None;
     for item in &lane.items {
-        let stack =
-            ItemStack::new(&sim.world.prototypes, item.item_id, 1).map_err(
-                |error| match error {
-                    InventoryError::UnknownItem(item_id) => {
-                        SimValidationError::UnknownItem(item_id)
-                    }
-                    InventoryError::EmptyItemStack(item_id) => {
-                        SimValidationError::EmptyItemStack(item_id)
-                    }
-                    InventoryError::StackExceedsLimit {
-                        item_id,
-                        count,
-                        stack_size,
-                    } => SimValidationError::StackExceedsLimit {
-                        item_id,
-                        count,
-                        stack_size,
-                    },
-                    _ => unreachable!("stack construction cannot report inventory capacity errors"),
-                },
-            )?;
-        validate_item_stack(&sim.world.prototypes, stack)?;
+        ItemStack::new(&sim.world.prototypes, item.item_id, 1).map_err(|error| match error {
+            InventoryError::UnknownItem(item_id) => SimValidationError::UnknownItem(item_id),
+            InventoryError::EmptyItemStack(item_id) => SimValidationError::EmptyItemStack(item_id),
+            InventoryError::StackExceedsLimit {
+                item_id,
+                count,
+                stack_size,
+            } => SimValidationError::StackExceedsLimit {
+                item_id,
+                count,
+                stack_size,
+            },
+            _ => unreachable!("stack construction cannot report inventory capacity errors"),
+        })?;
         if item.position_subtile >= BELT_SUBTILES_PER_TILE {
             return Err(SimValidationError::InvalidBeltItemPosition {
                 entity_id,

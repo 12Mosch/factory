@@ -176,22 +176,34 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
 
     if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
         inventory.remove(item_id, 1).ok()?;
-        return ItemStack::new(catalog, item_id, 1).ok();
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
     }
 
     if let Some(lab) = entities.labs.get_mut(&entity_id) {
         lab.inventory.remove(item_id, 1).ok()?;
-        return ItemStack::new(catalog, item_id, 1).ok();
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
     }
 
     if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
         remove_from_single_slot(&mut furnace.output_slot, item_id, 1).ok()?;
-        return ItemStack::new(catalog, item_id, 1).ok();
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
     }
 
     if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
         assembler.output_inventory.remove(item_id, 1).ok()?;
-        return ItemStack::new(catalog, item_id, 1).ok();
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
     }
 
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id)
@@ -201,7 +213,10 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
             entity_id,
             lane_index,
         });
-        return ItemStack::new(catalog, item_id, 1).ok();
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
     }
 
     if let Some(state) = entities.splitters.get_mut(&entity_id)
@@ -212,7 +227,10 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
             input_port,
             lane_index,
         });
-        return ItemStack::new(catalog, item_id, 1).ok();
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
     }
 
     None
