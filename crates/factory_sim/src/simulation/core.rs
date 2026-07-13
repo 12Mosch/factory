@@ -50,6 +50,7 @@ impl Simulation {
             pollution: PollutionState::default(),
             enemies: EnemySubsystem::default(),
             config,
+            attack_targets: enemy_ops::AttackTargetCache::default(),
             transport: TransportLaneCache::default(),
         };
         sim.reveal_chunks_around_player();

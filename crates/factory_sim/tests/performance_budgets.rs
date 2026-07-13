@@ -1,7 +1,7 @@
 use factory_data::{entity_prototype_id_by_name, item_id_by_name, recipe_id_by_name};
 use factory_sim::{
-    CHUNK_SIZE, ChunkCoord, Direction, EntityId, Inventory, ItemStack, Simulation,
-    SimulationCounts, SimulationTickProfile, load_from_bytes, save_to_bytes,
+    CHUNK_SIZE, ChunkCoord, Direction, EnemyDifficultyPreset, EnemyMode, EntityId, Inventory,
+    ItemStack, Simulation, SimulationCounts, SimulationTickProfile, load_from_bytes, save_to_bytes,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Mutex;
@@ -13,6 +13,9 @@ const SMOKE_ALLOC_P95_BYTES_BUDGET: u64 = 64 * 1024;
 const SMOKE_ALLOC_P95_COUNT_BUDGET: u64 = 256;
 const SMALL_ALLOC_P95_BYTES_BUDGET: u64 = 1024 * 1024;
 const SMALL_ALLOC_P95_COUNT_BUDGET: u64 = 2_000;
+const ENEMY_HEAVY_PHASE_P95_BUDGET: Duration = Duration::from_millis(8);
+const ENEMY_HEAVY_ALLOC_P95_BYTES_BUDGET: u64 = 1024 * 1024;
+const ENEMY_HEAVY_ALLOC_P95_COUNT_BUDGET: u64 = 2_000;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -117,6 +120,76 @@ fn large_headless_stress_5000_machines_50000_belts() {
         measurement_ticks: 300,
         assert_60_ups: false,
     });
+}
+
+/// Manual regression budget for combat-dominated worlds. Unlike the factory
+/// fixtures, this creates enough independent colonies to keep hundreds of
+/// attackers active at once and a broad structure field for target lookup.
+#[test]
+#[ignore]
+fn enemy_heavy_benchmark_500_attackers_2000_structures() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut config = EnemyDifficultyPreset::Aggressive.config();
+    config.preset = EnemyDifficultyPreset::Custom;
+    config.world.base_density_percent = 0;
+    let mut sim = Simulation::new_with_config(
+        123,
+        factory_data::PrototypeCatalog::load_base().expect("base catalog should load"),
+        config,
+    );
+    for y in -12..=12 {
+        for x in -12..=12 {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
+
+    let spawners = place_spaced_entities(&mut sim, "biter_spawner", 64, Direction::North, 256);
+    place_spaced_entities(&mut sim, "chest", 2_000, Direction::North, 4);
+    for spawner_id in spawners {
+        let placed = sim
+            .entities()
+            .placed_entity(spawner_id)
+            .expect("benchmark spawner should remain placed");
+        let chunk = ChunkCoord::from_tile(placed.x, placed.y)
+            .expect("placed spawner should have a valid chunk");
+        sim.add_pollution_micro(chunk, 2_000_000_000);
+    }
+
+    run_warmup_ticks(&mut sim, 7_200);
+    let attacker_count = sim
+        .enemies()
+        .iter()
+        .filter(|enemy| enemy.mode == EnemyMode::Attack)
+        .count();
+    assert!(
+        attacker_count >= 500,
+        "enemy-heavy fixture should retain at least 500 attackers, found {attacker_count}"
+    );
+
+    let stats = collect_benchmark_stats(&mut sim, 300);
+    print_benchmark_stats("enemy_heavy_500_attackers", stats);
+    sim.validate_state()
+        .expect("enemy-heavy budget run should leave a valid state");
+    assert!(
+        stats.p95.enemies <= ENEMY_HEAVY_PHASE_P95_BUDGET,
+        "enemy phase p95 {:.3} ms exceeded {:.3} ms",
+        ms(stats.p95.enemies),
+        ms(ENEMY_HEAVY_PHASE_P95_BUDGET)
+    );
+    assert!(
+        stats.alloc_p95_bytes <= ENEMY_HEAVY_ALLOC_P95_BYTES_BUDGET,
+        "allocation p95 {} bytes exceeded {} bytes",
+        stats.alloc_p95_bytes,
+        ENEMY_HEAVY_ALLOC_P95_BYTES_BUDGET
+    );
+    assert!(
+        stats.alloc_p95_count <= ENEMY_HEAVY_ALLOC_P95_COUNT_BUDGET,
+        "allocation p95 {} allocs exceeded {} allocs",
+        stats.alloc_p95_count,
+        ENEMY_HEAVY_ALLOC_P95_COUNT_BUDGET
+    );
 }
 
 #[test]
@@ -302,6 +375,37 @@ fn place_entities(
 
     panic!(
         "could only place {} of {count} {prototype_name}",
+        placed.len()
+    );
+}
+
+fn place_spaced_entities(
+    sim: &mut Simulation,
+    prototype_name: &str,
+    count: usize,
+    direction: Direction,
+    stride: usize,
+) -> Vec<EntityId> {
+    let prototype_id = entity_prototype_id_by_name(sim.catalog(), prototype_name);
+    let mut placed = Vec::with_capacity(count);
+
+    for (x, y) in deterministic_tile_coords(sim).into_iter().step_by(stride) {
+        if placed.len() == count {
+            return placed;
+        }
+        let request = benchmark_placement_request(prototype_id, x, y, direction);
+        let Some(entity_id) = place_if_valid(
+            sim,
+            request,
+            "validated spaced benchmark placement should succeed",
+        ) else {
+            continue;
+        };
+        placed.push(entity_id);
+    }
+
+    panic!(
+        "could only place {} of {count} spaced {prototype_name}",
         placed.len()
     );
 }
