@@ -4,6 +4,187 @@ use factory_data::{EnemyBaseGenerationConfig, EnemyGameplayConfig, UnitPrototype
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
+/// Derived index and shared target selections for attacking enemies.
+///
+/// None of this is authoritative simulation state. The index is rebuilt from
+/// placed entities after topology changes, and the selections are discarded
+/// with it so placements and removals become visible to every attacking
+/// group without serializing redundant data.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) struct AttackTargetCache {
+    revision: Option<u64>,
+    index: AttackableStructureIndex,
+    base_targets: BTreeMap<EnemyBaseId, Option<EntityId>>,
+    raid_targets: BTreeMap<RaidId, Option<EntityId>>,
+    #[cfg(test)]
+    shared_target_queries: usize,
+}
+
+impl AttackTargetCache {
+    /// Refreshes derived state and reports whether a previously built index
+    /// was invalidated. The first build (including after load) is not an
+    /// invalidation of durable unit and raid targets.
+    fn refresh(&mut self, revision: u64, world: &WorldSim, entities: &EntityStore) -> bool {
+        if self.revision == Some(revision) {
+            return false;
+        }
+
+        let invalidated = self.revision.is_some();
+        self.index.rebuild(world, entities);
+        self.base_targets.clear();
+        self.raid_targets.clear();
+        self.revision = Some(revision);
+        invalidated
+    }
+
+    fn target_for_base(
+        &mut self,
+        base_id: EnemyBaseId,
+        from: (WorldTileCoord, WorldTileCoord),
+    ) -> Option<EntityId> {
+        if let Some(target) = self.base_targets.get(&base_id) {
+            return *target;
+        }
+        #[cfg(test)]
+        {
+            self.shared_target_queries += 1;
+        }
+        let target = self.index.nearest(from);
+        self.base_targets.insert(base_id, target);
+        target
+    }
+
+    fn target_for_raid(
+        &mut self,
+        raid_id: RaidId,
+        from: (WorldTileCoord, WorldTileCoord),
+        current: Option<EntityId>,
+    ) -> Option<EntityId> {
+        if let Some(target) = self.raid_targets.get(&raid_id) {
+            return *target;
+        }
+        #[cfg(test)]
+        {
+            self.shared_target_queries += 1;
+        }
+        let target = current.or_else(|| self.index.nearest(from));
+        self.raid_targets.insert(raid_id, target);
+        target
+    }
+
+    fn retain_active_groups(&mut self, enemies: &EnemySubsystem) {
+        self.base_targets
+            .retain(|base_id, _| enemies.bases.contains_key(base_id));
+        self.raid_targets
+            .retain(|raid_id, _| enemies.raids.contains_key(raid_id));
+    }
+}
+
+/// Attackable entity ids grouped by the chunk-sized cell containing their
+/// footprint center. A nearest query scans cell bounds first and only visits
+/// entity ids in cells that can beat the current result.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+struct AttackableStructureIndex {
+    cells: BTreeMap<(i64, i64), Vec<IndexedAttackTarget>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct IndexedAttackTarget {
+    entity_id: EntityId,
+    center: (WorldTileCoord, WorldTileCoord),
+}
+
+impl AttackableStructureIndex {
+    fn rebuild(&mut self, world: &WorldSim, entities: &EntityStore) {
+        self.cells.clear();
+        for (&entity_id, placed) in &entities.placed_entities {
+            if !is_attackable_kind(world, placed) {
+                continue;
+            }
+            let (center_x, center_y) = footprint_center_tile(&placed.footprint);
+            let cell = (
+                center_x.div_euclid(i64::from(CHUNK_SIZE)),
+                center_y.div_euclid(i64::from(CHUNK_SIZE)),
+            );
+            self.cells
+                .entry(cell)
+                .or_default()
+                .push(IndexedAttackTarget {
+                    entity_id,
+                    center: (center_x, center_y),
+                });
+        }
+    }
+
+    fn nearest(&self, from: (WorldTileCoord, WorldTileCoord)) -> Option<EntityId> {
+        let nearest_cell_distance = self
+            .cells
+            .keys()
+            .map(|&cell| distance_squared_to_cell(from, cell))
+            .min()?;
+
+        let mut best = None;
+        for (&cell, candidates) in &self.cells {
+            if distance_squared_to_cell(from, cell) == nearest_cell_distance {
+                update_nearest_from_candidates(&mut best, from, candidates);
+            }
+        }
+
+        for (&cell, candidates) in &self.cells {
+            let cell_distance = distance_squared_to_cell(from, cell);
+            if cell_distance > nearest_cell_distance
+                && best.is_none_or(|(distance, _)| cell_distance <= distance)
+            {
+                update_nearest_from_candidates(&mut best, from, candidates);
+            }
+        }
+        best.map(|(_, entity_id)| entity_id)
+    }
+}
+
+fn distance_squared_to_cell(from: (WorldTileCoord, WorldTileCoord), cell: (i64, i64)) -> u128 {
+    let cell_size = i128::from(CHUNK_SIZE);
+    let min_x = i128::from(cell.0) * cell_size;
+    let min_y = i128::from(cell.1) * cell_size;
+    let max_x = min_x + cell_size - 1;
+    let max_y = min_y + cell_size - 1;
+    let from_x = i128::from(from.0);
+    let from_y = i128::from(from.1);
+    let dx = if from_x < min_x {
+        min_x - from_x
+    } else if from_x > max_x {
+        from_x - max_x
+    } else {
+        0
+    };
+    let dy = if from_y < min_y {
+        min_y - from_y
+    } else if from_y > max_y {
+        from_y - max_y
+    } else {
+        0
+    };
+    let dx = dx.unsigned_abs();
+    let dy = dy.unsigned_abs();
+    dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
+}
+
+fn update_nearest_from_candidates(
+    best: &mut Option<(u128, EntityId)>,
+    from: (WorldTileCoord, WorldTileCoord),
+    candidates: &[IndexedAttackTarget],
+) {
+    for candidate in candidates {
+        let dx = (i128::from(candidate.center.0) - i128::from(from.0)).unsigned_abs();
+        let dy = (i128::from(candidate.center.1) - i128::from(from.1)).unsigned_abs();
+        let distance = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+        let result = (distance, candidate.entity_id);
+        if best.is_none_or(|current| result < current) {
+            *best = Some(result);
+        }
+    }
+}
+
 /// Ticks between target rescans for units without a target.
 const ENEMY_TARGET_RESCAN_TICKS: u64 = 120;
 /// Ticks between path recomputations while a target is set.
@@ -662,29 +843,58 @@ impl Simulation {
     /// whatever stands adjacent. Damage is collected first and applied after
     /// the loop so unit order cannot observe half-applied destruction.
     pub(super) fn advance_enemies(&mut self) {
-        for raid in self.enemies.raids.values_mut() {
+        let targets_invalidated =
+            self.attack_targets
+                .refresh(self.entity_topology_revision, &self.world, &self.entities);
+        if targets_invalidated {
+            for raid in self.enemies.raids.values_mut() {
+                raid.target = None;
+            }
+            for unit in self.enemies.enemies.values_mut().filter(|unit| {
+                matches!(
+                    unit.mission,
+                    EnemyMission::Staging(_) | EnemyMission::Raid(_)
+                )
+            }) {
+                unit.target = None;
+                unit.path.clear();
+            }
+        }
+
+        let Simulation {
+            entities,
+            enemies,
+            attack_targets,
+            ..
+        } = self;
+        attack_targets.retain_active_groups(enemies);
+        for raid in enemies.raids.values_mut() {
             if raid
                 .target
-                .is_some_and(|target| !self.entities.placed_entities.contains_key(&target))
+                .is_some_and(|target| !entities.placed_entities.contains_key(&target))
             {
                 raid.target = None;
             }
-            if raid.target.is_none() {
-                raid.target = raid
-                    .members
-                    .iter()
-                    .filter_map(|id| self.enemies.enemies.get(id))
-                    .find_map(|unit| acquire_target(&self.world, &self.entities, unit));
+            let origin = raid
+                .members
+                .iter()
+                .filter_map(|id| enemies.enemies.get(id))
+                .map(Enemy::tile)
+                .next();
+            if let Some(origin) = origin {
+                raid.target = attack_targets.target_for_raid(raid.id, origin, raid.target);
+            } else {
+                raid.target = None;
             }
             for member in &raid.members {
-                if let Some(unit) = self.enemies.enemies.get_mut(member) {
+                if let Some(unit) = enemies.enemies.get_mut(member) {
                     unit.target = raid.target;
                 }
             }
         }
-        for party in self.enemies.expansions.values() {
+        for party in enemies.expansions.values() {
             for member in &party.members {
-                if let Some(unit) = self.enemies.enemies.get_mut(member)
+                if let Some(unit) = enemies.enemies.get_mut(member)
                     && unit.path.is_empty()
                 {
                     unit.path.push_back(party.destination);
@@ -724,6 +934,7 @@ impl Simulation {
                 world,
                 entities,
                 enemies,
+                attack_targets,
                 tick,
                 ..
             } = self;
@@ -731,7 +942,15 @@ impl Simulation {
             let seed = world.seed;
 
             for enemy in enemies.enemies.values_mut() {
-                step_enemy(world, entities, seed, tick, enemy, &mut attacks);
+                step_enemy(
+                    world,
+                    entities,
+                    attack_targets,
+                    seed,
+                    tick,
+                    enemy,
+                    &mut attacks,
+                );
             }
         }
 
@@ -1421,6 +1640,7 @@ fn scale_stat(base: u32, strength_percent: u32, evolution_percent: u32) -> u32 {
 fn step_enemy(
     world: &WorldSim,
     entities: &EntityStore,
+    attack_targets: &mut AttackTargetCache,
     seed: u64,
     tick: u64,
     enemy: &mut Enemy,
@@ -1435,7 +1655,11 @@ fn step_enemy(
     }
 
     if enemy.target.is_none() && tick >= enemy.next_decision_tick {
-        enemy.target = acquire_target(world, entities, enemy);
+        enemy.target = if let EnemyMission::Staging(base_id) = enemy.mission {
+            attack_targets.target_for_base(base_id, enemy.tile())
+        } else {
+            acquire_target(world, entities, &attack_targets.index, enemy)
+        };
         enemy.next_decision_tick = tick + ENEMY_TARGET_RESCAN_TICKS + enemy.id.raw() % 16;
         if enemy.target.is_some() {
             enemy.path.clear();
@@ -1492,7 +1716,12 @@ fn step_enemy(
 
 /// Chooses what a unit fights: guards react to player structures near them,
 /// attackers march on the closest structure anywhere in the world.
-fn acquire_target(world: &WorldSim, entities: &EntityStore, enemy: &Enemy) -> Option<EntityId> {
+fn acquire_target(
+    world: &WorldSim,
+    entities: &EntityStore,
+    attackable: &AttackableStructureIndex,
+    enemy: &Enemy,
+) -> Option<EntityId> {
     let (tile_x, tile_y) = enemy.tile();
     match enemy.mode {
         EnemyMode::Guard => {
@@ -1505,9 +1734,7 @@ fn acquire_target(world: &WorldSim, entities: &EntityStore, enemy: &Enemy) -> Op
             );
             nearest_attackable(world, entities, (tile_x, tile_y), candidates.into_iter())
         }
-        EnemyMode::Attack => {
-            nearest_attackable_in_expanding_ranges(world, entities, (tile_x, tile_y))
-        }
+        EnemyMode::Attack => attackable.nearest((tile_x, tile_y)),
     }
 }
 
@@ -1547,41 +1774,6 @@ fn nearest_attackable_with_distance(
         }
     }
     best
-}
-
-/// Finds the nearest player structure through the occupancy grid, doubling
-/// the searched square until it proves no unseen footprint can be nearer.
-fn nearest_attackable_in_expanding_ranges(
-    world: &WorldSim,
-    entities: &EntityStore,
-    from: (WorldTileCoord, WorldTileCoord),
-) -> Option<EntityId> {
-    let mut radius = i64::from(CHUNK_SIZE);
-    let mut candidates = BTreeSet::new();
-
-    loop {
-        candidates.extend(entities.occupancy.entity_ids_in_tile_rect(
-            from.0.saturating_sub(radius),
-            from.0.saturating_add(radius),
-            from.1.saturating_sub(radius),
-            from.1.saturating_add(radius),
-        ));
-        let best =
-            nearest_attackable_with_distance(world, entities, from, candidates.iter().copied());
-        if let Some((distance, entity_id)) = best {
-            let min_unseen_center_distance = radius.saturating_add(1);
-            let unseen_distance_squared =
-                i128::from(min_unseen_center_distance) * i128::from(min_unseen_center_distance);
-            if distance < unseen_distance_squared {
-                return Some(entity_id);
-            }
-        }
-
-        if radius == i64::MAX {
-            return best.map(|(_, entity_id)| entity_id);
-        }
-        radius = radius.saturating_mul(2);
-    }
 }
 
 fn is_attackable_kind(world: &WorldSim, placed: &PlacedEntity) -> bool {
@@ -1850,6 +2042,76 @@ fn free_tile_around_footprint(
 #[cfg(test)]
 mod enemy_feature_tests {
     use super::*;
+
+    fn indexed_target(entity_id: u64, x: i64, y: i64) -> IndexedAttackTarget {
+        IndexedAttackTarget {
+            entity_id: EntityId::new(entity_id),
+            center: (x, y),
+        }
+    }
+
+    #[test]
+    fn spatial_index_finds_exact_nearest_target_and_breaks_ties_by_id() {
+        let mut index = AttackableStructureIndex::default();
+        index.cells.insert((0, 0), vec![indexed_target(9, 31, 31)]);
+        index.cells.insert((1, 0), vec![indexed_target(8, 32, 0)]);
+        index.cells.insert((-2, 0), vec![indexed_target(3, -40, 0)]);
+
+        assert_eq!(index.nearest((0, 0)), Some(EntityId::new(8)));
+
+        index
+            .cells
+            .get_mut(&(1, 0))
+            .unwrap()
+            .push(indexed_target(7, 32, 0));
+        assert_eq!(index.nearest((0, 0)), Some(EntityId::new(7)));
+    }
+
+    #[test]
+    fn shared_target_query_budget_scales_with_groups_not_units() {
+        const BASES: u64 = 10;
+        const ATTACKERS: u64 = 500;
+
+        let mut cache = AttackTargetCache::default();
+        cache
+            .index
+            .cells
+            .insert((20, 20), vec![indexed_target(42, 640, 640)]);
+
+        for unit in 0..ATTACKERS {
+            let base_id = EnemyBaseId::new(unit % BASES + 1);
+            assert_eq!(
+                cache.target_for_base(base_id, (unit as i64, 0)),
+                Some(EntityId::new(42))
+            );
+        }
+
+        assert_eq!(
+            cache.shared_target_queries, BASES as usize,
+            "500 staging attackers should perform one global query per base"
+        );
+    }
+
+    #[test]
+    fn topology_revision_rebuilds_index_and_invalidates_group_targets() {
+        let sim = Simulation::new_test_world(123);
+        let mut cache = AttackTargetCache::default();
+        assert!(!cache.refresh(sim.entity_topology_revision, &sim.world, &sim.entities));
+        cache
+            .base_targets
+            .insert(EnemyBaseId::new(1), Some(EntityId::new(11)));
+        cache
+            .raid_targets
+            .insert(RaidId::new(1), Some(EntityId::new(12)));
+
+        assert!(cache.refresh(
+            sim.entity_topology_revision.wrapping_add(1),
+            &sim.world,
+            &sim.entities
+        ));
+        assert!(cache.base_targets.is_empty());
+        assert!(cache.raid_targets.is_empty());
+    }
 
     #[test]
     fn difficulty_presets_match_balance_defaults() {

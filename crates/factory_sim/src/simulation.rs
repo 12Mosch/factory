@@ -134,6 +134,8 @@ pub struct Simulation {
     config: SimulationConfig,
 
     #[serde(skip)]
+    attack_targets: enemy_ops::AttackTargetCache,
+    #[serde(skip)]
     transport: TransportLaneCache,
 }
 

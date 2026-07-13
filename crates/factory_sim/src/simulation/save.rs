@@ -295,6 +295,7 @@ impl SimulationSnapshotOwned {
             pollution: self.pollution,
             enemies: self.enemies,
             config: self.config,
+            attack_targets: enemy_ops::AttackTargetCache::default(),
             transport: TransportLaneCache::default(),
         };
         sim.ensure_fluid_network_topology();
