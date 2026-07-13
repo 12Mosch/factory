@@ -296,6 +296,7 @@ impl SimulationSnapshotOwned {
             enemies: self.enemies,
             config: self.config,
             attack_targets: enemy_ops::AttackTargetCache::default(),
+            enemy_navigation: enemy_navigation::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
         sim.ensure_fluid_network_topology();

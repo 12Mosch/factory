@@ -136,6 +136,8 @@ pub struct Simulation {
     #[serde(skip)]
     attack_targets: enemy_ops::AttackTargetCache,
     #[serde(skip)]
+    enemy_navigation: enemy_navigation::EnemyNavigation,
+    #[serde(skip)]
     transport: TransportLaneCache,
 }
 
@@ -529,6 +531,7 @@ mod contexts;
 mod core;
 mod diagnostics_ops;
 mod disjoint_set;
+mod enemy_navigation;
 mod enemy_ops;
 pub mod entity_access;
 pub mod entity_mutation;

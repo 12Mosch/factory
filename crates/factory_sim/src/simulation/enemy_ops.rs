@@ -1,8 +1,6 @@
 use super::*;
 use crate::enemies::{EnemyBase, Expansion, Raid};
 use factory_data::{EnemyBaseGenerationConfig, EnemyGameplayConfig, UnitPrototype};
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 
 /// Derived index and shared target selections for attacking enemies.
 ///
@@ -843,6 +841,8 @@ impl Simulation {
     /// whatever stands adjacent. Damage is collected first and applied after
     /// the loop so unit order cannot observe half-applied destruction.
     pub(super) fn advance_enemies(&mut self) {
+        self.enemy_navigation
+            .begin_tick(self.entity_topology_revision, self.world.chunk_revision());
         let targets_invalidated =
             self.attack_targets
                 .refresh(self.entity_topology_revision, &self.world, &self.entities);
@@ -862,12 +862,15 @@ impl Simulation {
         }
 
         let Simulation {
+            world,
             entities,
             enemies,
             attack_targets,
+            enemy_navigation,
             ..
         } = self;
         attack_targets.retain_active_groups(enemies);
+        enemy_navigation.retain_raids(&enemies.raids);
         for raid in enemies.raids.values_mut() {
             if raid
                 .target
@@ -892,6 +895,14 @@ impl Simulation {
                 }
             }
         }
+        for raid in enemies.raids.values() {
+            if let Some(target) = raid.target
+                && let Some(placed) = entities.placed_entities.get(&target)
+            {
+                enemy_navigation.sync_raid(raid.id, target, placed.footprint);
+            }
+        }
+        enemy_navigation.advance_raid_fields(world, entities);
         for party in enemies.expansions.values() {
             for member in &party.members {
                 if let Some(unit) = enemies.enemies.get_mut(member)
@@ -935,22 +946,23 @@ impl Simulation {
                 entities,
                 enemies,
                 attack_targets,
+                enemy_navigation,
                 tick,
                 ..
             } = self;
             let tick = *tick;
             let seed = world.seed;
+            let mut context = EnemyStepContext {
+                world,
+                entities,
+                attack_targets,
+                navigation: enemy_navigation,
+                seed,
+                tick,
+            };
 
             for enemy in enemies.enemies.values_mut() {
-                step_enemy(
-                    world,
-                    entities,
-                    attack_targets,
-                    seed,
-                    tick,
-                    enemy,
-                    &mut attacks,
-                );
+                step_enemy(&mut context, enemy, &mut attacks);
             }
         }
 
@@ -1637,15 +1649,24 @@ fn scale_stat(base: u32, strength_percent: u32, evolution_percent: u32) -> u32 {
     .unwrap_or(u32::MAX)
 }
 
-fn step_enemy(
-    world: &WorldSim,
-    entities: &EntityStore,
-    attack_targets: &mut AttackTargetCache,
+struct EnemyStepContext<'a> {
+    world: &'a WorldSim,
+    entities: &'a EntityStore,
+    attack_targets: &'a mut AttackTargetCache,
+    navigation: &'a mut enemy_navigation::EnemyNavigation,
     seed: u64,
     tick: u64,
+}
+
+fn step_enemy(
+    context: &mut EnemyStepContext<'_>,
     enemy: &mut Enemy,
     attacks: &mut Vec<(EntityId, u32)>,
 ) {
+    let world = context.world;
+    let entities = context.entities;
+    let seed = context.seed;
+    let tick = context.tick;
     // Drop targets that no longer exist.
     if let Some(target) = enemy.target
         && !entities.placed_entities.contains_key(&target)
@@ -1656,9 +1677,11 @@ fn step_enemy(
 
     if enemy.target.is_none() && tick >= enemy.next_decision_tick {
         enemy.target = if let EnemyMission::Staging(base_id) = enemy.mission {
-            attack_targets.target_for_base(base_id, enemy.tile())
+            context
+                .attack_targets
+                .target_for_base(base_id, enemy.tile())
         } else {
-            acquire_target(world, entities, &attack_targets.index, enemy)
+            acquire_target(world, entities, &context.attack_targets.index, enemy)
         };
         enemy.next_decision_tick = tick + ENEMY_TARGET_RESCAN_TICKS + enemy.id.raw() % 16;
         if enemy.target.is_some() {
@@ -1694,14 +1717,53 @@ fn step_enemy(
         .path
         .front()
         .is_some_and(|&(x, y)| !tile_open_for_enemy(world, entities, x, y, Some(target)));
+
+    if let EnemyMission::Raid(raid_id) = enemy.mission {
+        if next_waypoint_blocked {
+            enemy.path.clear();
+        }
+        if enemy.path.is_empty() {
+            match context.navigation.raid_route(raid_id, tile) {
+                enemy_navigation::RaidRoute::Step(next) => enemy.path.push_back(next),
+                enemy_navigation::RaidRoute::AtGoal | enemy_navigation::RaidRoute::Pending => {
+                    return;
+                }
+                enemy_navigation::RaidRoute::OutsideField
+                | enemy_navigation::RaidRoute::Unreachable => {
+                    greedy_step(world, entities, enemy, target, &target_footprint);
+                    return;
+                }
+            }
+        }
+        follow_path(enemy);
+        return;
+    }
+
     if (enemy.path.is_empty() || next_waypoint_blocked) && tick >= enemy.next_decision_tick {
-        enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
         enemy.path.clear();
         if chebyshev_distance_to_footprint(tile, &target_footprint)
             <= ENEMY_PATHFIND_MAX_RANGE_TILES
-            && let Some(path) = find_path(world, entities, tile, target, &target_footprint)
         {
-            enemy.path = path;
+            match context.navigation.request_path(
+                world,
+                entities,
+                tile,
+                target,
+                &target_footprint,
+                ENEMY_PATHFIND_MAX_RANGE_TILES,
+                ENEMY_PATHFIND_MAX_EXPANSIONS,
+            ) {
+                enemy_navigation::PathRequest::Ready(path) => {
+                    enemy.next_decision_tick =
+                        tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+                    if let Some(path) = path {
+                        enemy.path = path;
+                    }
+                }
+                enemy_navigation::PathRequest::Deferred => return,
+            }
+        } else {
+            enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
         }
         if enemy.path.is_empty() {
             // No route: walk straight at the target and gnaw through the
@@ -1893,7 +1955,7 @@ fn greedy_step(
 
 /// A tile a unit may stand on: generated, walkable terrain, and free of
 /// structures other than the unit's own target.
-fn tile_open_for_enemy(
+pub(super) fn tile_open_for_enemy(
     world: &WorldSim,
     entities: &EntityStore,
     x: WorldTileCoord,
@@ -1910,67 +1972,6 @@ fn tile_open_for_enemy(
         None => true,
         Some(occupant) => Some(occupant) == target,
     }
-}
-
-/// Bounded deterministic A* over 4-connected tiles toward any tile adjacent
-/// to the target footprint. Returns waypoints excluding the start tile.
-fn find_path(
-    world: &WorldSim,
-    entities: &EntityStore,
-    start: (WorldTileCoord, WorldTileCoord),
-    target: EntityId,
-    target_footprint: &EntityFootprint,
-) -> Option<VecDeque<(WorldTileCoord, WorldTileCoord)>> {
-    type Tile = (WorldTileCoord, WorldTileCoord);
-
-    let heuristic = |tile: Tile| -> i64 { manhattan_distance_to_footprint(tile, target_footprint) };
-
-    let mut open: BinaryHeap<Reverse<(i64, i64, Tile)>> = BinaryHeap::new();
-    let mut best_g: BTreeMap<Tile, i64> = BTreeMap::new();
-    let mut came_from: BTreeMap<Tile, Tile> = BTreeMap::new();
-
-    best_g.insert(start, 0);
-    open.push(Reverse((heuristic(start), 0, start)));
-    let mut expansions = 0;
-
-    while let Some(Reverse((_, g, tile))) = open.pop() {
-        if best_g.get(&tile).copied().is_some_and(|best| g > best) {
-            continue;
-        }
-        if chebyshev_distance_to_footprint(tile, target_footprint) <= 1 {
-            let mut path = VecDeque::new();
-            let mut current = tile;
-            while current != start {
-                path.push_front(current);
-                current = came_from[&current];
-            }
-            return Some(path);
-        }
-        expansions += 1;
-        if expansions > ENEMY_PATHFIND_MAX_EXPANSIONS {
-            return None;
-        }
-
-        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let next = (tile.0 + dx, tile.1 + dy);
-            if (next.0 - start.0).abs() > ENEMY_PATHFIND_MAX_RANGE_TILES
-                || (next.1 - start.1).abs() > ENEMY_PATHFIND_MAX_RANGE_TILES
-            {
-                continue;
-            }
-            if !tile_open_for_enemy(world, entities, next.0, next.1, Some(target)) {
-                continue;
-            }
-            let next_g = g + 1;
-            if best_g.get(&next).copied().is_none_or(|best| next_g < best) {
-                best_g.insert(next, next_g);
-                came_from.insert(next, tile);
-                open.push(Reverse((next_g + heuristic(next), next_g, next)));
-            }
-        }
-    }
-
-    None
 }
 
 fn footprint_center_tile(footprint: &EntityFootprint) -> (WorldTileCoord, WorldTileCoord) {
@@ -1999,7 +2000,7 @@ pub(super) fn chebyshev_distance_to_footprint(
     dx.max(dy)
 }
 
-fn manhattan_distance_to_footprint(
+pub(super) fn manhattan_distance_to_footprint(
     tile: (WorldTileCoord, WorldTileCoord),
     footprint: &EntityFootprint,
 ) -> i64 {
