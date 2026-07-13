@@ -208,7 +208,7 @@ fn pollution_spreads_to_neighbor_chunks_at_interval() {
     );
 }
 
-fn spread_pollution_reference(chunks: &mut BTreeMap<ChunkCoord, u64>) {
+fn spread_pollution_reference(chunks: &mut BTreeMap<ChunkCoord, u64>, world: &WorldSim) {
     let snapshot = chunks
         .iter()
         .filter(|(_, amount)| **amount >= POLLUTION_MIN_TO_SPREAD_MICRO)
@@ -226,7 +226,11 @@ fn spread_pollution_reference(chunks: &mut BTreeMap<ChunkCoord, u64>) {
             let (Some(x), Some(y)) = (coord.x.checked_add(dx), coord.y.checked_add(dy)) else {
                 continue;
             };
-            let amount = chunks.entry(ChunkCoord { x, y }).or_default();
+            let destination = ChunkCoord { x, y };
+            if !world.chunks.contains_key(&destination) {
+                continue;
+            }
+            let amount = chunks.entry(destination).or_default();
             *amount = amount.saturating_add(share);
             moved += share;
         }
@@ -271,12 +275,49 @@ fn buffered_pollution_diffusion_matches_ordered_updates_exactly() {
     sim.pollution.chunks = seeded;
 
     for _ in 0..2 {
-        spread_pollution_reference(&mut expected);
+        spread_pollution_reference(&mut expected, &sim.world);
         sim.spread_pollution_to_neighbors();
         assert_eq!(sim.pollution.chunks, expected);
         assert!(sim.pollution_diffusion.deltas.is_empty());
         assert!(sim.pollution_diffusion.ordered_deltas.is_empty());
     }
+}
+
+#[test]
+fn pollution_does_not_spread_beyond_generated_chunks() {
+    let mut sim = Simulation::new_test_world(123);
+    let area = sim.world.prototypes.world_generation.starting_area;
+    let source = ChunkCoord {
+        x: area.max_chunk,
+        y: area.max_chunk,
+    };
+    let outside = [
+        ChunkCoord {
+            x: source.x + 1,
+            y: source.y,
+        },
+        ChunkCoord {
+            x: source.x,
+            y: source.y + 1,
+        },
+    ];
+    let seeded = 10_000_000;
+    sim.add_pollution_micro(source, seeded);
+
+    sim.spread_pollution_to_neighbors();
+
+    assert_eq!(sim.pollution().total_micro(), seeded);
+    for &coord in &outside {
+        assert_eq!(sim.pollution().amount_micro(coord), 0);
+    }
+    assert!(sim.ensure_chunk_generated(outside[0]));
+    assert_eq!(sim.pollution().amount_micro(outside[0]), 0);
+    assert!(
+        sim.pollution()
+            .polluted_chunks()
+            .all(|(coord, _)| sim.world.chunks.contains_key(&coord)),
+        "diffusion should only create pollution entries for generated chunks"
+    );
 }
 
 #[test]

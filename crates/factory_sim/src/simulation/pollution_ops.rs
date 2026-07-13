@@ -101,8 +101,8 @@ impl Simulation {
     }
 
     /// Every spread interval: diffuses a share of each sufficiently polluted
-    /// chunk to its four neighbors, then lets terrain absorb, then evaporates
-    /// residue so the map stays bounded.
+    /// chunk to its generated neighbors, then lets terrain absorb, then
+    /// evaporates residue so the map stays bounded.
     pub(super) fn spread_and_absorb_pollution(&mut self) {
         if !self.tick.is_multiple_of(POLLUTION_SPREAD_INTERVAL_TICKS) {
             return;
@@ -138,6 +138,12 @@ impl Simulation {
                     continue;
                 };
                 let destination = ChunkCoord { x, y };
+                // Pollution does not materialize terrain or exist beyond the
+                // generated world. Treat its edge as a closed boundary: only
+                // shares with generated destinations leave the source.
+                if !self.world.chunks.contains_key(&destination) {
+                    continue;
+                }
                 let delta = self
                     .pollution_diffusion
                     .deltas

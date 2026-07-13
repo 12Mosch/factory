@@ -97,8 +97,9 @@ const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
 /// Pollution diffuses between chunks and is absorbed by terrain once per
 /// interval instead of every tick.
 pub const POLLUTION_SPREAD_INTERVAL_TICKS: u64 = 64;
-/// Share of a chunk's pollution handed to each of its four neighbors per
-/// spread interval, in permille.
+/// Share of a chunk's pollution handed to each generated cardinal neighbor
+/// per spread interval, in permille. Ungenerated chunks form a closed boundary,
+/// so a blocked share remains in the source chunk.
 pub const POLLUTION_SPREAD_PER_NEIGHBOR_PERMILLE: u64 = 20;
 /// Chunks below this level keep their pollution local instead of spreading.
 pub const POLLUTION_MIN_TO_SPREAD_MICRO: u64 = 100_000;
