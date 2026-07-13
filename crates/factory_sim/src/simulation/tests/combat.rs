@@ -605,6 +605,49 @@ fn walls_take_damage_and_repair_consumes_packs() {
 }
 
 #[test]
+fn structure_damage_is_aggregated_and_warnings_are_rate_limited_by_region() {
+    let mut sim = Simulation::new_test_world(123);
+    let wall = entity_id_by_name(&sim.world.prototypes, "wall");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 1);
+    let wall_id = place_at(&mut sim, wall, x, y, Direction::North);
+
+    let mut intents = CombatIntents::default();
+    intents.record_enemy_attack(wall_id, 10);
+    intents.record_enemy_attack(wall_id, 20);
+    sim.resolve_combat(intents);
+
+    assert_eq!(sim.entity_health(wall_id), Some((320, 350)));
+    let first_warning_sequence = sim.latest_threat_sequence();
+    assert_eq!(first_warning_sequence, 1);
+
+    sim.tick += STRUCTURE_WARNING_COOLDOWN_TICKS - 1;
+    let mut intents = CombatIntents::default();
+    intents.record_enemy_attack(wall_id, 10);
+    sim.resolve_combat(intents);
+    assert_eq!(sim.entity_health(wall_id), Some((310, 350)));
+    assert_eq!(sim.latest_threat_sequence(), first_warning_sequence);
+
+    sim.tick += 1;
+    let mut intents = CombatIntents::default();
+    intents.record_enemy_attack(wall_id, 10);
+    sim.resolve_combat(intents);
+    assert_eq!(sim.entity_health(wall_id), Some((300, 350)));
+    assert_eq!(sim.latest_threat_sequence(), first_warning_sequence + 1);
+}
+
+#[test]
+fn zero_structure_damage_does_not_emit_a_warning() {
+    let mut sim = Simulation::new_test_world(123);
+    let wall = entity_id_by_name(&sim.world.prototypes, "wall");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 1);
+    let wall_id = place_at(&mut sim, wall, x, y, Direction::North);
+
+    assert!(!sim.damage_entity(wall_id, 0));
+    assert_eq!(sim.entity_health(wall_id), Some((350, 350)));
+    assert_eq!(sim.latest_threat_sequence(), 0);
+}
+
+#[test]
 fn repair_requires_reach_and_packs() {
     let mut sim = Simulation::new_test_world(123);
     let wall = entity_id_by_name(&sim.world.prototypes, "wall");

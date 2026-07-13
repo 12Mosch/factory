@@ -1122,7 +1122,7 @@ impl Simulation {
             .enemies
             .structure_warning_ticks
             .get(&chunk)
-            .is_some_and(|tick| self.tick.saturating_sub(*tick) < 600)
+            .is_some_and(|tick| self.tick.saturating_sub(*tick) < STRUCTURE_WARNING_COOLDOWN_TICKS)
         {
             return;
         }

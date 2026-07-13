@@ -160,11 +160,12 @@ impl Simulation {
 
     /// Applies damage to a placed entity's health; at zero the entity is
     /// violently destroyed (no item recovery). Entities without health state
-    /// are indestructible. Returns true when the entity was destroyed.
+    /// are indestructible. Zero damage is a no-op. Returns true when the entity
+    /// was destroyed.
     pub(crate) fn damage_entity(&mut self, entity_id: EntityId, amount: u32) -> bool {
         // Entities without health state shrug the hit off entirely, so they
         // must not raise an under-attack alarm either.
-        if !self.entities.entity_health.contains_key(&entity_id) {
+        if amount == 0 || !self.entities.entity_health.contains_key(&entity_id) {
             return false;
         }
         let warning_location = self
@@ -183,19 +184,20 @@ impl Simulation {
                     })
                     .map(|_| (placed.x, placed.y))
             });
-        if let Some((x, y)) = warning_location {
-            self.emit_structure_damage_warning(x, y);
-        }
         let Some(health) = self.entities.entity_health.get_mut(&entity_id) else {
             return false;
         };
-        if health.current > amount {
-            health.current -= amount;
-            return false;
+        health.current = health.current.saturating_sub(amount);
+        let destroyed = health.current == 0;
+
+        if let Some((x, y)) = warning_location {
+            self.emit_structure_damage_warning(x, y);
         }
 
-        entity_mutation::remove(self, entity_id);
-        true
+        if destroyed {
+            entity_mutation::remove(self, entity_id);
+        }
+        destroyed
     }
 
     /// Player repair action: consumes repair pack durability to restore a
