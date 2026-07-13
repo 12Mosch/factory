@@ -1,11 +1,23 @@
+mod catalog;
+mod compatibility;
+mod container;
+mod jobs;
+mod types;
+
+pub use catalog::{refresh_catalog, scan_catalog};
+pub use container::{
+    CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES, decode_container, encode_container,
+};
+pub use jobs::PendingSaveJobs;
+pub use types::*;
+
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use factory_sim::{SaveLoadError, load_from_bytes, save_to_bytes};
+use factory_sim::{SaveLoadError, load_from_bytes};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::thread::{self, JoinHandle};
-use std::time::{Instant, SystemTime};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::build::resources::BuildPlacementState;
 use crate::constants::SIM_TICKS_PER_SECOND;
@@ -18,24 +30,13 @@ use crate::simulation::{SimCommandBacklog, SimCommandRequest, SimCommandResult};
 use crate::ui::resources::OpenContainer;
 use crate::world_setup::AppMode;
 
-pub const MANUAL_SAVE_SLOTS: [SaveSlotKind; 3] = [
-    SaveSlotKind::Manual(1),
-    SaveSlotKind::Manual(2),
-    SaveSlotKind::Manual(3),
-];
-
-pub const LOAD_SAVE_SLOTS: [SaveSlotKind; 5] = [
-    SaveSlotKind::Manual(1),
-    SaveSlotKind::Manual(2),
-    SaveSlotKind::Manual(3),
-    SaveSlotKind::Quick,
-    SaveSlotKind::Auto,
-];
+static MANUAL_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct SaveLoadConfig {
     pub root_dir: PathBuf,
     pub autosave_interval_ticks: u64,
+    pub autosave_slot_count: usize,
 }
 
 impl Default for SaveLoadConfig {
@@ -43,109 +44,9 @@ impl Default for SaveLoadConfig {
         Self {
             root_dir: default_save_root(),
             autosave_interval_ticks: (5.0 * 60.0 * SIM_TICKS_PER_SECOND) as u64,
+            autosave_slot_count: 5,
         }
     }
-}
-
-#[derive(Resource, Clone, Debug, PartialEq, Eq)]
-pub struct SaveLoadWindowState {
-    pub open: bool,
-    pub tab: SaveLoadTab,
-    pub selected_slot: SaveSlotKind,
-}
-
-impl Default for SaveLoadWindowState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            tab: SaveLoadTab::Save,
-            selected_slot: SaveSlotKind::Manual(1),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum SaveLoadTab {
-    #[default]
-    Save,
-    Load,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SaveSlotKind {
-    Manual(usize),
-    Quick,
-    Auto,
-}
-
-impl Default for SaveSlotKind {
-    fn default() -> Self {
-        Self::Manual(1)
-    }
-}
-
-#[derive(Resource, Clone, Debug, PartialEq, Eq)]
-pub struct SaveLoadStatus {
-    pub message: Option<String>,
-    pub kind: SaveLoadStatusKind,
-    pub last_completed_slot: Option<SaveSlotKind>,
-}
-
-impl Default for SaveLoadStatus {
-    fn default() -> Self {
-        Self {
-            message: None,
-            kind: SaveLoadStatusKind::Info,
-            last_completed_slot: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum SaveLoadStatusKind {
-    #[default]
-    Info,
-    Success,
-    Error,
-}
-
-#[derive(Resource, Default)]
-pub struct PendingSaveJobs {
-    jobs: Vec<SaveJob>,
-}
-
-impl PendingSaveJobs {
-    pub fn is_empty(&self) -> bool {
-        self.jobs.is_empty()
-    }
-
-    pub fn is_slot_pending(&self, slot: SaveSlotKind) -> bool {
-        self.jobs.iter().any(|job| job.slot == slot)
-    }
-
-    pub fn any_running(&self) -> bool {
-        !self.jobs.is_empty()
-    }
-
-    pub fn pending_slots(&self) -> Vec<SaveSlotKind> {
-        self.jobs.iter().map(|job| job.slot).collect()
-    }
-}
-
-struct SaveJob {
-    slot: SaveSlotKind,
-    explicit: bool,
-    pollable: bool,
-    handle: JoinHandle<Result<SaveJobOutcome, String>>,
-}
-
-#[derive(Debug)]
-struct SaveJobOutcome {
-    lock_wait_ms: f64,
-    serialize_ms: f64,
-    write_ms: f64,
-    total_ms: f64,
-    bytes: usize,
 }
 
 #[derive(Resource, Default, Debug, Clone, Copy)]
@@ -168,114 +69,230 @@ pub struct PresentationReloadToken {
     pub value: u64,
 }
 
-pub(crate) fn initialize_autosave_tick(sim: Res<SimResource>, mut autosave: ResMut<AutosaveState>) {
+pub(crate) fn initialize_save_state(
+    sim: Res<SimResource>,
+    config: Res<SaveLoadConfig>,
+    mut autosave: ResMut<AutosaveState>,
+    mut catalog: ResMut<SaveCatalog>,
+    mut status: ResMut<SaveLoadStatus>,
+) {
     autosave.last_autosave_tick = sim.read().tick_count();
+    refresh_with_status(&config, &mut catalog, &mut status);
 }
 
-pub fn slot_path(config: &SaveLoadConfig, slot: SaveSlotKind) -> PathBuf {
-    config.root_dir.join(match slot {
-        SaveSlotKind::Manual(1) => "slot_1.factsim",
-        SaveSlotKind::Manual(2) => "slot_2.factsim",
-        SaveSlotKind::Manual(3) => "slot_3.factsim",
-        SaveSlotKind::Manual(_) => "slot_invalid.factsim",
-        SaveSlotKind::Quick => "quicksave.factsim",
-        SaveSlotKind::Auto => "autosave.factsim",
-    })
-}
-
-pub fn slot_display_name(slot: SaveSlotKind) -> &'static str {
-    match slot {
-        SaveSlotKind::Manual(1) => "Slot 1",
-        SaveSlotKind::Manual(2) => "Slot 2",
-        SaveSlotKind::Manual(3) => "Slot 3",
-        SaveSlotKind::Manual(_) => "Invalid Slot",
-        SaveSlotKind::Quick => "Quicksave",
-        SaveSlotKind::Auto => "Autosave",
+pub(crate) fn refresh_catalog_on_manager_open(
+    mut window: ResMut<SaveLoadWindowState>,
+    config: Res<SaveLoadConfig>,
+    mut catalog: ResMut<SaveCatalog>,
+    mut status: ResMut<SaveLoadStatus>,
+) {
+    if window.open && window.refresh_on_open {
+        refresh_with_status(&config, &mut catalog, &mut status);
+        window.refresh_on_open = false;
     }
 }
 
-pub fn slot_exists(config: &SaveLoadConfig, slot: SaveSlotKind) -> bool {
-    slot_path(config, slot).is_file()
+pub fn validate_save_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    let count = trimmed.chars().count();
+    if count == 0 {
+        return Err("Save name cannot be empty.".into());
+    }
+    if count > 64 {
+        return Err("Save name must be at most 64 characters.".into());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("Save name cannot contain control characters.".into());
+    }
+    if trimmed.eq_ignore_ascii_case("quicksave") || trimmed.eq_ignore_ascii_case("autosave") {
+        return Err("Quicksave and Autosave are reserved names.".into());
+    }
+    Ok(trimmed.to_string())
 }
 
-pub fn slot_modified_label(config: &SaveLoadConfig, slot: SaveSlotKind) -> String {
-    let path = slot_path(config, slot);
-    let Ok(metadata) = fs::metadata(path) else {
-        return "Empty".to_string();
-    };
-    let Ok(modified) = metadata.modified() else {
-        return "Saved".to_string();
-    };
-    modified_time_label(modified)
+pub fn normalize_save_name(name: &str) -> String {
+    name.trim().to_lowercase()
 }
 
-pub fn request_save(
-    slot: SaveSlotKind,
+#[allow(clippy::too_many_arguments)]
+pub fn request_named_save(
+    name: &str,
     sim: &SimResource,
     config: &SaveLoadConfig,
-    pending_jobs: &mut PendingSaveJobs,
+    catalog: &SaveCatalog,
+    pending: &mut PendingSaveJobs,
+    confirmation: &mut PendingSaveConfirmation,
     status: &mut SaveLoadStatus,
     metrics: &mut SaveLoadMetrics,
 ) -> bool {
-    request_save_with_status(slot, sim, config, pending_jobs, status, metrics, true)
+    let name = match validate_save_name(name) {
+        Ok(name) => name,
+        Err(error) => {
+            set_error(status, error);
+            return false;
+        }
+    };
+    let normalized = normalize_save_name(&name);
+    if let Some(existing) = catalog.named_case_insensitive(&name) {
+        *confirmation = PendingSaveConfirmation::Overwrite(existing.id.clone());
+        status.message = Some(format!("Overwrite {}?", existing.metadata.display_name));
+        status.kind = SaveLoadStatusKind::Info;
+        return false;
+    }
+    let (id, path) = generate_manual_target(config);
+    jobs::queue_save(
+        id,
+        SaveKind::Named,
+        name,
+        path,
+        Some(normalized),
+        true,
+        sim,
+        pending,
+        status,
+        metrics,
+    )
+}
+
+pub fn request_overwrite(
+    id: &SaveId,
+    sim: &SimResource,
+    catalog: &SaveCatalog,
+    pending: &mut PendingSaveJobs,
+    status: &mut SaveLoadStatus,
+    metrics: &mut SaveLoadMetrics,
+) -> bool {
+    let Some(entry) = catalog
+        .get(id)
+        .filter(|entry| entry.metadata.kind == SaveKind::Named)
+    else {
+        set_error(
+            status,
+            "Cannot overwrite: save is no longer in the catalog.",
+        );
+        return false;
+    };
+    jobs::queue_save(
+        entry.id.clone(),
+        SaveKind::Named,
+        entry.metadata.display_name.clone(),
+        entry.path.clone(),
+        Some(normalize_save_name(&entry.metadata.display_name)),
+        true,
+        sim,
+        pending,
+        status,
+        metrics,
+    )
+}
+
+pub fn request_system_save(
+    kind: SaveKind,
+    sim: &SimResource,
+    config: &SaveLoadConfig,
+    pending: &mut PendingSaveJobs,
+    status: &mut SaveLoadStatus,
+    metrics: &mut SaveLoadMetrics,
+    explicit: bool,
+) -> bool {
+    let (id, name) = match kind {
+        SaveKind::Quicksave => (SaveId::new("quicksave"), "Quicksave".to_string()),
+        SaveKind::Autosave { generation }
+            if (1..=config.autosave_slot_count).contains(&generation) =>
+        {
+            (
+                SaveId::new(format!("autosave-{generation}")),
+                format!("Autosave {generation}"),
+            )
+        }
+        _ => {
+            set_error(status, "Cannot save: invalid system save target.");
+            return false;
+        }
+    };
+    let path = jobs::system_path(config, &kind);
+    jobs::queue_save(
+        id, kind, name, path, None, explicit, sim, pending, status, metrics,
+    )
+}
+
+pub fn delete_save(
+    id: &SaveId,
+    config: &SaveLoadConfig,
+    catalog: &mut SaveCatalog,
+    pending: &PendingSaveJobs,
+    status: &mut SaveLoadStatus,
+) -> bool {
+    let Some(entry) = catalog.get(id).cloned() else {
+        set_error(status, "Cannot delete: save is no longer in the catalog.");
+        refresh_with_status(config, catalog, status);
+        return false;
+    };
+    if pending.is_id_pending(id) {
+        set_error(status, "Cannot delete while this save is in progress.");
+        return false;
+    }
+    let expected = expected_path(config, &entry);
+    if entry.path != expected {
+        set_error(status, "Cannot delete: catalog path validation failed.");
+        return false;
+    }
+    if !entry.path.is_file() {
+        set_error(status, "Cannot delete: save file is missing.");
+        refresh_with_status(config, catalog, status);
+        return false;
+    }
+    if let Err(error) = fs::remove_file(&entry.path) {
+        set_error(
+            status,
+            format!("Cannot delete {}: {error}", entry.metadata.display_name),
+        );
+        return false;
+    }
+    status.message = Some(format!("{} deleted.", entry.metadata.display_name));
+    status.kind = SaveLoadStatusKind::Success;
+    status.last_completed_id = Some(id.clone());
+    refresh_with_status(config, catalog, status);
+    true
 }
 
 pub(crate) fn handle_save_load_shortcuts(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     config: Res<SaveLoadConfig>,
-    mut pending_jobs: ResMut<PendingSaveJobs>,
+    catalog: Res<SaveCatalog>,
+    mut pending: ResMut<PendingSaveJobs>,
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
 ) {
     let Some(keyboard) = keyboard else {
         return;
     };
-
     if keyboard.just_pressed(KeyCode::F5) {
-        request_save(
-            SaveSlotKind::Quick,
+        request_system_save(
+            SaveKind::Quicksave,
             &load_state.sim,
             &config,
-            &mut pending_jobs,
+            &mut pending,
             &mut status,
             &mut load_state.metrics,
+            true,
         );
     }
-
     if keyboard.just_pressed(KeyCode::F9) {
-        load_slot(
-            SaveSlotKind::Quick,
-            &config,
-            &pending_jobs,
-            &mut status,
-            &mut load_state,
-        );
+        let id = SaveId::new("quicksave");
+        load_save(&id, &catalog, &pending, &mut status, &mut load_state);
     }
 }
 
 pub(crate) fn poll_save_jobs(
-    mut pending_jobs: ResMut<PendingSaveJobs>,
+    config: Res<SaveLoadConfig>,
+    mut catalog: ResMut<SaveCatalog>,
+    mut pending: ResMut<PendingSaveJobs>,
     mut status: ResMut<SaveLoadStatus>,
     mut metrics: ResMut<SaveLoadMetrics>,
 ) {
-    let mut index = 0;
-    while index < pending_jobs.jobs.len() {
-        if !pending_jobs.jobs[index].pollable {
-            pending_jobs.jobs[index].pollable = true;
-            index += 1;
-            continue;
-        }
-        if !pending_jobs.jobs[index].handle.is_finished() {
-            index += 1;
-            continue;
-        }
-
-        let job = pending_jobs.jobs.swap_remove(index);
-        let result = job
-            .handle
-            .join()
-            .unwrap_or_else(|_| Err("save worker panicked".to_string()));
-        match result {
+    for job in jobs::take_completed(&mut pending) {
+        match job.result {
             Ok(outcome) => {
                 metrics.last_worker_lock_wait_ms = outcome.lock_wait_ms;
                 metrics.last_serialize_ms = outcome.serialize_ms;
@@ -283,18 +300,17 @@ pub(crate) fn poll_save_jobs(
                 metrics.last_total_ms = outcome.total_ms;
                 metrics.last_bytes = outcome.bytes;
                 if job.explicit || status.kind != SaveLoadStatusKind::Error {
-                    status.message = Some(format!("{} saved.", slot_display_name(job.slot)));
+                    status.message = Some(format!("{} saved.", job.display_name));
                     status.kind = SaveLoadStatusKind::Success;
-                    status.last_completed_slot = Some(job.slot);
+                    status.last_completed_id = Some(job.id);
                 }
+                refresh_with_status(&config, &mut catalog, &mut status);
             }
             Err(error) => {
-                status.message = Some(format!(
-                    "Cannot save {}: {error}",
-                    slot_display_name(job.slot)
-                ));
-                status.kind = SaveLoadStatusKind::Error;
-                status.last_completed_slot = None;
+                set_error(
+                    &mut status,
+                    format!("Cannot save {}: {error}", job.display_name),
+                );
             }
         }
     }
@@ -303,7 +319,8 @@ pub(crate) fn poll_save_jobs(
 pub(crate) fn run_autosave(
     sim: Res<SimResource>,
     config: Res<SaveLoadConfig>,
-    mut pending_jobs: ResMut<PendingSaveJobs>,
+    catalog: Res<SaveCatalog>,
+    mut pending: ResMut<PendingSaveJobs>,
     mut autosave: ResMut<AutosaveState>,
     mut status: ResMut<SaveLoadStatus>,
     mut metrics: ResMut<SaveLoadMetrics>,
@@ -313,23 +330,46 @@ pub(crate) fn run_autosave(
         < autosave
             .last_autosave_tick
             .saturating_add(config.autosave_interval_ticks)
+        || pending.any_running()
+        || config.autosave_slot_count == 0
     {
         return;
     }
-    if pending_jobs.any_running() {
-        return;
-    }
-    if request_save_with_status(
-        SaveSlotKind::Auto,
+    let generation = choose_autosave_generation(&catalog, config.autosave_slot_count);
+    if request_system_save(
+        SaveKind::Autosave { generation },
         &sim,
         &config,
-        &mut pending_jobs,
+        &mut pending,
         &mut status,
         &mut metrics,
         false,
     ) {
         autosave.last_autosave_tick = tick;
     }
+}
+
+pub fn choose_autosave_generation(catalog: &SaveCatalog, count: usize) -> usize {
+    for generation in 1..=count {
+        if !catalog
+            .entries()
+            .iter()
+            .any(|entry| entry.metadata.kind == SaveKind::Autosave { generation })
+        {
+            return generation;
+        }
+    }
+    catalog
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry.metadata.kind {
+            SaveKind::Autosave { generation } if generation <= count => {
+                Some((entry.metadata.completed_at_unix_ms, generation))
+            }
+            _ => None,
+        })
+        .min()
+        .map_or(1, |(_, generation)| generation)
 }
 
 #[derive(SystemParam)]
@@ -353,84 +393,68 @@ pub(crate) struct LoadState<'w> {
     pub(crate) metrics: ResMut<'w, SaveLoadMetrics>,
 }
 
-pub(crate) fn load_slot(
-    slot: SaveSlotKind,
-    config: &SaveLoadConfig,
-    pending_jobs: &PendingSaveJobs,
+pub(crate) fn load_save(
+    id: &SaveId,
+    catalog: &SaveCatalog,
+    pending: &PendingSaveJobs,
     status: &mut SaveLoadStatus,
     state: &mut LoadState,
 ) -> bool {
-    // A save worker holds a read lock on the simulation, so `replace` would
-    // fail with `Busy` anyway. Bail out before the expensive file read and
-    // deserialization instead of discovering the conflict after the work.
-    if pending_jobs.any_running() {
-        status.message = Some("Cannot load while a save is in progress.".to_string());
-        status.kind = SaveLoadStatusKind::Error;
-        status.last_completed_slot = None;
+    if pending.any_running() {
+        set_error(status, "Cannot load while a save is in progress.");
         return false;
     }
-
-    let path = slot_path(config, slot);
-    if !path.is_file() {
-        status.message = Some(format!(
-            "Cannot load {}: slot is empty.",
-            slot_display_name(slot)
-        ));
-        status.kind = SaveLoadStatusKind::Error;
-        status.last_completed_slot = None;
+    let Some(entry) = catalog.get(id) else {
+        set_error(status, "Cannot load: save is no longer in the catalog.");
+        return false;
+    };
+    if !entry.compatibility.can_load() {
+        set_error(
+            status,
+            entry
+                .compatibility
+                .reason()
+                .unwrap_or_else(|| "Cannot load this save.".into()),
+        );
         return false;
     }
-
-    let bytes = match fs::read(&path) {
+    let bytes = match container::read_simulation_payload(&entry.path) {
         Ok(bytes) => bytes,
         Err(error) => {
-            status.message = Some(format!(
-                "Cannot load {}: failed to read save file ({error}).",
-                slot_display_name(slot)
-            ));
-            status.kind = SaveLoadStatusKind::Error;
-            status.last_completed_slot = None;
+            set_error(
+                status,
+                format!("Cannot load {}: {error}", entry.metadata.display_name),
+            );
             return false;
         }
     };
-
     match load_from_bytes(&bytes) {
         Ok(loaded) => {
             let tick = loaded.tick_count();
             let player_tile = loaded.player().position_tiles();
             if let Err(error) = state.sim.replace(loaded) {
-                status.message = Some(match error {
-                    SimAccessError::Busy => "Cannot load while a save is in progress.".to_string(),
-                    SimAccessError::Poisoned => {
-                        "Cannot load: simulation access failed.".to_string()
-                    }
-                });
-                status.kind = SaveLoadStatusKind::Error;
-                status.last_completed_slot = None;
+                set_error(
+                    status,
+                    match error {
+                        SimAccessError::Busy => "Cannot load while a save is in progress.",
+                        SimAccessError::Poisoned => "Cannot load: simulation access failed.",
+                    },
+                );
                 return false;
             }
             enter_swapped_world(state, tick, player_tile);
-
-            status.message = Some(format!("{} loaded.", slot_display_name(slot)));
+            status.message = Some(format!("{} loaded.", entry.metadata.display_name));
             status.kind = SaveLoadStatusKind::Success;
-            status.last_completed_slot = Some(slot);
+            status.last_completed_id = Some(id.clone());
             true
         }
         Err(error) => {
-            status.message = Some(format_save_load_error(error));
-            status.kind = SaveLoadStatusKind::Error;
-            status.last_completed_slot = None;
+            set_error(status, format_save_load_error(error));
             false
         }
     }
 }
 
-/// Resets the presentation and queued-input state that referenced the
-/// previous world, then enters the game. Shared by loading a save and
-/// starting a new world: commands queued against the old world must not
-/// apply to the new one, results already produced by this frame's fixed tick
-/// must not be read as feedback for it, and caches keyed on the old world's
-/// chunks and entities must be rebuilt.
 pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile: (f32, f32)) {
     state.pending_commands.clear();
     state.pending_results.clear();
@@ -454,148 +478,74 @@ pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile:
 
 pub fn format_save_load_error(error: SaveLoadError) -> String {
     match error {
-        SaveLoadError::UnsupportedSaveVersion { found, supported } => format!(
-            "Cannot load save: save version {found} is unsupported by this build; supported version is {supported}."
-        ),
-        SaveLoadError::UnsupportedPrototypeFormatVersion { found, supported } => format!(
-            "Cannot load save: prototype format {found} is unsupported by this build; supported format is {supported}."
-        ),
-        SaveLoadError::PrototypeHashMismatch { .. } => {
-            "Cannot load save: prototype data does not match this build.".to_string()
-        }
-        SaveLoadError::InvalidMagic { .. } => {
-            "Cannot load save: file is not a Factory save.".to_string()
-        }
-        SaveLoadError::InvalidSimulationState(_) => {
-            "Cannot load save: saved simulation state failed validation.".to_string()
-        }
-        SaveLoadError::Codec(_) => "Cannot load save: file is corrupt or incomplete.".to_string(),
+        SaveLoadError::UnsupportedSaveVersion { found, supported } if found > supported => format!("Cannot load save: format {found} was created by a newer build; update the game."),
+        SaveLoadError::UnsupportedSaveVersion { found, supported } => format!("Cannot load save: format {found} is older than {supported}; this build has no migration."),
+        SaveLoadError::UnsupportedPrototypeFormatVersion { found, supported } if found > supported => format!("Cannot load save: prototype format {found} was created by a newer build; update the game."),
+        SaveLoadError::UnsupportedPrototypeFormatVersion { found, supported } => format!("Cannot load save: prototype format {found} is older than {supported}; this build has no migration."),
+        SaveLoadError::PrototypeHashMismatch { .. } => "Cannot load save: it uses different game/prototype data and may come from another build or data set.".into(),
+        SaveLoadError::InvalidMagic { .. } => "Cannot load save: file is not a Factory save.".into(),
+        SaveLoadError::InvalidSimulationState(_) => "Cannot load save: saved simulation state failed validation.".into(),
+        SaveLoadError::Codec(_) => "Cannot load save: file is corrupt or incomplete.".into(),
     }
 }
 
-fn request_save_with_status(
-    slot: SaveSlotKind,
-    sim: &SimResource,
+fn generate_manual_target(config: &SaveLoadConfig) -> (SaveId, PathBuf) {
+    loop {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let counter = MANUAL_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let id = SaveId::new(format!(
+            "manual-{nanos:x}-{:x}-{counter:x}",
+            std::process::id()
+        ));
+        let path = config.root_dir.join(format!("{}.factsim", id.as_str()));
+        if !path.exists() {
+            return (id, path);
+        }
+    }
+}
+
+fn expected_path(config: &SaveLoadConfig, entry: &SaveEntry) -> PathBuf {
+    match entry.metadata.kind {
+        SaveKind::Named => config
+            .root_dir
+            .join(format!("{}.factsim", entry.id.as_str())),
+        _ => jobs::system_path(config, &entry.metadata.kind),
+    }
+}
+
+fn refresh_with_status(
     config: &SaveLoadConfig,
-    pending_jobs: &mut PendingSaveJobs,
+    catalog: &mut SaveCatalog,
     status: &mut SaveLoadStatus,
-    metrics: &mut SaveLoadMetrics,
-    explicit: bool,
-) -> bool {
-    if !matches!(
-        slot,
-        SaveSlotKind::Manual(1..=3) | SaveSlotKind::Quick | SaveSlotKind::Auto
-    ) {
-        status.message = Some("Cannot save: invalid save slot.".to_string());
-        status.kind = SaveLoadStatusKind::Error;
-        status.last_completed_slot = None;
-        return false;
-    }
-    if pending_jobs.is_slot_pending(slot) {
-        if explicit {
-            status.message = Some(format!(
-                "{} is already being saved.",
-                slot_display_name(slot)
-            ));
-            status.kind = SaveLoadStatusKind::Info;
-        }
-        return false;
-    }
-
-    let submission_start = Instant::now();
-    let sim = sim.clone_handle();
-    let path = slot_path(config, slot);
-    let handle = thread::spawn(move || {
-        let worker_start = Instant::now();
-        let lock_start = Instant::now();
-        let sim = sim
-            .read()
-            .map_err(|_| "simulation lock poisoned".to_string())?;
-        let lock_wait_ms = lock_start.elapsed().as_secs_f64() * 1000.0;
-        let serialize_start = Instant::now();
-        let bytes = save_to_bytes(&sim).map_err(|error| format!("{error:?}"))?;
-        let serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
-        drop(sim);
-        let write_start = Instant::now();
-        write_save_bytes(&path, &bytes).map_err(|error| error.to_string())?;
-        Ok(SaveJobOutcome {
-            lock_wait_ms,
-            serialize_ms,
-            write_ms: write_start.elapsed().as_secs_f64() * 1000.0,
-            total_ms: worker_start.elapsed().as_secs_f64() * 1000.0,
-            bytes: bytes.len(),
-        })
-    });
-    pending_jobs.jobs.push(SaveJob {
-        slot,
-        explicit,
-        pollable: false,
-        handle,
-    });
-    metrics.last_request_submission_ms = submission_start.elapsed().as_secs_f64() * 1000.0;
-
-    if explicit {
-        status.message = Some(format!("Saving {}...", slot_display_name(slot)));
-        status.kind = SaveLoadStatusKind::Info;
-        status.last_completed_slot = None;
-    }
-    true
-}
-
-fn write_save_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let temp_path = sibling_with_suffix(path, "tmp");
-    let backup_path = sibling_with_suffix(path, "bak");
-    let _ = fs::remove_file(&temp_path);
-    fs::write(&temp_path, bytes)?;
-
-    if !path.exists() {
-        return fs::rename(&temp_path, path);
-    }
-
-    let _ = fs::remove_file(&backup_path);
-    fs::rename(path, &backup_path)?;
-    match fs::rename(&temp_path, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(&backup_path);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = fs::rename(&backup_path, path);
-            Err(error)
-        }
+) {
+    if let Err(error) = refresh_catalog(config, catalog) {
+        set_error(status, format!("Cannot refresh save catalog: {error}"));
     }
 }
 
-fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("save.factsim");
-    path.with_file_name(format!("{file_name}.{suffix}-{}", std::process::id()))
+fn set_error(status: &mut SaveLoadStatus, message: impl Into<String>) {
+    status.message = Some(message.into());
+    status.kind = SaveLoadStatusKind::Error;
+    status.last_completed_id = None;
 }
 
 fn default_save_root() -> PathBuf {
     default_data_dir()
-        .map(|data_dir| data_dir.join("factory").join("saves"))
+        .map(|dir| dir.join("factory").join("saves"))
         .unwrap_or_else(|| PathBuf::from("saves"))
 }
-
 #[cfg(target_os = "windows")]
 fn default_data_dir() -> Option<PathBuf> {
     env::var_os("APPDATA").map(PathBuf::from)
 }
-
 #[cfg(target_os = "macos")]
 fn default_data_dir() -> Option<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| home.join("Library").join("Application Support"))
 }
-
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn default_data_dir() -> Option<PathBuf> {
     env::var_os("XDG_DATA_HOME")
@@ -603,37 +553,53 @@ fn default_data_dir() -> Option<PathBuf> {
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
 }
 
-fn modified_time_label(modified: SystemTime) -> String {
-    let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
-        return "Saved just now".to_string();
-    };
-    let seconds = elapsed.as_secs();
-    if seconds < 60 {
-        "Saved just now".to_string()
-    } else if seconds < 60 * 60 {
-        format!("Saved {} min ago", seconds / 60)
-    } else if seconds < 24 * 60 * 60 {
-        format!("Saved {} hr ago", seconds / (60 * 60))
-    } else {
-        format!("Saved {} days ago", seconds / (24 * 60 * 60))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn validates_names() {
+        assert_eq!(validate_save_name("  Main Base  ").unwrap(), "Main Base");
+        assert!(validate_save_name("").is_err());
+        assert!(validate_save_name("QuIcKsAvE").is_err());
+        assert!(validate_save_name(&"x".repeat(65)).is_err());
+        assert!(validate_save_name("bad\nname").is_err());
+        assert_eq!(normalize_save_name("ÉCLAIR"), normalize_save_name("éclair"));
+    }
 
     #[test]
-    fn replace_fails_fast_while_save_reader_is_active() {
-        let mut resource = SimResource::new(factory_sim::Simulation::new_test_world(1));
-        let before_hash = resource.read().state_hash();
-        let handle = resource.clone_handle();
-        let guard = handle.read().expect("save reader should acquire the lock");
+    fn autosave_selection_prefers_missing_then_oldest_with_generation_tie_break() {
+        let mut catalog = SaveCatalog::default();
+        let entries = [1usize, 2, 3, 4]
+            .into_iter()
+            .map(|generation| test_autosave_entry(generation, 100))
+            .collect();
+        catalog.replace(entries);
+        assert_eq!(choose_autosave_generation(&catalog, 5), 5);
 
-        let result = resource.replace(factory_sim::Simulation::new_test_world(2));
+        let entries = (1usize..=5)
+            .map(|generation| {
+                test_autosave_entry(generation, if generation <= 2 { 50 } else { 100 })
+            })
+            .collect();
+        catalog.replace(entries);
+        assert_eq!(choose_autosave_generation(&catalog, 5), 1);
+    }
 
-        assert_eq!(result, Err(SimAccessError::Busy));
-        drop(guard);
-        assert_eq!(resource.read().state_hash(), before_hash);
+    fn test_autosave_entry(generation: usize, timestamp: u64) -> SaveEntry {
+        let id = SaveId::new(format!("autosave-{generation}"));
+        SaveEntry {
+            id: id.clone(),
+            metadata: SaveMetadata {
+                schema_version: 1,
+                id,
+                display_name: format!("Autosave {generation}"),
+                kind: SaveKind::Autosave { generation },
+                completed_at_unix_ms: timestamp,
+                application_version: "test".into(),
+            },
+            compatibility: SaveCompatibility::Compatible,
+            metadata_available: true,
+            path: PathBuf::from(format!("autosave-{generation}.factsim")),
+        }
     }
 }

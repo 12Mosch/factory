@@ -2,41 +2,32 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
-use factory_app::map::resources::{
-    MapChunkPaintState, MapLayerTextureCache, MapTextureCache, MapTextureLayer,
-};
-use factory_app::rendering::resource_cells::ResourceRenderCache;
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
-    LOAD_SAVE_SLOTS, MANUAL_SAVE_SLOTS, PendingSaveJobs, PresentationReloadToken, SaveLoadConfig,
-    SaveLoadMetrics, SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState,
-    SaveSlotKind, slot_path,
+    PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveCompatibility, SaveKind,
+    SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState, decode_container,
+    encode_container,
 };
 use factory_app::ui::resources::OpenContainer;
-use factory_app::ui::save_load::{SaveSlotAction, SaveSlotButton};
+use factory_app::ui::save_load::{
+    SaveConfirmationButton, SaveCreateButton, SaveEntryAction, SaveEntryButton,
+};
 use factory_data::{EntityPrototypeId, ItemId};
-use factory_sim::{ChunkCoord, EntityId, SAVE_VERSION, load_from_bytes, save_to_bytes};
+use factory_sim::{EntityId, SAVE_VERSION, load_from_bytes, save_to_bytes};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
-fn save_load_config_has_three_manual_slots() {
-    assert_eq!(
-        MANUAL_SAVE_SLOTS,
-        [
-            SaveSlotKind::Manual(1),
-            SaveSlotKind::Manual(2),
-            SaveSlotKind::Manual(3)
-        ]
-    );
-    assert!(LOAD_SAVE_SLOTS.contains(&SaveSlotKind::Quick));
-    assert!(LOAD_SAVE_SLOTS.contains(&SaveSlotKind::Auto));
+fn defaults_use_five_five_minute_autosaves() {
+    let config = SaveLoadConfig::default();
+    assert_eq!(config.autosave_slot_count, 5);
+    assert_eq!(config.autosave_interval_ticks, 5 * 60 * 60);
 }
 
 #[test]
-fn f5_quick_save_writes_loadable_exact_state() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "f5_quick_save");
+fn f5_writes_container_with_exact_simulation_payload() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "f5");
     run_until_tick(&mut app, 3);
     freeze_time(&mut app);
     let captured = sim_tick_and_hash(&app);
@@ -45,271 +36,328 @@ fn f5_quick_save_writes_loadable_exact_state() {
     app.update();
     drain_save_jobs(&mut app);
 
-    let config = app.world().resource::<SaveLoadConfig>();
-    let bytes = fs::read(slot_path(config, SaveSlotKind::Quick)).expect("quicksave should exist");
-    let loaded = load_from_bytes(&bytes).expect("quicksave should be loadable");
-
+    let path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+    let bytes = fs::read(path).unwrap();
+    let (metadata, payload) = decode_container(&bytes).unwrap();
+    assert_eq!(metadata.kind, SaveKind::Quicksave);
+    let loaded = load_from_bytes(payload).unwrap();
     assert_eq!((loaded.tick_count(), loaded.state_hash()), captured);
 }
 
 #[test]
-fn f9_quick_load_restores_exact_state() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "f9_quick_load");
-    run_until_tick(&mut app, 4);
+fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
+    let mut app = test_app(Duration::ZERO, "raw_quickload");
     let saved = sim_tick_and_hash(&app);
-    write_slot_save(&app, SaveSlotKind::Quick);
-
-    run_until_tick(&mut app, saved.0 + 5);
-    assert_ne!(sim_tick_and_hash(&app), saved);
-    freeze_time(&mut app);
-
-    press_key(&mut app, KeyCode::F9);
+    write_raw_quicksave(&app);
     app.update();
-
-    assert_eq!(sim_tick_and_hash(&app), saved);
-}
-
-#[test]
-fn manual_save_button_writes_slot_file() {
-    let mut app = test_app(Duration::ZERO, "manual_save_button");
-    open_save_load_menu(&mut app, SaveLoadTab::Save);
-    press_slot_button(&mut app, SaveSlotKind::Manual(1), SaveSlotAction::Save);
-    app.update();
-    drain_save_jobs(&mut app);
-
-    let config = app.world().resource::<SaveLoadConfig>();
-    let path = slot_path(config, SaveSlotKind::Manual(1));
-    let bytes = fs::read(path).expect("manual slot should exist");
-    load_from_bytes(&bytes).expect("manual slot should load");
-}
-
-#[test]
-fn manual_load_button_restores_slot_file() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "manual_load_button");
-    run_until_tick(&mut app, 4);
-    let saved = sim_tick_and_hash(&app);
-    write_slot_save(&app, SaveSlotKind::Manual(1));
-
-    run_until_tick(&mut app, saved.0 + 5);
-    freeze_time(&mut app);
-    open_save_load_menu(&mut app, SaveLoadTab::Load);
-    press_slot_button(&mut app, SaveSlotKind::Manual(1), SaveSlotAction::Load);
-    app.update();
-
-    assert_eq!(sim_tick_and_hash(&app), saved);
-}
-
-#[test]
-fn version_mismatch_reports_clear_error_and_keeps_current_sim() {
-    let mut app = test_app(Duration::ZERO, "version_mismatch");
-    let before = sim_tick_and_hash(&app);
-    let mut bytes = save_to_bytes(&app.world().resource::<SimResource>().read())
-        .expect("current sim should save");
-    let found_version = SAVE_VERSION + 1;
-    bytes[8..12].copy_from_slice(&found_version.to_le_bytes());
-    write_slot_bytes(&app, SaveSlotKind::Manual(1), &bytes);
-
-    open_save_load_menu(&mut app, SaveLoadTab::Load);
-    press_slot_button(&mut app, SaveSlotKind::Manual(1), SaveSlotAction::Load);
-    app.update();
-
-    assert_eq!(sim_tick_and_hash(&app), before);
-    let status = app.world().resource::<SaveLoadStatus>();
-    assert_eq!(status.kind, SaveLoadStatusKind::Error);
-    let message = status.message.as_deref().expect("error should be visible");
-    assert!(message.contains("save version"));
-    assert!(message.contains(&found_version.to_string()));
-    assert!(message.contains(&SAVE_VERSION.to_string()));
-}
-
-#[test]
-fn autosave_uses_background_job_and_writes_file() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "autosave");
-    app.world_mut()
-        .resource_mut::<SaveLoadConfig>()
-        .autosave_interval_ticks = 1;
-
-    for _ in 0..10 {
-        app.update();
-        if !app.world().resource::<PendingSaveJobs>().is_empty() {
-            break;
-        }
-    }
-    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
-    drain_save_jobs(&mut app);
-
-    let config = app.world().resource::<SaveLoadConfig>();
-    let bytes = fs::read(slot_path(config, SaveSlotKind::Auto)).expect("autosave should exist");
-    load_from_bytes(&bytes).expect("autosave should load");
-}
-
-#[test]
-fn load_resets_transient_app_state() {
-    let mut app = test_app(Duration::ZERO, "load_resets_transient");
-    write_slot_save(&app, SaveSlotKind::Quick);
     {
-        let mut build_state = app.world_mut().resource_mut::<BuildPlacementState>();
-        build_state.selected = Some(BuildSelection {
+        let mut build = app.world_mut().resource_mut::<BuildPlacementState>();
+        build.selected = Some(BuildSelection {
             prototype_id: EntityPrototypeId::new(0),
             item_id: ItemId::new(0),
         });
     }
     app.world_mut().resource_mut::<OpenContainer>().entity_id = Some(EntityId::new(999));
-    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
-
     press_key(&mut app, KeyCode::F9);
     app.update();
-
-    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
-    assert_eq!(app.world().resource::<OpenContainer>().entity_id, None);
-    assert!(!app.world().resource::<SaveLoadWindowState>().open);
+    assert_eq!(sim_tick_and_hash(&app), saved);
+    assert!(
+        app.world()
+            .resource::<BuildPlacementState>()
+            .selected
+            .is_none()
+    );
+    assert!(app.world().resource::<OpenContainer>().entity_id.is_none());
 }
 
 #[test]
-fn load_invalidates_render_caches() {
-    let mut app = test_app(Duration::ZERO, "load_invalidates_caches");
-    write_slot_save(&app, SaveSlotKind::Quick);
-    app.world_mut().insert_resource(MapTextureCache {
-        layers: [(
-            MapTextureLayer::Surface,
-            MapLayerTextureCache {
-                handle: None,
-                bounds: Some(Default::default()),
-                pixels: Some(vec![1, 2, 3, 4]),
-                dirty_regions: Default::default(),
-                painted_chunks: [(
-                    ChunkCoord { x: 9, y: -3 },
-                    MapChunkPaintState { revealed: true },
-                )]
-                .into(),
-                last_chunk_revision: 66,
-                last_resource_revision: 99,
-                last_revealed_revision: 77,
-                last_debug_flags: (true, true),
-                last_texture_update_tick: 44,
-            },
-        )]
-        .into(),
-    });
-    app.world_mut().insert_resource(ResourceRenderCache {
-        last_resource_revision: Some(42),
-        last_visible_revision: 13,
-        sprite_entities: Default::default(),
-        label_entities: Default::default(),
-        show_amount_labels: true,
-    });
-    let before_token = app.world().resource::<PresentationReloadToken>().value;
-
-    press_key(&mut app, KeyCode::F9);
+fn named_save_creation_and_duplicate_require_confirmation() {
+    let mut app = test_app(Duration::ZERO, "named_duplicate");
     app.update();
+    create_named_save(&mut app, "  Main Factory  ");
+    drain_save_jobs(&mut app);
+    let path = {
+        let entry = app
+            .world()
+            .resource::<SaveCatalog>()
+            .entries()
+            .iter()
+            .find(|entry| entry.metadata.kind == SaveKind::Named)
+            .unwrap();
+        assert_eq!(entry.metadata.display_name, "Main Factory");
+        entry.path().to_path_buf()
+    };
+    let original = fs::read(&path).unwrap();
 
-    let map_cache = app.world().resource::<MapTextureCache>();
-    assert!(map_cache.layers.is_empty());
-    assert_ne!(
-        app.world()
-            .resource::<ResourceRenderCache>()
-            .last_resource_revision,
-        Some(42)
-    );
+    create_named_save(&mut app, "main factory");
+    assert!(matches!(
+        app.world().resource::<PendingSaveConfirmation>(),
+        PendingSaveConfirmation::Overwrite(_)
+    ));
+    assert!(app.world().resource::<PendingSaveJobs>().is_empty());
+    assert_eq!(fs::read(&path).unwrap(), original);
+
+    press_confirmation(&mut app, false);
+    app.update();
     assert_eq!(
-        app.world().resource::<PresentationReloadToken>().value,
-        before_token + 1
+        *app.world().resource::<PendingSaveConfirmation>(),
+        PendingSaveConfirmation::None
     );
+    assert_eq!(fs::read(&path).unwrap(), original);
+
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    app.update();
+    create_named_save(&mut app, "MAIN FACTORY");
+    assert!(matches!(
+        app.world().resource::<PendingSaveConfirmation>(),
+        PendingSaveConfirmation::Overwrite(_)
+    ));
+    press_confirmation(&mut app, true);
+    app.update();
+    drain_save_jobs(&mut app);
+    assert_ne!(fs::read(&path).unwrap(), original);
 }
 
-fn test_app(frame_duration: Duration, test_name: &str) -> App {
+#[test]
+fn incompatible_named_save_stays_visible_and_deletable() {
+    let mut app = test_app(Duration::ZERO, "incompatible_delete");
+    app.update();
+    create_named_save(&mut app, "Old World");
+    drain_save_jobs(&mut app);
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let bytes = fs::read(&path).unwrap();
+    let (metadata, payload) = decode_container(&bytes).unwrap();
+    let mut payload = payload.to_vec();
+    payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
+    fs::write(&path, encode_container(&metadata, &payload).unwrap()).unwrap();
+    refresh_manager(&mut app);
+
+    let entry = &app.world().resource::<SaveCatalog>().entries()[0];
+    assert!(matches!(
+        entry.compatibility,
+        SaveCompatibility::SaveFormatOlder { .. }
+    ));
+    assert!(!entry.compatibility.can_load());
+    let id = entry.id.clone();
+    press_entry(&mut app, &id, SaveEntryAction::Delete);
+    app.update();
+    press_confirmation(&mut app, true);
+    app.update();
+    assert!(!path.exists());
+}
+
+#[test]
+fn malformed_metadata_falls_back_without_blocking_load() {
+    let mut app = test_app(Duration::ZERO, "metadata_fallback");
+    app.update();
+    let expected = sim_tick_and_hash(&app);
+    create_named_save(&mut app, "Fallback World");
+    drain_save_jobs(&mut app);
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let mut bytes = fs::read(&path).unwrap();
+    let metadata_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    bytes[16..16 + metadata_len].fill(b'!');
+    fs::write(&path, bytes).unwrap();
+    refresh_manager(&mut app);
+
+    let entry = &app.world().resource::<SaveCatalog>().entries()[0];
+    assert!(!entry.metadata_available);
+    assert!(entry.compatibility.can_load());
+    let id = entry.id.clone();
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    press_entry(&mut app, &id, SaveEntryAction::Load);
+    app.update();
+    assert_eq!(sim_tick_and_hash(&app), expected);
+}
+
+#[test]
+fn display_name_never_becomes_a_filesystem_path() {
+    let mut app = test_app(Duration::ZERO, "opaque_path");
+    app.update();
+    create_named_save(&mut app, "../escaped world");
+    drain_save_jobs(&mut app);
+    let root = app.world().resource::<SaveLoadConfig>().root_dir.clone();
+    let entry = &app.world().resource::<SaveCatalog>().entries()[0];
+    assert!(entry.path().starts_with(&root));
+    assert!(
+        entry
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("manual-")
+    );
+    assert!(!root.parent().unwrap().join("escaped world").exists());
+}
+
+#[test]
+fn autosave_fills_generations_before_rotation() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "autosave_rotation");
+    {
+        let mut config = app.world_mut().resource_mut::<SaveLoadConfig>();
+        config.autosave_interval_ticks = 1;
+        config.autosave_slot_count = 5;
+    }
+    for generation in 1..=5 {
+        run_until_jobs_start(&mut app);
+        drain_save_jobs(&mut app);
+        let path = app
+            .world()
+            .resource::<SaveLoadConfig>()
+            .root_dir
+            .join(format!("autosave-{generation}.factsim"));
+        assert!(path.is_file());
+    }
+}
+
+#[test]
+fn catalog_ignores_old_slots_temps_backups_and_old_autosave() {
+    let mut app = test_app(Duration::ZERO, "ignored_files");
+    let root = app.world().resource::<SaveLoadConfig>().root_dir.clone();
+    fs::create_dir_all(&root).unwrap();
+    for name in [
+        "slot_1.factsim",
+        "slot_2.factsim",
+        "slot_3.factsim",
+        "autosave.factsim",
+        "manual-x.factsim.tmp-1",
+        "quicksave.factsim.bak-1",
+        "notes.txt",
+    ] {
+        fs::write(root.join(name), b"ignored").unwrap();
+    }
+    app.update();
+    assert!(app.world().resource::<SaveCatalog>().entries().is_empty());
+}
+
+#[test]
+fn background_submission_remains_non_blocking_and_metrics_populate() {
+    let mut app = test_app(Duration::ZERO, "metrics");
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<SaveLoadMetrics>()
+            .last_request_submission_ms
+            < 50.0
+    );
+    drain_save_jobs(&mut app);
+    let metrics = app.world().resource::<SaveLoadMetrics>();
+    assert!(metrics.last_bytes > 0);
+    assert!(metrics.last_total_ms >= metrics.last_write_ms);
+}
+
+fn test_app(frame_duration: Duration, name: &str) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(FactoryAppPlugin)
         .insert_resource(TimeUpdateStrategy::ManualDuration(frame_duration));
     app.world_mut().insert_resource(SaveLoadConfig {
-        root_dir: unique_temp_dir(test_name),
+        root_dir: unique_temp_dir(name),
         autosave_interval_ticks: 5 * 60 * 60,
+        autosave_slot_count: 5,
     });
     app
 }
 
-fn unique_temp_dir(test_name: &str) -> PathBuf {
+fn unique_temp_dir(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time should be after epoch")
+        .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "factory_save_load_{test_name}_{}_{}",
-        std::process::id(),
-        nanos
+        "factory_save_load_{name}_{}_{nanos}",
+        std::process::id()
     ))
 }
 
-fn freeze_time(app: &mut App) {
-    app.world_mut()
-        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
-}
-
-#[test]
-#[ignore = "measurement harness"]
-fn save_request_latency_benchmark() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "save_request_latency");
-    run_until_tick(&mut app, 120);
-    freeze_time(&mut app);
-
-    press_key(&mut app, KeyCode::F5);
-    app.update();
-    let submission_ms = app
-        .world()
-        .resource::<SaveLoadMetrics>()
-        .last_request_submission_ms;
-    drain_save_jobs(&mut app);
-    let metrics = app.world().resource::<SaveLoadMetrics>();
-    println!(
-        "save_request_latency_benchmark: submission={submission_ms:.3} ms total={:.3} ms bytes={}",
-        metrics.last_total_ms, metrics.last_bytes
-    );
-    assert!(metrics.last_bytes > 0);
-}
-
-fn run_until_tick(app: &mut App, target_tick: u64) {
-    while app.world().resource::<SimResource>().read().tick_count() < target_tick {
-        app.update();
-    }
-}
-
-fn sim_tick_and_hash(app: &App) -> (u64, u64) {
-    let sim = &app.world().resource::<SimResource>().read();
-    (sim.tick_count(), sim.state_hash())
-}
-
-fn press_key(app: &mut App, key: KeyCode) {
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(key);
-}
-
-fn open_save_load_menu(app: &mut App, tab: SaveLoadTab) {
+fn create_named_save(app: &mut App, name: &str) {
     {
         let mut window = app.world_mut().resource_mut::<SaveLoadWindowState>();
         window.open = true;
-        window.tab = tab;
+        window.tab = SaveLoadTab::Save;
+        window.name_buffer = name.into();
+        window.refresh_on_open = true;
     }
+    app.update();
+    let mut query = app
+        .world_mut()
+        .query_filtered::<&mut Interaction, With<SaveCreateButton>>();
+    *query.single_mut(app.world_mut()).unwrap() = Interaction::Pressed;
     app.update();
 }
 
-fn press_slot_button(app: &mut App, slot: SaveSlotKind, action: SaveSlotAction) {
+fn refresh_manager(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<SaveLoadWindowState>()
+        .refresh_on_open = true;
+    app.update();
+}
+
+fn press_entry(app: &mut App, id: &factory_app::save_load::SaveId, action: SaveEntryAction) {
     let mut query = app
         .world_mut()
-        .query::<(&SaveSlotButton, &mut Interaction)>();
-    let mut pressed = false;
+        .query::<(&SaveEntryButton, &mut Interaction)>();
+    let mut found = false;
     for (button, mut interaction) in query.iter_mut(app.world_mut()) {
-        if button.slot == slot && button.action == action {
+        if &button.id == id && button.action == action {
             *interaction = Interaction::Pressed;
-            pressed = true;
+            found = true;
         }
     }
-    assert!(pressed, "expected {action:?} button for {slot:?}");
+    assert!(found);
+}
+
+fn press_confirmation(app: &mut App, confirm: bool) {
+    app.update();
+    let mut query = app
+        .world_mut()
+        .query::<(&SaveConfirmationButton, &mut Interaction)>();
+    let mut found = false;
+    for (button, mut interaction) in query.iter_mut(app.world_mut()) {
+        if button.0 == confirm {
+            *interaction = Interaction::Pressed;
+            found = true;
+        }
+    }
+    assert!(found);
+}
+
+fn write_raw_quicksave(app: &App) {
+    let bytes = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    let path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, bytes).unwrap();
+}
+
+fn run_until_jobs_start(app: &mut App) {
+    for _ in 0..20 {
+        app.update();
+        if !app.world().resource::<PendingSaveJobs>().is_empty() {
+            return;
+        }
+    }
+    panic!("autosave did not start");
 }
 
 fn drain_save_jobs(app: &mut App) {
-    for _ in 0..200 {
+    for _ in 0..300 {
         if app.world().resource::<PendingSaveJobs>().is_empty() {
             return;
         }
@@ -319,16 +367,21 @@ fn drain_save_jobs(app: &mut App) {
     panic!("save jobs did not drain");
 }
 
-fn write_slot_save(app: &App, slot: SaveSlotKind) {
-    let bytes = save_to_bytes(&app.world().resource::<SimResource>().read())
-        .expect("current sim should save");
-    write_slot_bytes(app, slot, &bytes);
+fn run_until_tick(app: &mut App, tick: u64) {
+    while app.world().resource::<SimResource>().read().tick_count() < tick {
+        app.update();
+    }
 }
-
-fn write_slot_bytes(app: &App, slot: SaveSlotKind, bytes: &[u8]) {
-    let config = app.world().resource::<SaveLoadConfig>();
-    let path = slot_path(config, slot);
-    fs::create_dir_all(path.parent().expect("slot path should have a parent"))
-        .expect("save dir should be created");
-    fs::write(path, bytes).expect("slot bytes should be written");
+fn freeze_time(app: &mut App) {
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+}
+fn sim_tick_and_hash(app: &App) -> (u64, u64) {
+    let sim = app.world().resource::<SimResource>().read();
+    (sim.tick_count(), sim.state_hash())
+}
+fn press_key(app: &mut App, key: KeyCode) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(key);
 }

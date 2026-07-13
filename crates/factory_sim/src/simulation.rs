@@ -566,8 +566,8 @@ use self::power_state::{PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
 pub use self::profiling::{SimulationCounts, SimulationTickProfile};
 pub use self::save::{
-    PROTOTYPE_FORMAT_VERSION, SAVE_VERSION, SaveLoadError, load_from_bytes, prototype_hash,
-    save_to_bytes,
+    PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo, SaveLoadError,
+    inspect_save_header, load_from_bytes, prototype_hash, save_to_bytes,
 };
 pub use self::scripted::scripted_inputs_for_red_science_factory;
 use self::statistics_ops::power_sample_is_recorded;

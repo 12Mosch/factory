@@ -9,9 +9,9 @@ mod simulation;
 mod ui;
 
 use crate::world_setup::{
-    AppMode, StartInWorldSetup, build_world_setup_ui, cleanup_world_setup,
+    AppMode, StartInWorldSetup, WorldSetupSaveListState, build_world_setup_ui, cleanup_world_setup,
     handle_world_setup_buttons, handle_world_setup_load_buttons, handle_world_setup_seed_input,
-    sync_world_setup_text,
+    sync_world_setup_save_list, sync_world_setup_text,
 };
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::input::InputSystems;
@@ -125,6 +125,7 @@ impl Plugin for FactoryAppPlugin {
             ui::UiPlugin,
         ))
         .init_resource::<crate::world_setup::WorldSetupState>()
+        .init_resource::<WorldSetupSaveListState>()
         .add_systems(OnEnter(AppMode::WorldSetup), build_world_setup_ui)
         .add_systems(OnExit(AppMode::WorldSetup), cleanup_world_setup)
         .add_systems(
@@ -133,6 +134,7 @@ impl Plugin for FactoryAppPlugin {
                 handle_world_setup_seed_input,
                 handle_world_setup_load_buttons,
                 handle_world_setup_buttons,
+                sync_world_setup_save_list,
                 sync_world_setup_text,
             )
                 .chain()
