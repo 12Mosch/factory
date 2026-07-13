@@ -289,6 +289,7 @@ impl SimulationSnapshotOwned {
             },
             pollution: self.pollution,
             pollution_emitters: PollutionEmitterIndex::default(),
+            pollution_diffusion: PollutionDiffusionBuffer::default(),
             enemies: self.enemies,
             config: self.config,
             attack_targets: enemy_ops::AttackTargetCache::default(),

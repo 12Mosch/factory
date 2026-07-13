@@ -49,6 +49,7 @@ impl Simulation {
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
             pollution_emitters: PollutionEmitterIndex::default(),
+            pollution_diffusion: PollutionDiffusionBuffer::default(),
             enemies: EnemySubsystem::default(),
             config,
             attack_targets: enemy_ops::AttackTargetCache::default(),

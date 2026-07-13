@@ -208,6 +208,77 @@ fn pollution_spreads_to_neighbor_chunks_at_interval() {
     );
 }
 
+fn spread_pollution_reference(chunks: &mut BTreeMap<ChunkCoord, u64>) {
+    let snapshot = chunks
+        .iter()
+        .filter(|(_, amount)| **amount >= POLLUTION_MIN_TO_SPREAD_MICRO)
+        .map(|(coord, amount)| (*coord, *amount))
+        .collect::<Vec<_>>();
+
+    for (coord, amount) in snapshot {
+        let share = amount / 1000 * POLLUTION_SPREAD_PER_NEIGHBOR_PERMILLE;
+        if share == 0 {
+            continue;
+        }
+
+        let mut moved = 0;
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (Some(x), Some(y)) = (coord.x.checked_add(dx), coord.y.checked_add(dy)) else {
+                continue;
+            };
+            let amount = chunks.entry(ChunkCoord { x, y }).or_default();
+            *amount = amount.saturating_add(share);
+            moved += share;
+        }
+
+        let remove_source = if let Some(amount) = chunks.get_mut(&coord) {
+            *amount = amount.saturating_sub(moved);
+            *amount == 0
+        } else {
+            false
+        };
+        if remove_source {
+            chunks.remove(&coord);
+        }
+    }
+}
+
+#[test]
+fn buffered_pollution_diffusion_matches_ordered_updates_exactly() {
+    let seeded = BTreeMap::from([
+        (ChunkCoord { x: -1, y: 0 }, u64::MAX - 5),
+        (ChunkCoord { x: 0, y: 0 }, u64::MAX - 10),
+        (ChunkCoord { x: 1, y: 0 }, 10_000_000),
+        (ChunkCoord { x: 0, y: 1 }, POLLUTION_MIN_TO_SPREAD_MICRO),
+        (
+            ChunkCoord {
+                x: i32::MIN,
+                y: i32::MIN,
+            },
+            1_000_000,
+        ),
+        (
+            ChunkCoord {
+                x: i32::MAX,
+                y: i32::MAX,
+            },
+            2_000_000,
+        ),
+        (ChunkCoord { x: 4, y: 4 }, 99_999),
+    ]);
+    let mut expected = seeded.clone();
+    let mut sim = Simulation::new_test_world(123);
+    sim.pollution.chunks = seeded;
+
+    for _ in 0..2 {
+        spread_pollution_reference(&mut expected);
+        sim.spread_pollution_to_neighbors();
+        assert_eq!(sim.pollution.chunks, expected);
+        assert!(sim.pollution_diffusion.deltas.is_empty());
+        assert!(sim.pollution_diffusion.ordered_deltas.is_empty());
+    }
+}
+
 #[test]
 fn terrain_absorbs_pollution_over_time() {
     let mut sim = Simulation::new_test_world(123);
