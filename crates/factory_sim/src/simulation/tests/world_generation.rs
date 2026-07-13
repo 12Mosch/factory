@@ -58,6 +58,35 @@ fn ensure_chunk_generated_creates_missing_chunk_once() {
 }
 
 #[test]
+fn generated_chunks_cache_terrain_pollution_absorption() {
+    let mut world = WorldSim::new_seeded(123);
+    let far_coord = ChunkCoord { x: 40, y: -37 };
+    assert!(world.ensure_chunk_generated(far_coord));
+
+    for prototype in &world.prototypes.tiles {
+        assert_eq!(
+            world.tile_pollution_absorption_per_minute_milli[prototype.id.index()],
+            u64::from(prototype.pollution_absorption_per_minute_milli),
+        );
+    }
+
+    for coord in [ChunkCoord { x: 0, y: 0 }, far_coord] {
+        let chunk = &world.chunks[&coord];
+        let expected: u64 = chunk
+            .tiles
+            .iter()
+            .map(|tile| {
+                u64::from(
+                    world.prototypes.tiles[tile.tile_id.index()]
+                        .pollution_absorption_per_minute_milli,
+                )
+            })
+            .sum();
+        assert_eq!(chunk.pollution_absorption_per_minute_milli, expected);
+    }
+}
+
+#[test]
 fn chunk_generation_is_independent_of_generation_order() {
     let coord_a = ChunkCoord { x: 12, y: -9 };
     let coord_b = ChunkCoord { x: -11, y: 14 };

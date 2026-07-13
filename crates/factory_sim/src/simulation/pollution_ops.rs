@@ -143,17 +143,12 @@ impl Simulation {
     }
 
     pub(super) fn absorb_pollution_by_terrain(&mut self) {
-        // Absorption rate per tile id, in milli-units per minute. Conversion
-        // happens after summing a chunk so fractional output is carried once
-        // per terrain source rather than discarded once per tile.
-        let per_tile_absorption: Vec<u64> = self
+        if self
             .world
-            .prototypes
-            .tiles
+            .tile_pollution_absorption_per_minute_milli
             .iter()
-            .map(|tile| u64::from(tile.pollution_absorption_per_minute_milli))
-            .collect();
-        if per_tile_absorption.iter().all(|rate| *rate == 0) {
+            .all(|rate| *rate == 0)
+        {
             return;
         }
 
@@ -164,19 +159,9 @@ impl Simulation {
             let Some(chunk) = self.world.chunks.get(&coord) else {
                 continue;
             };
-            let per_minute_milli: u64 = chunk
-                .tiles
-                .iter()
-                .map(|tile| {
-                    per_tile_absorption
-                        .get(tile.tile_id.index())
-                        .copied()
-                        .unwrap_or(0)
-                })
-                .sum();
             let absorption = self.pollution.accrue_terrain_absorption(
                 coord,
-                per_minute_milli,
+                chunk.pollution_absorption_per_minute_milli,
                 POLLUTION_SPREAD_INTERVAL_TICKS,
             );
             self.pollution.remove_micro(coord, absorption);
