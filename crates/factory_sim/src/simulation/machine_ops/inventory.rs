@@ -5,8 +5,15 @@ pub(in crate::simulation) fn burner_fuel_slot_can_accept(
     fuel_slot: Option<ItemStack>,
     stack: ItemStack,
 ) -> bool {
-    fuel_value_joules(catalog, stack.item_id()).is_some()
+    burner_fuel_accepts_item(catalog, stack.item_id())
         && crate::inventory::single_slot_can_accept(catalog, fuel_slot, stack)
+}
+
+pub(in crate::simulation) fn burner_fuel_accepts_item(
+    catalog: &PrototypeCatalog,
+    item_id: ItemId,
+) -> bool {
+    fuel_value_joules(catalog, item_id).is_some()
 }
 
 pub(in crate::simulation) fn output_slot_can_accept(

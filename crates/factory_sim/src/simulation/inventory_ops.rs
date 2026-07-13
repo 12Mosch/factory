@@ -28,28 +28,3 @@ impl_inventory_error_conversion!(BurnerDrillError, "burner drill");
 impl_inventory_error_conversion!(FurnaceError, "furnace");
 impl_inventory_error_conversion!(BoilerError, "boiler");
 impl_inventory_error_conversion!(AssemblerError, "assembler");
-
-pub(super) fn stack_in_slot(
-    inventory: &Inventory,
-    slot_index: usize,
-) -> Result<ItemStack, ContainerError> {
-    inventory
-        .slots()
-        .get(slot_index)
-        .ok_or(ContainerError::InvalidSlot { slot_index })?
-        .ok_or(ContainerError::EmptySlot { slot_index })
-}
-
-pub(super) fn ensure_inventory_can_accept(
-    catalog: &PrototypeCatalog,
-    inventory: &Inventory,
-    stack: ItemStack,
-) -> Result<(), ContainerError> {
-    if inventory.can_insert(catalog, stack.item_id(), stack.count()) {
-        Ok(())
-    } else if item_stack_size(catalog, stack.item_id()).is_none() {
-        Err(ContainerError::UnknownItem)
-    } else {
-        Err(ContainerError::InsufficientSpace)
-    }
-}

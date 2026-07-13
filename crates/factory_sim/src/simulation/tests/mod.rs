@@ -19,4 +19,5 @@ mod player;
 mod power;
 mod research;
 mod statistics;
+mod transfers;
 mod world_generation;

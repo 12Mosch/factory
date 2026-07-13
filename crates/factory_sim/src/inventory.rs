@@ -197,6 +197,50 @@ impl Inventory {
             .sum()
     }
 
+    /// Inserts a quantity whose item validity and destination capacity were
+    /// checked before the transfer commit began.
+    pub(crate) fn commit_prevalidated_insert(
+        &mut self,
+        item_id: ItemId,
+        count: u16,
+        stack_size: u16,
+    ) {
+        debug_assert!(count > 0);
+        debug_assert!(self.insert_capacity(item_id, stack_size) >= u32::from(count));
+        self.insert_validated(item_id, count, stack_size);
+    }
+
+    /// Removes a quantity from one exact source slot after a transfer plan has
+    /// captured and validated that slot.
+    pub(crate) fn commit_prevalidated_slot_removal(
+        &mut self,
+        slot_index: usize,
+        item_id: ItemId,
+        count: u16,
+    ) {
+        debug_assert!(count > 0);
+        let slot = self
+            .slots
+            .get_mut(slot_index)
+            .expect("a planned inventory source slot remains in bounds during commit");
+        let stack = slot
+            .as_mut()
+            .expect("a planned inventory source slot remains occupied during commit");
+        assert_eq!(
+            stack.item_id, item_id,
+            "a planned inventory source slot retains its item kind during commit"
+        );
+        assert!(
+            stack.count >= count,
+            "a planned inventory source slot retains the committed quantity"
+        );
+
+        stack.count -= count;
+        if stack.count == 0 {
+            *slot = None;
+        }
+    }
+
     fn insert_validated(&mut self, item_id: ItemId, count: u16, stack_size: u16) {
         let mut remaining = u32::from(count);
 
@@ -289,6 +333,62 @@ pub(crate) fn insert_into_single_slot(
         None => *slot = Some(stack),
     }
     Ok(())
+}
+
+pub(crate) fn commit_prevalidated_single_slot_insert(
+    slot: &mut Option<ItemStack>,
+    item_id: ItemId,
+    count: u16,
+    stack_size: u16,
+) {
+    debug_assert!(count > 0);
+    match slot {
+        Some(existing) => {
+            assert_eq!(
+                existing.item_id, item_id,
+                "a planned single-slot destination retains its item kind during commit"
+            );
+            existing.count = existing
+                .count
+                .checked_add(count)
+                .expect("a planned single-slot insertion cannot overflow");
+            assert!(
+                existing.count <= stack_size,
+                "a planned single-slot insertion stays within the item stack size"
+            );
+        }
+        None => {
+            assert!(
+                count <= stack_size,
+                "a planned single-slot insertion stays within the item stack size"
+            );
+            *slot = Some(ItemStack { item_id, count });
+        }
+    }
+}
+
+pub(crate) fn commit_prevalidated_single_slot_removal(
+    slot: &mut Option<ItemStack>,
+    item_id: ItemId,
+    count: u16,
+) {
+    debug_assert!(count > 0);
+    let stack = slot
+        .as_mut()
+        .expect("a planned single-slot source remains occupied during commit");
+    assert_eq!(
+        stack.item_id, item_id,
+        "a planned single-slot source retains its item kind during commit"
+    );
+    assert!(
+        stack.count >= count,
+        "a planned single-slot source retains the committed quantity"
+    );
+
+    stack.count -= count;
+    if stack.count == 0 {
+        *slot = None;
+    }
 }
 
 pub(crate) fn insert_item_into_single_slot(
