@@ -1,6 +1,23 @@
 use super::super::*;
 use super::support::*;
-use crate::simulation::combat_ops::CombatIntents;
+
+fn enemy_damage_commands(
+    target: EntityId,
+    amounts: impl IntoIterator<Item = u32>,
+) -> CombatCommandBuffer {
+    let mut commands = CombatCommandBuffer::default();
+    for amount in amounts {
+        commands.push(CombatCommand {
+            source: CombatSource {
+                owner: CombatantId::Enemy(EnemyId::new(u64::MAX)),
+                faction: Faction::Enemy,
+            },
+            target: CombatantId::Entity(target),
+            damage: Damage::physical(amount),
+        });
+    }
+    commands
+}
 
 fn chunk_of_entity(sim: &Simulation, entity_id: EntityId) -> ChunkCoord {
     let placed = sim
@@ -41,10 +58,12 @@ fn spawn_test_enemy_at(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoor
             id,
             x: x * POSITION_SCALE + POSITION_SCALE / 2,
             y: y * POSITION_SCALE + POSITION_SCALE / 2,
-            health: unit.max_health,
-            max_health: unit.max_health,
-            damage: unit.damage,
-            attack_cooldown_ticks: unit.attack_cooldown_ticks,
+            health: HealthState::new(unit.max_health, Faction::Enemy),
+            attack: AttackDefinition::melee(
+                Damage::physical(unit.damage),
+                unit.attack_cooldown_ticks,
+                1,
+            ),
             speed_fixed_per_tick: unit.speed_fixed_per_tick,
             aggro_radius_tiles: unit.aggro_radius_tiles,
             mode: EnemyMode::Attack,
@@ -412,7 +431,8 @@ fn enemy_and_turret_attacks_resolve_simultaneously() {
         .enemies
         .get_mut(&enemy_id)
         .expect("enemy should exist")
-        .health = 5;
+        .health
+        .current = 5;
 
     sim.tick();
 
@@ -482,12 +502,13 @@ fn turret_targeting_uses_one_combat_snapshot_regardless_of_placement_order() {
             .enemies
             .get_mut(&primary_enemy)
             .expect("primary enemy should exist")
-            .health = 5;
+            .health
+            .current = 5;
         let secondary_enemy = spawn_test_enemy_at(&mut sim, x + 15, y);
 
-        let mut intents = combat_ops::CombatIntents::default();
-        sim.advance_gun_turrets(&mut intents);
-        sim.resolve_combat(intents);
+        let mut commands = CombatCommandBuffer::default();
+        sim.advance_gun_turrets(&mut commands);
+        sim.resolve_combat_commands(commands);
 
         assert!(
             sim.enemies().get(primary_enemy).is_none(),
@@ -497,7 +518,8 @@ fn turret_targeting_uses_one_combat_snapshot_regardless_of_placement_order() {
             .enemies()
             .get(secondary_enemy)
             .expect("secondary enemy should not be targeted")
-            .health;
+            .health
+            .current;
         let exclusive_shots = sim.entities.gun_turrets[&exclusive_turret].loaded_shots;
         let flexible_shots = sim.entities.gun_turrets[&flexible_turret].loaded_shots;
         (secondary_health, exclusive_shots, flexible_shots)
@@ -526,7 +548,7 @@ fn unloaded_turret_does_not_fire() {
     }
 
     let enemy = sim.enemies().get(enemy_id).expect("enemy should survive");
-    assert_eq!(enemy.health, enemy.max_health);
+    assert_eq!(enemy.health.current, enemy.health.maximum);
 }
 
 #[test]
@@ -567,9 +589,9 @@ fn gun_turret_range_reaches_nearest_spawner_footprint_edge() {
     load_turret_ammo(&mut sim, turret_id, 1);
 
     let health_before = sim.entity_health(spawner_id).unwrap().0;
-    let mut intents = CombatIntents::default();
-    sim.advance_gun_turrets(&mut intents);
-    sim.resolve_combat(intents);
+    let mut commands = CombatCommandBuffer::default();
+    sim.advance_gun_turrets(&mut commands);
+    sim.resolve_combat_commands(commands);
 
     assert_eq!(sim.entity_health(spawner_id).unwrap().0, health_before - 5);
 }
@@ -611,28 +633,76 @@ fn structure_damage_is_aggregated_and_warnings_are_rate_limited_by_region() {
     let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 1);
     let wall_id = place_at(&mut sim, wall, x, y, Direction::North);
 
-    let mut intents = CombatIntents::default();
-    intents.record_enemy_attack(wall_id, 10);
-    intents.record_enemy_attack(wall_id, 20);
-    sim.resolve_combat(intents);
+    let commands = enemy_damage_commands(wall_id, [10, 20]);
+    sim.resolve_combat_commands(commands);
 
     assert_eq!(sim.entity_health(wall_id), Some((320, 350)));
     let first_warning_sequence = sim.latest_threat_sequence();
     assert_eq!(first_warning_sequence, 1);
 
     sim.tick += STRUCTURE_WARNING_COOLDOWN_TICKS - 1;
-    let mut intents = CombatIntents::default();
-    intents.record_enemy_attack(wall_id, 10);
-    sim.resolve_combat(intents);
+    let commands = enemy_damage_commands(wall_id, [10]);
+    sim.resolve_combat_commands(commands);
     assert_eq!(sim.entity_health(wall_id), Some((310, 350)));
     assert_eq!(sim.latest_threat_sequence(), first_warning_sequence);
 
     sim.tick += 1;
-    let mut intents = CombatIntents::default();
-    intents.record_enemy_attack(wall_id, 10);
-    sim.resolve_combat(intents);
+    let commands = enemy_damage_commands(wall_id, [10]);
+    sim.resolve_combat_commands(commands);
     assert_eq!(sim.entity_health(wall_id), Some((300, 350)));
     assert_eq!(sim.latest_threat_sequence(), first_warning_sequence + 1);
+}
+
+#[test]
+fn combat_commands_apply_resistance_per_hit_and_reject_friendly_fire() {
+    let mut sim = Simulation::new_test_world(123);
+    let wall = entity_id_by_name(&sim.world.prototypes, "wall");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 1);
+    let wall_id = place_at(&mut sim, wall, x, y, Direction::North);
+    sim.entities
+        .entity_health
+        .get_mut(&wall_id)
+        .unwrap()
+        .resistances =
+        ResistanceProfile::NONE.with_resistance(DamageType::Physical, Resistance::new(5, 0));
+
+    sim.resolve_combat_commands(enemy_damage_commands(wall_id, [10, 10]));
+    assert_eq!(sim.entity_health(wall_id), Some((340, 350)));
+
+    let mut friendly_fire = CombatCommandBuffer::default();
+    friendly_fire.push(CombatCommand {
+        source: CombatSource::new(CombatantId::Player, Faction::Player),
+        target: CombatantId::Entity(wall_id),
+        damage: Damage::new(100, DamageType::Fire),
+    });
+    sim.resolve_combat_commands(friendly_fire);
+
+    assert_eq!(
+        sim.entity_health(wall_id),
+        Some((340, 350)),
+        "allied combatants must not damage one another"
+    );
+}
+
+#[test]
+fn player_is_a_faction_owned_combat_target() {
+    let mut sim = Simulation::new_test_world(123);
+    let mut commands = CombatCommandBuffer::default();
+    commands.push(CombatCommand {
+        source: CombatSource::new(CombatantId::Enemy(EnemyId::new(u64::MAX)), Faction::Enemy),
+        target: CombatantId::Player,
+        damage: Damage::new(25, DamageType::Acid),
+    });
+
+    sim.resolve_combat_commands(commands);
+
+    assert_eq!(
+        sim.player_health(),
+        (PLAYER_MAX_HEALTH - 25, PLAYER_MAX_HEALTH)
+    );
+    assert_eq!(sim.faction_of(CombatantId::Player), Some(Faction::Player));
+    sim.validate()
+        .expect("a damaged player should remain a valid combatant");
 }
 
 #[test]

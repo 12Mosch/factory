@@ -41,6 +41,12 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_fluid_network_snapshots(sim)?;
 
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
+    if !sim.player.health.is_valid()
+        || sim.player.health.maximum != PLAYER_MAX_HEALTH
+        || sim.player.health.faction != Faction::Player
+    {
+        return Err(SimValidationError::InvalidPlayerState);
+    }
     validate_crafting_queue(sim)?;
     validate_research_state(sim)?;
     validate_enemies(sim)?;

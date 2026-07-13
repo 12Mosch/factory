@@ -10,7 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::hash::{Hash, Hasher};
 
 pub use crate::combat::{
-    EnemySpawnerState, GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState, HealthState, RepairError,
+    AttackDefinition, AttackDelivery, CombatCommand, CombatCommandBuffer, CombatSource,
+    CombatantId, Damage, DamageType, EnemySpawnerState, Faction, FactionRelation,
+    GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState, HealthState, PLAYER_MAX_HEALTH, RepairError,
+    Resistance, ResistanceProfile, TargetPriority,
 };
 pub use crate::construction::{
     Blueprint, BlueprintEntity, ConstructionError, ConstructionJob, ConstructionState, GhostEntity,
@@ -522,6 +525,7 @@ pub enum SimValidationError {
     InvalidEnemy {
         enemy_id: EnemyId,
     },
+    InvalidPlayerState,
     InvalidEnemyState,
 }
 

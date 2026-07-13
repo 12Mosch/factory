@@ -1,5 +1,6 @@
 use crate::ids::EntityId;
 use crate::world::{ChunkCoord, WorldTileCoord};
+use crate::{AttackDefinition, Faction, HealthState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -252,19 +253,17 @@ pub struct Expansion {
     pub spawner_prototype: factory_data::EntityPrototypeId,
 }
 
-/// A mobile enemy unit. Combat stats are copied from the spawner's unit
-/// prototype at spawn time so the unit stays self-contained even if its home
-/// spawner is destroyed.
+/// A mobile enemy unit. Its reusable combat state is derived from the
+/// spawner's unit prototype at spawn time and remains self-contained if its
+/// home spawner is destroyed.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct Enemy {
     pub id: EnemyId,
     /// Fixed-point center position, 1024 units per tile.
     pub x: i64,
     pub y: i64,
-    pub health: u32,
-    pub max_health: u32,
-    pub damage: u32,
-    pub attack_cooldown_ticks: u32,
+    pub health: HealthState,
+    pub attack: AttackDefinition,
     pub speed_fixed_per_tick: u32,
     pub aggro_radius_tiles: u32,
     pub mode: EnemyMode,
@@ -281,6 +280,10 @@ pub struct Enemy {
 }
 
 impl Enemy {
+    pub const fn faction(&self) -> Faction {
+        self.health.faction
+    }
+
     pub fn position_tiles(&self) -> (f32, f32) {
         (
             self.x as f32 / crate::simulation::POSITION_SCALE as f32,

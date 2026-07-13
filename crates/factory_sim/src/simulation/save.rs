@@ -12,7 +12,9 @@ use bincode::Options;
 // (absorbed pollution is pooled on EnemyBase::attack_budget_micro).
 // v17: per-source pollution emission and terrain absorption remainders joined
 // the pollution snapshot.
-pub const SAVE_VERSION: u32 = 17;
+// v18: typed combat state, factions, resistance profiles, and attack
+// definitions replaced the previous untyped damage fields.
+pub const SAVE_VERSION: u32 = 18;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

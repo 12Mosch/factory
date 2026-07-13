@@ -1,3 +1,4 @@
+use crate::HealthState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -7,6 +8,13 @@ pub struct PlayerState {
     /// Health the currently opened repair pack can still restore; a new pack
     /// is consumed from the inventory when this reaches zero mid-repair.
     pub(crate) repair_remaining_health: u32,
+    pub(crate) health: HealthState,
+}
+
+impl PlayerState {
+    pub fn health(self) -> HealthState {
+        self.health
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

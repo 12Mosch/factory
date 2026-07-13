@@ -254,7 +254,12 @@ fn enemy_spawner_state_for_prototype(
 }
 
 fn health_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<HealthState> {
-    prototype.max_health.map(|max_health| HealthState {
-        current: max_health,
-    })
+    let faction = if prototype.entity_kind == EntityKind::EnemySpawner {
+        Faction::Enemy
+    } else {
+        Faction::Player
+    };
+    prototype
+        .max_health
+        .map(|max_health| HealthState::new(max_health, faction))
 }

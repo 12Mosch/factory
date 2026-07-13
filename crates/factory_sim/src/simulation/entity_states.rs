@@ -271,7 +271,7 @@ impl EntityStateBehavior for GunTurretState {
                 });
             }
         }
-        if self.loaded_shots > 0 && self.loaded_damage == 0 {
+        if self.loaded_shots > 0 && self.loaded_damage.amount == 0 {
             return Err(SimValidationError::InvalidEntityState { entity_id });
         }
 
@@ -308,7 +308,23 @@ impl EntityStateBehavior for HealthState {
         let Some(max_health) = max_health else {
             return Err(SimValidationError::InvalidEntityState { entity_id });
         };
-        if self.current == 0 || self.current > max_health {
+        let expected_faction = if sim
+            .entities
+            .placed_entities
+            .get(&entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .is_some_and(|prototype| prototype.entity_kind == EntityKind::EnemySpawner)
+        {
+            Faction::Enemy
+        } else {
+            Faction::Player
+        };
+        if self.current == 0
+            || self.maximum != max_health
+            || self.current > self.maximum
+            || self.faction != expected_faction
+            || !self.resistances.is_valid()
+        {
             return Err(SimValidationError::InvalidEntityState { entity_id });
         }
 

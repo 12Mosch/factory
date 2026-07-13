@@ -114,10 +114,10 @@ impl Simulation {
         });
         profiler.measure(ProfilePhase::Enemies, || {
             self.advance_enemy_spawners();
-            let mut combat_intents = combat_ops::CombatIntents::default();
-            self.advance_enemies(&mut combat_intents);
-            self.advance_gun_turrets(&mut combat_intents);
-            self.resolve_combat(combat_intents);
+            let mut combat_commands = CombatCommandBuffer::default();
+            self.advance_enemies(&mut combat_commands);
+            self.advance_gun_turrets(&mut combat_commands);
+            self.resolve_combat_commands(combat_commands);
             self.resolve_arrived_expansions();
             self.cleanup_enemy_groups();
         });

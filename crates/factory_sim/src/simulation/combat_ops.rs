@@ -1,61 +1,17 @@
 use super::*;
 use std::collections::BTreeMap;
 
-/// Attacks committed during a tick, before any combat damage is applied.
-///
-/// Damage is aggregated by target so resolution is independent of attacker
-/// iteration order. For a surviving enemy hit by several turrets, the lowest
-/// turret ID becomes its deterministic retaliation target.
 #[derive(Default)]
-pub(super) struct CombatIntents {
-    structure_damage: BTreeMap<EntityId, u64>,
-    enemy_damage: BTreeMap<EnemyId, EnemyDamageIntent>,
-}
-
-struct EnemyDamageIntent {
+struct AccumulatedDamage {
     amount: u64,
-    retaliation_target: EntityId,
-}
-
-impl CombatIntents {
-    pub(super) fn record_enemy_attack(&mut self, target: EntityId, amount: u32) {
-        let damage = self.structure_damage.entry(target).or_default();
-        *damage = damage.saturating_add(u64::from(amount));
-    }
-
-    fn record_turret_attack(&mut self, turret_id: EntityId, target: TurretTarget, amount: u32) {
-        match target {
-            TurretTarget::Enemy(enemy_id) => {
-                self.enemy_damage
-                    .entry(enemy_id)
-                    .and_modify(|intent| {
-                        intent.amount = intent.amount.saturating_add(u64::from(amount));
-                        intent.retaliation_target = intent.retaliation_target.min(turret_id);
-                    })
-                    .or_insert(EnemyDamageIntent {
-                        amount: u64::from(amount),
-                        retaliation_target: turret_id,
-                    });
-            }
-            TurretTarget::Spawner(spawner_id) => {
-                let damage = self.structure_damage.entry(spawner_id).or_default();
-                *damage = damage.saturating_add(u64::from(amount));
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum TurretTarget {
-    Enemy(EnemyId),
-    Spawner(EntityId),
+    retaliation_target: Option<EntityId>,
 }
 
 impl Simulation {
     /// Gun turrets acquire the nearest enemy unit in range (falling back to
     /// enemy spawners), consume magazine shots, and commit their attacks for
     /// the tick's shared combat resolution phase.
-    pub(super) fn advance_gun_turrets(&mut self, intents: &mut CombatIntents) {
+    pub(super) fn advance_gun_turrets(&mut self, commands: &mut CombatCommandBuffer) {
         if self.onboarding_progress.loaded_gun_turrets == 0
             && self.entities.gun_turrets.iter().any(|(entity_id, state)| {
                 self.entities.placed_entities.contains_key(entity_id)
@@ -110,7 +66,7 @@ impl Simulation {
                 let target = if let Some(enemy_id) =
                     nearest_enemy_in_range(enemies, &enemy_chunks, &footprint, range)
                 {
-                    Some(TurretTarget::Enemy(enemy_id))
+                    Some(CombatantId::Enemy(enemy_id))
                 } else {
                     nearest_spawner_in_range(
                         &entities.enemy_spawners,
@@ -119,13 +75,25 @@ impl Simulation {
                         &footprint,
                         range,
                     )
-                    .map(TurretTarget::Spawner)
+                    .map(CombatantId::Entity)
                 };
 
                 if let Some(target) = target {
-                    intents.record_turret_attack(turret_id, target, state.loaded_damage);
+                    let attack = AttackDefinition::hitscan(
+                        state.loaded_damage,
+                        turret.cooldown_ticks,
+                        turret.range_tiles,
+                    );
+                    commands.attack(
+                        CombatSource {
+                            owner: CombatantId::Entity(turret_id),
+                            faction: Faction::Player,
+                        },
+                        target,
+                        attack,
+                    );
                     state.loaded_shots -= 1;
-                    state.next_ready_tick = tick + u64::from(turret.cooldown_ticks);
+                    state.next_ready_tick = tick + u64::from(attack.cooldown_ticks);
                 }
             }
         }
@@ -134,35 +102,97 @@ impl Simulation {
     /// Applies every attack committed from the tick's pre-resolution combat
     /// snapshot. A combatant destroyed here still contributes its own queued
     /// attack, so neither side receives an initiative advantage.
-    pub(super) fn resolve_combat(&mut self, intents: CombatIntents) {
-        for (entity_id, amount) in intents.structure_damage {
-            let amount = u32::try_from(amount).unwrap_or(u32::MAX);
-            self.damage_entity(entity_id, amount);
-        }
-
-        for (enemy_id, intent) in intents.enemy_damage {
-            let Some(enemy) = self.enemies.enemies.get_mut(&enemy_id) else {
+    pub fn resolve_combat_commands(&mut self, commands: CombatCommandBuffer) {
+        let mut accumulated = BTreeMap::<CombatantId, AccumulatedDamage>::new();
+        for command in commands.iter().copied() {
+            let Some(target_health) = self.combatant_health(command.target) else {
                 continue;
             };
-            if u64::from(enemy.health) <= intent.amount {
-                self.enemies.enemies.remove(&enemy_id);
-            } else {
-                let amount = u32::try_from(intent.amount)
-                    .expect("damage below surviving u32 health must fit in u32");
-                enemy.health -= amount;
-                // Being fired on pulls a surviving unit onto the lowest-ID
-                // turret that participated in the simultaneous volley.
-                enemy.target = Some(intent.retaliation_target);
-                enemy.path.clear();
+            if !command.source.faction.is_hostile_to(target_health.faction) {
+                continue;
+            }
+            let amount = command.damage.after_resistance(&target_health.resistances);
+            if amount == 0 {
+                continue;
+            }
+            let target_damage = accumulated.entry(command.target).or_default();
+            target_damage.amount = target_damage.amount.saturating_add(u64::from(amount));
+            if let CombatantId::Entity(entity_id) = command.source.owner {
+                target_damage.retaliation_target = Some(
+                    target_damage
+                        .retaliation_target
+                        .map_or(entity_id, |current| current.min(entity_id)),
+                );
             }
         }
+
+        for (target, damage) in accumulated {
+            let amount = u32::try_from(damage.amount).unwrap_or(u32::MAX);
+            match target {
+                CombatantId::Player => {
+                    self.player.health.current = self.player.health.current.saturating_sub(amount);
+                }
+                CombatantId::Entity(entity_id) => {
+                    self.apply_entity_damage(entity_id, amount);
+                }
+                CombatantId::Enemy(enemy_id) => {
+                    let Some(enemy) = self.enemies.enemies.get_mut(&enemy_id) else {
+                        continue;
+                    };
+                    enemy.health.current = enemy.health.current.saturating_sub(amount);
+                    if enemy.health.current == 0 {
+                        self.enemies.enemies.remove(&enemy_id);
+                    } else if let Some(retaliation_target) = damage.retaliation_target {
+                        // Being fired on pulls a surviving unit onto the
+                        // lowest-ID structure that participated in the volley.
+                        enemy.target = Some(retaliation_target);
+                        enemy.path.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    fn combatant_health(&self, combatant: CombatantId) -> Option<&HealthState> {
+        match combatant {
+            CombatantId::Player => Some(&self.player.health),
+            CombatantId::Entity(entity_id) => self.entities.entity_health.get(&entity_id),
+            CombatantId::Enemy(enemy_id) => self
+                .enemies
+                .enemies
+                .get(&enemy_id)
+                .map(|enemy| &enemy.health),
+        }
+    }
+
+    pub fn combatant_health_state(&self, combatant: CombatantId) -> Option<HealthState> {
+        self.combatant_health(combatant).copied()
+    }
+
+    pub fn faction_of(&self, combatant: CombatantId) -> Option<Faction> {
+        self.combatant_health(combatant)
+            .map(|health| health.faction)
     }
 
     /// Applies damage to a placed entity's health; at zero the entity is
     /// violently destroyed (no item recovery). Entities without health state
     /// are indestructible. Zero damage is a no-op. Returns true when the entity
     /// was destroyed.
-    pub(crate) fn damage_entity(&mut self, entity_id: EntityId, amount: u32) -> bool {
+    pub fn damage_entity(&mut self, entity_id: EntityId, amount: u32) -> bool {
+        self.damage_entity_with(entity_id, Damage::physical(amount))
+    }
+
+    /// Applies typed damage without a faction check. Environmental damage and
+    /// scripted effects use this path; attacks should use a command buffer.
+    pub fn damage_entity_with(&mut self, entity_id: EntityId, damage: Damage) -> bool {
+        let Some(health) = self.entities.entity_health.get(&entity_id) else {
+            return false;
+        };
+        let amount = damage.after_resistance(&health.resistances);
+        self.apply_entity_damage(entity_id, amount)
+    }
+
+    fn apply_entity_damage(&mut self, entity_id: EntityId, amount: u32) -> bool {
         // Entities without health state shrug the hit off entirely, so they
         // must not raise an under-attack alarm either.
         if amount == 0 || !self.entities.entity_health.contains_key(&entity_id) {
@@ -210,10 +240,10 @@ impl Simulation {
             .get(&entity_id)
             .ok_or(RepairError::MissingEntity(entity_id))?;
         let max_health = self
-            .world
-            .prototypes
-            .entity(placed.prototype_id)
-            .and_then(|prototype| prototype.max_health)
+            .entities
+            .entity_health
+            .get(&entity_id)
+            .map(|health| health.maximum)
             .ok_or(RepairError::NotRepairable(entity_id))?;
         let footprint = placed.footprint;
 
@@ -274,19 +304,12 @@ impl Simulation {
 
     /// Current and maximum health of an entity, when it is damageable.
     pub fn entity_health(&self, entity_id: EntityId) -> Option<(u32, u32)> {
-        let placed = self.entities.placed_entities.get(&entity_id)?;
-        let max_health = self
-            .world
-            .prototypes
-            .entity(placed.prototype_id)?
-            .max_health?;
-        let current = self
-            .entities
-            .entity_health
-            .get(&entity_id)
-            .map(|health| health.current)
-            .unwrap_or(max_health);
-        Some((current, max_health))
+        let health = self.entities.entity_health.get(&entity_id)?;
+        Some((health.current, health.maximum))
+    }
+
+    pub fn player_health(&self) -> (u32, u32) {
+        (self.player.health.current, self.player.health.maximum)
     }
 }
 
@@ -305,7 +328,7 @@ fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
         return;
     }
     state.loaded_shots = ammo.shots_per_item;
-    state.loaded_damage = ammo.damage_per_shot;
+    state.loaded_damage = Damage::physical(ammo.damage_per_shot);
 }
 
 /// Nearest enemy unit whose tile lies within `range` of the turret
