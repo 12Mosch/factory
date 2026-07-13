@@ -32,6 +32,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_item_statistics(sim)?;
     validate_fluid_statistics(sim)?;
     validate_power_statistics(sim)?;
+    validate_pollution_state(sim)?;
     validate_placed_entities(sim)?;
     validate_entity_occupancy(&sim.entities)?;
     validate_entity_state_ownership_and_kind(sim)?;
@@ -47,6 +48,68 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_entity_states(sim)?;
 
     Ok(())
+}
+
+fn validate_pollution_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    for (entity_id, remainder) in &sim.pollution.machine_emission_remainders {
+        if *remainder == 0
+            || *remainder >= crate::pollution::POLLUTION_TICKS_PER_MINUTE
+            || !sim.entities.placed_entities.contains_key(entity_id)
+        {
+            return Err(SimValidationError::InvalidPollutionState {
+                source: PollutionRemainderSource::MachineEmission(*entity_id),
+            });
+        }
+    }
+    for (coord, remainder) in &sim.pollution.terrain_absorption_remainders {
+        if *remainder == 0
+            || *remainder >= crate::pollution::POLLUTION_TICKS_PER_MINUTE
+            || !sim.world.chunks.contains_key(coord)
+        {
+            return Err(SimValidationError::InvalidPollutionState {
+                source: PollutionRemainderSource::TerrainAbsorption(*coord),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pollution_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_machine_pollution_remainder_reports_entity() {
+        let mut sim = Simulation::new_test_world(123);
+        let entity_id = EntityId::new(u64::MAX);
+        sim.pollution
+            .machine_emission_remainders
+            .insert(entity_id, 1);
+
+        assert_eq!(
+            validate_pollution_state(&sim),
+            Err(SimValidationError::InvalidPollutionState {
+                source: PollutionRemainderSource::MachineEmission(entity_id),
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_terrain_pollution_remainder_reports_chunk() {
+        let mut sim = Simulation::new_test_world(123);
+        let coord = ChunkCoord {
+            x: i32::MAX,
+            y: i32::MAX,
+        };
+        sim.pollution.terrain_absorption_remainders.insert(coord, 1);
+
+        assert_eq!(
+            validate_pollution_state(&sim),
+            Err(SimValidationError::InvalidPollutionState {
+                source: PollutionRemainderSource::TerrainAbsorption(coord),
+            })
+        );
+    }
 }
 
 macro_rules! define_validate_entity_states {

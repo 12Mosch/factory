@@ -10,7 +10,9 @@ use bincode::Options;
 // v15: enemy settings, colonies, missions, evolution and threat events.
 // v16: EnemySpawnerState dropped its unused absorbed_pollution_micro field
 // (absorbed pollution is pooled on EnemyBase::attack_budget_micro).
-pub const SAVE_VERSION: u32 = 16;
+// v17: per-source pollution emission and terrain absorption remainders joined
+// the pollution snapshot.
+pub const SAVE_VERSION: u32 = 17;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

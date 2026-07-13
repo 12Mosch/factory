@@ -91,6 +91,42 @@ fn idle_furnace_emits_no_pollution() {
 }
 
 #[test]
+fn machine_emission_conserves_a_low_rate_over_one_minute_and_save_load() {
+    let mut prototypes = PrototypeCatalog::load_base().expect("base prototypes should load");
+    let assembler = entity_id_by_name(&prototypes, "assembling_machine");
+    for prototype in &mut prototypes.entities {
+        prototype.pollution_per_minute_milli = None;
+    }
+    prototypes.entities[assembler.index()].pollution_per_minute_milli = Some(1);
+    let mut sim = Simulation::new(123, prototypes);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+    sim.tick();
+    assert_eq!(
+        sim.machine_status_for_entity(assembler_id),
+        Some(MachineStatus::Working)
+    );
+
+    sim.pollution = PollutionState::default();
+    sim.emit_pollution_from_machines();
+    assert_eq!(sim.pollution().total_micro(), 0);
+
+    let bytes = save_to_bytes(&sim).expect("fractional emission should save");
+    let mut loaded = load_from_bytes(&bytes).expect("fractional emission should load");
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+
+    for _ in 1..crate::pollution::POLLUTION_TICKS_PER_MINUTE {
+        loaded.emit_pollution_from_machines();
+    }
+
+    assert_eq!(
+        loaded.pollution().total_micro(),
+        1_000,
+        "one milli-unit per minute should emit exactly 1,000 micro-units"
+    );
+}
+
+#[test]
 fn pollution_spreads_to_neighbor_chunks_at_interval() {
     let mut sim = Simulation::new_test_world(123);
     let center = ChunkCoord { x: 0, y: 0 };
@@ -133,6 +169,33 @@ fn terrain_absorbs_pollution_over_time() {
     assert!(
         sim.pollution().total_micro() < total_before,
         "terrain should absorb pollution"
+    );
+}
+
+#[test]
+fn terrain_absorption_conserves_its_rate_over_eight_minutes() {
+    let mut prototypes = PrototypeCatalog::load_base().expect("base prototypes should load");
+    for tile in &mut prototypes.tiles {
+        tile.pollution_absorption_per_minute_milli = 1;
+    }
+    let mut sim = Simulation::new(123, prototypes);
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let tile_count = sim.world.chunks[&coord].tiles.len() as u64;
+    let minutes = 8;
+    let expected_absorption = tile_count * 1_000 * minutes;
+    let seeded = expected_absorption + 1;
+    sim.add_pollution_micro(coord, seeded);
+
+    let elapsed_ticks = crate::pollution::POLLUTION_TICKS_PER_MINUTE * minutes;
+    assert!(elapsed_ticks.is_multiple_of(POLLUTION_SPREAD_INTERVAL_TICKS));
+    for _ in 0..elapsed_ticks / POLLUTION_SPREAD_INTERVAL_TICKS {
+        sim.absorb_pollution_by_terrain();
+    }
+
+    assert_eq!(
+        seeded - sim.pollution().amount_micro(coord),
+        expected_absorption,
+        "terrain should preserve its configured per-minute absorption"
     );
 }
 
