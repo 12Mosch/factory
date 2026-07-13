@@ -4,11 +4,18 @@ impl WorldSim {
     const RESOURCE_DIRTY_HISTORY_LIMIT: usize = 4096;
 
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
-        let chunks = generate_world_chunks(seed, &prototypes);
+        let tile_pollution_absorption_per_minute_milli =
+            Self::tile_pollution_absorption_rates(&prototypes);
+        let chunks = generate_world_chunks(
+            seed,
+            &prototypes,
+            &tile_pollution_absorption_per_minute_milli,
+        );
         Self {
             seed,
             prototypes,
             chunks,
+            tile_pollution_absorption_per_minute_milli,
             chunk_revision: 0,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
@@ -20,6 +27,45 @@ impl WorldSim {
             seed,
             PrototypeCatalog::load_base().expect("base prototype catalog should load"),
         )
+    }
+
+    pub(crate) fn from_snapshot(
+        seed: u64,
+        prototypes: PrototypeCatalog,
+        mut chunks: BTreeMap<ChunkCoord, Chunk>,
+    ) -> Self {
+        let tile_pollution_absorption_per_minute_milli =
+            Self::tile_pollution_absorption_rates(&prototypes);
+        for chunk in chunks.values_mut() {
+            chunk.pollution_absorption_per_minute_milli = chunk
+                .tiles
+                .iter()
+                .map(|tile| {
+                    tile_pollution_absorption_per_minute_milli
+                        .get(tile.tile_id.index())
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .sum();
+        }
+
+        Self {
+            seed,
+            prototypes,
+            chunks,
+            tile_pollution_absorption_per_minute_milli,
+            chunk_revision: 0,
+            resource_revision: 0,
+            resource_dirty_tiles: VecDeque::new(),
+        }
+    }
+
+    pub(super) fn tile_pollution_absorption_rates(prototypes: &PrototypeCatalog) -> Vec<u64> {
+        prototypes
+            .tiles
+            .iter()
+            .map(|tile| u64::from(tile.pollution_absorption_per_minute_milli))
+            .collect()
     }
 
     pub fn tile_at<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
@@ -42,7 +88,12 @@ impl WorldSim {
         }
 
         let rules = WorldGenRules::from_catalog(&self.prototypes);
-        let chunk = generate_chunk(self.seed, coord, &rules);
+        let chunk = generate_chunk(
+            self.seed,
+            coord,
+            &rules,
+            &self.tile_pollution_absorption_per_minute_milli,
+        );
         self.chunks.insert(coord, chunk);
         self.chunk_revision = self.chunk_revision.wrapping_add(1);
         true

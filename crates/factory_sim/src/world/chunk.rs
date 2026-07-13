@@ -43,6 +43,11 @@ impl ChunkCoord {
 pub struct Chunk {
     pub coord: ChunkCoord,
     pub tiles: Vec<TileCell>,
+    /// Derived from the terrain tile ids and the prototype catalog when the
+    /// chunk is generated. Terrain mutation must update this cache if it is
+    /// introduced in the future.
+    #[serde(skip, default)]
+    pub(crate) pollution_absorption_per_minute_milli: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

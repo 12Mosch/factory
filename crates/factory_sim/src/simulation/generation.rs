@@ -41,6 +41,7 @@ pub(super) fn splitmix64(mut value: u64) -> u64 {
 pub(super) fn generate_world_chunks(
     seed: u64,
     prototypes: &PrototypeCatalog,
+    tile_pollution_absorption_per_minute_milli: &[u64],
 ) -> BTreeMap<ChunkCoord, Chunk> {
     let rules = WorldGenRules::from_catalog(prototypes);
     let area = prototypes.world_generation.starting_area;
@@ -52,26 +53,49 @@ pub(super) fn generate_world_chunks(
                 x: chunk_x,
                 y: chunk_y,
             };
-            chunks.insert(coord, generate_chunk(seed, coord, &rules));
+            chunks.insert(
+                coord,
+                generate_chunk(
+                    seed,
+                    coord,
+                    &rules,
+                    tile_pollution_absorption_per_minute_milli,
+                ),
+            );
         }
     }
 
     chunks
 }
 
-pub(super) fn generate_chunk(seed: u64, coord: ChunkCoord, rules: &WorldGenRules) -> Chunk {
+pub(super) fn generate_chunk(
+    seed: u64,
+    coord: ChunkCoord,
+    rules: &WorldGenRules,
+    tile_pollution_absorption_per_minute_milli: &[u64],
+) -> Chunk {
     let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+    let mut pollution_absorption_per_minute_milli = 0;
     let bounds = TileBounds::for_chunk(coord);
     let centers = generate_resource_patch_centers(seed, rules, bounds);
 
     for local_y in 0..CHUNK_SIZE {
         for local_x in 0..CHUNK_SIZE {
             let (x, y) = coord.tile_at(local_x, local_y);
-            tiles.push(generate_tile(seed, x, y, rules, &centers));
+            let tile = generate_tile(seed, x, y, rules, &centers);
+            pollution_absorption_per_minute_milli += tile_pollution_absorption_per_minute_milli
+                .get(tile.tile_id.index())
+                .copied()
+                .unwrap_or(0);
+            tiles.push(tile);
         }
     }
 
-    Chunk { coord, tiles }
+    Chunk {
+        coord,
+        tiles,
+        pollution_absorption_per_minute_milli,
+    }
 }
 
 pub(super) fn generate_tile(
@@ -1163,15 +1187,16 @@ mod tests {
     fn terrain_field_is_deterministic_and_seed_dependent() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
         let rules = WorldGenRules::from_catalog(&catalog);
+        let absorption_rates = WorldSim::tile_pollution_absorption_rates(&catalog);
         let coord = ChunkCoord { x: 0, y: 0 };
 
         assert_eq!(
-            generate_chunk(123, coord, &rules),
-            generate_chunk(123, coord, &rules)
+            generate_chunk(123, coord, &rules, &absorption_rates),
+            generate_chunk(123, coord, &rules, &absorption_rates)
         );
         assert_ne!(
-            generate_chunk(123, coord, &rules),
-            generate_chunk(124, coord, &rules)
+            generate_chunk(123, coord, &rules, &absorption_rates),
+            generate_chunk(124, coord, &rules, &absorption_rates)
         );
     }
 
