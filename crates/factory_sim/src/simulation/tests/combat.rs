@@ -428,6 +428,91 @@ fn enemy_and_turret_attacks_resolve_simultaneously() {
 }
 
 #[test]
+fn turret_targeting_uses_one_combat_snapshot_regardless_of_placement_order() {
+    fn run_scenario(place_exclusive_turret_first: bool) -> (u32, u32, u32) {
+        let mut sim = Simulation::new_test_world(123);
+        let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+        let (x, y) = first_buildable_rect_without_resource(&sim.world, 8, 2);
+        let exclusive_position = (x, y);
+        let flexible_position = (x + 6, y);
+
+        let (exclusive_turret, flexible_turret) = if place_exclusive_turret_first {
+            (
+                place_at(
+                    &mut sim,
+                    turret,
+                    exclusive_position.0,
+                    exclusive_position.1,
+                    Direction::North,
+                ),
+                place_at(
+                    &mut sim,
+                    turret,
+                    flexible_position.0,
+                    flexible_position.1,
+                    Direction::North,
+                ),
+            )
+        } else {
+            let flexible_turret = place_at(
+                &mut sim,
+                turret,
+                flexible_position.0,
+                flexible_position.1,
+                Direction::North,
+            );
+            let exclusive_turret = place_at(
+                &mut sim,
+                turret,
+                exclusive_position.0,
+                exclusive_position.1,
+                Direction::North,
+            );
+            (exclusive_turret, flexible_turret)
+        };
+        load_turret_ammo(&mut sim, exclusive_turret, 1);
+        load_turret_ammo(&mut sim, flexible_turret, 1);
+
+        // Both turrets prefer the primary target, but only the flexible turret
+        // can reach the secondary target. Immediate damage would let the
+        // flexible turret retarget only when it happened to have the later ID.
+        let primary_enemy = spawn_test_enemy_at(&mut sim, x + 3, y);
+        sim.enemies
+            .enemies
+            .get_mut(&primary_enemy)
+            .expect("primary enemy should exist")
+            .health = 5;
+        let secondary_enemy = spawn_test_enemy_at(&mut sim, x + 15, y);
+
+        let mut intents = combat_ops::CombatIntents::default();
+        sim.advance_gun_turrets(&mut intents);
+        sim.resolve_combat(intents);
+
+        assert!(
+            sim.enemies().get(primary_enemy).is_none(),
+            "the simultaneous volley should kill the primary target"
+        );
+        let secondary_health = sim
+            .enemies()
+            .get(secondary_enemy)
+            .expect("secondary enemy should not be targeted")
+            .health;
+        let exclusive_shots = sim.entities.gun_turrets[&exclusive_turret].loaded_shots;
+        let flexible_shots = sim.entities.gun_turrets[&flexible_turret].loaded_shots;
+        (secondary_health, exclusive_shots, flexible_shots)
+    }
+
+    let exclusive_first = run_scenario(true);
+    let flexible_first = run_scenario(false);
+
+    assert_eq!(
+        exclusive_first, flexible_first,
+        "changing placement order must not change targeting or ammo consumption"
+    );
+    assert_eq!(exclusive_first, (30, 9, 9));
+}
+
+#[test]
 fn unloaded_turret_does_not_fire() {
     let mut sim = Simulation::new_test_world(123);
     let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
