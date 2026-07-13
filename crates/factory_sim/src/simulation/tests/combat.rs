@@ -279,6 +279,53 @@ fn spawner_converts_absorbed_pollution_into_attackers() {
 }
 
 #[test]
+fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let placed = sim
+        .entities
+        .placed_entity(spawner_id)
+        .expect("spawner should be placed");
+    let footprint = placed.footprint;
+    let spawner_config = sim
+        .world
+        .prototypes
+        .entity(placed.prototype_id)
+        .and_then(|prototype| prototype.enemy_spawner.as_ref())
+        .expect("spawner should define enemy spawning");
+    let attack_cost = u64::from(spawner_config.unit_spawn_pollution_cost_milli) * 1000;
+    let base_id = sim.enemies.spawner_bases[&spawner_id];
+    sim.enemies
+        .bases
+        .get_mut(&base_id)
+        .unwrap()
+        .attack_budget_micro = attack_cost;
+
+    // Occupy every tile the spawner's deterministic three-ring search can
+    // inspect. Reusing the spawner ID is sufficient for this placement-only
+    // regression and avoids adding unrelated simulation entities.
+    for y in footprint.y - 3..footprint.y + i64::from(footprint.height) + 3 {
+        for x in footprint.x - 3..footprint.x + i64::from(footprint.width) + 3 {
+            sim.entities
+                .occupancy
+                .occupied_tiles
+                .insert((x, y), spawner_id);
+        }
+    }
+
+    sim.advance_enemy_spawners();
+
+    assert!(
+        sim.enemies().is_empty(),
+        "blocked spawner must not create a unit"
+    );
+    assert_eq!(
+        sim.enemies.bases[&base_id].attack_budget_micro, attack_cost,
+        "failed placement must not consume the colony's attack budget"
+    );
+}
+
+#[test]
 fn biter_destroys_nearby_building() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);

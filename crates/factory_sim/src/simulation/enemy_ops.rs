@@ -22,6 +22,12 @@ const SPAWN_SEARCH_RINGS: i64 = 3;
 /// independent of terrain and resource noise.
 const SPAWNER_PLACEMENT_SALT: u64 = 0x656e_656d_795f_6261;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpawnError {
+    SpawnerNotFound,
+    NoFreeTile,
+}
+
 #[derive(Clone, Copy)]
 struct EnemyMapBounds {
     min_x: WorldTileCoord,
@@ -424,6 +430,7 @@ impl Simulation {
             spawner_id: EntityId,
             unit: UnitPrototype,
             mission: EnemyMission,
+            attack_budget_cost_micro: u64,
         }
 
         let mut alive_by_spawner = BTreeMap::<EntityId, u32>::new();
@@ -495,6 +502,7 @@ impl Simulation {
                         spawner_id,
                         unit: config.unit,
                         mission: EnemyMission::Guard,
+                        attack_budget_cost_micro: 0,
                     });
                 }
             }
@@ -550,25 +558,39 @@ impl Simulation {
                 let base = self
                     .enemies
                     .bases
-                    .get_mut(&base_id)
+                    .get(&base_id)
                     .expect("listed base must exist");
                 if cost > 0
                     && base.attack_budget_micro >= cost
                     && base.staged_units.len() < target_size
                     && can_spawn
                 {
-                    base.attack_budget_micro -= cost;
                     requests.push(SpawnRequest {
                         spawner_id,
                         unit,
                         mission: EnemyMission::Staging(base_id),
+                        attack_budget_cost_micro: cost,
                     });
                 }
             }
         }
 
         for request in requests {
-            self.spawn_enemy_near_spawner(request.spawner_id, &request.unit, request.mission);
+            if self
+                .spawn_enemy_near_spawner(request.spawner_id, &request.unit, request.mission)
+                .is_ok()
+                && request.attack_budget_cost_micro > 0
+            {
+                let EnemyMission::Staging(base_id) = request.mission else {
+                    unreachable!("only staged enemies consume attack budget");
+                };
+                let base = self
+                    .enemies
+                    .bases
+                    .get_mut(&base_id)
+                    .expect("a successful staged spawn must retain its base");
+                base.attack_budget_micro -= request.attack_budget_cost_micro;
+            }
         }
         self.launch_ready_raids();
         self.advance_expansions_and_growth();
@@ -580,9 +602,9 @@ impl Simulation {
         spawner_id: EntityId,
         unit: &UnitPrototype,
         mission: EnemyMission,
-    ) {
+    ) -> Result<EnemyId, SpawnError> {
         let Some(placed) = self.entities.placed_entities.get(&spawner_id) else {
-            return;
+            return Err(SpawnError::SpawnerNotFound);
         };
         let footprint = placed.footprint;
         let Some((tile_x, tile_y)) = free_tile_around_footprint(
@@ -591,7 +613,7 @@ impl Simulation {
             &footprint,
             SPAWN_SEARCH_RINGS,
         ) else {
-            return;
+            return Err(SpawnError::NoFreeTile);
         };
 
         let id = self.enemies.allocate_id();
@@ -633,6 +655,7 @@ impl Simulation {
                 self.emit_base_event(base_id, ThreatEventKind::RaidPreparing);
             }
         }
+        Ok(id)
     }
 
     /// Unit AI: validate or acquire a target, path toward it, and attack
@@ -1223,7 +1246,11 @@ impl Simulation {
         let count = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
         let before: BTreeSet<_> = self.enemies.enemies.keys().copied().collect();
         for _ in 0..count {
-            self.spawn_enemy_near_spawner(spawner_id, &unit, EnemyMission::Expansion(expansion_id));
+            let _ = self.spawn_enemy_near_spawner(
+                spawner_id,
+                &unit,
+                EnemyMission::Expansion(expansion_id),
+            );
         }
         let members = self
             .enemies
