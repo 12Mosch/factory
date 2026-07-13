@@ -39,6 +39,8 @@ pub use crate::fluids::{
 };
 pub use crate::ids::{EntityId, Tick};
 pub use crate::inventory::{Inventory, InventoryError, ItemStack};
+#[cfg(test)]
+pub(crate) use crate::inventory::{test_inventory, test_stack};
 pub use crate::logistics::{
     BeltError, BeltItem, BeltLane, BeltSegment, ContainerError, InserterError, InserterState,
     InserterTransferPreview, SplitterError, SplitterState, UndergroundBeltLinkPreview,

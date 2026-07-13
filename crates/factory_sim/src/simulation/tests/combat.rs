@@ -640,10 +640,10 @@ fn gun_turret_kills_enemy_and_consumes_ammo() {
         .expect("turret state should exist");
     let remaining_magazines: u32 = state
         .ammo
-        .slots
+        .slots()
         .iter()
         .flatten()
-        .map(|stack| u32::from(stack.count))
+        .map(|stack| u32::from(stack.count()))
         .sum();
     assert!(
         remaining_magazines < 2 || state.loaded_shots < 10,

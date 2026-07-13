@@ -25,7 +25,8 @@ impl MachineTickContext<'_> {
                     }) else {
                         continue;
                     };
-                    let item = ItemStack { item_id, count: 1 };
+                    let item = ItemStack::new(&self.world.prototypes, item_id, 1)
+                        .expect("a source item should exist in the prototype catalog");
                     if !profiler.measure(ProfilePhase::InventoryTransfers, || {
                         inserter_target_can_accept(
                             &self.world.prototypes,
@@ -57,7 +58,8 @@ impl MachineTickContext<'_> {
                             peek_inserter_source_item(self.entities, pickup_tile)
                         })
                     {
-                        let item = ItemStack { item_id, count: 1 };
+                        let item = ItemStack::new(&self.world.prototypes, item_id, 1)
+                            .expect("a source item should exist in the prototype catalog");
                         if !profiler.measure(ProfilePhase::InventoryTransfers, || {
                             inserter_target_can_accept(
                                 &self.world.prototypes,
@@ -72,6 +74,7 @@ impl MachineTickContext<'_> {
                             profiler
                                 .measure(ProfilePhase::InventoryTransfers, || {
                                     try_take_inserter_source_item(
+                                        &self.world.prototypes,
                                         self.entities,
                                         self.transport,
                                         pickup_tile,

@@ -49,15 +49,12 @@ fn player_can_transfer_stack_to_chest() {
     )
     .expect("chest should be placeable");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[5] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 42,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 5, iron_plate, 42);
 
     crate::entity_transfer::player_slot_to_entity(&mut sim, entity_id, 5)
         .expect("stack should transfer to chest");
 
-    assert_eq!(sim.player_inventory.slots[5], None);
+    assert_eq!(sim.player_inventory.slots()[5], None);
     assert_eq!(
         crate::entity_access::inventory(&sim, entity_id)
             .expect("chest should have inventory")
@@ -84,19 +81,15 @@ fn transfer_to_full_chest_fails_without_changing_player_inventory() {
     )
     .expect("chest should be placeable");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[3] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 12,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 3, iron_plate, 12);
     {
+        let catalog = sim.world.prototypes.clone();
         let inventory = crate::entity_access::inventory_mut(&mut sim, entity_id)
             .expect("chest should expose inventory");
-        for slot in &mut inventory.slots {
-            *slot = Some(ItemStack {
-                item_id: coal,
-                count: 100,
-            });
-        }
+        let stack =
+            ItemStack::new(&catalog, coal, 100).expect("coal should form a full valid stack");
+        *inventory = Inventory::from_slots(&catalog, vec![Some(stack); inventory.slots().len()])
+            .expect("full chest fixture should be valid");
     }
     assert!(
         !crate::entity_access::inventory(&sim, entity_id)
@@ -135,10 +128,7 @@ fn transfer_from_chest_to_full_player_fails_without_changing_chest_inventory() {
         .expect("player inventory should accept blocking stack");
     let inventory = crate::entity_access::inventory_mut(&mut sim, entity_id)
         .expect("chest should expose inventory");
-    inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 8,
-    });
+    set_inventory_slot(inventory, 0, iron_plate, 8);
     let chest_before = crate::entity_access::inventory(&sim, entity_id)
         .expect("chest should have inventory")
         .clone();
@@ -182,21 +172,15 @@ fn lab_rejects_non_science_pack_player_transfer_without_mutation() {
     let lab_id = place_lab(&mut sim);
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 1);
 
     assert_eq!(
         crate::entity_transfer::player_slot_to_entity(&mut sim, lab_id, 0),
         Err(ContainerError::InvalidItem(iron_plate))
     );
     assert_eq!(
-        sim.player_inventory.slots[0],
-        Some(ItemStack {
-            item_id: iron_plate,
-            count: 1,
-        })
+        sim.player_inventory.slots()[0],
+        Some(test_stack(iron_plate, 1))
     );
     assert_eq!(
         crate::entity_access::inventory(&sim, lab_id)
@@ -220,16 +204,10 @@ fn inventory_merges_stacks_until_stack_size() {
         .expect("second insert should fill existing stack first");
 
     assert_eq!(
-        inventory.slots,
+        inventory.slots(),
         vec![
-            Some(ItemStack {
-                item_id: iron_plate,
-                count: 100,
-            }),
-            Some(ItemStack {
-                item_id: iron_plate,
-                count: 1,
-            }),
+            Some(test_stack(iron_plate, 100)),
+            Some(test_stack(iron_plate, 1)),
         ]
     );
 }
@@ -256,19 +234,12 @@ fn inventory_rejects_insert_when_full() {
 #[test]
 fn inventory_acceptance_reports_unknown_items() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    let inventory = Inventory::with_slot_count(1);
+    let mut inventory = Inventory::with_slot_count(1);
     let unknown_item = ItemId::new(catalog.items.len() as u16);
 
     assert_eq!(
-        ensure_inventory_can_accept(
-            &catalog,
-            &inventory,
-            ItemStack {
-                item_id: unknown_item,
-                count: 1,
-            },
-        ),
-        Err(ContainerError::UnknownItem)
+        inventory.insert(&catalog, unknown_item, 1),
+        Err(InventoryError::UnknownItem(unknown_item))
     );
 }
 
@@ -298,20 +269,23 @@ fn player_starts_with_drill_and_furnace_only() {
     let stone_furnace = item_id(&sim.world.prototypes, "stone_furnace");
     let occupied_slots = sim
         .player_inventory
-        .slots
+        .slots()
         .iter()
         .filter_map(|slot| *slot)
         .collect::<Vec<_>>();
 
     assert_eq!(
-        sim.player_inventory.slots.len(),
+        sim.player_inventory.slots().len(),
         PLAYER_INVENTORY_SLOT_COUNT
     );
     assert_eq!(sim.player_inventory.count(burner_mining_drill), 1);
     assert_eq!(sim.player_inventory.count(stone_furnace), 1);
     assert_eq!(occupied_slots.len(), 2);
     assert_eq!(
-        occupied_slots.iter().map(|stack| stack.count).sum::<u16>(),
+        occupied_slots
+            .iter()
+            .map(|stack| stack.count())
+            .sum::<u16>(),
         2
     );
 }
@@ -327,8 +301,8 @@ fn inventory_insert_never_exceeds_item_stack_size() {
         .expect("two cable stacks should fit");
 
     assert_eq!(inventory.count(copper_cable), 201);
-    for stack in inventory.slots.iter().flatten() {
-        assert!(stack.count <= 200);
+    for stack in inventory.slots().iter().flatten() {
+        assert!(stack.count() <= 200);
     }
 }
 
@@ -345,5 +319,5 @@ fn zero_count_insert_and_remove_are_no_ops() {
         .remove(unknown_item, 0)
         .expect("zero-count remove should be a no-op");
 
-    assert_eq!(inventory.slots, vec![None]);
+    assert_eq!(inventory.slots(), vec![None]);
 }

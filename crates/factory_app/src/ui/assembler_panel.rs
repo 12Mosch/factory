@@ -161,7 +161,7 @@ pub(crate) fn spawn_assembler_panel(
                         BackgroundColor(Color::NONE),
                     ))
                     .with_children(|slots| {
-                        for slot_index in 0..state.input_inventory.slots.len() {
+                        for slot_index in 0..state.input_inventory.slots().len() {
                             spawn_slot_button(slots, InventoryPanel::AssemblerInput, slot_index);
                         }
                     });
@@ -181,7 +181,7 @@ pub(crate) fn spawn_assembler_panel(
                         BackgroundColor(Color::NONE),
                     ))
                     .with_children(|slots| {
-                        for slot_index in 0..state.output_inventory.slots.len() {
+                        for slot_index in 0..state.output_inventory.slots().len() {
                             spawn_slot_button(slots, InventoryPanel::AssemblerOutput, slot_index);
                         }
                     });

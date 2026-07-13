@@ -140,12 +140,13 @@ fn lab_consumes_science_and_increases_research_progress() {
     let (chest_id, inserter_id, lab_id) = place_chest_inserter_lab_line(&mut sim);
     sim.select_research(logistics)
         .expect("logistics should be selectable");
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: science_pack,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should expose inventory"),
+        0,
+        science_pack,
+        1,
+    );
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -193,12 +194,13 @@ fn multiple_labs_contribute_research_units_in_parallel() {
     sim.select_research(logistics)
         .expect("logistics should be selectable");
     for lab_id in [first_lab, second_lab] {
-        crate::entity_access::inventory_mut(&mut sim, lab_id)
-            .expect("lab should expose inventory")
-            .slots[0] = Some(ItemStack {
-            item_id: science_pack,
-            count: 1,
-        });
+        set_inventory_slot(
+            crate::entity_access::inventory_mut(&mut sim, lab_id)
+                .expect("lab should expose inventory"),
+            0,
+            science_pack,
+            1,
+        );
     }
 
     for _ in 0..600 {
@@ -226,12 +228,12 @@ fn no_active_research_leaves_labs_idle() {
     let automation = technology_id(&sim.world.prototypes, "automation");
     let science_pack = item_id(&sim.world.prototypes, "automation_science_pack");
     let lab_id = place_lab(&mut sim);
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .expect("lab should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: science_pack,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).expect("lab should expose inventory"),
+        0,
+        science_pack,
+        1,
+    );
 
     for _ in 0..1_000 {
         sim.tick();
@@ -255,12 +257,12 @@ fn lab_completed_research_unlocks_recipe() {
     complete_research_by_name(&mut sim, "logistics");
     sim.select_research(automation)
         .expect("automation should be selectable");
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .expect("lab should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: science_pack,
-        count: 20,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).expect("lab should expose inventory"),
+        0,
+        science_pack,
+        20,
+    );
 
     for _ in 0..12_000 {
         sim.tick();
@@ -576,12 +578,12 @@ fn labs_with_only_red_packs_cannot_progress_red_green_research() {
     let lab_id = place_lab(&mut sim);
     sim.select_research(logistics_2)
         .expect("logistics 2 prerequisites should be complete");
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .expect("lab should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: red,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).expect("lab should expose inventory"),
+        0,
+        red,
+        1,
+    );
 
     for _ in 0..600 {
         sim.tick();
@@ -610,18 +612,18 @@ fn labs_consume_exact_required_red_and_green_packs_per_unit() {
     let lab_id = place_lab(&mut sim);
     sim.select_research(logistics_2)
         .expect("logistics 2 prerequisites should be complete");
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .expect("lab should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: red,
-        count: 1,
-    });
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .unwrap()
-        .slots[1] = Some(ItemStack {
-        item_id: green,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).expect("lab should expose inventory"),
+        0,
+        red,
+        1,
+    );
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).unwrap(),
+        1,
+        green,
+        1,
+    );
 
     for _ in 0..600 {
         sim.tick();
@@ -642,18 +644,18 @@ fn red_only_research_does_not_consume_green_packs() {
     let lab_id = place_lab(&mut sim);
     sim.select_research(logistics)
         .expect("logistics should be selectable");
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .unwrap()
-        .slots[0] = Some(ItemStack {
-        item_id: red,
-        count: 1,
-    });
-    crate::entity_access::inventory_mut(&mut sim, lab_id)
-        .unwrap()
-        .slots[1] = Some(ItemStack {
-        item_id: green,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).unwrap(),
+        0,
+        red,
+        1,
+    );
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).unwrap(),
+        1,
+        green,
+        1,
+    );
 
     for _ in 0..600 {
         sim.tick();

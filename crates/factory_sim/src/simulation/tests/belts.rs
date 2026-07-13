@@ -327,8 +327,14 @@ fn unblocked_jam_wakes_upstream_one_lane_per_tick() {
             .expect("terminal belt should remain placed");
         (placed.x, placed.y)
     };
-    try_take_inserter_source_item(&mut sim.entities, &mut sim.transport, pickup_tile, iron_ore)
-        .expect("pickup should remove the terminal belt item");
+    try_take_inserter_source_item(
+        &sim.world.prototypes,
+        &mut sim.entities,
+        &mut sim.transport,
+        pickup_tile,
+        iron_ore,
+    )
+    .expect("pickup should remove the terminal belt item");
 
     sim.tick();
     assert_eq!(

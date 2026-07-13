@@ -51,14 +51,8 @@ pub(in crate::simulation::tests) fn add_furnace_input_and_fuel(
     fuel_item: ItemId,
 ) {
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: input_item,
-        count: 1,
-    });
-    sim.player_inventory.slots[1] = Some(ItemStack {
-        item_id: fuel_item,
-        count: 1,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, input_item, 1);
+    set_inventory_slot(&mut sim.player_inventory, 1, fuel_item, 1);
     crate::entity_transfer::player_slot_to_furnace_input(sim, entity_id, 0)
         .expect("input should transfer to furnace");
     crate::entity_transfer::player_slot_to_furnace_fuel(sim, entity_id, 1)
@@ -91,10 +85,7 @@ pub(in crate::simulation::tests) fn add_assembler_gear_job(
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("gear recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 2,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 2);
     crate::entity_transfer::player_slot_to_assembler_input(sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
 }
@@ -106,10 +97,7 @@ pub(in crate::simulation::tests) fn run_same_assembler_actions(sim: &mut Simulat
     sim.select_assembler_recipe(assembler_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     sim.player_inventory = Inventory::player();
-    sim.player_inventory.slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 4,
-    });
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_plate, 4);
     crate::entity_transfer::player_slot_to_assembler_input(sim, assembler_id, 0)
         .expect("assembler should accept gear ingredients");
     for _ in 0..125 {

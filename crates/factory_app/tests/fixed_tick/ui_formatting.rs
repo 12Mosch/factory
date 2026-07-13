@@ -1,7 +1,8 @@
 use super::common::{
     all_tile_coords, complete_research_by_name, entity_id_by_name, first_buildable_rect,
     first_resource_tile_for_app, format_item_name_for_test, item_id_by_name,
-    place_powered_fixture_origin, recipe_id_by_name, technology_id_by_name,
+    place_powered_fixture_origin, recipe_id_by_name, set_player_inventory_slot,
+    technology_id_by_name,
 };
 use factory_app::rendering::resources::RenderSyncStats;
 use factory_app::resources::SimProfileStats;
@@ -15,8 +16,7 @@ use factory_app::ui::production_stats::{
 };
 use factory_data::{CraftingCategory, PrototypeCatalog};
 use factory_sim::{
-    Direction, Inventory, ItemStack, PowerSummary, Simulation, SimulationCounts,
-    SimulationTickProfile,
+    Direction, Inventory, PowerSummary, Simulation, SimulationCounts, SimulationTickProfile,
 };
 use std::time::Duration;
 
@@ -401,10 +401,7 @@ fn assembler_detail_formatting_reports_partial_ingredients() {
     sim.select_assembler_recipe(entity_id, recipe)
         .expect("crafting recipe should be accepted by assembler");
     *sim.player_inventory_mut() = Inventory::player();
-    sim.player_inventory_mut().slots[2] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+    set_player_inventory_slot(&mut sim, 2, iron_plate, 1);
     factory_sim::entity_transfer::player_slot_to_assembler_input(&mut sim, entity_id, 2)
         .expect("partial ingredients should transfer to assembler input");
 

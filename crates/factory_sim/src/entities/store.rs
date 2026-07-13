@@ -121,7 +121,7 @@ mod tests {
     use super::*;
     use crate::combat::{Damage, EnemySpawnerState, Faction, GunTurretState, HealthState};
     use crate::fluids::FluidBoxState;
-    use crate::inventory::{Inventory, ItemStack};
+    use crate::inventory::{test_inventory, test_stack};
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
     use crate::machines::{
         AssemblingMachineState, BurnerEnergy, BurnerMiningDrillState, FurnaceState, LabState,
@@ -211,12 +211,7 @@ mod tests {
             .insert((1, 2), EntityId::new(1));
         store.entity_inventories.insert(
             EntityId::new(1),
-            Inventory {
-                slots: vec![Some(ItemStack {
-                    item_id: iron,
-                    count: 5,
-                })],
-            },
+            test_inventory(vec![Some(test_stack(iron, 5))]),
         );
         store.burner_mining_drills.insert(
             EntityId::new(2),
@@ -225,24 +220,15 @@ mod tests {
                 mining_progress_ticks: 7,
                 mining_required_ticks: 60,
                 resource_target: Some(ManualMiningTarget { x: 2, y: 3 }),
-                output_slot: Some(ItemStack {
-                    item_id: copper,
-                    count: 2,
-                }),
+                output_slot: Some(test_stack(copper, 2)),
             },
         );
         store.furnaces.insert(
             EntityId::new(3),
             FurnaceState {
-                input_slot: Some(ItemStack {
-                    item_id: iron,
-                    count: 3,
-                }),
+                input_slot: Some(test_stack(iron, 3)),
                 energy: burner_energy(iron),
-                output_slot: Some(ItemStack {
-                    item_id: copper,
-                    count: 1,
-                }),
+                output_slot: Some(test_stack(copper, 1)),
                 active_recipe: Some(recipe),
                 crafting_progress_ticks: 9,
                 crafting_required_ticks: 120,
@@ -252,18 +238,8 @@ mod tests {
             EntityId::new(4),
             AssemblingMachineState {
                 selected_recipe: Some(recipe),
-                input_inventory: Inventory {
-                    slots: vec![Some(ItemStack {
-                        item_id: iron,
-                        count: 4,
-                    })],
-                },
-                output_inventory: Inventory {
-                    slots: vec![Some(ItemStack {
-                        item_id: copper,
-                        count: 1,
-                    })],
-                },
+                input_inventory: test_inventory(vec![Some(test_stack(iron, 4))]),
+                output_inventory: test_inventory(vec![Some(test_stack(copper, 1))]),
                 crafting_progress_ticks: 11,
                 crafting_required_ticks: 60,
                 crafting_speed_numerator: 1,
@@ -273,12 +249,7 @@ mod tests {
         store.labs.insert(
             EntityId::new(5),
             LabState {
-                inventory: Inventory {
-                    slots: vec![Some(ItemStack {
-                        item_id: iron,
-                        count: 1,
-                    })],
-                },
+                inventory: test_inventory(vec![Some(test_stack(iron, 1))]),
                 active_technology: Some(technology),
                 progress_ticks: 13,
                 required_ticks: 30,
@@ -324,22 +295,14 @@ mod tests {
         store.inserters.insert(
             EntityId::new(14),
             InserterState::Holding {
-                item: ItemStack {
-                    item_id: copper,
-                    count: 1,
-                },
+                item: test_stack(copper, 1),
             },
         );
         store.pumpjacks.insert(EntityId::new(15), PumpjackState);
         store.gun_turrets.insert(
             EntityId::new(16),
             GunTurretState {
-                ammo: Inventory {
-                    slots: vec![Some(ItemStack {
-                        item_id: copper,
-                        count: 7,
-                    })],
-                },
+                ammo: test_inventory(vec![Some(test_stack(copper, 7))]),
                 loaded_shots: 4,
                 loaded_damage: Damage::physical(5),
                 next_ready_tick: 17,
@@ -360,10 +323,7 @@ mod tests {
 
     fn burner_energy(fuel_item: ItemId) -> BurnerEnergy {
         BurnerEnergy {
-            fuel_slot: Some(ItemStack {
-                item_id: fuel_item,
-                count: 1,
-            }),
+            fuel_slot: Some(test_stack(fuel_item, 1)),
             energy_remaining_joules: 42.0,
             energy_usage_watts: 90_000.0,
         }

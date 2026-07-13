@@ -1,7 +1,7 @@
 use factory_data::{entity_prototype_id_by_name, item_id_by_name, recipe_id_by_name};
 use factory_sim::{
     CHUNK_SIZE, ChunkCoord, Direction, EnemyDifficultyPreset, EnemyMode, EntityId, Inventory,
-    ItemStack, Simulation, SimulationCounts, SimulationTickProfile, load_from_bytes, save_to_bytes,
+    Simulation, SimulationCounts, SimulationTickProfile, load_from_bytes, save_to_bytes,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Mutex;
@@ -445,6 +445,7 @@ fn place_if_valid(
 }
 
 fn seed_assemblers(sim: &mut Simulation, machine_ids: &[EntityId]) {
+    let catalog = sim.catalog().clone();
     let recipe = recipe_id_by_name(sim.catalog(), "iron_gear_wheel");
     let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
 
@@ -452,10 +453,9 @@ fn seed_assemblers(sim: &mut Simulation, machine_ids: &[EntityId]) {
         sim.select_assembler_recipe(*machine_id, recipe)
             .expect("benchmark assembler recipe should be selectable");
         *sim.player_inventory_mut() = Inventory::player();
-        sim.player_inventory_mut().slots[0] = Some(ItemStack {
-            item_id: iron_plate,
-            count: 100,
-        });
+        sim.player_inventory_mut()
+            .insert(&catalog, iron_plate, 100)
+            .expect("benchmark player inventory should accept iron plates");
         factory_sim::entity_transfer::player_slot_to_assembler_input(sim, *machine_id, 0)
             .expect("benchmark assembler should accept seeded iron plates");
     }
@@ -496,6 +496,7 @@ fn place_representative_power_poles(sim: &mut Simulation, spec: FactoryBenchmark
 }
 
 fn place_fluid_fixtures(sim: &mut Simulation, count: usize) {
+    let catalog = sim.catalog().clone();
     let pump = entity_prototype_id_by_name(sim.catalog(), "offshore_pump");
     let boiler = entity_prototype_id_by_name(sim.catalog(), "boiler");
     let steam_engine = entity_prototype_id_by_name(sim.catalog(), "steam_engine");
@@ -529,10 +530,9 @@ fn place_fluid_fixtures(sim: &mut Simulation, count: usize) {
             "validated benchmark engine should place",
         );
         *sim.player_inventory_mut() = Inventory::player();
-        sim.player_inventory_mut().slots[0] = Some(ItemStack {
-            item_id: coal,
-            count: 50,
-        });
+        sim.player_inventory_mut()
+            .insert(&catalog, coal, 50)
+            .expect("benchmark player inventory should accept coal");
         factory_sim::entity_transfer::player_slot_to_boiler_fuel(sim, boiler_id, 0)
             .expect("benchmark boiler should accept fuel");
         placed += 1;

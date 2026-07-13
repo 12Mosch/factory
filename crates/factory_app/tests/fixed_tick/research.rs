@@ -1,9 +1,9 @@
 use super::common::{
     complete_research_by_name, entity_id_by_name, item_id_by_name, place_powered_fixture_origin,
-    place_test_entity, recipe_id_by_name, technology_id_by_name,
+    place_test_entity, recipe_id_by_name, set_entity_inventory_slot, technology_id_by_name,
 };
 use factory_app::ui::formatting::available_crafting_recipe_choices;
-use factory_sim::{ItemStack, Simulation};
+use factory_sim::Simulation;
 
 #[test]
 fn completed_research_unlocks_recipe() {
@@ -17,12 +17,7 @@ fn completed_research_unlocks_recipe() {
     complete_research_by_name(&mut sim, "logistics");
     sim.select_research(automation)
         .expect("automation should be selectable");
-    factory_sim::entity_access::inventory_mut(&mut sim, lab_id)
-        .expect("lab should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: science_pack,
-        count: 20,
-    });
+    set_entity_inventory_slot(&mut sim, lab_id, 0, science_pack, 20);
 
     assert!(
         !available_crafting_recipe_choices(&sim)

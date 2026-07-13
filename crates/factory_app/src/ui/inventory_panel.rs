@@ -200,14 +200,10 @@ pub(crate) fn update_container_slot_text(
 
     for (marker, mut text) in &mut texts {
         let stack = match marker.panel {
-            InventoryPanel::Player => sim
-                .player_inventory()
-                .slots
-                .get(marker.slot_index)
-                .and_then(|slot| *slot),
-            InventoryPanel::Container => container_inventory
-                .and_then(|inventory| inventory.slots.get(marker.slot_index))
-                .and_then(|slot| *slot),
+            InventoryPanel::Player => sim.player_inventory().slot(marker.slot_index),
+            InventoryPanel::Container => {
+                container_inventory.and_then(|inventory| inventory.slot(marker.slot_index))
+            }
             InventoryPanel::BurnerFuel => burner_drill_state.and_then(|state| {
                 (marker.slot_index == BURNER_MINING_DRILL_FUEL_SLOT_INDEX)
                     .then_some(state.energy.fuel_slot)
@@ -238,12 +234,12 @@ pub(crate) fn update_container_slot_text(
                     .then_some(state.energy.fuel_slot)
                     .flatten()
             }),
-            InventoryPanel::AssemblerInput => assembler_state
-                .and_then(|state| state.input_inventory.slots.get(marker.slot_index))
-                .and_then(|slot| *slot),
-            InventoryPanel::AssemblerOutput => assembler_state
-                .and_then(|state| state.output_inventory.slots.get(marker.slot_index))
-                .and_then(|slot| *slot),
+            InventoryPanel::AssemblerInput => {
+                assembler_state.and_then(|state| state.input_inventory.slot(marker.slot_index))
+            }
+            InventoryPanel::AssemblerOutput => {
+                assembler_state.and_then(|state| state.output_inventory.slot(marker.slot_index))
+            }
         };
         text.0 = stack
             .map(|stack| format_item_stack(stack, sim.catalog()))

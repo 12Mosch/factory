@@ -149,7 +149,7 @@ fn machine_panel_width(kind: OpenMachineKind) -> f32 {
 fn container_slot_count(sim: &factory_sim::Simulation, entity_id: EntityId) -> usize {
     factory_sim::entity_access::inventory(sim, entity_id)
         .expect("open container should expose inventory")
-        .slots
+        .slots()
         .len()
 }
 

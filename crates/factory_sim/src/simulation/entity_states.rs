@@ -13,7 +13,7 @@ use super::*;
 /// silently inheriting one.
 pub(crate) trait EntityStateBehavior {
     /// Items handed back to the player when the owning entity is destroyed.
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>);
+    fn push_recovery_stacks(&self, catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>);
 
     /// Validates the state against the catalog and simulation invariants.
     fn validate_state(
@@ -24,7 +24,7 @@ pub(crate) trait EntityStateBehavior {
 }
 
 impl EntityStateBehavior for Inventory {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_inventory_stacks(stacks, self);
     }
 
@@ -38,7 +38,7 @@ impl EntityStateBehavior for Inventory {
 }
 
 impl EntityStateBehavior for BurnerMiningDrillState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_optional_stack(stacks, self.energy.fuel_slot);
         push_optional_stack(stacks, self.output_slot);
     }
@@ -53,7 +53,7 @@ impl EntityStateBehavior for BurnerMiningDrillState {
 }
 
 impl EntityStateBehavior for FurnaceState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_optional_stack(stacks, self.input_slot);
         push_optional_stack(stacks, self.energy.fuel_slot);
         push_optional_stack(stacks, self.output_slot);
@@ -69,7 +69,7 @@ impl EntityStateBehavior for FurnaceState {
 }
 
 impl EntityStateBehavior for AssemblingMachineState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_inventory_stacks(stacks, &self.input_inventory);
         push_inventory_stacks(stacks, &self.output_inventory);
     }
@@ -84,7 +84,7 @@ impl EntityStateBehavior for AssemblingMachineState {
 }
 
 impl EntityStateBehavior for LabState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_inventory_stacks(stacks, &self.inventory);
     }
 
@@ -98,7 +98,7 @@ impl EntityStateBehavior for LabState {
 }
 
 impl EntityStateBehavior for ElectricPoleState {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -110,7 +110,7 @@ impl EntityStateBehavior for ElectricPoleState {
 }
 
 impl EntityStateBehavior for ElectricConsumerState {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -126,7 +126,7 @@ impl EntityStateBehavior for ElectricConsumerState {
 }
 
 impl EntityStateBehavior for SteamEngineState {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -138,7 +138,7 @@ impl EntityStateBehavior for SteamEngineState {
 }
 
 impl EntityStateBehavior for BoilerState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_optional_stack(stacks, self.energy.fuel_slot);
     }
 
@@ -152,7 +152,7 @@ impl EntityStateBehavior for BoilerState {
 }
 
 impl EntityStateBehavior for OffshorePumpState {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -164,7 +164,7 @@ impl EntityStateBehavior for OffshorePumpState {
 }
 
 impl EntityStateBehavior for PumpjackState {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -178,7 +178,7 @@ impl EntityStateBehavior for PumpjackState {
 // Fluid box contents are validated network-wide by `validate_fluid_box_states`
 // and hold no recoverable items.
 impl EntityStateBehavior for Vec<FluidBoxState> {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -190,11 +190,11 @@ impl EntityStateBehavior for Vec<FluidBoxState> {
 }
 
 impl EntityStateBehavior for BeltSegment {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         stacks.extend(self.lanes.iter().flat_map(|lane| {
-            lane.items.iter().map(|item| ItemStack {
-                item_id: item.item_id,
-                count: 1,
+            lane.items.iter().map(|item| {
+                ItemStack::new(catalog, item.item_id, 1)
+                    .expect("validated belt items should have valid stack prototypes")
             })
         }));
     }
@@ -209,12 +209,12 @@ impl EntityStateBehavior for BeltSegment {
 }
 
 impl EntityStateBehavior for SplitterState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         stacks.extend(self.input_lanes.iter().flat_map(|input_lanes| {
             input_lanes.iter().flat_map(|lane| {
-                lane.items.iter().map(|item| ItemStack {
-                    item_id: item.item_id,
-                    count: 1,
+                lane.items.iter().map(|item| {
+                    ItemStack::new(catalog, item.item_id, 1)
+                        .expect("validated splitter items should have valid stack prototypes")
                 })
             })
         }));
@@ -230,7 +230,7 @@ impl EntityStateBehavior for SplitterState {
 }
 
 impl EntityStateBehavior for InserterState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         if let InserterState::Holding { item } = self {
             stacks.push(*item);
         }
@@ -246,7 +246,7 @@ impl EntityStateBehavior for InserterState {
 }
 
 impl EntityStateBehavior for GunTurretState {
-    fn push_recovery_stacks(&self, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         // The opened magazine (`loaded_shots`) is lost; only unopened
         // magazines in the ammo inventory are recovered.
         push_inventory_stacks(stacks, &self.ammo);
@@ -258,16 +258,16 @@ impl EntityStateBehavior for GunTurretState {
         entity_id: EntityId,
     ) -> Result<(), SimValidationError> {
         super::validation::inventory::validate_inventory(&sim.world.prototypes, &self.ammo)?;
-        for stack in self.ammo.slots.iter().flatten() {
+        for stack in self.ammo.slots().iter().flatten() {
             let is_ammo = sim
                 .world
                 .prototypes
-                .item(stack.item_id)
+                .item(stack.item_id())
                 .is_some_and(|item| item.ammo.is_some());
             if !is_ammo {
                 return Err(SimValidationError::InvalidMachineItem {
                     entity_id,
-                    item_id: stack.item_id,
+                    item_id: stack.item_id(),
                 });
             }
         }
@@ -280,7 +280,7 @@ impl EntityStateBehavior for GunTurretState {
 }
 
 impl EntityStateBehavior for EnemySpawnerState {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -292,7 +292,7 @@ impl EntityStateBehavior for EnemySpawnerState {
 }
 
 impl EntityStateBehavior for HealthState {
-    fn push_recovery_stacks(&self, _stacks: &mut Vec<ItemStack>) {}
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 
     fn validate_state(
         &self,
@@ -333,7 +333,7 @@ impl EntityStateBehavior for HealthState {
 }
 
 fn push_inventory_stacks(stacks: &mut Vec<ItemStack>, inventory: &Inventory) {
-    stacks.extend(inventory.slots.iter().flatten().copied());
+    stacks.extend(inventory.slots().iter().flatten().copied());
 }
 
 fn push_optional_stack(stacks: &mut Vec<ItemStack>, stack: Option<ItemStack>) {

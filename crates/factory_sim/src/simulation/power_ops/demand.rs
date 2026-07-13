@@ -164,7 +164,8 @@ fn inserter_can_work(
                 research,
                 entities,
                 drop_tile,
-                ItemStack { item_id, count: 1 },
+                ItemStack::new(catalog, item_id, 1)
+                    .expect("a source item should exist in the prototype catalog"),
             )
         }
         InserterState::Picking { .. } | InserterState::Dropping { .. } => true,

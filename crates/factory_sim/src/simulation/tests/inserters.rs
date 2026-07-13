@@ -6,12 +6,13 @@ fn inserter_does_not_place_invalid_items_into_lab() {
     let mut sim = Simulation::new_test_world(123);
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
     let (chest_id, inserter_id, lab_id) = place_chest_inserter_lab_line(&mut sim);
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should expose inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should expose inventory"),
+        0,
+        iron_plate,
+        1,
+    );
 
     for _ in 0..100 {
         sim.tick();
@@ -41,13 +42,13 @@ fn inserter_moves_item_from_chest_to_furnace() {
     let mut sim = Simulation::new_test_world(123);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
-
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -61,10 +62,7 @@ fn inserter_moves_item_from_chest_to_furnace() {
         crate::entity_access::furnace_state(&sim, furnace_id)
             .expect("furnace should have state")
             .input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: 1
-        })
+        Some(test_stack(iron_ore, 1))
     );
     assert!(matches!(
         crate::entity_access::inserter_state(&sim, inserter_id)
@@ -84,26 +82,20 @@ fn inserter_moves_fuel_from_chest_to_furnace_fuel_slot() {
     let mut sim = Simulation::new_test_world(123);
     let coal = item_id(&sim.world.prototypes, "coal");
     let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
-
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: coal,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        coal,
+        1,
+    );
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
     let furnace =
         crate::entity_access::furnace_state(&sim, furnace_id).expect("furnace should have state");
     assert_eq!(furnace.input_slot, None);
-    assert_eq!(
-        furnace.energy.fuel_slot,
-        Some(ItemStack {
-            item_id: coal,
-            count: 1,
-        })
-    );
+    assert_eq!(furnace.energy.fuel_slot, Some(test_stack(coal, 1)));
 }
 
 #[test]
@@ -113,20 +105,17 @@ fn inserter_waits_when_target_full() {
     let stack_size =
         item_stack_size(&sim.world.prototypes, iron_ore).expect("iron ore should have stack size");
     let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
-
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .input_slot = Some(ItemStack {
-        item_id: iron_ore,
-        count: stack_size,
-    });
+        .input_slot = Some(test_stack(iron_ore, stack_size));
 
     for _ in 0..BASIC_INSERTER_PICKUP_TICKS + BASIC_INSERTER_DROP_TICKS + 10 {
         sim.tick();
@@ -147,10 +136,7 @@ fn inserter_waits_when_target_full() {
         crate::entity_access::furnace_state(&sim, furnace_id)
             .expect("furnace should have state")
             .input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: stack_size
-        })
+        Some(test_stack(iron_ore, stack_size))
     );
     assert!(!matches!(
         crate::entity_access::inserter_state(&sim, inserter_id)
@@ -168,13 +154,13 @@ fn inserter_preserves_item_count() {
     let mut sim = Simulation::new_test_world(123);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let (chest_id, _inserter_id, _furnace_id) = place_chest_inserter_furnace_line(&mut sim);
-
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 3,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        3,
+    );
 
     let ticks = (BASIC_INSERTER_PICKUP_TICKS + BASIC_INSERTER_DROP_TICKS + 5) * 3;
     for _ in 0..ticks {
@@ -199,10 +185,7 @@ fn inserter_moves_item_from_belt_to_furnace() {
         crate::entity_access::furnace_state(&sim, furnace_id)
             .expect("furnace should have state")
             .input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: 1
-        })
+        Some(test_stack(iron_ore, 1))
     );
     assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
 }
@@ -216,10 +199,7 @@ fn inserter_moves_furnace_output_to_chest() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .output_slot = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+        .output_slot = Some(test_stack(iron_plate, 1));
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -247,10 +227,7 @@ fn inserter_moves_furnace_output_to_belt() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .output_slot = Some(ItemStack {
-        item_id: iron_plate,
-        count: 1,
-    });
+        .output_slot = Some(test_stack(iron_plate, 1));
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -276,12 +253,13 @@ fn inserter_uses_rotated_direction_for_pickup_and_drop() {
     let chest_id = place_at(&mut sim, chest, x, y, Direction::North);
     let inserter_id = place_at(&mut sim, inserter, x + 1, y, Direction::North);
     let furnace_id = place_at(&mut sim, furnace, x + 2, y, Direction::North);
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
 
     for _ in 0..BASIC_INSERTER_PICKUP_TICKS + 2 {
         sim.tick();
@@ -313,10 +291,7 @@ fn inserter_uses_rotated_direction_for_pickup_and_drop() {
         crate::entity_access::furnace_state(&sim, furnace_id)
             .expect("furnace should have state")
             .input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: 1
-        })
+        Some(test_stack(iron_ore, 1))
     );
     assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
 }
@@ -331,19 +306,20 @@ fn fast_inserter_transfers_faster_than_basic() {
         place_chest_inserter_furnace_line_at(&mut sim, "inserter", x, y);
     let (fast_source, _fast_inserter, fast_target) =
         place_chest_inserter_furnace_line_at(&mut sim, "fast_inserter", x, y + 3);
-
-    crate::entity_access::inventory_mut(&mut sim, basic_source)
-        .expect("basic source chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
-    crate::entity_access::inventory_mut(&mut sim, fast_source)
-        .expect("fast source chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, basic_source)
+            .expect("basic source chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, fast_source)
+            .expect("fast source chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
 
     for _ in 0..20 {
         sim.tick();
@@ -353,10 +329,7 @@ fn fast_inserter_transfers_faster_than_basic() {
         crate::entity_access::furnace_state(&sim, fast_target)
             .expect("fast target should be a furnace")
             .input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: 1,
-        })
+        Some(test_stack(iron_ore, 1))
     );
     assert_eq!(
         crate::entity_access::furnace_state(&sim, basic_target)
@@ -379,13 +352,13 @@ fn long_handed_inserter_uses_two_tile_pickup_and_drop() {
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let (chest_id, inserter_id, furnace_id) =
         place_two_tile_chest_inserter_furnace_line(&mut sim, "long_handed_inserter");
-
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -399,10 +372,7 @@ fn long_handed_inserter_uses_two_tile_pickup_and_drop() {
         crate::entity_access::furnace_state(&sim, furnace_id)
             .expect("furnace should have state")
             .input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: 1,
-        })
+        Some(test_stack(iron_ore, 1))
     );
     assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
 }
@@ -413,13 +383,13 @@ fn basic_inserter_does_not_reach_long_handed_positions() {
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let (chest_id, inserter_id, furnace_id) =
         place_two_tile_chest_inserter_furnace_line(&mut sim, "inserter");
-
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
 
     for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) {
         sim.tick();
@@ -452,22 +422,19 @@ fn inserter_holding_item_does_not_duplicate_when_target_becomes_blocked() {
     let stack_size = item_stack_size(&sim.world.prototypes, copper_ore)
         .expect("copper ore should have stack size");
     let (chest_id, inserter_id, furnace_id) = place_chest_inserter_furnace_line(&mut sim);
-
-    crate::entity_access::inventory_mut(&mut sim, chest_id)
-        .expect("chest should have inventory")
-        .slots[0] = Some(ItemStack {
-        item_id: iron_ore,
-        count: 1,
-    });
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
 
     run_inserter_until_holding(&mut sim, inserter_id);
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .input_slot = Some(ItemStack {
-        item_id: copper_ore,
-        count: stack_size,
-    });
+        .input_slot = Some(test_stack(copper_ore, stack_size));
 
     for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) * 3 {
         sim.tick();
@@ -483,19 +450,13 @@ fn inserter_holding_item_does_not_duplicate_when_target_becomes_blocked() {
         crate::entity_access::furnace_state(&sim, furnace_id)
             .expect("furnace should have state")
             .input_slot,
-        Some(ItemStack {
-            item_id: copper_ore,
-            count: stack_size,
-        })
+        Some(test_stack(copper_ore, stack_size))
     );
     assert_eq!(
         crate::entity_access::inserter_state(&sim, inserter_id)
             .expect("inserter should have state"),
         &InserterState::Holding {
-            item: ItemStack {
-                item_id: iron_ore,
-                count: 1,
-            },
+            item: test_stack(iron_ore, 1),
         }
     );
     assert_eq!(total_item_count_in_sim(&sim, iron_ore), 1);
@@ -514,10 +475,7 @@ fn inserter_holding_item_does_not_duplicate_when_target_becomes_blocked() {
         crate::entity_access::furnace_state(&sim, furnace_id)
             .expect("furnace should have state")
             .input_slot,
-        Some(ItemStack {
-            item_id: iron_ore,
-            count: 1,
-        })
+        Some(test_stack(iron_ore, 1))
     );
     assert!(!matches!(
         crate::entity_access::inserter_state(&sim, inserter_id)

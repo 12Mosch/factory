@@ -69,21 +69,24 @@ pub fn player_slot_to_entity(
 ) -> Result<(), ContainerError> {
     let stack = stack_in_slot(&sim.player_inventory, player_slot_index)?;
     if sim.entities.labs.contains_key(&entity_id)
-        && !lab_can_accept_item(&sim.world.prototypes, stack.item_id)
+        && !lab_can_accept_item(&sim.world.prototypes, stack.item_id())
     {
-        return Err(ContainerError::InvalidItem(stack.item_id));
+        return Err(ContainerError::InvalidItem(stack.item_id()));
     }
     if sim.entities.gun_turrets.contains_key(&entity_id)
-        && !item_is_ammo(&sim.world.prototypes, stack.item_id)
+        && !item_is_ammo(&sim.world.prototypes, stack.item_id())
     {
-        return Err(ContainerError::InvalidItem(stack.item_id));
+        return Err(ContainerError::InvalidItem(stack.item_id()));
     }
     let entity_inventory = EntityStore::entity_inventory(&sim.entities, entity_id)?;
     ensure_inventory_can_accept(&sim.world.prototypes, entity_inventory, stack)?;
 
-    sim.player_inventory.slots[player_slot_index] = None;
+    let stack = sim
+        .player_inventory
+        .take_slot(player_slot_index)
+        .map_err(ContainerError::from)?;
     EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(ContainerError::from)
 }
 
@@ -98,10 +101,11 @@ pub fn entity_slot_to_player(
     };
     ensure_inventory_can_accept(&sim.world.prototypes, &sim.player_inventory, stack)?;
 
-    EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?.slots[entity_slot_index] =
-        None;
+    let stack = EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?
+        .take_slot(entity_slot_index)
+        .map_err(ContainerError::from)?;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(ContainerError::from)
 }
 
@@ -112,7 +116,7 @@ pub fn player_slot_to_burner_drill_fuel(
 ) -> Result<(), BurnerDrillError> {
     let stack = sim
         .player_inventory
-        .slots
+        .slots()
         .get(player_slot_index)
         .ok_or(BurnerDrillError::InvalidSlot {
             slot_index: player_slot_index,
@@ -121,8 +125,8 @@ pub fn player_slot_to_burner_drill_fuel(
             slot_index: player_slot_index,
         })?;
 
-    if fuel_value_joules(&sim.world.prototypes, stack.item_id).is_none() {
-        return Err(BurnerDrillError::InvalidFuel(stack.item_id));
+    if fuel_value_joules(&sim.world.prototypes, stack.item_id()).is_none() {
+        return Err(BurnerDrillError::InvalidFuel(stack.item_id()));
     }
 
     let state = sim.entities.burner_drill_state(entity_id)?;
@@ -130,9 +134,13 @@ pub fn player_slot_to_burner_drill_fuel(
         return Err(BurnerDrillError::InsufficientSpace);
     }
 
-    sim.player_inventory.slots[player_slot_index] = None;
+    let stack = sim
+        .player_inventory
+        .take_slot(player_slot_index)
+        .map_err(BurnerDrillError::from)?;
     let state = sim.entities.burner_drill_state_mut(entity_id)?;
-    insert_into_single_slot(&mut state.energy.fuel_slot, stack);
+    insert_into_single_slot(&sim.world.prototypes, &mut state.energy.fuel_slot, stack)
+        .map_err(BurnerDrillError::from)?;
 
     Ok(())
 }
@@ -151,7 +159,7 @@ pub fn burner_drill_fuel_to_player(
         })?;
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(BurnerDrillError::InsufficientSpace);
     }
@@ -161,7 +169,7 @@ pub fn burner_drill_fuel_to_player(
         .energy
         .fuel_slot = None;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(BurnerDrillError::from)
 }
 
@@ -178,14 +186,14 @@ pub fn burner_drill_output_to_player(
         })?;
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(BurnerDrillError::InsufficientSpace);
     }
 
     sim.entities.burner_drill_state_mut(entity_id)?.output_slot = None;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(BurnerDrillError::from)
 }
 
@@ -196,7 +204,7 @@ pub fn player_slot_to_furnace_input(
 ) -> Result<(), FurnaceError> {
     let stack = sim
         .player_inventory
-        .slots
+        .slots()
         .get(player_slot_index)
         .ok_or(FurnaceError::InvalidSlot {
             slot_index: player_slot_index,
@@ -205,10 +213,14 @@ pub fn player_slot_to_furnace_input(
             slot_index: player_slot_index,
         })?;
 
-    if first_matching_unlocked_smelting_recipe(&sim.world.prototypes, &sim.research, stack.item_id)
-        .is_none()
+    if first_matching_unlocked_smelting_recipe(
+        &sim.world.prototypes,
+        &sim.research,
+        stack.item_id(),
+    )
+    .is_none()
     {
-        return Err(FurnaceError::InvalidInput(stack.item_id));
+        return Err(FurnaceError::InvalidInput(stack.item_id()));
     }
 
     let state = sim.entities.furnace_state(entity_id)?;
@@ -221,9 +233,13 @@ pub fn player_slot_to_furnace_input(
         return Err(FurnaceError::InsufficientSpace);
     }
 
-    sim.player_inventory.slots[player_slot_index] = None;
+    let stack = sim
+        .player_inventory
+        .take_slot(player_slot_index)
+        .map_err(FurnaceError::from)?;
     let state = sim.entities.furnace_state_mut(entity_id)?;
-    insert_into_single_slot(&mut state.input_slot, stack);
+    insert_into_single_slot(&sim.world.prototypes, &mut state.input_slot, stack)
+        .map_err(FurnaceError::from)?;
 
     Ok(())
 }
@@ -235,7 +251,7 @@ pub fn player_slot_to_furnace_fuel(
 ) -> Result<(), FurnaceError> {
     let stack = sim
         .player_inventory
-        .slots
+        .slots()
         .get(player_slot_index)
         .ok_or(FurnaceError::InvalidSlot {
             slot_index: player_slot_index,
@@ -244,8 +260,8 @@ pub fn player_slot_to_furnace_fuel(
             slot_index: player_slot_index,
         })?;
 
-    if fuel_value_joules(&sim.world.prototypes, stack.item_id).is_none() {
-        return Err(FurnaceError::InvalidFuel(stack.item_id));
+    if fuel_value_joules(&sim.world.prototypes, stack.item_id()).is_none() {
+        return Err(FurnaceError::InvalidFuel(stack.item_id()));
     }
 
     let state = sim.entities.furnace_state(entity_id)?;
@@ -253,9 +269,13 @@ pub fn player_slot_to_furnace_fuel(
         return Err(FurnaceError::InsufficientSpace);
     }
 
-    sim.player_inventory.slots[player_slot_index] = None;
+    let stack = sim
+        .player_inventory
+        .take_slot(player_slot_index)
+        .map_err(FurnaceError::from)?;
     let state = sim.entities.furnace_state_mut(entity_id)?;
-    insert_into_single_slot(&mut state.energy.fuel_slot, stack);
+    insert_into_single_slot(&sim.world.prototypes, &mut state.energy.fuel_slot, stack)
+        .map_err(FurnaceError::from)?;
 
     Ok(())
 }
@@ -273,14 +293,14 @@ pub fn furnace_input_to_player(
             })?;
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(FurnaceError::InsufficientSpace);
     }
 
     sim.entities.furnace_state_mut(entity_id)?.input_slot = None;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(FurnaceError::from)
 }
 
@@ -298,14 +318,14 @@ pub fn furnace_fuel_to_player(
         })?;
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(FurnaceError::InsufficientSpace);
     }
 
     sim.entities.furnace_state_mut(entity_id)?.energy.fuel_slot = None;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(FurnaceError::from)
 }
 
@@ -322,14 +342,14 @@ pub fn furnace_output_to_player(
             })?;
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(FurnaceError::InsufficientSpace);
     }
 
     sim.entities.furnace_state_mut(entity_id)?.output_slot = None;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(FurnaceError::from)
 }
 
@@ -340,7 +360,7 @@ pub fn player_slot_to_boiler_fuel(
 ) -> Result<(), BoilerError> {
     let stack = sim
         .player_inventory
-        .slots
+        .slots()
         .get(player_slot_index)
         .ok_or(BoilerError::InvalidSlot {
             slot_index: player_slot_index,
@@ -349,8 +369,8 @@ pub fn player_slot_to_boiler_fuel(
             slot_index: player_slot_index,
         })?;
 
-    if fuel_value_joules(&sim.world.prototypes, stack.item_id).is_none() {
-        return Err(BoilerError::InvalidFuel(stack.item_id));
+    if fuel_value_joules(&sim.world.prototypes, stack.item_id()).is_none() {
+        return Err(BoilerError::InvalidFuel(stack.item_id()));
     }
 
     let state = sim.entities.boiler_state(entity_id)?;
@@ -358,9 +378,13 @@ pub fn player_slot_to_boiler_fuel(
         return Err(BoilerError::InsufficientSpace);
     }
 
-    sim.player_inventory.slots[player_slot_index] = None;
+    let stack = sim
+        .player_inventory
+        .take_slot(player_slot_index)
+        .map_err(BoilerError::from)?;
     let state = sim.entities.boiler_state_mut(entity_id)?;
-    insert_into_single_slot(&mut state.energy.fuel_slot, stack);
+    insert_into_single_slot(&sim.world.prototypes, &mut state.energy.fuel_slot, stack)
+        .map_err(BoilerError::from)?;
     sim.invalidate_power_dynamic_state();
 
     Ok(())
@@ -377,14 +401,14 @@ pub fn boiler_fuel_to_player(sim: &mut Simulation, entity_id: EntityId) -> Resul
         })?;
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(BoilerError::InsufficientSpace);
     }
 
     sim.entities.boiler_state_mut(entity_id)?.energy.fuel_slot = None;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(BoilerError::from)?;
     sim.invalidate_power_dynamic_state();
     Ok(())
@@ -397,7 +421,7 @@ pub fn player_slot_to_assembler_input(
 ) -> Result<(), AssemblerError> {
     let stack = sim
         .player_inventory
-        .slots
+        .slots()
         .get(player_slot_index)
         .ok_or(AssemblerError::InvalidSlot {
             slot_index: player_slot_index,
@@ -415,20 +439,23 @@ pub fn player_slot_to_assembler_input(
         state,
         stack,
     ) {
-        return Err(AssemblerError::InvalidInput(stack.item_id));
+        return Err(AssemblerError::InvalidInput(stack.item_id()));
     }
     if !state
         .input_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(AssemblerError::InsufficientSpace);
     }
 
-    sim.player_inventory.slots[player_slot_index] = None;
+    let stack = sim
+        .player_inventory
+        .take_slot(player_slot_index)
+        .map_err(AssemblerError::from)?;
     sim.entities
         .assembler_state_mut(entity_id)?
         .input_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(AssemblerError::from)
 }
 
@@ -443,17 +470,19 @@ pub fn assembler_input_slot_to_player(
     };
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(AssemblerError::InsufficientSpace);
     }
 
-    sim.entities
+    let stack = sim
+        .entities
         .assembler_state_mut(entity_id)?
         .input_inventory
-        .slots[slot_index] = None;
+        .take_slot(slot_index)
+        .map_err(AssemblerError::from)?;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(AssemblerError::from)
 }
 
@@ -468,17 +497,19 @@ pub fn assembler_output_slot_to_player(
     };
     if !sim
         .player_inventory
-        .can_insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .can_insert(&sim.world.prototypes, stack.item_id(), stack.count())
     {
         return Err(AssemblerError::InsufficientSpace);
     }
 
-    sim.entities
+    let stack = sim
+        .entities
         .assembler_state_mut(entity_id)?
         .output_inventory
-        .slots[slot_index] = None;
+        .take_slot(slot_index)
+        .map_err(AssemblerError::from)?;
     sim.player_inventory
-        .insert(&sim.world.prototypes, stack.item_id, stack.count)
+        .insert_stack(&sim.world.prototypes, stack)
         .map_err(AssemblerError::from)
 }
 
@@ -489,13 +520,13 @@ fn player_slot_to_furnace(
 ) -> Result<(), FurnaceError> {
     let stack = sim
         .player_inventory()
-        .slots
+        .slots()
         .get(slot_index)
         .ok_or(FurnaceError::InvalidSlot { slot_index })?
         .ok_or(FurnaceError::EmptySlot { slot_index })?;
     let is_fuel = sim
         .catalog()
-        .item(stack.item_id)
+        .item(stack.item_id())
         .and_then(|prototype| prototype.fuel_value_joules)
         .is_some();
 
