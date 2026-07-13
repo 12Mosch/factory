@@ -36,11 +36,7 @@ impl AttackTargetCache {
         invalidated
     }
 
-    fn target_for_base(
-        &mut self,
-        base_id: EnemyBaseId,
-        from: (WorldTileCoord, WorldTileCoord),
-    ) -> Option<EntityId> {
+    fn target_for_base(&mut self, base_id: EnemyBaseId, from: EntityFootprint) -> Option<EntityId> {
         if let Some(target) = self.base_targets.get(&base_id) {
             return *target;
         }
@@ -48,7 +44,7 @@ impl AttackTargetCache {
         {
             self.shared_target_queries += 1;
         }
-        let target = self.index.nearest(from);
+        let target = self.index.nearest(&from);
         self.base_targets.insert(base_id, target);
         target
     }
@@ -56,7 +52,7 @@ impl AttackTargetCache {
     fn target_for_raid(
         &mut self,
         raid_id: RaidId,
-        from: (WorldTileCoord, WorldTileCoord),
+        from: EntityFootprint,
         current: Option<EntityId>,
     ) -> Option<EntityId> {
         if let Some(target) = self.raid_targets.get(&raid_id) {
@@ -66,7 +62,7 @@ impl AttackTargetCache {
         {
             self.shared_target_queries += 1;
         }
-        let target = current.or_else(|| self.index.nearest(from));
+        let target = current.or_else(|| self.index.nearest(&from));
         self.raid_targets.insert(raid_id, target);
         target
     }
@@ -84,13 +80,56 @@ impl AttackTargetCache {
 /// entity ids in cells that can beat the current result.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 struct AttackableStructureIndex {
-    cells: BTreeMap<(i64, i64), Vec<IndexedAttackTarget>>,
+    cells: BTreeMap<(i64, i64), IndexedAttackCell>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct IndexedAttackCell {
+    min_x: i128,
+    max_x: i128,
+    min_y: i128,
+    max_y: i128,
+    targets: Vec<IndexedAttackTarget>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct IndexedAttackTarget {
     entity_id: EntityId,
-    center: (WorldTileCoord, WorldTileCoord),
+    footprint: EntityFootprint,
+}
+
+impl IndexedAttackCell {
+    fn new(target: IndexedAttackTarget) -> Self {
+        let footprint = target.footprint;
+        Self {
+            min_x: i128::from(footprint.x),
+            max_x: footprint_axis_end(footprint.x, footprint.width),
+            min_y: i128::from(footprint.y),
+            max_y: footprint_axis_end(footprint.y, footprint.height),
+            targets: vec![target],
+        }
+    }
+
+    fn push(&mut self, target: IndexedAttackTarget) {
+        let footprint = target.footprint;
+        self.min_x = self.min_x.min(i128::from(footprint.x));
+        self.max_x = self
+            .max_x
+            .max(footprint_axis_end(footprint.x, footprint.width));
+        self.min_y = self.min_y.min(i128::from(footprint.y));
+        self.max_y = self
+            .max_y
+            .max(footprint_axis_end(footprint.y, footprint.height));
+        self.targets.push(target);
+    }
+
+    fn distance_squared_to(&self, from: &EntityFootprint) -> u128 {
+        from.distance_squared_to_bounds(self.min_x, self.max_x, self.min_y, self.max_y)
+    }
+}
+
+fn footprint_axis_end(start: WorldTileCoord, length: i32) -> i128 {
+    i128::from(start) + i128::from(length) - 1
 }
 
 impl AttackableStructureIndex {
@@ -105,78 +144,50 @@ impl AttackableStructureIndex {
                 center_x.div_euclid(i64::from(CHUNK_SIZE)),
                 center_y.div_euclid(i64::from(CHUNK_SIZE)),
             );
+            let target = IndexedAttackTarget {
+                entity_id,
+                footprint: placed.footprint,
+            };
             self.cells
                 .entry(cell)
-                .or_default()
-                .push(IndexedAttackTarget {
-                    entity_id,
-                    center: (center_x, center_y),
-                });
+                .and_modify(|cell| cell.push(target))
+                .or_insert_with(|| IndexedAttackCell::new(target));
         }
     }
 
-    fn nearest(&self, from: (WorldTileCoord, WorldTileCoord)) -> Option<EntityId> {
+    fn nearest(&self, from: &EntityFootprint) -> Option<EntityId> {
         let nearest_cell_distance = self
             .cells
-            .keys()
-            .map(|&cell| distance_squared_to_cell(from, cell))
+            .values()
+            .map(|cell| cell.distance_squared_to(from))
             .min()?;
 
         let mut best = None;
-        for (&cell, candidates) in &self.cells {
-            if distance_squared_to_cell(from, cell) == nearest_cell_distance {
-                update_nearest_from_candidates(&mut best, from, candidates);
+        for cell in self.cells.values() {
+            if cell.distance_squared_to(from) == nearest_cell_distance {
+                update_nearest_from_candidates(&mut best, from, &cell.targets);
             }
         }
 
-        for (&cell, candidates) in &self.cells {
-            let cell_distance = distance_squared_to_cell(from, cell);
+        for cell in self.cells.values() {
+            let cell_distance = cell.distance_squared_to(from);
             if cell_distance > nearest_cell_distance
                 && best.is_none_or(|(distance, _)| cell_distance <= distance)
             {
-                update_nearest_from_candidates(&mut best, from, candidates);
+                update_nearest_from_candidates(&mut best, from, &cell.targets);
             }
         }
         best.map(|(_, entity_id)| entity_id)
     }
 }
 
-fn distance_squared_to_cell(from: (WorldTileCoord, WorldTileCoord), cell: (i64, i64)) -> u128 {
-    let cell_size = i128::from(CHUNK_SIZE);
-    let min_x = i128::from(cell.0) * cell_size;
-    let min_y = i128::from(cell.1) * cell_size;
-    let max_x = min_x + cell_size - 1;
-    let max_y = min_y + cell_size - 1;
-    let from_x = i128::from(from.0);
-    let from_y = i128::from(from.1);
-    let dx = if from_x < min_x {
-        min_x - from_x
-    } else if from_x > max_x {
-        from_x - max_x
-    } else {
-        0
-    };
-    let dy = if from_y < min_y {
-        min_y - from_y
-    } else if from_y > max_y {
-        from_y - max_y
-    } else {
-        0
-    };
-    let dx = dx.unsigned_abs();
-    let dy = dy.unsigned_abs();
-    dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
-}
-
 fn update_nearest_from_candidates(
     best: &mut Option<(u128, EntityId)>,
-    from: (WorldTileCoord, WorldTileCoord),
+    from: &EntityFootprint,
     candidates: &[IndexedAttackTarget],
 ) {
     for candidate in candidates {
-        let dx = (i128::from(candidate.center.0) - i128::from(from.0)).unsigned_abs();
-        let dy = (i128::from(candidate.center.1) - i128::from(from.1)).unsigned_abs();
-        let distance = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+        let distance = from.distance_squared_to(&candidate.footprint);
         let result = (distance, candidate.entity_id);
         if best.is_none_or(|current| result < current) {
             *best = Some(result);
@@ -886,7 +897,11 @@ impl Simulation {
                 .map(Enemy::tile)
                 .next();
             if let Some(origin) = origin {
-                raid.target = attack_targets.target_for_raid(raid.id, origin, raid.target);
+                raid.target = attack_targets.target_for_raid(
+                    raid.id,
+                    EntityFootprint::single_tile(origin.0, origin.1),
+                    raid.target,
+                );
             } else {
                 raid.target = None;
             }
@@ -1670,7 +1685,7 @@ fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &m
         enemy.target = if let EnemyMission::Staging(base_id) = enemy.mission {
             context
                 .attack_targets
-                .target_for_base(base_id, enemy.tile())
+                .target_for_base(base_id, enemy_footprint(enemy))
         } else {
             acquire_target(world, entities, &context.attack_targets.index, enemy)
         };
@@ -1694,7 +1709,7 @@ fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &m
 
     // Attack when standing next to (or on the edge of) the target.
     let tile = enemy.tile();
-    if chebyshev_distance_to_footprint(tile, &target_footprint) <= 1 {
+    if enemy_footprint(enemy).chebyshev_distance_to(&target_footprint) <= 1 {
         enemy.path.clear();
         if tick >= enemy.next_attack_tick {
             intents.record_enemy_attack(target, enemy.damage);
@@ -1732,7 +1747,7 @@ fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &m
 
     if (enemy.path.is_empty() || next_waypoint_blocked) && tick >= enemy.next_decision_tick {
         enemy.path.clear();
-        if chebyshev_distance_to_footprint(tile, &target_footprint)
+        if enemy_footprint(enemy).chebyshev_distance_to(&target_footprint)
             <= ENEMY_PATHFIND_MAX_RANGE_TILES
         {
             match context.navigation.request_path(
@@ -1776,6 +1791,7 @@ fn acquire_target(
     enemy: &Enemy,
 ) -> Option<EntityId> {
     let (tile_x, tile_y) = enemy.tile();
+    let footprint = enemy_footprint(enemy);
     match enemy.mode {
         EnemyMode::Guard => {
             let radius = i64::from(enemy.aggro_radius_tiles);
@@ -1785,9 +1801,9 @@ fn acquire_target(
                 tile_y - radius,
                 tile_y + radius,
             );
-            nearest_attackable(world, entities, (tile_x, tile_y), candidates.into_iter())
+            nearest_attackable(world, entities, &footprint, candidates.into_iter())
         }
-        EnemyMode::Attack => attackable.nearest((tile_x, tile_y)),
+        EnemyMode::Attack => attackable.nearest(&footprint),
     }
 }
 
@@ -1797,7 +1813,7 @@ fn acquire_target(
 fn nearest_attackable(
     world: &WorldSim,
     entities: &EntityStore,
-    from: (WorldTileCoord, WorldTileCoord),
+    from: &EntityFootprint,
     candidates: impl Iterator<Item = EntityId>,
 ) -> Option<EntityId> {
     nearest_attackable_with_distance(world, entities, from, candidates)
@@ -1807,10 +1823,10 @@ fn nearest_attackable(
 fn nearest_attackable_with_distance(
     world: &WorldSim,
     entities: &EntityStore,
-    from: (WorldTileCoord, WorldTileCoord),
+    from: &EntityFootprint,
     candidates: impl Iterator<Item = EntityId>,
-) -> Option<(i128, EntityId)> {
-    let mut best: Option<(i128, EntityId)> = None;
+) -> Option<(u128, EntityId)> {
+    let mut best: Option<(u128, EntityId)> = None;
     for entity_id in candidates {
         let Some(placed) = entities.placed_entities.get(&entity_id) else {
             continue;
@@ -1818,10 +1834,7 @@ fn nearest_attackable_with_distance(
         if !is_attackable_kind(world, placed) {
             continue;
         }
-        let (center_x, center_y) = footprint_center_tile(&placed.footprint);
-        let dx = center_x - from.0;
-        let dy = center_y - from.1;
-        let distance = i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy);
+        let distance = from.distance_squared_to(&placed.footprint);
         if best.is_none_or(|(best_distance, _)| distance < best_distance) {
             best = Some((distance, entity_id));
         }
@@ -1972,32 +1985,9 @@ fn footprint_center_tile(footprint: &EntityFootprint) -> (WorldTileCoord, WorldT
     )
 }
 
-fn axis_distance_to_span(value: i64, span_start: i64, span_len: i32) -> i64 {
-    if value < span_start {
-        span_start - value
-    } else if value >= span_start + i64::from(span_len) {
-        value - (span_start + i64::from(span_len) - 1)
-    } else {
-        0
-    }
-}
-
-pub(super) fn chebyshev_distance_to_footprint(
-    tile: (WorldTileCoord, WorldTileCoord),
-    footprint: &EntityFootprint,
-) -> i64 {
-    let dx = axis_distance_to_span(tile.0, footprint.x, footprint.width);
-    let dy = axis_distance_to_span(tile.1, footprint.y, footprint.height);
-    dx.max(dy)
-}
-
-pub(super) fn manhattan_distance_to_footprint(
-    tile: (WorldTileCoord, WorldTileCoord),
-    footprint: &EntityFootprint,
-) -> i64 {
-    let dx = axis_distance_to_span(tile.0, footprint.x, footprint.width);
-    let dy = axis_distance_to_span(tile.1, footprint.y, footprint.height);
-    dx + dy
+fn enemy_footprint(enemy: &Enemy) -> EntityFootprint {
+    let (x, y) = enemy.tile();
+    EntityFootprint::single_tile(x, y)
 }
 
 /// First free walkable tile in expanding rings around a footprint,
@@ -2038,25 +2028,73 @@ mod enemy_feature_tests {
     fn indexed_target(entity_id: u64, x: i64, y: i64) -> IndexedAttackTarget {
         IndexedAttackTarget {
             entity_id: EntityId::new(entity_id),
-            center: (x, y),
+            footprint: EntityFootprint::single_tile(x, y),
         }
+    }
+
+    fn indexed_cell(targets: impl IntoIterator<Item = IndexedAttackTarget>) -> IndexedAttackCell {
+        let mut targets = targets.into_iter();
+        let first = targets.next().expect("test cell must contain a target");
+        let mut cell = IndexedAttackCell::new(first);
+        for target in targets {
+            cell.push(target);
+        }
+        cell
     }
 
     #[test]
     fn spatial_index_finds_exact_nearest_target_and_breaks_ties_by_id() {
         let mut index = AttackableStructureIndex::default();
-        index.cells.insert((0, 0), vec![indexed_target(9, 31, 31)]);
-        index.cells.insert((1, 0), vec![indexed_target(8, 32, 0)]);
-        index.cells.insert((-2, 0), vec![indexed_target(3, -40, 0)]);
+        index
+            .cells
+            .insert((0, 0), indexed_cell([indexed_target(9, 31, 31)]));
+        index
+            .cells
+            .insert((1, 0), indexed_cell([indexed_target(8, 32, 0)]));
+        index
+            .cells
+            .insert((-2, 0), indexed_cell([indexed_target(3, -40, 0)]));
 
-        assert_eq!(index.nearest((0, 0)), Some(EntityId::new(8)));
+        assert_eq!(
+            index.nearest(&EntityFootprint::single_tile(0, 0)),
+            Some(EntityId::new(8))
+        );
 
         index
             .cells
             .get_mut(&(1, 0))
             .unwrap()
             .push(indexed_target(7, 32, 0));
-        assert_eq!(index.nearest((0, 0)), Some(EntityId::new(7)));
+        assert_eq!(
+            index.nearest(&EntityFootprint::single_tile(0, 0)),
+            Some(EntityId::new(7))
+        );
+    }
+
+    #[test]
+    fn spatial_index_ranks_targets_by_nearest_footprint_edge() {
+        let mut index = AttackableStructureIndex::default();
+        index
+            .cells
+            .insert((0, 0), indexed_cell([indexed_target(2, 20, 0)]));
+        index.cells.insert(
+            (1, 0),
+            indexed_cell([IndexedAttackTarget {
+                entity_id: EntityId::new(1),
+                footprint: EntityFootprint {
+                    x: 10,
+                    y: 0,
+                    width: 50,
+                    height: 1,
+                },
+            }]),
+        );
+
+        assert_eq!(
+            index.nearest(&EntityFootprint::single_tile(0, 0)),
+            Some(EntityId::new(1)),
+            "the nearer edge wins even when the other target's center is closer"
+        );
     }
 
     #[test]
@@ -2068,12 +2106,12 @@ mod enemy_feature_tests {
         cache
             .index
             .cells
-            .insert((20, 20), vec![indexed_target(42, 640, 640)]);
+            .insert((20, 20), indexed_cell([indexed_target(42, 640, 640)]));
 
         for unit in 0..ATTACKERS {
             let base_id = EnemyBaseId::new(unit % BASES + 1);
             assert_eq!(
-                cache.target_for_base(base_id, (unit as i64, 0)),
+                cache.target_for_base(base_id, EntityFootprint::single_tile(unit as i64, 0)),
                 Some(EntityId::new(42))
             );
         }

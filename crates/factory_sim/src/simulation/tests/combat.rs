@@ -1,5 +1,6 @@
 use super::super::*;
 use super::support::*;
+use crate::simulation::combat_ops::CombatIntents;
 
 fn chunk_of_entity(sim: &Simulation, entity_id: EntityId) -> ChunkCoord {
     let placed = sim
@@ -553,6 +554,24 @@ fn gun_turret_destroys_spawner_in_range() {
     assert!(destroyed, "turret creep should clear the nest");
     sim.validate()
         .expect("simulation should stay valid after nest destruction");
+}
+
+#[test]
+fn gun_turret_range_reaches_nearest_spawner_footprint_edge() {
+    let mut sim = Simulation::new_test_world(123);
+    let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+    let spawner = entity_id_by_name(&sim.world.prototypes, "biter_spawner");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 17, 2);
+    let turret_id = place_at(&mut sim, turret, x, y, Direction::North);
+    let spawner_id = place_at(&mut sim, spawner, x + 13, y, Direction::North);
+    load_turret_ammo(&mut sim, turret_id, 1);
+
+    let health_before = sim.entity_health(spawner_id).unwrap().0;
+    let mut intents = CombatIntents::default();
+    sim.advance_gun_turrets(&mut intents);
+    sim.resolve_combat(intents);
+
+    assert_eq!(sim.entity_health(spawner_id).unwrap().0, health_before - 5);
 }
 
 #[test]

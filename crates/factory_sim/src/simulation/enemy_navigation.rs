@@ -1,6 +1,4 @@
-use super::enemy_ops::{
-    chebyshev_distance_to_footprint, manhattan_distance_to_footprint, tile_open_for_enemy,
-};
+use super::enemy_ops::tile_open_for_enemy;
 use super::*;
 use crate::enemies::Raid;
 use std::cmp::Reverse;
@@ -88,7 +86,7 @@ impl RaidFlowField {
 
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                if chebyshev_distance_to_footprint((x, y), &footprint) != 1
+                if EntityFootprint::single_tile(x, y).chebyshev_distance_to(&footprint) != 1
                     || !tile_open_for_enemy(world, entities, x, y, None)
                 {
                     continue;
@@ -389,7 +387,9 @@ impl PathSearchScratch {
             }
             Some(y as usize * diameter + x as usize)
         };
-        let heuristic = |tile| manhattan_distance_to_footprint(tile, target_footprint);
+        let heuristic = |tile: (WorldTileCoord, WorldTileCoord)| {
+            EntityFootprint::single_tile(tile.0, tile.1).manhattan_distance_to(target_footprint)
+        };
 
         let start_index = index(start).expect("start is centered in path scratch bounds");
         self.best_g[start_index] = 0;
@@ -401,7 +401,9 @@ impl PathSearchScratch {
             if g > i64::from(self.best_g[tile_index]) {
                 continue;
             }
-            if chebyshev_distance_to_footprint(tile, target_footprint) <= 1 {
+            if EntityFootprint::single_tile(tile.0, tile.1).chebyshev_distance_to(target_footprint)
+                <= 1
+            {
                 let mut path = VecDeque::new();
                 let mut current = tile;
                 while current != start {
@@ -538,7 +540,9 @@ mod tests {
         assert_eq!(field.route_from(start), field.route_from(start));
         let mut current = start;
         let mut steps = 0;
-        while chebyshev_distance_to_footprint(current, &footprint) > 1 {
+        while EntityFootprint::single_tile(current.0, current.1).chebyshev_distance_to(&footprint)
+            > 1
+        {
             let RaidRoute::Step(next) = field.route_from(current) else {
                 panic!("the shared field should route around the barrier");
             };
