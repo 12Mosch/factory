@@ -5,6 +5,20 @@ use std::collections::BTreeMap;
 /// Ticks per minute at the fixed 60 Hz simulation rate.
 pub(crate) const POLLUTION_TICKS_PER_MINUTE: u64 = 3600;
 
+/// Highest pollution amount accepted for one chunk by simulation validation.
+///
+/// One billion whole pollution units in a single 32x32 chunk is far beyond
+/// normal gameplay, while leaving ample arithmetic headroom before `u64`
+/// storage is exhausted.
+pub const MAX_POLLUTION_PER_CHUNK_MICRO: u64 = 1_000_000_000_000_000;
+
+/// Highest pollution total accepted by simulation validation.
+///
+/// This represents one trillion whole pollution units across the generated
+/// world. Runtime arithmetic still saturates beyond this limit so a bad state
+/// remains deterministic and inspectable instead of panicking.
+pub const MAX_TOTAL_POLLUTION_MICRO: u64 = 1_000_000_000_000_000_000;
+
 /// A pollution rate converted to the fixed-tick representation used while
 /// emitting. Keeping this alongside the emitter avoids repeating prototype
 /// lookups and unit conversion in the hot path.
@@ -41,19 +55,32 @@ impl PollutionState {
     }
 
     pub fn total_micro(&self) -> u64 {
-        self.chunks.values().sum()
+        self.chunks.values().copied().fold(0, u64::saturating_add)
+    }
+
+    /// Returns the exact pollution total, or `None` when the field exceeds
+    /// the storage capacity of `u64`.
+    pub fn checked_total_micro(&self) -> Option<u64> {
+        self.chunks
+            .values()
+            .try_fold(0_u64, |total, amount| total.checked_add(*amount))
     }
 
     pub fn polluted_chunks(&self) -> impl Iterator<Item = (ChunkCoord, u64)> + '_ {
         self.chunks.iter().map(|(coord, amount)| (*coord, *amount))
     }
 
-    pub(crate) fn add_micro(&mut self, coord: ChunkCoord, amount: u64) {
+    /// Adds pollution and reports whether the chunk amount exceeded `u64`
+    /// capacity. The stored amount saturates so the simulation remains
+    /// deterministic under corrupt or adversarial input.
+    pub(crate) fn add_micro(&mut self, coord: ChunkCoord, amount: u64) -> bool {
         if amount == 0 {
-            return;
+            return false;
         }
         let entry = self.chunks.entry(coord).or_insert(0);
-        *entry = entry.saturating_add(amount);
+        let (sum, overflowed) = saturating_add_with_overflow(*entry, amount);
+        *entry = sum;
+        overflowed
     }
 
     /// Removes up to `amount` from the chunk, returning what was actually
@@ -108,6 +135,13 @@ impl PollutionState {
     }
 }
 
+pub(crate) fn saturating_add_with_overflow(left: u64, right: u64) -> (u64, bool) {
+    match left.checked_add(right) {
+        Some(sum) => (sum, false),
+        None => (u64::MAX, true),
+    }
+}
+
 /// Converts a milli-unit-per-minute rate to whole micro-units while retaining
 /// the numerator remainder for the next update of the same source.
 fn accrue_rate<K: Copy + Ord>(
@@ -125,4 +159,29 @@ fn accrue_rate<K: Copy + Ord>(
         remainders.remove(&source);
     }
     amount
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pollution_total_saturates_consistently_when_exact_total_overflows() {
+        let mut pollution = PollutionState::default();
+        pollution.chunks.insert(ChunkCoord { x: 0, y: 0 }, u64::MAX);
+        pollution.chunks.insert(ChunkCoord { x: 1, y: 0 }, 1);
+
+        assert_eq!(pollution.total_micro(), u64::MAX);
+        assert_eq!(pollution.checked_total_micro(), None);
+    }
+
+    #[test]
+    fn adding_pollution_reports_chunk_overflow_and_saturates() {
+        let coord = ChunkCoord { x: 0, y: 0 };
+        let mut pollution = PollutionState::default();
+        pollution.chunks.insert(coord, u64::MAX - 1);
+
+        assert!(pollution.add_micro(coord, 2));
+        assert_eq!(pollution.amount_micro(coord), u64::MAX);
+    }
 }

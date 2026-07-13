@@ -493,6 +493,31 @@ fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
 }
 
 #[test]
+fn excessive_attack_budget_is_reported_by_diagnostics_and_validation() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let base_id = sim.enemies.spawner_bases[&spawner_id];
+    let cap = sim
+        .attack_budget_cap(base_id)
+        .expect("placed spawner should define an attack-budget cap");
+    sim.enemies
+        .bases
+        .get_mut(&base_id)
+        .unwrap()
+        .attack_budget_micro = cap + 1;
+
+    assert_eq!(
+        sim.capacity_diagnostics()
+            .attack_budgets_over_practical_limit,
+        1
+    );
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::AttackBudgetCapacityExceeded { base_id })
+    );
+}
+
+#[test]
 fn biter_destroys_nearby_building() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);

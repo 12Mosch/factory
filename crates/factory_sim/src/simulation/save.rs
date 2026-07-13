@@ -288,6 +288,7 @@ impl SimulationSnapshotOwned {
                 power: self.power_statistics,
             },
             pollution: self.pollution,
+            capacity_overflows: CapacityOverflowCounters::default(),
             pollution_emitters: PollutionEmitterIndex::default(),
             pollution_diffusion: PollutionDiffusionBuffer::default(),
             enemies: self.enemies,

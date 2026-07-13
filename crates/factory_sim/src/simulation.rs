@@ -50,8 +50,10 @@ pub use crate::machines::{
     MachineStatus, PumpjackState,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
-pub(crate) use crate::pollution::PollutionEmissionRate;
-pub use crate::pollution::PollutionState;
+pub use crate::pollution::{
+    MAX_POLLUTION_PER_CHUNK_MICRO, MAX_TOTAL_POLLUTION_MICRO, PollutionState,
+};
+pub(crate) use crate::pollution::{PollutionEmissionRate, saturating_add_with_overflow};
 pub use crate::power::{
     BoilerError, BoilerState, ElectricConsumerState, ElectricPoleState, EntityPowerStatus,
     OffshorePumpState, PowerMapConnection, PowerMapConsumer, PowerMapPole, PowerMapSnapshot,
@@ -139,6 +141,8 @@ pub struct Simulation {
     statistics: StatisticsSubsystem,
     pollution: PollutionState,
     #[serde(skip, default)]
+    capacity_overflows: CapacityOverflowCounters,
+    #[serde(skip, default)]
     pollution_emitters: PollutionEmitterIndex,
     #[serde(skip)]
     pollution_diffusion: PollutionDiffusionBuffer,
@@ -180,6 +184,24 @@ struct PollutionChunkDelta {
 struct PollutionDiffusionBuffer {
     deltas: HashMap<ChunkCoord, PollutionChunkDelta, BuildHasherDefault<StableHasher>>,
     ordered_deltas: Vec<(ChunkCoord, PollutionChunkDelta)>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CapacityOverflowCounters {
+    pollution_additions: u64,
+    attack_budget_additions: u64,
+}
+
+// Overflow counters are runtime diagnostics rather than durable simulation
+// state. They reset after loading and do not affect equality or state hashes.
+impl PartialEq for CapacityOverflowCounters {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Hash for CapacityOverflowCounters {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
 // Diffusion scratch is transient and is empty between passes, so retained
@@ -384,6 +406,32 @@ pub struct PowerStatisticsSnapshot {
     pub samples: Vec<PowerStatisticsSample>,
 }
 
+/// Arithmetic-capacity health for pollution and enemy attack budgets.
+///
+/// Overflow counts cover saturating additions observed since the simulation
+/// was created or loaded. The remaining fields inspect the current durable
+/// state, including totals that cannot be represented exactly as `u64`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CapacityDiagnostics {
+    pub pollution_addition_overflows: u64,
+    pub attack_budget_addition_overflows: u64,
+    pub pollution_total_overflowed: bool,
+    pub pollution_chunks_over_practical_limit: usize,
+    pub pollution_total_over_practical_limit: bool,
+    pub attack_budgets_over_practical_limit: usize,
+}
+
+impl CapacityDiagnostics {
+    pub const fn has_capacity_failures(self) -> bool {
+        self.pollution_addition_overflows != 0
+            || self.attack_budget_addition_overflows != 0
+            || self.pollution_total_overflowed
+            || self.pollution_chunks_over_practical_limit != 0
+            || self.pollution_total_over_practical_limit
+            || self.attack_budgets_over_practical_limit != 0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MachineStatusCount {
     pub status: MachineStatus,
@@ -560,6 +608,9 @@ pub enum SimValidationError {
     InvalidPollutionState {
         source: PollutionRemainderSource,
     },
+    PollutionCapacityExceeded {
+        chunk: Option<ChunkCoord>,
+    },
     InvalidGhostPrototype {
         ghost_id: GhostId,
         prototype_id: EntityPrototypeId,
@@ -594,6 +645,9 @@ pub enum SimValidationError {
     },
     InvalidPlayerState,
     InvalidEnemyState,
+    AttackBudgetCapacityExceeded {
+        base_id: EnemyBaseId,
+    },
 }
 
 mod belt_ops;
