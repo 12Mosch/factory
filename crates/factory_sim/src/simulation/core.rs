@@ -51,6 +51,7 @@ impl Simulation {
             enemies: EnemySubsystem::default(),
             config,
             attack_targets: enemy_ops::AttackTargetCache::default(),
+            enemy_navigation: enemy_navigation::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
         sim.reveal_chunks_around_player();
