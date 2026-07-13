@@ -50,14 +50,14 @@ pub(in crate::simulation) fn first_matching_unlocked_smelting_recipe<'a>(
 pub(in crate::simulation) fn furnace_work_selection(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
-    input_slot: Option<ItemStack>,
+    input_slot: ItemSlot,
 ) -> Option<(
     RecipeId,
     u32,
     factory_data::ItemAmount,
     factory_data::ItemAmount,
 )> {
-    let input_stack = input_slot?;
+    let input_stack = input_slot.stack()?;
     let recipe = first_matching_unlocked_smelting_recipe(catalog, research, input_stack.item_id())?;
     let ingredient = recipe.ingredients[0].clone();
     if input_stack.count() < ingredient.amount {
@@ -66,16 +66,6 @@ pub(in crate::simulation) fn furnace_work_selection(
     let product = recipe.products[0].clone();
 
     Some((recipe.id, recipe.crafting_time_ticks, ingredient, product))
-}
-
-pub(in crate::simulation) fn input_slot_can_accept(
-    catalog: &PrototypeCatalog,
-    research: &ResearchState,
-    input_slot: Option<ItemStack>,
-    stack: ItemStack,
-) -> bool {
-    furnace_input_accepts_item(catalog, research, stack.item_id())
-        && output_slot_can_accept(catalog, input_slot, stack.item_id(), stack.count())
 }
 
 pub(in crate::simulation) fn furnace_input_accepts_item(
@@ -103,8 +93,16 @@ pub(in crate::simulation) fn assembler_is_empty_for_recipe_change(
     state: &AssemblingMachineState,
 ) -> bool {
     state.crafting_progress_ticks == 0
-        && state.input_inventory.slots().iter().all(Option::is_none)
-        && state.output_inventory.slots().iter().all(Option::is_none)
+        && state
+            .input_inventory
+            .slots()
+            .iter()
+            .all(|slot| slot.is_empty())
+        && state
+            .output_inventory
+            .slots()
+            .iter()
+            .all(|slot| slot.is_empty())
 }
 
 pub(in crate::simulation) fn selected_assembler_recipe<'a>(
@@ -189,7 +187,7 @@ pub(in crate::simulation) fn assembler_output_can_accept(
     let empty_slots = output_inventory
         .slots()
         .iter()
-        .filter(|slot| slot.is_none())
+        .filter(|slot| slot.is_empty())
         .count();
     let mut needed_empty_slots = 0usize;
 
@@ -212,7 +210,7 @@ pub(in crate::simulation) fn assembler_output_can_accept(
         let existing_capacity = output_inventory
             .slots()
             .iter()
-            .filter_map(|slot| slot.as_ref())
+            .filter_map(|slot| slot.stack())
             .filter(|stack| stack.item_id() == product.item)
             .map(|stack| stack_size.saturating_sub(u32::from(stack.count())))
             .sum::<u32>();

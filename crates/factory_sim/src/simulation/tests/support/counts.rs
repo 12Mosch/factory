@@ -93,11 +93,8 @@ pub(in crate::simulation::tests) fn total_belt_count_for_item(
     belt_count + splitter_count
 }
 
-pub(in crate::simulation::tests) fn count_slot_item(
-    slot: Option<ItemStack>,
-    item_id: ItemId,
-) -> u32 {
-    match slot {
+pub(in crate::simulation::tests) fn count_slot_item(slot: ItemSlot, item_id: ItemId) -> u32 {
+    match slot.stack() {
         Some(stack) if stack.item_id() == item_id => u32::from(stack.count()),
         _ => 0,
     }

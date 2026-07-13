@@ -71,3 +71,80 @@ pub fn assembler_state(
 ) -> Result<&AssemblingMachineState, AssemblerError> {
     sim.entities.assembler_state(entity_id)
 }
+
+/// Resolves a displayed inventory panel slot without exposing the entity
+/// state's storage layout to presentation code.
+pub fn inventory_panel_slot(
+    sim: &Simulation,
+    entity_id: Option<EntityId>,
+    panel: InventoryPanel,
+    slot_index: usize,
+) -> Option<ItemStack> {
+    match panel {
+        InventoryPanel::Player => sim.player_inventory.slot(slot_index),
+        InventoryPanel::Container => entity_id
+            .and_then(|id| EntityStore::entity_inventory(&sim.entities, id).ok())
+            .and_then(|inventory| inventory.slot(slot_index)),
+        InventoryPanel::BurnerFuel => entity_id
+            .and_then(|id| sim.entities.burner_drill_state(id).ok())
+            .filter(|_| slot_index == BURNER_MINING_DRILL_FUEL_SLOT_INDEX)
+            .and_then(|state| state.energy.fuel_slot.stack()),
+        InventoryPanel::BurnerOutput => entity_id
+            .and_then(|id| sim.entities.burner_drill_state(id).ok())
+            .filter(|_| slot_index == BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX)
+            .and_then(|state| state.output_slot.stack()),
+        InventoryPanel::FurnaceInput => entity_id
+            .and_then(|id| sim.entities.furnace_state(id).ok())
+            .filter(|_| slot_index == FURNACE_INPUT_SLOT_INDEX)
+            .and_then(|state| state.input_slot.stack()),
+        InventoryPanel::FurnaceFuel => entity_id
+            .and_then(|id| sim.entities.furnace_state(id).ok())
+            .filter(|_| slot_index == FURNACE_FUEL_SLOT_INDEX)
+            .and_then(|state| state.energy.fuel_slot.stack()),
+        InventoryPanel::FurnaceOutput => entity_id
+            .and_then(|id| sim.entities.furnace_state(id).ok())
+            .filter(|_| slot_index == FURNACE_OUTPUT_SLOT_INDEX)
+            .and_then(|state| state.output_slot.stack()),
+        InventoryPanel::BoilerFuel => entity_id
+            .and_then(|id| sim.entities.boiler_state(id).ok())
+            .filter(|_| slot_index == BOILER_FUEL_SLOT_INDEX)
+            .and_then(|state| state.energy.fuel_slot.stack()),
+        InventoryPanel::AssemblerInput => entity_id
+            .and_then(|id| sim.entities.assembler_state(id).ok())
+            .and_then(|state| state.input_inventory.slot(slot_index)),
+        InventoryPanel::AssemblerOutput => entity_id
+            .and_then(|id| sim.entities.assembler_state(id).ok())
+            .and_then(|state| state.output_inventory.slot(slot_index)),
+    }
+}
+
+/// Number of slots represented by a displayed inventory panel.
+pub fn inventory_panel_slot_count(
+    sim: &Simulation,
+    entity_id: Option<EntityId>,
+    panel: InventoryPanel,
+) -> usize {
+    match panel {
+        InventoryPanel::Player => sim.player_inventory.slots().len(),
+        InventoryPanel::Container => entity_id
+            .and_then(|id| EntityStore::entity_inventory(&sim.entities, id).ok())
+            .map_or(0, |inventory| inventory.slots().len()),
+        InventoryPanel::BurnerFuel | InventoryPanel::BurnerOutput => entity_id
+            .and_then(|id| sim.entities.burner_drill_state(id).ok())
+            .map_or(0, |_| 1),
+        InventoryPanel::FurnaceInput
+        | InventoryPanel::FurnaceFuel
+        | InventoryPanel::FurnaceOutput => entity_id
+            .and_then(|id| sim.entities.furnace_state(id).ok())
+            .map_or(0, |_| 1),
+        InventoryPanel::BoilerFuel => entity_id
+            .and_then(|id| sim.entities.boiler_state(id).ok())
+            .map_or(0, |_| 1),
+        InventoryPanel::AssemblerInput => entity_id
+            .and_then(|id| sim.entities.assembler_state(id).ok())
+            .map_or(0, |state| state.input_inventory.slots().len()),
+        InventoryPanel::AssemblerOutput => entity_id
+            .and_then(|id| sim.entities.assembler_state(id).ok())
+            .map_or(0, |state| state.output_inventory.slots().len()),
+    }
+}

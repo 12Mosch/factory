@@ -60,13 +60,13 @@ fn boiler_clears_insufficient_residual_energy_without_fuel() {
         .entities
         .boiler_state_mut(boiler_id)
         .expect("boiler should exist");
-    state.energy.fuel_slot = None;
+    state.energy.fuel_slot = ItemSlot::default();
     state.energy.energy_remaining_joules = 1.0;
 
     sim.tick();
 
     let state = crate::entity_access::boiler_state(&sim, boiler_id).unwrap();
-    assert_eq!(state.energy.fuel_slot, None);
+    assert_eq!(state.energy.fuel_slot.stack(), None);
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
 }
 
@@ -80,7 +80,7 @@ fn boiler_validation_rejects_non_fuel_in_fuel_slot() {
         .boiler_state_mut(boiler_id)
         .expect("boiler should exist")
         .energy
-        .fuel_slot = Some(test_stack(iron_ore, 1));
+        .fuel_slot = test_slot(test_stack(iron_ore, 1));
 
     assert_eq!(
         sim.validate(),
@@ -100,7 +100,7 @@ fn boiler_with_no_water_or_no_fuel_produces_no_steam_power() {
         .boiler_state_mut(boiler_id)
         .expect("boiler should exist")
         .energy
-        .fuel_slot = None;
+        .fuel_slot = ItemSlot::default();
     let assembler = entity_id_by_name(&no_fuel.world.prototypes, "assembling_machine");
     let assembler_id = crate::placement::place(
         &mut no_fuel,
@@ -238,7 +238,10 @@ fn boiler_consumes_water_and_fuel_and_outputs_steam() {
     sim.tick();
 
     let boiler = crate::entity_access::boiler_state(&sim, boiler_id).expect("boiler should exist");
-    assert_eq!(boiler.energy.fuel_slot.map(|stack| stack.count()), Some(49));
+    assert_eq!(
+        boiler.energy.fuel_slot.stack().map(|stack| stack.count()),
+        Some(49)
+    );
     assert!(boiler.energy.energy_remaining_joules > 0.0);
     assert_eq!(
         sim.entities.fluid_boxes[&boiler_id][1].fluid_id,
@@ -281,7 +284,7 @@ fn boiler_does_not_consume_fuel_without_water_or_when_steam_output_is_full() {
         .boiler_state_mut(boiler_id)
         .unwrap()
         .energy
-        .fuel_slot = Some(test_stack(coal, 1));
+        .fuel_slot = test_slot(test_stack(coal, 1));
     let before = crate::entity_access::boiler_state(&no_water, boiler_id)
         .unwrap()
         .clone();
@@ -331,7 +334,7 @@ fn steam_engine_consumes_steam_and_produces_electricity_for_demand() {
     .expect("assembler should be placeable");
     add_assembler_gear_job(&mut sim, assembler_id);
     for state in sim.entities.boilers.values_mut() {
-        state.energy.fuel_slot = None;
+        state.energy.fuel_slot = ItemSlot::default();
         state.energy.energy_remaining_joules = 0.0;
     }
     let steam = fluid_id(&sim.world.prototypes, "steam");
@@ -376,7 +379,7 @@ fn steam_engine_cannot_produce_without_steam() {
     .expect("assembler should be placeable");
     add_assembler_gear_job(&mut sim, assembler_id);
     for state in sim.entities.boilers.values_mut() {
-        state.energy.fuel_slot = None;
+        state.energy.fuel_slot = ItemSlot::default();
         state.energy.energy_remaining_joules = 0.0;
     }
 

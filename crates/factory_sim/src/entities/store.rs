@@ -121,7 +121,7 @@ mod tests {
     use super::*;
     use crate::combat::{Damage, EnemySpawnerState, Faction, GunTurretState, HealthState};
     use crate::fluids::FluidBoxState;
-    use crate::inventory::{test_inventory, test_stack};
+    use crate::inventory::{test_inventory, test_slot, test_stack};
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
     use crate::machines::{
         AssemblingMachineState, BurnerEnergy, BurnerMiningDrillState, FurnaceState, LabState,
@@ -220,15 +220,15 @@ mod tests {
                 mining_progress_ticks: 7,
                 mining_required_ticks: 60,
                 resource_target: Some(ManualMiningTarget { x: 2, y: 3 }),
-                output_slot: Some(test_stack(copper, 2)),
+                output_slot: test_slot(test_stack(copper, 2)),
             },
         );
         store.furnaces.insert(
             EntityId::new(3),
             FurnaceState {
-                input_slot: Some(test_stack(iron, 3)),
+                input_slot: test_slot(test_stack(iron, 3)),
                 energy: burner_energy(iron),
-                output_slot: Some(test_stack(copper, 1)),
+                output_slot: test_slot(test_stack(copper, 1)),
                 active_recipe: Some(recipe),
                 crafting_progress_ticks: 9,
                 crafting_required_ticks: 120,
@@ -323,7 +323,7 @@ mod tests {
 
     fn burner_energy(fuel_item: ItemId) -> BurnerEnergy {
         BurnerEnergy {
-            fuel_slot: Some(test_stack(fuel_item, 1)),
+            fuel_slot: test_slot(test_stack(fuel_item, 1)),
             energy_remaining_joules: 42.0,
             energy_usage_watts: 90_000.0,
         }

@@ -13,34 +13,24 @@ struct TransferPlan {
 }
 
 #[derive(Clone, Copy)]
-enum TransferSource<'a> {
-    Inventory {
-        inventory: &'a Inventory,
-        slot_index: usize,
-    },
-    SingleSlot {
-        slot: Option<ItemStack>,
-        slot_index: usize,
-    },
+struct TransferSource<'a> {
+    slot: Option<&'a ItemSlot>,
+    slot_index: usize,
 }
 
 #[derive(Clone, Copy)]
 enum TransferDestination<'a> {
     Inventory(&'a Inventory),
-    SingleSlot(Option<ItemStack>),
+    SingleSlot(&'a ItemSlot),
 }
 
 enum TransferSourceMut<'a> {
-    Inventory {
-        inventory: &'a mut Inventory,
-        slot_index: usize,
-    },
-    SingleSlot(&'a mut Option<ItemStack>),
+    Slot(&'a mut ItemSlot),
 }
 
 enum TransferDestinationMut<'a> {
     Inventory(&'a mut Inventory),
-    SingleSlot(&'a mut Option<ItemStack>),
+    SingleSlot(&'a mut ItemSlot),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,19 +44,14 @@ enum TransferPlanError {
 
 impl TransferSource<'_> {
     fn stack(self) -> Result<ItemStack, TransferPlanError> {
-        match self {
-            Self::Inventory {
-                inventory,
-                slot_index,
-            } => inventory
-                .slots()
-                .get(slot_index)
-                .ok_or(TransferPlanError::InvalidSlot { slot_index })?
-                .ok_or(TransferPlanError::EmptySlot { slot_index }),
-            Self::SingleSlot { slot, slot_index } => {
-                slot.ok_or(TransferPlanError::EmptySlot { slot_index })
-            }
-        }
+        self.slot
+            .ok_or(TransferPlanError::InvalidSlot {
+                slot_index: self.slot_index,
+            })?
+            .stack()
+            .ok_or(TransferPlanError::EmptySlot {
+                slot_index: self.slot_index,
+            })
     }
 }
 
@@ -74,11 +59,7 @@ impl TransferDestination<'_> {
     fn capacity(self, item_id: ItemId, stack_size: u16) -> u32 {
         match self {
             Self::Inventory(inventory) => inventory.insert_capacity(item_id, stack_size),
-            Self::SingleSlot(None) => u32::from(stack_size),
-            Self::SingleSlot(Some(existing)) if existing.item_id() == item_id => {
-                u32::from(stack_size.saturating_sub(existing.count()))
-            }
-            Self::SingleSlot(Some(_)) => 0,
+            Self::SingleSlot(slot) => u32::from(slot.capacity_for(item_id, stack_size)),
         }
     }
 }
@@ -122,30 +103,13 @@ fn commit_transfer(
             inventory.commit_prevalidated_insert(plan.item_id, plan.moved_quantity, plan.stack_size)
         }
         TransferDestinationMut::SingleSlot(slot) => {
-            crate::inventory::commit_prevalidated_single_slot_insert(
-                slot,
-                plan.item_id,
-                plan.moved_quantity,
-                plan.stack_size,
-            );
+            slot.commit_prevalidated_insert(plan.item_id, plan.moved_quantity, plan.stack_size);
         }
     }
 
     match source {
-        TransferSourceMut::Inventory {
-            inventory,
-            slot_index,
-        } => inventory.commit_prevalidated_slot_removal(
-            slot_index,
-            plan.item_id,
-            plan.moved_quantity,
-        ),
-        TransferSourceMut::SingleSlot(slot) => {
-            crate::inventory::commit_prevalidated_single_slot_removal(
-                slot,
-                plan.item_id,
-                plan.moved_quantity,
-            );
+        TransferSourceMut::Slot(slot) => {
+            slot.commit_prevalidated_removal(plan.item_id, plan.moved_quantity);
         }
     }
 
@@ -239,18 +203,23 @@ pub fn player_slot_to_entity(
     player_slot_index: usize,
 ) -> Result<TransferOutcome, ContainerError> {
     let entity_inventory = EntityStore::entity_inventory(&sim.entities, entity_id)?;
+    let policy = inventory_policy_for_entity(&sim.entities, entity_id);
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: &sim.player_inventory,
+        TransferSource {
+            slot: sim.player_inventory.item_slot(player_slot_index),
             slot_index: player_slot_index,
         },
         TransferDestination::Inventory(entity_inventory),
         |item_id| {
-            (!sim.entities.labs.contains_key(&entity_id)
-                || lab_can_accept_item(&sim.world.prototypes, item_id))
-                && (!sim.entities.gun_turrets.contains_key(&entity_id)
-                    || item_is_ammo(&sim.world.prototypes, item_id))
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                policy,
+                ItemSlotOperation::PlayerInsert,
+                item_id,
+            )
         },
     )
     .map_err(|error| map_plan_error(error, ContainerError::InvalidItem))?;
@@ -258,10 +227,11 @@ pub fn player_slot_to_entity(
     let entity_inventory = EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: &mut sim.player_inventory,
-            slot_index: player_slot_index,
-        },
+        TransferSourceMut::Slot(
+            sim.player_inventory
+                .item_slot_mut(player_slot_index)
+                .expect("a planned player source slot remains in bounds"),
+        ),
         TransferDestinationMut::Inventory(entity_inventory),
     ))
 }
@@ -272,24 +242,35 @@ pub fn entity_slot_to_player(
     entity_slot_index: usize,
 ) -> Result<TransferOutcome, ContainerError> {
     let entity_inventory = EntityStore::entity_inventory(&sim.entities, entity_id)?;
+    let policy = inventory_policy_for_entity(&sim.entities, entity_id);
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: entity_inventory,
+        TransferSource {
+            slot: entity_inventory.item_slot(entity_slot_index),
             slot_index: entity_slot_index,
         },
         TransferDestination::Inventory(&sim.player_inventory),
-        |_| true,
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                policy,
+                ItemSlotOperation::PlayerExtract,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, ContainerError::InvalidItem))?;
 
     let entity_inventory = EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: entity_inventory,
-            slot_index: entity_slot_index,
-        },
+        TransferSourceMut::Slot(
+            entity_inventory
+                .item_slot_mut(entity_slot_index)
+                .expect("a planned entity source slot remains in bounds"),
+        ),
         TransferDestinationMut::Inventory(&mut sim.player_inventory),
     ))
 }
@@ -302,12 +283,21 @@ pub fn player_slot_to_burner_drill_fuel(
     let fuel_slot = sim.entities.burner_drill_state(entity_id)?.energy.fuel_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: &sim.player_inventory,
+        TransferSource {
+            slot: sim.player_inventory.item_slot(player_slot_index),
             slot_index: player_slot_index,
         },
-        TransferDestination::SingleSlot(fuel_slot),
-        |item_id| burner_fuel_accepts_item(&sim.world.prototypes, item_id),
+        TransferDestination::SingleSlot(&fuel_slot),
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::Fuel,
+                ItemSlotOperation::PlayerInsert,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, BurnerDrillError::InvalidFuel))?;
 
@@ -318,10 +308,11 @@ pub fn player_slot_to_burner_drill_fuel(
         .fuel_slot;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: &mut sim.player_inventory,
-            slot_index: player_slot_index,
-        },
+        TransferSourceMut::Slot(
+            sim.player_inventory
+                .item_slot_mut(player_slot_index)
+                .expect("a planned player source slot remains in bounds"),
+        ),
         TransferDestinationMut::SingleSlot(fuel_slot),
     ))
 }
@@ -333,12 +324,21 @@ pub fn burner_drill_fuel_to_player(
     let fuel_slot = sim.entities.burner_drill_state(entity_id)?.energy.fuel_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::SingleSlot {
-            slot: fuel_slot,
+        TransferSource {
+            slot: Some(&fuel_slot),
             slot_index: BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
         },
         TransferDestination::Inventory(&sim.player_inventory),
-        |_| true,
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::Fuel,
+                ItemSlotOperation::PlayerExtract,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, BurnerDrillError::InvalidFuel))?;
 
@@ -349,7 +349,7 @@ pub fn burner_drill_fuel_to_player(
         .fuel_slot;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::SingleSlot(fuel_slot),
+        TransferSourceMut::Slot(fuel_slot),
         TransferDestinationMut::Inventory(&mut sim.player_inventory),
     ))
 }
@@ -361,19 +361,28 @@ pub fn burner_drill_output_to_player(
     let output_slot = sim.entities.burner_drill_state(entity_id)?.output_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::SingleSlot {
-            slot: output_slot,
+        TransferSource {
+            slot: Some(&output_slot),
             slot_index: BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX,
         },
         TransferDestination::Inventory(&sim.player_inventory),
-        |_| true,
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::OutputOnly,
+                ItemSlotOperation::PlayerExtract,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, BurnerDrillError::InvalidFuel))?;
 
     let output_slot = &mut sim.entities.burner_drill_state_mut(entity_id)?.output_slot;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::SingleSlot(output_slot),
+        TransferSourceMut::Slot(output_slot),
         TransferDestinationMut::Inventory(&mut sim.player_inventory),
     ))
 }
@@ -386,22 +395,32 @@ pub fn player_slot_to_furnace_input(
     let input_slot = sim.entities.furnace_state(entity_id)?.input_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: &sim.player_inventory,
+        TransferSource {
+            slot: sim.player_inventory.item_slot(player_slot_index),
             slot_index: player_slot_index,
         },
-        TransferDestination::SingleSlot(input_slot),
-        |item_id| furnace_input_accepts_item(&sim.world.prototypes, &sim.research, item_id),
+        TransferDestination::SingleSlot(&input_slot),
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::FurnaceIngredient,
+                ItemSlotOperation::PlayerInsert,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, FurnaceError::InvalidInput))?;
 
     let input_slot = &mut sim.entities.furnace_state_mut(entity_id)?.input_slot;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: &mut sim.player_inventory,
-            slot_index: player_slot_index,
-        },
+        TransferSourceMut::Slot(
+            sim.player_inventory
+                .item_slot_mut(player_slot_index)
+                .expect("a planned player source slot remains in bounds"),
+        ),
         TransferDestinationMut::SingleSlot(input_slot),
     ))
 }
@@ -414,22 +433,32 @@ pub fn player_slot_to_furnace_fuel(
     let fuel_slot = sim.entities.furnace_state(entity_id)?.energy.fuel_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: &sim.player_inventory,
+        TransferSource {
+            slot: sim.player_inventory.item_slot(player_slot_index),
             slot_index: player_slot_index,
         },
-        TransferDestination::SingleSlot(fuel_slot),
-        |item_id| burner_fuel_accepts_item(&sim.world.prototypes, item_id),
+        TransferDestination::SingleSlot(&fuel_slot),
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::Fuel,
+                ItemSlotOperation::PlayerInsert,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, FurnaceError::InvalidFuel))?;
 
     let fuel_slot = &mut sim.entities.furnace_state_mut(entity_id)?.energy.fuel_slot;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: &mut sim.player_inventory,
-            slot_index: player_slot_index,
-        },
+        TransferSourceMut::Slot(
+            sim.player_inventory
+                .item_slot_mut(player_slot_index)
+                .expect("a planned player source slot remains in bounds"),
+        ),
         TransferDestinationMut::SingleSlot(fuel_slot),
     ))
 }
@@ -444,6 +473,7 @@ pub fn furnace_input_to_player(
         entity_id,
         input_slot,
         FURNACE_INPUT_SLOT_INDEX,
+        ItemSlotPolicy::FurnaceIngredient,
         |state| &mut state.input_slot,
     )
 }
@@ -458,6 +488,7 @@ pub fn furnace_fuel_to_player(
         entity_id,
         fuel_slot,
         FURNACE_FUEL_SLOT_INDEX,
+        ItemSlotPolicy::Fuel,
         |state| &mut state.energy.fuel_slot,
     )
 }
@@ -472,6 +503,7 @@ pub fn furnace_output_to_player(
         entity_id,
         output_slot,
         FURNACE_OUTPUT_SLOT_INDEX,
+        ItemSlotPolicy::OutputOnly,
         |state| &mut state.output_slot,
     )
 }
@@ -479,22 +511,35 @@ pub fn furnace_output_to_player(
 fn transfer_furnace_slot_to_player(
     sim: &mut Simulation,
     entity_id: EntityId,
-    slot: Option<ItemStack>,
+    slot: ItemSlot,
     slot_index: usize,
-    slot_mut: impl FnOnce(&mut FurnaceState) -> &mut Option<ItemStack>,
+    policy: ItemSlotPolicy,
+    slot_mut: impl FnOnce(&mut FurnaceState) -> &mut ItemSlot,
 ) -> Result<TransferOutcome, FurnaceError> {
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::SingleSlot { slot, slot_index },
+        TransferSource {
+            slot: Some(&slot),
+            slot_index,
+        },
         TransferDestination::Inventory(&sim.player_inventory),
-        |_| true,
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                policy,
+                ItemSlotOperation::PlayerExtract,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, FurnaceError::InvalidInput))?;
 
     let source = slot_mut(sim.entities.furnace_state_mut(entity_id)?);
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::SingleSlot(source),
+        TransferSourceMut::Slot(source),
         TransferDestinationMut::Inventory(&mut sim.player_inventory),
     ))
 }
@@ -507,22 +552,32 @@ pub fn player_slot_to_boiler_fuel(
     let fuel_slot = sim.entities.boiler_state(entity_id)?.energy.fuel_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: &sim.player_inventory,
+        TransferSource {
+            slot: sim.player_inventory.item_slot(player_slot_index),
             slot_index: player_slot_index,
         },
-        TransferDestination::SingleSlot(fuel_slot),
-        |item_id| burner_fuel_accepts_item(&sim.world.prototypes, item_id),
+        TransferDestination::SingleSlot(&fuel_slot),
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::Fuel,
+                ItemSlotOperation::PlayerInsert,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, BoilerError::InvalidFuel))?;
 
     let fuel_slot = &mut sim.entities.boiler_state_mut(entity_id)?.energy.fuel_slot;
     let outcome = commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: &mut sim.player_inventory,
-            slot_index: player_slot_index,
-        },
+        TransferSourceMut::Slot(
+            sim.player_inventory
+                .item_slot_mut(player_slot_index)
+                .expect("a planned player source slot remains in bounds"),
+        ),
         TransferDestinationMut::SingleSlot(fuel_slot),
     );
     sim.invalidate_power_dynamic_state();
@@ -536,19 +591,28 @@ pub fn boiler_fuel_to_player(
     let fuel_slot = sim.entities.boiler_state(entity_id)?.energy.fuel_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::SingleSlot {
-            slot: fuel_slot,
+        TransferSource {
+            slot: Some(&fuel_slot),
             slot_index: BOILER_FUEL_SLOT_INDEX,
         },
         TransferDestination::Inventory(&sim.player_inventory),
-        |_| true,
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::Fuel,
+                ItemSlotOperation::PlayerExtract,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, BoilerError::InvalidFuel))?;
 
     let fuel_slot = &mut sim.entities.boiler_state_mut(entity_id)?.energy.fuel_slot;
     let outcome = commit_transfer(
         plan,
-        TransferSourceMut::SingleSlot(fuel_slot),
+        TransferSourceMut::Slot(fuel_slot),
         TransferDestinationMut::Inventory(&mut sim.player_inventory),
     );
     sim.invalidate_power_dynamic_state();
@@ -560,22 +624,21 @@ pub fn player_slot_to_assembler_input(
     entity_id: EntityId,
     player_slot_index: usize,
 ) -> Result<TransferOutcome, AssemblerError> {
-    let machine_category =
-        assembler_machine_category(&sim.world.prototypes, &sim.entities, entity_id);
     let state = sim.entities.assembler_state(entity_id)?;
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: &sim.player_inventory,
+        TransferSource {
+            slot: sim.player_inventory.item_slot(player_slot_index),
             slot_index: player_slot_index,
         },
         TransferDestination::Inventory(&state.input_inventory),
         |item_id| {
-            assembler_input_accepts_item(
+            item_slot_policy_accepts(
                 &sim.world.prototypes,
                 &sim.research,
-                machine_category,
-                state,
+                &sim.entities,
+                ItemSlotPolicy::AssemblerIngredient(entity_id),
+                ItemSlotOperation::PlayerInsert,
                 item_id,
             )
         },
@@ -585,10 +648,11 @@ pub fn player_slot_to_assembler_input(
     let input_inventory = &mut sim.entities.assembler_state_mut(entity_id)?.input_inventory;
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: &mut sim.player_inventory,
-            slot_index: player_slot_index,
-        },
+        TransferSourceMut::Slot(
+            sim.player_inventory
+                .item_slot_mut(player_slot_index)
+                .expect("a planned player source slot remains in bounds"),
+        ),
         TransferDestinationMut::Inventory(input_inventory),
     ))
 }
@@ -602,6 +666,7 @@ pub fn assembler_input_slot_to_player(
         sim,
         entity_id,
         slot_index,
+        ItemSlotPolicy::AssemblerIngredient(entity_id),
         |state| &state.input_inventory,
         |state| &mut state.input_inventory,
     )
@@ -616,6 +681,7 @@ pub fn assembler_output_slot_to_player(
         sim,
         entity_id,
         slot_index,
+        ItemSlotPolicy::OutputOnly,
         |state| &state.output_inventory,
         |state| &mut state.output_inventory,
     )
@@ -625,28 +691,39 @@ fn transfer_assembler_slot_to_player(
     sim: &mut Simulation,
     entity_id: EntityId,
     slot_index: usize,
+    policy: ItemSlotPolicy,
     inventory: impl FnOnce(&AssemblingMachineState) -> &Inventory,
     inventory_mut: impl FnOnce(&mut AssemblingMachineState) -> &mut Inventory,
 ) -> Result<TransferOutcome, AssemblerError> {
     let source_inventory = inventory(sim.entities.assembler_state(entity_id)?);
     let plan = plan_transfer(
         &sim.world.prototypes,
-        TransferSource::Inventory {
-            inventory: source_inventory,
+        TransferSource {
+            slot: source_inventory.item_slot(slot_index),
             slot_index,
         },
         TransferDestination::Inventory(&sim.player_inventory),
-        |_| true,
+        |item_id| {
+            item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                policy,
+                ItemSlotOperation::PlayerExtract,
+                item_id,
+            )
+        },
     )
     .map_err(|error| map_plan_error(error, AssemblerError::InvalidInput))?;
 
     let source_inventory = inventory_mut(sim.entities.assembler_state_mut(entity_id)?);
     Ok(commit_transfer(
         plan,
-        TransferSourceMut::Inventory {
-            inventory: source_inventory,
-            slot_index,
-        },
+        TransferSourceMut::Slot(
+            source_inventory
+                .item_slot_mut(slot_index)
+                .expect("a planned assembler source slot remains in bounds"),
+        ),
         TransferDestinationMut::Inventory(&mut sim.player_inventory),
     ))
 }
@@ -658,11 +735,18 @@ fn player_slot_to_furnace(
 ) -> Result<TransferOutcome, FurnaceError> {
     let stack = sim
         .player_inventory()
-        .slots()
-        .get(slot_index)
+        .item_slot(slot_index)
         .ok_or(FurnaceError::InvalidSlot { slot_index })?
+        .stack()
         .ok_or(FurnaceError::EmptySlot { slot_index })?;
-    let is_fuel = burner_fuel_accepts_item(sim.catalog(), stack.item_id());
+    let is_fuel = item_slot_policy_accepts(
+        sim.catalog(),
+        &sim.research,
+        &sim.entities,
+        ItemSlotPolicy::Fuel,
+        ItemSlotOperation::PlayerInsert,
+        stack.item_id(),
+    );
 
     if is_fuel {
         player_slot_to_furnace_fuel(sim, entity_id, slot_index)
@@ -682,21 +766,21 @@ mod tests {
         let mut source = Inventory::from_slots(
             &catalog,
             vec![
-                Some(ItemStack::new(&catalog, item_id, 40).unwrap()),
-                Some(ItemStack::new(&catalog, item_id, 60).unwrap()),
+                test_slot(ItemStack::new(&catalog, item_id, 40).unwrap()),
+                test_slot(ItemStack::new(&catalog, item_id, 60).unwrap()),
             ],
         )
         .unwrap();
         let mut destination = Inventory::from_slots(
             &catalog,
-            vec![Some(ItemStack::new(&catalog, item_id, 75).unwrap())],
+            vec![test_slot(ItemStack::new(&catalog, item_id, 75).unwrap())],
         )
         .unwrap();
 
         let plan = plan_transfer(
             &catalog,
-            TransferSource::Inventory {
-                inventory: &source,
+            TransferSource {
+                slot: source.item_slot(0),
                 slot_index: 0,
             },
             TransferDestination::Inventory(&destination),
@@ -705,10 +789,7 @@ mod tests {
         .unwrap();
         let outcome = commit_transfer(
             plan,
-            TransferSourceMut::Inventory {
-                inventory: &mut source,
-                slot_index: 0,
-            },
+            TransferSourceMut::Slot(source.item_slot_mut(0).unwrap()),
             TransferDestinationMut::Inventory(&mut destination),
         );
 
@@ -725,12 +806,12 @@ mod tests {
         let coal = factory_data::item_id_by_name(&catalog, "coal");
         let source = Inventory::from_slots(
             &catalog,
-            vec![Some(ItemStack::new(&catalog, iron_plate, 10).unwrap())],
+            vec![test_slot(ItemStack::new(&catalog, iron_plate, 10).unwrap())],
         )
         .unwrap();
         let destination = Inventory::from_slots(
             &catalog,
-            vec![Some(ItemStack::new(&catalog, coal, 100).unwrap())],
+            vec![test_slot(ItemStack::new(&catalog, coal, 100).unwrap())],
         )
         .unwrap();
         let source_before = source.clone();
@@ -739,8 +820,8 @@ mod tests {
         assert_eq!(
             plan_transfer(
                 &catalog,
-                TransferSource::Inventory {
-                    inventory: &source,
+                TransferSource {
+                    slot: source.item_slot(0),
                     slot_index: 0,
                 },
                 TransferDestination::Inventory(&destination),
@@ -762,7 +843,9 @@ mod tests {
             .id;
         let source = Inventory::from_slots(
             &source_catalog,
-            vec![Some(ItemStack::new(&source_catalog, item_id, 1).unwrap())],
+            vec![test_slot(
+                ItemStack::new(&source_catalog, item_id, 1).unwrap(),
+            )],
         )
         .unwrap();
         let destination = Inventory::with_slot_count(1);
@@ -774,8 +857,8 @@ mod tests {
         assert_eq!(
             plan_transfer(
                 &destination_catalog,
-                TransferSource::Inventory {
-                    inventory: &source,
+                TransferSource {
+                    slot: source.item_slot(0),
                     slot_index: 0,
                 },
                 TransferDestination::Inventory(&destination),

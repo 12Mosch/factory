@@ -4,11 +4,18 @@ pub(in crate::simulation) fn validate_inventory(
     catalog: &PrototypeCatalog,
     inventory: &Inventory,
 ) -> Result<(), SimValidationError> {
-    for stack in inventory.slots().iter().flatten() {
-        validate_item_stack(catalog, *stack)?;
+    for slot in inventory.slots() {
+        validate_item_slot(catalog, *slot)?;
     }
 
     Ok(())
+}
+
+pub(super) fn validate_item_slot(
+    catalog: &PrototypeCatalog,
+    slot: ItemSlot,
+) -> Result<(), SimValidationError> {
+    slot.validate(catalog).map_err(map_inventory_error)
 }
 
 pub(super) fn validate_item_stack(
@@ -30,4 +37,26 @@ pub(super) fn validate_item_stack(
     }
 
     Ok(())
+}
+
+fn map_inventory_error(error: InventoryError) -> SimValidationError {
+    match error {
+        InventoryError::UnknownItem(item_id) => SimValidationError::UnknownItem(item_id),
+        InventoryError::EmptyItemStack(item_id) => SimValidationError::EmptyItemStack(item_id),
+        InventoryError::StackExceedsLimit {
+            item_id,
+            count,
+            stack_size,
+        } => SimValidationError::StackExceedsLimit {
+            item_id,
+            count,
+            stack_size,
+        },
+        InventoryError::InvalidSlot { .. }
+        | InventoryError::EmptySlot { .. }
+        | InventoryError::InsufficientSpace
+        | InventoryError::InsufficientItems => {
+            unreachable!("validating one item slot cannot report inventory operation errors")
+        }
+    }
 }

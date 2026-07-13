@@ -111,13 +111,13 @@ pub(in crate::simulation) fn drill_output_target_can_accept(
     catalog: &PrototypeCatalog,
     entities: &EntityStore,
     output_target: DrillOutputTarget,
-    internal_output_slot: Option<ItemStack>,
+    internal_output_slot: ItemSlot,
     item_id: ItemId,
     count: u16,
 ) -> bool {
     match output_target {
         DrillOutputTarget::InternalSlot => {
-            output_slot_can_accept(catalog, internal_output_slot, item_id, count)
+            internal_output_slot.can_insert_item(catalog, item_id, count)
         }
         DrillOutputTarget::Inventory(entity_id) => entities
             .entity_inventories

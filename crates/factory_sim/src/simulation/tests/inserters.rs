@@ -94,8 +94,8 @@ fn inserter_moves_fuel_from_chest_to_furnace_fuel_slot() {
 
     let furnace =
         crate::entity_access::furnace_state(&sim, furnace_id).expect("furnace should have state");
-    assert_eq!(furnace.input_slot, None);
-    assert_eq!(furnace.energy.fuel_slot, Some(test_stack(coal, 1)));
+    assert_eq!(furnace.input_slot.stack(), None);
+    assert_eq!(furnace.energy.fuel_slot.stack(), Some(test_stack(coal, 1)));
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn inserter_waits_when_target_full() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .input_slot = Some(test_stack(iron_ore, stack_size));
+        .input_slot = test_slot(test_stack(iron_ore, stack_size));
 
     for _ in 0..BASIC_INSERTER_PICKUP_TICKS + BASIC_INSERTER_DROP_TICKS + 10 {
         sim.tick();
@@ -199,7 +199,7 @@ fn inserter_moves_furnace_output_to_chest() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .output_slot = Some(test_stack(iron_plate, 1));
+        .output_slot = test_slot(test_stack(iron_plate, 1));
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -227,7 +227,7 @@ fn inserter_moves_furnace_output_to_belt() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .output_slot = Some(test_stack(iron_plate, 1));
+        .output_slot = test_slot(test_stack(iron_plate, 1));
 
     run_inserter_until_idle(&mut sim, inserter_id);
 
@@ -434,7 +434,7 @@ fn inserter_holding_item_does_not_duplicate_when_target_becomes_blocked() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .input_slot = Some(test_stack(copper_ore, stack_size));
+        .input_slot = test_slot(test_stack(copper_ore, stack_size));
 
     for _ in 0..inserter_cycle_tick_budget(&sim, inserter_id) * 3 {
         sim.tick();
@@ -468,7 +468,7 @@ fn inserter_holding_item_does_not_duplicate_when_target_becomes_blocked() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should have state")
-        .input_slot = None;
+        .input_slot = ItemSlot::default();
     sim.tick();
 
     assert_eq!(

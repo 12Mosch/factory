@@ -3,13 +3,34 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct Inventory {
-    slots: Vec<Option<ItemStack>>,
+    slots: Vec<ItemSlot>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ItemStack {
     item_id: ItemId,
     count: u16,
+}
+
+/// One persistent item-storage slot.
+///
+/// The transparent representation intentionally matches the legacy
+/// `Option<ItemStack>` encoding used by version 18 saves.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ItemSlot(Option<ItemStack>);
+
+impl PartialEq<Option<ItemStack>> for ItemSlot {
+    fn eq(&self, other: &Option<ItemStack>) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<ItemSlot> for Option<ItemStack> {
+    fn eq(&self, other: &ItemSlot) -> bool {
+        *self == other.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,10 +72,139 @@ impl ItemStack {
     }
 }
 
+impl ItemSlot {
+    pub fn from_stack(
+        catalog: &PrototypeCatalog,
+        stack: ItemStack,
+    ) -> Result<Self, InventoryError> {
+        validate_stack(catalog, stack)?;
+        Ok(Self(Some(stack)))
+    }
+
+    pub fn stack(self) -> Option<ItemStack> {
+        self.0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0.is_none()
+    }
+
+    pub fn take_stack(&mut self) -> Option<ItemStack> {
+        self.0.take()
+    }
+
+    pub fn validate(self, catalog: &PrototypeCatalog) -> Result<(), InventoryError> {
+        if let Some(stack) = self.0 {
+            validate_stack(catalog, stack)?;
+        }
+        Ok(())
+    }
+
+    pub fn can_insert(self, catalog: &PrototypeCatalog, stack: ItemStack) -> bool {
+        validate_stack(catalog, stack).is_ok()
+            && self.capacity_for(
+                stack.item_id,
+                stack_size(catalog, stack.item_id)
+                    .expect("a validated stack always has a catalog prototype"),
+            ) >= stack.count
+    }
+
+    pub fn can_insert_item(self, catalog: &PrototypeCatalog, item_id: ItemId, count: u16) -> bool {
+        ItemStack::new(catalog, item_id, count).is_ok_and(|stack| self.can_insert(catalog, stack))
+    }
+
+    pub fn insert_capacity(
+        self,
+        catalog: &PrototypeCatalog,
+        item_id: ItemId,
+    ) -> Result<u16, InventoryError> {
+        let stack_size =
+            stack_size(catalog, item_id).ok_or(InventoryError::UnknownItem(item_id))?;
+        Ok(self.capacity_for(item_id, stack_size))
+    }
+
+    pub fn insert_stack(
+        &mut self,
+        catalog: &PrototypeCatalog,
+        stack: ItemStack,
+    ) -> Result<(), InventoryError> {
+        validate_stack(catalog, stack)?;
+        let stack_size = stack_size(catalog, stack.item_id)
+            .expect("a validated stack always has a catalog prototype");
+        if self.capacity_for(stack.item_id, stack_size) < stack.count {
+            return Err(InventoryError::InsufficientSpace);
+        }
+        self.commit_prevalidated_insert(stack.item_id, stack.count, stack_size);
+        Ok(())
+    }
+
+    pub fn insert(
+        &mut self,
+        catalog: &PrototypeCatalog,
+        item_id: ItemId,
+        count: u16,
+    ) -> Result<(), InventoryError> {
+        self.insert_stack(catalog, ItemStack::new(catalog, item_id, count)?)
+    }
+
+    pub fn remove(&mut self, item_id: ItemId, count: u16) -> Result<(), InventoryError> {
+        if count == 0 {
+            return Ok(());
+        }
+        let Some(stack) = self.0 else {
+            return Err(InventoryError::InsufficientItems);
+        };
+        if stack.item_id != item_id || stack.count < count {
+            return Err(InventoryError::InsufficientItems);
+        }
+        self.commit_prevalidated_removal(item_id, count);
+        Ok(())
+    }
+
+    pub(crate) fn capacity_for(self, item_id: ItemId, stack_size: u16) -> u16 {
+        match self.0 {
+            None => stack_size,
+            Some(stack) if stack.item_id == item_id => stack_size.saturating_sub(stack.count),
+            Some(_) => 0,
+        }
+    }
+
+    pub(crate) fn commit_prevalidated_insert(
+        &mut self,
+        item_id: ItemId,
+        count: u16,
+        stack_size: u16,
+    ) {
+        debug_assert!(count > 0);
+        assert!(self.capacity_for(item_id, stack_size) >= count);
+        match &mut self.0 {
+            Some(existing) => {
+                assert_eq!(existing.item_id, item_id);
+                existing.count += count;
+            }
+            None => self.0 = Some(ItemStack { item_id, count }),
+        }
+    }
+
+    pub(crate) fn commit_prevalidated_removal(&mut self, item_id: ItemId, count: u16) {
+        debug_assert!(count > 0);
+        let stack = self
+            .0
+            .as_mut()
+            .expect("a planned item slot remains occupied during commit");
+        assert_eq!(stack.item_id, item_id);
+        assert!(stack.count >= count);
+        stack.count -= count;
+        if stack.count == 0 {
+            self.0 = None;
+        }
+    }
+}
+
 impl Inventory {
     pub fn with_slot_count(slot_count: usize) -> Self {
         Self {
-            slots: vec![None; slot_count],
+            slots: vec![ItemSlot::default(); slot_count],
         }
     }
 
@@ -64,20 +214,28 @@ impl Inventory {
 
     pub fn from_slots(
         catalog: &PrototypeCatalog,
-        slots: Vec<Option<ItemStack>>,
+        slots: Vec<ItemSlot>,
     ) -> Result<Self, InventoryError> {
-        for stack in slots.iter().flatten().copied() {
-            validate_stack(catalog, stack)?;
+        for slot in &slots {
+            slot.validate(catalog)?;
         }
         Ok(Self { slots })
     }
 
     pub fn slot(&self, slot_index: usize) -> Option<ItemStack> {
-        self.slots.get(slot_index).copied().flatten()
+        self.slots.get(slot_index).and_then(|slot| slot.stack())
     }
 
-    pub fn slots(&self) -> &[Option<ItemStack>] {
+    pub fn slots(&self) -> &[ItemSlot] {
         &self.slots
+    }
+
+    pub(crate) fn item_slot(&self, slot_index: usize) -> Option<&ItemSlot> {
+        self.slots.get(slot_index)
+    }
+
+    pub(crate) fn item_slot_mut(&mut self, slot_index: usize) -> Option<&mut ItemSlot> {
+        self.slots.get_mut(slot_index)
     }
 
     pub fn take_slot(&mut self, slot_index: usize) -> Result<ItemStack, InventoryError> {
@@ -85,7 +243,8 @@ impl Inventory {
             .slots
             .get_mut(slot_index)
             .ok_or(InventoryError::InvalidSlot { slot_index })?;
-        slot.take().ok_or(InventoryError::EmptySlot { slot_index })
+        slot.take_stack()
+            .ok_or(InventoryError::EmptySlot { slot_index })
     }
 
     pub fn can_insert(&self, catalog: &PrototypeCatalog, item_id: ItemId, count: u16) -> bool {
@@ -151,7 +310,7 @@ impl Inventory {
 
         let mut remaining = count;
         for slot in &mut self.slots {
-            let Some(stack) = slot else {
+            let Some(stack) = slot.stack() else {
                 continue;
             };
 
@@ -160,12 +319,8 @@ impl Inventory {
             }
 
             let removed = remaining.min(stack.count);
-            stack.count -= removed;
             remaining -= removed;
-
-            if stack.count == 0 {
-                *slot = None;
-            }
+            slot.commit_prevalidated_removal(item_id, removed);
 
             if remaining == 0 {
                 return Ok(());
@@ -178,7 +333,7 @@ impl Inventory {
     pub fn count(&self, item_id: ItemId) -> u32 {
         self.slots
             .iter()
-            .flatten()
+            .filter_map(|slot| slot.stack())
             .filter(|stack| stack.item_id == item_id)
             .map(|stack| u32::from(stack.count))
             .sum()
@@ -187,13 +342,7 @@ impl Inventory {
     pub(crate) fn insert_capacity(&self, item_id: ItemId, stack_size: u16) -> u32 {
         self.slots
             .iter()
-            .map(|slot| match slot {
-                Some(stack) if stack.item_id == item_id && stack.count < stack_size => {
-                    u32::from(stack_size - stack.count)
-                }
-                Some(_) => 0,
-                None => u32::from(stack_size),
-            })
+            .map(|slot| u32::from(slot.capacity_for(item_id, stack_size)))
             .sum()
     }
 
@@ -210,47 +359,16 @@ impl Inventory {
         self.insert_validated(item_id, count, stack_size);
     }
 
-    /// Removes a quantity from one exact source slot after a transfer plan has
-    /// captured and validated that slot.
-    pub(crate) fn commit_prevalidated_slot_removal(
-        &mut self,
-        slot_index: usize,
-        item_id: ItemId,
-        count: u16,
-    ) {
-        debug_assert!(count > 0);
-        let slot = self
-            .slots
-            .get_mut(slot_index)
-            .expect("a planned inventory source slot remains in bounds during commit");
-        let stack = slot
-            .as_mut()
-            .expect("a planned inventory source slot remains occupied during commit");
-        assert_eq!(
-            stack.item_id, item_id,
-            "a planned inventory source slot retains its item kind during commit"
-        );
-        assert!(
-            stack.count >= count,
-            "a planned inventory source slot retains the committed quantity"
-        );
-
-        stack.count -= count;
-        if stack.count == 0 {
-            *slot = None;
-        }
-    }
-
     fn insert_validated(&mut self, item_id: ItemId, count: u16, stack_size: u16) {
         let mut remaining = u32::from(count);
 
-        for stack in self.slots.iter_mut().flatten() {
-            if stack.item_id != item_id || stack.count >= stack_size {
+        for slot in &mut self.slots {
+            let capacity = slot.capacity_for(item_id, stack_size);
+            if slot.is_empty() || capacity == 0 {
                 continue;
             }
-
-            let inserted = remaining.min(u32::from(stack_size - stack.count)) as u16;
-            stack.count += inserted;
+            let inserted = remaining.min(u32::from(capacity)) as u16;
+            slot.commit_prevalidated_insert(item_id, inserted, stack_size);
             remaining -= u32::from(inserted);
             if remaining == 0 {
                 return;
@@ -258,15 +376,12 @@ impl Inventory {
         }
 
         for slot in &mut self.slots {
-            if slot.is_some() {
+            if !slot.is_empty() {
                 continue;
             }
 
             let inserted = remaining.min(u32::from(stack_size)) as u16;
-            *slot = Some(ItemStack {
-                item_id,
-                count: inserted,
-            });
+            slot.commit_prevalidated_insert(item_id, inserted, stack_size);
             remaining -= u32::from(inserted);
             if remaining == 0 {
                 return;
@@ -296,133 +411,6 @@ pub(crate) fn validate_stack(
     Ok(())
 }
 
-pub(crate) fn single_slot_can_accept(
-    catalog: &PrototypeCatalog,
-    slot: Option<ItemStack>,
-    stack: ItemStack,
-) -> bool {
-    let Ok(()) = validate_stack(catalog, stack) else {
-        return false;
-    };
-    let stack_size = catalog
-        .item(stack.item_id)
-        .expect("a validated stack has a catalog prototype")
-        .stack_size;
-
-    match slot {
-        None => true,
-        Some(existing) if existing.item_id == stack.item_id => {
-            u32::from(existing.count) + u32::from(stack.count) <= u32::from(stack_size)
-        }
-        Some(_) => false,
-    }
-}
-
-pub(crate) fn insert_into_single_slot(
-    catalog: &PrototypeCatalog,
-    slot: &mut Option<ItemStack>,
-    stack: ItemStack,
-) -> Result<(), InventoryError> {
-    validate_stack(catalog, stack)?;
-    if !single_slot_can_accept(catalog, *slot, stack) {
-        return Err(InventoryError::InsufficientSpace);
-    }
-
-    match slot {
-        Some(existing) => existing.count += stack.count,
-        None => *slot = Some(stack),
-    }
-    Ok(())
-}
-
-pub(crate) fn commit_prevalidated_single_slot_insert(
-    slot: &mut Option<ItemStack>,
-    item_id: ItemId,
-    count: u16,
-    stack_size: u16,
-) {
-    debug_assert!(count > 0);
-    match slot {
-        Some(existing) => {
-            assert_eq!(
-                existing.item_id, item_id,
-                "a planned single-slot destination retains its item kind during commit"
-            );
-            existing.count = existing
-                .count
-                .checked_add(count)
-                .expect("a planned single-slot insertion cannot overflow");
-            assert!(
-                existing.count <= stack_size,
-                "a planned single-slot insertion stays within the item stack size"
-            );
-        }
-        None => {
-            assert!(
-                count <= stack_size,
-                "a planned single-slot insertion stays within the item stack size"
-            );
-            *slot = Some(ItemStack { item_id, count });
-        }
-    }
-}
-
-pub(crate) fn commit_prevalidated_single_slot_removal(
-    slot: &mut Option<ItemStack>,
-    item_id: ItemId,
-    count: u16,
-) {
-    debug_assert!(count > 0);
-    let stack = slot
-        .as_mut()
-        .expect("a planned single-slot source remains occupied during commit");
-    assert_eq!(
-        stack.item_id, item_id,
-        "a planned single-slot source retains its item kind during commit"
-    );
-    assert!(
-        stack.count >= count,
-        "a planned single-slot source retains the committed quantity"
-    );
-
-    stack.count -= count;
-    if stack.count == 0 {
-        *slot = None;
-    }
-}
-
-pub(crate) fn insert_item_into_single_slot(
-    catalog: &PrototypeCatalog,
-    slot: &mut Option<ItemStack>,
-    item_id: ItemId,
-    count: u16,
-) -> Result<(), InventoryError> {
-    insert_into_single_slot(catalog, slot, ItemStack::new(catalog, item_id, count)?)
-}
-
-pub(crate) fn remove_from_single_slot(
-    slot: &mut Option<ItemStack>,
-    item_id: ItemId,
-    count: u16,
-) -> Result<(), InventoryError> {
-    if count == 0 {
-        return Ok(());
-    }
-
-    let Some(stack) = slot else {
-        return Err(InventoryError::InsufficientItems);
-    };
-    if stack.item_id != item_id || stack.count < count {
-        return Err(InventoryError::InsufficientItems);
-    }
-
-    stack.count -= count;
-    if stack.count == 0 {
-        *slot = None;
-    }
-    Ok(())
-}
-
 fn stack_size(catalog: &PrototypeCatalog, item_id: ItemId) -> Option<u16> {
     catalog.item(item_id).map(|item| item.stack_size)
 }
@@ -438,8 +426,17 @@ pub(crate) fn test_stack(item_id: ItemId, count: u16) -> ItemStack {
 }
 
 #[cfg(test)]
+pub(crate) fn test_slot(stack: ItemStack) -> ItemSlot {
+    ItemSlot(Some(stack))
+}
+
+#[cfg(test)]
 pub(crate) fn test_inventory(slots: Vec<Option<ItemStack>>) -> Inventory {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let slots = slots
+        .into_iter()
+        .map(|stack| stack.map_or_else(ItemSlot::default, test_slot))
+        .collect();
     Inventory::from_slots(&catalog, slots).expect("test inventory layout should be valid")
 }
 
@@ -489,13 +486,19 @@ mod tests {
         let catalog = base_catalog();
         let iron_plate = item_id(&catalog, "iron_plate");
         let stack = ItemStack::new(&catalog, iron_plate, 7).unwrap();
-        let mut inventory = Inventory::from_slots(&catalog, vec![None, Some(stack), None])
-            .expect("exact inventory layout should be valid");
+        let mut inventory = Inventory::from_slots(
+            &catalog,
+            vec![ItemSlot::default(), test_slot(stack), ItemSlot::default()],
+        )
+        .expect("exact inventory layout should be valid");
 
         assert_eq!(inventory.slot(0), None);
         assert_eq!(inventory.slot(1), Some(stack));
         assert_eq!(inventory.slot(3), None);
-        assert_eq!(inventory.slots(), &[None, Some(stack), None]);
+        assert_eq!(
+            inventory.slots(),
+            &[ItemSlot::default(), test_slot(stack), ItemSlot::default()]
+        );
         assert_eq!(inventory.take_slot(1), Ok(stack));
         assert_eq!(inventory.slot(1), None);
         assert_eq!(
@@ -517,7 +520,7 @@ mod tests {
         target_catalog.items.pop();
 
         assert_eq!(
-            Inventory::from_slots(&target_catalog, vec![Some(stack)]),
+            Inventory::from_slots(&target_catalog, vec![test_slot(stack)]),
             Err(InventoryError::UnknownItem(item_id))
         );
     }
@@ -528,7 +531,9 @@ mod tests {
         let iron_plate = item_id(&catalog, "iron_plate");
         let existing = ItemStack::new(&catalog, iron_plate, 90).unwrap();
         let incoming = ItemStack::new(&catalog, iron_plate, 20).unwrap();
-        let mut inventory = Inventory::from_slots(&catalog, vec![Some(existing), None]).unwrap();
+        let mut inventory =
+            Inventory::from_slots(&catalog, vec![test_slot(existing), ItemSlot::default()])
+                .unwrap();
 
         inventory
             .insert_stack(&catalog, incoming)
@@ -537,8 +542,8 @@ mod tests {
         assert_eq!(
             inventory.slots(),
             &[
-                Some(ItemStack::new(&catalog, iron_plate, 100).unwrap()),
-                Some(ItemStack::new(&catalog, iron_plate, 10).unwrap()),
+                test_slot(ItemStack::new(&catalog, iron_plate, 100).unwrap()),
+                test_slot(ItemStack::new(&catalog, iron_plate, 10).unwrap()),
             ]
         );
     }
@@ -549,7 +554,7 @@ mod tests {
         let iron_plate = item_id(&catalog, "iron_plate");
         let existing = ItemStack::new(&catalog, iron_plate, 90).unwrap();
         let incoming = ItemStack::new(&catalog, iron_plate, 20).unwrap();
-        let mut inventory = Inventory::from_slots(&catalog, vec![Some(existing)]).unwrap();
+        let mut inventory = Inventory::from_slots(&catalog, vec![test_slot(existing)]).unwrap();
         let before = inventory.clone();
 
         assert_eq!(
@@ -572,6 +577,88 @@ mod tests {
             inventory.insert_stack(&target_catalog, stack),
             Err(InventoryError::UnknownItem(item_id))
         );
-        assert_eq!(inventory.slots(), &[None]);
+        assert_eq!(inventory.slots(), &[ItemSlot::default()]);
+    }
+
+    #[test]
+    fn item_slot_checked_mutations_are_atomic() {
+        let catalog = base_catalog();
+        let iron = item_id(&catalog, "iron_plate");
+        let copper = item_id(&catalog, "copper_plate");
+        let mut slot =
+            ItemSlot::from_stack(&catalog, ItemStack::new(&catalog, iron, 90).unwrap()).unwrap();
+        let before = slot;
+
+        assert_eq!(
+            slot.insert_stack(&catalog, ItemStack::new(&catalog, copper, 1).unwrap()),
+            Err(InventoryError::InsufficientSpace)
+        );
+        assert_eq!(slot, before);
+        assert_eq!(
+            slot.remove(iron, 91),
+            Err(InventoryError::InsufficientItems)
+        );
+        assert_eq!(slot, before);
+
+        slot.insert(&catalog, iron, 10).unwrap();
+        assert!(!slot.is_empty());
+        assert!(!slot.can_insert_item(&catalog, iron, 1));
+        slot.remove(iron, 40).unwrap();
+        assert_eq!(slot.stack().unwrap().count(), 60);
+        assert_eq!(slot.take_stack().unwrap().count(), 60);
+        assert!(slot.is_empty());
+    }
+
+    #[test]
+    fn item_slot_rejects_unknown_zero_and_oversized_stacks() {
+        let catalog = base_catalog();
+        let iron = item_id(&catalog, "iron_plate");
+        let unknown = ItemId::new(u16::MAX);
+        let stack_size = catalog.item(iron).unwrap().stack_size;
+        let mut slot = ItemSlot::default();
+
+        assert_eq!(
+            slot.insert(&catalog, unknown, 1),
+            Err(InventoryError::UnknownItem(unknown))
+        );
+        assert_eq!(
+            slot.insert(&catalog, iron, 0),
+            Err(InventoryError::EmptyItemStack(iron))
+        );
+        assert_eq!(
+            slot.insert(&catalog, iron, stack_size + 1),
+            Err(InventoryError::StackExceedsLimit {
+                item_id: iron,
+                count: stack_size + 1,
+                stack_size,
+            })
+        );
+        assert!(slot.is_empty());
+    }
+
+    #[test]
+    fn item_slot_serialization_matches_legacy_option_encoding() {
+        let catalog = base_catalog();
+        let iron = item_id(&catalog, "iron_plate");
+        let stack = ItemStack::new(&catalog, iron, 7).unwrap();
+
+        for legacy in [None, Some(stack)] {
+            let slot = legacy.map_or_else(ItemSlot::default, test_slot);
+            assert_eq!(
+                bincode::serialize(&slot).unwrap(),
+                bincode::serialize(&legacy).unwrap()
+            );
+        }
+
+        let legacy = vec![None, Some(stack), None];
+        let slots = legacy
+            .iter()
+            .copied()
+            .map(|stack| stack.map_or_else(ItemSlot::default, test_slot))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bincode::serialize(&slots).unwrap(),
+            bincode::serialize(&legacy).unwrap()
+        );
     }
 }

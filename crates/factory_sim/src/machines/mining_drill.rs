@@ -1,5 +1,5 @@
 use crate::ids::EntityId;
-use crate::inventory::ItemStack;
+use crate::inventory::ItemSlot;
 use crate::machines::BurnerEnergy;
 use crate::player::ManualMiningTarget;
 use factory_data::ItemId;
@@ -11,7 +11,7 @@ pub struct BurnerMiningDrillState {
     pub mining_progress_ticks: u32,
     pub mining_required_ticks: u32,
     pub resource_target: Option<ManualMiningTarget>,
-    pub output_slot: Option<ItemStack>,
+    pub output_slot: ItemSlot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

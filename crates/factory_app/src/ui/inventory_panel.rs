@@ -1,10 +1,8 @@
 use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
-    AssemblerError, BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
-    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, BoilerError, BurnerDrillError, ContainerError,
-    FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX, FURNACE_OUTPUT_SLOT_INDEX, FurnaceError,
-    SimCommand, SlotTransferError,
+    AssemblerError, BoilerError, BurnerDrillError, ContainerError, FurnaceError, SimCommand,
+    SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -182,65 +180,14 @@ pub(crate) fn update_container_slot_text(
     mut texts: Query<(&ContainerSlotText, &mut Text)>,
 ) {
     let sim = sim.read();
-    let container_inventory = open_container
-        .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::inventory(&sim, entity_id).ok());
-    let burner_drill_state = open_container
-        .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::burner_drill_state(&sim, entity_id).ok());
-    let furnace_state = open_container
-        .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::furnace_state(&sim, entity_id).ok());
-    let boiler_state = open_container
-        .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::boiler_state(&sim, entity_id).ok());
-    let assembler_state = open_container
-        .entity_id
-        .and_then(|entity_id| factory_sim::entity_access::assembler_state(&sim, entity_id).ok());
 
     for (marker, mut text) in &mut texts {
-        let stack = match marker.panel {
-            InventoryPanel::Player => sim.player_inventory().slot(marker.slot_index),
-            InventoryPanel::Container => {
-                container_inventory.and_then(|inventory| inventory.slot(marker.slot_index))
-            }
-            InventoryPanel::BurnerFuel => burner_drill_state.and_then(|state| {
-                (marker.slot_index == BURNER_MINING_DRILL_FUEL_SLOT_INDEX)
-                    .then_some(state.energy.fuel_slot)
-                    .flatten()
-            }),
-            InventoryPanel::BurnerOutput => burner_drill_state.and_then(|state| {
-                (marker.slot_index == BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX)
-                    .then_some(state.output_slot)
-                    .flatten()
-            }),
-            InventoryPanel::FurnaceInput => furnace_state.and_then(|state| {
-                (marker.slot_index == FURNACE_INPUT_SLOT_INDEX)
-                    .then_some(state.input_slot)
-                    .flatten()
-            }),
-            InventoryPanel::FurnaceFuel => furnace_state.and_then(|state| {
-                (marker.slot_index == FURNACE_FUEL_SLOT_INDEX)
-                    .then_some(state.energy.fuel_slot)
-                    .flatten()
-            }),
-            InventoryPanel::FurnaceOutput => furnace_state.and_then(|state| {
-                (marker.slot_index == FURNACE_OUTPUT_SLOT_INDEX)
-                    .then_some(state.output_slot)
-                    .flatten()
-            }),
-            InventoryPanel::BoilerFuel => boiler_state.and_then(|state| {
-                (marker.slot_index == BOILER_FUEL_SLOT_INDEX)
-                    .then_some(state.energy.fuel_slot)
-                    .flatten()
-            }),
-            InventoryPanel::AssemblerInput => {
-                assembler_state.and_then(|state| state.input_inventory.slot(marker.slot_index))
-            }
-            InventoryPanel::AssemblerOutput => {
-                assembler_state.and_then(|state| state.output_inventory.slot(marker.slot_index))
-            }
-        };
+        let stack = factory_sim::entity_access::inventory_panel_slot(
+            &sim,
+            open_container.entity_id,
+            marker.panel,
+            marker.slot_index,
+        );
         text.0 = stack
             .map(|stack| format_item_stack(stack, sim.catalog()))
             .unwrap_or_default();

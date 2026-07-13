@@ -7,9 +7,10 @@ pub(in crate::simulation) fn validate_burner_mining_drill(
     entity_id: EntityId,
     state: &BurnerMiningDrillState,
 ) -> Result<(), SimValidationError> {
-    validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
-    validate_single_slot(&sim.world.prototypes, state.output_slot)?;
-    if let Some(stack) = state.output_slot {
+    validate_item_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
+    validate_item_slot(&sim.world.prototypes, state.output_slot)?;
+    validate_slot_policy(sim, entity_id, state.energy.fuel_slot, ItemSlotPolicy::Fuel)?;
+    if let Some(stack) = state.output_slot.stack() {
         let is_solid_resource =
             sim.world
                 .prototypes
@@ -36,9 +37,16 @@ pub(in crate::simulation) fn validate_furnace(
     entity_id: EntityId,
     state: &FurnaceState,
 ) -> Result<(), SimValidationError> {
-    validate_single_slot(&sim.world.prototypes, state.input_slot)?;
-    validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
-    validate_single_slot(&sim.world.prototypes, state.output_slot)?;
+    validate_item_slot(&sim.world.prototypes, state.input_slot)?;
+    validate_item_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
+    validate_item_slot(&sim.world.prototypes, state.output_slot)?;
+    validate_slot_policy(
+        sim,
+        entity_id,
+        state.input_slot,
+        ItemSlotPolicy::FurnaceIngredient,
+    )?;
+    validate_slot_policy(sim, entity_id, state.energy.fuel_slot, ItemSlotPolicy::Fuel)?;
 
     if let Some(recipe_id) = state.active_recipe {
         smelting_recipe_by_id(&sim.world.prototypes, recipe_id).ok_or(
@@ -57,16 +65,8 @@ pub(in crate::simulation) fn validate_boiler(
     entity_id: EntityId,
     state: &BoilerState,
 ) -> Result<(), SimValidationError> {
-    validate_single_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
-
-    if let Some(stack) = state.energy.fuel_slot
-        && fuel_value_joules(&sim.world.prototypes, stack.item_id()).is_none()
-    {
-        return Err(SimValidationError::InvalidMachineItem {
-            entity_id,
-            item_id: stack.item_id(),
-        });
-    }
+    validate_item_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
+    validate_slot_policy(sim, entity_id, state.energy.fuel_slot, ItemSlotPolicy::Fuel)?;
 
     Ok(())
 }
@@ -78,6 +78,15 @@ pub(in crate::simulation) fn validate_assembler(
 ) -> Result<(), SimValidationError> {
     validate_inventory(&sim.world.prototypes, &state.input_inventory)?;
     validate_inventory(&sim.world.prototypes, &state.output_inventory)?;
+
+    for slot in state.input_inventory.slots() {
+        validate_slot_policy(
+            sim,
+            entity_id,
+            *slot,
+            ItemSlotPolicy::AssemblerIngredient(entity_id),
+        )?;
+    }
 
     let Some(recipe_id) = state.selected_recipe else {
         return Ok(());
@@ -103,13 +112,8 @@ pub(in crate::simulation) fn validate_lab(
     state: &LabState,
 ) -> Result<(), SimValidationError> {
     validate_inventory(&sim.world.prototypes, &state.inventory)?;
-    for stack in state.inventory.slots().iter().flatten() {
-        if !lab_can_accept_item(&sim.world.prototypes, stack.item_id()) {
-            return Err(SimValidationError::InvalidMachineItem {
-                entity_id,
-                item_id: stack.item_id(),
-            });
-        }
+    for slot in state.inventory.slots() {
+        validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::SciencePack)?;
     }
 
     if let Some(technology_id) = state.active_technology
@@ -290,12 +294,26 @@ fn validate_inserter_target(
     Ok(())
 }
 
-fn validate_single_slot(
-    catalog: &PrototypeCatalog,
-    slot: Option<ItemStack>,
+fn validate_slot_policy(
+    sim: &Simulation,
+    entity_id: EntityId,
+    slot: ItemSlot,
+    policy: ItemSlotPolicy,
 ) -> Result<(), SimValidationError> {
-    if let Some(stack) = slot {
-        validate_item_stack(catalog, stack)?;
+    if let Some(stack) = slot.stack()
+        && !item_slot_policy_accepts(
+            &sim.world.prototypes,
+            &sim.research,
+            &sim.entities,
+            policy,
+            ItemSlotOperation::MachineInsert,
+            stack.item_id(),
+        )
+    {
+        return Err(SimValidationError::InvalidMachineItem {
+            entity_id,
+            item_id: stack.item_id(),
+        });
     }
 
     Ok(())

@@ -167,7 +167,7 @@ pub(in crate::simulation::tests) fn place_powered_fixture_origin_where(
             .boiler_state_mut(boiler_id)
             .expect("placed boiler should expose boiler state")
             .energy
-            .fuel_slot = Some(test_stack(coal, 50));
+            .fuel_slot = test_slot(test_stack(coal, 50));
 
         return Some((fixture_x, fixture_y, boiler_id));
     }

@@ -6,7 +6,7 @@ use factory_app::placement::build::buildable_prototypes;
 use factory_app::resources::SimResource;
 use factory_data::{EntityPrototypeId, ItemId, PrototypeCatalog};
 use factory_sim::{
-    CHUNK_SIZE, Direction, EntityFootprint, EntityId, Inventory, ItemStack, Simulation,
+    CHUNK_SIZE, Direction, EntityFootprint, EntityId, Inventory, ItemSlot, ItemStack, Simulation,
 };
 use std::time::Duration;
 
@@ -72,10 +72,12 @@ fn set_inventory_slot(
     count: u16,
 ) {
     let mut slots = inventory.slots().to_vec();
-    slots[slot_index] = Some(
+    slots[slot_index] = ItemSlot::from_stack(
+        catalog,
         ItemStack::new(catalog, item_id, count)
             .expect("fixed-tick test stack should satisfy catalog invariants"),
-    );
+    )
+    .expect("fixed-tick item slot should satisfy catalog invariants");
     *inventory = Inventory::from_slots(catalog, slots)
         .expect("fixed-tick test inventory layout should satisfy catalog invariants");
 }
