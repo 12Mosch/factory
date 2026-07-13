@@ -1,4 +1,3 @@
-use super::enemy_ops::chebyshev_distance_to_footprint;
 use super::*;
 use std::collections::BTreeMap;
 
@@ -217,8 +216,9 @@ impl Simulation {
         let footprint = placed.footprint;
 
         let (player_tile_x, player_tile_y) = self.player.tile_position();
+        let player_footprint = EntityFootprint::single_tile(player_tile_x, player_tile_y);
         let reach = REPAIR_REACH_TILES as i64;
-        if chebyshev_distance_to_footprint((player_tile_x, player_tile_y), &footprint) > reach {
+        if player_footprint.chebyshev_distance_to(&footprint) > reach {
             return Err(RepairError::OutOfReach);
         }
 
@@ -319,7 +319,8 @@ fn nearest_enemy_in_range(
         let Some(enemy) = enemies.enemies.get(enemy_id) else {
             continue;
         };
-        let distance = chebyshev_distance_to_footprint(enemy.tile(), footprint);
+        let enemy_footprint = EntityFootprint::single_tile(enemy.tile().0, enemy.tile().1);
+        let distance = footprint.chebyshev_distance_to(&enemy_footprint);
         if distance > range {
             continue;
         }
@@ -355,11 +356,7 @@ fn nearest_spawner_in_range(
         let Some(placed) = placed_entities.get(&spawner_id) else {
             continue;
         };
-        let (center_x, center_y) = (
-            placed.footprint.x + i64::from(placed.footprint.width) / 2,
-            placed.footprint.y + i64::from(placed.footprint.height) / 2,
-        );
-        let distance = chebyshev_distance_to_footprint((center_x, center_y), footprint);
+        let distance = footprint.chebyshev_distance_to(&placed.footprint);
         if distance > range {
             continue;
         }
