@@ -47,6 +47,8 @@ pub enum DamageType {
 }
 
 impl DamageType {
+    pub const COUNT: usize = 4;
+
     const fn index(self) -> usize {
         match self {
             Self::Physical => 0,
@@ -110,12 +112,12 @@ impl Resistance {
 /// Compact, allocation-free resistance table for every supported damage type.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ResistanceProfile {
-    values: [Resistance; 4],
+    values: [Resistance; DamageType::COUNT],
 }
 
 impl ResistanceProfile {
     pub const NONE: Self = Self {
-        values: [Resistance::new(0, 0); 4],
+        values: [Resistance::new(0, 0); DamageType::COUNT],
     };
 
     pub const fn resistance(self, damage_type: DamageType) -> Resistance {
