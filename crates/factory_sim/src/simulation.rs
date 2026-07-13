@@ -699,10 +699,10 @@ pub use self::commands::{
 pub use self::construction_ops::GhostPlacementRequest;
 use self::contexts::*;
 pub(crate) use self::entity_states::EntityStateBehavior;
+pub use self::entity_transfer::TransferOutcome;
 use self::fluid_ops::*;
 use self::fluid_state::FluidSubsystem;
 use self::generation::*;
-use self::inventory_ops::*;
 use self::machine_ops::*;
 use self::power_state::{PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};

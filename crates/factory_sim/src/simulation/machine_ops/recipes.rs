@@ -74,11 +74,16 @@ pub(in crate::simulation) fn input_slot_can_accept(
     input_slot: Option<ItemStack>,
     stack: ItemStack,
 ) -> bool {
-    if first_matching_unlocked_smelting_recipe(catalog, research, stack.item_id()).is_none() {
-        return false;
-    }
+    furnace_input_accepts_item(catalog, research, stack.item_id())
+        && output_slot_can_accept(catalog, input_slot, stack.item_id(), stack.count())
+}
 
-    output_slot_can_accept(catalog, input_slot, stack.item_id(), stack.count())
+pub(in crate::simulation) fn furnace_input_accepts_item(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    item_id: ItemId,
+) -> bool {
+    first_matching_unlocked_smelting_recipe(catalog, research, item_id).is_some()
 }
 
 pub(in crate::simulation) fn assembler_required_ticks(
@@ -128,12 +133,12 @@ pub(in crate::simulation) fn assembler_machine_category(
         .unwrap_or(CraftingCategory::Crafting)
 }
 
-pub(in crate::simulation) fn assembler_input_can_accept(
+pub(in crate::simulation) fn assembler_input_accepts_item(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     machine_category: CraftingCategory,
     state: &AssemblingMachineState,
-    stack: ItemStack,
+    item_id: ItemId,
 ) -> bool {
     let Some(recipe_id) = state.selected_recipe else {
         return false;
@@ -151,7 +156,7 @@ pub(in crate::simulation) fn assembler_input_can_accept(
     recipe
         .ingredients
         .iter()
-        .any(|ingredient| ingredient.item == stack.item_id())
+        .any(|ingredient| ingredient.item == item_id)
 }
 
 pub(in crate::simulation) fn assembler_has_ingredients(
@@ -316,17 +321,6 @@ pub(in crate::simulation) fn insert_fluid_products(
         state.fluid_id = Some(product.fluid);
         state.amount_milliunits += product.amount_milliunits;
     }
-}
-
-pub(in crate::simulation) fn stack_in_assembler_inventory_slot(
-    inventory: &Inventory,
-    slot_index: usize,
-) -> Result<ItemStack, AssemblerError> {
-    inventory
-        .slots()
-        .get(slot_index)
-        .ok_or(AssemblerError::InvalidSlot { slot_index })?
-        .ok_or(AssemblerError::EmptySlot { slot_index })
 }
 
 fn assembler_recipe(
