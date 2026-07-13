@@ -293,8 +293,8 @@ impl SimulationSnapshotOwned {
             pollution_diffusion: PollutionDiffusionBuffer::default(),
             enemies: self.enemies,
             config: self.config,
-            attack_targets: enemy_ops::AttackTargetCache::default(),
-            enemy_navigation: enemy_navigation::EnemyNavigation::default(),
+            attack_targets: enemy::AttackTargetCache::default(),
+            enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
         sim.ensure_fluid_network_topology();
