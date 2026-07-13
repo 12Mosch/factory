@@ -1,5 +1,7 @@
+use crate::entities::EntityFootprint;
 use crate::ids::EntityId;
 use crate::machines::BurnerEnergy;
+use crate::world::WorldTileCoord;
 use factory_data::ItemId;
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +51,40 @@ pub struct EntityPowerStatus {
     pub satisfaction_permyriad: u32,
     pub active_usage_watts: u64,
     pub drain_watts: u64,
+}
+
+/// Deterministic, region-scoped power intelligence for map presentation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PowerMapSnapshot {
+    pub poles: Vec<PowerMapPole>,
+    pub connections: Vec<PowerMapConnection>,
+    pub consumers: Vec<PowerMapConsumer>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerMapPole {
+    pub entity_id: EntityId,
+    /// Pole center in half-tile units.
+    pub center_x2: WorldTileCoord,
+    pub center_y2: WorldTileCoord,
+    pub network_id: u32,
+    pub satisfaction_permyriad: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerMapConnection {
+    pub first_pole_id: EntityId,
+    pub second_pole_id: EntityId,
+    pub network_id: u32,
+    pub satisfaction_permyriad: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerMapConsumer {
+    pub entity_id: EntityId,
+    pub footprint: EntityFootprint,
+    pub network_id: Option<u32>,
+    pub satisfaction_permyriad: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

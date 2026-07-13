@@ -1,14 +1,14 @@
 use bevy::prelude::*;
 
-use crate::map::resources::MapViewState;
+use crate::map::resources::{MapDisplaySettings, MapViewState};
 use crate::resources::SimResource;
 
-use super::components::{FullMapLayerButton, FullMapRecenterButton};
+use super::components::{FullMapOverlayButton, FullMapRecenterButton};
 
-type FullMapLayerInteractionQuery<'w, 's> = Query<
+type FullMapOverlayInteractionQuery<'w, 's> = Query<
     'w,
     's,
-    (&'static Interaction, &'static FullMapLayerButton),
+    (&'static Interaction, &'static FullMapOverlayButton),
     (
         Changed<Interaction>,
         With<Button>,
@@ -28,18 +28,19 @@ type FullMapRecenterInteractionQuery<'w, 's> = Query<
 >;
 
 pub(crate) fn handle_full_map_buttons(
-    mut layer_buttons: FullMapLayerInteractionQuery,
+    mut overlay_buttons: FullMapOverlayInteractionQuery,
     mut recenter_buttons: FullMapRecenterInteractionQuery,
     sim: Res<SimResource>,
     mut state: ResMut<MapViewState>,
+    mut settings: ResMut<MapDisplaySettings>,
 ) {
     if !state.open {
         return;
     }
 
-    for (interaction, button) in &mut layer_buttons {
+    for (interaction, button) in &mut overlay_buttons {
         if *interaction == Interaction::Pressed {
-            state.selected_layer = button.layer;
+            settings.overlays.toggle(button.overlay);
         }
     }
 

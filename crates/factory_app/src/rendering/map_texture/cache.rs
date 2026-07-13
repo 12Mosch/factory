@@ -1,9 +1,8 @@
 use bevy::prelude::*;
-use factory_sim::Simulation;
+use factory_sim::{ChunkCoord, Simulation};
 
 use crate::map::resources::{
-    MapDisplaySettings, MapLayer, MapLayerTextureCache, MapTextureBounds, MapTextureCache,
-    MapViewState,
+    MapDisplaySettings, MapLayerTextureCache, MapTextureBounds, MapTextureCache, MapTextureLayer,
 };
 use crate::resources::SimResource;
 
@@ -13,12 +12,9 @@ use super::pixels::pixel_offset;
 use super::rasterizer::MapRasterizer;
 use super::upload::{MapTextureUploadQueue, upload_layer_texture};
 
-const RESOURCE_TEXTURE_REFRESH_INTERVAL_TICKS: u64 = 15;
-
 pub(crate) fn update_map_texture(
     sim: Res<SimResource>,
     settings: Res<MapDisplaySettings>,
-    state: Res<MapViewState>,
     mut cache: ResMut<MapTextureCache>,
     mut uploads: ResMut<MapTextureUploadQueue>,
     images: Option<ResMut<Assets<Image>>>,
@@ -30,22 +26,25 @@ pub(crate) fn update_map_texture(
     let sim = sim.read();
     // The surface layer also backs the minimap, so it stays fresh even while
     // the fullscreen map is closed. Other layers only update while displayed.
-    let surface_cache = cache.layer_mut(MapLayer::Surface);
+    let surface_cache = cache.layer_mut(MapTextureLayer::Surface);
     update_layer_map_texture(
         &sim,
         &settings,
-        MapLayer::Surface,
+        MapTextureLayer::Surface,
         surface_cache,
         &mut images,
         &mut uploads,
     );
 
-    if state.open && state.selected_layer != MapLayer::Surface {
-        let layer_cache = cache.layer_mut(state.selected_layer);
+    if settings
+        .overlays
+        .is_enabled(crate::map::resources::MapOverlay::Resources)
+    {
+        let layer_cache = cache.layer_mut(MapTextureLayer::Resources);
         update_layer_map_texture(
             &sim,
             &settings,
-            state.selected_layer,
+            MapTextureLayer::Resources,
             layer_cache,
             &mut images,
             &mut uploads,
@@ -56,7 +55,7 @@ pub(crate) fn update_map_texture(
 fn update_layer_map_texture(
     sim: &Simulation,
     settings: &MapDisplaySettings,
-    layer: MapLayer,
+    layer: MapTextureLayer,
     cache: &mut MapLayerTextureCache,
     images: &mut Assets<Image>,
     uploads: &mut MapTextureUploadQueue,
@@ -72,7 +71,7 @@ fn update_layer_map_texture(
         || chunk_changed
         || revealed_changed
         || debug_changed
-        || (resource_changed && should_refresh_texture(cache.last_texture_update_tick, tick_count));
+        || (layer == MapTextureLayer::Resources && resource_changed);
 
     if !needs_update {
         return;
@@ -99,16 +98,17 @@ fn update_layer_map_texture(
     cache.last_texture_update_tick = tick_count;
 }
 
-fn should_refresh_texture(last_texture_update_tick: u64, tick_count: u64) -> bool {
-    tick_count.saturating_sub(last_texture_update_tick) >= RESOURCE_TEXTURE_REFRESH_INTERVAL_TICKS
-}
-
 fn update_map_pixels_incremental(rasterizer: &MapRasterizer<'_>, cache: &mut MapLayerTextureCache) {
     let old_bounds = cache.bounds.unwrap_or_default();
     let new_bounds = map_texture_bounds(rasterizer.sim, rasterizer.settings).unwrap_or_default();
     let bounds_changed = old_bounds != new_bounds;
     if bounds_changed {
-        resize_cached_pixels(cache, old_bounds, new_bounds);
+        let background = if rasterizer.layer == MapTextureLayer::Surface {
+            super::UNREVEALED_PIXEL
+        } else {
+            [0; 4]
+        };
+        resize_cached_pixels(cache, old_bounds, new_bounds, background);
         cache.dirty_regions.mark_full();
         // The resize only preserves pixels inside both bounds; drop the paint
         // state of clipped chunks so they get repainted at their new position.
@@ -117,9 +117,14 @@ fn update_map_pixels_incremental(rasterizer: &MapRasterizer<'_>, cache: &mut Map
         });
     }
     repaint_changed_chunks(rasterizer, cache);
-    repaint_dirty_resource_tiles(rasterizer, cache);
+    if rasterizer.layer == MapTextureLayer::Resources {
+        repaint_dirty_resource_tiles(rasterizer, cache);
+    }
 
-    if bounds_changed && rasterizer.settings.show_chunk_grid {
+    if bounds_changed
+        && rasterizer.settings.show_chunk_grid
+        && rasterizer.layer == MapTextureLayer::Surface
+    {
         let Some(bounds) = cache.bounds else {
             return;
         };
@@ -134,20 +139,17 @@ fn resize_cached_pixels(
     cache: &mut MapLayerTextureCache,
     old_bounds: MapTextureBounds,
     new_bounds: MapTextureBounds,
+    background: [u8; 4],
 ) {
     let Some(old_pixels) = cache.pixels.take() else {
         cache.bounds = Some(new_bounds);
-        cache.pixels = Some(vec![
-            0;
-            new_bounds.width as usize
-                * new_bounds.height as usize
-                * 4
-        ]);
+        cache.pixels =
+            Some(background.repeat(new_bounds.width as usize * new_bounds.height as usize));
         cache.painted_chunks.clear();
         return;
     };
 
-    let mut new_pixels = vec![0; new_bounds.width as usize * new_bounds.height as usize * 4];
+    let mut new_pixels = background.repeat(new_bounds.width as usize * new_bounds.height as usize);
     let old_max_x = old_bounds.min_x + i64::from(old_bounds.width) - 1;
     let old_max_y = old_bounds.min_y + i64::from(old_bounds.height) - 1;
     let new_max_x = new_bounds.min_x + i64::from(new_bounds.width) - 1;
@@ -179,18 +181,21 @@ fn repaint_changed_chunks(rasterizer: &MapRasterizer<'_>, cache: &mut MapLayerTe
         return;
     };
 
+    let eligible = rasterizer
+        .eligible_chunk_coords(bounds)
+        .collect::<std::collections::BTreeSet<_>>();
     cache
         .painted_chunks
-        .retain(|coord, _| rasterizer.sim.world().chunks.contains_key(coord));
+        .retain(|coord, _| eligible.contains(coord));
 
-    for chunk in rasterizer.sim.world().chunks.values() {
-        let state = rasterizer.chunk_paint_state(chunk.coord);
-        if cache.painted_chunks.get(&chunk.coord) == Some(&state) {
+    for coord in eligible {
+        let state = rasterizer.chunk_paint_state(coord);
+        if cache.painted_chunks.get(&coord) == Some(&state) {
             continue;
         }
-        rasterizer.repaint_chunk(data, bounds, chunk.coord);
-        cache.dirty_regions.mark_world_chunk(bounds, chunk.coord);
-        cache.painted_chunks.insert(chunk.coord, state);
+        rasterizer.repaint_chunk(data, bounds, coord);
+        cache.dirty_regions.mark_world_chunk(bounds, coord);
+        cache.painted_chunks.insert(coord, state);
     }
 }
 
@@ -215,7 +220,11 @@ fn repaint_dirty_resource_tiles(rasterizer: &MapRasterizer<'_>, cache: &mut MapL
         return;
     };
 
-    for change in changes {
+    for change in changes.into_iter().filter(|change| {
+        bounds.contains_tile((change.x, change.y))
+            && ChunkCoord::from_tile(change.x, change.y)
+                .is_some_and(|coord| rasterizer.chunk_paint_state(coord).revealed)
+    }) {
         rasterizer.repaint_tile(data, bounds, change.x, change.y);
         cache
             .dirty_regions
@@ -232,22 +241,18 @@ fn repaint_all_chunks(rasterizer: &MapRasterizer<'_>, cache: &mut MapLayerTextur
     };
 
     cache.painted_chunks.clear();
-    for chunk in rasterizer.sim.world().chunks.values() {
-        rasterizer.repaint_chunk(data, bounds, chunk.coord);
+    for coord in rasterizer.eligible_chunk_coords(bounds) {
+        rasterizer.repaint_chunk(data, bounds, coord);
         cache
             .painted_chunks
-            .insert(chunk.coord, rasterizer.chunk_paint_state(chunk.coord));
+            .insert(coord, rasterizer.chunk_paint_state(coord));
     }
     cache.dirty_regions.mark_full();
 }
 
 fn refresh_painted_chunks(rasterizer: &MapRasterizer<'_>, cache: &mut MapLayerTextureCache) {
     cache.painted_chunks = rasterizer
-        .sim
-        .world()
-        .chunks
-        .keys()
-        .copied()
+        .eligible_chunk_coords(cache.bounds.unwrap_or_default())
         .map(|coord| (coord, rasterizer.chunk_paint_state(coord)))
         .collect();
 }
@@ -287,10 +292,12 @@ mod tests {
             MapDisplaySettings {
                 debug_reveal_all: false,
                 show_chunk_grid: true,
+                ..default()
             },
             MapDisplaySettings {
                 debug_reveal_all: true,
                 show_chunk_grid: true,
+                ..default()
             },
         ];
         for settings in settings_variants {
@@ -301,12 +308,7 @@ mod tests {
     fn assert_incremental_update_matches_full_render_after_streaming_chunk(
         settings: MapDisplaySettings,
     ) {
-        let layers = [
-            MapLayer::Surface,
-            MapLayer::Resources,
-            MapLayer::Entities,
-            MapLayer::Threat,
-        ];
+        let layers = [MapTextureLayer::Surface, MapTextureLayer::Resources];
         let mut sim = Simulation::new_test_world(123);
         let mut caches = layers.map(|layer| {
             let initial = generate_map_pixels_for_layer(&sim, &settings, layer);
@@ -378,8 +380,9 @@ mod tests {
         let settings = MapDisplaySettings {
             debug_reveal_all: true,
             show_chunk_grid: false,
+            ..default()
         };
-        let layer = MapLayer::Surface;
+        let layer = MapTextureLayer::Surface;
         let initial = generate_map_pixels_for_layer(&sim, &settings, layer);
         let mut images = Assets::<Image>::default();
         let handle = images.add(image_asset(
@@ -447,9 +450,10 @@ mod tests {
         let settings = MapDisplaySettings {
             debug_reveal_all: true,
             show_chunk_grid: false,
+            ..default()
         };
 
-        let initial = generate_map_pixels_for_layer(&sim, &settings, MapLayer::Surface);
+        let initial = generate_map_pixels_for_layer(&sim, &settings, MapTextureLayer::Surface);
         let mut cache = MapLayerTextureCache {
             handle: Some(Handle::default()),
             bounds: Some(initial.bounds),
@@ -462,19 +466,19 @@ mod tests {
             last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
             last_texture_update_tick: sim.tick_count(),
         };
-        let rasterizer = MapRasterizer::new(&sim, &settings, MapLayer::Surface);
+        let rasterizer = MapRasterizer::new(&sim, &settings, MapTextureLayer::Surface);
         refresh_painted_chunks(&rasterizer, &mut cache);
 
         // Frontier chunk grows the texture bounds by one chunk column.
         sim.ensure_chunk_generated(ChunkCoord { x: 16, y: 0 });
 
         let started = std::time::Instant::now();
-        let rasterizer = MapRasterizer::new(&sim, &settings, MapLayer::Surface);
+        let rasterizer = MapRasterizer::new(&sim, &settings, MapTextureLayer::Surface);
         update_map_pixels_incremental(&rasterizer, &mut cache);
         let elapsed = started.elapsed();
         println!("incremental update after bounds growth: {elapsed:?}");
 
-        let full = generate_map_pixels_for_layer(&sim, &settings, MapLayer::Surface);
+        let full = generate_map_pixels_for_layer(&sim, &settings, MapTextureLayer::Surface);
         assert_eq!(cache.bounds, Some(full.bounds));
         assert_eq!(cache.pixels.as_deref(), Some(full.data.as_slice()));
     }
@@ -493,8 +497,9 @@ mod tests {
         let settings = MapDisplaySettings {
             debug_reveal_all: true,
             show_chunk_grid: false,
+            ..default()
         };
-        let layer = MapLayer::Resources;
+        let layer = MapTextureLayer::Resources;
         let initial = generate_map_pixels_for_layer(&sim, &settings, layer);
         let mut images = Assets::<Image>::default();
         let handle = images.add(image_asset(

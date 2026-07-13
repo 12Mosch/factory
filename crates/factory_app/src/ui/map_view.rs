@@ -7,7 +7,7 @@ mod layout;
 mod sync;
 
 pub(crate) use components::{
-    FullMapImage, FullMapLayerButton, FullMapOverlayRoot, FullMapRecenterButton, FullMapRoot,
+    FullMapImage, FullMapOverlayButton, FullMapOverlayRoot, FullMapRecenterButton, FullMapRoot,
     MinimapImage, MinimapOverlayRoot, MinimapRoot,
 };
 pub(crate) use drawing::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET, MINIMAP_TOP_OFFSET};

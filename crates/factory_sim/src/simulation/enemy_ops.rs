@@ -170,6 +170,88 @@ impl Simulation {
         snapshot
     }
 
+    pub fn enemy_map_snapshot_in_tile_rect(
+        &self,
+        min_x: WorldTileCoord,
+        max_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_y: WorldTileCoord,
+    ) -> EnemyMapSnapshot {
+        if min_x > max_x || min_y > max_y {
+            return EnemyMapSnapshot::default();
+        }
+        let point_in_rect = |x: WorldTileCoord, y: WorldTileCoord| {
+            x >= min_x && x <= max_x && y >= min_y && y <= max_y
+        };
+        let sector_intersects = |coord: ChunkCoord| {
+            let (x, y) = coord.min_tile();
+            let chunk_max_x = x + i64::from(CHUNK_SIZE) - 1;
+            let chunk_max_y = y + i64::from(CHUNK_SIZE) - 1;
+            x <= max_x && chunk_max_x >= min_x && y <= max_y && chunk_max_y >= min_y
+        };
+        let location_intersects = |location: ThreatLocation| match location {
+            ThreatLocation::Exact { x, y } => point_in_rect(x, y),
+            ThreatLocation::Sector(coord) => sector_intersects(coord),
+        };
+
+        let mut snapshot = EnemyMapSnapshot::default();
+        for base in self.enemies.bases.values() {
+            if base.pollution_contact && sector_intersects(base.anchor) {
+                snapshot.contacted_sectors.push(base.anchor);
+            }
+            if self.chart.revealed_chunks.contains(&base.anchor)
+                && let Some(spawner) = base
+                    .spawners
+                    .iter()
+                    .next()
+                    .and_then(|id| self.entities.placed_entities.get(id))
+                && point_in_rect(spawner.x, spawner.y)
+            {
+                snapshot.known_bases.push((base.id, spawner.x, spawner.y));
+            }
+        }
+        for raid in self.enemies.raids.values() {
+            let exact = raid
+                .members
+                .iter()
+                .next()
+                .and_then(|id| self.enemies.enemies.get(id))
+                .map(|unit| unit.tile())
+                .filter(|&(x, y)| {
+                    ChunkCoord::from_tile(x, y)
+                        .is_some_and(|chunk| self.chart.revealed_chunks.contains(&chunk))
+                })
+                .map(|(x, y)| ThreatLocation::Exact { x, y });
+            let Some(location) = exact.or_else(|| {
+                self.enemies
+                    .bases
+                    .get(&raid.base_id)
+                    .map(|base| ThreatLocation::Sector(base.anchor))
+            }) else {
+                continue;
+            };
+            if !location_intersects(location) {
+                continue;
+            }
+            snapshot.raids.push((raid.id, location));
+            if let Some(target) = raid.target {
+                snapshot.raid_targets.push((raid.id, target));
+            }
+        }
+        for party in self.enemies.expansions.values().filter(|party| {
+            party.spotted && point_in_rect(party.destination.0, party.destination.1)
+        }) {
+            snapshot.expansions.push((
+                party.id,
+                ThreatLocation::Exact {
+                    x: party.destination.0,
+                    y: party.destination.1,
+                },
+            ));
+        }
+        snapshot
+    }
+
     /// The catalog's enemy gameplay tuning. Catalog loading rejects enemy
     /// content (spawner prototypes or base generation) without this section,
     /// so the `None` early-returns downstream only fire for catalogs that

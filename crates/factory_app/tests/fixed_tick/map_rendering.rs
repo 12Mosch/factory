@@ -1,8 +1,8 @@
 use super::common::{entity_id_by_name, pixel_at};
 use bevy::prelude::Vec2;
-use factory_app::map::resources::{MapDisplaySettings, MapLayer, MapTextureBounds};
+use factory_app::map::resources::{MapDisplaySettings, MapTextureBounds, MapTextureLayer};
 use factory_app::rendering::map_texture::{
-    GRID_PIXEL, MapPixels, UNREVEALED_PIXEL, generate_map_pixels, generate_map_pixels_for_layer,
+    GRID_PIXEL, UNREVEALED_PIXEL, generate_map_pixels, generate_map_pixels_for_layer,
 };
 use factory_app::ui::map_view::fullscreen_crop_bounds;
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, Simulation, WorldSim};
@@ -29,6 +29,7 @@ fn map_pixel_generation_draws_revealed_tiles_and_debug_grid() {
         &MapDisplaySettings {
             debug_reveal_all: true,
             show_chunk_grid: true,
+            ..MapDisplaySettings::default()
         },
     );
     assert!(debug.bounds.contains_chunk(unrevealed_chunk));
@@ -80,6 +81,7 @@ fn debug_reveal_shows_generated_streamed_chunks() {
         &MapDisplaySettings {
             debug_reveal_all: true,
             show_chunk_grid: false,
+            ..MapDisplaySettings::default()
         },
     );
 
@@ -113,14 +115,15 @@ fn fullscreen_crop_bounds_clamps_near_map_edges() {
 }
 
 #[test]
-fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks() {
+fn resource_texture_is_transparent_and_does_not_reveal_hidden_chunks() {
     let mut sim = Simulation::new_test_world(123);
     let chest = entity_id_by_name(sim.catalog(), "chest");
     let (entity_x, entity_y) = revealed_buildable_tile(&sim, chest);
-    let surface_before =
-        generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Surface);
-    let entities_before =
-        generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Entities);
+    let surface_before = generate_map_pixels_for_layer(
+        &sim,
+        &MapDisplaySettings::default(),
+        MapTextureLayer::Surface,
+    );
     factory_sim::placement::place(
         &mut sim,
         factory_sim::placement::EntityPlacementRequest {
@@ -138,35 +141,30 @@ fn map_layers_emphasize_resources_and_entities_without_revealing_hidden_chunks()
     move_player_to_tile(&mut sim, target);
     sim.tick();
 
-    let surface =
-        generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Surface);
-    let resources =
-        generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Resources);
-    let entities =
-        generate_map_pixels_for_layer(&sim, &MapDisplaySettings::default(), MapLayer::Entities);
-
+    let surface = generate_map_pixels_for_layer(
+        &sim,
+        &MapDisplaySettings::default(),
+        MapTextureLayer::Surface,
+    );
+    let resources = generate_map_pixels_for_layer(
+        &sim,
+        &MapDisplaySettings::default(),
+        MapTextureLayer::Resources,
+    );
+    assert_ne!(pixel_at(&resources, resource_tile), [0; 4]);
     assert_ne!(
-        pixel_at(&resources, resource_tile),
-        pixel_at(&entities, resource_tile)
+        pixel_at(&surface, resource_tile),
+        pixel_at(&resources, resource_tile)
     );
     assert_eq!(
         pixel_at(&surface, (entity_x, entity_y)),
         pixel_at(&surface_before, (entity_x, entity_y))
     );
-    assert_eq!(
-        pixel_at(&entities, (entity_x, entity_y)),
-        pixel_at(&entities_before, (entity_x, entity_y))
-    );
+    assert_eq!(pixel_at(&resources, (entity_x, entity_y)), [0; 4]);
 
     assert!(!sim.is_chunk_revealed(concealed_chunk));
     let hidden_tile = concealed_chunk.tile_at(1, 1);
-    assert_hidden_pixel(&resources, hidden_tile);
-    assert_hidden_pixel(&entities, hidden_tile);
-}
-
-fn assert_hidden_pixel(map: &MapPixels, tile: (i64, i64)) {
-    assert!(map.bounds.contains_tile(tile));
-    assert_eq!(pixel_at(map, tile), UNREVEALED_PIXEL);
+    assert_eq!(pixel_at(&resources, hidden_tile), [0; 4]);
 }
 
 fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i64, i64) {

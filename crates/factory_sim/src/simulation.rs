@@ -49,7 +49,8 @@ pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
 pub use crate::pollution::PollutionState;
 pub use crate::power::{
     BoilerError, BoilerState, ElectricConsumerState, ElectricPoleState, EntityPowerStatus,
-    OffshorePumpState, PowerNetworkSnapshot, PowerSummary, SteamEngineState,
+    OffshorePumpState, PowerMapConnection, PowerMapConsumer, PowerMapPole, PowerMapSnapshot,
+    PowerNetworkSnapshot, PowerSummary, SteamEngineState,
 };
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,

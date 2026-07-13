@@ -3,7 +3,7 @@ use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
 use factory_app::map::resources::{
-    MapChunkPaintState, MapLayer, MapLayerTextureCache, MapTextureCache,
+    MapChunkPaintState, MapLayerTextureCache, MapTextureCache, MapTextureLayer,
 };
 use factory_app::rendering::resource_cells::ResourceRenderCache;
 use factory_app::resources::SimResource;
@@ -171,7 +171,7 @@ fn load_invalidates_render_caches() {
     write_slot_save(&app, SaveSlotKind::Quick);
     app.world_mut().insert_resource(MapTextureCache {
         layers: [(
-            MapLayer::Surface,
+            MapTextureLayer::Surface,
             MapLayerTextureCache {
                 handle: None,
                 bounds: Some(Default::default()),

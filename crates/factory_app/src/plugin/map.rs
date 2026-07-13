@@ -2,7 +2,9 @@ use bevy::prelude::*;
 
 use super::{AppSet, InGameSet};
 use crate::input::panels::handle_fullscreen_map_input;
-use crate::map::resources::{MapDisplaySettings, MapOverlayMarkers, MapTextureCache, MapViewState};
+use crate::map::resources::{
+    MapDetailCache, MapDisplaySettings, MapOverlayMarkers, MapTextureCache, MapViewState,
+};
 use crate::rendering::map_texture::{register_map_texture_upload_systems, update_map_texture};
 use crate::ui::map_view::{handle_full_map_buttons, sync_full_map_view, sync_minimap};
 
@@ -14,6 +16,7 @@ impl Plugin for MapPlugin {
         app.init_resource::<MapViewState>()
             .init_resource::<MapOverlayMarkers>()
             .init_resource::<MapDisplaySettings>()
+            .init_resource::<MapDetailCache>()
             .init_resource::<MapTextureCache>()
             .add_systems(
                 PreUpdate,
