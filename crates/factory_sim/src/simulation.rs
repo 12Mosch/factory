@@ -364,6 +364,12 @@ enum DrillOutputTarget {
 pub type SimulationValidationError = SimValidationError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PollutionRemainderSource {
+    MachineEmission(EntityId),
+    TerrainAbsorption(ChunkCoord),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimValidationError {
     MissingTile {
         x: WorldTileCoord,
@@ -475,7 +481,9 @@ pub enum SimValidationError {
     InvalidItemStatistics(ItemId),
     InvalidFluidStatistics(FluidId),
     InvalidPowerStatistics,
-    InvalidPollutionState,
+    InvalidPollutionState {
+        source: PollutionRemainderSource,
+    },
     InvalidGhostPrototype {
         ghost_id: GhostId,
         prototype_id: EntityPrototypeId,
