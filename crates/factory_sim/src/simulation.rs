@@ -475,6 +475,7 @@ pub enum SimValidationError {
     InvalidItemStatistics(ItemId),
     InvalidFluidStatistics(FluidId),
     InvalidPowerStatistics,
+    InvalidPollutionState,
     InvalidGhostPrototype {
         ghost_id: GhostId,
         prototype_id: EntityPrototypeId,

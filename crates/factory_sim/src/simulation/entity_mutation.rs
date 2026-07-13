@@ -21,6 +21,7 @@ pub fn rotate(
 pub fn remove(sim: &mut Simulation, entity_id: EntityId) -> Option<PlacedEntity> {
     let removed = sim.entities.remove_placed_entity(entity_id);
     if let Some(removed) = &removed {
+        sim.pollution.remove_machine_emission_remainder(entity_id);
         if sim
             .world
             .prototypes

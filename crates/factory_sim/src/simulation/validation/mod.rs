@@ -32,6 +32,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_item_statistics(sim)?;
     validate_fluid_statistics(sim)?;
     validate_power_statistics(sim)?;
+    validate_pollution_state(sim)?;
     validate_placed_entities(sim)?;
     validate_entity_occupancy(&sim.entities)?;
     validate_entity_state_ownership_and_kind(sim)?;
@@ -46,6 +47,32 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
 
     validate_entity_states(sim)?;
 
+    Ok(())
+}
+
+fn validate_pollution_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    let invalid_machine_remainder =
+        sim.pollution
+            .machine_emission_remainders
+            .iter()
+            .any(|(entity_id, remainder)| {
+                *remainder == 0
+                    || *remainder >= crate::pollution::POLLUTION_TICKS_PER_MINUTE
+                    || !sim.entities.placed_entities.contains_key(entity_id)
+            });
+    let invalid_terrain_remainder =
+        sim.pollution
+            .terrain_absorption_remainders
+            .iter()
+            .any(|(coord, remainder)| {
+                *remainder == 0
+                    || *remainder >= crate::pollution::POLLUTION_TICKS_PER_MINUTE
+                    || !sim.world.chunks.contains_key(coord)
+            });
+
+    if invalid_machine_remainder || invalid_terrain_remainder {
+        return Err(SimValidationError::InvalidPollutionState);
+    }
     Ok(())
 }
 

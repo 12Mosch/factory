@@ -1,9 +1,5 @@
 use super::*;
 
-/// Ticks per minute at the fixed 60 Hz simulation rate; converts
-/// per-minute prototype rates into per-tick amounts.
-const TICKS_PER_MINUTE: u64 = 3600;
-
 impl Simulation {
     pub fn pollution(&self) -> &PollutionState {
         &self.pollution
@@ -17,7 +13,7 @@ impl Simulation {
     /// Adds each working machine's per-tick emission to the chunk containing
     /// its anchor tile.
     pub(super) fn emit_pollution_from_machines(&mut self) {
-        let mut emissions: SmallVec<[(ChunkCoord, u64); 32]> = SmallVec::new();
+        let mut emissions: SmallVec<[(EntityId, ChunkCoord, u64); 32]> = SmallVec::new();
         for placed in self.entities.placed_entities.values() {
             let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
                 continue;
@@ -25,20 +21,19 @@ impl Simulation {
             let Some(per_minute_milli) = prototype.pollution_per_minute_milli else {
                 continue;
             };
-            let per_tick_micro = u64::from(per_minute_milli) * 1000 / TICKS_PER_MINUTE;
-            if per_tick_micro == 0 {
-                continue;
-            }
             if self.machine_status_for_entity(placed.id) != Some(MachineStatus::Working) {
                 continue;
             }
             let Some(coord) = ChunkCoord::from_tile(placed.x, placed.y) else {
                 continue;
             };
-            emissions.push((coord, per_tick_micro));
+            emissions.push((placed.id, coord, u64::from(per_minute_milli)));
         }
 
-        for (coord, amount) in emissions {
+        for (entity_id, coord, per_minute_milli) in emissions {
+            let amount = self
+                .pollution
+                .accrue_machine_emission(entity_id, per_minute_milli);
             self.pollution.add_micro(coord, amount);
         }
     }
@@ -86,19 +81,16 @@ impl Simulation {
         }
     }
 
-    fn absorb_pollution_by_terrain(&mut self) {
-        // Absorption rate per tile id, in micro-units per spread interval.
+    pub(super) fn absorb_pollution_by_terrain(&mut self) {
+        // Absorption rate per tile id, in milli-units per minute. Conversion
+        // happens after summing a chunk so fractional output is carried once
+        // per terrain source rather than discarded once per tile.
         let per_tile_absorption: Vec<u64> = self
             .world
             .prototypes
             .tiles
             .iter()
-            .map(|tile| {
-                u64::from(tile.pollution_absorption_per_minute_milli)
-                    * 1000
-                    * POLLUTION_SPREAD_INTERVAL_TICKS
-                    / TICKS_PER_MINUTE
-            })
+            .map(|tile| u64::from(tile.pollution_absorption_per_minute_milli))
             .collect();
         if per_tile_absorption.iter().all(|rate| *rate == 0) {
             return;
@@ -111,7 +103,7 @@ impl Simulation {
             let Some(chunk) = self.world.chunks.get(&coord) else {
                 continue;
             };
-            let absorption: u64 = chunk
+            let per_minute_milli: u64 = chunk
                 .tiles
                 .iter()
                 .map(|tile| {
@@ -121,6 +113,11 @@ impl Simulation {
                         .unwrap_or(0)
                 })
                 .sum();
+            let absorption = self.pollution.accrue_terrain_absorption(
+                coord,
+                per_minute_milli,
+                POLLUTION_SPREAD_INTERVAL_TICKS,
+            );
             self.pollution.remove_micro(coord, absorption);
         }
     }
