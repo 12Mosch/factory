@@ -1,3 +1,4 @@
+use super::combat_ops::CombatIntents;
 use super::*;
 use crate::enemies::{EnemyBase, Expansion, Raid};
 use factory_data::{EnemyBaseGenerationConfig, EnemyGameplayConfig, UnitPrototype};
@@ -837,10 +838,10 @@ impl Simulation {
         Ok(id)
     }
 
-    /// Unit AI: validate or acquire a target, path toward it, and attack
-    /// whatever stands adjacent. Damage is collected first and applied after
-    /// the loop so unit order cannot observe half-applied destruction.
-    pub(super) fn advance_enemies(&mut self) {
+    /// Unit AI: validate or acquire a target, path toward it, and commit an
+    /// attack against whatever stands adjacent. Damage remains pending until
+    /// turret attacks have been collected from the same combat snapshot.
+    pub(super) fn advance_enemies(&mut self, intents: &mut CombatIntents) {
         self.enemy_navigation
             .begin_tick(self.entity_topology_revision, self.world.chunk_revision());
         let targets_invalidated =
@@ -939,7 +940,6 @@ impl Simulation {
                 );
             }
         }
-        let mut attacks: Vec<(EntityId, u32)> = Vec::new();
         {
             let Simulation {
                 world,
@@ -962,14 +962,9 @@ impl Simulation {
             };
 
             for enemy in enemies.enemies.values_mut() {
-                step_enemy(&mut context, enemy, &mut attacks);
+                step_enemy(&mut context, enemy, intents);
             }
         }
-
-        for (entity_id, damage) in attacks {
-            self.damage_entity(entity_id, damage);
-        }
-        self.resolve_arrived_expansions();
     }
 
     pub(super) fn on_enemy_spawner_placed(
@@ -1522,7 +1517,7 @@ impl Simulation {
         }
     }
 
-    fn resolve_arrived_expansions(&mut self) {
+    pub(super) fn resolve_arrived_expansions(&mut self) {
         let arrivals: Vec<_> = self
             .enemies
             .expansions
@@ -1658,11 +1653,7 @@ struct EnemyStepContext<'a> {
     tick: u64,
 }
 
-fn step_enemy(
-    context: &mut EnemyStepContext<'_>,
-    enemy: &mut Enemy,
-    attacks: &mut Vec<(EntityId, u32)>,
-) {
+fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &mut CombatIntents) {
     let world = context.world;
     let entities = context.entities;
     let seed = context.seed;
@@ -1706,7 +1697,7 @@ fn step_enemy(
     if chebyshev_distance_to_footprint(tile, &target_footprint) <= 1 {
         enemy.path.clear();
         if tick >= enemy.next_attack_tick {
-            attacks.push((target, enemy.damage));
+            intents.record_enemy_attack(target, enemy.damage);
             enemy.next_attack_tick = tick + u64::from(enemy.attack_cooldown_ticks);
         }
         return;

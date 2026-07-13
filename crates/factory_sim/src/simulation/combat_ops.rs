@@ -2,12 +2,61 @@ use super::enemy_ops::chebyshev_distance_to_footprint;
 use super::*;
 use std::collections::BTreeMap;
 
+/// Attacks committed during a tick, before any combat damage is applied.
+///
+/// Damage is aggregated by target so resolution is independent of attacker
+/// iteration order. For a surviving enemy hit by several turrets, the lowest
+/// turret ID becomes its deterministic retaliation target.
+#[derive(Default)]
+pub(super) struct CombatIntents {
+    structure_damage: BTreeMap<EntityId, u64>,
+    enemy_damage: BTreeMap<EnemyId, EnemyDamageIntent>,
+}
+
+struct EnemyDamageIntent {
+    amount: u64,
+    retaliation_target: EntityId,
+}
+
+impl CombatIntents {
+    pub(super) fn record_enemy_attack(&mut self, target: EntityId, amount: u32) {
+        let damage = self.structure_damage.entry(target).or_default();
+        *damage = damage.saturating_add(u64::from(amount));
+    }
+
+    fn record_turret_attack(&mut self, turret_id: EntityId, target: TurretTarget, amount: u32) {
+        match target {
+            TurretTarget::Enemy(enemy_id) => {
+                self.enemy_damage
+                    .entry(enemy_id)
+                    .and_modify(|intent| {
+                        intent.amount = intent.amount.saturating_add(u64::from(amount));
+                        intent.retaliation_target = intent.retaliation_target.min(turret_id);
+                    })
+                    .or_insert(EnemyDamageIntent {
+                        amount: u64::from(amount),
+                        retaliation_target: turret_id,
+                    });
+            }
+            TurretTarget::Spawner(spawner_id) => {
+                let damage = self.structure_damage.entry(spawner_id).or_default();
+                *damage = damage.saturating_add(u64::from(amount));
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TurretTarget {
+    Enemy(EnemyId),
+    Spawner(EntityId),
+}
+
 impl Simulation {
     /// Gun turrets acquire the nearest enemy unit in range (falling back to
-    /// enemy spawners) and fire, consuming magazine shots. Spawner damage is
-    /// applied after the turret loop so destruction never happens while
-    /// entity state is borrowed.
-    pub(super) fn advance_gun_turrets(&mut self) {
+    /// enemy spawners), consume magazine shots, and commit their attacks for
+    /// the tick's shared combat resolution phase.
+    pub(super) fn advance_gun_turrets(&mut self, intents: &mut CombatIntents) {
         if self.onboarding_progress.loaded_gun_turrets == 0
             && self.entities.gun_turrets.iter().any(|(entity_id, state)| {
                 self.entities.placed_entities.contains_key(entity_id)
@@ -23,7 +72,6 @@ impl Simulation {
             self.onboarding_progress
                 .record_counter(|progress| &mut progress.loaded_gun_turrets, 1);
         }
-        let mut structure_damage: Vec<(EntityId, u32)> = Vec::new();
         // Units move during their own simulation step, not during turret
         // fire, so one index is valid for this whole pass.
         let enemy_chunks = EnemyChunkIndex::from_enemies(&self.enemies);
@@ -60,45 +108,54 @@ impl Simulation {
 
                 let footprint = placed.footprint;
                 let range = i64::from(turret.range_tiles);
-                let fired = if let Some(enemy_id) =
+                let target = if let Some(enemy_id) =
                     nearest_enemy_in_range(enemies, &enemy_chunks, &footprint, range)
                 {
-                    let enemy = enemies
-                        .enemies
-                        .get_mut(&enemy_id)
-                        .expect("selected enemy id should exist");
-                    let damage = state.loaded_damage;
-                    if enemy.health <= damage {
-                        enemies.enemies.remove(&enemy_id);
-                    } else {
-                        enemy.health -= damage;
-                        // Retaliate: the shot pulls the unit onto the turret.
-                        enemy.target = Some(turret_id);
-                        enemy.path.clear();
-                    }
-                    true
-                } else if let Some(spawner_id) = nearest_spawner_in_range(
-                    &entities.enemy_spawners,
-                    &entities.placed_entities,
-                    &entities.occupancy,
-                    &footprint,
-                    range,
-                ) {
-                    structure_damage.push((spawner_id, state.loaded_damage));
-                    true
+                    Some(TurretTarget::Enemy(enemy_id))
                 } else {
-                    false
+                    nearest_spawner_in_range(
+                        &entities.enemy_spawners,
+                        &entities.placed_entities,
+                        &entities.occupancy,
+                        &footprint,
+                        range,
+                    )
+                    .map(TurretTarget::Spawner)
                 };
 
-                if fired {
+                if let Some(target) = target {
+                    intents.record_turret_attack(turret_id, target, state.loaded_damage);
                     state.loaded_shots -= 1;
                     state.next_ready_tick = tick + u64::from(turret.cooldown_ticks);
                 }
             }
         }
+    }
 
-        for (entity_id, damage) in structure_damage {
-            self.damage_entity(entity_id, damage);
+    /// Applies every attack committed from the tick's pre-resolution combat
+    /// snapshot. A combatant destroyed here still contributes its own queued
+    /// attack, so neither side receives an initiative advantage.
+    pub(super) fn resolve_combat(&mut self, intents: CombatIntents) {
+        for (entity_id, amount) in intents.structure_damage {
+            let amount = u32::try_from(amount).unwrap_or(u32::MAX);
+            self.damage_entity(entity_id, amount);
+        }
+
+        for (enemy_id, intent) in intents.enemy_damage {
+            let Some(enemy) = self.enemies.enemies.get_mut(&enemy_id) else {
+                continue;
+            };
+            if u64::from(enemy.health) <= intent.amount {
+                self.enemies.enemies.remove(&enemy_id);
+            } else {
+                let amount = u32::try_from(intent.amount)
+                    .expect("damage below surviving u32 health must fit in u32");
+                enemy.health -= amount;
+                // Being fired on pulls a surviving unit onto the lowest-ID
+                // turret that participated in the simultaneous volley.
+                enemy.target = Some(intent.retaliation_target);
+                enemy.path.clear();
+            }
         }
     }
 
@@ -260,7 +317,6 @@ fn nearest_enemy_in_range(
     let mut best: Option<(i64, EnemyId)> = None;
     for enemy_id in enemy_chunks.ids_in_expanded_footprint(footprint, range) {
         let Some(enemy) = enemies.enemies.get(enemy_id) else {
-            // A preceding turret may have killed this indexed enemy.
             continue;
         };
         let distance = chebyshev_distance_to_footprint(enemy.tile(), footprint);
