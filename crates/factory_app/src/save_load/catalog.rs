@@ -1,7 +1,5 @@
 use super::compatibility::classify_header;
-use super::container::{
-    CONTAINER_MAGIC, CONTAINER_VERSION, ContainerError, fallback_metadata, inspect_container,
-};
+use super::container::{CONTAINER_VERSION, ContainerError, fallback_metadata, inspect_container};
 use super::{SaveCatalog, SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig};
 use factory_data::PrototypeCatalog;
 use factory_sim::{SAVE_HEADER_SIZE, SaveLoadError, inspect_save_header, prototype_hash};
@@ -129,13 +127,7 @@ fn inspect_entry(
             (fallback(), compatibility)
         }
         Err(ContainerError::InvalidContainerMagic) => {
-            let bytes = fs::read(&path).unwrap_or_default();
-            let compatibility = if bytes.len() < 8 || bytes.starts_with(&CONTAINER_MAGIC) {
-                SaveCompatibility::CorruptOrTruncated
-            } else {
-                SaveCompatibility::NotFactorySave
-            };
-            (fallback(), compatibility)
+            (fallback(), SaveCompatibility::NotFactorySave)
         }
         Err(_) => (fallback(), SaveCompatibility::CorruptOrTruncated),
     };

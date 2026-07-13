@@ -4,13 +4,17 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use factory_app::audio::AudioSettingsWindowState;
-use factory_app::build::resources::{BuildMenuState, BuildPlacementState};
+use factory_app::build::resources::{
+    BlueprintLibraryWindowState, BuildMenuState, BuildPlacementState,
+};
 use factory_app::input::resources::AppInputState;
 use factory_app::map::resources::{
     MapDisplaySettings, MapOverlay, MapTextureBounds, MapTextureCache, MapTextureLayer,
     MapViewState,
 };
 use factory_app::resources::SimResource;
+use factory_app::save_load::SaveLoadWindowState;
+use factory_app::ui::enemy_settings::EnemySettingsWindowState;
 use factory_app::ui::resources::{
     CraftingWindowState, ProductionStatsWindowState, TechnologyWindowState,
 };
@@ -359,6 +363,49 @@ fn f3_toggles_map_debug_flags() {
     let settings = app.world().resource::<MapDisplaySettings>();
     assert!(settings.debug_reveal_all);
     assert!(settings.show_chunk_grid);
+}
+
+#[test]
+fn save_load_window_suppresses_panel_and_debug_hotkeys() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+
+    for key in [
+        KeyCode::KeyM,
+        KeyCode::KeyP,
+        KeyCode::KeyC,
+        KeyCode::KeyO,
+        KeyCode::KeyN,
+        KeyCode::KeyB,
+        KeyCode::F3,
+    ] {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(key);
+        app.update();
+    }
+    {
+        let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keyboard.press(KeyCode::ControlLeft);
+        keyboard.press(KeyCode::KeyB);
+    }
+    app.update();
+
+    assert!(!app.world().resource::<MapViewState>().open);
+    assert!(!app.world().resource::<ProductionStatsWindowState>().open);
+    assert!(!app.world().resource::<CraftingWindowState>().open);
+    assert!(!app.world().resource::<AudioSettingsWindowState>().open);
+    assert!(!app.world().resource::<EnemySettingsWindowState>().open);
+    assert!(!app.world().resource::<BuildMenuState>().open);
+    assert!(!app.world().resource::<BlueprintLibraryWindowState>().open);
+    let settings = app.world().resource::<MapDisplaySettings>();
+    assert!(!settings.debug_reveal_all);
+    assert!(!settings.show_chunk_grid);
 }
 
 #[test]

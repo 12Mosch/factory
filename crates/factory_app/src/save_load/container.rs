@@ -69,6 +69,13 @@ pub fn encode_container(
 }
 
 pub fn decode_container(bytes: &[u8]) -> Result<(SaveMetadata, &[u8]), ContainerError> {
+    let payload_offset = container_payload_offset(bytes)?;
+    let metadata = ron::de::from_bytes(&bytes[PREFIX_SIZE..payload_offset])
+        .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
+    Ok((metadata, &bytes[payload_offset..]))
+}
+
+fn container_payload_offset(bytes: &[u8]) -> Result<usize, ContainerError> {
     if bytes.len() < PREFIX_SIZE {
         return Err(ContainerError::Truncated);
     }
@@ -85,9 +92,7 @@ pub fn decode_container(bytes: &[u8]) -> Result<(SaveMetadata, &[u8]), Container
     if bytes.len() < payload_offset {
         return Err(ContainerError::Truncated);
     }
-    let metadata = ron::de::from_bytes(&bytes[PREFIX_SIZE..payload_offset])
-        .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
-    Ok((metadata, &bytes[payload_offset..]))
+    Ok(payload_offset)
 }
 
 pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, ContainerError> {
@@ -125,21 +130,8 @@ pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, Conta
 pub(crate) fn read_simulation_payload(path: &Path) -> Result<Vec<u8>, ContainerError> {
     let bytes = fs::read(path)?;
     if bytes.starts_with(&CONTAINER_MAGIC) {
-        if bytes.len() < PREFIX_SIZE {
-            return Err(ContainerError::Truncated);
-        }
-        let metadata_len =
-            u32::from_le_bytes(bytes[12..16].try_into().expect("fixed range")) as usize;
-        if metadata_len > MAX_METADATA_BYTES {
-            return Err(ContainerError::MetadataTooLarge(metadata_len));
-        }
-        let payload_offset = PREFIX_SIZE
-            .checked_add(metadata_len)
-            .ok_or(ContainerError::Truncated)?;
-        bytes
-            .get(payload_offset..)
-            .map(<[u8]>::to_vec)
-            .ok_or(ContainerError::Truncated)
+        let payload_offset = container_payload_offset(&bytes)?;
+        Ok(bytes[payload_offset..].to_vec())
     } else {
         Ok(bytes)
     }

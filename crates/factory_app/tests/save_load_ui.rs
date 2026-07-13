@@ -108,6 +108,21 @@ fn named_save_creation_and_duplicate_require_confirmation() {
         PendingSaveConfirmation::None
     );
     assert_eq!(fs::read(&path).unwrap(), original);
+
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    app.update();
+    create_named_save(&mut app, "MAIN FACTORY");
+    assert!(matches!(
+        app.world().resource::<PendingSaveConfirmation>(),
+        PendingSaveConfirmation::Overwrite(_)
+    ));
+    press_confirmation(&mut app, true);
+    app.update();
+    drain_save_jobs(&mut app);
+    assert_ne!(fs::read(&path).unwrap(), original);
 }
 
 #[test]

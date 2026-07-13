@@ -133,10 +133,7 @@ pub fn request_named_save(
         }
     };
     let normalized = normalize_save_name(&name);
-    if let Some(existing) = catalog.entries().iter().find(|entry| {
-        entry.metadata.kind == SaveKind::Named
-            && normalize_save_name(&entry.metadata.display_name) == normalized
-    }) {
+    if let Some(existing) = catalog.named_case_insensitive(&name) {
         *confirmation = PendingSaveConfirmation::Overwrite(existing.id.clone());
         status.message = Some(format!("Overwrite {}?", existing.metadata.display_name));
         status.kind = SaveLoadStatusKind::Info;

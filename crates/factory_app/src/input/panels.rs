@@ -132,6 +132,28 @@ pub(crate) fn handle_panel_input(
         return;
     }
 
+    if resources.save_load.open {
+        if keyboard.just_pressed(KeyCode::Escape) {
+            if *resources.save_confirmation != PendingSaveConfirmation::None {
+                *resources.save_confirmation = PendingSaveConfirmation::None;
+            } else {
+                resources.save_load.open = false;
+            }
+            resources.input_state.escape_consumed = true;
+        }
+        resources.input_state.world_blocked = world_blocking_windows_open(
+            resources.map.open,
+            resources.stats.open,
+            resources.crafting.open,
+            resources.audio_settings.open,
+            resources.enemy_settings.open,
+            resources.save_load.open,
+            resources.build_menu.open,
+            resources.blueprint_library.open,
+        );
+        return;
+    }
+
     if keyboard.just_pressed(KeyCode::KeyM) {
         resources.map.open = !resources.map.open;
         if resources.map.open {
@@ -227,13 +249,6 @@ pub(crate) fn handle_panel_input(
         } else if resources.build_state.selected.is_some() {
             resources.build_state.selected = None;
             resources.build_state.last_status = Default::default();
-            resources.input_state.escape_consumed = true;
-        } else if resources.save_load.open {
-            if *resources.save_confirmation != PendingSaveConfirmation::None {
-                *resources.save_confirmation = PendingSaveConfirmation::None;
-            } else {
-                resources.save_load.open = false;
-            }
             resources.input_state.escape_consumed = true;
         } else {
             resources.save_load.open = true;
