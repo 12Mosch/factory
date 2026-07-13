@@ -295,6 +295,7 @@ impl SimulationSnapshotOwned {
                 power: self.power_statistics,
             },
             pollution: self.pollution,
+            pollution_emitters: PollutionEmitterIndex::default(),
             enemies: self.enemies,
             config: self.config,
             attack_targets: enemy_ops::AttackTargetCache::default(),
@@ -302,6 +303,7 @@ impl SimulationSnapshotOwned {
             transport: TransportLaneCache::default(),
         };
         sim.ensure_fluid_network_topology();
+        sim.rebuild_pollution_emitter_index();
         sim
     }
 }

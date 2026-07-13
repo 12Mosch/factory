@@ -181,6 +181,7 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) statistics: StatisticsContext<'a>,
     pub(super) onboarding_progress: &'a mut OnboardingProgress,
+    pub(super) pollution_emitters: &'a mut PollutionEmitterIndex,
     pub(super) base: factory_data::BasePrototypeIds,
 }
 
@@ -197,6 +198,10 @@ impl<'a> MachineTickContext<'a> {
 
     pub(super) fn record_item_consumed(&mut self, item_id: ItemId, amount: u64) {
         self.statistics.record_item_consumed(item_id, amount);
+    }
+
+    pub(super) fn mark_pollution_emitter_active(&mut self, entity_id: EntityId) {
+        self.pollution_emitters.mark_active(entity_id);
     }
 
     pub(super) fn add_research_units(

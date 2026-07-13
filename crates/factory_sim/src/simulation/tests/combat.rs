@@ -111,6 +111,36 @@ fn idle_furnace_emits_no_pollution() {
 }
 
 #[test]
+fn pollution_emitter_index_tracks_placement_removal_and_work() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace_id = place_stone_furnace(&mut sim);
+    let emitter = sim
+        .pollution_emitters
+        .emitters
+        .get(&furnace_id)
+        .expect("polluting prototype should be indexed on placement");
+    assert_eq!(emitter.chunk, chunk_of_entity(&sim, furnace_id));
+    assert!(!emitter.active, "new idle emitter should not be active");
+
+    let iron_ore = item_id_by_name(&sim.world.prototypes, "iron_ore");
+    let coal = item_id_by_name(&sim.world.prototypes, "coal");
+    add_furnace_input_and_fuel(&mut sim, furnace_id, iron_ore, coal);
+    sim.tick();
+    assert!(sim.pollution_emitters.emitters[&furnace_id].active);
+
+    crate::entity_mutation::remove(&mut sim, furnace_id)
+        .expect("placed emitter should be removable");
+    assert!(!sim.pollution_emitters.emitters.contains_key(&furnace_id));
+    assert!(!sim.pollution_emitters.active_emitters.contains(&furnace_id));
+    assert!(
+        !sim.pollution
+            .machine_emission_remainders
+            .contains_key(&furnace_id),
+        "removal should discard the emitter's fractional carry"
+    );
+}
+
+#[test]
 fn machine_emission_conserves_a_low_rate_over_one_minute_and_save_load() {
     let mut prototypes = PrototypeCatalog::load_base().expect("base prototypes should load");
     let assembler = entity_id_by_name(&prototypes, "assembling_machine");
@@ -120,6 +150,11 @@ fn machine_emission_conserves_a_low_rate_over_one_minute_and_save_load() {
     prototypes.entities[assembler.index()].pollution_per_minute_milli = Some(1);
     let mut sim = Simulation::new(123, prototypes);
     let assembler_id = place_assembling_machine(&mut sim);
+    assert_eq!(
+        sim.pollution_emitters.emitters.len(),
+        1,
+        "non-polluting power infrastructure should stay out of the index"
+    );
     add_assembler_gear_job(&mut sim, assembler_id);
     sim.tick();
     assert_eq!(

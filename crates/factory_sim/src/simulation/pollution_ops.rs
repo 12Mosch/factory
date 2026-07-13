@@ -10,31 +10,92 @@ impl Simulation {
         self.pollution.add_micro(coord, amount);
     }
 
-    /// Adds each working machine's per-tick emission to the chunk containing
-    /// its anchor tile.
-    pub(super) fn emit_pollution_from_machines(&mut self) {
-        let mut emissions: SmallVec<[(EntityId, ChunkCoord, u64); 32]> = SmallVec::new();
-        for placed in self.entities.placed_entities.values() {
-            let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
-                continue;
-            };
-            let Some(per_minute_milli) = prototype.pollution_per_minute_milli else {
-                continue;
-            };
-            if self.machine_status_for_entity(placed.id) != Some(MachineStatus::Working) {
-                continue;
-            }
-            let Some(coord) = ChunkCoord::from_tile(placed.x, placed.y) else {
-                continue;
-            };
-            emissions.push((placed.id, coord, u64::from(per_minute_milli)));
+    pub(super) fn register_pollution_emitter(
+        &mut self,
+        entity_id: EntityId,
+        prototype_id: EntityPrototypeId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) {
+        let Some(per_minute_milli) = self
+            .world
+            .prototypes
+            .entity(prototype_id)
+            .and_then(|prototype| prototype.pollution_per_minute_milli)
+            .filter(|rate| *rate > 0)
+        else {
+            return;
+        };
+        let Some(chunk) = ChunkCoord::from_tile(x, y) else {
+            return;
+        };
+        self.pollution_emitters.emitters.insert(
+            entity_id,
+            PollutionEmitter {
+                chunk,
+                rate: PollutionEmissionRate::from_per_minute_milli(per_minute_milli),
+                active: false,
+            },
+        );
+    }
+
+    pub(super) fn unregister_pollution_emitter(&mut self, entity_id: EntityId) {
+        self.pollution_emitters.emitters.remove(&entity_id);
+        self.pollution_emitters
+            .active_emitters
+            .retain(|active_id| *active_id != entity_id);
+        self.pollution.remove_machine_emission_remainder(entity_id);
+    }
+
+    pub(super) fn rebuild_pollution_emitter_index(&mut self) {
+        self.pollution_emitters.emitters.clear();
+        self.pollution_emitters.active_emitters.clear();
+        let placed = self
+            .entities
+            .placed_entities
+            .values()
+            .map(|placed| (placed.id, placed.prototype_id, placed.x, placed.y))
+            .collect::<Vec<_>>();
+        for (entity_id, prototype_id, x, y) in placed {
+            self.register_pollution_emitter(entity_id, prototype_id, x, y);
         }
 
-        for (entity_id, coord, per_minute_milli) in emissions {
+        // The active flag is derived state. Reconstruct it once after loading
+        // so test/scenario hooks that emit before the next tick retain their
+        // pre-save behavior; normal ticks update it from actual machine work.
+        let active = self
+            .pollution_emitters
+            .emitters
+            .keys()
+            .copied()
+            .filter(|entity_id| {
+                self.machine_status_for_entity(*entity_id) == Some(MachineStatus::Working)
+            })
+            .collect::<Vec<_>>();
+        for entity_id in active {
+            self.pollution_emitters.mark_active(entity_id);
+        }
+    }
+
+    /// Adds each active emitter's cached per-tick emission to its chunk.
+    pub(super) fn emit_pollution_from_machines(&mut self) {
+        let emissions: SmallVec<[(EntityId, PollutionEmitter); 32]> = self
+            .pollution_emitters
+            .active_emitters
+            .iter()
+            .filter_map(|entity_id| {
+                self.pollution_emitters
+                    .emitters
+                    .get(entity_id)
+                    .map(|emitter| (*entity_id, *emitter))
+            })
+            .collect();
+
+        for (entity_id, emitter) in emissions {
             let amount = self
                 .pollution
-                .accrue_machine_emission(entity_id, per_minute_milli);
-            self.pollution.add_micro(coord, amount);
+                .accrue_machine_emission(entity_id, emitter.rate);
+            self.pollution.add_micro(emitter.chunk, amount);
         }
     }
 

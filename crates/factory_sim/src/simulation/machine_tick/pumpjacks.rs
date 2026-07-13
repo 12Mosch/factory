@@ -67,6 +67,7 @@ impl MachineTickContext<'_> {
                 .expect("pumpjack fluid box was checked above");
             state.fluid_id = Some(output_fluid);
             state.amount_milliunits += amount;
+            self.mark_pollution_emitter_active(entity_id);
             self.statistics.record_fluid_produced(output_fluid, amount);
         }
     }

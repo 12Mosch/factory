@@ -177,6 +177,7 @@ impl Simulation {
                     steam_to_consume,
                 )
             {
+                self.pollution_emitters.mark_active(engine_id);
                 self.record_fluid_consumed(steam, steam_to_consume);
             }
         }

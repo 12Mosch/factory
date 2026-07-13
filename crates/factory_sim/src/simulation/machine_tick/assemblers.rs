@@ -73,6 +73,7 @@ impl MachineTickContext<'_> {
                 advance_electric_progress(&mut state.crafting_progress_ticks, required_ticks),
                 ProgressAdvance::Completed
             );
+            self.pollution_emitters.mark_active(entity_id);
 
             if !completed {
                 continue;

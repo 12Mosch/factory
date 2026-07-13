@@ -44,6 +44,9 @@ impl Simulation {
 
             let amount = per_tick_milliunits(pump.pumping_speed_per_second_milliunits);
             let added = self.add_fluid_to_network(network_id, water, amount);
+            if added > 0 {
+                self.pollution_emitters.mark_active(entity_id);
+            }
             self.record_fluid_produced(water, added);
         }
     }
@@ -132,6 +135,7 @@ impl Simulation {
             let added = self.add_fluid_to_network(steam_network_id, steam, steam_amount);
             self.record_fluid_produced(steam, added);
             debug_assert_eq!(added, steam_amount);
+            self.pollution_emitters.mark_active(entity_id);
         }
     }
 }
