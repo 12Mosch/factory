@@ -119,7 +119,7 @@ pub struct PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::combat::{EnemySpawnerState, GunTurretState, HealthState};
+    use crate::combat::{Damage, EnemySpawnerState, Faction, GunTurretState, HealthState};
     use crate::fluids::FluidBoxState;
     use crate::inventory::{Inventory, ItemStack};
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
@@ -142,7 +142,8 @@ mod tests {
         // v12: gun turret, enemy spawner, and health state maps joined the
         // registry.
         // v16: EnemySpawnerState dropped absorbed_pollution_micro.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x0994_95d2_abe6_6160;
+        // v18: gun turret damage and health state became typed combat data.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x9ff3_595e_dd96_fbda;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -340,7 +341,7 @@ mod tests {
                     })],
                 },
                 loaded_shots: 4,
-                loaded_damage: 5,
+                loaded_damage: Damage::physical(5),
                 next_ready_tick: 17,
             },
         );
@@ -352,7 +353,7 @@ mod tests {
         );
         store
             .entity_health
-            .insert(EntityId::new(18), HealthState { current: 42 });
+            .insert(EntityId::new(18), HealthState::new(42, Faction::Player));
 
         store
     }

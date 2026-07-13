@@ -1,4 +1,3 @@
-use super::combat_ops::CombatIntents;
 use super::*;
 use crate::enemies::{EnemyBase, Expansion, Raid};
 use factory_data::{EnemyBaseGenerationConfig, EnemyGameplayConfig, UnitPrototype};
@@ -133,10 +132,10 @@ fn footprint_axis_end(start: WorldTileCoord, length: i32) -> i128 {
 }
 
 impl AttackableStructureIndex {
-    fn rebuild(&mut self, world: &WorldSim, entities: &EntityStore) {
+    fn rebuild(&mut self, _world: &WorldSim, entities: &EntityStore) {
         self.cells.clear();
         for (&entity_id, placed) in &entities.placed_entities {
-            if !is_attackable_kind(world, placed) {
+            if !is_attackable_kind(entities, placed) {
                 continue;
             }
             let (center_x, center_y) = footprint_center_tile(&placed.footprint);
@@ -822,10 +821,15 @@ impl Simulation {
                 id,
                 x: tile_center_fixed(tile_x),
                 y: tile_center_fixed(tile_y),
-                health: scale_stat(unit.max_health, strength, evolution),
-                max_health: scale_stat(unit.max_health, strength, evolution),
-                damage: scale_stat(unit.damage, strength, evolution),
-                attack_cooldown_ticks: unit.attack_cooldown_ticks,
+                health: HealthState::new(
+                    scale_stat(unit.max_health, strength, evolution),
+                    Faction::Enemy,
+                ),
+                attack: AttackDefinition::melee(
+                    Damage::physical(scale_stat(unit.damage, strength, evolution)),
+                    unit.attack_cooldown_ticks,
+                    1,
+                ),
                 speed_fixed_per_tick: unit.speed_fixed_per_tick,
                 aggro_radius_tiles: unit.aggro_radius_tiles,
                 mode,
@@ -852,7 +856,7 @@ impl Simulation {
     /// Unit AI: validate or acquire a target, path toward it, and commit an
     /// attack against whatever stands adjacent. Damage remains pending until
     /// turret attacks have been collected from the same combat snapshot.
-    pub(super) fn advance_enemies(&mut self, intents: &mut CombatIntents) {
+    pub(super) fn advance_enemies(&mut self, commands: &mut CombatCommandBuffer) {
         self.enemy_navigation
             .begin_tick(self.entity_topology_revision, self.world.chunk_revision());
         let targets_invalidated =
@@ -977,7 +981,7 @@ impl Simulation {
             };
 
             for enemy in enemies.enemies.values_mut() {
-                step_enemy(&mut context, enemy, intents);
+                step_enemy(&mut context, enemy, commands);
             }
         }
     }
@@ -1668,7 +1672,11 @@ struct EnemyStepContext<'a> {
     tick: u64,
 }
 
-fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &mut CombatIntents) {
+fn step_enemy(
+    context: &mut EnemyStepContext<'_>,
+    enemy: &mut Enemy,
+    commands: &mut CombatCommandBuffer,
+) {
     let world = context.world;
     let entities = context.entities;
     let seed = context.seed;
@@ -1687,7 +1695,7 @@ fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &m
                 .attack_targets
                 .target_for_base(base_id, enemy_footprint(enemy))
         } else {
-            acquire_target(world, entities, &context.attack_targets.index, enemy)
+            acquire_target(entities, &context.attack_targets.index, enemy)
         };
         enemy.next_decision_tick = tick + ENEMY_TARGET_RESCAN_TICKS + enemy.id.raw() % 16;
         if enemy.target.is_some() {
@@ -1709,11 +1717,20 @@ fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &m
 
     // Attack when standing next to (or on the edge of) the target.
     let tile = enemy.tile();
-    if enemy_footprint(enemy).chebyshev_distance_to(&target_footprint) <= 1 {
+    if enemy_footprint(enemy).chebyshev_distance_to(&target_footprint)
+        <= i64::from(enemy.attack.delivery.range_tiles())
+    {
         enemy.path.clear();
         if tick >= enemy.next_attack_tick {
-            intents.record_enemy_attack(target, enemy.damage);
-            enemy.next_attack_tick = tick + u64::from(enemy.attack_cooldown_ticks);
+            commands.attack(
+                CombatSource {
+                    owner: CombatantId::Enemy(enemy.id),
+                    faction: enemy.faction(),
+                },
+                CombatantId::Entity(target),
+                enemy.attack,
+            );
+            enemy.next_attack_tick = tick + u64::from(enemy.attack.cooldown_ticks);
         }
         return;
     }
@@ -1785,7 +1802,6 @@ fn step_enemy(context: &mut EnemyStepContext<'_>, enemy: &mut Enemy, intents: &m
 /// Chooses what a unit fights: guards react to player structures near them,
 /// attackers march on the closest structure anywhere in the world.
 fn acquire_target(
-    world: &WorldSim,
     entities: &EntityStore,
     attackable: &AttackableStructureIndex,
     enemy: &Enemy,
@@ -1801,7 +1817,7 @@ fn acquire_target(
                 tile_y - radius,
                 tile_y + radius,
             );
-            nearest_attackable(world, entities, &footprint, candidates.into_iter())
+            nearest_attackable(entities, &footprint, candidates.into_iter())
         }
         EnemyMode::Attack => attackable.nearest(&footprint),
     }
@@ -1811,17 +1827,14 @@ fn acquire_target(
 /// never targets. Ties resolve to the lowest entity id because candidates
 /// iterate in ascending id order.
 fn nearest_attackable(
-    world: &WorldSim,
     entities: &EntityStore,
     from: &EntityFootprint,
     candidates: impl Iterator<Item = EntityId>,
 ) -> Option<EntityId> {
-    nearest_attackable_with_distance(world, entities, from, candidates)
-        .map(|(_, entity_id)| entity_id)
+    nearest_attackable_with_distance(entities, from, candidates).map(|(_, entity_id)| entity_id)
 }
 
 fn nearest_attackable_with_distance(
-    world: &WorldSim,
     entities: &EntityStore,
     from: &EntityFootprint,
     candidates: impl Iterator<Item = EntityId>,
@@ -1831,7 +1844,7 @@ fn nearest_attackable_with_distance(
         let Some(placed) = entities.placed_entities.get(&entity_id) else {
             continue;
         };
-        if !is_attackable_kind(world, placed) {
+        if !is_attackable_kind(entities, placed) {
             continue;
         }
         let distance = from.distance_squared_to(&placed.footprint);
@@ -1842,16 +1855,11 @@ fn nearest_attackable_with_distance(
     best
 }
 
-fn is_attackable_kind(world: &WorldSim, placed: &PlacedEntity) -> bool {
-    world
-        .prototypes
-        .entity(placed.prototype_id)
-        .is_some_and(|prototype| {
-            !matches!(
-                prototype.entity_kind,
-                EntityKind::EnemySpawner | EntityKind::ResourcePatch
-            )
-        })
+fn is_attackable_kind(entities: &EntityStore, placed: &PlacedEntity) -> bool {
+    entities
+        .entity_health
+        .get(&placed.id)
+        .is_some_and(|health| Faction::Enemy.is_hostile_to(health.faction))
 }
 
 /// Idle guards drift around their home spawner so nests look alive.
@@ -1948,7 +1956,7 @@ fn greedy_step(
             && entities
                 .placed_entities
                 .get(&blocker)
-                .is_some_and(|placed| is_attackable_kind(world, placed))
+                .is_some_and(|placed| is_attackable_kind(entities, placed))
         {
             enemy.target = Some(blocker);
             enemy.path.clear();

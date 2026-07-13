@@ -302,6 +302,7 @@ impl PlayerState {
             x: tile_center_fixed(x.into()),
             y: tile_center_fixed(y.into()),
             repair_remaining_health: 0,
+            health: HealthState::new(PLAYER_MAX_HEALTH, Faction::Player),
         }
     }
 }

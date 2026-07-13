@@ -226,8 +226,11 @@ pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationErro
     }
     for (id, enemy) in &sim.enemies.enemies {
         if enemy.id != *id
-            || enemy.health == 0
-            || enemy.health > enemy.max_health
+            || enemy.health.current == 0
+            || enemy.health.current > enemy.health.maximum
+            || enemy.health.faction != Faction::Enemy
+            || !enemy.health.resistances.is_valid()
+            || !enemy.attack.is_valid()
             || enemy.speed_fixed_per_tick == 0
             || enemy.id.raw() > sim.enemies.next_enemy_id
         {
