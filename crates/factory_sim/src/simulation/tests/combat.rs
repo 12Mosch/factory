@@ -394,6 +394,40 @@ fn gun_turret_kills_enemy_and_consumes_ammo() {
 }
 
 #[test]
+fn enemy_and_turret_attacks_resolve_simultaneously() {
+    let mut sim = Simulation::new_test_world(123);
+    let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 3);
+    let turret_id = place_at(&mut sim, turret, x, y, Direction::North);
+    load_turret_ammo(&mut sim, turret_id, 1);
+    sim.entities
+        .entity_health
+        .get_mut(&turret_id)
+        .expect("turret should have health")
+        .current = 15;
+
+    let enemy_id = spawn_test_enemy_at(&mut sim, x + 2, y);
+    sim.enemies
+        .enemies
+        .get_mut(&enemy_id)
+        .expect("enemy should exist")
+        .health = 5;
+
+    sim.tick();
+
+    assert!(
+        sim.entities.placed_entity(turret_id).is_none(),
+        "the enemy's committed attack should destroy the turret"
+    );
+    assert!(
+        sim.enemies().get(enemy_id).is_none(),
+        "the destroyed turret's committed shot should still kill the enemy"
+    );
+    sim.validate()
+        .expect("simultaneous combat resolution should preserve validity");
+}
+
+#[test]
 fn unloaded_turret_does_not_fire() {
     let mut sim = Simulation::new_test_world(123);
     let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
