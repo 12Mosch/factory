@@ -25,6 +25,7 @@ impl AttackTargetCache {
         revision: u64,
         world: &WorldSim,
         entities: &EntityStore,
+        enemies: &EnemySubsystem,
     ) -> bool {
         if self.revision == Some(revision) {
             return false;
@@ -34,6 +35,23 @@ impl AttackTargetCache {
         self.index.rebuild(world, entities);
         self.base_targets.clear();
         self.raid_targets.clear();
+        if !invalidated {
+            for (&base_id, base) in &enemies.bases {
+                if let Some(target) = base
+                    .staged_units
+                    .iter()
+                    .filter_map(|id| enemies.enemies.get(id).and_then(|unit| unit.target))
+                    .find(|target| {
+                        entities
+                            .placed_entities
+                            .get(target)
+                            .is_some_and(|placed| is_attackable_kind(entities, placed))
+                    })
+                {
+                    self.base_targets.insert(base_id, Some(target));
+                }
+            }
+        }
         self.revision = Some(revision);
         invalidated
     }

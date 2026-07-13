@@ -133,7 +133,12 @@ mod enemy_feature_tests {
     fn topology_revision_rebuilds_index_and_invalidates_group_targets() {
         let sim = Simulation::new_test_world(123);
         let mut cache = AttackTargetCache::default();
-        assert!(!cache.refresh(sim.entity_topology_revision, &sim.world, &sim.entities));
+        assert!(!cache.refresh(
+            sim.entity_topology_revision,
+            &sim.world,
+            &sim.entities,
+            &sim.enemies,
+        ));
         cache
             .base_targets
             .insert(EnemyBaseId::new(1), Some(EntityId::new(11)));
@@ -144,7 +149,8 @@ mod enemy_feature_tests {
         assert!(cache.refresh(
             sim.entity_topology_revision.wrapping_add(1),
             &sim.world,
-            &sim.entities
+            &sim.entities,
+            &sim.enemies,
         ));
         assert!(cache.base_targets.is_empty());
         assert!(cache.raid_targets.is_empty());

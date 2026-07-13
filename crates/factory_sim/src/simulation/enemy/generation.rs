@@ -39,15 +39,7 @@ impl Simulation {
             return;
         };
         let (min_x, min_y) = coord.min_tile();
-        let center_x = min_x + i64::from(CHUNK_SIZE) / 2;
-        let center_y = min_y + i64::from(CHUNK_SIZE) / 2;
         let min_distance = i64::from(self.config.world.starting_safe_radius_tiles);
-        let center_distance_squared = i128::from(center_x) * i128::from(center_x)
-            + i128::from(center_y) * i128::from(center_y);
-        let min_distance_squared = i128::from(min_distance) * i128::from(min_distance);
-        if center_distance_squared < min_distance_squared {
-            return;
-        }
 
         let roll = splitmix64(
             self.world.seed ^ SPAWNER_PLACEMENT_SALT ^ hash_world(self.world.seed, min_x, min_y),
@@ -114,6 +106,16 @@ impl Simulation {
                 min_y + margin,
                 min_y + i64::from(CHUNK_SIZE) - margin - i64::from(prototype_size.y),
             );
+            let footprint = EntityFootprint::from_size(
+                x,
+                y,
+                prototype_size.x,
+                prototype_size.y,
+                Direction::North,
+            );
+            if footprint_intersects_starting_safe_radius(&footprint, min_distance) {
+                continue;
+            }
             self.enemies.placement_base = Some(id);
             let _ = placement::place(
                 self,
@@ -135,4 +137,17 @@ impl Simulation {
             self.enemies.bases.remove(&id);
         }
     }
+}
+
+fn footprint_intersects_starting_safe_radius(
+    footprint: &EntityFootprint,
+    radius: WorldTileCoord,
+) -> bool {
+    let max_x = footprint.x + i64::from(footprint.width) - 1;
+    let max_y = footprint.y + i64::from(footprint.height) - 1;
+    let nearest_x = 0_i64.clamp(footprint.x, max_x);
+    let nearest_y = 0_i64.clamp(footprint.y, max_y);
+    let distance_squared = i128::from(nearest_x) * i128::from(nearest_x)
+        + i128::from(nearest_y) * i128::from(nearest_y);
+    distance_squared < i128::from(radius) * i128::from(radius)
 }

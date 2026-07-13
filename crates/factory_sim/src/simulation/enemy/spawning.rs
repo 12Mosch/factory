@@ -28,6 +28,7 @@ impl Simulation {
                 }
             }
         }
+        let mut projected_alive_by_spawner = alive_by_spawner.clone();
 
         self.advance_evolution_time();
         let mut requests: Vec<SpawnRequest> = Vec::new();
@@ -86,17 +87,18 @@ impl Simulation {
             *absorbed_for_base = sum;
             attack_budget_overflows = attack_budget_overflows.saturating_add(u64::from(overflowed));
 
-            let alive = alive_by_spawner.get(&spawner_id).copied().unwrap_or(0);
+            let projected_alive = projected_alive_by_spawner.entry(spawner_id).or_default();
             let guards = guards_by_spawner.get(&spawner_id).copied().unwrap_or(0);
             if tick >= state.next_free_spawn_tick {
                 state.next_free_spawn_tick = tick + u64::from(config.free_spawn_interval_ticks);
-                if guards < config.guard_units && alive < config.max_alive_units {
+                if guards < config.guard_units && *projected_alive < config.max_alive_units {
                     requests.push(SpawnRequest {
                         spawner_id,
                         unit: config.unit,
                         mission: EnemyMission::Guard,
                         attack_budget_cost_micro: 0,
                     });
+                    *projected_alive += 1;
                 }
             }
         }
@@ -149,7 +151,10 @@ impl Simulation {
                             spawner_id,
                             cfg.unit,
                             u64::from(cfg.unit_spawn_pollution_cost_milli) * 1000,
-                            alive_by_spawner.get(spawner_id).copied().unwrap_or(0)
+                            projected_alive_by_spawner
+                                .get(spawner_id)
+                                .copied()
+                                .unwrap_or(0)
                                 < cfg.max_alive_units,
                         ))
                     })
@@ -172,6 +177,7 @@ impl Simulation {
                         mission: EnemyMission::Staging(base_id),
                         attack_budget_cost_micro: cost,
                     });
+                    *projected_alive_by_spawner.entry(spawner_id).or_default() += 1;
                 }
             }
         }
@@ -193,9 +199,9 @@ impl Simulation {
                 base.attack_budget_micro -= request.attack_budget_cost_micro;
             }
         }
+        self.cleanup_enemy_groups();
         self.launch_ready_raids();
         self.advance_expansions_and_growth();
-        self.cleanup_enemy_groups();
     }
 
     pub(super) fn spawn_enemy_near_spawner(

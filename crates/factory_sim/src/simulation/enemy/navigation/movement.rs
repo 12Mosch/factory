@@ -16,9 +16,12 @@ impl Simulation {
     pub(in crate::simulation) fn advance_enemies(&mut self, commands: &mut CombatCommandBuffer) {
         self.enemy_navigation
             .begin_tick(self.entity_topology_revision, self.world.chunk_revision());
-        let targets_invalidated =
-            self.attack_targets
-                .refresh(self.entity_topology_revision, &self.world, &self.entities);
+        let targets_invalidated = self.attack_targets.refresh(
+            self.entity_topology_revision,
+            &self.world,
+            &self.entities,
+            &self.enemies,
+        );
         if targets_invalidated {
             for raid in self.enemies.raids.values_mut() {
                 raid.target = None;
@@ -68,7 +71,16 @@ impl Simulation {
             }
             for member in &raid.members {
                 if let Some(unit) = enemies.enemies.get_mut(member) {
-                    unit.target = raid.target;
+                    let local_blocker_active = unit.target.is_some_and(|target| {
+                        Some(target) != raid.target
+                            && entities
+                                .placed_entities
+                                .get(&target)
+                                .is_some_and(|placed| is_attackable_kind(entities, placed))
+                    });
+                    if !local_blocker_active {
+                        unit.target = raid.target;
+                    }
                 }
             }
         }
@@ -178,9 +190,11 @@ fn step_enemy(
         } else {
             acquire_target(entities, &context.attack_targets.index, enemy)
         };
-        enemy.next_decision_tick = tick + ENEMY_TARGET_RESCAN_TICKS + enemy.id.raw() % 16;
         if enemy.target.is_some() {
             enemy.path.clear();
+            enemy.next_decision_tick = tick;
+        } else {
+            enemy.next_decision_tick = tick + ENEMY_TARGET_RESCAN_TICKS + enemy.id.raw() % 16;
         }
     }
 

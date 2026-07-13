@@ -390,10 +390,12 @@ fn enemy_spawners_seed_in_distant_chunks_but_not_near_spawn() {
             .placed_entities
             .get(spawner_id)
             .expect("spawner should be placed");
-        let distance_squared = placed.x * placed.x + placed.y * placed.y;
+        let distance_squared =
+            EntityFootprint::single_tile(0, 0).distance_squared_to(&placed.footprint);
+        let safe_radius = u128::from(sim.enemy_settings().world.starting_safe_radius_tiles);
         assert!(
-            distance_squared >= 100 * 100,
-            "spawners should keep their distance from the origin"
+            distance_squared >= safe_radius * safe_radius,
+            "every spawner footprint should stay outside the starting safe radius"
         );
     }
     sim.validate().expect("seeded world should stay valid");
@@ -489,6 +491,70 @@ fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
     assert_eq!(
         sim.enemies.bases[&base_id].attack_budget_micro, attack_cost,
         "failed placement must not consume the colony's attack budget"
+    );
+}
+
+#[test]
+fn dead_staged_members_are_pruned_before_raid_launch() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let base_id = sim.enemies.spawner_bases[&spawner_id];
+    let raid_target_size = sim.raid_target_size();
+    let base = sim.enemies.bases.get_mut(&base_id).unwrap();
+    base.staged_units = (1..=u64::from(raid_target_size))
+        .map(|offset| EnemyId::new(u64::MAX - offset))
+        .collect();
+    base.staging_started_tick = Some(0);
+    base.next_raid_tick = 0;
+
+    sim.advance_enemy_spawners();
+
+    assert!(sim.enemies.raids.is_empty());
+    assert!(sim.enemies.bases[&base_id].staged_units.is_empty());
+    assert_eq!(sim.enemies.bases[&base_id].next_raid_tick, 0);
+    assert!(
+        !sim.enemies
+            .threat_events
+            .iter()
+            .any(|event| event.kind == ThreatEventKind::RaidLaunched)
+    );
+}
+
+#[test]
+fn queued_guard_and_staging_spawns_respect_spawner_alive_cap() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let placed = sim.entities.placed_entities[&spawner_id].clone();
+    let config = sim.world.prototypes.entities[placed.prototype_id.index()]
+        .enemy_spawner
+        .as_ref()
+        .unwrap();
+    let max_alive = config.max_alive_units;
+    let attack_cost = u64::from(config.unit_spawn_pollution_cost_milli) * 1_000;
+    let base_id = sim.enemies.spawner_bases[&spawner_id];
+    sim.enemies
+        .bases
+        .get_mut(&base_id)
+        .unwrap()
+        .attack_budget_micro = attack_cost;
+
+    for offset in 0..max_alive - 1 {
+        let id = spawn_test_enemy_at(&mut sim, placed.x + i64::from(offset), placed.y + 8);
+        sim.enemies.enemies.get_mut(&id).unwrap().home_spawner = Some(spawner_id);
+    }
+
+    sim.advance_enemy_spawners();
+
+    let alive = sim
+        .enemies
+        .enemies
+        .values()
+        .filter(|unit| unit.home_spawner == Some(spawner_id))
+        .count();
+    assert_eq!(alive, max_alive as usize);
+    assert_eq!(
+        sim.enemies.bases[&base_id].attack_budget_micro, attack_cost,
+        "the staging request should be suppressed after the projected guard reaches the cap"
     );
 }
 

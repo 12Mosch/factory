@@ -199,21 +199,16 @@ impl Simulation {
         };
         let expansion_id = self.enemies.allocate_expansion_id();
         let count = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
-        let before: BTreeSet<_> = self.enemies.enemies.keys().copied().collect();
+        let mut members = BTreeSet::new();
         for _ in 0..count {
-            let _ = self.spawn_enemy_near_spawner(
+            if let Ok(member) = self.spawn_enemy_near_spawner(
                 spawner_id,
                 &unit,
                 EnemyMission::Expansion(expansion_id),
-            );
+            ) {
+                members.insert(member);
+            }
         }
-        let members = self
-            .enemies
-            .enemies
-            .keys()
-            .filter(|id| !before.contains(id))
-            .copied()
-            .collect::<BTreeSet<_>>();
         if members.is_empty() {
             return;
         }
@@ -255,27 +250,26 @@ impl Simulation {
                 party
                     .members
                     .iter()
-                    .filter_map(|member| self.enemies.enemies.get(member))
-                    .any(|unit| unit.tile() == party.destination)
-                    .then_some(id)
+                    .find(|member| {
+                        self.enemies
+                            .enemies
+                            .get(member)
+                            .is_some_and(|unit| unit.tile() == party.destination)
+                    })
+                    .copied()
+                    .map(|founder| (id, founder))
             })
             .collect();
-        for expansion_id in arrivals {
+        for (expansion_id, founder) in arrivals {
             let Some(party) = self.enemies.expansions.remove(&expansion_id) else {
                 continue;
             };
             let Some(cfg) = self.gameplay().copied() else {
                 continue;
             };
-            let Some(founder) = party
-                .members
-                .iter()
-                .filter(|id| self.enemies.enemies.contains_key(id))
-                .min()
-                .copied()
-            else {
+            if !self.enemies.enemies.contains_key(&founder) {
                 continue;
-            };
+            }
             if !self.expansion_site_clear(
                 party.base_id,
                 party.destination.0,
@@ -346,6 +340,13 @@ impl Simulation {
                     }
                 }
             } else {
+                for id in party.members {
+                    if let Some(unit) = self.enemies.enemies.get_mut(&id) {
+                        unit.mission = EnemyMission::Guard;
+                        unit.mode = EnemyMode::Guard;
+                        unit.path.clear();
+                    }
+                }
                 self.enemies.bases.remove(&new_base);
             }
         }
