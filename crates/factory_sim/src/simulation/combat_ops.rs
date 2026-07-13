@@ -16,12 +16,17 @@ impl Simulation {
             && self.entities.gun_turrets.iter().any(|(entity_id, state)| {
                 self.entities.placed_entities.contains_key(entity_id)
                     && (state.loaded_shots > 0
-                        || state.ammo.slots().iter().flatten().any(|stack| {
-                            self.world
-                                .prototypes
-                                .item(stack.item_id())
-                                .is_some_and(|item| item.ammo.is_some())
-                        }))
+                        || state
+                            .ammo
+                            .slots()
+                            .iter()
+                            .filter_map(|slot| slot.stack())
+                            .any(|stack| {
+                                self.world
+                                    .prototypes
+                                    .item(stack.item_id())
+                                    .is_some_and(|item| item.ammo.is_some())
+                            }))
             })
         {
             self.onboarding_progress
@@ -269,7 +274,7 @@ impl Simulation {
                 .player_inventory
                 .slots()
                 .iter()
-                .flatten()
+                .filter_map(|slot| slot.stack())
                 .map(|stack| stack.item_id())
                 .find(|item_id| {
                     self.world
@@ -315,13 +320,19 @@ impl Simulation {
 
 /// Breaks one magazine out of the turret's ammo inventory into loose shots.
 fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
-    let Some((item_id, ammo)) = state.ammo.slots().iter().flatten().find_map(|stack| {
-        world
-            .prototypes
-            .item(stack.item_id())
-            .and_then(|item| item.ammo)
-            .map(|ammo| (stack.item_id(), ammo))
-    }) else {
+    let Some((item_id, ammo)) = state
+        .ammo
+        .slots()
+        .iter()
+        .filter_map(|slot| slot.stack())
+        .find_map(|stack| {
+            world
+                .prototypes
+                .item(stack.item_id())
+                .and_then(|item| item.ammo)
+                .map(|ammo| (stack.item_id(), ammo))
+        })
+    else {
         return;
     };
     if state.ammo.remove(item_id, 1).is_err() {

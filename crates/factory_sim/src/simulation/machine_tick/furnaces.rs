@@ -20,9 +20,8 @@ impl MachineTickContext<'_> {
             };
 
             let output_can_accept = profiler.measure(ProfilePhase::InventoryTransfers, || {
-                output_slot_can_accept(
+                state.output_slot.can_insert_item(
                     &self.world.prototypes,
-                    state.output_slot,
                     product.item,
                     product.amount,
                 )
@@ -61,15 +60,14 @@ impl MachineTickContext<'_> {
             }
 
             profiler.measure(ProfilePhase::InventoryTransfers, || {
-                remove_from_single_slot(&mut state.input_slot, ingredient.item, ingredient.amount)
+                state
+                    .input_slot
+                    .remove(ingredient.item, ingredient.amount)
                     .expect("selected furnace input should still contain ingredient");
-                insert_output_item(
-                    &self.world.prototypes,
-                    &mut state.output_slot,
-                    product.item,
-                    product.amount,
-                )
-                .expect("the checked furnace output slot should accept the product");
+                state
+                    .output_slot
+                    .insert(&self.world.prototypes, product.item, product.amount)
+                    .expect("the checked furnace output slot should accept the product");
             });
             self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
             self.record_item_produced(product.item, u64::from(product.amount));

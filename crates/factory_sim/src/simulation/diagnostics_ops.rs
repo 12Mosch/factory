@@ -283,7 +283,7 @@ impl Simulation {
         ) {
             return MachineStatus::OutputFull;
         }
-        if state.energy.fuel_slot.is_none() && state.energy.energy_remaining_joules <= f64::EPSILON
+        if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
         {
             return MachineStatus::NoFuel;
         }
@@ -296,15 +296,13 @@ impl Simulation {
         else {
             return MachineStatus::NoInput;
         };
-        if !output_slot_can_accept(
-            &self.world.prototypes,
-            state.output_slot,
-            product.item,
-            product.amount,
-        ) {
+        if !state
+            .output_slot
+            .can_insert_item(&self.world.prototypes, product.item, product.amount)
+        {
             return MachineStatus::OutputFull;
         }
-        if state.energy.fuel_slot.is_none() && state.energy.energy_remaining_joules <= f64::EPSILON
+        if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
         {
             return MachineStatus::NoFuel;
         }
@@ -434,7 +432,7 @@ impl Simulation {
         if self.fluid_network_available_capacity_for_fluid(steam_network_id, steam) < steam_amount {
             return MachineStatus::OutputFull;
         }
-        if state.energy.fuel_slot.is_none() && state.energy.energy_remaining_joules <= f64::EPSILON
+        if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
         {
             return MachineStatus::NoFuel;
         }

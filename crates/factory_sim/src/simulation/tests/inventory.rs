@@ -88,8 +88,9 @@ fn transfer_to_full_chest_fails_without_changing_player_inventory() {
             .expect("chest should expose inventory");
         let stack =
             ItemStack::new(&catalog, coal, 100).expect("coal should form a full valid stack");
-        *inventory = Inventory::from_slots(&catalog, vec![Some(stack); inventory.slots().len()])
-            .expect("full chest fixture should be valid");
+        *inventory =
+            Inventory::from_slots(&catalog, vec![test_slot(stack); inventory.slots().len()])
+                .expect("full chest fixture should be valid");
     }
     assert!(
         !crate::entity_access::inventory(&sim, entity_id)
@@ -271,7 +272,7 @@ fn player_starts_with_drill_and_furnace_only() {
         .player_inventory
         .slots()
         .iter()
-        .filter_map(|slot| *slot)
+        .filter_map(|slot| slot.stack())
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -301,7 +302,7 @@ fn inventory_insert_never_exceeds_item_stack_size() {
         .expect("two cable stacks should fit");
 
     assert_eq!(inventory.count(copper_cable), 201);
-    for stack in inventory.slots().iter().flatten() {
+    for stack in inventory.slots().iter().filter_map(|slot| slot.stack()) {
         assert!(stack.count() <= 200);
     }
 }

@@ -61,7 +61,7 @@ pub(in crate::simulation) fn peek_inserter_source_item(
         return inventory
             .slots()
             .iter()
-            .flatten()
+            .filter_map(|slot| slot.stack())
             .map(|stack| stack.item_id())
             .next();
     }
@@ -71,13 +71,13 @@ pub(in crate::simulation) fn peek_inserter_source_item(
             .inventory
             .slots()
             .iter()
-            .flatten()
+            .filter_map(|slot| slot.stack())
             .map(|stack| stack.item_id())
             .next();
     }
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
-        return furnace.output_slot.map(|stack| stack.item_id());
+        return furnace.output_slot.stack().map(|stack| stack.item_id());
     }
 
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
@@ -85,7 +85,7 @@ pub(in crate::simulation) fn peek_inserter_source_item(
             .output_inventory
             .slots()
             .iter()
-            .flatten()
+            .filter_map(|slot| slot.stack())
             .map(|stack| stack.item_id())
             .next();
     }
@@ -114,39 +114,81 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     };
 
     if let Some(inventory) = entities.entity_inventories.get(&entity_id) {
-        return inventory.can_insert(catalog, item.item_id(), item.count());
+        return item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            inventory_policy_for_entity(entities, entity_id),
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        ) && inventory.can_insert(catalog, item.item_id(), item.count());
     }
 
     if let Some(lab) = entities.labs.get(&entity_id) {
-        return lab_can_accept_item(catalog, item.item_id())
-            && lab
-                .inventory
-                .can_insert(catalog, item.item_id(), item.count());
+        return item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::SciencePack,
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        ) && lab
+            .inventory
+            .can_insert(catalog, item.item_id(), item.count());
     }
 
     if let Some(turret) = entities.gun_turrets.get(&entity_id) {
-        return item_is_ammo(catalog, item.item_id())
-            && turret
-                .ammo
-                .can_insert(catalog, item.item_id(), item.count());
+        return item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Ammunition,
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        ) && turret
+            .ammo
+            .can_insert(catalog, item.item_id(), item.count());
     }
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
-        return burner_fuel_slot_can_accept(catalog, furnace.energy.fuel_slot, item)
-            || input_slot_can_accept(catalog, research, furnace.input_slot, item);
+        return item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            furnace.energy.fuel_slot,
+            item,
+        ) || item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::FurnaceIngredient,
+            ItemSlotOperation::InserterInsert,
+            furnace.input_slot,
+            item,
+        );
     }
 
     if let Some(boiler) = entities.boilers.get(&entity_id) {
-        return burner_fuel_slot_can_accept(catalog, boiler.energy.fuel_slot, item);
+        return item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            boiler.energy.fuel_slot,
+            item,
+        );
     }
 
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
-        let machine_category = assembler_machine_category(catalog, entities, entity_id);
-        return assembler_input_accepts_item(
+        return item_slot_policy_accepts(
             catalog,
             research,
-            machine_category,
-            assembler,
+            entities,
+            ItemSlotPolicy::AssemblerIngredient(entity_id),
+            ItemSlotOperation::InserterInsert,
             item.item_id(),
         ) && assembler
             .input_inventory
@@ -180,6 +222,12 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
     let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
 
     if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
+        if !item_slot_policy_allows_operation(
+            ItemSlotPolicy::Unrestricted,
+            ItemSlotOperation::InserterExtract,
+        ) {
+            return None;
+        }
         inventory.remove(item_id, 1).ok()?;
         return Some(
             ItemStack::new(catalog, item_id, 1)
@@ -188,6 +236,12 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
     }
 
     if let Some(lab) = entities.labs.get_mut(&entity_id) {
+        if !item_slot_policy_allows_operation(
+            ItemSlotPolicy::SciencePack,
+            ItemSlotOperation::InserterExtract,
+        ) {
+            return None;
+        }
         lab.inventory.remove(item_id, 1).ok()?;
         return Some(
             ItemStack::new(catalog, item_id, 1)
@@ -196,7 +250,13 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
     }
 
     if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
-        remove_from_single_slot(&mut furnace.output_slot, item_id, 1).ok()?;
+        if !item_slot_policy_allows_operation(
+            ItemSlotPolicy::OutputOnly,
+            ItemSlotOperation::InserterExtract,
+        ) {
+            return None;
+        }
+        furnace.output_slot.remove(item_id, 1).ok()?;
         return Some(
             ItemStack::new(catalog, item_id, 1)
                 .expect("a removed inserter source item should form a valid stack"),
@@ -204,6 +264,12 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
     }
 
     if let Some(assembler) = entities.assembling_machines.get_mut(&entity_id) {
+        if !item_slot_policy_allows_operation(
+            ItemSlotPolicy::OutputOnly,
+            ItemSlotOperation::InserterExtract,
+        ) {
+            return None;
+        }
         assembler.output_inventory.remove(item_id, 1).ok()?;
         return Some(
             ItemStack::new(catalog, item_id, 1)
@@ -253,43 +319,105 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         return false;
     };
 
-    if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
+    if entities.entity_inventories.contains_key(&entity_id) {
+        if !item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            inventory_policy_for_entity(entities, entity_id),
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        ) {
+            return false;
+        }
+        let inventory = entities
+            .entity_inventories
+            .get_mut(&entity_id)
+            .expect("inventory presence was checked above");
         return inventory
             .insert(catalog, item.item_id(), item.count())
             .is_ok();
     }
 
-    if let Some(lab) = entities.labs.get_mut(&entity_id) {
-        if !lab_can_accept_item(catalog, item.item_id()) {
+    if entities.labs.contains_key(&entity_id) {
+        if !item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::SciencePack,
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        ) {
             return false;
         }
-
+        let lab = entities
+            .labs
+            .get_mut(&entity_id)
+            .expect("lab presence was checked above");
         return lab
             .inventory
             .insert(catalog, item.item_id(), item.count())
             .is_ok();
     }
 
-    if let Some(turret) = entities.gun_turrets.get_mut(&entity_id) {
-        if !item_is_ammo(catalog, item.item_id()) {
+    if entities.gun_turrets.contains_key(&entity_id) {
+        if !item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Ammunition,
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        ) {
             return false;
         }
-
+        let turret = entities
+            .gun_turrets
+            .get_mut(&entity_id)
+            .expect("turret presence was checked above");
         return turret
             .ammo
             .insert(catalog, item.item_id(), item.count())
             .is_ok();
     }
 
-    if let Some(furnace) = entities.furnaces.get_mut(&entity_id) {
-        if burner_fuel_slot_can_accept(catalog, furnace.energy.fuel_slot, item) {
-            insert_into_single_slot(catalog, &mut furnace.energy.fuel_slot, item)
+    if let Some(furnace) = entities.furnaces.get(&entity_id) {
+        let fuel_accepts = item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            furnace.energy.fuel_slot,
+            item,
+        );
+        let input_accepts = !fuel_accepts
+            && item_slot_can_accept(
+                catalog,
+                research,
+                entities,
+                ItemSlotPolicy::FurnaceIngredient,
+                ItemSlotOperation::InserterInsert,
+                furnace.input_slot,
+                item,
+            );
+        let furnace = entities
+            .furnaces
+            .get_mut(&entity_id)
+            .expect("furnace presence was checked above");
+        if fuel_accepts {
+            furnace
+                .energy
+                .fuel_slot
+                .insert_stack(catalog, item)
                 .expect("the checked furnace fuel slot should accept the item");
             return true;
         }
 
-        if input_slot_can_accept(catalog, research, furnace.input_slot, item) {
-            insert_into_single_slot(catalog, &mut furnace.input_slot, item)
+        if input_accepts {
+            furnace
+                .input_slot
+                .insert_stack(catalog, item)
                 .expect("the checked furnace input slot should accept the item");
             return true;
         }
@@ -297,9 +425,25 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         return false;
     }
 
-    if let Some(boiler) = entities.boilers.get_mut(&entity_id) {
-        if burner_fuel_slot_can_accept(catalog, boiler.energy.fuel_slot, item) {
-            insert_into_single_slot(catalog, &mut boiler.energy.fuel_slot, item)
+    if let Some(boiler) = entities.boilers.get(&entity_id) {
+        let fuel_accepts = item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            boiler.energy.fuel_slot,
+            item,
+        );
+        let boiler = entities
+            .boilers
+            .get_mut(&entity_id)
+            .expect("boiler presence was checked above");
+        if fuel_accepts {
+            boiler
+                .energy
+                .fuel_slot
+                .insert_stack(catalog, item)
                 .expect("the checked boiler fuel slot should accept the item");
             return true;
         }
@@ -308,18 +452,19 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     }
 
     if entities.assembling_machines.contains_key(&entity_id) {
-        let machine_category = assembler_machine_category(catalog, entities, entity_id);
+        let accepts = item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::AssemblerIngredient(entity_id),
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        );
         let assembler = entities
             .assembling_machines
             .get_mut(&entity_id)
             .expect("assembler presence was checked above");
-        if !assembler_input_accepts_item(
-            catalog,
-            research,
-            machine_category,
-            assembler,
-            item.item_id(),
-        ) {
+        if !accepts {
             return false;
         }
 

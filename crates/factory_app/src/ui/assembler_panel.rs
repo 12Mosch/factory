@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use factory_data::{CraftingCategory, PrototypeCatalog, RecipeId};
-use factory_sim::{AssemblingMachineState, SimCommand};
+use factory_sim::SimCommand;
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
@@ -58,7 +58,8 @@ pub(crate) type AssemblerDetailTextQuery<'w, 's> = Query<
 pub(crate) fn spawn_assembler_panel(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     catalog: &PrototypeCatalog,
-    state: &AssemblingMachineState,
+    input_slot_count: usize,
+    output_slot_count: usize,
     machine_category: CraftingCategory,
     title: &str,
 ) {
@@ -161,7 +162,7 @@ pub(crate) fn spawn_assembler_panel(
                         BackgroundColor(Color::NONE),
                     ))
                     .with_children(|slots| {
-                        for slot_index in 0..state.input_inventory.slots().len() {
+                        for slot_index in 0..input_slot_count {
                             spawn_slot_button(slots, InventoryPanel::AssemblerInput, slot_index);
                         }
                     });
@@ -181,7 +182,7 @@ pub(crate) fn spawn_assembler_panel(
                         BackgroundColor(Color::NONE),
                     ))
                     .with_children(|slots| {
-                        for slot_index in 0..state.output_inventory.slots().len() {
+                        for slot_index in 0..output_slot_count {
                             spawn_slot_button(slots, InventoryPanel::AssemblerOutput, slot_index);
                         }
                     });

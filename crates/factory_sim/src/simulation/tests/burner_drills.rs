@@ -15,7 +15,7 @@ fn burner_drill_without_fuel_remains_idle() {
         .expect("burner drill should expose state");
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
     assert_eq!(state.mining_progress_ticks, 0);
-    assert_eq!(state.output_slot, None);
+    assert_eq!(state.output_slot.stack(), None);
     assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
 }
 
@@ -36,7 +36,7 @@ fn burner_drill_with_coal_mines_output() {
 
     let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
-    assert_eq!(state.output_slot, Some(test_stack(iron_ore, 1)));
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_ore, 1)));
     assert_eq!(state.mining_progress_ticks, 0);
     assert_eq!(state.energy.energy_remaining_joules, 3_400_000.0);
     assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 1));
@@ -58,9 +58,12 @@ fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
 
     let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
-    assert_eq!(state.energy.fuel_slot, None);
+    assert_eq!(state.energy.fuel_slot.stack(), None);
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
-    assert_eq!(state.output_slot.map(|stack| stack.count()), Some(6));
+    assert_eq!(
+        state.output_slot.stack().map(|stack| stack.count()),
+        Some(6)
+    );
     assert_eq!(state.mining_progress_ticks, 160);
 
     sim.tick();
@@ -81,8 +84,8 @@ fn blocked_burner_drill_output_pauses_without_consuming_fuel() {
         .entities
         .burner_drill_state_mut(entity_id)
         .expect("burner drill should expose state");
-    state.energy.fuel_slot = Some(test_stack(coal, 1));
-    state.output_slot = Some(test_stack(coal, 1));
+    state.energy.fuel_slot = test_slot(test_stack(coal, 1));
+    state.output_slot = test_slot(test_stack(coal, 1));
 
     for _ in 0..10 {
         sim.tick();
@@ -90,7 +93,7 @@ fn blocked_burner_drill_output_pauses_without_consuming_fuel() {
 
     let state = crate::entity_access::burner_drill_state(&sim, entity_id)
         .expect("burner drill should expose state");
-    assert_eq!(state.energy.fuel_slot, Some(test_stack(coal, 1)));
+    assert_eq!(state.energy.fuel_slot.stack(), Some(test_stack(coal, 1)));
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
     assert_eq!(state.mining_progress_ticks, 0);
     assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
@@ -192,7 +195,7 @@ fn burner_drill_exports_stored_output_onto_belt_without_new_production() {
         .entities
         .burner_drill_state_mut(drill_id)
         .expect("burner drill should expose state");
-    state.output_slot = Some(test_stack(iron_ore, 3));
+    state.output_slot = test_slot(test_stack(iron_ore, 3));
 
     sim.tick();
 
@@ -223,7 +226,7 @@ fn burner_drill_blocks_when_output_inventory_full() {
     let state = crate::entity_access::burner_drill_state(&sim, drill_id)
         .expect("burner drill should expose state");
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
-    assert_eq!(state.energy.fuel_slot, Some(test_stack(coal, 1)));
+    assert_eq!(state.energy.fuel_slot.stack(), Some(test_stack(coal, 1)));
     assert_eq!(state.mining_progress_ticks, 0);
     assert_eq!(resource_amount_at(&sim.world, x, y), Some(before));
     assert_eq!(

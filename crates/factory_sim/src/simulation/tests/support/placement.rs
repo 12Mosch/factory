@@ -35,7 +35,7 @@ pub(in crate::simulation::tests) fn fill_inventory_with(
         .expect("test entity should have inventory");
     let stack = ItemStack::new(&catalog, item_id, stack_size)
         .expect("test item should form a full valid stack");
-    *inventory = Inventory::from_slots(&catalog, vec![Some(stack); inventory.slots().len()])
+    *inventory = Inventory::from_slots(&catalog, vec![test_slot(stack); inventory.slots().len()])
         .expect("filled test inventory should be valid");
 }
 

@@ -39,8 +39,8 @@ impl EntityStateBehavior for Inventory {
 
 impl EntityStateBehavior for BurnerMiningDrillState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
-        push_optional_stack(stacks, self.energy.fuel_slot);
-        push_optional_stack(stacks, self.output_slot);
+        push_item_slot(stacks, self.energy.fuel_slot);
+        push_item_slot(stacks, self.output_slot);
     }
 
     fn validate_state(
@@ -54,9 +54,9 @@ impl EntityStateBehavior for BurnerMiningDrillState {
 
 impl EntityStateBehavior for FurnaceState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
-        push_optional_stack(stacks, self.input_slot);
-        push_optional_stack(stacks, self.energy.fuel_slot);
-        push_optional_stack(stacks, self.output_slot);
+        push_item_slot(stacks, self.input_slot);
+        push_item_slot(stacks, self.energy.fuel_slot);
+        push_item_slot(stacks, self.output_slot);
     }
 
     fn validate_state(
@@ -139,7 +139,7 @@ impl EntityStateBehavior for SteamEngineState {
 
 impl EntityStateBehavior for BoilerState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
-        push_optional_stack(stacks, self.energy.fuel_slot);
+        push_item_slot(stacks, self.energy.fuel_slot);
     }
 
     fn validate_state(
@@ -258,13 +258,15 @@ impl EntityStateBehavior for GunTurretState {
         entity_id: EntityId,
     ) -> Result<(), SimValidationError> {
         super::validation::inventory::validate_inventory(&sim.world.prototypes, &self.ammo)?;
-        for stack in self.ammo.slots().iter().flatten() {
-            let is_ammo = sim
-                .world
-                .prototypes
-                .item(stack.item_id())
-                .is_some_and(|item| item.ammo.is_some());
-            if !is_ammo {
+        for stack in self.ammo.slots().iter().filter_map(|slot| slot.stack()) {
+            if !item_slot_policy_accepts(
+                &sim.world.prototypes,
+                &sim.research,
+                &sim.entities,
+                ItemSlotPolicy::Ammunition,
+                ItemSlotOperation::MachineInsert,
+                stack.item_id(),
+            ) {
                 return Err(SimValidationError::InvalidMachineItem {
                     entity_id,
                     item_id: stack.item_id(),
@@ -333,11 +335,11 @@ impl EntityStateBehavior for HealthState {
 }
 
 fn push_inventory_stacks(stacks: &mut Vec<ItemStack>, inventory: &Inventory) {
-    stacks.extend(inventory.slots().iter().flatten().copied());
+    stacks.extend(inventory.slots().iter().filter_map(|slot| slot.stack()));
 }
 
-fn push_optional_stack(stacks: &mut Vec<ItemStack>, stack: Option<ItemStack>) {
-    if let Some(stack) = stack {
+fn push_item_slot(stacks: &mut Vec<ItemStack>, slot: ItemSlot) {
+    if let Some(stack) = slot.stack() {
         stacks.push(stack);
     }
 }

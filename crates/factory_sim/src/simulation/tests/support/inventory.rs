@@ -14,7 +14,7 @@ pub(in crate::simulation::tests) fn set_inventory_slot(
     let slot = slots
         .get_mut(slot_index)
         .expect("test inventory slot index should be valid");
-    *slot = Some(
+    *slot = test_slot(
         ItemStack::new(catalog, item_id, count)
             .expect("test inventory stack should satisfy catalog invariants"),
     );

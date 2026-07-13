@@ -111,7 +111,9 @@ fn insert_drill_output_from_state(
 ) {
     match output_target {
         DrillOutputTarget::InternalSlot => {
-            insert_output_item(catalog, &mut state.output_slot, item_id, count)
+            state
+                .output_slot
+                .insert(catalog, item_id, count)
                 .expect("the checked drill output slot should accept the product");
         }
         DrillOutputTarget::Inventory(entity_id) => {
@@ -174,11 +176,18 @@ fn try_export_stored_drill_output_from_state(
         return false;
     }
 
-    let Some(stack) = state.output_slot else {
+    let Some(stack) = state.output_slot.stack() else {
         return false;
     };
 
-    if !drill_output_target_can_accept(catalog, entities, output_target, None, stack.item_id(), 1) {
+    if !drill_output_target_can_accept(
+        catalog,
+        entities,
+        output_target,
+        ItemSlot::default(),
+        stack.item_id(),
+        1,
+    ) {
         return false;
     }
 
@@ -191,7 +200,9 @@ fn try_export_stored_drill_output_from_state(
         1,
         catalog,
     );
-    remove_from_single_slot(&mut state.output_slot, stack.item_id(), 1)
+    state
+        .output_slot
+        .remove(stack.item_id(), 1)
         .expect("stored drill output should still contain exported item");
 
     true

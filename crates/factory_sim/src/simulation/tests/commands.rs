@@ -202,8 +202,14 @@ fn apply_command_transfer_slot_routes_player_input_by_machine_kind() {
 
     let furnace_state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
-    assert_eq!(furnace_state.input_slot, Some(test_stack(iron_ore, 1)));
-    assert_eq!(furnace_state.energy.fuel_slot, Some(test_stack(coal, 1)));
+    assert_eq!(
+        furnace_state.input_slot.stack(),
+        Some(test_stack(iron_ore, 1))
+    );
+    assert_eq!(
+        furnace_state.energy.fuel_slot.stack(),
+        Some(test_stack(coal, 1))
+    );
 }
 
 #[test]

@@ -4,7 +4,7 @@ use super::support::*;
 fn one_slot_inventory(catalog: &PrototypeCatalog, item_id: ItemId, count: u16) -> Inventory {
     Inventory::from_slots(
         catalog,
-        vec![Some(
+        vec![test_slot(
             ItemStack::new(catalog, item_id, count).expect("test stack should be valid"),
         )],
     )
@@ -127,7 +127,7 @@ fn burner_slot_transfers_are_partial_and_preserve_exact_source_remainders() {
         .burner_drill_state_mut(drill_id)
         .unwrap()
         .energy
-        .fuel_slot = Some(ItemStack::new(&catalog, coal, 95).unwrap());
+        .fuel_slot = test_slot(ItemStack::new(&catalog, coal, 95).unwrap());
     let outcome = crate::entity_transfer::player_slot_to_burner_drill_fuel(&mut sim, drill_id, 0)
         .expect("fuel slot should accept its remaining capacity");
     assert_eq!(outcome, TransferOutcome { moved_quantity: 5 });
@@ -138,6 +138,7 @@ fn burner_slot_transfers_are_partial_and_preserve_exact_source_remainders() {
             .unwrap()
             .energy
             .fuel_slot
+            .stack()
             .unwrap()
             .count(),
         100
@@ -148,7 +149,7 @@ fn burner_slot_transfers_are_partial_and_preserve_exact_source_remainders() {
         .burner_drill_state_mut(drill_id)
         .unwrap()
         .energy
-        .fuel_slot = Some(ItemStack::new(&catalog, coal, 10).unwrap());
+        .fuel_slot = test_slot(ItemStack::new(&catalog, coal, 10).unwrap());
     let outcome = crate::entity_transfer::burner_drill_fuel_to_player(&mut sim, drill_id)
         .expect("player should accept part of the fuel slot");
     assert_eq!(outcome, TransferOutcome { moved_quantity: 2 });
@@ -159,6 +160,7 @@ fn burner_slot_transfers_are_partial_and_preserve_exact_source_remainders() {
             .unwrap()
             .energy
             .fuel_slot
+            .stack()
             .unwrap()
             .count(),
         8
@@ -168,7 +170,7 @@ fn burner_slot_transfers_are_partial_and_preserve_exact_source_remainders() {
     sim.entities
         .burner_drill_state_mut(drill_id)
         .unwrap()
-        .output_slot = Some(ItemStack::new(&catalog, coal, 10).unwrap());
+        .output_slot = test_slot(ItemStack::new(&catalog, coal, 10).unwrap());
     let outcome = crate::entity_transfer::burner_drill_output_to_player(&mut sim, drill_id)
         .expect("player should accept part of the output slot");
     assert_eq!(outcome, TransferOutcome { moved_quantity: 1 });
@@ -177,6 +179,7 @@ fn burner_slot_transfers_are_partial_and_preserve_exact_source_remainders() {
             .burner_drill_state(drill_id)
             .unwrap()
             .output_slot
+            .stack()
             .unwrap()
             .count(),
         9
@@ -197,8 +200,8 @@ fn furnace_slots_transfer_partially_in_every_supported_direction() {
     set_inventory_slot(&mut sim.player_inventory, 1, coal, 10);
     {
         let furnace = sim.entities.furnace_state_mut(furnace_id).unwrap();
-        furnace.input_slot = Some(ItemStack::new(&catalog, iron_ore, 95).unwrap());
-        furnace.energy.fuel_slot = Some(ItemStack::new(&catalog, coal, 95).unwrap());
+        furnace.input_slot = test_slot(ItemStack::new(&catalog, iron_ore, 95).unwrap());
+        furnace.energy.fuel_slot = test_slot(ItemStack::new(&catalog, coal, 95).unwrap());
     }
 
     assert_eq!(
@@ -226,12 +229,15 @@ fn furnace_slots_transfer_partially_in_every_supported_direction() {
             let furnace = sim.entities.furnace_state_mut(furnace_id).unwrap();
             match source_item {
                 item if item == iron_ore => {
-                    furnace.input_slot = Some(ItemStack::new(&catalog, item, 10).unwrap())
+                    furnace.input_slot = test_slot(ItemStack::new(&catalog, item, 10).unwrap())
                 }
                 item if item == coal => {
-                    furnace.energy.fuel_slot = Some(ItemStack::new(&catalog, item, 10).unwrap())
+                    furnace.energy.fuel_slot =
+                        test_slot(ItemStack::new(&catalog, item, 10).unwrap())
                 }
-                item => furnace.output_slot = Some(ItemStack::new(&catalog, item, 10).unwrap()),
+                item => {
+                    furnace.output_slot = test_slot(ItemStack::new(&catalog, item, 10).unwrap())
+                }
             }
         }
 
@@ -243,9 +249,9 @@ fn furnace_slots_transfer_partially_in_every_supported_direction() {
     }
 
     let furnace = sim.entities.furnace_state(furnace_id).unwrap();
-    assert_eq!(furnace.input_slot.unwrap().count(), 9);
-    assert_eq!(furnace.energy.fuel_slot.unwrap().count(), 9);
-    assert_eq!(furnace.output_slot.unwrap().count(), 9);
+    assert_eq!(furnace.input_slot.stack().unwrap().count(), 9);
+    assert_eq!(furnace.energy.fuel_slot.stack().unwrap().count(), 9);
+    assert_eq!(furnace.output_slot.stack().unwrap().count(), 9);
 }
 
 #[test]
@@ -322,7 +328,7 @@ fn boiler_transfer_invalidates_dynamic_power_only_after_successful_commit() {
         .boiler_state_mut(boiler_id)
         .unwrap()
         .energy
-        .fuel_slot = Some(ItemStack::new(&catalog, coal, 50).unwrap());
+        .fuel_slot = test_slot(ItemStack::new(&catalog, coal, 50).unwrap());
 
     sim.player_inventory = one_slot_inventory(&catalog, iron_plate, 1);
     let before_hash = sim.state_hash();
@@ -349,7 +355,7 @@ fn boiler_transfer_invalidates_dynamic_power_only_after_successful_commit() {
         .boiler_state_mut(boiler_id)
         .unwrap()
         .energy
-        .fuel_slot = Some(ItemStack::new(&catalog, coal, 10).unwrap());
+        .fuel_slot = test_slot(ItemStack::new(&catalog, coal, 10).unwrap());
     assert_eq!(
         crate::entity_transfer::boiler_fuel_to_player(&mut sim, boiler_id).unwrap(),
         TransferOutcome { moved_quantity: 1 }
@@ -360,6 +366,7 @@ fn boiler_transfer_invalidates_dynamic_power_only_after_successful_commit() {
             .unwrap()
             .energy
             .fuel_slot
+            .stack()
             .unwrap()
             .count(),
         9

@@ -543,7 +543,7 @@ fn boiler_fuel_and_fluid_changes_update_power_without_rebuilding_topology() {
             .entities
             .boiler_state_mut(boiler_id)
             .expect("fixture boiler should expose state");
-        boiler.energy.fuel_slot = None;
+        boiler.energy.fuel_slot = ItemSlot::default();
         boiler.energy.energy_remaining_joules = 0.0;
     }
     for boxes in sim.entities.fluid_boxes.values_mut() {

@@ -219,7 +219,7 @@ impl Simulation {
         entity_id: EntityId,
         state: &BurnerMiningDrillState,
     ) -> bool {
-        if state.energy.fuel_slot.is_some()
+        if !state.energy.fuel_slot.is_empty()
             || state.energy.energy_remaining_joules > f64::EPSILON
             || state.mining_progress_ticks > 0
         {
@@ -264,12 +264,9 @@ impl Simulation {
         };
         let product = &recipe.products[0];
 
-        output_slot_can_accept(
-            &self.world.prototypes,
-            state.output_slot,
-            product.item,
-            product.amount,
-        )
+        state
+            .output_slot
+            .can_insert_item(&self.world.prototypes, product.item, product.amount)
     }
 
     fn assembler_is_active(&self, state: &AssemblingMachineState) -> bool {

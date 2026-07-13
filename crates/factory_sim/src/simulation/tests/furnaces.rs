@@ -16,8 +16,8 @@ fn furnace_smelts_iron_ore_to_iron_plate() {
 
     let state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
-    assert_eq!(state.input_slot, None);
-    assert_eq!(state.output_slot, Some(test_stack(iron_plate, 1)));
+    assert_eq!(state.input_slot.stack(), None);
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_plate, 1)));
     assert_eq!(state.crafting_progress_ticks, 0);
     assert_eq!(state.energy.energy_remaining_joules, 3_685_000.0);
 }
@@ -38,8 +38,8 @@ fn furnace_does_not_smelts_without_fuel() {
 
     let state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
-    assert_eq!(state.input_slot, Some(test_stack(iron_ore, 1)));
-    assert_eq!(state.output_slot, None);
+    assert_eq!(state.input_slot.stack(), Some(test_stack(iron_ore, 1)));
+    assert_eq!(state.output_slot.stack(), None);
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
     assert_eq!(state.crafting_progress_ticks, 0);
 }
@@ -57,7 +57,7 @@ fn furnace_blocks_when_output_full() {
         .entities
         .furnace_state_mut(entity_id)
         .expect("furnace should expose state");
-    state.output_slot = Some(test_stack(copper_plate, 1));
+    state.output_slot = test_slot(test_stack(copper_plate, 1));
 
     for _ in 0..210 {
         sim.tick();
@@ -65,16 +65,19 @@ fn furnace_blocks_when_output_full() {
 
     let state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
-    assert_eq!(state.input_slot, Some(test_stack(iron_ore, 1)));
-    assert_eq!(state.energy.fuel_slot, Some(test_stack(coal, 1)));
+    assert_eq!(state.input_slot.stack(), Some(test_stack(iron_ore, 1)));
+    assert_eq!(state.energy.fuel_slot.stack(), Some(test_stack(coal, 1)));
     assert_eq!(state.energy.energy_remaining_joules, 0.0);
     assert_eq!(state.crafting_progress_ticks, 0);
     assert_eq!(
-        state.output_slot.map(|stack| stack.item_id()),
+        state.output_slot.stack().map(|stack| stack.item_id()),
         Some(copper_plate)
     );
     assert_eq!(
-        state.output_slot.map(|stack| stack.item_id() == iron_plate),
+        state
+            .output_slot
+            .stack()
+            .map(|stack| stack.item_id() == iron_plate),
         Some(false)
     );
 }
@@ -117,7 +120,7 @@ fn furnace_smelts_stone_to_stone_brick() {
     let state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(state.active_recipe, Some(recipe));
-    assert_eq!(state.output_slot, Some(test_stack(stone_brick, 1)));
+    assert_eq!(state.output_slot.stack(), Some(test_stack(stone_brick, 1)));
 }
 
 #[test]
@@ -154,7 +157,7 @@ fn locked_smelting_recipes_are_not_selected_by_furnaces() {
     sim.entities
         .furnace_state_mut(furnace_id)
         .expect("furnace should expose state")
-        .input_slot = Some(test_stack(stone, 1));
+        .input_slot = test_slot(test_stack(stone, 1));
 
     for _ in 0..240 {
         sim.tick();
@@ -163,7 +166,7 @@ fn locked_smelting_recipes_are_not_selected_by_furnaces() {
     let furnace =
         crate::entity_access::furnace_state(&sim, furnace_id).expect("furnace should expose state");
     assert_eq!(furnace.active_recipe, None);
-    assert_eq!(furnace.input_slot.unwrap().count(), 1);
+    assert_eq!(furnace.input_slot.stack().unwrap().count(), 1);
     assert_eq!(
         sim.technology_progress(technology_id(&sim.world.prototypes, "automation")),
         Some(0)

@@ -642,7 +642,7 @@ fn gun_turret_kills_enemy_and_consumes_ammo() {
         .ammo
         .slots()
         .iter()
-        .flatten()
+        .filter_map(|slot| slot.stack())
         .map(|stack| u32::from(stack.count()))
         .sum();
     assert!(

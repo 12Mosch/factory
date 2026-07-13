@@ -62,14 +62,14 @@ fn burner_mining_drill_state_for_prototype(
 
     Some(BurnerMiningDrillState {
         energy: BurnerEnergy {
-            fuel_slot: None,
+            fuel_slot: ItemSlot::default(),
             energy_remaining_joules: 0.0,
             energy_usage_watts: burner.energy_usage_watts as f64,
         },
         mining_progress_ticks: 0,
         mining_required_ticks: mining_drill.ticks_per_item,
         resource_target: None,
-        output_slot: None,
+        output_slot: ItemSlot::default(),
     })
 }
 
@@ -81,13 +81,13 @@ fn furnace_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Opt
     let burner = prototype.burner.as_ref()?;
 
     Some(FurnaceState {
-        input_slot: None,
+        input_slot: ItemSlot::default(),
         energy: BurnerEnergy {
-            fuel_slot: None,
+            fuel_slot: ItemSlot::default(),
             energy_remaining_joules: 0.0,
             energy_usage_watts: burner.energy_usage_watts as f64,
         },
-        output_slot: None,
+        output_slot: ItemSlot::default(),
         active_recipe: None,
         crafting_progress_ticks: 0,
         crafting_required_ticks: 0,
@@ -160,7 +160,7 @@ fn boiler_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Opti
 
     Some(BoilerState {
         energy: BurnerEnergy {
-            fuel_slot: None,
+            fuel_slot: ItemSlot::default(),
             energy_remaining_joules: 0.0,
             energy_usage_watts: burner.energy_usage_watts as f64,
         },

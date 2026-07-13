@@ -1,10 +1,10 @@
-use crate::inventory::ItemStack;
+use crate::inventory::ItemSlot;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BurnerEnergy {
-    pub fuel_slot: Option<ItemStack>,
+    pub fuel_slot: ItemSlot,
     pub energy_remaining_joules: f64,
     pub energy_usage_watts: f64,
 }
@@ -43,12 +43,12 @@ mod tests {
     #[test]
     fn burner_energy_equality_and_hash_treat_signed_zero_as_equal() {
         let positive_zero = BurnerEnergy {
-            fuel_slot: None,
+            fuel_slot: ItemSlot::default(),
             energy_remaining_joules: 0.0,
             energy_usage_watts: -0.0,
         };
         let negative_zero = BurnerEnergy {
-            fuel_slot: None,
+            fuel_slot: ItemSlot::default(),
             energy_remaining_joules: -0.0,
             energy_usage_watts: 0.0,
         };
@@ -60,12 +60,12 @@ mod tests {
     #[test]
     fn burner_energy_equality_uses_float_nan_semantics() {
         let nan_energy = BurnerEnergy {
-            fuel_slot: None,
+            fuel_slot: ItemSlot::default(),
             energy_remaining_joules: f64::NAN,
             energy_usage_watts: 0.0,
         };
         let other_nan_energy = BurnerEnergy {
-            fuel_slot: None,
+            fuel_slot: ItemSlot::default(),
             energy_remaining_joules: f64::NAN,
             energy_usage_watts: 0.0,
         };
