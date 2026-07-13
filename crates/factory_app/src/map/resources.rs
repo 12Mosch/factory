@@ -33,15 +33,17 @@ impl MapOverlay {
     ];
 }
 
+const MAP_OVERLAY_COUNT: usize = MapOverlay::ALL.len();
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapOverlaySettings {
-    enabled: [bool; 6],
+    enabled: [bool; MAP_OVERLAY_COUNT],
 }
 
 impl Default for MapOverlaySettings {
     fn default() -> Self {
         let mut settings = Self {
-            enabled: [false; 6],
+            enabled: [false; MAP_OVERLAY_COUNT],
         };
         settings.set_enabled(MapOverlay::Resources, true);
         settings.set_enabled(MapOverlay::Enemies, true);
@@ -65,12 +67,12 @@ impl MapOverlaySettings {
         enabled
     }
 
-    pub(crate) fn enabled_bits(self) -> u8 {
-        MapOverlay::ALL
+    pub(crate) fn enabled_bits(self) -> u64 {
+        self.enabled
             .into_iter()
             .enumerate()
-            .fold(0, |bits, (index, overlay)| {
-                bits | (u8::from(self.is_enabled(overlay)) << index)
+            .fold(0, |bits, (index, enabled)| {
+                bits | (u64::from(enabled) << index)
             })
     }
 }
@@ -113,7 +115,7 @@ pub(crate) struct MapDetailCacheKey {
     pub player_bits: (u32, u32),
     pub camera_bits: Option<(u32, u32, u32, u32)>,
     pub chunk_cursor: Option<ChunkCoord>,
-    pub overlay_bits: u8,
+    pub overlay_bits: u64,
     pub debug_reveal_all: bool,
     pub reveal_revision: u64,
     pub topology_revision: u64,

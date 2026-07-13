@@ -107,31 +107,42 @@ impl MapRasterizer<'_> {
     }
 
     /// Generated and chart-eligible chunks intersecting the requested bounds.
-    /// Coordinate iteration keeps map work proportional to the crop instead of
-    /// to the total generated world.
+    /// Normal map work follows the sparse revealed set; debug reveal follows
+    /// generated chunks so the explicit override still exposes uncharted land.
     pub(super) fn eligible_chunk_coords(
         &self,
         bounds: MapTextureBounds,
     ) -> impl Iterator<Item = ChunkCoord> + '_ {
-        let max_x = bounds.min_x + i64::from(bounds.width.saturating_sub(1));
-        let max_y = bounds.min_y + i64::from(bounds.height.saturating_sub(1));
-        let min = ChunkCoord::from_tile(bounds.min_x, bounds.min_y);
-        let max = ChunkCoord::from_tile(max_x, max_y);
-        let mut coords = Vec::new();
-        if let (Some(min), Some(max)) = (min, max) {
-            for y in min.y..=max.y {
-                for x in min.x..=max.x {
-                    let coord = ChunkCoord { x, y };
-                    if self.sim.world().chunks.contains_key(&coord)
-                        && self.chunk_paint_state(coord).revealed
-                    {
-                        coords.push(coord);
-                    }
-                }
-            }
-        }
+        let candidates: Box<dyn Iterator<Item = ChunkCoord> + '_> =
+            if self.settings.debug_reveal_all {
+                Box::new(self.sim.world().chunks.keys().copied())
+            } else {
+                Box::new(self.sim.revealed_chunks().iter().copied())
+            };
+        let coords = candidates
+            .filter(|coord| chunk_intersects_bounds(*coord, bounds))
+            .filter(|coord| {
+                (self.settings.debug_reveal_all || self.sim.world().chunks.contains_key(coord))
+                    && self.chunk_paint_state(*coord).revealed
+            })
+            .collect::<Vec<_>>();
         coords.into_iter()
     }
+}
+
+fn chunk_intersects_bounds(coord: ChunkCoord, bounds: MapTextureBounds) -> bool {
+    if bounds.width == 0 || bounds.height == 0 {
+        return false;
+    }
+    let (chunk_min_x, chunk_min_y) = coord.min_tile();
+    let chunk_max_x = chunk_min_x + i64::from(CHUNK_SIZE) - 1;
+    let chunk_max_y = chunk_min_y + i64::from(CHUNK_SIZE) - 1;
+    let bounds_max_x = bounds.min_x + i64::from(bounds.width) - 1;
+    let bounds_max_y = bounds.min_y + i64::from(bounds.height) - 1;
+    chunk_min_x <= bounds_max_x
+        && chunk_max_x >= bounds.min_x
+        && chunk_min_y <= bounds_max_y
+        && chunk_max_y >= bounds.min_y
 }
 
 pub fn generate_map_pixels(sim: &Simulation, settings: &MapDisplaySettings) -> MapPixels {

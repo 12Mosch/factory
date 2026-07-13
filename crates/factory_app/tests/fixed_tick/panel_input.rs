@@ -228,32 +228,40 @@ fn fullscreen_map_digit_keys_toggle_overlays_independently() {
 
     press_key(&mut app, KeyCode::Digit2);
     app.update();
-    assert!(
-        !app.world()
-            .resource::<MapDisplaySettings>()
-            .overlays
-            .is_enabled(MapOverlay::Resources)
-    );
+    assert_overlay_states(&app, [false, false, false, false, true, true]);
 
     release_key(&mut app, KeyCode::Digit2);
     press_key(&mut app, KeyCode::Digit3);
     app.update();
-    assert!(
-        app.world()
-            .resource::<MapDisplaySettings>()
-            .overlays
-            .is_enabled(MapOverlay::PowerNetworks)
-    );
+    assert_overlay_states(&app, [false, false, true, false, true, true]);
 
     release_key(&mut app, KeyCode::Digit3);
     press_key(&mut app, KeyCode::Digit1);
     app.update();
-    assert!(
-        app.world()
-            .resource::<MapDisplaySettings>()
-            .overlays
-            .is_enabled(MapOverlay::Pollution)
-    );
+    assert_overlay_states(&app, [true, false, true, false, true, true]);
+
+    release_key(&mut app, KeyCode::Digit1);
+    press_key(&mut app, KeyCode::Digit4);
+    app.update();
+    assert_overlay_states(&app, [true, false, true, true, true, true]);
+
+    release_key(&mut app, KeyCode::Digit4);
+    press_key(&mut app, KeyCode::Digit5);
+    app.update();
+    assert_overlay_states(&app, [true, false, true, true, false, true]);
+
+    release_key(&mut app, KeyCode::Digit5);
+    press_key(&mut app, KeyCode::Digit6);
+    app.update();
+    assert_overlay_states(&app, [true, false, true, true, false, false]);
+    release_key(&mut app, KeyCode::Digit6);
+}
+
+fn assert_overlay_states(app: &App, expected: [bool; 6]) {
+    let overlays = app.world().resource::<MapDisplaySettings>().overlays;
+    for (overlay, expected) in MapOverlay::ALL.into_iter().zip(expected) {
+        assert_eq!(overlays.is_enabled(overlay), expected, "{overlay:?}");
+    }
 }
 
 #[test]

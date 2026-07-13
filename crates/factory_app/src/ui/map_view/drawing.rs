@@ -506,6 +506,9 @@ fn spawn_construction_overlays(
 }
 
 fn crop_chunk_coords(bounds: MapTextureBounds) -> impl Iterator<Item = ChunkCoord> {
+    if bounds.width == 0 || bounds.height == 0 {
+        return Vec::new().into_iter();
+    }
     let max_x = bounds.min_x + i64::from(bounds.width.saturating_sub(1));
     let max_y = bounds.min_y + i64::from(bounds.height.saturating_sub(1));
     let mut coords = Vec::new();
