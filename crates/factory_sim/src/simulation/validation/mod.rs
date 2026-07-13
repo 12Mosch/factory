@@ -57,6 +57,20 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
 }
 
 fn validate_pollution_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    for (coord, amount) in &sim.pollution.chunks {
+        if *amount > MAX_POLLUTION_PER_CHUNK_MICRO {
+            return Err(SimValidationError::PollutionCapacityExceeded {
+                chunk: Some(*coord),
+            });
+        }
+    }
+    if sim
+        .pollution
+        .checked_total_micro()
+        .is_none_or(|total| total > MAX_TOTAL_POLLUTION_MICRO)
+    {
+        return Err(SimValidationError::PollutionCapacityExceeded { chunk: None });
+    }
     for (entity_id, remainder) in &sim.pollution.machine_emission_remainders {
         if *remainder == 0
             || *remainder >= crate::pollution::POLLUTION_TICKS_PER_MINUTE
@@ -114,6 +128,54 @@ mod pollution_tests {
             Err(SimValidationError::InvalidPollutionState {
                 source: PollutionRemainderSource::TerrainAbsorption(coord),
             })
+        );
+    }
+
+    #[test]
+    fn pollution_above_practical_chunk_limit_is_rejected() {
+        let mut sim = Simulation::new_test_world(123);
+        let coord = ChunkCoord { x: 0, y: 0 };
+        sim.pollution
+            .chunks
+            .insert(coord, MAX_POLLUTION_PER_CHUNK_MICRO + 1);
+
+        assert_eq!(
+            validate_pollution_state(&sim),
+            Err(SimValidationError::PollutionCapacityExceeded { chunk: Some(coord) })
+        );
+    }
+
+    #[test]
+    fn pollution_addition_overflow_is_exposed_by_capacity_diagnostics() {
+        let mut sim = Simulation::new_test_world(123);
+        let coord = ChunkCoord { x: 0, y: 0 };
+        sim.add_pollution_micro(coord, u64::MAX);
+        sim.add_pollution_micro(coord, 1);
+
+        let diagnostics = sim.capacity_diagnostics();
+        assert_eq!(diagnostics.pollution_addition_overflows, 1);
+        assert_eq!(diagnostics.pollution_chunks_over_practical_limit, 1);
+        assert!(diagnostics.pollution_total_over_practical_limit);
+        assert!(diagnostics.has_capacity_failures());
+    }
+
+    #[test]
+    fn pollution_above_practical_total_limit_is_rejected() {
+        let mut sim = Simulation::new_test_world(123);
+        let chunk_count = MAX_TOTAL_POLLUTION_MICRO / MAX_POLLUTION_PER_CHUNK_MICRO + 1;
+        for x in 0..chunk_count {
+            sim.pollution.chunks.insert(
+                ChunkCoord {
+                    x: i32::try_from(x).unwrap(),
+                    y: 0,
+                },
+                MAX_POLLUTION_PER_CHUNK_MICRO,
+            );
+        }
+
+        assert_eq!(
+            validate_pollution_state(&sim),
+            Err(SimValidationError::PollutionCapacityExceeded { chunk: None })
         );
     }
 }

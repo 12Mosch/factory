@@ -183,6 +183,12 @@ pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationErro
         {
             return Err(SimValidationError::InvalidEnemyState);
         }
+        let Some(attack_budget_cap) = sim.attack_budget_cap(base.id) else {
+            return Err(SimValidationError::InvalidEnemyState);
+        };
+        if base.attack_budget_micro > attack_budget_cap {
+            return Err(SimValidationError::AttackBudgetCapacityExceeded { base_id: base.id });
+        }
         for id in &base.staged_units {
             if !grouped.insert(*id)
                 || !sim

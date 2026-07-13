@@ -637,6 +637,7 @@ impl Simulation {
         self.advance_evolution_time();
         let mut requests: Vec<SpawnRequest> = Vec::new();
         let mut absorbed_by_base = BTreeMap::<EnemyBaseId, u64>::new();
+        let mut attack_budget_overflows = 0_u64;
         let tick = self.tick;
         let raid_size = u64::from(self.raid_target_size());
         let Simulation {
@@ -666,12 +667,16 @@ impl Simulation {
             let cap = u64::from(config.unit_spawn_pollution_cost_milli) * 1000 * raid_size * 10;
             // Count what sibling spawners of this base already absorbed this
             // pass, so a multi-spawner base cannot overshoot its budget cap.
-            let budget = self
+            let existing_budget = self
                 .enemies
                 .bases
                 .get(&base_id)
-                .map_or(0, |base| base.attack_budget_micro)
-                .saturating_add(absorbed_by_base.get(&base_id).copied().unwrap_or(0));
+                .map_or(0, |base| base.attack_budget_micro);
+            let (budget, overflowed) = saturating_add_with_overflow(
+                existing_budget,
+                absorbed_by_base.get(&base_id).copied().unwrap_or(0),
+            );
+            attack_budget_overflows = attack_budget_overflows.saturating_add(u64::from(overflowed));
             let absorption = u64::from(config.pollution_absorption_per_tick_milli)
                 * 1000
                 * u64::from(self.config.runtime.pollution_sensitivity_percent)
@@ -681,7 +686,10 @@ impl Simulation {
             } else {
                 0
             };
-            *absorbed_by_base.entry(base_id).or_default() += absorbed;
+            let absorbed_for_base = absorbed_by_base.entry(base_id).or_default();
+            let (sum, overflowed) = saturating_add_with_overflow(*absorbed_for_base, absorbed);
+            *absorbed_for_base = sum;
+            attack_budget_overflows = attack_budget_overflows.saturating_add(u64::from(overflowed));
 
             let alive = alive_by_spawner.get(&spawner_id).copied().unwrap_or(0);
             let guards = guards_by_spawner.get(&spawner_id).copied().unwrap_or(0);
@@ -708,14 +716,22 @@ impl Simulation {
                 .get(&base_id)
                 .is_some_and(|base| !base.pollution_contact);
             if let Some(base) = self.enemies.bases.get_mut(&base_id) {
-                base.attack_budget_micro = base.attack_budget_micro.saturating_add(absorbed);
+                let (budget, overflowed) =
+                    saturating_add_with_overflow(base.attack_budget_micro, absorbed);
+                base.attack_budget_micro = budget;
                 base.pollution_contact = true;
+                attack_budget_overflows =
+                    attack_budget_overflows.saturating_add(u64::from(overflowed));
             }
             self.add_pollution_evolution(absorbed);
             if became_active {
                 self.emit_base_event(base_id, ThreatEventKind::PollutionContact);
             }
         }
+        self.capacity_overflows.attack_budget_additions = self
+            .capacity_overflows
+            .attack_budget_additions
+            .saturating_add(attack_budget_overflows);
 
         if self.config.runtime.proactive_raids {
             let base_ids: Vec<_> = self.enemies.bases.keys().copied().collect();
@@ -1209,8 +1225,28 @@ impl Simulation {
                 .unwrap_or(10_000);
     }
 
-    fn raid_target_size(&self) -> u8 {
+    pub(super) fn raid_target_size(&self) -> u8 {
         4 + (self.enemies.evolution_points / 2500).min(4) as u8
+    }
+
+    pub(super) fn attack_budget_cap(&self, base_id: EnemyBaseId) -> Option<u64> {
+        let raid_size = u64::from(self.raid_target_size());
+        self.enemies
+            .bases
+            .get(&base_id)?
+            .spawners
+            .iter()
+            .filter_map(|spawner_id| {
+                let placed = self.entities.placed_entities.get(spawner_id)?;
+                let config = self
+                    .world
+                    .prototypes
+                    .entity(placed.prototype_id)?
+                    .enemy_spawner
+                    .as_ref()?;
+                Some(u64::from(config.unit_spawn_pollution_cost_milli) * 1000 * raid_size * 10)
+            })
+            .max()
     }
 
     fn launch_ready_raids(&mut self) {

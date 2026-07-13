@@ -8,7 +8,34 @@ impl Simulation {
 
     /// Test and scenario hook: injects pollution directly into a chunk.
     pub fn add_pollution_micro(&mut self, coord: ChunkCoord, amount: u64) {
-        self.pollution.add_micro(coord, amount);
+        let overflowed = self.pollution.add_micro(coord, amount);
+        self.record_pollution_addition_overflows(u64::from(overflowed));
+    }
+
+    pub fn capacity_diagnostics(&self) -> CapacityDiagnostics {
+        let exact_total = self.pollution.checked_total_micro();
+        CapacityDiagnostics {
+            pollution_addition_overflows: self.capacity_overflows.pollution_additions,
+            attack_budget_addition_overflows: self.capacity_overflows.attack_budget_additions,
+            pollution_total_overflowed: exact_total.is_none(),
+            pollution_chunks_over_practical_limit: self
+                .pollution
+                .chunks
+                .values()
+                .filter(|amount| **amount > MAX_POLLUTION_PER_CHUNK_MICRO)
+                .count(),
+            pollution_total_over_practical_limit: exact_total
+                .is_none_or(|total| total > MAX_TOTAL_POLLUTION_MICRO),
+            attack_budgets_over_practical_limit: self
+                .enemies
+                .bases
+                .iter()
+                .filter(|(base_id, base)| {
+                    self.attack_budget_cap(**base_id)
+                        .is_some_and(|cap| base.attack_budget_micro > cap)
+                })
+                .count(),
+        }
     }
 
     pub(super) fn register_pollution_emitter(
@@ -96,7 +123,8 @@ impl Simulation {
             let amount = self
                 .pollution
                 .accrue_machine_emission(entity_id, emitter.rate);
-            self.pollution.add_micro(emitter.chunk, amount);
+            let overflowed = self.pollution.add_micro(emitter.chunk, amount);
+            self.record_pollution_addition_overflows(u64::from(overflowed));
         }
     }
 
@@ -121,6 +149,7 @@ impl Simulation {
         // passes and each affected BTreeMap entry is updated only once.
         self.pollution_diffusion.deltas.clear();
         self.pollution_diffusion.ordered_deltas.clear();
+        let mut overflow_count = 0_u64;
 
         for (&coord, &amount) in self
             .pollution
@@ -150,11 +179,15 @@ impl Simulation {
                     .entry(destination)
                     .or_default();
                 if coord < destination {
-                    delta.incoming_before_outflow =
-                        delta.incoming_before_outflow.saturating_add(share);
+                    let (sum, overflowed) =
+                        saturating_add_with_overflow(delta.incoming_before_outflow, share);
+                    delta.incoming_before_outflow = sum;
+                    overflow_count = overflow_count.saturating_add(u64::from(overflowed));
                 } else {
-                    delta.incoming_after_outflow =
-                        delta.incoming_after_outflow.saturating_add(share);
+                    let (sum, overflowed) =
+                        saturating_add_with_overflow(delta.incoming_after_outflow, share);
+                    delta.incoming_after_outflow = sum;
+                    overflow_count = overflow_count.saturating_add(u64::from(overflowed));
                 }
                 moved += share;
             }
@@ -175,11 +208,15 @@ impl Simulation {
         for (coord, delta) in self.pollution_diffusion.ordered_deltas.drain(..) {
             match self.pollution.chunks.entry(coord) {
                 Entry::Occupied(mut entry) => {
-                    let amount = entry
-                        .get()
-                        .saturating_add(delta.incoming_before_outflow)
-                        .saturating_sub(delta.outgoing)
-                        .saturating_add(delta.incoming_after_outflow);
+                    let (before_outflow, before_overflowed) =
+                        saturating_add_with_overflow(*entry.get(), delta.incoming_before_outflow);
+                    let (amount, after_overflowed) = saturating_add_with_overflow(
+                        before_outflow.saturating_sub(delta.outgoing),
+                        delta.incoming_after_outflow,
+                    );
+                    overflow_count = overflow_count
+                        .saturating_add(u64::from(before_overflowed))
+                        .saturating_add(u64::from(after_overflowed));
                     if amount == 0 {
                         entry.remove();
                     } else {
@@ -188,15 +225,18 @@ impl Simulation {
                 }
                 Entry::Vacant(entry) => {
                     debug_assert_eq!(delta.outgoing, 0);
-                    let amount = delta
-                        .incoming_before_outflow
-                        .saturating_add(delta.incoming_after_outflow);
+                    let (amount, overflowed) = saturating_add_with_overflow(
+                        delta.incoming_before_outflow,
+                        delta.incoming_after_outflow,
+                    );
+                    overflow_count = overflow_count.saturating_add(u64::from(overflowed));
                     if amount != 0 {
                         entry.insert(amount);
                     }
                 }
             }
         }
+        self.record_pollution_addition_overflows(overflow_count);
     }
 
     pub(super) fn absorb_pollution_by_terrain(&mut self) {
@@ -223,5 +263,12 @@ impl Simulation {
             );
             self.pollution.remove_micro(coord, absorption);
         }
+    }
+
+    fn record_pollution_addition_overflows(&mut self, count: u64) {
+        self.capacity_overflows.pollution_additions = self
+            .capacity_overflows
+            .pollution_additions
+            .saturating_add(count);
     }
 }

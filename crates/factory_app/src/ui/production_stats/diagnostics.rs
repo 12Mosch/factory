@@ -3,19 +3,44 @@ use factory_sim::{MachineStatus, Simulation};
 
 pub fn diagnostic_lines(sim: &Simulation) -> Vec<String> {
     let statuses = sim.machine_statuses();
-    statuses
-        .total_by_status
-        .iter()
-        .map(|count| format!("{}: {}", machine_status_name(count.status), count.count))
-        .chain(statuses.groups.iter().map(|group| {
-            let counts = group
-                .counts
+    let capacity = sim.capacity_diagnostics();
+    let capacity_line = if capacity.has_capacity_failures() {
+        format!(
+            "Arithmetic capacity: {} pollution additions overflowed, {} attack-budget additions overflowed, {} pollution chunks and {} attack budgets over practical limits{}",
+            capacity.pollution_addition_overflows,
+            capacity.attack_budget_addition_overflows,
+            capacity.pollution_chunks_over_practical_limit,
+            capacity.attack_budgets_over_practical_limit,
+            if capacity.pollution_total_overflowed {
+                ", pollution total overflowed u64"
+            } else if capacity.pollution_total_over_practical_limit {
+                ", pollution total over practical limit"
+            } else {
+                ""
+            }
+        )
+    } else {
+        "Arithmetic capacity: healthy".to_owned()
+    };
+
+    std::iter::once(capacity_line)
+        .chain(
+            statuses
+                .total_by_status
                 .iter()
-                .map(|count| format!("{} {}", count.count, machine_status_name(count.status)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{}: {}", entity_kind_name(group.kind), counts)
-        }))
+                .map(|count| format!("{}: {}", machine_status_name(count.status), count.count))
+                .chain(statuses.groups.iter().map(|group| {
+                    let counts = group
+                        .counts
+                        .iter()
+                        .map(|count| {
+                            format!("{} {}", count.count, machine_status_name(count.status))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}: {}", entity_kind_name(group.kind), counts)
+                })),
+        )
         .collect()
 }
 
