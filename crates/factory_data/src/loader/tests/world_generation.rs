@@ -292,12 +292,32 @@ fn invalid_numeric_constraints_fail() {
             "inverted starting area",
         ),
         (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 64), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
+            "starting area above the chunk budget",
+        ),
+        (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 0, jitter: 16, edge_noise: 3))",
             "zero cell size",
         ),
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: -1, edge_noise: 3))",
             "negative jitter",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 1048577, jitter: 16, edge_noise: 3))",
+            "cell size above the supported maximum",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 1048577, edge_noise: 3))",
+            "jitter above the supported maximum",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 4097))",
+            "edge noise above the supported maximum",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 1, jitter: 100, edge_noise: 3))",
+            "resource scan reach above the per-chunk work bound",
         ),
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
@@ -328,12 +348,24 @@ fn invalid_numeric_constraints_fail() {
             "distance scaling radius bonus above its cap",
         ),
         (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 75, radius_bonus_tiles: 1, max_radius_bonus_tiles: 129)))",
+            "distance scaling radius bonus cap above the supported maximum",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 10001, radius_bonus_tiles: 1, max_radius_bonus_tiles: 6)))",
+            "distance scaling richness bonus above the supported maximum",
+        ),
+        (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 101, radius: 5, richness: 100)])",
             "frequency above 100",
         ),
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 0, richness: 100)])",
             "zero radius",
+        ),
+        (
+            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 16385, richness: 100)])",
+            "resource radius above the supported maximum",
         ),
         (
             "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 5, richness: 0)])",
