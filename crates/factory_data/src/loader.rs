@@ -632,6 +632,16 @@ fn resolve_enemy_bases(
 /// Validate the top-level world generation fields that do not require
 /// resolving names against loaded prototypes.
 fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), PrototypeLoadError> {
+    const MAX_STARTING_AREA_AXIS_CHUNKS: u64 = 64;
+    const MAX_STARTING_AREA_CHUNKS: u64 = 4_096;
+    const MAX_PATCH_GRID_CELL_SIZE: i32 = 1_048_576;
+    const MAX_PATCH_GRID_JITTER: i32 = 1_048_576;
+    const MAX_PATCH_EDGE_NOISE: i32 = 4_096;
+    const MAX_RESOURCE_RADIUS: i32 = 16_384;
+    const MAX_RADIUS_BONUS_TILES: u8 = 128;
+    const MAX_RICHNESS_BONUS_PERCENT: u32 = 10_000;
+    const MAX_PATCH_REACH_CELL_MULTIPLE: i64 = 32;
+
     if raw.version != WORLD_GENERATION_FORMAT_VERSION {
         return Err(PrototypeLoadError::UnsupportedWorldGenerationVersion {
             found: raw.version,
@@ -641,6 +651,28 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
     if raw.starting_area.min_chunk > raw.starting_area.max_chunk {
         return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
             detail: "starting area min_chunk must not exceed max_chunk",
+        });
+    }
+    let starting_axis_chunks = i64::from(raw.starting_area.max_chunk)
+        .checked_sub(i64::from(raw.starting_area.min_chunk))
+        .and_then(|span| span.checked_add(1))
+        .and_then(|span| u64::try_from(span).ok())
+        .ok_or(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "starting area dimensions overflow",
+        })?;
+    if starting_axis_chunks > MAX_STARTING_AREA_AXIS_CHUNKS {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "starting area axis must not exceed 64 chunks",
+        });
+    }
+    let starting_chunk_count = starting_axis_chunks
+        .checked_mul(starting_axis_chunks)
+        .ok_or(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "starting area chunk count overflow",
+        })?;
+    if starting_chunk_count > MAX_STARTING_AREA_CHUNKS {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "starting area must not exceed 4096 total chunks",
         });
     }
     if raw.patch_grid.cell_size < 1 {
@@ -653,6 +685,28 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
             detail: "patch grid jitter and edge_noise must not be negative",
         });
     }
+    if raw.patch_grid.cell_size > MAX_PATCH_GRID_CELL_SIZE {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid cell_size must not exceed 1048576",
+        });
+    }
+    if raw.patch_grid.jitter > MAX_PATCH_GRID_JITTER {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid jitter must not exceed 1048576",
+        });
+    }
+    if raw.patch_grid.edge_noise > MAX_PATCH_EDGE_NOISE {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid edge_noise must not exceed 4096",
+        });
+    }
+    raw.patch_grid
+        .jitter
+        .checked_mul(2)
+        .and_then(|diameter| diameter.checked_add(1))
+        .ok_or(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid jitter range overflow",
+        })?;
     if raw.terrain.is_empty() {
         return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
             detail: "terrain must declare at least one layer",
@@ -682,6 +736,57 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
                          max_radius_bonus_tiles",
             });
         }
+        if scaling.max_radius_bonus_tiles > MAX_RADIUS_BONUS_TILES {
+            return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                detail: "distance scaling max_radius_bonus_tiles must not exceed 128",
+            });
+        }
+        if scaling.richness_bonus_percent > MAX_RICHNESS_BONUS_PERCENT {
+            return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                detail: "distance scaling richness_bonus_percent must not exceed 10000",
+            });
+        }
+    }
+    let max_radius = raw
+        .resources
+        .iter()
+        .map(|resource| resource.radius)
+        .max()
+        .unwrap_or(0);
+    if max_radius > MAX_RESOURCE_RADIUS {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "resource radius must not exceed 16384",
+        });
+    }
+    let patch_scan_reach = i64::from(max_radius)
+        .checked_add(i64::from(raw.patch_grid.edge_noise))
+        .and_then(|reach| reach.checked_add(i64::from(raw.patch_grid.jitter)))
+        .and_then(|reach| {
+            reach.checked_add(i64::from(
+                raw.distance_scaling
+                    .as_ref()
+                    .map_or(0, |scaling| scaling.max_radius_bonus_tiles),
+            ))
+        })
+        .ok_or(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "resource patch scan reach overflow",
+        })?;
+    let max_patch_scan_reach = i64::from(raw.patch_grid.cell_size)
+        .checked_mul(MAX_PATCH_REACH_CELL_MULTIPLE)
+        .ok_or(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid cell_size scan bound overflow",
+        })?;
+    if patch_scan_reach > max_patch_scan_reach {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "resource patch scan reach must not exceed 32 grid cells",
+        });
+    }
+    for resource in &raw.resources {
+        i64::from(resource.radius)
+            .checked_add(i64::from(raw.patch_grid.edge_noise))
+            .ok_or(PrototypeLoadError::InvalidWorldGenerationConfig {
+                detail: "resource radius plus edge_noise overflow",
+            })?;
     }
     Ok(())
 }

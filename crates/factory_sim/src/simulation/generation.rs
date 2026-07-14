@@ -356,8 +356,7 @@ impl SpawnTerrainBias {
             if (distance as u128) * (distance as u128) < distance_sq {
                 distance += 1;
             }
-            inner_radius =
-                inner_radius.max(distance + i64::from(resource.radius) + i64::from(edge_noise));
+            inner_radius = inner_radius.max(distance + resource.radius + i64::from(edge_noise));
         }
         let outer_radius = inner_radius + i64::from(noise_scale.max(1));
 
@@ -456,12 +455,11 @@ pub(super) fn generate_resource_patch_centers(
         .map(|resource| resource.radius)
         .max()
         .unwrap_or(0)
-        + rules.edge_noise
-        + rules.grid_jitter
+        + i64::from(rules.edge_noise)
+        + i64::from(rules.grid_jitter)
         + rules
             .distance_scaling
-            .map_or(0, |scaling| i32::from(scaling.max_radius_bonus_tiles));
-    let max_reach = i64::from(max_reach);
+            .map_or(0, |scaling| i64::from(scaling.max_radius_bonus_tiles));
     let grid_size = i64::from(rules.grid_cell_size);
     let min_grid_x = (bounds.min_x - max_reach).div_euclid(grid_size);
     let max_grid_x = (bounds.max_x + max_reach).div_euclid(grid_size);
@@ -495,10 +493,9 @@ fn resource_patch_center_for_grid_cell(
 ) -> Option<ResourcePatchCenter> {
     let hash = hash_resource_center(seed, grid_x, grid_y);
     let resource = select_resource_for_grid_cell(&rules.resources, hash)?;
-    let jitter_x =
-        ((hash >> 8) % (rules.grid_jitter * 2 + 1) as u64) as i64 - i64::from(rules.grid_jitter);
-    let jitter_y =
-        ((hash >> 16) % (rules.grid_jitter * 2 + 1) as u64) as i64 - i64::from(rules.grid_jitter);
+    let jitter_diameter = i64::from(rules.grid_jitter) * 2 + 1;
+    let jitter_x = ((hash & 0xFFFF_FFFF) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
+    let jitter_y = ((hash >> 32) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
     let grid_size = i64::from(rules.grid_cell_size);
     let x = grid_x * grid_size + grid_size / 2 + jitter_x;
     let y = grid_y * grid_size + grid_size / 2 + jitter_y;
@@ -545,13 +542,13 @@ fn scale_patch_with_distance(
     resource: &ResourceRule,
     x: WorldTileCoord,
     y: WorldTileCoord,
-) -> (i32, u32) {
+) -> (i64, u32) {
     let distance_sq = (i128::from(x) * i128::from(x) + i128::from(y) * i128::from(y)) as u128;
     let distance = distance_sq.isqrt();
     let interval = u128::from(scaling.interval_tiles.max(1));
 
     let radius_bonus = (distance * u128::from(scaling.radius_bonus_tiles) / interval)
-        .min(u128::from(scaling.max_radius_bonus_tiles)) as i32;
+        .min(u128::from(scaling.max_radius_bonus_tiles)) as i64;
     let richness_bonus =
         u128::from(resource.richness) * u128::from(scaling.richness_bonus_percent) * distance
             / (interval * 100);
@@ -593,7 +590,7 @@ fn resource_patch_can_affect_bounds(
     let closest_y = center.y.clamp(bounds.min_y, bounds.max_y);
     let dx = i128::from(center.x) - i128::from(closest_x);
     let dy = i128::from(center.y) - i128::from(closest_y);
-    let reach = i128::from(center.radius + edge_noise);
+    let reach = i128::from(center.radius + i64::from(edge_noise));
 
     dx * dx + dy * dy <= reach * reach
 }
@@ -611,8 +608,14 @@ pub(super) fn resource_at_patch_tile(
         let dx = i128::from(x) - i128::from(center.x);
         let dy = i128::from(y) - i128::from(center.y);
         let distance_sq = dx * dx + dy * dy;
-        let radius =
-            center.radius + resource_edge_noise(seed, x, y, center.resource_item, edge_noise);
+        let radius = center.radius
+            + i64::from(resource_edge_noise(
+                seed,
+                x,
+                y,
+                center.resource_item,
+                edge_noise,
+            ));
         let radius_sq = i128::from(radius) * i128::from(radius);
 
         if distance_sq > radius_sq {
@@ -696,7 +699,7 @@ pub(super) struct ResourcePatchCenter {
     resource_item: ItemId,
     x: WorldTileCoord,
     y: WorldTileCoord,
-    radius: i32,
+    radius: i64,
     richness: u32,
 }
 
@@ -752,7 +755,7 @@ struct ResourceRule {
     resource_item: ItemId,
     minable: bool,
     frequency_percent: u8,
-    radius: i32,
+    radius: i64,
     richness: u32,
     starting_patch: Option<(WorldTileCoord, WorldTileCoord)>,
 }
@@ -782,7 +785,7 @@ impl WorldGenRules {
                 resource_item: resource.resource_item,
                 minable: resource.extraction == ResourceExtraction::Solid,
                 frequency_percent: resource.frequency_percent,
-                radius: resource.radius,
+                radius: i64::from(resource.radius),
                 richness: resource.richness,
                 starting_patch: resource
                     .starting_patch
@@ -1276,7 +1279,7 @@ mod tests {
             );
             assert_eq!(
                 center.radius,
-                base.radius + i32::from(scaling.max_radius_bonus_tiles),
+                base.radius + i64::from(scaling.max_radius_bonus_tiles),
                 "radius bonus at ({}, {}) should be capped",
                 center.x,
                 center.y
