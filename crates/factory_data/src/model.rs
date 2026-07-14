@@ -288,6 +288,11 @@ pub struct TilePrototype {
     /// Pollution absorbed by one tile of this terrain, in
     /// milli-pollution-units per minute.
     pub pollution_absorption_per_minute_milli: u32,
+    /// Base sRGB color `[r, g, b]` used by the front-end to paint this
+    /// terrain. Inert data here (this crate has no rendering dependency); the
+    /// renderer reads it to give each biome a visual identity instead of
+    /// hard-coding terrain colors.
+    pub color: [u8; 3],
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -357,7 +362,10 @@ pub struct CollisionMask {
 
 /// Format version accepted for [`WorldGenerationConfig`]; configs declaring a
 /// different version are rejected at load time instead of being misread.
-pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 1;
+///
+/// Version 2 replaced the single weighted-band `terrain` selector with a
+/// data-driven biome table classified from three independent climate channels.
+pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 2;
 
 /// Data-driven world generation rules: terrain distribution, starting area,
 /// and resource patch definitions. Loaded from the `world_generation` section
@@ -367,13 +375,16 @@ pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 1;
 pub struct WorldGenerationConfig {
     pub version: u32,
     pub starting_area: StartingAreaConfig,
-    /// Weighted terrain layers mapped onto a coherent noise field: each
-    /// layer's weight is its share of the noise value range, assigned in
-    /// declaration order from the lowest values upward (so an early "water"
-    /// layer fills basins, a late "grass" layer covers highlands). Tile
-    /// collision behaviour derives from the tile prototype's collision mask.
-    pub terrain: Vec<TerrainLayerConfig>,
-    pub terrain_noise: TerrainNoiseConfig,
+    /// Independent fractal-noise parameters for the elevation, moisture, and
+    /// temperature climate channels that drive biome classification.
+    pub climate_noise: ClimateNoiseConfig,
+    /// Ordered biome table: each tile is classified by finding the first biome
+    /// whose elevation/moisture/temperature ranges all contain the sampled
+    /// climate. Order encodes priority (specialized biomes first, catch-alls
+    /// last); a tile matching no biome falls back to the first tile prototype.
+    /// Tile collision behaviour derives from the tile prototype's collision
+    /// mask.
+    pub biomes: Vec<BiomeConfig>,
     pub patch_grid: ResourcePatchGridConfig,
     /// Distance-based reward for expanding outward; `None` keeps every patch
     /// at its base richness and radius.
@@ -392,8 +403,8 @@ impl Default for WorldGenerationConfig {
                 min_chunk: 0,
                 max_chunk: 0,
             },
-            terrain: Vec::new(),
-            terrain_noise: TerrainNoiseConfig::default(),
+            climate_noise: ClimateNoiseConfig::default(),
+            biomes: Vec::new(),
             patch_grid: ResourcePatchGridConfig {
                 cell_size: 40,
                 jitter: 16,
@@ -425,13 +436,44 @@ pub struct StartingAreaConfig {
     pub max_chunk: i32,
 }
 
+/// One biome in the classification table: a terrain tile plus the inclusive
+/// climate box it occupies. A tile is classified into the first biome (in
+/// declaration order) whose three ranges all contain the sampled climate.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
-pub struct TerrainLayerConfig {
+pub struct BiomeConfig {
     pub tile: TileId,
-    pub weight: u32,
+    pub elevation: ClimateRange,
+    pub moisture: ClimateRange,
+    pub temperature: ClimateRange,
 }
 
-/// Fractal value-noise parameters for the terrain field. `scale` is the base
+/// Half-open percent range `[min, max)` (`0..=100`) matched against a climate
+/// channel sample. `min` is inclusive, `max` exclusive, so adjacent biomes can
+/// tile the range without overlap.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ClimateRange {
+    pub min: u8,
+    pub max: u8,
+}
+
+impl ClimateRange {
+    /// Whether `percent` (`0..=100`) falls in `[min, max)`.
+    pub fn contains(self, percent: u8) -> bool {
+        percent >= self.min && percent < self.max
+    }
+}
+
+/// Independent fractal-noise parameters for the three climate channels that
+/// drive biome selection. Each channel is sampled from its own seed-salted
+/// noise field so elevation, moisture, and temperature vary independently.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ClimateNoiseConfig {
+    pub elevation: TerrainNoiseConfig,
+    pub moisture: TerrainNoiseConfig,
+    pub temperature: TerrainNoiseConfig,
+}
+
+/// Fractal value-noise parameters for one climate channel. `scale` is the base
 /// wavelength in tiles of the lowest-frequency octave; each further octave
 /// halves the wavelength and amplitude, adding finer detail such as ragged
 /// coastlines.

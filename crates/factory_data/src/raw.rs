@@ -29,9 +29,8 @@ pub(crate) struct RawPrototypeCatalog {
 pub(crate) struct RawWorldGenerationConfig {
     pub(crate) version: u32,
     pub(crate) starting_area: RawStartingArea,
-    pub(crate) terrain: Vec<RawTerrainLayer>,
-    #[serde(default)]
-    pub(crate) terrain_noise: Option<RawTerrainNoise>,
+    pub(crate) climate_noise: RawClimateNoise,
+    pub(crate) biomes: Vec<RawBiomeConfig>,
     pub(crate) patch_grid: RawResourcePatchGrid,
     #[serde(default)]
     pub(crate) distance_scaling: Option<RawResourceDistanceScaling>,
@@ -55,9 +54,24 @@ pub(crate) struct RawStartingArea {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawTerrainLayer {
+pub(crate) struct RawClimateNoise {
+    pub(crate) elevation: RawTerrainNoise,
+    pub(crate) moisture: RawTerrainNoise,
+    pub(crate) temperature: RawTerrainNoise,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawBiomeConfig {
     pub(crate) tile: String,
-    pub(crate) weight: u32,
+    pub(crate) elevation: RawClimateRange,
+    pub(crate) moisture: RawClimateRange,
+    pub(crate) temperature: RawClimateRange,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawClimateRange {
+    pub(crate) min: u8,
+    pub(crate) max: u8,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,6 +230,14 @@ pub(crate) struct RawTilePrototype {
     pub(crate) collision_mask: RawCollisionMask,
     #[serde(default)]
     pub(crate) pollution_absorption_per_minute_milli: u32,
+    /// Base sRGB color `[r, g, b]`; defaults to magenta so any tile missing a
+    /// color is glaringly visible rather than silently invisible.
+    #[serde(default = "default_tile_color")]
+    pub(crate) color: [u8; 3],
+}
+
+fn default_tile_color() -> [u8; 3] {
+    [255, 0, 255]
 }
 
 #[derive(Debug, Deserialize)]

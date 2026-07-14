@@ -1,7 +1,7 @@
 use super::*;
 use factory_data::{
-    CollisionLayer, CollisionMask, ResourceDistanceScalingConfig, ResourceExtraction,
-    item_id_by_name,
+    ClimateNoiseConfig, ClimateRange, CollisionLayer, CollisionMask, ResourceDistanceScalingConfig,
+    ResourceExtraction, TerrainNoiseConfig, item_id_by_name,
 };
 
 #[derive(Default)]
@@ -135,28 +135,62 @@ pub(super) fn generate_terrain(
     y: WorldTileCoord,
     rules: &WorldGenRules,
 ) -> (TileId, TileCollision) {
-    if rules.terrain_total_weight > 0 {
-        // Slice the coherent noise field into bands: each layer covers the
-        // slice of the value range proportional to its weight, in declaration
-        // order from the lowest values upward. Contiguous low regions become
-        // lakes instead of scattered single tiles.
-        let field = warped_terrain_field(seed, x, y, rules.noise_scale, rules.noise_octaves);
-        let field = match &rules.spawn_bias {
-            Some(bias) => bias.apply(x, y, field),
-            None => field,
-        };
-        let terrain_roll = (field * rules.terrain_total_weight) >> NOISE_ONE_BITS;
-        let mut cumulative_weight = 0;
-        for layer in &rules.terrain {
-            cumulative_weight += layer.weight;
-            if terrain_roll < cumulative_weight {
-                return (layer.tile_id, layer.collision);
-            }
+    // Sample three independent climate channels. Elevation drives land vs.
+    // water, so the spawn bias clamps it toward buildable land near the origin;
+    // moisture and temperature vary freely to distinguish land biomes.
+    let elevation_field = climate_field(seed ^ ELEVATION_SALT, x, y, rules.climate_noise.elevation);
+    let elevation_field = match &rules.spawn_bias {
+        Some(bias) => bias.apply(x, y, elevation_field),
+        None => elevation_field,
+    };
+    let elevation = field_to_percent(elevation_field);
+    let moisture = field_to_percent(climate_field(
+        seed ^ MOISTURE_SALT,
+        x,
+        y,
+        rules.climate_noise.moisture,
+    ));
+    let temperature = field_to_percent(climate_field(
+        seed ^ TEMPERATURE_SALT,
+        x,
+        y,
+        rules.climate_noise.temperature,
+    ));
+
+    // First biome (in declaration order) whose three ranges all contain the
+    // sample wins; order encodes priority. No match falls back to the first
+    // tile prototype, which is always buildable ground.
+    for biome in &rules.biomes {
+        if biome.elevation.contains(elevation)
+            && biome.moisture.contains(moisture)
+            && biome.temperature.contains(temperature)
+        {
+            return (biome.tile_id, biome.collision);
         }
     }
 
     (rules.fallback_tile, rules.fallback_collision)
 }
+
+/// Sample one climate channel's warped fractal field for a tile.
+fn climate_field(
+    channel_seed: u64,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+    noise: TerrainNoiseConfig,
+) -> u64 {
+    warped_terrain_field(channel_seed, x, y, noise.scale, noise.octaves)
+}
+
+/// Map a Q16 noise field value in `[0, NOISE_ONE)` to a percent in `0..=99`,
+/// the unit biome climate ranges are expressed in.
+fn field_to_percent(field: u64) -> u8 {
+    ((field * 100) >> NOISE_ONE_BITS) as u8
+}
+
+const ELEVATION_SALT: u64 = 0x8f27_9a1e_4c6b_d305;
+const MOISTURE_SALT: u64 = 0x2b17_63e0_9d4a_f1c8;
+const TEMPERATURE_SALT: u64 = 0xc4e9_50a7_1f82_6db3;
 
 const TERRAIN_FIELD_SALT: u64 = 0x5e2d_58d8_b3bc_e8ee;
 const WARP_X_SALT: u64 = 0x3c6e_f372_fe94_f82a;
@@ -283,17 +317,17 @@ fn lerp_q16(a: u64, b: u64, t: u64) -> u64 {
 /// on open ground even when no starting patches are configured.
 const SPAWN_LAND_MIN_RADIUS: i64 = 8;
 
-/// Radial terrain bias that guarantees open ground around the spawn point.
+/// Radial elevation bias that guarantees open ground around the spawn point.
 ///
-/// Within `inner_radius` tiles of the origin the noise field is clamped into
-/// `[min_field, max_field]`, the value range covered by the widest contiguous
-/// run of walkable+buildable terrain bands. That forces the spawn tile and
-/// every starting resource patch onto dry, buildable land for any seed while
-/// keeping the variation between ground bands (shores, grass) intact. Between
+/// Elevation is the land-vs-water climate channel, so biasing it toward land
+/// near the origin forces the spawn tile and every starting resource patch onto
+/// buildable ground. Within `inner_radius` tiles the elevation field is clamped
+/// into `[min_field, max_field]` — the value range of the widest contiguous
+/// elevation band that no non-buildable biome occupies, so any biome selected
+/// there (or the buildable fallback tile) is walkable+buildable. Between
 /// `inner_radius` and `outer_radius` the clamp relaxes linearly back to the
-/// full noise range so the guaranteed land blends into the surrounding
-/// coastline. Integer-only, so generation stays deterministic across
-/// platforms.
+/// full range so the guaranteed land blends into the surrounding coastline.
+/// Integer-only, so generation stays deterministic across platforms.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SpawnTerrainBias {
     inner_radius: i64,
@@ -304,41 +338,49 @@ pub(super) struct SpawnTerrainBias {
 
 impl SpawnTerrainBias {
     fn derive(
-        terrain: &[TerrainLayerRule],
-        total_weight: u64,
+        biomes: &[BiomeRule],
         resources: &[ResourceRule],
         edge_noise: i32,
-        noise_scale: u32,
+        elevation_scale: u32,
     ) -> Option<Self> {
-        if total_weight == 0 {
-            return None;
+        // Elevation percents (0..=99) blocked by a non-buildable biome. Clamping
+        // into a gap between these guarantees the spawn resolves to a buildable
+        // biome or the buildable fallback tile.
+        let mut blocked = [false; 100];
+        for biome in biomes {
+            if biome.collision.walkable && biome.collision.buildable {
+                continue;
+            }
+            let lo = usize::from(biome.elevation.min).min(blocked.len());
+            let hi = usize::from(biome.elevation.max).min(blocked.len());
+            for cell in &mut blocked[lo..hi] {
+                *cell = true;
+            }
         }
 
-        // Widest contiguous run of ground bands in the field's value range.
-        // Zero-weight layers occupy no value range, so they never break a run.
-        let mut cumulative = 0u64;
-        let mut run_start = 0u64;
-        let mut run_weight = 0u64;
+        // Widest contiguous run of unblocked elevation percents [lo, hi).
         let mut best: Option<(u64, u64)> = None;
-        for layer in terrain {
-            if layer.collision.walkable && layer.collision.buildable {
-                if run_weight == 0 {
-                    run_start = cumulative;
+        let mut run_start: Option<usize> = None;
+        for percent in 0..=blocked.len() {
+            let open = percent < blocked.len() && !blocked[percent];
+            match (open, run_start) {
+                (true, None) => run_start = Some(percent),
+                (false, Some(start)) => {
+                    let (start, end) = (start as u64, percent as u64);
+                    if best.is_none_or(|(bstart, bend)| bend - bstart < end - start) {
+                        best = Some((start, end));
+                    }
+                    run_start = None;
                 }
-                run_weight += layer.weight;
-            } else if layer.weight > 0 {
-                run_weight = 0;
-            }
-            cumulative += layer.weight;
-            if run_weight > 0 && best.is_none_or(|(start, end)| end - start < run_weight) {
-                best = Some((run_start, run_start + run_weight));
+                _ => {}
             }
         }
-        let (start, end) = best?;
+        let (lo, hi) = best?;
 
-        // Tightest Q16 field range whose band roll stays inside [start, end).
-        let min_field = (start << NOISE_ONE_BITS).div_ceil(total_weight);
-        let max_field = (((end << NOISE_ONE_BITS) - 1) / total_weight).min(NOISE_ONE - 1);
+        // Tightest Q16 elevation field range whose percent stays inside [lo, hi):
+        // percent(field) = (field * 100) >> NOISE_ONE_BITS.
+        let min_field = (lo << NOISE_ONE_BITS).div_ceil(100);
+        let max_field = (((hi << NOISE_ONE_BITS) - 1) / 100).min(NOISE_ONE - 1);
         if min_field > max_field {
             return None;
         }
@@ -358,7 +400,7 @@ impl SpawnTerrainBias {
             }
             inner_radius = inner_radius.max(distance + resource.radius + i64::from(edge_noise));
         }
-        let outer_radius = inner_radius + i64::from(noise_scale.max(1));
+        let outer_radius = inner_radius + i64::from(elevation_scale.max(1));
 
         Some(Self {
             inner_radius,
@@ -494,7 +536,8 @@ fn resource_patch_center_for_grid_cell(
     let hash = hash_resource_center(seed, grid_x, grid_y);
     let resource = select_resource_for_grid_cell(&rules.resources, hash)?;
     let jitter_diameter = i64::from(rules.grid_jitter) * 2 + 1;
-    let jitter_x = ((hash & 0xFFFF_FFFF) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
+    let jitter_x =
+        ((hash & 0xFFFF_FFFF) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
     let jitter_y = ((hash >> 32) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
     let grid_size = i64::from(rules.grid_cell_size);
     let x = grid_x * grid_size + grid_size / 2 + jitter_x;
@@ -724,11 +767,9 @@ pub(super) fn hash_world(seed: u64, x: WorldTileCoord, y: WorldTileCoord) -> u64
 /// config against the catalog.
 #[derive(Clone, Debug)]
 pub(super) struct WorldGenRules {
-    terrain: Vec<TerrainLayerRule>,
-    terrain_total_weight: u64,
-    noise_scale: u32,
-    noise_octaves: u32,
-    /// Tile used when no terrain layers are configured (empty config).
+    biomes: Vec<BiomeRule>,
+    climate_noise: ClimateNoiseConfig,
+    /// Tile used when no biome matches (or the biome table is empty).
     fallback_tile: TileId,
     fallback_collision: TileCollision,
     resources: Vec<ResourceRule>,
@@ -738,16 +779,18 @@ pub(super) struct WorldGenRules {
     /// Distance-based richness/radius growth for grid patches; starting
     /// patches stay at their configured base values.
     distance_scaling: Option<ResourceDistanceScalingConfig>,
-    /// Derived from the terrain bands and starting patches; `None` when no
-    /// walkable+buildable band exists to bias toward.
+    /// Derived from the biome table and starting patches; `None` when every
+    /// biome is buildable so no elevation bias is needed.
     spawn_bias: Option<SpawnTerrainBias>,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct TerrainLayerRule {
+struct BiomeRule {
     tile_id: TileId,
-    weight: u64,
     collision: TileCollision,
+    elevation: ClimateRange,
+    moisture: ClimateRange,
+    temperature: ClimateRange,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -763,16 +806,17 @@ struct ResourceRule {
 impl WorldGenRules {
     pub(super) fn from_catalog(prototypes: &PrototypeCatalog) -> Self {
         let config = &prototypes.world_generation;
-        let terrain: Vec<TerrainLayerRule> = config
-            .terrain
+        let biomes: Vec<BiomeRule> = config
+            .biomes
             .iter()
-            .map(|layer| TerrainLayerRule {
-                tile_id: layer.tile,
-                weight: u64::from(layer.weight),
-                collision: tile_collision(prototypes, layer.tile),
+            .map(|biome| BiomeRule {
+                tile_id: biome.tile,
+                collision: tile_collision(prototypes, biome.tile),
+                elevation: biome.elevation,
+                moisture: biome.moisture,
+                temperature: biome.temperature,
             })
             .collect();
-        let terrain_total_weight = terrain.iter().map(|layer| layer.weight).sum();
         let (fallback_tile, fallback_collision) = prototypes
             .tiles
             .first()
@@ -793,18 +837,15 @@ impl WorldGenRules {
             })
             .collect();
         let spawn_bias = SpawnTerrainBias::derive(
-            &terrain,
-            terrain_total_weight,
+            &biomes,
             &resources,
             config.patch_grid.edge_noise,
-            config.terrain_noise.scale,
+            config.climate_noise.elevation.scale,
         );
 
         Self {
-            terrain,
-            terrain_total_weight,
-            noise_scale: config.terrain_noise.scale,
-            noise_octaves: config.terrain_noise.octaves,
+            biomes,
+            climate_noise: config.climate_noise,
             fallback_tile,
             fallback_collision,
             resources,
@@ -886,15 +927,18 @@ pub(super) fn item_is_ammo(catalog: &PrototypeCatalog, item_id: ItemId) -> bool 
 mod tests {
     use super::*;
 
-    /// Terrain statistics over the configured starting area: how much water
-    /// there is and how strongly it clumps (fraction of water tiles with at
-    /// least two orthogonal water neighbours — near zero for independent
-    /// per-tile rolls, high for coherent lakes).
-    fn starting_area_water_stats(seed: u64, catalog: &PrototypeCatalog) -> (f64, f64) {
+    /// Terrain statistics over a broad region with the spawn-bias disk around
+    /// the origin excluded, so it measures the unbiased biome distribution:
+    /// how much water there is and how strongly it clumps (fraction of water
+    /// tiles with at least two orthogonal water neighbours — near zero for
+    /// independent per-tile rolls, high for coherent lakes). Sampling a large
+    /// area rather than one window keeps the fraction stable across seeds
+    /// instead of landing on a single continent or basin.
+    fn natural_water_stats(seed: u64, catalog: &PrototypeCatalog) -> (f64, f64) {
         let rules = WorldGenRules::from_catalog(catalog);
-        let area = catalog.world_generation.starting_area;
-        let min_tile = i64::from(area.min_chunk) * i64::from(CHUNK_SIZE);
-        let max_tile = (i64::from(area.max_chunk) + 1) * i64::from(CHUNK_SIZE) - 1;
+        // Comfortably beyond the spawn elevation bias's outer radius.
+        const SPAWN_EXCLUSION: i64 = 160;
+        let half_extent = 256;
 
         let is_water = |x: i64, y: i64| {
             let (_, collision) = generate_terrain(seed, x, y, &rules);
@@ -904,8 +948,11 @@ mod tests {
         let mut total = 0u64;
         let mut water = 0u64;
         let mut clustered = 0u64;
-        for y in min_tile..=max_tile {
-            for x in min_tile..=max_tile {
+        for y in -half_extent..=half_extent {
+            for x in -half_extent..=half_extent {
+                if x * x + y * y <= SPAWN_EXCLUSION * SPAWN_EXCLUSION {
+                    continue;
+                }
                 total += 1;
                 if !is_water(x, y) {
                     continue;
@@ -935,7 +982,7 @@ mod tests {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
         for seed in [0, 42, 123, 8675309] {
-            let (water_fraction, clustered_fraction) = starting_area_water_stats(seed, &catalog);
+            let (water_fraction, clustered_fraction) = natural_water_stats(seed, &catalog);
 
             assert!(
                 (0.02..0.45).contains(&water_fraction),
@@ -945,6 +992,95 @@ mod tests {
                 clustered_fraction > 0.8,
                 "seed {seed}: only {clustered_fraction:.3} of water tiles sit in \
                  coherent bodies; terrain looks like salt-and-pepper noise"
+            );
+        }
+    }
+
+    #[test]
+    fn climate_channels_are_independent() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let noise = catalog.world_generation.climate_noise;
+
+        for seed in [0u64, 42, 123] {
+            let mut elevation_eq_moisture = 0u64;
+            let mut elevation_eq_temperature = 0u64;
+            let mut total = 0u64;
+            for y in -48..48i64 {
+                for x in -48..48i64 {
+                    let elevation = field_to_percent(climate_field(
+                        seed ^ ELEVATION_SALT,
+                        x,
+                        y,
+                        noise.elevation,
+                    ));
+                    let moisture =
+                        field_to_percent(climate_field(seed ^ MOISTURE_SALT, x, y, noise.moisture));
+                    let temperature = field_to_percent(climate_field(
+                        seed ^ TEMPERATURE_SALT,
+                        x,
+                        y,
+                        noise.temperature,
+                    ));
+                    total += 1;
+                    if elevation == moisture {
+                        elevation_eq_moisture += 1;
+                    }
+                    if elevation == temperature {
+                        elevation_eq_temperature += 1;
+                    }
+                }
+            }
+
+            // Independent channels drawn from distinct salts rarely land in the
+            // same percent bucket; identical channels would match every tile.
+            let moisture_agreement = elevation_eq_moisture as f64 / total as f64;
+            let temperature_agreement = elevation_eq_temperature as f64 / total as f64;
+            assert!(
+                moisture_agreement < 0.2,
+                "seed {seed}: elevation and moisture agree on {moisture_agreement:.3} of tiles; \
+                 the channels are not independent"
+            );
+            assert!(
+                temperature_agreement < 0.2,
+                "seed {seed}: elevation and temperature agree on {temperature_agreement:.3} of \
+                 tiles; the channels are not independent"
+            );
+        }
+    }
+
+    #[test]
+    fn biome_table_produces_varied_terrain() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+
+        for seed in [0u64, 42, 123, 8675309] {
+            let mut tiles = std::collections::BTreeSet::new();
+            for y in -96..96i64 {
+                for x in -96..96i64 {
+                    let (tile_id, _) = generate_terrain(seed, x, y, &rules);
+                    tiles.insert(tile_id);
+                }
+            }
+            assert!(
+                tiles.len() >= 4,
+                "seed {seed}: only {} distinct biomes appear over the sample area; the climate \
+                 table is not producing variety",
+                tiles.len()
+            );
+        }
+    }
+
+    #[test]
+    fn biome_selection_is_deterministic_per_seed() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let rules = WorldGenRules::from_catalog(&catalog);
+
+        for &(x, y) in &[(0i64, 0i64), (17, -33), (-64, 50), (120, -8)] {
+            let first = generate_terrain(777, x, y, &rules);
+            let second = generate_terrain(777, x, y, &rules);
+            assert_eq!(
+                first.0, second.0,
+                "generate_terrain must be deterministic at ({x}, {y})"
             );
         }
     }
@@ -1104,7 +1240,7 @@ mod tests {
     fn warp_offsets_are_coherent_and_span_their_range() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
         let rules = WorldGenRules::from_catalog(&catalog);
-        let amplitude = i64::from(rules.noise_scale / 2);
+        let amplitude = i64::from(rules.climate_noise.elevation.scale / 2);
         assert!(
             amplitude > 0,
             "base catalog noise scale should be large enough to warp"
@@ -1118,7 +1254,7 @@ mod tests {
             let mut seen_max = i64::MIN;
             for y in -96..96i64 {
                 for x in -96..96i64 {
-                    let offset = warp_offset(warp_seed, x, y, rules.noise_scale);
+                    let offset = warp_offset(warp_seed, x, y, rules.climate_noise.elevation.scale);
                     assert!(
                         (-amplitude..=amplitude).contains(&offset),
                         "seed {seed}: warp offset {offset} at ({x}, {y}) outside \
@@ -1126,7 +1262,8 @@ mod tests {
                     );
                     seen_min = seen_min.min(offset);
                     seen_max = seen_max.max(offset);
-                    let right = warp_offset(warp_seed, x + 1, y, rules.noise_scale);
+                    let right =
+                        warp_offset(warp_seed, x + 1, y, rules.climate_noise.elevation.scale);
                     pairs += 1;
                     if offset == right {
                         equal += 1;
@@ -1165,11 +1302,16 @@ mod tests {
                         seed ^ TERRAIN_FIELD_SALT,
                         x,
                         y,
-                        rules.noise_scale,
-                        rules.noise_octaves,
+                        rules.climate_noise.elevation.scale,
+                        rules.climate_noise.elevation.octaves,
                     );
-                    let warped =
-                        warped_terrain_field(seed, x, y, rules.noise_scale, rules.noise_octaves);
+                    let warped = warped_terrain_field(
+                        seed,
+                        x,
+                        y,
+                        rules.climate_noise.elevation.scale,
+                        rules.climate_noise.elevation.octaves,
+                    );
                     total += 1;
                     if warped != unwarped {
                         moved += 1;

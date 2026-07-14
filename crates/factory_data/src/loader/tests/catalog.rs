@@ -143,7 +143,9 @@ const ENTITY_NAMES: [&str; 34] = [
     "chemical_plant",
 ];
 
-const TILE_NAMES: [&str; 3] = ["grass", "dirt", "water"];
+const TILE_NAMES: [&str; 8] = [
+    "grass", "dirt", "water", "sand", "forest", "snow", "swamp", "rock",
+];
 const TECHNOLOGY_NAMES: [&str; 10] = [
     "logistics",
     "automation",
@@ -165,7 +167,7 @@ fn base_catalog_loads_from_ron() {
     assert_eq!(catalog.fluids.len(), 4);
     assert_eq!(catalog.recipes.len(), 42);
     assert_eq!(catalog.entities.len(), 37);
-    assert_eq!(catalog.tiles.len(), 3);
+    assert_eq!(catalog.tiles.len(), 8);
     assert_eq!(catalog.technologies.len(), 12);
 }
 

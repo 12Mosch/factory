@@ -105,7 +105,9 @@ pub fn first_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::
                 .iter()
                 .enumerate()
                 .filter_map(move |(index, tile)| {
-                    let resource = tile.resource?;
+                    // Only minable (solid) resources: hand-mining tests can't
+                    // extract fluids such as crude oil.
+                    let resource = tile.resource.filter(|_| tile.collision.minable)?;
                     let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                     let local_y = (index as i32).div_euclid(CHUNK_SIZE);
                     let (x, y) = chunk.coord.tile_at(local_x, local_y);
@@ -113,7 +115,7 @@ pub fn first_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::
                 })
         })
         .next()
-        .expect("generated world should contain resource tiles")
+        .expect("generated world should contain a minable resource tile")
 }
 
 pub fn format_item_name_for_test(sim: &Simulation, item_id: ItemId) -> String {

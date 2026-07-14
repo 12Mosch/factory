@@ -6,6 +6,11 @@ pub(in crate::simulation::tests) fn first_resource_tile(
 ) -> (i64, i64, ResourceCell) {
     for chunk in world.chunks.values() {
         for (index, tile) in chunk.tiles.iter().enumerate() {
+            // Only minable (solid) resources; fluid patches such as crude oil
+            // are extracted by pumpjacks and cannot be hand-mined.
+            if !tile.collision.minable {
+                continue;
+            }
             if let Some(resource) = tile.resource {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
@@ -15,7 +20,7 @@ pub(in crate::simulation::tests) fn first_resource_tile(
         }
     }
 
-    panic!("expected at least one resource tile");
+    panic!("expected at least one minable resource tile");
 }
 
 pub(in crate::simulation::tests) fn first_resource_tile_for_item(
@@ -87,10 +92,10 @@ pub(in crate::simulation::tests) fn nearby_resource_pair(
     let resources = all_tile_coords(world)
         .into_iter()
         .filter(|(x, y)| {
+            // Only minable tiles: hand-mining tests must be able to mine both.
             world
                 .tile_at(*x, *y)
-                .and_then(|tile| tile.resource)
-                .is_some()
+                .is_some_and(|tile| tile.resource.is_some() && tile.collision.minable)
         })
         .collect::<Vec<_>>();
 

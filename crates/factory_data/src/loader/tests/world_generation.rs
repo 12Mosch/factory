@@ -7,6 +7,13 @@ use crate::model::{
     WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };
 
+/// Valid `climate_noise` block shared by the config-fragment tests.
+const CLIMATE: &str = "climate_noise: (elevation: (scale: 32, octaves: 3), \
+     moisture: (scale: 32, octaves: 3), temperature: (scale: 32, octaves: 3))";
+/// Valid single-entry `biomes` block referencing the `grass` test tile.
+const BIOMES: &str = "biomes: [(tile: \"grass\", elevation: (min: 0, max: 100), \
+     moisture: (min: 0, max: 100), temperature: (min: 0, max: 100))]";
+
 fn catalog_ron(world_generation: &str) -> String {
     format!(
         r#"
@@ -31,7 +38,7 @@ fn missing_section_defaults_to_empty_config() {
     let catalog = PrototypeCatalog::from_ron_str(&catalog_ron("")).expect("catalog should load");
 
     assert_eq!(catalog.world_generation, WorldGenerationConfig::default());
-    assert!(catalog.world_generation.terrain.is_empty());
+    assert!(catalog.world_generation.biomes.is_empty());
     assert!(catalog.world_generation.resources.is_empty());
 }
 
@@ -43,12 +50,21 @@ fn base_catalog_defines_world_generation() {
     assert_eq!(config.version, WORLD_GENERATION_FORMAT_VERSION);
     assert_eq!(config.starting_area.min_chunk, -2);
     assert_eq!(config.starting_area.max_chunk, 2);
-    assert_eq!(config.terrain.len(), 3);
+    assert_eq!(config.biomes.len(), 8);
     assert_eq!(
-        config.terrain.iter().map(|layer| layer.weight).sum::<u32>(),
-        100
+        config.climate_noise.elevation,
+        TerrainNoiseConfig {
+            scale: 40,
+            octaves: 3,
+        }
     );
-    assert_eq!(config.terrain_noise, TerrainNoiseConfig::default());
+    // Every biome references a tile that exists in the catalog.
+    assert!(
+        config
+            .biomes
+            .iter()
+            .all(|biome| catalog.tiles.iter().any(|tile| tile.id == biome.tile))
+    );
     assert_eq!(config.patch_grid.cell_size, 40);
     assert!(config.distance_scaling.is_some());
     assert_eq!(config.resources.len(), 5);
@@ -73,11 +89,16 @@ fn section_resolves_names_to_ids() {
     let catalog = PrototypeCatalog::from_ron_str(&catalog_ron(
         r#"
         world_generation: Some((
-            version: 1,
+            version: 2,
             starting_area: (min_chunk: -1, max_chunk: 1),
-            terrain: [
-                (tile: "water", weight: 10),
-                (tile: "grass", weight: 90),
+            climate_noise: (
+                elevation: (scale: 32, octaves: 3),
+                moisture: (scale: 32, octaves: 3),
+                temperature: (scale: 32, octaves: 3),
+            ),
+            biomes: [
+                (tile: "water", elevation: (min: 0, max: 30), moisture: (min: 0, max: 100), temperature: (min: 0, max: 100)),
+                (tile: "grass", elevation: (min: 30, max: 100), moisture: (min: 0, max: 100), temperature: (min: 0, max: 100)),
             ],
             patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
             resources: [
@@ -96,8 +117,8 @@ fn section_resolves_names_to_ids() {
     .expect("catalog should load");
 
     let config = &catalog.world_generation;
-    assert_eq!(config.terrain[0].tile, catalog.tiles[1].id);
-    assert_eq!(config.terrain[1].tile, catalog.tiles[0].id);
+    assert_eq!(config.biomes[0].tile, catalog.tiles[1].id);
+    assert_eq!(config.biomes[1].tile, catalog.tiles[0].id);
     assert_eq!(config.resources[0].resource_item, catalog.items[0].id);
     assert_eq!(config.resources[0].extraction, ResourceExtraction::Solid);
     assert_eq!(
@@ -107,62 +128,55 @@ fn section_resolves_names_to_ids() {
 }
 
 #[test]
-fn terrain_noise_parses_and_defaults_when_absent() {
-    let explicit = PrototypeCatalog::from_ron_str(&catalog_ron(
+fn climate_noise_parses_per_channel() {
+    let catalog = PrototypeCatalog::from_ron_str(&catalog_ron(
         r#"
         world_generation: Some((
-            version: 1,
+            version: 2,
             starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "grass", weight: 1)],
-            terrain_noise: Some((scale: 48, octaves: 4)),
+            climate_noise: (
+                elevation: (scale: 48, octaves: 4),
+                moisture: (scale: 24, octaves: 2),
+                temperature: (scale: 64, octaves: 1),
+            ),
+            biomes: [(tile: "grass", elevation: (min: 0, max: 100), moisture: (min: 0, max: 100), temperature: (min: 0, max: 100))],
             patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
         )),
         "#,
     ))
     .expect("catalog should load");
+    let noise = catalog.world_generation.climate_noise;
     assert_eq!(
-        explicit.world_generation.terrain_noise,
+        noise.elevation,
         TerrainNoiseConfig {
             scale: 48,
             octaves: 4,
         }
     );
-
-    let absent = PrototypeCatalog::from_ron_str(&catalog_ron(
-        r#"
-        world_generation: Some((
-            version: 1,
-            starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "grass", weight: 1)],
-            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
-        )),
-        "#,
-    ))
-    .expect("catalog should load");
     assert_eq!(
-        absent.world_generation.terrain_noise,
-        TerrainNoiseConfig::default()
+        noise.moisture,
+        TerrainNoiseConfig {
+            scale: 24,
+            octaves: 2,
+        }
+    );
+    assert_eq!(
+        noise.temperature,
+        TerrainNoiseConfig {
+            scale: 64,
+            octaves: 1,
+        }
     );
 }
 
 #[test]
 fn distance_scaling_parses_and_defaults_to_none() {
-    let explicit = PrototypeCatalog::from_ron_str(&catalog_ron(
-        r#"
-        world_generation: Some((
-            version: 1,
-            starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "grass", weight: 1)],
-            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
-            distance_scaling: Some((
-                interval_tiles: 100,
-                richness_bonus_percent: 75,
-                radius_bonus_tiles: 1,
-                max_radius_bonus_tiles: 6,
-            )),
-        )),
-        "#,
-    ))
+    let explicit = PrototypeCatalog::from_ron_str(&catalog_ron(&format!(
+        "world_generation: Some((version: 2, starting_area: (min_chunk: 0, max_chunk: 0), \
+         {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), \
+         distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 75, \
+         radius_bonus_tiles: 1, max_radius_bonus_tiles: 6)))),"
+    )))
     .expect("catalog should load");
     assert_eq!(
         explicit.world_generation.distance_scaling,
@@ -174,32 +188,20 @@ fn distance_scaling_parses_and_defaults_to_none() {
         })
     );
 
-    let absent = PrototypeCatalog::from_ron_str(&catalog_ron(
-        r#"
-        world_generation: Some((
-            version: 1,
-            starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "grass", weight: 1)],
-            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
-        )),
-        "#,
-    ))
+    let absent = PrototypeCatalog::from_ron_str(&catalog_ron(&format!(
+        "world_generation: Some((version: 2, starting_area: (min_chunk: 0, max_chunk: 0), \
+         {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))),"
+    )))
     .expect("catalog should load");
     assert_eq!(absent.world_generation.distance_scaling, None);
 }
 
 #[test]
 fn unsupported_version_fails() {
-    let error = PrototypeCatalog::from_ron_str(&catalog_ron(
-        r#"
-        world_generation: Some((
-            version: 999,
-            starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "grass", weight: 1)],
-            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
-        )),
-        "#,
-    ))
+    let error = PrototypeCatalog::from_ron_str(&catalog_ron(&format!(
+        "world_generation: Some((version: 999, starting_area: (min_chunk: 0, max_chunk: 0), \
+         {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))),"
+    )))
     .expect_err("unsupported version should fail");
 
     assert!(matches!(
@@ -212,18 +214,14 @@ fn unsupported_version_fails() {
 }
 
 #[test]
-fn missing_terrain_tile_fails() {
-    let error = PrototypeCatalog::from_ron_str(&catalog_ron(
-        r#"
-        world_generation: Some((
-            version: 1,
-            starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "lava", weight: 1)],
-            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
-        )),
-        "#,
-    ))
-    .expect_err("unknown terrain tile should fail");
+fn missing_biome_tile_fails() {
+    let error = PrototypeCatalog::from_ron_str(&catalog_ron(&format!(
+        "world_generation: Some((version: 2, starting_area: (min_chunk: 0, max_chunk: 0), \
+         {CLIMATE}, biomes: [(tile: \"lava\", elevation: (min: 0, max: 100), \
+         moisture: (min: 0, max: 100), temperature: (min: 0, max: 100))], \
+         patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))),"
+    )))
+    .expect_err("unknown biome tile should fail");
 
     assert!(matches!(
         error,
@@ -233,25 +231,12 @@ fn missing_terrain_tile_fails() {
 
 #[test]
 fn missing_resource_item_fails() {
-    let error = PrototypeCatalog::from_ron_str(&catalog_ron(
-        r#"
-        world_generation: Some((
-            version: 1,
-            starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "grass", weight: 1)],
-            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
-            resources: [
-                (
-                    item: "unobtainium",
-                    extraction: Solid,
-                    frequency_percent: 50,
-                    radius: 5,
-                    richness: 100,
-                ),
-            ],
-        )),
-        "#,
-    ))
+    let error = PrototypeCatalog::from_ron_str(&catalog_ron(&format!(
+        "world_generation: Some((version: 2, starting_area: (min_chunk: 0, max_chunk: 0), \
+         {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), \
+         resources: [(item: \"unobtainium\", extraction: Solid, frequency_percent: 50, \
+         radius: 5, richness: 100)])),"
+    )))
     .expect_err("unknown resource item should fail");
 
     assert!(matches!(
@@ -262,20 +247,12 @@ fn missing_resource_item_fails() {
 
 #[test]
 fn duplicate_resource_item_fails() {
-    let error = PrototypeCatalog::from_ron_str(&catalog_ron(
-        r#"
-        world_generation: Some((
-            version: 1,
-            starting_area: (min_chunk: 0, max_chunk: 0),
-            terrain: [(tile: "grass", weight: 1)],
-            patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
-            resources: [
-                (item: "iron_ore", extraction: Solid, frequency_percent: 50, radius: 5, richness: 100),
-                (item: "iron_ore", extraction: Fluid, frequency_percent: 30, radius: 4, richness: 900),
-            ],
-        )),
-        "#,
-    ))
+    let error = PrototypeCatalog::from_ron_str(&catalog_ron(&format!(
+        "world_generation: Some((version: 2, starting_area: (min_chunk: 0, max_chunk: 0), \
+         {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), \
+         resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 5, richness: 100), \
+         (item: \"iron_ore\", extraction: Fluid, frequency_percent: 30, radius: 4, richness: 900)])),"
+    )))
     .expect_err("duplicate resource items should fail");
 
     assert!(matches!(
@@ -286,89 +263,127 @@ fn duplicate_resource_item_fails() {
 
 #[test]
 fn invalid_numeric_constraints_fail() {
+    // Each fragment is a full `world_generation` inner tuple; only the field
+    // under test deviates from the valid CLIMATE/BIOMES defaults.
     let cases = [
         (
-            "(version: 1, starting_area: (min_chunk: 2, max_chunk: -2), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 2, max_chunk: -2), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
             "inverted starting area",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 64), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 64), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
             "starting area above the chunk budget",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 0, jitter: 16, edge_noise: 3))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 0, jitter: 16, edge_noise: 3))"
+            ),
             "zero cell size",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: -1, edge_noise: 3))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: -1, edge_noise: 3))"
+            ),
             "negative jitter",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 1048577, jitter: 16, edge_noise: 3))",
-            "cell size above the supported maximum",
-        ),
-        (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 1048577, edge_noise: 3))",
-            "jitter above the supported maximum",
-        ),
-        (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 4097))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 4097))"
+            ),
             "edge noise above the supported maximum",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 1, jitter: 100, edge_noise: 3))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 1, jitter: 100, edge_noise: 3))"
+            ),
             "resource scan reach above the per-chunk work bound",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
-            "empty terrain",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, biomes: [], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
+            "empty biomes",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 0)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
-            "all-zero terrain weights",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, biomes: [(tile: \"grass\", elevation: (min: 60, max: 40), moisture: (min: 0, max: 100), temperature: (min: 0, max: 100))], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
+            "biome range min not below max",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], terrain_noise: Some((scale: 0, octaves: 3)), patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
-            "zero noise scale",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, biomes: [(tile: \"grass\", elevation: (min: 0, max: 101), moisture: (min: 0, max: 100), temperature: (min: 0, max: 100))], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
+            "biome range max above 100",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], terrain_noise: Some((scale: 32, octaves: 0)), patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
-            "zero noise octaves",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), climate_noise: (elevation: (scale: 0, octaves: 3), moisture: (scale: 32, octaves: 3), temperature: (scale: 32, octaves: 3)), {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
+            "zero climate noise scale",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], terrain_noise: Some((scale: 32, octaves: 9)), patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))",
-            "too many noise octaves",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), climate_noise: (elevation: (scale: 32, octaves: 0), moisture: (scale: 32, octaves: 3), temperature: (scale: 32, octaves: 3)), {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
+            "zero climate noise octaves",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 0, richness_bonus_percent: 75, radius_bonus_tiles: 1, max_radius_bonus_tiles: 6)))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), climate_noise: (elevation: (scale: 32, octaves: 3), moisture: (scale: 32, octaves: 3), temperature: (scale: 32, octaves: 9)), {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3))"
+            ),
+            "too many climate noise octaves",
+        ),
+        (
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 0, richness_bonus_percent: 75, radius_bonus_tiles: 1, max_radius_bonus_tiles: 6)))"
+            ),
             "zero distance scaling interval",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 75, radius_bonus_tiles: 7, max_radius_bonus_tiles: 6)))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 75, radius_bonus_tiles: 7, max_radius_bonus_tiles: 6)))"
+            ),
             "distance scaling radius bonus above its cap",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 75, radius_bonus_tiles: 1, max_radius_bonus_tiles: 129)))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 75, radius_bonus_tiles: 1, max_radius_bonus_tiles: 129)))"
+            ),
             "distance scaling radius bonus cap above the supported maximum",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 10001, radius_bonus_tiles: 1, max_radius_bonus_tiles: 6)))",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), distance_scaling: Some((interval_tiles: 100, richness_bonus_percent: 10001, radius_bonus_tiles: 1, max_radius_bonus_tiles: 6)))"
+            ),
             "distance scaling richness bonus above the supported maximum",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 101, radius: 5, richness: 100)])",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 101, radius: 5, richness: 100)])"
+            ),
             "frequency above 100",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 0, richness: 100)])",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 0, richness: 100)])"
+            ),
             "zero radius",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 16385, richness: 100)])",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 16385, richness: 100)])"
+            ),
             "resource radius above the supported maximum",
         ),
         (
-            "(version: 1, starting_area: (min_chunk: 0, max_chunk: 0), terrain: [(tile: \"grass\", weight: 1)], patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 5, richness: 0)])",
+            format!(
+                "(version: 2, starting_area: (min_chunk: 0, max_chunk: 0), {CLIMATE}, {BIOMES}, patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3), resources: [(item: \"iron_ore\", extraction: Solid, frequency_percent: 50, radius: 5, richness: 0)])"
+            ),
             "zero richness",
         ),
     ];
