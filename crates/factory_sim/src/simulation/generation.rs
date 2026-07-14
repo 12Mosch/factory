@@ -494,8 +494,8 @@ fn resource_patch_center_for_grid_cell(
     let hash = hash_resource_center(seed, grid_x, grid_y);
     let resource = select_resource_for_grid_cell(&rules.resources, hash)?;
     let jitter_diameter = i64::from(rules.grid_jitter) * 2 + 1;
-    let jitter_x = ((hash >> 8) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
-    let jitter_y = ((hash >> 16) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
+    let jitter_x = ((hash & 0xFFFF_FFFF) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
+    let jitter_y = ((hash >> 32) % jitter_diameter as u64) as i64 - i64::from(rules.grid_jitter);
     let grid_size = i64::from(rules.grid_cell_size);
     let x = grid_x * grid_size + grid_size / 2 + jitter_x;
     let y = grid_y * grid_size + grid_size / 2 + jitter_y;
