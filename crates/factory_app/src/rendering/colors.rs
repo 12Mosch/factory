@@ -126,14 +126,19 @@ pub(crate) struct TileColorTable {
 
 impl TileColorTable {
     pub(crate) fn from_catalog(catalog: &PrototypeCatalog) -> Self {
-        let colors: Vec<Color> = catalog
-            .tiles
-            .iter()
-            .map(|tile| {
-                let [r, g, b] = tile.color;
-                Color::srgb_u8(r, g, b)
-            })
-            .collect();
+        let mut colors = vec![
+            Color::default();
+            catalog
+                .tiles
+                .iter()
+                .map(|tile| tile.id.index() + 1)
+                .max()
+                .unwrap_or_default()
+        ];
+        for tile in &catalog.tiles {
+            let [r, g, b] = tile.color;
+            colors[tile.id.index()] = Color::srgb_u8(r, g, b);
+        }
         Self {
             colors: colors.into(),
         }
@@ -275,5 +280,28 @@ impl RenderPrototypeIds {
 
     pub(crate) fn is_dirt(self, tile_id: TileId) -> bool {
         tile_id == self.dirt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tile_colors_are_indexed_by_tile_id() {
+        let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+        let mut high_id_tile = catalog.tiles[0].clone();
+        high_id_tile.id = TileId::new(2);
+        high_id_tile.color = [10, 20, 30];
+        let mut low_id_tile = catalog.tiles[1].clone();
+        low_id_tile.id = TileId::new(0);
+        low_id_tile.color = [40, 50, 60];
+        catalog.tiles = vec![high_id_tile, low_id_tile];
+
+        let colors = TileColorTable::from_catalog(&catalog);
+
+        assert_eq!(colors.base(TileId::new(0)), Color::srgb_u8(40, 50, 60));
+        assert_eq!(colors.base(TileId::new(1)), Color::default());
+        assert_eq!(colors.base(TileId::new(2)), Color::srgb_u8(10, 20, 30));
     }
 }
