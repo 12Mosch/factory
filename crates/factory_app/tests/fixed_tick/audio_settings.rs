@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use factory_app::audio::{AudioSettings, SoundEvent};
 use factory_app::ui::audio_settings::{AudioSettingsAction, AudioSettingsButton};
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 #[test]
@@ -54,7 +55,7 @@ fn audio_systems_are_inert_without_asset_server() {
 
 #[test]
 fn bundled_wav_assets_are_decodable() {
-    let audio_dir = format!("{}/assets/audio", env!("CARGO_MANIFEST_DIR"));
+    let audio_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/audio");
     let entries = fs::read_dir(&audio_dir).expect("bundled audio directory should be readable");
     let mut decoded_count = 0;
 
