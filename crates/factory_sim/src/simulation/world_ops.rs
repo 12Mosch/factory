@@ -1,6 +1,7 @@
 use super::*;
 
 impl WorldSim {
+    const CHUNK_GENERATION_HISTORY_LIMIT: usize = 4096;
     const RESOURCE_DIRTY_HISTORY_LIMIT: usize = 4096;
 
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
@@ -12,6 +13,7 @@ impl WorldSim {
             chunks,
             generator,
             chunk_revision: 0,
+            chunk_generation_history: Default::default(),
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
         }
@@ -50,6 +52,7 @@ impl WorldSim {
             chunks,
             generator,
             chunk_revision: 0,
+            chunk_generation_history: Default::default(),
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
         }
@@ -69,8 +72,8 @@ impl WorldSim {
             .and_then(|chunk| chunk.tiles.get(index))
     }
 
-    pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> bool {
-        self.generate_missing_chunk(coord)
+    pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> ChunkGenerationResult {
+        self.ensure_chunks_generated([coord])
     }
 
     /// Generates every missing coordinate in iteration order and returns the
@@ -79,14 +82,14 @@ impl WorldSim {
     pub fn ensure_chunks_generated(
         &mut self,
         coords: impl IntoIterator<Item = ChunkCoord>,
-    ) -> Vec<ChunkCoord> {
-        let mut generated = Vec::new();
+    ) -> ChunkGenerationResult {
+        let mut result = ChunkGenerationResult::new(self.chunk_revision);
         for coord in coords {
             if self.generate_missing_chunk(coord) {
-                generated.push(coord);
+                result.push(coord, self.chunk_revision);
             }
         }
-        generated
+        result
     }
 
     fn generate_missing_chunk(&mut self, coord: ChunkCoord) -> bool {
@@ -96,6 +99,15 @@ impl WorldSim {
 
         entry.insert(generate_chunk(self.seed, coord, &self.generator));
         self.chunk_revision = self.chunk_revision.wrapping_add(1);
+        self.chunk_generation_history.0.push_back(
+            crate::world::generation::ChunkGenerationChange {
+                revision: self.chunk_revision,
+                coord,
+            },
+        );
+        while self.chunk_generation_history.0.len() > Self::CHUNK_GENERATION_HISTORY_LIMIT {
+            self.chunk_generation_history.0.pop_front();
+        }
         true
     }
 
@@ -103,15 +115,45 @@ impl WorldSim {
         &mut self,
         center: ChunkCoord,
         radius: i32,
-    ) -> Result<usize, ChunkNeighborhoodError> {
+    ) -> Result<ChunkGenerationResult, ChunkNeighborhoodError> {
         let (min_x, max_x, min_y, max_y) = chunk_neighborhood_bounds(center, radius)?;
         let coords =
             (min_y..=max_y).flat_map(|y| (min_x..=max_x).map(move |x| ChunkCoord { x, y }));
-        Ok(self.ensure_chunks_generated(coords).len())
+        Ok(self.ensure_chunks_generated(coords))
     }
 
     pub fn chunk_revision(&self) -> u64 {
         self.chunk_revision
+    }
+
+    /// Returns exact chunk coordinates generated after `revision`.
+    ///
+    /// `None` means the caller fell behind the bounded runtime history and
+    /// must rebuild its derived state from `chunks`.
+    pub fn chunk_generation_since(&self, revision: u64) -> Option<ChunkGenerationResult> {
+        if revision > self.chunk_revision {
+            return None;
+        }
+        if revision < self.chunk_revision
+            && self
+                .chunk_generation_history
+                .0
+                .front()
+                .is_none_or(|change| change.revision > revision.saturating_add(1))
+        {
+            return None;
+        }
+
+        let mut result = ChunkGenerationResult::new(self.chunk_revision);
+        for change in self
+            .chunk_generation_history
+            .0
+            .iter()
+            .filter(|change| change.revision > revision)
+        {
+            result.push(change.coord, change.revision);
+        }
+        Some(result)
     }
 
     pub fn generated_chunk_count(&self) -> usize {
@@ -421,8 +463,8 @@ impl Simulation {
     }
 
     pub(super) fn process_chunk_generation_queue(&mut self, budget: usize) -> usize {
-        let mut generated = 0;
-        while generated < budget {
+        let mut generated_chunks = Vec::with_capacity(budget);
+        while generated_chunks.len() < budget {
             let coord = self
                 .chunk_generation_queue
                 .required
@@ -432,15 +474,34 @@ impl Simulation {
             let Some(coord) = coord else {
                 break;
             };
-            if self.world.ensure_chunk_generated(coord) {
-                generated += 1;
-            }
+            generated_chunks.extend(
+                self.world
+                    .ensure_chunk_generated(coord)
+                    .into_generated_chunks(),
+            );
         }
 
-        if generated != 0 {
-            self.seed_enemy_spawners_in_new_chunks();
-        }
+        let generated = generated_chunks.len();
+        let result = ChunkGenerationResult::from_generated_chunks(
+            self.world.chunk_revision(),
+            generated_chunks,
+        );
+        self.initialize_generated_chunks(&result, true);
         generated
+    }
+
+    pub(super) fn initialize_generated_chunks(
+        &mut self,
+        result: &ChunkGenerationResult,
+        reveal_around_player: bool,
+    ) {
+        if result.is_empty() {
+            return;
+        }
+        if reveal_around_player {
+            self.reveal_generated_chunks_around_player(result.generated_chunks());
+        }
+        self.seed_enemy_spawners_in_chunks(result.generated_chunks());
     }
 
     pub(super) fn remove_chunk_generation_request(&mut self, coord: ChunkCoord) {

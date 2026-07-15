@@ -4,29 +4,17 @@ use super::*;
 const SPAWNER_PLACEMENT_SALT: u64 = 0x656e_656d_795f_6261;
 
 impl Simulation {
-    /// Rolls spawner placement for every generated chunk that has not been
-    /// seeded yet. Runs after any chunk generation opportunity; placement is
-    /// a pure function of the world seed and chunk coordinate.
-    pub(in crate::simulation) fn seed_enemy_spawners_in_new_chunks(&mut self) {
+    /// Rolls spawner placement for the exact chunks returned by world
+    /// generation. Placement is a pure function of the world seed and chunk
+    /// coordinate.
+    pub(in crate::simulation) fn seed_enemy_spawners_in_chunks(&mut self, chunks: &[ChunkCoord]) {
         let Some(config) = self.world.prototypes.world_generation.enemy_bases else {
             return;
         };
-        // Seeded chunks only ever come from generated chunks, so equal sizes
-        // mean there is nothing new.
-        if self.enemies.seeded_chunks.len() == self.world.chunks.len() {
-            return;
-        }
-
-        let new_chunks: Vec<ChunkCoord> = self
-            .world
-            .chunks
-            .keys()
-            .filter(|coord| !self.enemies.seeded_chunks.contains(coord))
-            .copied()
-            .collect();
-        for coord in new_chunks {
-            self.enemies.seeded_chunks.insert(coord);
-            self.try_place_spawner_in_chunk(coord, &config);
+        for &coord in chunks {
+            if self.enemies.seeded_chunks.insert(coord) {
+                self.try_place_spawner_in_chunk(coord, &config);
+            }
         }
     }
 

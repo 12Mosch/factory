@@ -59,8 +59,11 @@ impl Simulation {
             transport: TransportLaneCache::default(),
         };
         sim.request_chunks_around_player();
-        sim.reveal_generated_chunks_around_player();
-        sim.seed_enemy_spawners_in_new_chunks();
+        let initial_chunks = ChunkGenerationResult::from_generated_chunks(
+            sim.world.chunk_revision(),
+            sim.world.chunks.keys().copied(),
+        );
+        sim.initialize_generated_chunks(&initial_chunks, false);
         sim
     }
 
@@ -88,7 +91,6 @@ impl Simulation {
         self.advance_statistics_to_current_tick();
         self.request_chunks_around_player();
         self.process_chunk_generation_queue(CHUNK_GENERATION_BUDGET_PER_TICK);
-        self.reveal_generated_chunks_around_player();
         self.pollution_emitters.begin_tick();
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
@@ -194,13 +196,11 @@ impl Simulation {
         &self.world
     }
 
-    pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> bool {
+    pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> ChunkGenerationResult {
         self.remove_chunk_generation_request(coord);
-        let generated = self.world.ensure_chunk_generated(coord);
-        if generated {
-            self.seed_enemy_spawners_in_new_chunks();
-        }
-        generated
+        let result = self.world.ensure_chunk_generated(coord);
+        self.initialize_generated_chunks(&result, false);
+        result
     }
 
     pub fn entities(&self) -> &EntityStore {

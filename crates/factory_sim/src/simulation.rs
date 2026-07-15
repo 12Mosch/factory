@@ -65,8 +65,8 @@ pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
 pub use crate::world::{
-    Chunk, ChunkCoord, MinedResource, ResourceCell, ResourceTileChange, TileCell, TileCollision,
-    WorldSim, WorldTileCoord,
+    Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
+    TileCell, TileCollision, WorldSim, WorldTileCoord,
 };
 
 pub const CHUNK_SIZE: i32 = 32;
