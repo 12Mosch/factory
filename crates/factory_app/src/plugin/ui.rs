@@ -1,3 +1,4 @@
+use bevy::asset::{AssetId, Assets};
 use bevy::prelude::*;
 
 use super::{AppSet, InGameSet};
@@ -51,8 +52,29 @@ use crate::ui::threat::{
 /// manual crafting, production stats, and machine indicators.
 pub(super) struct UiPlugin;
 
+const DEFAULT_UI_FONT: &[u8] = include_bytes!("../../assets/fonts/FiraMono-Medium.ttf");
+
+/// Replaces Bevy's ASCII-only Fira Mono subset while retaining its default
+/// font handle, so all existing and future `TextFont::default()` instances use
+/// the complete face without requiring per-widget font wiring.
+fn install_default_ui_font(app: &mut App) {
+    let Some(mut fonts) = app.world_mut().get_resource_mut::<Assets<Font>>() else {
+        // Headless tests use MinimalPlugins and intentionally have no text assets.
+        return;
+    };
+
+    fonts
+        .insert(
+            AssetId::default(),
+            Font::from_bytes(DEFAULT_UI_FONT.to_vec()),
+        )
+        .expect("the default font asset ID must remain valid");
+}
+
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
+        install_default_ui_font(app);
+
         app.init_resource::<UpsStats>()
             .init_resource::<DebugOverlayVisible>()
             .init_resource::<OpenContainer>()
@@ -133,5 +155,24 @@ impl Plugin for UiPlugin {
                 )
                     .in_set(InGameSet),
             );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installs_complete_face_at_the_default_font_handle() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Font>>();
+
+        install_default_ui_font(&mut app);
+
+        let fonts = app.world().resource::<Assets<Font>>();
+        let font = fonts
+            .get(AssetId::default())
+            .expect("the complete UI font should occupy Bevy's default handle");
+        assert_eq!(font.data.data(), DEFAULT_UI_FONT);
     }
 }
