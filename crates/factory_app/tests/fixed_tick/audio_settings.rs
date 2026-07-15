@@ -1,7 +1,9 @@
 use super::common::test_app;
+use bevy::audio::{AudioSource, Decodable};
 use bevy::prelude::*;
 use factory_app::audio::{AudioSettings, SoundEvent};
 use factory_app::ui::audio_settings::{AudioSettingsAction, AudioSettingsButton};
+use std::fs;
 use std::time::Duration;
 
 #[test]
@@ -48,4 +50,32 @@ fn audio_systems_are_inert_without_asset_server() {
         .write(SoundEvent::UiClick);
 
     app.update();
+}
+
+#[test]
+fn bundled_wav_assets_are_decodable() {
+    let audio_dir = format!("{}/assets/audio", env!("CARGO_MANIFEST_DIR"));
+    let entries = fs::read_dir(&audio_dir).expect("bundled audio directory should be readable");
+    let mut decoded_count = 0;
+
+    for entry in entries {
+        let path = entry
+            .expect("audio directory entry should be readable")
+            .path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("wav") {
+            continue;
+        }
+
+        let bytes = fs::read(&path).expect("bundled audio asset should be readable");
+        let source = AudioSource {
+            bytes: bytes.into(),
+        };
+        let _decoder = source.decoder();
+        decoded_count += 1;
+    }
+
+    assert!(
+        decoded_count > 0,
+        "at least one bundled WAV asset should exist"
+    );
 }
