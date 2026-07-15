@@ -52,17 +52,25 @@ use crate::ui::threat::{
 /// manual crafting, production stats, and machine indicators.
 pub(super) struct UiPlugin;
 
-const DEFAULT_UI_FONT: &[u8] = include_bytes!("../../assets/fonts/FiraMono-Medium.ttf");
+const DEFAULT_UI_FONT: &[u8] = include_bytes!("../../third_party/fira_mono/FiraMono-Medium.ttf");
 
 /// Replaces Bevy's ASCII-only Fira Mono subset while retaining its default
-/// font handle, so all existing and future `TextFont::default()` instances use
-/// the complete face without requiring per-widget font wiring.
+/// font handle, so constructors such as `TextFont::from_font_size` use the
+/// complete face without requiring per-widget font wiring.
 fn install_default_ui_font(app: &mut App) {
-    let Some(mut fonts) = app.world_mut().get_resource_mut::<Assets<Font>>() else {
+    if !app.world().contains_resource::<Assets<Font>>() {
         // Headless tests use MinimalPlugins and intentionally have no text assets.
         return;
-    };
+    }
 
+    // Bevy 0.19's TextPlugin registers DEFAULT_FONT_DATA at AssetId::default().
+    // UiPlugin must follow TextPlugin, and this invariant must be rechecked on upgrades.
+    debug_assert!(
+        app.is_plugin_added::<bevy::text::TextPlugin>(),
+        "the complete UI font must be installed after TextPlugin"
+    );
+
+    let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
     fonts
         .insert(
             AssetId::default(),
@@ -161,11 +169,20 @@ impl Plugin for UiPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::asset::AssetPlugin;
+    use bevy::text::TextPlugin;
 
     #[test]
-    fn installs_complete_face_at_the_default_font_handle() {
+    fn replaces_text_plugins_subset_at_the_default_font_handle() {
         let mut app = App::new();
-        app.init_resource::<Assets<Font>>();
+        app.add_plugins((AssetPlugin::default(), TextPlugin));
+
+        let subset = app
+            .world()
+            .resource::<Assets<Font>>()
+            .get(AssetId::default())
+            .expect("TextPlugin should install Bevy's default font subset");
+        assert_ne!(subset.data.data(), DEFAULT_UI_FONT);
 
         install_default_ui_font(&mut app);
 
