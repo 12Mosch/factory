@@ -523,16 +523,20 @@ pub(super) fn generate_resource_patch_centers(
     centers
 }
 
-/// Selects exactly one resource rule for a grid cell, using each configured
-/// `frequency_percent` as its relative weight. This keeps random patches from
-/// different resources sharing a cell and competing tile-by-tile at their
-/// overlapping borders.
+/// First rolls the configured total patch chance, then selects exactly one
+/// resource rule using each configured `selection_weight` as its relative
+/// weight. Density and resource composition are therefore independent, while
+/// random patches still cannot compete tile-by-tile within one grid cell.
 fn resource_patch_center_for_grid_cell(
     seed: u64,
     rules: &WorldGenRules,
     grid_x: WorldTileCoord,
     grid_y: WorldTileCoord,
 ) -> Option<ResourcePatchCenter> {
+    let presence_hash = hash_resource_patch_presence(seed, grid_x, grid_y);
+    if presence_hash % 100 >= u64::from(rules.patch_chance_percent) {
+        return None;
+    }
     let hash = hash_resource_center(seed, grid_x, grid_y);
     let resource = select_resource_for_grid_cell(&rules.resources, hash)?;
     let jitter_diameter = i64::from(rules.grid_jitter) * 2 + 1;
@@ -559,12 +563,12 @@ fn resource_patch_center_for_grid_cell(
 fn select_resource_for_grid_cell(resources: &[ResourceRule], hash: u64) -> Option<&ResourceRule> {
     let total_weight: u64 = resources
         .iter()
-        .map(|resource| u64::from(resource.frequency_percent))
+        .map(|resource| u64::from(resource.selection_weight))
         .sum();
     let mut roll = hash % total_weight.max(1);
 
     for resource in resources {
-        let weight = u64::from(resource.frequency_percent);
+        let weight = u64::from(resource.selection_weight);
         if roll < weight {
             return Some(resource);
         }
@@ -737,6 +741,10 @@ pub(super) fn hash_resource_center(
     hash_world(seed ^ 0xa24b_aed4_963e_e407, grid_x, grid_y)
 }
 
+fn hash_resource_patch_presence(seed: u64, grid_x: WorldTileCoord, grid_y: WorldTileCoord) -> u64 {
+    hash_world(seed ^ 0x6c8e_9cf5_7093_2bd1, grid_x, grid_y)
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct ResourcePatchCenter {
     resource_item: ItemId,
@@ -776,6 +784,7 @@ pub(crate) struct WorldGenRules {
     grid_cell_size: i32,
     grid_jitter: i32,
     edge_noise: i32,
+    patch_chance_percent: u8,
     /// Distance-based richness/radius growth for grid patches; starting
     /// patches stay at their configured base values.
     distance_scaling: Option<ResourceDistanceScalingConfig>,
@@ -797,7 +806,7 @@ struct BiomeRule {
 struct ResourceRule {
     resource_item: ItemId,
     minable: bool,
-    frequency_percent: u8,
+    selection_weight: u32,
     radius: i64,
     richness: u32,
     starting_patch: Option<(WorldTileCoord, WorldTileCoord)>,
@@ -828,7 +837,7 @@ impl WorldGenRules {
             .map(|resource| ResourceRule {
                 resource_item: resource.resource_item,
                 minable: resource.extraction == ResourceExtraction::Solid,
-                frequency_percent: resource.frequency_percent,
+                selection_weight: resource.selection_weight,
                 radius: i64::from(resource.radius),
                 richness: resource.richness,
                 starting_patch: resource
@@ -852,6 +861,7 @@ impl WorldGenRules {
             grid_cell_size: config.patch_grid.cell_size,
             grid_jitter: config.patch_grid.jitter,
             edge_noise: config.patch_grid.edge_noise,
+            patch_chance_percent: config.patch_grid.patch_chance_percent,
             distance_scaling: config.distance_scaling,
             spawn_bias,
         }
@@ -1346,19 +1356,23 @@ mod tests {
     }
 
     #[test]
-    fn grid_cells_select_one_resource_weighted_by_frequency() {
+    fn grid_cells_roll_density_then_select_one_resource_by_weight() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
         let rules = WorldGenRules::from_catalog(&catalog);
         let mut counts = vec![0u64; rules.resources.len()];
-        let mut total = 0u64;
+        let mut occupied = 0u64;
+        let mut cells = 0u64;
 
         for grid_y in -64..64 {
             for grid_x in -64..64 {
+                cells += 1;
+                let Some(center) = resource_patch_center_for_grid_cell(123, &rules, grid_x, grid_y)
+                else {
+                    continue;
+                };
                 let hash = hash_resource_center(123, grid_x, grid_y);
                 let selected = select_resource_for_grid_cell(&rules.resources, hash)
-                    .expect("base resource frequencies should select one resource per grid cell");
-                let center = resource_patch_center_for_grid_cell(123, &rules, grid_x, grid_y)
-                    .expect("selected grid resource should produce a patch center");
+                    .expect("base resource weights should select one resource");
                 assert_eq!(center.resource_item, selected.resource_item);
 
                 let index = rules
@@ -1367,24 +1381,61 @@ mod tests {
                     .position(|resource| resource.resource_item == selected.resource_item)
                     .expect("selected resource should be configured");
                 counts[index] += 1;
-                total += 1;
+                occupied += 1;
             }
         }
+
+        let actual_density = occupied as f64 / cells as f64;
+        let expected_density = f64::from(rules.patch_chance_percent) / 100.0;
+        assert!(
+            (actual_density - expected_density).abs() < 0.02,
+            "patch density was {actual_density:.3}, expected about {expected_density:.3}"
+        );
 
         let total_weight: u64 = rules
             .resources
             .iter()
-            .map(|resource| u64::from(resource.frequency_percent))
+            .map(|resource| u64::from(resource.selection_weight))
             .sum();
         for (resource, count) in rules.resources.iter().zip(counts) {
-            let expected = f64::from(resource.frequency_percent) / total_weight as f64;
-            let actual = count as f64 / total as f64;
+            let expected = f64::from(resource.selection_weight) / total_weight as f64;
+            let actual = count as f64 / occupied as f64;
             assert!(
                 (actual - expected).abs() < 0.025,
                 "resource {:?} selected at {actual:.3}, expected about {expected:.3}",
                 resource.resource_item
             );
         }
+    }
+
+    #[test]
+    fn patch_chance_and_selection_weights_handle_empty_cells() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let mut rules = WorldGenRules::from_catalog(&catalog);
+
+        let mut recomposed_rules = rules.clone();
+        recomposed_rules.resources[0].selection_weight = u32::MAX;
+        for grid_y in -8..8 {
+            for grid_x in -8..8 {
+                assert_eq!(
+                    resource_patch_center_for_grid_cell(123, &rules, grid_x, grid_y).is_some(),
+                    resource_patch_center_for_grid_cell(123, &recomposed_rules, grid_x, grid_y)
+                        .is_some(),
+                    "changing composition changed patch presence at ({grid_x}, {grid_y})"
+                );
+            }
+        }
+
+        rules.patch_chance_percent = 0;
+        assert!(resource_patch_center_for_grid_cell(123, &rules, 4, -7).is_none());
+
+        rules.patch_chance_percent = 100;
+        assert!(resource_patch_center_for_grid_cell(123, &rules, 4, -7).is_some());
+
+        for resource in &mut rules.resources {
+            resource.selection_weight = 0;
+        }
+        assert!(resource_patch_center_for_grid_cell(123, &rules, 4, -7).is_none());
     }
 
     #[test]
@@ -1396,37 +1447,35 @@ mod tests {
             .distance_scaling
             .expect("base catalog should configure distance scaling");
 
-        // Far enough out that no starting patch reaches the chunk and every
-        // relevant patch center sits past the radius bonus cap.
-        let bounds = TileBounds::for_chunk(ChunkCoord { x: 20, y: 20 });
-        let centers = generate_resource_patch_centers(123, &rules, bounds);
+        // Far enough out that every candidate sits past the radius bonus cap.
+        // Search several cells because the density roll intentionally leaves
+        // some cells empty.
+        let center = (500..520)
+            .flat_map(|grid_y| (500..520).map(move |grid_x| (grid_x, grid_y)))
+            .find_map(|(grid_x, grid_y)| {
+                resource_patch_center_for_grid_cell(123, &rules, grid_x, grid_y)
+            })
+            .expect("expected a grid patch among the sampled far cells");
+        let base = rules
+            .resources
+            .iter()
+            .find(|resource| resource.resource_item == center.resource_item)
+            .expect("center resource should be configured");
         assert!(
-            !centers.is_empty(),
-            "expected grid patches in the far chunk"
+            center.richness > base.richness * 2,
+            "richness {} at ({}, {}) should be well above base {}",
+            center.richness,
+            center.x,
+            center.y,
+            base.richness
         );
-
-        for center in &centers {
-            let base = rules
-                .resources
-                .iter()
-                .find(|resource| resource.resource_item == center.resource_item)
-                .expect("center resource should be configured");
-            assert!(
-                center.richness > base.richness * 2,
-                "richness {} at ({}, {}) should be well above base {}",
-                center.richness,
-                center.x,
-                center.y,
-                base.richness
-            );
-            assert_eq!(
-                center.radius,
-                base.radius + i64::from(scaling.max_radius_bonus_tiles),
-                "radius bonus at ({}, {}) should be capped",
-                center.x,
-                center.y
-            );
-        }
+        assert_eq!(
+            center.radius,
+            base.radius + i64::from(scaling.max_radius_bonus_tiles),
+            "radius bonus at ({}, {}) should be capped",
+            center.x,
+            center.y
+        );
     }
 
     #[test]

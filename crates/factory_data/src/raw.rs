@@ -85,6 +85,12 @@ pub(crate) struct RawResourcePatchGrid {
     pub(crate) cell_size: i32,
     pub(crate) jitter: i32,
     pub(crate) edge_noise: i32,
+    #[serde(default = "default_patch_chance_percent")]
+    pub(crate) patch_chance_percent: u8,
+}
+
+fn default_patch_chance_percent() -> u8 {
+    100
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,7 +105,8 @@ pub(crate) struct RawResourceDistanceScaling {
 pub(crate) struct RawResourceGeneration {
     pub(crate) item: String,
     pub(crate) extraction: ResourceExtraction,
-    pub(crate) frequency_percent: u8,
+    #[serde(alias = "frequency_percent")]
+    pub(crate) selection_weight: u32,
     pub(crate) radius: i32,
     pub(crate) richness: u32,
     #[serde(default)]

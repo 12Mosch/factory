@@ -1334,7 +1334,7 @@
         evolution_colony_destroyed_points: 200,
     )),
     world_generation: Some((
-        version: 2,
+        version: 3,
         starting_area: (min_chunk: -2, max_chunk: 2),
         // Three independent climate channels drive biome selection. Distinct
         // wavelengths keep their features from lining up; each is sampled from
@@ -1360,7 +1360,12 @@
             (tile: "forest", elevation: (min: 33, max: 82),  moisture: (min: 55, max: 100), temperature: (min: 30, max: 66)),
             (tile: "grass",  elevation: (min: 33, max: 100), moisture: (min: 0, max: 100), temperature: (min: 0,  max: 100)),
         ],
-        patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
+        patch_grid: (
+            cell_size: 40,
+            jitter: 16,
+            edge_noise: 3,
+            patch_chance_percent: 60,
+        ),
         // Expansion reward: every 100 tiles from spawn, grid patches gain 75%
         // of their base richness and 1 tile of radius (radius capped at +6).
         // Starting patches keep their base values.
@@ -1374,7 +1379,7 @@
             (
                 item: "iron_ore",
                 extraction: Solid,
-                frequency_percent: 68,
+                selection_weight: 68,
                 radius: 9,
                 richness: 700,
                 starting_patch: Some((x: -22, y: -14)),
@@ -1382,7 +1387,7 @@
             (
                 item: "copper_ore",
                 extraction: Solid,
-                frequency_percent: 62,
+                selection_weight: 62,
                 radius: 8,
                 richness: 650,
                 starting_patch: Some((x: 18, y: -12)),
@@ -1390,7 +1395,7 @@
             (
                 item: "coal",
                 extraction: Solid,
-                frequency_percent: 55,
+                selection_weight: 55,
                 radius: 10,
                 richness: 800,
                 starting_patch: Some((x: -16, y: 20)),
@@ -1398,7 +1403,7 @@
             (
                 item: "stone",
                 extraction: Solid,
-                frequency_percent: 48,
+                selection_weight: 48,
                 radius: 7,
                 richness: 520,
                 starting_patch: Some((x: 20, y: 18)),
@@ -1406,7 +1411,7 @@
             (
                 item: "crude_oil",
                 extraction: Fluid,
-                frequency_percent: 30,
+                selection_weight: 30,
                 radius: 4,
                 richness: 900,
                 starting_patch: Some((x: -26, y: 4)),

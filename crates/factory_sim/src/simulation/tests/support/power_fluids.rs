@@ -253,39 +253,6 @@ pub(in crate::simulation::tests) fn place_pump_pipe_boiler_fixture(
     panic!("expected pump-pipe-boiler fixture area");
 }
 
-/// Places a powered pumpjack over a crude oil patch, backed by a boiler power
-/// plant. Returns `None` when the generated world offers no suitable spot.
-pub(in crate::simulation::tests) fn place_powered_pumpjack(
-    sim: &mut Simulation,
-) -> Option<EntityId> {
-    let pumpjack = entity_id_by_name(&sim.world.prototypes, "pumpjack");
-    let (x, y, _) = place_powered_fixture_origin_where(sim, 3, 3, (3, 1), |sim, fixture| {
-        crate::placement::validate(
-            sim,
-            crate::placement::EntityPlacementRequest {
-                prototype_id: pumpjack,
-                x: fixture.x,
-                y: fixture.y,
-                direction: Direction::North,
-            },
-        )
-        .is_ok()
-    })?;
-
-    Some(
-        crate::placement::place(
-            sim,
-            crate::placement::EntityPlacementRequest {
-                prototype_id: pumpjack,
-                x,
-                y,
-                direction: Direction::North,
-            },
-        )
-        .expect("validated pumpjack fixture should be placeable"),
-    )
-}
-
 pub(in crate::simulation::tests) fn fixture_is_clear_buildable(
     sim: &Simulation,
     footprint: &EntityFootprint,
