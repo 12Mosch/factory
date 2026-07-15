@@ -35,6 +35,7 @@ impl Simulation {
             entity_topology_revision: 0,
             revealed_revision: 0,
             world,
+            chunk_generation_queue: ChunkGenerationQueue::default(),
             chart: ChartState::default(),
             entities,
             construction: ConstructionState::default(),
@@ -57,7 +58,8 @@ impl Simulation {
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
-        sim.reveal_chunks_around_player();
+        sim.request_chunks_around_player();
+        sim.reveal_generated_chunks_around_player();
         sim.seed_enemy_spawners_in_new_chunks();
         sim
     }
@@ -84,8 +86,9 @@ impl Simulation {
     pub(crate) fn advance_one_tick<P: TickProfiler>(&mut self, profiler: &mut P) {
         self.tick += 1;
         self.advance_statistics_to_current_tick();
-        self.reveal_chunks_around_player();
-        self.seed_enemy_spawners_in_new_chunks();
+        self.request_chunks_around_player();
+        self.process_chunk_generation_queue(CHUNK_GENERATION_BUDGET_PER_TICK);
+        self.reveal_generated_chunks_around_player();
         self.pollution_emitters.begin_tick();
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
@@ -162,6 +165,7 @@ impl Simulation {
         self.world.seed.hash(&mut hasher);
         prototype_hash(&self.world.prototypes).hash(&mut hasher);
         self.world.chunks.hash(&mut hasher);
+        self.chunk_generation_queue.hash(&mut hasher);
         self.chart.hash(&mut hasher);
         self.statistics.items.hash(&mut hasher);
         self.statistics.fluids.hash(&mut hasher);
@@ -191,6 +195,7 @@ impl Simulation {
     }
 
     pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> bool {
+        self.remove_chunk_generation_request(coord);
         let generated = self.world.ensure_chunk_generated(coord);
         if generated {
             self.seed_enemy_spawners_in_new_chunks();

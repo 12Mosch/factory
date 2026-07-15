@@ -56,18 +56,41 @@ fn player_generates_and_can_walk_into_streamed_walkable_chunk() {
 
     sim.move_player_by_tiles(delta.0, delta.1);
 
-    assert_ne!(sim.player, before);
+    assert_eq!(sim.player, before);
+    assert!(!sim.world.chunks.contains_key(&streamed_chunk));
+
+    sim.tick();
     assert!(sim.world.chunks.contains_key(&streamed_chunk));
+
+    sim.move_player_by_tiles(delta.0, delta.1);
+
+    assert_ne!(sim.player, before);
 }
 
 #[test]
-fn moving_or_ticking_far_from_origin_reveals_generated_chunks() {
+fn teleport_streams_and_reveals_at_most_one_chunk_per_tick() {
     let mut sim = Simulation::new_test_world(123);
     let player_chunk = ChunkCoord { x: 20, y: -17 };
     sim.player =
         PlayerState::centered_on_tile(player_chunk.x * CHUNK_SIZE, player_chunk.y * CHUNK_SIZE);
+    let initial_chunk_count = sim.world.generated_chunk_count();
 
     sim.tick();
+
+    assert_eq!(
+        sim.world.generated_chunk_count(),
+        initial_chunk_count + CHUNK_GENERATION_BUDGET_PER_TICK
+    );
+    assert!(sim.world.chunks.contains_key(&player_chunk));
+    assert!(sim.is_chunk_revealed(player_chunk));
+
+    for completed_ticks in 2..=9 {
+        sim.tick();
+        assert_eq!(
+            sim.world.generated_chunk_count(),
+            initial_chunk_count + completed_ticks
+        );
+    }
 
     for y in player_chunk.y - 1..=player_chunk.y + 1 {
         for x in player_chunk.x - 1..=player_chunk.x + 1 {
@@ -75,6 +98,25 @@ fn moving_or_ticking_far_from_origin_reveals_generated_chunks() {
             assert!(sim.world.chunks.contains_key(&coord));
             assert!(sim.is_chunk_revealed(coord));
         }
+    }
+}
+
+#[test]
+fn generation_queue_uses_priority_then_stable_coordinate_order() {
+    let mut sim = Simulation::new_test_world(123);
+    let required_first = ChunkCoord { x: -9, y: 9 };
+    let required_second = ChunkCoord { x: 9, y: 9 };
+    let chart = ChunkCoord { x: -20, y: -20 };
+    let prefetch = ChunkCoord { x: -30, y: -30 };
+
+    sim.request_chunk_generation(prefetch, ChunkGenerationPriority::Prefetch);
+    sim.request_chunk_generation(required_second, ChunkGenerationPriority::Required);
+    sim.request_chunk_generation(chart, ChunkGenerationPriority::Chart);
+    sim.request_chunk_generation(required_first, ChunkGenerationPriority::Required);
+
+    for expected in [required_first, required_second, prefetch, chart] {
+        assert_eq!(sim.process_chunk_generation_queue(1), 1);
+        assert!(sim.world.chunks.contains_key(&expected));
     }
 }
 

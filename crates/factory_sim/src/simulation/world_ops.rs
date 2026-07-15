@@ -1,4 +1,5 @@
 use super::*;
+use crate::world::generation::GenerationRulesCache;
 
 impl WorldSim {
     const RESOURCE_DIRTY_HISTORY_LIMIT: usize = 4096;
@@ -6,9 +7,11 @@ impl WorldSim {
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
         let tile_pollution_absorption_per_minute_milli =
             Self::tile_pollution_absorption_rates(&prototypes);
+        let rules = WorldGenRules::from_catalog(&prototypes);
         let chunks = generate_world_chunks(
             seed,
             &prototypes,
+            &rules,
             &tile_pollution_absorption_per_minute_milli,
         );
         Self {
@@ -16,6 +19,7 @@ impl WorldSim {
             prototypes,
             chunks,
             tile_pollution_absorption_per_minute_milli,
+            generation_rules: GenerationRulesCache(Some(rules)),
             chunk_revision: 0,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
@@ -36,6 +40,7 @@ impl WorldSim {
     ) -> Self {
         let tile_pollution_absorption_per_minute_milli =
             Self::tile_pollution_absorption_rates(&prototypes);
+        let generation_rules = WorldGenRules::from_catalog(&prototypes);
         for chunk in chunks.values_mut() {
             chunk.pollution_absorption_per_minute_milli = chunk
                 .tiles
@@ -54,6 +59,7 @@ impl WorldSim {
             prototypes,
             chunks,
             tile_pollution_absorption_per_minute_milli,
+            generation_rules: GenerationRulesCache(Some(generation_rules)),
             chunk_revision: 0,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
@@ -87,11 +93,14 @@ impl WorldSim {
             return false;
         }
 
-        let rules = WorldGenRules::from_catalog(&self.prototypes);
+        let rules = self
+            .generation_rules
+            .0
+            .get_or_insert_with(|| WorldGenRules::from_catalog(&self.prototypes));
         let chunk = generate_chunk(
             self.seed,
             coord,
-            &rules,
+            rules,
             &self.tile_pollution_absorption_per_minute_milli,
         );
         self.chunks.insert(coord, chunk);
@@ -104,29 +113,12 @@ impl WorldSim {
         center: ChunkCoord,
         radius: i32,
     ) -> Result<usize, ChunkNeighborhoodError> {
-        let radius = i64::from(radius.max(0));
-        let min_x = i64::from(center.x) - radius;
-        let max_x = i64::from(center.x) + radius;
-        let min_y = i64::from(center.y) - radius;
-        let max_y = i64::from(center.y) + radius;
-        if min_x < i64::from(i32::MIN)
-            || max_x > i64::from(i32::MAX)
-            || min_y < i64::from(i32::MIN)
-            || max_y > i64::from(i32::MAX)
-        {
-            return Err(ChunkNeighborhoodError::OutOfChunkCoordinateRange {
-                center,
-                radius: radius as i32,
-            });
-        }
+        let (min_x, max_x, min_y, max_y) = chunk_neighborhood_bounds(center, radius)?;
         let mut generated = 0;
 
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                if self.ensure_chunk_generated(ChunkCoord {
-                    x: x as i32,
-                    y: y as i32,
-                }) {
+                if self.ensure_chunk_generated(ChunkCoord { x, y }) {
                     generated += 1;
                 }
             }
@@ -380,6 +372,98 @@ impl WorldSim {
         while self.resource_dirty_tiles.len() > Self::RESOURCE_DIRTY_HISTORY_LIMIT {
             self.resource_dirty_tiles.pop_front();
         }
+    }
+}
+
+pub(super) fn chunk_neighborhood_bounds(
+    center: ChunkCoord,
+    radius: i32,
+) -> Result<(i32, i32, i32, i32), ChunkNeighborhoodError> {
+    let radius = i64::from(radius.max(0));
+    let min_x = i64::from(center.x) - radius;
+    let max_x = i64::from(center.x) + radius;
+    let min_y = i64::from(center.y) - radius;
+    let max_y = i64::from(center.y) + radius;
+    if min_x < i64::from(i32::MIN)
+        || max_x > i64::from(i32::MAX)
+        || min_y < i64::from(i32::MIN)
+        || max_y > i64::from(i32::MAX)
+    {
+        return Err(ChunkNeighborhoodError::OutOfChunkCoordinateRange {
+            center,
+            radius: radius as i32,
+        });
+    }
+
+    Ok((min_x as i32, max_x as i32, min_y as i32, max_y as i32))
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ChunkGenerationPriority {
+    Required,
+    Chart,
+    Prefetch,
+}
+
+impl Simulation {
+    pub(super) fn request_chunk_generation(
+        &mut self,
+        coord: ChunkCoord,
+        priority: ChunkGenerationPriority,
+    ) {
+        if self.world.chunks.contains_key(&coord) {
+            return;
+        }
+
+        match priority {
+            ChunkGenerationPriority::Required => {
+                self.chunk_generation_queue.chart.remove(&coord);
+                self.chunk_generation_queue.prefetch.remove(&coord);
+                self.chunk_generation_queue.required.insert(coord);
+            }
+            ChunkGenerationPriority::Chart => {
+                if !self.chunk_generation_queue.required.contains(&coord)
+                    && !self.chunk_generation_queue.prefetch.contains(&coord)
+                {
+                    self.chunk_generation_queue.chart.insert(coord);
+                }
+            }
+            ChunkGenerationPriority::Prefetch => {
+                if !self.chunk_generation_queue.required.contains(&coord) {
+                    self.chunk_generation_queue.chart.remove(&coord);
+                    self.chunk_generation_queue.prefetch.insert(coord);
+                }
+            }
+        }
+    }
+
+    pub(super) fn process_chunk_generation_queue(&mut self, budget: usize) -> usize {
+        let mut generated = 0;
+        while generated < budget {
+            let coord = self
+                .chunk_generation_queue
+                .required
+                .pop_first()
+                .or_else(|| self.chunk_generation_queue.prefetch.pop_first())
+                .or_else(|| self.chunk_generation_queue.chart.pop_first());
+            let Some(coord) = coord else {
+                break;
+            };
+            if self.world.ensure_chunk_generated(coord) {
+                generated += 1;
+            }
+        }
+
+        if generated != 0 {
+            self.seed_enemy_spawners_in_new_chunks();
+        }
+        generated
+    }
+
+    pub(super) fn remove_chunk_generation_request(&mut self, coord: ChunkCoord) {
+        self.chunk_generation_queue.required.remove(&coord);
+        self.chunk_generation_queue.chart.remove(&coord);
+        self.chunk_generation_queue.prefetch.remove(&coord);
     }
 }
 

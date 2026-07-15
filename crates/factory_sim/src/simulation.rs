@@ -111,6 +111,11 @@ pub const POLLUTION_MIN_TO_SPREAD_MICRO: u64 = 100_000;
 /// map stays bounded.
 pub const POLLUTION_MIN_RETAINED_MICRO: u64 = 1_000;
 
+/// Maximum number of requested chunks generated during one fixed simulation
+/// tick. Keeping this small bounds terrain streaming work during teleports and
+/// large chart reveals.
+pub const CHUNK_GENERATION_BUDGET_PER_TICK: usize = 1;
+
 /// Health restored per applied repair command; the app repeats the command
 /// while the repair input is held.
 pub const REPAIR_HEALTH_PER_ACTION: u32 = 5;
@@ -127,6 +132,7 @@ pub struct Simulation {
     revealed_revision: u64,
 
     world: WorldSim,
+    chunk_generation_queue: ChunkGenerationQueue,
     chart: ChartState,
     entities: EntityStore,
     construction: ConstructionState,
@@ -324,6 +330,13 @@ impl OnboardingProgress {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ChartState {
     pub revealed_chunks: BTreeSet<ChunkCoord>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+struct ChunkGenerationQueue {
+    required: BTreeSet<ChunkCoord>,
+    chart: BTreeSet<ChunkCoord>,
+    prefetch: BTreeSet<ChunkCoord>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -702,6 +715,7 @@ pub(crate) use self::entity_states::EntityStateBehavior;
 pub use self::entity_transfer::TransferOutcome;
 use self::fluid_ops::*;
 use self::fluid_state::FluidSubsystem;
+pub(crate) use self::generation::WorldGenRules as CachedWorldGenRules;
 use self::generation::*;
 use self::machine_ops::*;
 use self::power_state::{PowerSubsystem, PowerTopologyCache};

@@ -186,11 +186,18 @@ fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i64, i64) {
 }
 
 fn move_player_to_tile(sim: &mut Simulation, tile: (i64, i64)) {
-    let (player_x, player_y) = sim.player().position_tiles();
-    sim.move_player_by_tiles(
-        tile.0 as f32 + 0.5 - player_x,
-        tile.1 as f32 + 0.5 - player_y,
-    );
+    let attempt_move = |sim: &mut Simulation| {
+        let (player_x, player_y) = sim.player().position_tiles();
+        sim.move_player_by_tiles(
+            tile.0 as f32 + 0.5 - player_x,
+            tile.1 as f32 + 0.5 - player_y,
+        );
+    };
+    attempt_move(sim);
+    if sim.player().tile_position() != tile {
+        sim.tick();
+        attempt_move(sim);
+    }
     assert_eq!(sim.player().tile_position(), tile);
 }
 
