@@ -184,11 +184,13 @@ fn generating_neighbor_remeshes_cached_shoreline_chunk() {
             .expect("cached shoreline mesh should exist"),
     );
 
-    assert!(
+    assert_eq!(
         app.world_mut()
             .resource_mut::<SimResource>()
             .write_for_tests()
             .ensure_chunk_generated(generated_coord)
+            .generated_chunks(),
+        &[generated_coord]
     );
     app.update();
 

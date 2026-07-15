@@ -310,7 +310,10 @@ fn pollution_does_not_spread_beyond_generated_chunks() {
     for &coord in &outside {
         assert_eq!(sim.pollution().amount_micro(coord), 0);
     }
-    assert!(sim.ensure_chunk_generated(outside[0]));
+    assert_eq!(
+        sim.ensure_chunk_generated(outside[0]).generated_chunks(),
+        &[outside[0]]
+    );
     assert_eq!(sim.pollution().amount_micro(outside[0]), 0);
     assert!(
         sim.pollution()

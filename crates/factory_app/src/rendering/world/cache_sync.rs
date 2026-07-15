@@ -71,7 +71,6 @@ pub(super) fn sync_visible_world_tiles_impl(
         for (_, handle) in std::mem::take(&mut cache.chunk_meshes) {
             meshes.remove(handle.id());
         }
-        cache.known_generated_chunks.clear();
         cache.material = None;
         cache.last_reload_token = token.value;
     }
@@ -105,11 +104,9 @@ pub(super) fn sync_visible_world_tiles_impl(
 
     let new_chunks = sim
         .world()
-        .chunks
-        .keys()
-        .copied()
-        .filter(|coord| !cache.known_generated_chunks.contains(coord))
-        .collect::<Vec<_>>();
+        .chunk_generation_since(cache.last_chunk_revision)
+        .map(|result| result.into_generated_chunks())
+        .unwrap_or_else(|| sim.world().chunks.keys().copied().collect());
     let affected_cached_neighbors = cached_neighbors_of(&new_chunks, &cache.chunk_meshes);
     for coord in affected_cached_neighbors {
         let (Some(chunk), Some(handle)) = (
@@ -146,7 +143,6 @@ pub(super) fn sync_visible_world_tiles_impl(
         cache.chunk_meshes.insert(*coord, mesh);
     }
 
-    cache.known_generated_chunks = sim.world().chunks.keys().copied().collect();
     cache.last_visible_revision = visible.revision;
     cache.last_chunk_revision = sim.world().chunk_revision();
 }

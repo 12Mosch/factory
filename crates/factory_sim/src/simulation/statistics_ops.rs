@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeneratedChunkReveal {
+    Missing,
+    AlreadyRevealed,
+    NewlyRevealed,
+}
+
 const CHART_REVEAL_RADIUS_CHUNKS: i32 = 1;
 
 impl Default for ItemStatistics {
@@ -163,42 +170,67 @@ impl Simulation {
         // Drop obsolete work after a teleport instead of streaming terrain
         // that will no longer be revealed.
         self.chunk_generation_queue.chart.clear();
-        self.request_chunk_generation(player_chunk, ChunkGenerationPriority::Required);
+        let Ok((min_x, max_x, min_y, max_y)) =
+            chunk_neighborhood_bounds(player_chunk, CHART_REVEAL_RADIUS_CHUNKS)
+        else {
+            self.request_chunk_generation(player_chunk, ChunkGenerationPriority::Required);
+            return;
+        };
+        let mut revealed_any = false;
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let coord = ChunkCoord { x, y };
+                match self.reveal_generated_chunk(coord) {
+                    GeneratedChunkReveal::Missing => {
+                        let priority = if coord == player_chunk {
+                            ChunkGenerationPriority::Required
+                        } else {
+                            ChunkGenerationPriority::Chart
+                        };
+                        self.request_chunk_generation(coord, priority);
+                    }
+                    GeneratedChunkReveal::NewlyRevealed => revealed_any = true,
+                    GeneratedChunkReveal::AlreadyRevealed => {}
+                }
+            }
+        }
+        self.finish_chunk_reveal(revealed_any);
+    }
+
+    pub(super) fn reveal_generated_chunks_around_player(&mut self, chunks: &[ChunkCoord]) {
+        let (tile_x, tile_y) = self.player.tile_position();
+        let Some(player_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
+            return;
+        };
         let Ok((min_x, max_x, min_y, max_y)) =
             chunk_neighborhood_bounds(player_chunk, CHART_REVEAL_RADIUS_CHUNKS)
         else {
             return;
         };
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
-                self.request_chunk_generation(ChunkCoord { x, y }, ChunkGenerationPriority::Chart);
+
+        let mut revealed_any = false;
+        for &coord in chunks {
+            if (min_x..=max_x).contains(&coord.x) && (min_y..=max_y).contains(&coord.y) {
+                revealed_any |= matches!(
+                    self.reveal_generated_chunk(coord),
+                    GeneratedChunkReveal::NewlyRevealed
+                );
             }
+        }
+        self.finish_chunk_reveal(revealed_any);
+    }
+
+    fn reveal_generated_chunk(&mut self, coord: ChunkCoord) -> GeneratedChunkReveal {
+        if !self.world.chunks.contains_key(&coord) {
+            GeneratedChunkReveal::Missing
+        } else if self.chart.revealed_chunks.insert(coord) {
+            GeneratedChunkReveal::NewlyRevealed
+        } else {
+            GeneratedChunkReveal::AlreadyRevealed
         }
     }
 
-    pub(super) fn reveal_generated_chunks_around_player(&mut self) {
-        let (tile_x, tile_y) = self.player.tile_position();
-        let Some(player_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
-            return;
-        };
-
-        let mut revealed_any = false;
-        for y_offset in -CHART_REVEAL_RADIUS_CHUNKS..=CHART_REVEAL_RADIUS_CHUNKS {
-            for x_offset in -CHART_REVEAL_RADIUS_CHUNKS..=CHART_REVEAL_RADIUS_CHUNKS {
-                let Some(x) = player_chunk.x.checked_add(x_offset) else {
-                    continue;
-                };
-                let Some(y) = player_chunk.y.checked_add(y_offset) else {
-                    continue;
-                };
-                let coord = ChunkCoord { x, y };
-                if self.world.chunks.contains_key(&coord)
-                    && self.chart.revealed_chunks.insert(coord)
-                {
-                    revealed_any = true;
-                }
-            }
-        }
+    fn finish_chunk_reveal(&mut self, revealed_any: bool) {
         if revealed_any {
             self.revealed_revision = self.revealed_revision.wrapping_add(1);
         }

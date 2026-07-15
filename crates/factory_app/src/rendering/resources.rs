@@ -1,6 +1,6 @@
 use bevy::prelude::{ColorMaterial, Entity, Handle, Mesh, Resource};
 use factory_sim::{ChunkCoord, EntityId};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Resource, Default)]
@@ -95,7 +95,6 @@ impl Default for RenderDetail {
 pub struct WorldRenderCache {
     pub chunk_entities: BTreeMap<ChunkCoord, Entity>,
     pub chunk_meshes: BTreeMap<ChunkCoord, Handle<Mesh>>,
-    pub known_generated_chunks: BTreeSet<ChunkCoord>,
     pub material: Option<Handle<ColorMaterial>>,
     pub last_visible_revision: u64,
     pub last_chunk_revision: u64,

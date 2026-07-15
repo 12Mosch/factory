@@ -5,5 +5,5 @@ pub mod resources;
 
 pub use self::chunk::{Chunk, ChunkCoord, TileCell, WorldTileCoord};
 pub use self::collision::TileCollision;
-pub use self::generation::WorldSim;
+pub use self::generation::{ChunkGenerationResult, WorldSim};
 pub use self::resources::{MinedResource, ResourceCell, ResourceTileChange};

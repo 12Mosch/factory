@@ -49,10 +49,12 @@ fn ensure_chunk_generated_creates_missing_chunk_once() {
     let mut world = WorldSim::new_seeded(123);
     let coord = ChunkCoord { x: 40, y: -37 };
 
-    assert!(world.ensure_chunk_generated(coord));
+    let generated = world.ensure_chunk_generated(coord);
+    assert_eq!(generated.generated_chunks(), &[coord]);
+    assert_eq!(generated.revision(), 1);
     assert_eq!(world.chunk_revision(), 1);
     assert_eq!(world.generated_chunk_count(), 26);
-    assert!(!world.ensure_chunk_generated(coord));
+    assert!(world.ensure_chunk_generated(coord).is_empty());
     assert_eq!(world.chunk_revision(), 1);
     assert_eq!(world.generated_chunk_count(), 26);
 }
@@ -61,7 +63,10 @@ fn ensure_chunk_generated_creates_missing_chunk_once() {
 fn generated_chunks_cache_terrain_pollution_absorption() {
     let mut world = WorldSim::new_seeded(123);
     let far_coord = ChunkCoord { x: 40, y: -37 };
-    assert!(world.ensure_chunk_generated(far_coord));
+    assert_eq!(
+        world.ensure_chunk_generated(far_coord).generated_chunks(),
+        &[far_coord]
+    );
 
     for prototype in &world.prototypes.tiles {
         assert_eq!(
@@ -95,7 +100,8 @@ fn batch_generation_returns_only_new_coordinates_in_input_order() {
 
     let generated = world.ensure_chunks_generated([existing, first, first, second]);
 
-    assert_eq!(generated, vec![first, second]);
+    assert_eq!(generated.generated_chunks(), &[first, second]);
+    assert_eq!(generated.revision(), 2);
     assert_eq!(world.chunk_revision(), 2);
     assert!(world.chunks.contains_key(&first));
     assert!(world.chunks.contains_key(&second));
@@ -106,10 +112,37 @@ fn neighborhood_generation_uses_batch_missing_chunk_semantics() {
     let mut world = WorldSim::new_seeded(123);
     let center = ChunkCoord { x: 40, y: -37 };
 
-    assert_eq!(world.ensure_chunks_around_chunk(center, 1), Ok(9));
+    assert_eq!(
+        world
+            .ensure_chunks_around_chunk(center, 1)
+            .map(|result| result.len()),
+        Ok(9)
+    );
     assert_eq!(world.chunk_revision(), 9);
-    assert_eq!(world.ensure_chunks_around_chunk(center, 1), Ok(0));
+    assert_eq!(
+        world
+            .ensure_chunks_around_chunk(center, 1)
+            .map(|result| result.len()),
+        Ok(0)
+    );
     assert_eq!(world.chunk_revision(), 9);
+}
+
+#[test]
+fn chunk_generation_history_returns_exact_coordinates_since_revision() {
+    let mut world = WorldSim::new_seeded(123);
+    let first = ChunkCoord { x: 40, y: -37 };
+    let second = ChunkCoord { x: -41, y: 38 };
+
+    world.ensure_chunk_generated(first);
+    let after_first = world.chunk_revision();
+    world.ensure_chunks_generated([first, second]);
+
+    let generated = world
+        .chunk_generation_since(after_first)
+        .expect("recent generation should remain in history");
+    assert_eq!(generated.generated_chunks(), &[second]);
+    assert_eq!(generated.revision(), world.chunk_revision());
 }
 
 #[test]

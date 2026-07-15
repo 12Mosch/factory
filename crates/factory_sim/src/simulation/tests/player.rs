@@ -23,6 +23,18 @@ fn moving_player_into_another_chunk_reveals_that_chunk() {
 }
 
 #[test]
+fn reveal_candidates_do_not_chart_ungenerated_chunks() {
+    let mut sim = Simulation::new_test_world(123);
+    let missing = ChunkCoord { x: 20, y: -17 };
+    sim.player = PlayerState::centered_on_tile(missing.x * CHUNK_SIZE, missing.y * CHUNK_SIZE);
+
+    sim.reveal_generated_chunks_around_player(&[missing]);
+
+    assert!(!sim.world.chunks.contains_key(&missing));
+    assert!(!sim.is_chunk_revealed(missing));
+}
+
+#[test]
 fn player_starts_on_walkable_generated_tile() {
     let sim = Simulation::new_test_world(123);
     let (x, y) = sim.player.tile_position();
