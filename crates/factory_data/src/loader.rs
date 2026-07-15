@@ -6,19 +6,20 @@ use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
 use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 use crate::model::{
-    ElectricPolePrototype, EnemyBaseGenerationConfig, EnemySpawnerPrototype, EntityPrototype,
-    FluidBoxPrototype, FluidConnectionPrototype, FluidConnectionSide, FluidPrototype,
-    InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype, PumpjackPrototype,
-    RecipePrototype, ResourceDistanceScalingConfig, ResourceGenerationConfig,
-    ResourcePatchGridConfig, StartingAreaConfig, TechnologyEffect, TechnologyPrototype,
-    TerrainLayerConfig, TerrainNoiseConfig, TilePrototype, WORLD_GENERATION_FORMAT_VERSION,
-    WorldGenerationConfig,
+    BiomeConfig, ClimateNoiseConfig, ClimateRange, ElectricPolePrototype,
+    EnemyBaseGenerationConfig, EnemySpawnerPrototype, EntityPrototype, FluidBoxPrototype,
+    FluidConnectionPrototype, FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount,
+    ItemPrototype, MiningDrillPrototype, PumpjackPrototype, RecipePrototype,
+    ResourceDistanceScalingConfig, ResourceGenerationConfig, ResourcePatchGridConfig,
+    StartingAreaConfig, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig, TilePrototype,
+    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };
 use crate::raw::{
-    RawEnemyBaseGeneration, RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype,
-    RawFluidPrototype, RawItemPrototype, RawPrototypeCatalog, RawPumpjackPrototype,
-    RawRecipePrototype, RawResourceGeneration, RawTechnologyEffect, RawTechnologyPrototype,
-    RawTerrainLayer, RawTilePrototype, RawWorldGenerationConfig,
+    RawBiomeConfig, RawClimateNoise, RawClimateRange, RawEnemyBaseGeneration, RawEntityPrototype,
+    RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype, RawItemPrototype,
+    RawPrototypeCatalog, RawPumpjackPrototype, RawRecipePrototype, RawResourceGeneration,
+    RawTechnologyEffect, RawTechnologyPrototype, RawTerrainNoise, RawTilePrototype,
+    RawWorldGenerationConfig,
 };
 use crate::validation::{
     resolve_collision_mask, resolve_fluid_amounts, resolve_item_amounts, validate_group,
@@ -560,14 +561,8 @@ fn load_world_generation(
 
     validate_world_generation(&raw)?;
 
-    let terrain = resolve_terrain_layers(raw.terrain, tiles)?;
-    let terrain_noise = raw
-        .terrain_noise
-        .map(|noise| TerrainNoiseConfig {
-            scale: noise.scale,
-            octaves: noise.octaves,
-        })
-        .unwrap_or_default();
+    let climate_noise = resolve_climate_noise(&raw.climate_noise);
+    let biomes = resolve_biomes(raw.biomes, tiles)?;
     let resources = resolve_resources(raw.resources, item_ids_by_name)?;
     let enemy_bases = raw
         .enemy_bases
@@ -580,8 +575,8 @@ fn load_world_generation(
             min_chunk: raw.starting_area.min_chunk,
             max_chunk: raw.starting_area.max_chunk,
         },
-        terrain,
-        terrain_noise,
+        climate_noise,
+        biomes,
         patch_grid: ResourcePatchGridConfig {
             cell_size: raw.patch_grid.cell_size,
             jitter: raw.patch_grid.jitter,
@@ -707,20 +702,38 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
         .ok_or(PrototypeLoadError::InvalidWorldGenerationConfig {
             detail: "patch grid jitter range overflow",
         })?;
-    if raw.terrain.is_empty() {
+    if raw.biomes.is_empty() {
         return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
-            detail: "terrain must declare at least one layer",
+            detail: "biomes must declare at least one entry",
         });
     }
-    if let Some(noise) = &raw.terrain_noise {
+    for biome in &raw.biomes {
+        for range in [&biome.elevation, &biome.moisture, &biome.temperature] {
+            if range.max > 100 {
+                return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                    detail: "biome climate range max must not exceed 100",
+                });
+            }
+            if range.min >= range.max {
+                return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+                    detail: "biome climate range min must be less than max",
+                });
+            }
+        }
+    }
+    for noise in [
+        &raw.climate_noise.elevation,
+        &raw.climate_noise.moisture,
+        &raw.climate_noise.temperature,
+    ] {
         if noise.scale < 1 {
             return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
-                detail: "terrain noise scale must be at least 1",
+                detail: "climate noise scale must be at least 1",
             });
         }
         if noise.octaves < 1 || noise.octaves > 8 {
             return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
-                detail: "terrain noise octaves must be between 1 and 8",
+                detail: "climate noise octaves must be between 1 and 8",
             });
         }
     }
@@ -791,31 +804,46 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
     Ok(())
 }
 
-/// Resolve terrain layer tile names against loaded tiles and validate weights.
-fn resolve_terrain_layers(
-    terrain: Vec<RawTerrainLayer>,
+/// Convert the three raw climate-noise channels into their validated form.
+/// Numeric bounds were already checked by [`validate_world_generation`].
+fn resolve_climate_noise(noise: &RawClimateNoise) -> ClimateNoiseConfig {
+    let channel = |channel: &RawTerrainNoise| TerrainNoiseConfig {
+        scale: channel.scale,
+        octaves: channel.octaves,
+    };
+    ClimateNoiseConfig {
+        elevation: channel(&noise.elevation),
+        moisture: channel(&noise.moisture),
+        temperature: channel(&noise.temperature),
+    }
+}
+
+/// Resolve biome tile names against loaded tiles. Climate-range bounds were
+/// already checked by [`validate_world_generation`].
+fn resolve_biomes(
+    biomes: Vec<RawBiomeConfig>,
     tiles: &[TilePrototype],
-) -> Result<Vec<TerrainLayerConfig>, PrototypeLoadError> {
-    let terrain = terrain
+) -> Result<Vec<BiomeConfig>, PrototypeLoadError> {
+    let range = |range: &RawClimateRange| ClimateRange {
+        min: range.min,
+        max: range.max,
+    };
+    biomes
         .into_iter()
-        .map(|layer| {
+        .map(|biome| {
             let tile = tiles
                 .iter()
-                .find(|tile| tile.name == layer.tile)
+                .find(|tile| tile.name == biome.tile)
                 .map(|tile| tile.id)
-                .ok_or(PrototypeLoadError::MissingWorldGenerationTile { tile: layer.tile })?;
-            Ok(TerrainLayerConfig {
+                .ok_or(PrototypeLoadError::MissingWorldGenerationTile { tile: biome.tile })?;
+            Ok(BiomeConfig {
                 tile,
-                weight: layer.weight,
+                elevation: range(&biome.elevation),
+                moisture: range(&biome.moisture),
+                temperature: range(&biome.temperature),
             })
         })
-        .collect::<Result<Vec<_>, PrototypeLoadError>>()?;
-    if terrain.iter().all(|layer| layer.weight == 0) {
-        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
-            detail: "terrain layer weights must not all be zero",
-        });
-    }
-    Ok(terrain)
+        .collect::<Result<Vec<_>, PrototypeLoadError>>()
 }
 
 /// Resolve resource item names against loaded items and validate each entry.
@@ -876,6 +904,7 @@ fn load_tiles(tiles: Vec<RawTilePrototype>) -> Result<Vec<TilePrototype>, Protot
                 name: name.clone(),
                 collision_mask: resolve_collision_mask(name, tile.collision_mask)?,
                 pollution_absorption_per_minute_milli: tile.pollution_absorption_per_minute_milli,
+                color: tile.color,
             })
         })
         .collect()

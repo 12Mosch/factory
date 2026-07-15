@@ -115,33 +115,71 @@ pub(crate) fn inserter_color(inserter: Option<&InserterPrototype>) -> Color {
     }
 }
 
+/// Per-`TileId` base terrain colors resolved from the prototype catalog. The
+/// data lives in `factory_data`; the renderer only turns each biome's declared
+/// sRGB triple into a Bevy [`Color`] and applies coherent shade variation, so
+/// terrain visuals stay data-driven rather than hard-coded here.
+#[derive(Clone)]
+pub(crate) struct TileColorTable {
+    colors: std::sync::Arc<[Color]>,
+}
+
+impl TileColorTable {
+    pub(crate) fn from_catalog(catalog: &PrototypeCatalog) -> Self {
+        let mut colors = vec![
+            Color::default();
+            catalog
+                .tiles
+                .iter()
+                .map(|tile| tile.id.index() + 1)
+                .max()
+                .unwrap_or_default()
+        ];
+        for tile in &catalog.tiles {
+            let [r, g, b] = tile.color;
+            colors[tile.id.index()] = Color::srgb_u8(r, g, b);
+        }
+        Self {
+            colors: colors.into(),
+        }
+    }
+
+    /// Base color for a tile, or a glaring magenta if the id is unknown so a
+    /// missing palette entry is obvious rather than invisible.
+    fn base(&self, tile_id: TileId) -> Color {
+        self.colors
+            .get(tile_id.index())
+            .copied()
+            .unwrap_or(Color::srgb_u8(255, 0, 255))
+    }
+}
+
 pub(crate) fn tile_color(
     tile_id: TileId,
-    ids: RenderPrototypeIds,
+    colors: &TileColorTable,
     seed: u64,
     x: i64,
     y: i64,
 ) -> Color {
-    let variant = coherent_variant(seed, x, y, 8, 0x6a09_e667_f3bc_c909);
-    if tile_id == ids.water {
-        match variant {
-            -1 => Color::srgb(0.074, 0.278, 0.525),
-            1 => Color::srgb(0.086, 0.302, 0.555),
-            _ => Color::srgb(0.08, 0.29, 0.54),
-        }
-    } else if tile_id == ids.dirt {
-        match variant {
-            -1 => Color::srgb(0.395, 0.315, 0.215),
-            1 => Color::srgb(0.445, 0.365, 0.245),
-            _ => Color::srgb(0.42, 0.34, 0.23),
-        }
-    } else {
-        match variant {
-            -1 => Color::srgb(0.205, 0.405, 0.225),
-            1 => Color::srgb(0.235, 0.45, 0.255),
-            _ => Color::srgb(0.22, 0.43, 0.24),
-        }
-    }
+    // Coherent per-tile shade jitter around the biome's declared base color,
+    // keeping the subtle terrain texture the old hard-coded shades provided.
+    let factor = match coherent_variant(seed, x, y, 8, 0x6a09_e667_f3bc_c909) {
+        -1 => 0.93,
+        1 => 1.07,
+        _ => 1.0,
+    };
+    scaled_color(colors.base(tile_id), factor)
+}
+
+/// Multiply a color's RGB by `factor`, clamping to the displayable range.
+fn scaled_color(color: Color, factor: f32) -> Color {
+    let color = color.to_srgba();
+    Color::srgba(
+        (color.red * factor).min(1.0),
+        (color.green * factor).min(1.0),
+        (color.blue * factor).min(1.0),
+        color.alpha,
+    )
 }
 
 pub(crate) fn resource_color_variant(
@@ -242,5 +280,28 @@ impl RenderPrototypeIds {
 
     pub(crate) fn is_dirt(self, tile_id: TileId) -> bool {
         tile_id == self.dirt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tile_colors_are_indexed_by_tile_id() {
+        let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+        let mut high_id_tile = catalog.tiles[0].clone();
+        high_id_tile.id = TileId::new(2);
+        high_id_tile.color = [10, 20, 30];
+        let mut low_id_tile = catalog.tiles[1].clone();
+        low_id_tile.id = TileId::new(0);
+        low_id_tile.color = [40, 50, 60];
+        catalog.tiles = vec![high_id_tile, low_id_tile];
+
+        let colors = TileColorTable::from_catalog(&catalog);
+
+        assert_eq!(colors.base(TileId::new(0)), Color::srgb_u8(40, 50, 60));
+        assert_eq!(colors.base(TileId::new(1)), Color::default());
+        assert_eq!(colors.base(TileId::new(2)), Color::srgb_u8(10, 20, 30));
     }
 }

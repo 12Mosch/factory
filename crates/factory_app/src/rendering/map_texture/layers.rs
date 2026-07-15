@@ -3,13 +3,16 @@ use bevy::prelude::{Color, ColorToPacked};
 use factory_sim::Simulation;
 
 use crate::map::resources::MapTextureLayer;
-use crate::rendering::colors::{RenderPrototypeIds, resource_color_variant, tile_color};
+use crate::rendering::colors::{
+    RenderPrototypeIds, TileColorTable, resource_color_variant, tile_color,
+};
 use crate::rendering::map_texture::UNREVEALED_PIXEL;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct MapLayerPainter {
     layer: MapTextureLayer,
     ids: RenderPrototypeIds,
+    color_table: TileColorTable,
     seed: u64,
 }
 
@@ -18,12 +21,13 @@ impl MapLayerPainter {
         Self {
             layer,
             ids: RenderPrototypeIds::from_catalog(sim.catalog()),
+            color_table: TileColorTable::from_catalog(sim.catalog()),
             seed: sim.seed(),
         }
     }
 
     pub(super) fn pixel_for_tile(
-        self,
+        &self,
         tile: &factory_sim::TileCell,
         x: i64,
         y: i64,
@@ -38,11 +42,12 @@ impl MapLayerPainter {
         }
     }
 
-    fn revealed_tile_pixel(self, tile: &factory_sim::TileCell, x: i64, y: i64) -> [u8; 4] {
+    fn revealed_tile_pixel(&self, tile: &factory_sim::TileCell, x: i64, y: i64) -> [u8; 4] {
         match self.layer {
-            MapTextureLayer::Surface => {
-                darkened(tile_color(tile.tile_id, self.ids, self.seed, x, y), 0.58)
-            }
+            MapTextureLayer::Surface => darkened(
+                tile_color(tile.tile_id, &self.color_table, self.seed, x, y),
+                0.58,
+            ),
             MapTextureLayer::Resources => tile
                 .resource
                 .map(|resource| {

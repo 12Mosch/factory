@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use crate::map::resources::VisibleChunks;
-use crate::rendering::colors::RenderPrototypeIds;
+use crate::rendering::colors::{RenderPrototypeIds, TileColorTable};
 use crate::rendering::resources::{RenderSyncStats, WorldRenderCache};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
@@ -92,6 +92,7 @@ pub(super) fn sync_visible_world_tiles_impl(
     }
 
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
+    let color_table = TileColorTable::from_catalog(sim.catalog());
     let material = cache
         .material
         .get_or_insert_with(|| {
@@ -118,7 +119,10 @@ pub(super) fn sync_visible_world_tiles_impl(
             continue;
         };
         meshes
-            .insert(handle.id(), world_chunk_mesh(sim.world(), chunk, ids))
+            .insert(
+                handle.id(),
+                world_chunk_mesh(sim.world(), chunk, ids, &color_table),
+            )
             .expect("cached chunk mesh handle should remain valid");
     }
 
@@ -129,7 +133,7 @@ pub(super) fn sync_visible_world_tiles_impl(
         let Some(chunk) = sim.world().chunks.get(coord) else {
             continue;
         };
-        let mesh = meshes.add(world_chunk_mesh(sim.world(), chunk, ids));
+        let mesh = meshes.add(world_chunk_mesh(sim.world(), chunk, ids, &color_table));
         let entity = commands
             .spawn((
                 Mesh2d(mesh.clone()),

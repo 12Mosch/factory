@@ -17,16 +17,16 @@ pub use catalog::PrototypeCatalog;
 pub use error::PrototypeLoadError;
 pub use ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 pub use model::{
-    AmmoPrototype, AssemblingMachinePrototype, BoilerPrototype, BuildingCategory, BurnerPrototype,
-    CollisionLayer, CollisionMask, CraftingCategory, ElectricEnergySourcePrototype,
-    ElectricPolePrototype, EnemyBaseGenerationConfig, EnemyGameplayConfig, EnemySpawnerPrototype,
-    EntityKind, EntityPrototype, FluidAmount, FluidBoxIo, FluidBoxPrototype,
-    FluidConnectionPrototype, FluidConnectionSide, FluidPrototype, GunTurretPrototype,
-    InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype, OffshorePumpPrototype,
-    PumpjackPrototype, RecipePrototype, RepairToolPrototype, ResourceDistanceScalingConfig,
-    ResourceExtraction, ResourceGenerationConfig, ResourcePatchGridConfig, SplitterPrototype,
-    StartingAreaConfig, SteamEnginePrototype, TechnologyEffect, TechnologyPrototype,
-    TerrainLayerConfig, TerrainNoiseConfig, TilePrototype, TransportBeltPrototype,
-    UndergroundBeltPart, UndergroundBeltPrototype, UnitPrototype, WORLD_GENERATION_FORMAT_VERSION,
-    WorldGenerationConfig,
+    AmmoPrototype, AssemblingMachinePrototype, BiomeConfig, BoilerPrototype, BuildingCategory,
+    BurnerPrototype, ClimateNoiseConfig, ClimateRange, CollisionLayer, CollisionMask,
+    CraftingCategory, ElectricEnergySourcePrototype, ElectricPolePrototype,
+    EnemyBaseGenerationConfig, EnemyGameplayConfig, EnemySpawnerPrototype, EntityKind,
+    EntityPrototype, FluidAmount, FluidBoxIo, FluidBoxPrototype, FluidConnectionPrototype,
+    FluidConnectionSide, FluidPrototype, GunTurretPrototype, InserterPrototype, ItemAmount,
+    ItemPrototype, MiningDrillPrototype, OffshorePumpPrototype, PumpjackPrototype, RecipePrototype,
+    RepairToolPrototype, ResourceDistanceScalingConfig, ResourceExtraction,
+    ResourceGenerationConfig, ResourcePatchGridConfig, SplitterPrototype, StartingAreaConfig,
+    SteamEnginePrototype, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig, TilePrototype,
+    TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype, UnitPrototype,
+    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };

@@ -1117,17 +1117,55 @@
             // Vegetation scrubs pollution: a full grass chunk absorbs about
             // one pollution unit per minute.
             pollution_absorption_per_minute_milli: 1,
+            color: (56, 110, 61),
         ),
         (
             id: 1,
             name: "dirt",
             collision_mask: (layers: ["ground"]),
+            color: (107, 87, 59),
         ),
         (
             id: 2,
             name: "water",
             collision_mask: (layers: ["water"]),
             pollution_absorption_per_minute_milli: 2,
+            color: (20, 74, 138),
+        ),
+        (
+            id: 3,
+            name: "sand",
+            collision_mask: (layers: ["ground"]),
+            // Bare desert sand scrubs no pollution.
+            color: (194, 178, 128),
+        ),
+        (
+            id: 4,
+            name: "forest",
+            collision_mask: (layers: ["ground"]),
+            // Dense vegetation scrubs pollution hardest.
+            pollution_absorption_per_minute_milli: 4,
+            color: (38, 84, 42),
+        ),
+        (
+            id: 5,
+            name: "snow",
+            collision_mask: (layers: ["ground"]),
+            color: (222, 228, 235),
+        ),
+        (
+            id: 6,
+            name: "swamp",
+            collision_mask: (layers: ["ground"]),
+            // Wetland vegetation also absorbs pollution well.
+            pollution_absorption_per_minute_milli: 3,
+            color: (70, 80, 48),
+        ),
+        (
+            id: 7,
+            name: "rock",
+            collision_mask: (layers: ["ground"]),
+            color: (112, 106, 99),
         ),
     ],
     technologies: [
@@ -1296,16 +1334,32 @@
         evolution_colony_destroyed_points: 200,
     )),
     world_generation: Some((
-        version: 1,
+        version: 2,
         starting_area: (min_chunk: -2, max_chunk: 2),
-        // Bands over a coherent noise field, lowest values first: water fills
-        // basins, dirt forms shores around them, grass covers the rest.
-        terrain: [
-            (tile: "water", weight: 30),
-            (tile: "dirt", weight: 10),
-            (tile: "grass", weight: 60),
+        // Three independent climate channels drive biome selection. Distinct
+        // wavelengths keep their features from lining up; each is sampled from
+        // its own seed-salted noise field so they vary independently.
+        climate_noise: (
+            elevation: (scale: 40, octaves: 3),
+            moisture: (scale: 32, octaves: 3),
+            temperature: (scale: 56, octaves: 2),
+        ),
+        // Ordered biome table (percent ranges [min, max), first match wins).
+        // Low elevation is water; a thin shore band is dirt; high elevation is
+        // rock. Land in between is split by temperature (cold -> snow) and by
+        // moisture/temperature (hot+dry -> sand, hot+wet -> swamp, mild+wet ->
+        // forest), with grass as the catch-all. Every land biome is buildable,
+        // so the spawn elevation bias guarantees open ground around the origin.
+        biomes: [
+            (tile: "water",  elevation: (min: 0,  max: 28),  moisture: (min: 0, max: 100), temperature: (min: 0,  max: 100)),
+            (tile: "dirt",   elevation: (min: 28, max: 33),  moisture: (min: 0, max: 100), temperature: (min: 0,  max: 100)),
+            (tile: "rock",   elevation: (min: 82, max: 100), moisture: (min: 0, max: 100), temperature: (min: 0,  max: 100)),
+            (tile: "snow",   elevation: (min: 33, max: 82),  moisture: (min: 0, max: 100), temperature: (min: 0,  max: 30)),
+            (tile: "sand",   elevation: (min: 33, max: 82),  moisture: (min: 0, max: 42),  temperature: (min: 66, max: 100)),
+            (tile: "swamp",  elevation: (min: 33, max: 82),  moisture: (min: 58, max: 100), temperature: (min: 66, max: 100)),
+            (tile: "forest", elevation: (min: 33, max: 82),  moisture: (min: 55, max: 100), temperature: (min: 30, max: 66)),
+            (tile: "grass",  elevation: (min: 33, max: 100), moisture: (min: 0, max: 100), temperature: (min: 0,  max: 100)),
         ],
-        terrain_noise: Some((scale: 32, octaves: 3)),
         patch_grid: (cell_size: 40, jitter: 16, edge_noise: 3),
         // Expansion reward: every 100 tiles from spawn, grid patches gain 75%
         // of their base richness and 1 tile of radius (radius capped at +6).

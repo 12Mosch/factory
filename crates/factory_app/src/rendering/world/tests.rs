@@ -9,7 +9,7 @@ use crate::rendering::belts::{
     BeltDirectionSprite, BeltItemLabel, BeltItemSprite, measured_sync_belt_direction_rendering,
     measured_sync_belt_item_rendering,
 };
-use crate::rendering::colors::{RenderPrototypeIds, tile_color};
+use crate::rendering::colors::{RenderPrototypeIds, TileColorTable, tile_color};
 use crate::rendering::entities::{
     PlacedEntitySprite, measured_sync_placed_entity_rendering, update_visible_entity_ids,
 };
@@ -76,8 +76,9 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
     sim.ensure_chunk_generated(ChunkCoord { x: 0, y: 0 });
     let chunk = sim.world().chunks[&ChunkCoord { x: 0, y: 0 }].clone();
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
+    let color_table = TileColorTable::from_catalog(sim.catalog());
 
-    let mesh = world_chunk_mesh(sim.world(), &chunk, ids);
+    let mesh = world_chunk_mesh(sim.world(), &chunk, ids, &color_table);
     let (positions, colors) = mesh_quads(&mesh);
     let base_quad_indices = (0..positions.len() / 4)
         .filter(|quad| positions[quad * 4][2] == 0.0)
@@ -112,7 +113,7 @@ fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
         let (x, y) = chunk
             .coord
             .tile_at((index % size) as i32, (index / size) as i32);
-        let expected = tile_color(tile.tile_id, ids, sim.seed(), x, y)
+        let expected = tile_color(tile.tile_id, &color_table, sim.seed(), x, y)
             .to_linear()
             .to_f32_array();
         assert_eq!(painted[index], Some(expected), "tile {index} coverage");
@@ -129,13 +130,14 @@ fn world_chunk_mesh_variants_are_seed_deterministic() {
         tile.tile_id = uniform_id;
     }
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
+    let color_table = TileColorTable::from_catalog(sim.catalog());
 
-    let first = world_chunk_mesh(sim.world(), &chunk, ids);
-    let second = world_chunk_mesh(sim.world(), &chunk, ids);
+    let first = world_chunk_mesh(sim.world(), &chunk, ids, &color_table);
+    let second = world_chunk_mesh(sim.world(), &chunk, ids, &color_table);
     assert_eq!(mesh_quads(&first), mesh_quads(&second));
 
     let other_sim = Simulation::new_test_world(124);
-    let other = world_chunk_mesh(other_sim.world(), &chunk, ids);
+    let other = world_chunk_mesh(other_sim.world(), &chunk, ids, &color_table);
     assert_ne!(mesh_quads(&first), mesh_quads(&other));
 }
 
@@ -218,6 +220,7 @@ fn streamed_shoreline_fixture() -> (Simulation, ChunkCoord, ChunkCoord) {
     for seed in 0..16 {
         let sim = Simulation::new_test_world(seed);
         let ids = RenderPrototypeIds::from_catalog(sim.catalog());
+        let color_table = TileColorTable::from_catalog(sim.catalog());
         for &cached_coord in sim.world().chunks.keys() {
             for (dx, dy) in DIRECTIONS {
                 let generated_coord = ChunkCoord {
@@ -228,13 +231,19 @@ fn streamed_shoreline_fixture() -> (Simulation, ChunkCoord, ChunkCoord) {
                     continue;
                 }
                 let cached_chunk = &sim.world().chunks[&cached_coord];
-                let before = mesh_quads(&world_chunk_mesh(sim.world(), cached_chunk, ids));
+                let before = mesh_quads(&world_chunk_mesh(
+                    sim.world(),
+                    cached_chunk,
+                    ids,
+                    &color_table,
+                ));
                 let mut completed = sim.clone();
                 completed.ensure_chunk_generated(generated_coord);
                 let after = mesh_quads(&world_chunk_mesh(
                     completed.world(),
                     &completed.world().chunks[&cached_coord],
                     ids,
+                    &color_table,
                 ));
                 if before != after {
                     return (sim, cached_coord, generated_coord);

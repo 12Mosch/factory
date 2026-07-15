@@ -4,9 +4,14 @@ use bevy::{
 use factory_sim::{CHUNK_SIZE, Chunk, WorldSim};
 
 use crate::constants::TILE_SIZE;
-use crate::rendering::colors::{RenderPrototypeIds, tile_color, tile_hash};
+use crate::rendering::colors::{RenderPrototypeIds, TileColorTable, tile_color, tile_hash};
 
-pub(super) fn world_chunk_mesh(world: &WorldSim, chunk: &Chunk, ids: RenderPrototypeIds) -> Mesh {
+pub(super) fn world_chunk_mesh(
+    world: &WorldSim,
+    chunk: &Chunk,
+    ids: RenderPrototypeIds,
+    color_table: &TileColorTable,
+) -> Mesh {
     let size = CHUNK_SIZE as usize;
     let tile_colors = chunk
         .tiles
@@ -16,7 +21,7 @@ pub(super) fn world_chunk_mesh(world: &WorldSim, chunk: &Chunk, ids: RenderProto
             let (x, y) = chunk
                 .coord
                 .tile_at((index % size) as i32, (index / size) as i32);
-            tile_color(tile.tile_id, ids, world.seed, x, y)
+            tile_color(tile.tile_id, color_table, world.seed, x, y)
                 .to_linear()
                 .to_f32_array()
         })
