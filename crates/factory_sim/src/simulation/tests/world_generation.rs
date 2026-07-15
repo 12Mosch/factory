@@ -143,6 +143,43 @@ fn chunk_generation_history_returns_exact_coordinates_since_revision() {
         .expect("recent generation should remain in history");
     assert_eq!(generated.generated_chunks(), &[second]);
     assert_eq!(generated.revision(), world.chunk_revision());
+
+    // Prefill the runtime-only history, then use real generation to exercise
+    // the world's production trimming path without generating thousands of
+    // full terrain chunks in this unit test.
+    for revision in 3..=10_000 {
+        world.chunk_generation_history.0.push_back(
+            crate::world::generation::ChunkGenerationChange {
+                revision,
+                coord: second,
+            },
+        );
+    }
+    world.chunk_revision = 10_000;
+    world.ensure_chunk_generated(ChunkCoord {
+        x: 10_000,
+        y: 10_000,
+    });
+
+    let oldest_retained_revision = world
+        .chunk_generation_history
+        .0
+        .front()
+        .expect("generation history should retain its bounded tail")
+        .revision
+        - 1;
+    assert!(
+        world
+            .chunk_generation_since(oldest_retained_revision)
+            .is_some(),
+        "the revision immediately before the oldest retained change should remain queryable"
+    );
+    assert!(
+        world
+            .chunk_generation_since(oldest_retained_revision - 1)
+            .is_none(),
+        "a revision older than the retained generation history should expire"
+    );
 }
 
 #[test]

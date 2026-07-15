@@ -102,12 +102,13 @@ pub(super) fn sync_visible_world_tiles_impl(
         })
         .clone();
 
-    let new_chunks = sim
+    let affected_cached_neighbors = match sim
         .world()
         .chunk_generation_since(cache.last_chunk_revision)
-        .map(|result| result.into_generated_chunks())
-        .unwrap_or_else(|| sim.world().chunks.keys().copied().collect());
-    let affected_cached_neighbors = cached_neighbors_of(&new_chunks, &cache.chunk_meshes);
+    {
+        Some(result) => cached_neighbors_of(result.generated_chunks(), &cache.chunk_meshes),
+        None => cache.chunk_meshes.keys().copied().collect(),
+    };
     for coord in affected_cached_neighbors {
         let (Some(chunk), Some(handle)) = (
             sim.world().chunks.get(&coord),
