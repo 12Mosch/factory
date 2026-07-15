@@ -41,9 +41,9 @@ pub(super) fn splitmix64(mut value: u64) -> u64 {
 pub(super) fn generate_world_chunks(
     seed: u64,
     prototypes: &PrototypeCatalog,
+    rules: &WorldGenRules,
     tile_pollution_absorption_per_minute_milli: &[u64],
 ) -> BTreeMap<ChunkCoord, Chunk> {
-    let rules = WorldGenRules::from_catalog(prototypes);
     let area = prototypes.world_generation.starting_area;
     let mut chunks = BTreeMap::new();
 
@@ -58,7 +58,7 @@ pub(super) fn generate_world_chunks(
                 generate_chunk(
                     seed,
                     coord,
-                    &rules,
+                    rules,
                     tile_pollution_absorption_per_minute_milli,
                 ),
             );
@@ -766,7 +766,7 @@ pub(super) fn hash_world(seed: u64, x: WorldTileCoord, y: WorldTileCoord) -> u64
 /// parameters. Resolution is infallible; the loader already validated the
 /// config against the catalog.
 #[derive(Clone, Debug)]
-pub(super) struct WorldGenRules {
+pub(crate) struct WorldGenRules {
     biomes: Vec<BiomeRule>,
     climate_noise: ClimateNoiseConfig,
     /// Tile used when no biome matches (or the biome table is empty).

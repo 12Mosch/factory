@@ -266,7 +266,32 @@ impl Simulation {
         let Some(candidate_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
             return;
         };
-        self.world.ensure_chunk_generated(candidate_chunk);
+        self.request_chunk_generation(candidate_chunk, ChunkGenerationPriority::Required);
+
+        let (current_tile_x, current_tile_y) = self.player.tile_position();
+        let current_chunk = ChunkCoord::from_tile(current_tile_x, current_tile_y);
+        if let Some(current_chunk) = current_chunk {
+            let prefetch_coord = if delta_x != 0 {
+                current_chunk
+                    .x
+                    .checked_add(delta_x.signum() as i32)
+                    .map(|x| ChunkCoord {
+                        x,
+                        y: current_chunk.y,
+                    })
+            } else {
+                current_chunk
+                    .y
+                    .checked_add(delta_y.signum() as i32)
+                    .map(|y| ChunkCoord {
+                        x: current_chunk.x,
+                        y,
+                    })
+            };
+            if let Some(prefetch_coord) = prefetch_coord {
+                self.request_chunk_generation(prefetch_coord, ChunkGenerationPriority::Prefetch);
+            }
+        }
 
         if self.can_player_occupy_tile(tile_x, tile_y) {
             self.player = candidate;

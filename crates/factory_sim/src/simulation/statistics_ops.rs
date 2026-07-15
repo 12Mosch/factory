@@ -153,29 +153,49 @@ impl Simulation {
         PowerStatisticsSnapshot { samples }
     }
 
-    pub(super) fn reveal_chunks_around_player(&mut self) {
+    pub(super) fn request_chunks_around_player(&mut self) {
         let (tile_x, tile_y) = self.player.tile_position();
         let Some(player_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
             return;
         };
-        if self
-            .world
-            .ensure_chunks_around_chunk(player_chunk, CHART_REVEAL_RADIUS_CHUNKS)
-            .is_err()
-        {
+
+        // Chart requests describe the player's current reveal neighborhood.
+        // Drop obsolete work after a teleport instead of streaming terrain
+        // that will no longer be revealed.
+        self.chunk_generation_queue.chart.clear();
+        self.request_chunk_generation(player_chunk, ChunkGenerationPriority::Required);
+        let Ok((min_x, max_x, min_y, max_y)) =
+            chunk_neighborhood_bounds(player_chunk, CHART_REVEAL_RADIUS_CHUNKS)
+        else {
             return;
+        };
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                self.request_chunk_generation(ChunkCoord { x, y }, ChunkGenerationPriority::Chart);
+            }
         }
+    }
+
+    pub(super) fn reveal_generated_chunks_around_player(&mut self) {
+        let (tile_x, tile_y) = self.player.tile_position();
+        let Some(player_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
+            return;
+        };
 
         let mut revealed_any = false;
-        for y in player_chunk.y - CHART_REVEAL_RADIUS_CHUNKS
-            ..=player_chunk.y + CHART_REVEAL_RADIUS_CHUNKS
-        {
-            for x in player_chunk.x - CHART_REVEAL_RADIUS_CHUNKS
-                ..=player_chunk.x + CHART_REVEAL_RADIUS_CHUNKS
-            {
+        for y_offset in -CHART_REVEAL_RADIUS_CHUNKS..=CHART_REVEAL_RADIUS_CHUNKS {
+            for x_offset in -CHART_REVEAL_RADIUS_CHUNKS..=CHART_REVEAL_RADIUS_CHUNKS {
+                let Some(x) = player_chunk.x.checked_add(x_offset) else {
+                    continue;
+                };
+                let Some(y) = player_chunk.y.checked_add(y_offset) else {
+                    continue;
+                };
                 let coord = ChunkCoord { x, y };
-                if self.world.chunks.contains_key(&coord) {
-                    revealed_any |= self.chart.revealed_chunks.insert(coord);
+                if self.world.chunks.contains_key(&coord)
+                    && self.chart.revealed_chunks.insert(coord)
+                {
+                    revealed_any = true;
                 }
             }
         }

@@ -14,7 +14,8 @@ use bincode::Options;
 // the pollution snapshot.
 // v18: typed combat state, factions, resistance profiles, and attack
 // definitions replaced the previous untyped damage fields.
-pub const SAVE_VERSION: u32 = 18;
+// v19: pending deterministic chunk-generation requests joined the snapshot.
+pub const SAVE_VERSION: u32 = 19;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -62,6 +63,7 @@ struct SimulationSnapshotOwned {
     world_seed: u64,
     prototypes: PrototypeCatalog,
     chunks: BTreeMap<ChunkCoord, Chunk>,
+    chunk_generation_queue: ChunkGenerationQueue,
     chart: ChartState,
     item_statistics: ItemStatistics,
     fluid_statistics: FluidStatistics,
@@ -205,6 +207,7 @@ struct SimulationSnapshotRef<'a> {
     world_seed: u64,
     prototypes: &'a PrototypeCatalog,
     chunks: &'a BTreeMap<ChunkCoord, Chunk>,
+    chunk_generation_queue: &'a ChunkGenerationQueue,
     chart: &'a ChartState,
     item_statistics: &'a ItemStatistics,
     fluid_statistics: &'a FluidStatistics,
@@ -233,6 +236,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             world_seed: sim.world.seed,
             prototypes: &sim.world.prototypes,
             chunks: &sim.world.chunks,
+            chunk_generation_queue: &sim.chunk_generation_queue,
             chart: &sim.chart,
             item_statistics: &sim.statistics.items,
             fluid_statistics: &sim.statistics.fluids,
@@ -263,6 +267,7 @@ impl SimulationSnapshotOwned {
             entity_topology_revision: 0,
             revealed_revision: 0,
             world: WorldSim::from_snapshot(self.world_seed, self.prototypes, self.chunks),
+            chunk_generation_queue: self.chunk_generation_queue,
             chart: self.chart,
             entities: self.entities,
             construction: self.construction,
@@ -354,6 +359,23 @@ mod tests {
         assert_eq!(sim.tick_count(), loaded.tick_count());
         assert_eq!(sim.seed(), loaded.seed());
         assert_eq!(before_hash, loaded.state_hash());
+    }
+
+    #[test]
+    fn round_trip_preserves_pending_chunk_generation_order() {
+        let mut sim = Simulation::new_test_world(123);
+        let required = ChunkCoord { x: 40, y: -37 };
+        let prefetch = ChunkCoord { x: -30, y: 31 };
+        sim.request_chunk_generation(prefetch, ChunkGenerationPriority::Prefetch);
+        sim.request_chunk_generation(required, ChunkGenerationPriority::Required);
+
+        let bytes = save_to_bytes(&sim).unwrap();
+        let mut loaded = load_from_bytes(&bytes).unwrap();
+
+        assert_eq!(sim.state_hash(), loaded.state_hash());
+        assert_eq!(loaded.process_chunk_generation_queue(1), 1);
+        assert!(loaded.world.chunks.contains_key(&required));
+        assert!(!loaded.world.chunks.contains_key(&prefetch));
     }
 
     #[test]
