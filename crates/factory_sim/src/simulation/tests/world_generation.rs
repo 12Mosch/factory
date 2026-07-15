@@ -65,7 +65,7 @@ fn generated_chunks_cache_terrain_pollution_absorption() {
 
     for prototype in &world.prototypes.tiles {
         assert_eq!(
-            world.tile_pollution_absorption_per_minute_milli[prototype.id.index()],
+            world.generator.tile_pollution_absorption_per_minute_milli[prototype.id.index()],
             u64::from(prototype.pollution_absorption_per_minute_milli),
         );
     }
@@ -83,6 +83,58 @@ fn generated_chunks_cache_terrain_pollution_absorption() {
             })
             .sum();
         assert_eq!(chunk.pollution_absorption_per_minute_milli, expected);
+    }
+}
+
+#[test]
+fn batch_generation_returns_only_new_coordinates_in_input_order() {
+    let mut world = WorldSim::new_seeded(123);
+    let existing = ChunkCoord { x: 0, y: 0 };
+    let first = ChunkCoord { x: 40, y: -37 };
+    let second = ChunkCoord { x: -41, y: 38 };
+
+    let generated = world.ensure_chunks_generated([existing, first, first, second]);
+
+    assert_eq!(generated, vec![first, second]);
+    assert_eq!(world.chunk_revision(), 2);
+    assert!(world.chunks.contains_key(&first));
+    assert!(world.chunks.contains_key(&second));
+}
+
+#[test]
+fn neighborhood_generation_uses_batch_missing_chunk_semantics() {
+    let mut world = WorldSim::new_seeded(123);
+    let center = ChunkCoord { x: 40, y: -37 };
+
+    assert_eq!(world.ensure_chunks_around_chunk(center, 1), Ok(9));
+    assert_eq!(world.chunk_revision(), 9);
+    assert_eq!(world.ensure_chunks_around_chunk(center, 1), Ok(0));
+    assert_eq!(world.chunk_revision(), 9);
+}
+
+#[test]
+fn deserialization_rebuilds_the_runtime_world_generator() {
+    let mut world = WorldSim::new_seeded(123);
+    world
+        .generator
+        .tile_pollution_absorption_per_minute_milli
+        .clear();
+    let bytes = bincode::serialize(&world).expect("world should serialize");
+
+    let loaded: WorldSim = bincode::deserialize(&bytes).expect("world should deserialize");
+
+    assert_eq!(
+        loaded
+            .generator
+            .tile_pollution_absorption_per_minute_milli
+            .len(),
+        loaded.prototypes.tiles.len()
+    );
+    for tile in &loaded.prototypes.tiles {
+        assert_eq!(
+            loaded.generator.tile_pollution_absorption_per_minute_milli[tile.id.index()],
+            u64::from(tile.pollution_absorption_per_minute_milli)
+        );
     }
 }
 
