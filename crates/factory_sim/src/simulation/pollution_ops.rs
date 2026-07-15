@@ -240,12 +240,7 @@ impl Simulation {
     }
 
     pub(super) fn absorb_pollution_by_terrain(&mut self) {
-        if self
-            .world
-            .tile_pollution_absorption_per_minute_milli
-            .iter()
-            .all(|rate| *rate == 0)
-        {
+        if !self.world.generator.has_pollution_absorption() {
             return;
         }
 

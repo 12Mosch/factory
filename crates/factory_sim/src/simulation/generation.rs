@@ -41,8 +41,7 @@ pub(super) fn splitmix64(mut value: u64) -> u64 {
 pub(super) fn generate_world_chunks(
     seed: u64,
     prototypes: &PrototypeCatalog,
-    rules: &WorldGenRules,
-    tile_pollution_absorption_per_minute_milli: &[u64],
+    generator: &WorldGenerator,
 ) -> BTreeMap<ChunkCoord, Chunk> {
     let area = prototypes.world_generation.starting_area;
     let mut chunks = BTreeMap::new();
@@ -53,37 +52,25 @@ pub(super) fn generate_world_chunks(
                 x: chunk_x,
                 y: chunk_y,
             };
-            chunks.insert(
-                coord,
-                generate_chunk(
-                    seed,
-                    coord,
-                    rules,
-                    tile_pollution_absorption_per_minute_milli,
-                ),
-            );
+            chunks.insert(coord, generate_chunk(seed, coord, generator));
         }
     }
 
     chunks
 }
 
-pub(super) fn generate_chunk(
-    seed: u64,
-    coord: ChunkCoord,
-    rules: &WorldGenRules,
-    tile_pollution_absorption_per_minute_milli: &[u64],
-) -> Chunk {
+pub(super) fn generate_chunk(seed: u64, coord: ChunkCoord, generator: &WorldGenerator) -> Chunk {
     let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
     let mut pollution_absorption_per_minute_milli = 0;
     let bounds = TileBounds::for_chunk(coord);
-    let centers = generate_resource_patch_centers(seed, rules, bounds);
+    let centers = generate_resource_patch_centers(seed, generator, bounds);
 
     for local_y in 0..CHUNK_SIZE {
         for local_x in 0..CHUNK_SIZE {
             let (x, y) = coord.tile_at(local_x, local_y);
-            let tile = generate_tile(seed, x, y, rules, &centers);
-            pollution_absorption_per_minute_milli += tile_pollution_absorption_per_minute_milli
+            let tile = generate_tile(seed, x, y, generator, &centers);
+            pollution_absorption_per_minute_milli += generator
+                .tile_pollution_absorption_per_minute_milli
                 .get(tile.tile_id.index())
                 .copied()
                 .unwrap_or(0);
@@ -102,7 +89,7 @@ pub(super) fn generate_tile(
     seed: u64,
     x: WorldTileCoord,
     y: WorldTileCoord,
-    rules: &WorldGenRules,
+    rules: &WorldGenerator,
     centers: &[ResourcePatchCenter],
 ) -> TileCell {
     let (tile_id, mut collision) = generate_terrain(seed, x, y, rules);
@@ -133,7 +120,7 @@ pub(super) fn generate_terrain(
     seed: u64,
     x: WorldTileCoord,
     y: WorldTileCoord,
-    rules: &WorldGenRules,
+    rules: &WorldGenerator,
 ) -> (TileId, TileCollision) {
     // Sample three independent climate channels. Elevation drives land vs.
     // water, so the spawn bias clamps it toward buildable land near the origin;
@@ -467,7 +454,7 @@ pub(super) fn tile_collision(prototypes: &PrototypeCatalog, tile_id: TileId) -> 
 
 pub(super) fn generate_resource_patch_centers(
     seed: u64,
-    rules: &WorldGenRules,
+    rules: &WorldGenerator,
     bounds: TileBounds,
 ) -> Vec<ResourcePatchCenter> {
     let mut centers = Vec::new();
@@ -491,22 +478,11 @@ pub(super) fn generate_resource_patch_centers(
         }
     }
 
-    let max_reach = rules
-        .resources
-        .iter()
-        .map(|resource| resource.radius)
-        .max()
-        .unwrap_or(0)
-        + i64::from(rules.edge_noise)
-        + i64::from(rules.grid_jitter)
-        + rules
-            .distance_scaling
-            .map_or(0, |scaling| i64::from(scaling.max_radius_bonus_tiles));
     let grid_size = i64::from(rules.grid_cell_size);
-    let min_grid_x = (bounds.min_x - max_reach).div_euclid(grid_size);
-    let max_grid_x = (bounds.max_x + max_reach).div_euclid(grid_size);
-    let min_grid_y = (bounds.min_y - max_reach).div_euclid(grid_size);
-    let max_grid_y = (bounds.max_y + max_reach).div_euclid(grid_size);
+    let min_grid_x = (bounds.min_x - rules.patch_grid_reach).div_euclid(grid_size);
+    let max_grid_x = (bounds.max_x + rules.patch_grid_reach).div_euclid(grid_size);
+    let min_grid_y = (bounds.min_y - rules.patch_grid_reach).div_euclid(grid_size);
+    let max_grid_y = (bounds.max_y + rules.patch_grid_reach).div_euclid(grid_size);
 
     for grid_y in min_grid_y..=max_grid_y {
         for grid_x in min_grid_x..=max_grid_x {
@@ -529,7 +505,7 @@ pub(super) fn generate_resource_patch_centers(
 /// random patches still cannot compete tile-by-tile within one grid cell.
 fn resource_patch_center_for_grid_cell(
     seed: u64,
-    rules: &WorldGenRules,
+    rules: &WorldGenerator,
     grid_x: WorldTileCoord,
     grid_y: WorldTileCoord,
 ) -> Option<ResourcePatchCenter> {
@@ -768,29 +744,35 @@ pub(super) fn hash_world(seed: u64, x: WorldTileCoord, y: WorldTileCoord) -> u64
     splitmix64(seed ^ x_bits.rotate_left(32) ^ y_bits.rotate_left(1))
 }
 
-/// World generation rules resolved from a catalog's
-/// [`factory_data::WorldGenerationConfig`]: terrain layers with their derived
-/// collision, resource patch definitions with minability, and placement grid
-/// parameters. Resolution is infallible; the loader already validated the
-/// config against the catalog.
+/// Runtime-only world generation state resolved from a prototype catalog.
+///
+/// This owns terrain bands with derived collision, resource patch rules and
+/// minability, patch-grid reach, spawn bias, and pollution absorption. The
+/// loader already validated the source configuration, so resolution is
+/// infallible and streaming chunks never rebuilds catalog-derived rules.
 #[derive(Clone, Debug)]
-pub(crate) struct WorldGenRules {
+pub(crate) struct WorldGenerator {
     biomes: Vec<BiomeRule>,
     climate_noise: ClimateNoiseConfig,
     /// Tile used when no biome matches (or the biome table is empty).
     fallback_tile: TileId,
     fallback_collision: TileCollision,
     resources: Vec<ResourceRule>,
+    resource_minability: Vec<bool>,
     grid_cell_size: i32,
     grid_jitter: i32,
     edge_noise: i32,
     patch_chance_percent: u8,
+    /// Maximum distance from a chunk's bounds at which a patch grid cell can
+    /// still affect that chunk, including jitter and distance scaling.
+    patch_grid_reach: i64,
     /// Distance-based richness/radius growth for grid patches; starting
     /// patches stay at their configured base values.
     distance_scaling: Option<ResourceDistanceScalingConfig>,
     /// Derived from the biome table and starting patches; `None` when every
     /// biome is buildable so no elevation bias is needed.
     spawn_bias: Option<SpawnTerrainBias>,
+    pub(super) tile_pollution_absorption_per_minute_milli: Vec<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -812,7 +794,7 @@ struct ResourceRule {
     starting_patch: Option<(WorldTileCoord, WorldTileCoord)>,
 }
 
-impl WorldGenRules {
+impl WorldGenerator {
     pub(super) fn from_catalog(prototypes: &PrototypeCatalog) -> Self {
         let config = &prototypes.world_generation;
         let biomes: Vec<BiomeRule> = config
@@ -845,12 +827,36 @@ impl WorldGenRules {
                     .map(|offset| (i64::from(offset.x), i64::from(offset.y))),
             })
             .collect();
+        let mut resource_minability = vec![false; prototypes.items.len()];
+        // Validated catalogs have unique resource items. Iterate backwards to
+        // preserve the old first-match behavior for catalogs mutated directly
+        // by callers after validation.
+        for resource in resources.iter().rev() {
+            if let Some(minable) = resource_minability.get_mut(resource.resource_item.index()) {
+                *minable = resource.minable;
+            }
+        }
         let spawn_bias = SpawnTerrainBias::derive(
             &biomes,
             &resources,
             config.patch_grid.edge_noise,
             config.climate_noise.elevation.scale,
         );
+        let patch_grid_reach = resources
+            .iter()
+            .map(|resource| resource.radius)
+            .max()
+            .unwrap_or(0)
+            + i64::from(config.patch_grid.edge_noise)
+            + i64::from(config.patch_grid.jitter)
+            + config
+                .distance_scaling
+                .map_or(0, |scaling| i64::from(scaling.max_radius_bonus_tiles));
+        let tile_pollution_absorption_per_minute_milli = prototypes
+            .tiles
+            .iter()
+            .map(|tile| u64::from(tile.pollution_absorption_per_minute_milli))
+            .collect();
 
         Self {
             biomes,
@@ -858,21 +864,44 @@ impl WorldGenRules {
             fallback_tile,
             fallback_collision,
             resources,
+            resource_minability,
             grid_cell_size: config.patch_grid.cell_size,
             grid_jitter: config.patch_grid.jitter,
             edge_noise: config.patch_grid.edge_noise,
             patch_chance_percent: config.patch_grid.patch_chance_percent,
+            patch_grid_reach,
             distance_scaling: config.distance_scaling,
             spawn_bias,
+            tile_pollution_absorption_per_minute_milli,
         }
     }
 
     fn resource_is_minable(&self, resource_item: ItemId) -> bool {
-        self.resources
-            .iter()
-            .find(|resource| resource.resource_item == resource_item)
-            .is_some_and(|resource| resource.minable)
+        self.resource_minability
+            .get(resource_item.index())
+            .copied()
+            .unwrap_or(false)
     }
+
+    pub(super) fn has_pollution_absorption(&self) -> bool {
+        self.tile_pollution_absorption_per_minute_milli
+            .iter()
+            .any(|rate| *rate != 0)
+    }
+}
+
+// `WorldGenerator` is fully derived from serialized prototype data. Excluding
+// it from equality and hashing keeps world identity tied to durable state.
+impl PartialEq for WorldGenerator {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for WorldGenerator {}
+
+impl Hash for WorldGenerator {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
 pub(super) fn item_id(prototypes: &PrototypeCatalog, name: &str) -> ItemId {
@@ -945,7 +974,7 @@ mod tests {
     /// area rather than one window keeps the fraction stable across seeds
     /// instead of landing on a single continent or basin.
     fn natural_water_stats(seed: u64, catalog: &PrototypeCatalog) -> (f64, f64) {
-        let rules = WorldGenRules::from_catalog(catalog);
+        let rules = WorldGenerator::from_catalog(catalog);
         // Comfortably beyond the spawn elevation bias's outer radius.
         const SPAWN_EXCLUSION: i64 = 160;
         let half_extent = 256;
@@ -1061,7 +1090,7 @@ mod tests {
     #[test]
     fn biome_table_produces_varied_terrain() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
 
         for seed in [0u64, 42, 123, 8675309] {
             let mut tiles = std::collections::BTreeSet::new();
@@ -1083,7 +1112,7 @@ mod tests {
     #[test]
     fn biome_selection_is_deterministic_per_seed() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
 
         for &(x, y) in &[(0i64, 0i64), (17, -33), (-64, 50), (120, -8)] {
             let first = generate_terrain(777, x, y, &rules);
@@ -1098,7 +1127,7 @@ mod tests {
     #[test]
     fn spawn_area_terrain_is_open_ground_for_any_seed() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
         let bias = rules
             .spawn_bias
             .expect("base catalog should derive a spawn bias");
@@ -1124,7 +1153,7 @@ mod tests {
     #[test]
     fn starting_patches_generate_their_resource_for_any_seed() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
         let starting_patches: Vec<_> = catalog
             .world_generation
             .resources
@@ -1159,7 +1188,7 @@ mod tests {
     #[test]
     fn resource_edge_noise_is_coherent_across_neighbouring_tiles() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
         let resource = rules
             .resources
             .first()
@@ -1249,7 +1278,7 @@ mod tests {
     #[test]
     fn warp_offsets_are_coherent_and_span_their_range() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
         let amplitude = i64::from(rules.climate_noise.elevation.scale / 2);
         assert!(
             amplitude > 0,
@@ -1301,7 +1330,7 @@ mod tests {
     #[test]
     fn domain_warp_displaces_the_terrain_field() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
 
         for seed in [0, 42, 123, 8675309] {
             let mut total = 0u64;
@@ -1341,24 +1370,47 @@ mod tests {
     #[test]
     fn terrain_field_is_deterministic_and_seed_dependent() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
-        let absorption_rates = WorldSim::tile_pollution_absorption_rates(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
         let coord = ChunkCoord { x: 0, y: 0 };
 
         assert_eq!(
-            generate_chunk(123, coord, &rules, &absorption_rates),
-            generate_chunk(123, coord, &rules, &absorption_rates)
+            generate_chunk(123, coord, &rules),
+            generate_chunk(123, coord, &rules)
         );
         assert_ne!(
-            generate_chunk(123, coord, &rules, &absorption_rates),
-            generate_chunk(124, coord, &rules, &absorption_rates)
+            generate_chunk(123, coord, &rules),
+            generate_chunk(124, coord, &rules)
         );
+    }
+
+    #[test]
+    fn resource_minability_lookup_preserves_first_matching_rule() {
+        let mut catalog =
+            PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let first = catalog.world_generation.resources[0];
+        catalog.world_generation.resources[0].extraction = ResourceExtraction::Solid;
+        let mut duplicate = first;
+        duplicate.extraction = ResourceExtraction::Fluid;
+        catalog.world_generation.resources.push(duplicate);
+
+        let generator = WorldGenerator::from_catalog(&catalog);
+        assert!(generator.resource_is_minable(first.resource_item));
+
+        catalog.world_generation.resources[0].extraction = ResourceExtraction::Fluid;
+        catalog
+            .world_generation
+            .resources
+            .last_mut()
+            .expect("duplicate resource should exist")
+            .extraction = ResourceExtraction::Solid;
+        let generator = WorldGenerator::from_catalog(&catalog);
+        assert!(!generator.resource_is_minable(first.resource_item));
     }
 
     #[test]
     fn grid_cells_roll_density_then_select_one_resource_by_weight() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
         let mut counts = vec![0u64; rules.resources.len()];
         let mut occupied = 0u64;
         let mut cells = 0u64;
@@ -1411,7 +1463,7 @@ mod tests {
     #[test]
     fn patch_chance_and_selection_weights_handle_empty_cells() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let mut rules = WorldGenRules::from_catalog(&catalog);
+        let mut rules = WorldGenerator::from_catalog(&catalog);
 
         let mut recomposed_rules = rules.clone();
         recomposed_rules.resources[0].selection_weight = u32::MAX;
@@ -1441,7 +1493,7 @@ mod tests {
     #[test]
     fn grid_patch_richness_and_radius_scale_with_distance() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
         let scaling = catalog
             .world_generation
             .distance_scaling
@@ -1481,7 +1533,7 @@ mod tests {
     #[test]
     fn starting_patches_keep_base_richness_and_radius() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
 
         for resource in &rules.resources {
             let Some((x, y)) = resource.starting_patch else {
@@ -1506,7 +1558,7 @@ mod tests {
     #[test]
     fn distance_scaled_patches_do_not_create_chunk_seams() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
 
         for seed in [0, 123] {
             for coord in [ChunkCoord { x: 15, y: 0 }, ChunkCoord { x: -20, y: 20 }] {
@@ -1541,7 +1593,7 @@ mod tests {
     #[test]
     fn retained_resource_candidates_can_affect_their_chunk() {
         let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-        let rules = WorldGenRules::from_catalog(&catalog);
+        let rules = WorldGenerator::from_catalog(&catalog);
 
         for seed in [0, 123, 987_654_321] {
             for coord in [

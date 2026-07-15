@@ -1,25 +1,16 @@
 use super::*;
-use crate::world::generation::GenerationRulesCache;
 
 impl WorldSim {
     const RESOURCE_DIRTY_HISTORY_LIMIT: usize = 4096;
 
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
-        let tile_pollution_absorption_per_minute_milli =
-            Self::tile_pollution_absorption_rates(&prototypes);
-        let rules = WorldGenRules::from_catalog(&prototypes);
-        let chunks = generate_world_chunks(
-            seed,
-            &prototypes,
-            &rules,
-            &tile_pollution_absorption_per_minute_milli,
-        );
+        let generator = WorldGenerator::from_catalog(&prototypes);
+        let chunks = generate_world_chunks(seed, &prototypes, &generator);
         Self {
             seed,
             prototypes,
             chunks,
-            tile_pollution_absorption_per_minute_milli,
-            generation_rules: GenerationRulesCache(Some(rules)),
+            generator,
             chunk_revision: 0,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
@@ -38,15 +29,14 @@ impl WorldSim {
         prototypes: PrototypeCatalog,
         mut chunks: BTreeMap<ChunkCoord, Chunk>,
     ) -> Self {
-        let tile_pollution_absorption_per_minute_milli =
-            Self::tile_pollution_absorption_rates(&prototypes);
-        let generation_rules = WorldGenRules::from_catalog(&prototypes);
+        let generator = WorldGenerator::from_catalog(&prototypes);
         for chunk in chunks.values_mut() {
             chunk.pollution_absorption_per_minute_milli = chunk
                 .tiles
                 .iter()
                 .map(|tile| {
-                    tile_pollution_absorption_per_minute_milli
+                    generator
+                        .tile_pollution_absorption_per_minute_milli
                         .get(tile.tile_id.index())
                         .copied()
                         .unwrap_or(0)
@@ -58,20 +48,11 @@ impl WorldSim {
             seed,
             prototypes,
             chunks,
-            tile_pollution_absorption_per_minute_milli,
-            generation_rules: GenerationRulesCache(Some(generation_rules)),
+            generator,
             chunk_revision: 0,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
         }
-    }
-
-    pub(super) fn tile_pollution_absorption_rates(prototypes: &PrototypeCatalog) -> Vec<u64> {
-        prototypes
-            .tiles
-            .iter()
-            .map(|tile| u64::from(tile.pollution_absorption_per_minute_milli))
-            .collect()
     }
 
     pub fn tile_at<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
@@ -89,21 +70,31 @@ impl WorldSim {
     }
 
     pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> bool {
-        if self.chunks.contains_key(&coord) {
-            return false;
-        }
+        self.generate_missing_chunk(coord)
+    }
 
-        let rules = self
-            .generation_rules
-            .0
-            .get_or_insert_with(|| WorldGenRules::from_catalog(&self.prototypes));
-        let chunk = generate_chunk(
-            self.seed,
-            coord,
-            rules,
-            &self.tile_pollution_absorption_per_minute_milli,
-        );
-        self.chunks.insert(coord, chunk);
+    /// Generates every missing coordinate in iteration order and returns the
+    /// coordinates actually inserted. Duplicate and already-generated
+    /// coordinates are omitted from the result.
+    pub fn ensure_chunks_generated(
+        &mut self,
+        coords: impl IntoIterator<Item = ChunkCoord>,
+    ) -> Vec<ChunkCoord> {
+        let mut generated = Vec::new();
+        for coord in coords {
+            if self.generate_missing_chunk(coord) {
+                generated.push(coord);
+            }
+        }
+        generated
+    }
+
+    fn generate_missing_chunk(&mut self, coord: ChunkCoord) -> bool {
+        let std::collections::btree_map::Entry::Vacant(entry) = self.chunks.entry(coord) else {
+            return false;
+        };
+
+        entry.insert(generate_chunk(self.seed, coord, &self.generator));
         self.chunk_revision = self.chunk_revision.wrapping_add(1);
         true
     }
@@ -114,17 +105,9 @@ impl WorldSim {
         radius: i32,
     ) -> Result<usize, ChunkNeighborhoodError> {
         let (min_x, max_x, min_y, max_y) = chunk_neighborhood_bounds(center, radius)?;
-        let mut generated = 0;
-
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
-                if self.ensure_chunk_generated(ChunkCoord { x, y }) {
-                    generated += 1;
-                }
-            }
-        }
-
-        Ok(generated)
+        let coords =
+            (min_y..=max_y).flat_map(|y| (min_x..=max_x).map(move |x| ChunkCoord { x, y }));
+        Ok(self.ensure_chunks_generated(coords).len())
     }
 
     pub fn chunk_revision(&self) -> u64 {
