@@ -581,6 +581,7 @@ fn load_world_generation(
             cell_size: raw.patch_grid.cell_size,
             jitter: raw.patch_grid.jitter,
             edge_noise: raw.patch_grid.edge_noise,
+            patch_chance_percent: raw.patch_grid.patch_chance_percent,
         },
         distance_scaling: raw
             .distance_scaling
@@ -693,6 +694,23 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
     if raw.patch_grid.edge_noise > MAX_PATCH_EDGE_NOISE {
         return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
             detail: "patch grid edge_noise must not exceed 4096",
+        });
+    }
+    if raw.patch_grid.patch_chance_percent > 100 {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "patch grid patch_chance_percent must not exceed 100",
+        });
+    }
+    if raw.patch_grid.patch_chance_percent > 0
+        && !raw.resources.is_empty()
+        && raw
+            .resources
+            .iter()
+            .all(|resource| resource.selection_weight == 0)
+    {
+        return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
+            detail: "resources must include a positive selection_weight when patch_chance_percent \
+                     is positive",
         });
     }
     raw.patch_grid
@@ -865,11 +883,6 @@ fn resolve_resources(
                     item: resource.item,
                 });
             }
-            if resource.frequency_percent > 100 {
-                return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
-                    detail: "resource frequency_percent must not exceed 100",
-                });
-            }
             if resource.radius < 1 {
                 return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
                     detail: "resource radius must be at least 1",
@@ -883,7 +896,7 @@ fn resolve_resources(
             Ok(ResourceGenerationConfig {
                 resource_item,
                 extraction: resource.extraction,
-                frequency_percent: resource.frequency_percent,
+                selection_weight: resource.selection_weight,
                 radius: resource.radius,
                 richness: resource.richness,
                 starting_patch: resource

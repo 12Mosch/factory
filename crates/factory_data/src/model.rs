@@ -365,7 +365,8 @@ pub struct CollisionMask {
 ///
 /// Version 2 replaced the single weighted-band `terrain` selector with a
 /// data-driven biome table classified from three independent climate channels.
-pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 2;
+/// Version 3 split resource patch density from resource selection weights.
+pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 3;
 
 /// Data-driven world generation rules: terrain distribution, starting area,
 /// and resource patch definitions. Loaded from the `world_generation` section
@@ -409,6 +410,7 @@ impl Default for WorldGenerationConfig {
                 cell_size: 40,
                 jitter: 16,
                 edge_noise: 3,
+                patch_chance_percent: 100,
             },
             distance_scaling: None,
             resources: Vec::new(),
@@ -500,6 +502,8 @@ pub struct ResourcePatchGridConfig {
     pub cell_size: i32,
     pub jitter: i32,
     pub edge_noise: i32,
+    /// Chance (0-100) that a grid cell contains a non-starting resource patch.
+    pub patch_chance_percent: u8,
 }
 
 /// Linear distance scaling for grid-placed resource patches, rewarding
@@ -522,8 +526,9 @@ pub struct ResourceDistanceScalingConfig {
 pub struct ResourceGenerationConfig {
     pub resource_item: ItemId,
     pub extraction: ResourceExtraction,
-    /// Chance (0-100) that a grid cell spawns a patch of this resource.
-    pub frequency_percent: u8,
+    /// Relative weight used to select this resource when a grid cell spawns a
+    /// patch. A weight of zero excludes it from random patch selection.
+    pub selection_weight: u32,
     pub radius: i32,
     pub richness: u32,
     /// Guaranteed patch center near the origin so starter worlds always

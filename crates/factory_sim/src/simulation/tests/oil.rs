@@ -16,14 +16,39 @@ fn unlock_oil_processing(sim: &mut Simulation) {
 }
 
 fn sim_with_powered_pumpjack() -> (Simulation, EntityId) {
-    for seed in 0..64 {
-        let mut sim = Simulation::new_test_world(seed);
-        if let Some(pumpjack_id) = place_powered_pumpjack(&mut sim) {
-            return (sim, pumpjack_id);
-        }
-    }
+    let mut sim = Simulation::new_test_world(123);
+    let crude_oil = item_id(&sim.world.prototypes, "crude_oil");
+    let starting_patch = sim
+        .world
+        .prototypes
+        .world_generation
+        .resources
+        .iter()
+        .find(|resource| resource.resource_item == crude_oil)
+        .and_then(|resource| resource.starting_patch)
+        .expect("crude oil should have a guaranteed starting patch");
+    let pumpjack = entity_id_by_name(&sim.world.prototypes, "pumpjack");
+    let x = i64::from(starting_patch.x) - 1;
+    let y = i64::from(starting_patch.y) - 1;
+    let pumpjack_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pumpjack,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("pumpjack should be placeable over the guaranteed crude-oil patch");
+    sim.power.entity_statuses.insert(
+        pumpjack_id,
+        EntityPowerStatus {
+            satisfaction_permyriad: 10_000,
+            ..EntityPowerStatus::default()
+        },
+    );
 
-    panic!("expected a seed with a powerable crude oil patch");
+    (sim, pumpjack_id)
 }
 
 fn sim_with_powered_refinery() -> (Simulation, EntityId) {
@@ -216,17 +241,15 @@ fn powered_pumpjack_produces_crude_oil_into_its_output_box() {
     let (mut sim, pumpjack_id) = sim_with_powered_pumpjack();
     let crude_oil = fluid_id(&sim.world.prototypes, "crude_oil");
 
-    for _ in 0..240 {
-        sim.tick();
+    for _ in 0..100 {
+        sim.advance_machines(&mut NoopTickProfiler);
     }
 
     let (fluid, amount) = fluid_box_amount(&sim, pumpjack_id, 0);
     assert_eq!(fluid, Some(crude_oil));
-    // 100 milliunits per tick once powered; allow a warm-up margin for the
-    // boiler and steam engine to spin up.
-    assert!(
-        amount >= 10_000,
-        "pumpjack should have produced crude oil, got {amount}"
+    assert_eq!(
+        amount, 10_000,
+        "pumpjack should produce 100 milliunits per tick"
     );
     assert_eq!(
         sim.machine_status_for_entity(pumpjack_id),
