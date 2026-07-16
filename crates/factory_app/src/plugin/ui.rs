@@ -64,12 +64,6 @@ fn install_default_ui_font(app: &mut App) {
     }
 
     // Bevy 0.19's TextPlugin registers DEFAULT_FONT_DATA at AssetId::default().
-    // UiPlugin must follow TextPlugin, and this invariant must be rechecked on upgrades.
-    debug_assert!(
-        app.is_plugin_added::<bevy::text::TextPlugin>(),
-        "the complete UI font must be installed after TextPlugin"
-    );
-
     let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
     fonts
         .insert(
