@@ -511,64 +511,106 @@ fn place_representative_power_poles(sim: &mut Simulation, spec: FactoryBenchmark
 }
 
 fn place_fluid_fixtures(sim: &mut Simulation, count: usize) {
+    const MAX_CHUNK_RADIUS: i32 = 64;
+
     let catalog = sim.catalog().clone();
     let pump = entity_prototype_id_by_name(sim.catalog(), "offshore_pump");
     let boiler = entity_prototype_id_by_name(sim.catalog(), "boiler");
     let steam_engine = entity_prototype_id_by_name(sim.catalog(), "steam_engine");
     let coal = item_id_by_name(sim.catalog(), "coal");
     let mut placed = 0;
+    let mut candidate_tiles = deterministic_tile_coords(sim);
 
-    for (x, y) in deterministic_tile_coords(sim) {
+    loop {
+        for (x, y) in candidate_tiles {
+            if placed == count {
+                return;
+            }
+            let pump_request = benchmark_placement_request(pump, x, y, Direction::North);
+            let boiler_request = benchmark_placement_request(boiler, x, y + 1, Direction::North);
+            let steam_engine_request =
+                benchmark_placement_request(steam_engine, x + 2, y + 1, Direction::North);
+            if [pump_request, boiler_request, steam_engine_request]
+                .into_iter()
+                .any(|request| !can_place(sim, request))
+            {
+                continue;
+            }
+
+            place_validated(sim, pump_request, "validated benchmark pump should place");
+            let boiler_id = place_validated(
+                sim,
+                boiler_request,
+                "validated benchmark boiler should place",
+            );
+            place_validated(
+                sim,
+                steam_engine_request,
+                "validated benchmark engine should place",
+            );
+            *sim.player_inventory_mut() = Inventory::player();
+            sim.player_inventory_mut()
+                .insert(&catalog, coal, 50)
+                .expect("benchmark player inventory should accept coal");
+            factory_sim::entity_transfer::player_slot_to_boiler_fuel(sim, boiler_id, 0)
+                .expect("benchmark boiler should accept fuel");
+            placed += 1;
+        }
         if placed == count {
             return;
         }
-        let pump_request = benchmark_placement_request(pump, x, y, Direction::North);
-        let boiler_request = benchmark_placement_request(boiler, x, y + 1, Direction::North);
-        let steam_engine_request =
-            benchmark_placement_request(steam_engine, x + 2, y + 1, Direction::North);
-        if [pump_request, boiler_request, steam_engine_request]
-            .into_iter()
-            .any(|request| !can_place(sim, request))
-        {
-            continue;
-        }
 
-        place_validated(sim, pump_request, "validated benchmark pump should place");
-        let boiler_id = place_validated(
-            sim,
-            boiler_request,
-            "validated benchmark boiler should place",
+        // Fixtures need shoreline, which is far sparser than the open ground
+        // the initial world estimate is sized for. Grow the map one chunk ring
+        // at a time and keep placing on the newly generated tiles.
+        let radius = generated_chunk_radius(sim) + 1;
+        assert!(
+            radius <= MAX_CHUNK_RADIUS,
+            "could only place {placed} of {count} fluid benchmark fixtures within chunk radius {MAX_CHUNK_RADIUS}"
         );
-        place_validated(
-            sim,
-            steam_engine_request,
-            "validated benchmark engine should place",
-        );
-        *sim.player_inventory_mut() = Inventory::player();
-        sim.player_inventory_mut()
-            .insert(&catalog, coal, 50)
-            .expect("benchmark player inventory should accept coal");
-        factory_sim::entity_transfer::player_slot_to_boiler_fuel(sim, boiler_id, 0)
-            .expect("benchmark boiler should accept fuel");
-        placed += 1;
+        candidate_tiles = generate_chunk_ring(sim, radius);
     }
+}
 
-    panic!("could only place {placed} of {count} fluid benchmark fixtures");
+fn generated_chunk_radius(sim: &Simulation) -> i32 {
+    sim.world()
+        .chunks
+        .keys()
+        .map(|coord| coord.x.abs().max(coord.y.abs()))
+        .max()
+        .unwrap_or(0)
+}
+
+fn generate_chunk_ring(sim: &mut Simulation, radius: i32) -> Vec<(i64, i64)> {
+    let mut ring = Vec::new();
+    for y in -radius..=radius {
+        for x in -radius..=radius {
+            if x.abs().max(y.abs()) < radius {
+                continue;
+            }
+            let coord = ChunkCoord { x, y };
+            if !sim.world().chunks.contains_key(&coord) {
+                sim.ensure_chunk_generated(coord);
+                ring.push(coord);
+            }
+        }
+    }
+    ring.sort_unstable();
+    ring.into_iter().flat_map(chunk_tiles).collect()
 }
 
 fn deterministic_tile_coords(sim: &Simulation) -> Vec<(i64, i64)> {
     let mut chunks = sim.world().chunks.keys().copied().collect::<Vec<_>>();
     chunks.sort_unstable();
-    chunks
-        .into_iter()
-        .flat_map(|coord| {
-            (0..CHUNK_SIZE * CHUNK_SIZE).map(move |index| {
-                let local_x = index.rem_euclid(CHUNK_SIZE);
-                let local_y = index.div_euclid(CHUNK_SIZE);
-                coord.tile_at(local_x, local_y)
-            })
-        })
-        .collect()
+    chunks.into_iter().flat_map(chunk_tiles).collect()
+}
+
+fn chunk_tiles(coord: ChunkCoord) -> impl Iterator<Item = (i64, i64)> {
+    (0..CHUNK_SIZE * CHUNK_SIZE).map(move |index| {
+        let local_x = index.rem_euclid(CHUNK_SIZE);
+        let local_y = index.div_euclid(CHUNK_SIZE);
+        coord.tile_at(local_x, local_y)
+    })
 }
 
 fn run_warmup_ticks(sim: &mut Simulation, ticks: usize) {
@@ -651,7 +693,7 @@ fn average_profile(samples: &[TickSample]) -> SimulationTickProfile {
         entity_motion: average_duration(samples, len, |profile| profile.entity_motion),
         belts: average_duration(samples, len, |profile| profile.belts),
         fluids: average_duration(samples, len, |profile| profile.fluids),
-        power_rebuild: average_duration(samples, len, |profile| profile.power_rebuild),
+        power: average_duration(samples, len, |profile| profile.power),
         machines: average_duration(samples, len, |profile| profile.machines),
         inserters: average_duration(samples, len, |profile| profile.inserters),
         inventory_transfers: average_duration(samples, len, |profile| profile.inventory_transfers),
@@ -669,7 +711,7 @@ fn percentile_profile(samples: &[TickSample], index: usize) -> SimulationTickPro
         entity_motion: percentile_duration(samples, index, |profile| profile.entity_motion),
         belts: percentile_duration(samples, index, |profile| profile.belts),
         fluids: percentile_duration(samples, index, |profile| profile.fluids),
-        power_rebuild: percentile_duration(samples, index, |profile| profile.power_rebuild),
+        power: percentile_duration(samples, index, |profile| profile.power),
         machines: percentile_duration(samples, index, |profile| profile.machines),
         inserters: percentile_duration(samples, index, |profile| profile.inserters),
         inventory_transfers: percentile_duration(samples, index, |profile| {
@@ -689,7 +731,7 @@ fn max_profile(samples: &[TickSample]) -> SimulationTickProfile {
         entity_motion: max_duration(samples, |profile| profile.entity_motion),
         belts: max_duration(samples, |profile| profile.belts),
         fluids: max_duration(samples, |profile| profile.fluids),
-        power_rebuild: max_duration(samples, |profile| profile.power_rebuild),
+        power: max_duration(samples, |profile| profile.power),
         machines: max_duration(samples, |profile| profile.machines),
         inserters: max_duration(samples, |profile| profile.inserters),
         inventory_transfers: max_duration(samples, |profile| profile.inventory_transfers),
@@ -740,7 +782,7 @@ fn max_duration(
 
 fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
     println!(
-        "{name}:\n  counts: entities {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  power_rebuild: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
+        "{name}:\n  counts: entities {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
         stats.counts.entity_count,
         stats.counts.belt_count,
         stats.counts.belt_item_count,
@@ -762,9 +804,9 @@ fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
         ms(stats.average.fluids),
         ms(stats.p95.fluids),
         ms(stats.max.fluids),
-        ms(stats.average.power_rebuild),
-        ms(stats.p95.power_rebuild),
-        ms(stats.max.power_rebuild),
+        ms(stats.average.power),
+        ms(stats.p95.power),
+        ms(stats.max.power),
         stats.alloc_average_bytes,
         stats.alloc_average_count,
         stats.alloc_p95_bytes,

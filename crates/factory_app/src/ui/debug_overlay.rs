@@ -183,7 +183,7 @@ Machines: {}
 Inserters: {}
 Machines active/idle: {}/{}
 Power: production {}, consumption {}, satisfaction {:.1}%
-Phases: belts {}, fluids {}, power rebuild {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync total {} (player {}, world {}, resources {}, entities {}, belt dirs {}, belt items {})",
+Phases: belts {}, fluids {}, power {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync total {} (player {}, world {}, resources {}, entities {}, belt dirs {}, belt items {})",
         snapshot.tick,
         snapshot.ups,
         format_optional(snapshot.fps, "", 1),
@@ -202,7 +202,7 @@ Phases: belts {}, fluids {}, power rebuild {}, machines {}, inserters {}, invent
         f64::from(snapshot.power.satisfaction_permyriad) / 100.0,
         format_duration_ms(snapshot.sim_profile.last_tick.belts),
         format_duration_ms(snapshot.sim_profile.last_tick.fluids),
-        format_duration_ms(snapshot.sim_profile.last_tick.power_rebuild),
+        format_duration_ms(snapshot.sim_profile.last_tick.power),
         format_duration_ms(snapshot.sim_profile.last_tick.machines),
         format_duration_ms(snapshot.sim_profile.last_tick.inserters),
         format_duration_ms(snapshot.sim_profile.last_tick.inventory_transfers),
@@ -249,7 +249,7 @@ mod tests {
             last_tick: SimulationTickProfile {
                 belts: Duration::from_micros(100),
                 fluids: Duration::from_micros(200),
-                power_rebuild: Duration::from_micros(300),
+                power: Duration::from_micros(300),
                 machines: Duration::from_micros(400),
                 inserters: Duration::from_micros(500),
                 inventory_transfers: Duration::from_micros(600),
@@ -308,7 +308,7 @@ mod tests {
             "Power:",
             "belts",
             "fluids",
-            "power rebuild",
+            "power",
             "machines",
             "inserters",
             "inventory transfers",
