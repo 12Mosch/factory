@@ -82,7 +82,7 @@ struct SimulationSnapshotOwned {
     research: ResearchState,
     power_summary: PowerSummary,
     power_networks: Vec<PowerNetworkSnapshot>,
-    entity_power_statuses: BTreeMap<EntityId, EntityPowerStatus>,
+    entity_power_statuses: DenseEntityMap<EntityPowerStatus>,
     fluid_networks: Vec<FluidNetworkSnapshot>,
     pollution: PollutionState,
     enemies: EnemySubsystem,
@@ -226,7 +226,7 @@ struct SimulationSnapshotRef<'a> {
     research: &'a ResearchState,
     power_summary: PowerSummary,
     power_networks: &'a Vec<PowerNetworkSnapshot>,
-    entity_power_statuses: &'a BTreeMap<EntityId, EntityPowerStatus>,
+    entity_power_statuses: &'a DenseEntityMap<EntityPowerStatus>,
     fluid_networks: &'a Vec<FluidNetworkSnapshot>,
     pollution: &'a PollutionState,
     enemies: &'a EnemySubsystem,
@@ -290,6 +290,7 @@ impl SimulationSnapshotOwned {
                 #[cfg(test)]
                 topology_rebuilds: 0,
             },
+            power_demand_cache: PowerDemandCache::default(),
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,

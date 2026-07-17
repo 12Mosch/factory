@@ -97,6 +97,21 @@ impl<T> DenseEntityMap<T> {
         self.entries.len()
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        for page in self.direct_pages.iter_mut().flatten() {
+            page.fill(VACANT_INDEX);
+        }
+        for page in self.sparse_pages.values_mut() {
+            page.fill(VACANT_INDEX);
+        }
+        self.ordered_ids.clear();
+        self.entries.clear();
+    }
+
     pub(crate) fn iter(&self) -> DenseEntityIter<'_, T> {
         DenseEntityIter {
             ids: self.ordered_ids.iter(),

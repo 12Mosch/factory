@@ -80,6 +80,7 @@ impl MachineTickContext<'_> {
             });
             self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
             self.record_item_produced(product.item, u64::from(product.amount));
+            self.power_demand_cache.mark_dirty(entity_id);
             if product.item == self.base.items.iron_plate {
                 self.onboarding_progress.record_counter(
                     |progress| &mut progress.iron_plates_smelted,

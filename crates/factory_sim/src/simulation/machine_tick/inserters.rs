@@ -132,6 +132,30 @@ impl MachineTickContext<'_> {
                 }
             };
 
+            if matches!(
+                (&*state, &next_state),
+                (InserterState::Picking { .. }, InserterState::Holding { .. })
+            ) && let Some(endpoint_id) = self
+                .entities
+                .occupancy
+                .entity_at(pickup_tile.0, pickup_tile.1)
+            {
+                self.power_demand_cache.mark_dirty(endpoint_id);
+            }
+            if matches!(
+                (&*state, &next_state),
+                (
+                    InserterState::Holding { .. },
+                    InserterState::Dropping { .. }
+                )
+            ) && let Some(endpoint_id) =
+                self.entities.occupancy.entity_at(drop_tile.0, drop_tile.1)
+            {
+                self.power_demand_cache.mark_dirty(endpoint_id);
+            }
+            if std::mem::discriminant(&*state) != std::mem::discriminant(&next_state) {
+                self.power_demand_cache.mark_dirty(entity_id);
+            }
             *state = next_state;
         }
 

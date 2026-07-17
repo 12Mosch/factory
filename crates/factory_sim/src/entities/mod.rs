@@ -6,6 +6,7 @@ pub mod placement;
 pub mod reservation;
 pub mod store;
 
+pub(crate) use self::dense_map::DenseEntityMap;
 pub use self::direction::Direction;
 pub use self::footprint::EntityFootprint;
 pub use self::occupancy::OccupancyGrid;

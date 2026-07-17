@@ -179,6 +179,7 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) transport: &'a mut TransportLaneCache,
     pub(super) research: &'a mut ResearchState,
     pub(super) power: &'a mut PowerSubsystem,
+    pub(super) power_demand_cache: &'a mut PowerDemandCache,
     pub(super) statistics: StatisticsContext<'a>,
     pub(super) onboarding_progress: &'a mut OnboardingProgress,
     pub(super) pollution_emitters: &'a mut PollutionEmitterIndex,
@@ -209,6 +210,9 @@ impl<'a> MachineTickContext<'a> {
         units: u32,
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result = add_research_units_to_state(&self.world.prototypes, self.research, units)?;
+        if matches!(result, ResearchProgressResult::Completed { .. }) {
+            self.power_demand_cache.invalidate();
+        }
         if let ResearchProgressResult::Completed { technology_id } = result
             && let Some(technology) = self.world.prototypes.technology(technology_id)
         {
@@ -273,5 +277,6 @@ impl<'a> PowerContext<'a> {
         };
         self.power.networks.clear();
         self.power.entity_statuses.clear();
+        debug_assert!(self.power.entity_statuses.is_empty());
     }
 }

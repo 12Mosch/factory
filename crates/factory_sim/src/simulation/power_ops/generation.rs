@@ -153,10 +153,11 @@ impl Simulation {
         &mut self,
         engine_output_watts: BTreeMap<EntityId, u64>,
         engine_assignments: &BTreeMap<EntityId, SteamEngineAssignment>,
-    ) {
+    ) -> bool {
         let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
             .fluids
             .steam;
+        let mut consumed_any = false;
         for (engine_id, output_watts) in engine_output_watts {
             if output_watts == 0 {
                 continue;
@@ -179,8 +180,10 @@ impl Simulation {
             {
                 self.pollution_emitters.mark_active(engine_id);
                 self.record_fluid_consumed(steam, steam_to_consume);
+                consumed_any = true;
             }
         }
+        consumed_any
     }
 }
 
