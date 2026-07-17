@@ -240,6 +240,10 @@ impl MapDetailCache {
         &mut self.entries.entry(root).or_default().layer_entities[layer.index()]
     }
 
+    pub(crate) fn remove_root(&mut self, root: bevy::prelude::Entity) -> bool {
+        self.entries.remove(&root).is_some()
+    }
+
     pub fn clear(&mut self) {
         for entry in self.entries.values_mut() {
             entry.key = None;
@@ -368,6 +372,30 @@ mod tests {
         for (index, layer) in MapOverlayLayer::ALL.into_iter().enumerate() {
             assert_eq!(changed[index], layer == MapOverlayLayer::Enemies);
         }
+    }
+
+    #[test]
+    fn detail_cache_removes_all_state_for_despawned_root() {
+        let mut cache = MapDetailCache::default();
+        let root = bevy::prelude::Entity::PLACEHOLDER;
+        cache.changed_layers(root, detail_key(MapOverlaySettings::default()));
+        cache
+            .layer_entities_mut(root, MapOverlayLayer::Player)
+            .push(root);
+
+        assert!(cache.remove_root(root));
+        assert!(!cache.remove_root(root));
+        assert!(
+            cache
+                .changed_layers(root, detail_key(MapOverlaySettings::default()))
+                .into_iter()
+                .all(|changed| changed)
+        );
+        assert!(
+            cache
+                .layer_entities_mut(root, MapOverlayLayer::Player)
+                .is_empty()
+        );
     }
 
     #[test]

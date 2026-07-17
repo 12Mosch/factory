@@ -48,6 +48,7 @@ pub(crate) struct MinimapSyncParams<'w, 's> {
         Query<'w, 's, &'static mut ImageNode, (With<MinimapImage>, Without<MinimapResourceImage>)>,
     resource_images: MinimapResourceImages<'w, 's>,
     overlay_roots: Query<'w, 's, Entity, With<MinimapOverlayRoot>>,
+    parents: Query<'w, 's, &'static ChildOf>,
     cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera2d>>,
 }
 
@@ -67,7 +68,7 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
     let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
 
     let mut roots_iter = params.roots.iter();
-    let Some(_root) = roots_iter.next() else {
+    let Some(root) = roots_iter.next() else {
         let resources = params
             .cache
             .layer(MapTextureLayer::Resources)
@@ -76,6 +77,12 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
         return;
     };
     for duplicate in roots_iter {
+        remove_descendant_overlay_details(
+            duplicate,
+            params.overlay_roots.iter(),
+            &params.parents,
+            &mut params.details,
+        );
         commands.entity(duplicate).despawn();
     }
 
@@ -99,6 +106,9 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
 
     let camera_rect = camera_tile_rect(&params.cameras);
     for overlay_root in &params.overlay_roots {
+        if !is_descendant_of(overlay_root, root, &params.parents) {
+            continue;
+        }
         let sim = params.sim.read();
         let key = map_detail_cache_key(
             crop_bounds,
@@ -148,6 +158,7 @@ pub(crate) struct FullMapSyncParams<'w, 's> {
     image_layout:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<FullMapImage>>,
     overlay_roots: Query<'w, 's, Entity, With<FullMapOverlayRoot>>,
+    parents: Query<'w, 's, &'static ChildOf>,
     cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera2d>>,
     layer_buttons: Query<
         'w,
@@ -165,6 +176,12 @@ pub(crate) struct FullMapSyncParams<'w, 's> {
 pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSyncParams) {
     if !params.state.open {
         for entity in &params.roots {
+            remove_descendant_overlay_details(
+                entity,
+                params.overlay_roots.iter(),
+                &params.parents,
+                &mut params.details,
+            );
             commands.entity(entity).despawn();
         }
         return;
@@ -193,7 +210,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
     let texture_rect = texture_rect_for_world_bounds(map_bounds, crop_bounds);
 
     let mut roots_iter = params.roots.iter();
-    let Some(_root) = roots_iter.next() else {
+    let Some(root) = roots_iter.next() else {
         spawn_full_map(
             &mut commands,
             handle.clone(),
@@ -208,6 +225,12 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
         return;
     };
     for duplicate in roots_iter {
+        remove_descendant_overlay_details(
+            duplicate,
+            params.overlay_roots.iter(),
+            &params.parents,
+            &mut params.details,
+        );
         commands.entity(duplicate).despawn();
     }
 
@@ -241,6 +264,9 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
     let camera_rect = camera_tile_rect(&params.cameras);
     let chunk_cursor = fullscreen_cursor_chunk(crop_bounds, &params.windows, &params.image_layout);
     for overlay_root in &params.overlay_roots {
+        if !is_descendant_of(overlay_root, root, &params.parents) {
+            continue;
+        }
         let sim = params.sim.read();
         let key = map_detail_cache_key(
             crop_bounds,
@@ -271,6 +297,25 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
             },
         );
     }
+}
+
+fn remove_descendant_overlay_details(
+    map_root: Entity,
+    overlay_roots: impl Iterator<Item = Entity>,
+    parents: &Query<&ChildOf>,
+    details: &mut MapDetailCache,
+) {
+    for overlay_root in overlay_roots {
+        if is_descendant_of(overlay_root, map_root, parents) {
+            details.remove_root(overlay_root);
+        }
+    }
+}
+
+fn is_descendant_of(entity: Entity, ancestor: Entity, parents: &Query<&ChildOf>) -> bool {
+    parents
+        .iter_ancestors::<ChildOf>(entity)
+        .any(|candidate| candidate == ancestor)
 }
 
 pub(super) fn map_detail_cache_key(

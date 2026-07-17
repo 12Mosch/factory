@@ -46,6 +46,45 @@ fn profiled_tick_preserves_deterministic_hashes_against_tick() {
 }
 
 #[test]
+fn production_status_revision_changes_only_when_map_marker_changes() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 3);
+    let assembler_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: assembler,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("assembler should be placeable");
+
+    sim.tick();
+    let no_recipe_revision = sim.production_status_revision();
+    sim.tick();
+    assert_eq!(sim.production_status_revision(), no_recipe_revision);
+
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    sim.select_assembler_recipe(assembler_id, recipe)
+        .expect("gear recipe should be accepted");
+    sim.tick();
+    assert_eq!(
+        sim.production_status_revision(),
+        no_recipe_revision,
+        "orange problem states render identically"
+    );
+
+    add_assembler_gear_job(&mut sim, assembler_id);
+    sim.tick();
+    assert!(
+        sim.production_status_revision() > no_recipe_revision,
+        "orange-to-red status transition should invalidate the overlay"
+    );
+}
+
+#[test]
 fn machine_statuses_classify_power_input_and_output_blocks() {
     let mut no_power = Simulation::new_test_world(123);
     let assembler = entity_id_by_name(&no_power.world.prototypes, "assembling_machine");

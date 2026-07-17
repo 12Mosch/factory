@@ -138,6 +138,10 @@ pub struct Simulation {
     power_map_revision: u64,
     #[serde(skip, default)]
     production_status_revision: u64,
+    #[serde(skip, default)]
+    production_map_statuses: Vec<(EntityId, u8)>,
+    #[serde(skip, default)]
+    production_map_status_scratch: Vec<(EntityId, u8)>,
 
     world: WorldSim,
     chunk_generation_queue: ChunkGenerationQueue,

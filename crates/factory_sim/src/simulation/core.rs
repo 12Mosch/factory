@@ -38,6 +38,8 @@ impl Simulation {
             enemy_map_revision: 0,
             power_map_revision: 0,
             production_status_revision: 0,
+            production_map_statuses: Vec::new(),
+            production_map_status_scratch: Vec::new(),
             world,
             chunk_generation_queue: ChunkGenerationQueue::default(),
             chart: ChartState::default(),
@@ -121,7 +123,7 @@ impl Simulation {
         profiler.measure(ProfilePhase::ManualCrafting, || {
             self.advance_manual_crafting();
         });
-        self.production_status_revision = self.production_status_revision.wrapping_add(1);
+        self.refresh_production_status_revision();
 
         profiler.measure(ProfilePhase::Pollution, || {
             let map_can_change = !self.pollution_emitters.active_emitters.is_empty()

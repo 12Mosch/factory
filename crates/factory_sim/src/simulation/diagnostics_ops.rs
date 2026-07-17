@@ -1,6 +1,67 @@
 use super::*;
 
 impl Simulation {
+    pub(super) fn refresh_production_status_revision(&mut self) {
+        let mut next = std::mem::take(&mut self.production_map_status_scratch);
+        next.clear();
+        let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
+
+        for (entity_id, state) in &self.entities.mining_drills {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.mining_drill_status(*entity_id, state),
+            );
+        }
+        for (entity_id, state) in &self.entities.furnaces {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.furnace_status(*entity_id, state),
+            );
+        }
+        for (entity_id, state) in &self.entities.assembling_machines {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.assembler_status(*entity_id, state),
+            );
+        }
+        for (entity_id, state) in &self.entities.labs {
+            push_production_map_status(&mut next, *entity_id, self.lab_status(*entity_id, state));
+        }
+        for (entity_id, state) in &self.entities.boilers {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.boiler_status(*entity_id, state, fluids.water, fluids.steam),
+            );
+        }
+        for entity_id in self.entities.steam_engines.keys() {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.steam_engine_status(*entity_id, fluids.steam),
+            );
+        }
+        for entity_id in self.entities.offshore_pumps.keys() {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.offshore_pump_status(*entity_id, fluids.water),
+            );
+        }
+        for entity_id in self.entities.pumpjacks.keys() {
+            push_production_map_status(&mut next, *entity_id, self.pumpjack_status(*entity_id));
+        }
+
+        if next != self.production_map_statuses {
+            self.production_status_revision = self.production_status_revision.wrapping_add(1);
+        }
+        std::mem::swap(&mut self.production_map_statuses, &mut next);
+        self.production_map_status_scratch = next;
+    }
+
     pub fn machine_statuses(&self) -> MachineStatusSnapshot {
         let mut groups = Vec::new();
         let mut total_by_status = BTreeMap::<MachineStatus, usize>::new();
@@ -564,6 +625,19 @@ impl Simulation {
             self.fluid_network_total_for_fluid(network_id, steam) < required
         })
     }
+}
+
+fn push_production_map_status(
+    statuses: &mut Vec<(EntityId, u8)>,
+    entity_id: EntityId,
+    status: MachineStatus,
+) {
+    let display_class = match status {
+        MachineStatus::Working | MachineStatus::Idle => return,
+        MachineStatus::NoPower => 0,
+        _ => 1,
+    };
+    statuses.push((entity_id, display_class));
 }
 
 fn hint_kind_order(kind: BottleneckHintKind) -> u8 {

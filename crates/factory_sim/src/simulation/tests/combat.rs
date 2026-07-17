@@ -451,6 +451,26 @@ fn spawner_converts_absorbed_pollution_into_attackers() {
 }
 
 #[test]
+fn enemy_map_revision_changes_only_on_first_pollution_contact() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let coord = chunk_of_entity(&sim, spawner_id);
+    sim.add_pollution_micro(coord, 12_000_000);
+    let before_contact = sim.enemy_map_revision();
+
+    sim.advance_enemy_spawners();
+    let after_contact = sim.enemy_map_revision();
+    assert!(after_contact > before_contact);
+
+    sim.advance_enemy_spawners();
+    assert_eq!(
+        sim.enemy_map_revision(),
+        after_contact,
+        "continued absorption does not change the contacted-sector marker"
+    );
+}
+
+#[test]
 fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
