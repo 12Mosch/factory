@@ -1,5 +1,159 @@
 use super::*;
 
+pub(super) fn refresh_consumer_demand_cache(
+    world: &WorldSim,
+    entities: &EntityStore,
+    research: &ResearchState,
+    topology: &PowerTopologyCache,
+    entity_statuses: &mut DenseEntityMap<EntityPowerStatus>,
+    cache: &mut PowerDemandCache,
+    networks: &mut [NetworkAccumulator],
+) {
+    if !cache.valid || cache.network_consumption_watts.len() != networks.len() {
+        rebuild_consumer_demand_cache(
+            world,
+            entities,
+            research,
+            topology,
+            entity_statuses,
+            cache,
+            networks.len(),
+        );
+    } else {
+        cache.refresh_consumers.clear();
+        cache
+            .refresh_consumers
+            .extend_from_slice(&cache.active_consumers);
+        cache.refresh_consumers.append(&mut cache.dirty_consumers);
+        cache.refresh_consumers.sort_unstable();
+        cache.refresh_consumers.dedup();
+
+        for &entity_id in &cache.refresh_consumers {
+            let Some(status) = entity_statuses.get_mut(&entity_id) else {
+                continue;
+            };
+            let Some((active_usage_watts, drain_watts)) =
+                consumer_power_demand_for(world, entities, research, entity_id)
+            else {
+                cache.invalidate();
+                break;
+            };
+            #[cfg(test)]
+            {
+                cache.demand_recomputations += 1;
+            }
+
+            let old_demand = status.active_usage_watts.saturating_add(status.drain_watts);
+            let new_demand = active_usage_watts.saturating_add(drain_watts);
+            if let Some(network_id) = status.network_id {
+                let consumption = &mut cache.network_consumption_watts[network_id as usize];
+                *consumption = consumption
+                    .saturating_sub(old_demand)
+                    .saturating_add(new_demand);
+            }
+            status.active_usage_watts = active_usage_watts;
+            status.drain_watts = drain_watts;
+        }
+
+        if !cache.valid {
+            rebuild_consumer_demand_cache(
+                world,
+                entities,
+                research,
+                topology,
+                entity_statuses,
+                cache,
+                networks.len(),
+            );
+        }
+    }
+
+    for (network_id, network) in networks.iter_mut().enumerate() {
+        network.consumer_count = cache.network_consumer_counts[network_id];
+        network.consumption_watts = cache.network_consumption_watts[network_id];
+    }
+}
+
+fn rebuild_consumer_demand_cache(
+    world: &WorldSim,
+    entities: &EntityStore,
+    research: &ResearchState,
+    topology: &PowerTopologyCache,
+    entity_statuses: &mut DenseEntityMap<EntityPowerStatus>,
+    cache: &mut PowerDemandCache,
+    network_count: usize,
+) {
+    entity_statuses.clear();
+    cache.active_consumers.clear();
+    cache.dirty_consumers.clear();
+    cache.network_consumption_watts.clear();
+    cache.network_consumption_watts.resize(network_count, 0);
+    cache.network_consumer_counts.clear();
+    cache.network_consumer_counts.resize(network_count, 0);
+    cache.consumers_by_network.clear();
+    cache
+        .consumers_by_network
+        .resize_with(network_count, Vec::new);
+    cache.network_satisfaction_permyriad.clear();
+    cache
+        .network_satisfaction_permyriad
+        .resize(network_count, u32::MAX);
+
+    for &entity_id in entities.electric_consumers.keys() {
+        let Some((active_usage_watts, drain_watts)) =
+            consumer_power_demand_for(world, entities, research, entity_id)
+        else {
+            continue;
+        };
+        #[cfg(test)]
+        {
+            cache.demand_recomputations += 1;
+        }
+        let network_id = topology.network_ids_by_entity.get(&entity_id).copied();
+        entity_statuses.insert(
+            entity_id,
+            EntityPowerStatus {
+                network_id,
+                active_usage_watts,
+                drain_watts,
+                ..EntityPowerStatus::default()
+            },
+        );
+
+        if consumer_demand_is_active(entities, world, entity_id) {
+            cache.active_consumers.push(entity_id);
+        }
+        if let Some(network_id) = network_id {
+            let network_index = network_id as usize;
+            cache.network_consumer_counts[network_index] += 1;
+            cache.network_consumption_watts[network_index] = cache.network_consumption_watts
+                [network_index]
+                .saturating_add(active_usage_watts.saturating_add(drain_watts));
+            cache.consumers_by_network[network_index].push(entity_id);
+        }
+    }
+    cache.valid = true;
+}
+
+fn consumer_demand_is_active(
+    entities: &EntityStore,
+    world: &WorldSim,
+    entity_id: EntityId,
+) -> bool {
+    if entities.inserters.contains_key(&entity_id)
+        || entities.mining_drills.contains_key(&entity_id)
+        || entities.pumpjacks.contains_key(&entity_id)
+    {
+        return true;
+    }
+
+    entities.assembling_machines.contains_key(&entity_id)
+        && entities
+            .placed_entity(entity_id)
+            .and_then(|placed| world.prototypes.entity(placed.prototype_id))
+            .is_some_and(|prototype| !prototype.fluid_boxes.is_empty())
+}
+
 pub(super) fn consumer_power_demand_for(
     world: &WorldSim,
     entities: &EntityStore,
@@ -13,14 +167,6 @@ pub(super) fn consumer_power_demand_for(
         0
     };
     Some((active_usage_watts, energy_source.drain_watts))
-}
-
-pub(super) fn electric_consumer_has_power_source(
-    catalog: &PrototypeCatalog,
-    entities: &EntityStore,
-    entity_id: EntityId,
-) -> bool {
-    electric_consumer_power_source(catalog, entities, entity_id).is_some()
 }
 
 fn electric_consumer_power_source<'a>(

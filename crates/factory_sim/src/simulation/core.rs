@@ -46,6 +46,7 @@ impl Simulation {
             onboarding_progress: OnboardingProgress::default(),
             research,
             power: PowerSubsystem::default(),
+            power_demand_cache: PowerDemandCache::default(),
             fluids: FluidSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
@@ -274,6 +275,7 @@ impl Simulation {
             .queue
             .retain(|queued_id| *queued_id != technology_id);
         self.prune_invalid_research_queue();
+        self.power_demand_cache.invalidate();
         Ok(())
     }
 
@@ -293,6 +295,7 @@ impl Simulation {
         self.can_enqueue_research(technology_id)?;
         self.research.queue.push(technology_id);
         self.promote_next_queued_research()?;
+        self.power_demand_cache.invalidate();
         Ok(())
     }
 
@@ -343,6 +346,9 @@ impl Simulation {
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result =
             add_research_units_to_state(&self.world.prototypes, &mut self.research, units)?;
+        if matches!(result, ResearchProgressResult::Completed { .. }) {
+            self.power_demand_cache.invalidate();
+        }
         if let ResearchProgressResult::Completed { technology_id } = result
             && let Some(technology) = self.world.prototypes.technology(technology_id)
         {

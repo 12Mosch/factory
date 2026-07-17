@@ -26,13 +26,13 @@ pub use crate::enemies::{
     EnemyRuntimeSettings, EnemySubsystem, EnemyWorldSettings, ExpansionId, RaidId,
     SimulationConfig, ThreatEvent, ThreatEventKind, ThreatLocation, ThreatSnapshot, ThreatTier,
 };
-pub(crate) use crate::entities::EntityReservation;
 pub(crate) use crate::entities::store::for_each_entity_state_map;
 pub use crate::entities::{
     BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview, Direction,
     EntityDestroyError, EntityFootprint, EntityStore, OccupancyGrid, PlacedEntity,
     PlayerBuildError, SimEntity,
 };
+pub(crate) use crate::entities::{DenseEntityMap, EntityReservation};
 pub use crate::fluids::{
     FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState, FluidNetworkBoxSnapshot,
     FluidNetworkSnapshot,
@@ -145,6 +145,8 @@ pub struct Simulation {
     pub research: ResearchState,
 
     power: PowerSubsystem,
+    #[serde(skip)]
+    power_demand_cache: PowerDemandCache,
     fluids: FluidSubsystem,
     statistics: StatisticsSubsystem,
     pollution: PollutionState,
@@ -718,7 +720,7 @@ use self::fluid_state::FluidSubsystem;
 pub(crate) use self::generation::WorldGenerator;
 use self::generation::*;
 use self::machine_ops::*;
-use self::power_state::{PowerSubsystem, PowerTopologyCache};
+use self::power_state::{PowerDemandCache, PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
 pub use self::profiling::{SimulationCounts, SimulationTickProfile};
 pub use self::save::{

@@ -224,16 +224,20 @@ pub fn player_slot_to_entity(
     )
     .map_err(|error| map_plan_error(error, ContainerError::InvalidItem))?;
 
-    let entity_inventory = EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?;
-    Ok(commit_transfer(
-        plan,
-        TransferSourceMut::Slot(
-            sim.player_inventory
-                .item_slot_mut(player_slot_index)
-                .expect("a planned player source slot remains in bounds"),
-        ),
-        TransferDestinationMut::Inventory(entity_inventory),
-    ))
+    let outcome = {
+        let entity_inventory = EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?;
+        commit_transfer(
+            plan,
+            TransferSourceMut::Slot(
+                sim.player_inventory
+                    .item_slot_mut(player_slot_index)
+                    .expect("a planned player source slot remains in bounds"),
+            ),
+            TransferDestinationMut::Inventory(entity_inventory),
+        )
+    };
+    sim.invalidate_consumer_power_demand(entity_id);
+    Ok(outcome)
 }
 
 pub fn entity_slot_to_player(
@@ -263,16 +267,20 @@ pub fn entity_slot_to_player(
     )
     .map_err(|error| map_plan_error(error, ContainerError::InvalidItem))?;
 
-    let entity_inventory = EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?;
-    Ok(commit_transfer(
-        plan,
-        TransferSourceMut::Slot(
-            entity_inventory
-                .item_slot_mut(entity_slot_index)
-                .expect("a planned entity source slot remains in bounds"),
-        ),
-        TransferDestinationMut::Inventory(&mut sim.player_inventory),
-    ))
+    let outcome = {
+        let entity_inventory = EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)?;
+        commit_transfer(
+            plan,
+            TransferSourceMut::Slot(
+                entity_inventory
+                    .item_slot_mut(entity_slot_index)
+                    .expect("a planned entity source slot remains in bounds"),
+            ),
+            TransferDestinationMut::Inventory(&mut sim.player_inventory),
+        )
+    };
+    sim.invalidate_consumer_power_demand(entity_id);
+    Ok(outcome)
 }
 
 pub fn player_slot_to_mining_drill_fuel(
@@ -425,16 +433,20 @@ pub fn player_slot_to_furnace_input(
     )
     .map_err(|error| map_plan_error(error, FurnaceError::InvalidInput))?;
 
-    let input_slot = &mut sim.entities.furnace_state_mut(entity_id)?.input_slot;
-    Ok(commit_transfer(
-        plan,
-        TransferSourceMut::Slot(
-            sim.player_inventory
-                .item_slot_mut(player_slot_index)
-                .expect("a planned player source slot remains in bounds"),
-        ),
-        TransferDestinationMut::SingleSlot(input_slot),
-    ))
+    let outcome = {
+        let input_slot = &mut sim.entities.furnace_state_mut(entity_id)?.input_slot;
+        commit_transfer(
+            plan,
+            TransferSourceMut::Slot(
+                sim.player_inventory
+                    .item_slot_mut(player_slot_index)
+                    .expect("a planned player source slot remains in bounds"),
+            ),
+            TransferDestinationMut::SingleSlot(input_slot),
+        )
+    };
+    sim.invalidate_consumer_power_demand(entity_id);
+    Ok(outcome)
 }
 
 pub fn player_slot_to_furnace_fuel(
@@ -568,12 +580,16 @@ fn transfer_furnace_slot_to_player(
     )
     .map_err(|error| map_plan_error(error, FurnaceError::InvalidInput))?;
 
-    let source = slot_mut(sim.entities.furnace_state_mut(entity_id)?);
-    Ok(commit_transfer(
-        plan,
-        TransferSourceMut::Slot(source),
-        TransferDestinationMut::Inventory(&mut sim.player_inventory),
-    ))
+    let outcome = {
+        let source = slot_mut(sim.entities.furnace_state_mut(entity_id)?);
+        commit_transfer(
+            plan,
+            TransferSourceMut::Slot(source),
+            TransferDestinationMut::Inventory(&mut sim.player_inventory),
+        )
+    };
+    sim.invalidate_consumer_power_demand(entity_id);
+    Ok(outcome)
 }
 
 pub fn player_slot_to_boiler_fuel(
@@ -677,16 +693,20 @@ pub fn player_slot_to_assembler_input(
     )
     .map_err(|error| map_plan_error(error, AssemblerError::InvalidInput))?;
 
-    let input_inventory = &mut sim.entities.assembler_state_mut(entity_id)?.input_inventory;
-    Ok(commit_transfer(
-        plan,
-        TransferSourceMut::Slot(
-            sim.player_inventory
-                .item_slot_mut(player_slot_index)
-                .expect("a planned player source slot remains in bounds"),
-        ),
-        TransferDestinationMut::Inventory(input_inventory),
-    ))
+    let outcome = {
+        let input_inventory = &mut sim.entities.assembler_state_mut(entity_id)?.input_inventory;
+        commit_transfer(
+            plan,
+            TransferSourceMut::Slot(
+                sim.player_inventory
+                    .item_slot_mut(player_slot_index)
+                    .expect("a planned player source slot remains in bounds"),
+            ),
+            TransferDestinationMut::Inventory(input_inventory),
+        )
+    };
+    sim.invalidate_consumer_power_demand(entity_id);
+    Ok(outcome)
 }
 
 pub fn assembler_input_slot_to_player(
@@ -748,16 +768,20 @@ fn transfer_assembler_slot_to_player(
     )
     .map_err(|error| map_plan_error(error, AssemblerError::InvalidInput))?;
 
-    let source_inventory = inventory_mut(sim.entities.assembler_state_mut(entity_id)?);
-    Ok(commit_transfer(
-        plan,
-        TransferSourceMut::Slot(
-            source_inventory
-                .item_slot_mut(slot_index)
-                .expect("a planned assembler source slot remains in bounds"),
-        ),
-        TransferDestinationMut::Inventory(&mut sim.player_inventory),
-    ))
+    let outcome = {
+        let source_inventory = inventory_mut(sim.entities.assembler_state_mut(entity_id)?);
+        commit_transfer(
+            plan,
+            TransferSourceMut::Slot(
+                source_inventory
+                    .item_slot_mut(slot_index)
+                    .expect("a planned assembler source slot remains in bounds"),
+            ),
+            TransferDestinationMut::Inventory(&mut sim.player_inventory),
+        )
+    };
+    sim.invalidate_consumer_power_demand(entity_id);
+    Ok(outcome)
 }
 
 fn player_slot_to_furnace(

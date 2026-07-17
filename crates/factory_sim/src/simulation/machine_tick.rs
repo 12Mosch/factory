@@ -17,6 +17,7 @@ impl Simulation {
             transport: &mut self.transport,
             research: &mut self.research,
             power: &mut self.power,
+            power_demand_cache: &mut self.power_demand_cache,
             statistics: StatisticsContext::new(self.tick, &mut self.statistics),
             onboarding_progress: &mut self.onboarding_progress,
             pollution_emitters: &mut self.pollution_emitters,

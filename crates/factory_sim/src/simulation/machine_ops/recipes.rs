@@ -379,6 +379,7 @@ impl Simulation {
             state.crafting_speed_numerator,
             state.crafting_speed_denominator,
         );
+        self.invalidate_consumer_power_demand(entity_id);
 
         Ok(())
     }

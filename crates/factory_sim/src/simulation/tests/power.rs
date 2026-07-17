@@ -424,6 +424,44 @@ fn repeated_ticks_without_topology_edits_do_not_rebuild_power_topology() {
 }
 
 #[test]
+fn stable_consumer_demand_is_recomputed_only_after_relevant_mutation() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+    let recomputations_after_build = sim.power_demand_cache.demand_recomputations;
+    assert!(
+        recomputations_after_build > 0,
+        "initial cache construction should compute consumer demand"
+    );
+
+    for _ in 0..5 {
+        sim.tick();
+    }
+    assert_eq!(
+        sim.power_demand_cache.demand_recomputations, recomputations_after_build,
+        "unchanged item-only assembler demand should remain cached"
+    );
+
+    crate::entity_transfer::assembler_input_slot_to_player(&mut sim, assembler_id, 0)
+        .expect("removing assembler input should succeed");
+    sim.tick();
+
+    assert_eq!(
+        sim.power_demand_cache.demand_recomputations,
+        recomputations_after_build + 1,
+        "inventory mutation should enqueue exactly the affected consumer"
+    );
+    assert_eq!(
+        sim.entity_power_status(assembler_id)
+            .expect("assembler should retain a power status")
+            .active_usage_watts,
+        0
+    );
+}
+
+#[test]
 fn placing_electric_pole_dirties_and_rebuilds_power_topology() {
     let mut sim = Simulation::new_test_world(123);
     let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");

@@ -169,10 +169,16 @@ impl Simulation {
 
     pub(super) fn invalidate_power_state(&mut self) {
         PowerContext::new(&mut self.power).invalidate_power_state();
+        self.power_demand_cache.invalidate();
     }
 
     pub(super) fn invalidate_power_dynamic_state(&mut self) {
         PowerContext::new(&mut self.power).invalidate_power_dynamic_state();
+        self.power_demand_cache.invalidate();
+    }
+
+    pub(super) fn invalidate_consumer_power_demand(&mut self, entity_id: EntityId) {
+        self.power_demand_cache.mark_dirty(entity_id);
     }
 
     pub(super) fn refresh_power_state(&mut self) {
@@ -188,35 +194,15 @@ impl Simulation {
         self.ensure_fluid_network_topology();
         let mut networks = self.power.topology.network_accumulators();
 
-        let world = &self.world;
-        let entities = &self.entities;
-        let research = &self.research;
-        let network_ids_by_entity = &self.power.topology.network_ids_by_entity;
-        self.power.entity_statuses.retain(|entity_id, _| {
-            entities.electric_consumers.contains_key(entity_id)
-                && electric_consumer_has_power_source(&world.prototypes, entities, *entity_id)
-        });
-
-        for &entity_id in entities.electric_consumers.keys() {
-            let Some((active_usage_watts, drain_watts)) =
-                consumer_power_demand_for(world, entities, research, entity_id)
-            else {
-                continue;
-            };
-            let network_id = network_ids_by_entity.get(&entity_id).copied();
-            let status = self.power.entity_statuses.entry(entity_id).or_default();
-            status.network_id = network_id;
-            status.active_usage_watts = active_usage_watts;
-            status.drain_watts = drain_watts;
-
-            if let Some(network_id) = network_id {
-                let network = &mut networks[network_id as usize];
-                network.consumer_count += 1;
-                network.consumption_watts = network
-                    .consumption_watts
-                    .saturating_add(active_usage_watts.saturating_add(drain_watts));
-            }
-        }
+        refresh_consumer_demand_cache(
+            &self.world,
+            &self.entities,
+            &self.research,
+            &self.power.topology,
+            &mut self.power.entity_statuses,
+            &mut self.power_demand_cache,
+            &mut networks,
+        );
 
         let engine_assignments = self.assign_steam_engines_to_fluid_networks(
             &self.power.topology.network_ids_by_entity,
@@ -240,19 +226,36 @@ impl Simulation {
         }
 
         let engine_output_watts = actual_steam_engine_outputs(&networks, &engine_assignments);
-        self.consume_steam_for_engine_output(engine_output_watts, &engine_assignments);
-        self.refresh_fluid_networks_after_dynamic_changes();
+        if self.consume_steam_for_engine_output(engine_output_watts, &engine_assignments) {
+            // Machine systems consume their own box state later in this tick,
+            // so redistribute changed steam now. Durable fluid snapshots are
+            // refreshed once after all machines have run.
+            self.equalize_fluid_networks();
+        }
         self.power.networks = network_snapshots(&networks);
         self.power.summary = aggregate_power_summary(&self.power.networks);
         if self.any_steam_engine_can_generate(&self.power.topology.network_ids_by_entity) {
             self.onboarding_progress.record_electricity_generated();
         }
-        for status in self.power.entity_statuses.values_mut() {
-            status.satisfaction_permyriad = status
-                .network_id
-                .and_then(|network_id| self.power.networks.get(network_id as usize))
-                .map(|network| network.satisfaction_permyriad)
-                .unwrap_or(0);
+        for (network_index, consumers) in self
+            .power_demand_cache
+            .consumers_by_network
+            .iter()
+            .enumerate()
+        {
+            let satisfaction_permyriad = self.power.networks[network_index].satisfaction_permyriad;
+            if self.power_demand_cache.network_satisfaction_permyriad[network_index]
+                == satisfaction_permyriad
+            {
+                continue;
+            }
+            self.power_demand_cache.network_satisfaction_permyriad[network_index] =
+                satisfaction_permyriad;
+            for entity_id in consumers {
+                if let Some(status) = self.power.entity_statuses.get_mut(entity_id) {
+                    status.satisfaction_permyriad = satisfaction_permyriad;
+                }
+            }
         }
         self.record_power_sample();
     }

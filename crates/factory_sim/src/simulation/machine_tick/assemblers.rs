@@ -135,6 +135,7 @@ impl MachineTickContext<'_> {
                     );
                 }
             }
+            self.power_demand_cache.mark_dirty(entity_id);
         }
 
         self.entities.assembling_machines = assembling_machines;

@@ -17,6 +17,16 @@ impl MachineTickContext<'_> {
             let pickup_ticks = inserter.pickup_ticks;
             let drop_ticks = inserter.drop_ticks;
             let (pickup_tile, drop_tile) = inserter_transfer_tiles_for_prototype(&placed, inserter);
+            if let Some(endpoint_id) = self
+                .entities
+                .occupancy
+                .entity_at(pickup_tile.0, pickup_tile.1)
+            {
+                self.power_demand_cache.mark_dirty(endpoint_id);
+            }
+            if let Some(endpoint_id) = self.entities.occupancy.entity_at(drop_tile.0, drop_tile.1) {
+                self.power_demand_cache.mark_dirty(endpoint_id);
+            }
 
             let next_state = match *state {
                 InserterState::WaitingForItem => {

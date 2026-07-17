@@ -68,6 +68,7 @@ impl MachineTickContext<'_> {
                 self.statistics
                     .record_item_consumed(science_pack.item, u64::from(science_pack.amount));
             }
+            self.power_demand_cache.mark_dirty(entity_id);
             self.add_research_units(1)
                 .expect("lab completion should have active research");
         }

@@ -14,6 +14,8 @@ pub fn inventory_mut(
     sim: &mut Simulation,
     entity_id: EntityId,
 ) -> Result<&mut Inventory, ContainerError> {
+    EntityStore::entity_inventory(&sim.entities, entity_id)?;
+    sim.invalidate_consumer_power_demand(entity_id);
     EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)
 }
 
