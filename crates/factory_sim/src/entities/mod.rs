@@ -1,3 +1,4 @@
+mod dense_map;
 pub mod direction;
 pub mod footprint;
 pub mod occupancy;
