@@ -3,7 +3,7 @@ pub mod inserter;
 pub mod transfer;
 
 pub use self::belt::{
-    BeltError, BeltItem, BeltLane, BeltSegment, SplitterError, SplitterState,
+    BeltError, BeltItem, BeltItemId, BeltLane, BeltSegment, SplitterError, SplitterState,
     UndergroundBeltLinkPreview, UndergroundBeltSegment,
 };
 pub use self::inserter::{InserterError, InserterState, InserterTransferPreview};

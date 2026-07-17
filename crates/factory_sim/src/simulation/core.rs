@@ -65,6 +65,7 @@ impl Simulation {
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
+        sim.transport.initialize_item_tracking(&sim.entities);
         sim.request_chunks_around_player();
         let initial_chunks = ChunkGenerationResult::from_generated_chunks(
             sim.world.chunk_revision(),
@@ -156,6 +157,14 @@ impl Simulation {
 
     pub fn tick_count(&self) -> u64 {
         self.tick
+    }
+
+    pub fn belt_item_revision(&self) -> u64 {
+        self.transport.item_revision()
+    }
+
+    pub fn belt_entity_item_revision(&self, entity_id: EntityId) -> u64 {
+        self.transport.entity_item_revision(entity_id)
     }
 
     pub fn entity_topology_revision(&self) -> u64 {

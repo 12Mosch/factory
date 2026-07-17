@@ -136,7 +136,13 @@ fn insert_drill_output_from_state(
                 .expect("validated output belt should still exist");
             let lane_index = belt_output_lane_index(segment, item_id)
                 .expect("validated belt lane should accept");
-            insert_lane_item_at_entry(&mut segment.lanes[lane_index], item_id, 0);
+            let item = BeltItem {
+                id: transport.allocate_item_id(),
+                item_id,
+                position_subtile: 0,
+            };
+            insert_lane_item_at_entry(&mut segment.lanes[lane_index], item);
+            transport.mark_items_changed(entity_id);
             transport.mark_active(TransportLaneKey::Belt {
                 entity_id,
                 lane_index,
@@ -152,7 +158,13 @@ fn insert_drill_output_from_state(
                 .expect("validated output splitter should still exist");
             let lane_index = splitter_output_lane_index(state, input_port, item_id)
                 .expect("validated splitter lane should accept");
-            insert_lane_item_at_entry(&mut state.input_lanes[input_port][lane_index], item_id, 0);
+            let item = BeltItem {
+                id: transport.allocate_item_id(),
+                item_id,
+                position_subtile: 0,
+            };
+            insert_lane_item_at_entry(&mut state.input_lanes[input_port][lane_index], item);
+            transport.mark_items_changed(entity_id);
             transport.mark_active(TransportLaneKey::Splitter {
                 entity_id,
                 input_port,

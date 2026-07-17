@@ -242,7 +242,7 @@ impl EntityStore {
         &mut self,
         entity_id: EntityId,
         lane_index: usize,
-        item_id: ItemId,
+        item: BeltItem,
     ) -> Result<(), BeltError> {
         let segment = self.belt_segment_mut(entity_id)?;
         let lane = segment
@@ -253,7 +253,7 @@ impl EntityStore {
             return Err(BeltError::Blocked);
         }
 
-        insert_lane_item_at_entry(lane, item_id, 0);
+        insert_lane_item_at_entry(lane, item);
         Ok(())
     }
 

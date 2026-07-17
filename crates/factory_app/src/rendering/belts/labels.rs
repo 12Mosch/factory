@@ -20,7 +20,7 @@ pub(super) fn spawn_or_reuse_belt_item_label(
     sim: &Simulation,
     pool: &mut BeltItemRenderPool,
     item: VisibleBeltItemRenderState,
-) {
+) -> Entity {
     let marker = BeltItemLabel {
         key: item.key,
         item_id: item.item_id,
@@ -41,20 +41,22 @@ pub(super) fn spawn_or_reuse_belt_item_label(
             Visibility::Visible,
             marker,
         ));
-        return;
+        return entity;
     }
 
-    commands.spawn((
-        Text2d::new(label),
-        TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),
-        TextColor(Color::WHITE),
-        TextLayout::justify(Justify::Center),
-        Transform::from_translation(translation),
-        Anchor::CENTER,
-        Text2dShadow::default(),
-        Visibility::Visible,
-        marker,
-    ));
+    commands
+        .spawn((
+            Text2d::new(label),
+            TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),
+            TextColor(Color::WHITE),
+            TextLayout::justify(Justify::Center),
+            Transform::from_translation(translation),
+            Anchor::CENTER,
+            Text2dShadow::default(),
+            Visibility::Visible,
+            marker,
+        ))
+        .id()
 }
 
 pub(super) fn label_translation(mut translation: Vec3) -> Vec3 {

@@ -159,7 +159,8 @@ mod tests {
         // v20: furnace and mining drill energy became MachineEnergy
         // (burner-or-electric); the fixture drill uses the electric variant
         // so both enum arms are pinned.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x029c_5a71_7c77_f98d;
+        // v21: transport items gained stable identities.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x3284_4334_556b_9bae;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -303,6 +304,7 @@ mod tests {
         );
         let mut belt = BeltSegment::new(Direction::South, 4);
         belt.lanes[0].items.push(BeltItem {
+            id: crate::logistics::BeltItemId::new(1),
             item_id: iron,
             position_subtile: 64,
         });

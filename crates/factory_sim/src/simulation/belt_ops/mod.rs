@@ -21,8 +21,14 @@ impl Simulation {
         lane_index: usize,
         item_id: ItemId,
     ) -> Result<(), BeltError> {
+        let item = BeltItem {
+            id: self.transport.allocate_item_id(),
+            item_id,
+            position_subtile: 0,
+        };
         self.entities
-            .insert_item_onto_belt(entity_id, lane_index, item_id)?;
+            .insert_item_onto_belt(entity_id, lane_index, item)?;
+        self.transport.mark_items_changed(entity_id);
         self.transport.mark_active(TransportLaneKey::Belt {
             entity_id,
             lane_index,
