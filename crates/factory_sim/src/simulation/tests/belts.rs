@@ -13,6 +13,7 @@ fn belt_moves_item_to_next_segment() {
         .lanes[0]
         .items[0]
         .id;
+    let source_revision = sim.belt_entity_item_revision(belts[0]);
     let destination_revision = sim.belt_entity_item_revision(belts[1]);
 
     for _ in 0..32 {
@@ -33,6 +34,7 @@ fn belt_moves_item_to_next_segment() {
     assert_eq!(second_lane.len(), 1);
     assert_eq!(second_lane[0].id, item_id);
     assert_eq!(second_lane[0].item_id, iron_ore);
+    assert_ne!(sim.belt_entity_item_revision(belts[0]), source_revision);
     assert_ne!(
         sim.belt_entity_item_revision(belts[1]),
         destination_revision
@@ -319,12 +321,18 @@ fn unblocked_jam_wakes_upstream_one_lane_per_tick() {
     let belts = place_belt_line(&mut sim, 3);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     for belt_id in &belts {
+        let item_ids = allocate_belt_item_ids(&mut sim, 4);
         let segment = sim
             .entities
             .transport_belts
             .get_mut(belt_id)
             .expect("placed belt should have belt state");
-        seed_saturated_lane(&mut segment.lanes[0], iron_ore, &[0, 64, 128, 192]);
+        seed_saturated_lane(
+            &mut segment.lanes[0],
+            iron_ore,
+            &[0, 64, 128, 192],
+            &item_ids,
+        );
     }
 
     for _ in 0..64 {

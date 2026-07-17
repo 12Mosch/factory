@@ -315,6 +315,7 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
     let sim_replaced = cache.sim_replacement_revision != sim.replacement_revision();
     if sim_replaced {
         cache.sim_replacement_revision = sim.replacement_revision();
+        pool_cached_belt_items(&mut cache, &mut pool, &mut sprites, &mut labels);
     }
     let alpha = fixed_time
         .as_deref()

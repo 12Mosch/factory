@@ -354,13 +354,24 @@ pub(in crate::simulation::tests) fn seed_saturated_belts(
     item_id: ItemId,
 ) {
     for entity_id in belts {
+        let item_ids = allocate_belt_item_ids(sim, 8);
         let segment = sim
             .entities
             .transport_belts
             .get_mut(entity_id)
             .expect("throughput fixture should contain belt state");
-        seed_saturated_lane(&mut segment.lanes[0], item_id, &[0, 64, 128, 192]);
-        seed_saturated_lane(&mut segment.lanes[1], item_id, &[32, 96, 160, 224]);
+        seed_saturated_lane(
+            &mut segment.lanes[0],
+            item_id,
+            &[0, 64, 128, 192],
+            &item_ids[..4],
+        );
+        seed_saturated_lane(
+            &mut segment.lanes[1],
+            item_id,
+            &[32, 96, 160, 224],
+            &item_ids[4..],
+        );
     }
 }
 
@@ -370,6 +381,7 @@ pub(in crate::simulation::tests) fn seed_saturated_splitter_input(
     input_port: usize,
     item_id: ItemId,
 ) {
+    let item_ids = allocate_belt_item_ids(sim, 8);
     let state = sim
         .entities
         .splitters
@@ -379,22 +391,43 @@ pub(in crate::simulation::tests) fn seed_saturated_splitter_input(
         .input_lanes
         .get_mut(input_port)
         .expect("throughput splitter input port should exist");
-    seed_saturated_lane(&mut input_lanes[0], item_id, &[0, 64, 128, 192]);
-    seed_saturated_lane(&mut input_lanes[1], item_id, &[32, 96, 160, 224]);
+    seed_saturated_lane(
+        &mut input_lanes[0],
+        item_id,
+        &[0, 64, 128, 192],
+        &item_ids[..4],
+    );
+    seed_saturated_lane(
+        &mut input_lanes[1],
+        item_id,
+        &[32, 96, 160, 224],
+        &item_ids[4..],
+    );
+}
+
+pub(in crate::simulation::tests) fn allocate_belt_item_ids(
+    sim: &mut Simulation,
+    count: usize,
+) -> Vec<BeltItemId> {
+    (0..count)
+        .map(|_| sim.transport.allocate_item_id())
+        .collect()
 }
 
 pub(in crate::simulation::tests) fn seed_saturated_lane(
     lane: &mut BeltLane,
     item_id: ItemId,
     positions: &[u16],
+    item_ids: &[BeltItemId],
 ) {
+    assert_eq!(positions.len(), item_ids.len());
     lane.items.clear();
     lane.items.extend(
         positions
             .iter()
-            .enumerate()
-            .map(|(index, position_subtile)| BeltItem {
-                id: BeltItemId::new(u64::from(*position_subtile) + index as u64 + 1),
+            .zip(item_ids)
+            .map(|(position_subtile, &id)| BeltItem {
+                id,
                 item_id,
                 position_subtile: *position_subtile,
             }),

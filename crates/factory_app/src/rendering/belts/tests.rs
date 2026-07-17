@@ -262,6 +262,65 @@ fn belt_item_rendering_interpolates_between_fixed_ticks() {
 }
 
 #[test]
+fn simulation_replacement_resets_interpolation_for_reused_belt_item_ids() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
+    let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
+    let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
+    let belt_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: belt,
+            x,
+            y,
+            direction: Direction::East,
+        },
+    )
+    .expect("belt should be placeable");
+    sim.insert_item_onto_belt(belt_id, 0, iron_ore)
+        .expect("empty belt should accept item");
+
+    let original_id = factory_sim::entity_access::belt_segment(&sim, belt_id)
+        .expect("placed belt should have state")
+        .lanes[0]
+        .items[0]
+        .id;
+    let mut replacement = sim.clone();
+    replacement.tick();
+    let replacement_id = factory_sim::entity_access::belt_segment(&replacement, belt_id)
+        .expect("replacement belt should have state")
+        .lanes[0]
+        .items[0]
+        .id;
+    let expected = belt_item_render_state(&replacement, belt_id, 0, 0)
+        .expect("item should render")
+        .0;
+    assert_eq!(replacement_id, original_id);
+
+    let mut app = App::new();
+    app.insert_resource(SimResource::new(sim))
+        .insert_resource(visible_entity_ids([belt_id]))
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .init_resource::<RenderDetail>()
+        .init_resource::<BeltItemRenderPool>()
+        .add_systems(Update, sync_belt_item_rendering);
+
+    app.update();
+    let (_, before) = active_belt_item_sprite_state(&mut app).expect("sprite should spawn");
+    assert_ne!(expected, before);
+
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(replacement)
+        .expect("simulation replacement should succeed");
+    app.update();
+
+    let (_, after) =
+        active_belt_item_sprite_state(&mut app).expect("replacement sprite should spawn");
+    assert_eq!(after, expected);
+}
+
+#[test]
 fn collect_visible_belt_items_into_clears_stale_items_when_visibility_empty() {
     let mut sim = Simulation::new_test_world(123);
     let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
