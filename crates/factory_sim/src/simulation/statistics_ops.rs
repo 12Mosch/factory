@@ -8,6 +8,7 @@ enum GeneratedChunkReveal {
 }
 
 const CHART_REVEAL_RADIUS_CHUNKS: i32 = 1;
+const REVEALED_CHUNK_HISTORY_LIMIT: usize = 4096;
 
 impl Default for ItemStatistics {
     fn default() -> Self {
@@ -51,6 +52,36 @@ impl Simulation {
 
     pub fn is_chunk_revealed(&self, coord: ChunkCoord) -> bool {
         self.chart.revealed_chunks.contains(&coord)
+    }
+
+    /// Returns exact chunk coordinates revealed after `revision`.
+    ///
+    /// `None` means the caller fell behind the bounded runtime history and
+    /// must rebuild its derived state from `revealed_chunks`.
+    pub fn revealed_chunks_since(
+        &self,
+        revision: u64,
+    ) -> Option<impl Iterator<Item = ChunkCoord> + '_> {
+        if revision > self.revealed_revision {
+            return None;
+        }
+        if revision < self.revealed_revision
+            && self
+                .revealed_chunk_history
+                .0
+                .front()
+                .is_none_or(|batch| batch.revision > revision.saturating_add(1))
+        {
+            return None;
+        }
+
+        Some(
+            self.revealed_chunk_history
+                .0
+                .iter()
+                .filter(move |batch| batch.revision > revision)
+                .flat_map(|batch| batch.chunks.iter().copied()),
+        )
     }
 
     pub fn item_statistics(&self) -> ItemStatisticsSnapshot {
@@ -176,7 +207,7 @@ impl Simulation {
             self.request_chunk_generation(player_chunk, ChunkGenerationPriority::Required);
             return;
         };
-        let mut revealed_any = false;
+        let mut revealed_chunks = Vec::new();
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 let coord = ChunkCoord { x, y };
@@ -189,12 +220,12 @@ impl Simulation {
                         };
                         self.request_chunk_generation(coord, priority);
                     }
-                    GeneratedChunkReveal::NewlyRevealed => revealed_any = true,
+                    GeneratedChunkReveal::NewlyRevealed => revealed_chunks.push(coord),
                     GeneratedChunkReveal::AlreadyRevealed => {}
                 }
             }
         }
-        self.finish_chunk_reveal(revealed_any);
+        self.finish_chunk_reveal(revealed_chunks);
     }
 
     pub(super) fn reveal_generated_chunks_around_player(&mut self, chunks: &[ChunkCoord]) {
@@ -208,16 +239,19 @@ impl Simulation {
             return;
         };
 
-        let mut revealed_any = false;
+        let mut revealed_chunks = Vec::new();
         for &coord in chunks {
-            if (min_x..=max_x).contains(&coord.x) && (min_y..=max_y).contains(&coord.y) {
-                revealed_any |= matches!(
+            if (min_x..=max_x).contains(&coord.x)
+                && (min_y..=max_y).contains(&coord.y)
+                && matches!(
                     self.reveal_generated_chunk(coord),
                     GeneratedChunkReveal::NewlyRevealed
-                );
+                )
+            {
+                revealed_chunks.push(coord);
             }
         }
-        self.finish_chunk_reveal(revealed_any);
+        self.finish_chunk_reveal(revealed_chunks);
     }
 
     fn reveal_generated_chunk(&mut self, coord: ChunkCoord) -> GeneratedChunkReveal {
@@ -230,9 +264,18 @@ impl Simulation {
         }
     }
 
-    fn finish_chunk_reveal(&mut self, revealed_any: bool) {
-        if revealed_any {
-            self.revealed_revision = self.revealed_revision.wrapping_add(1);
+    fn finish_chunk_reveal(&mut self, chunks: Vec<ChunkCoord>) {
+        if chunks.is_empty() {
+            return;
+        }
+
+        self.revealed_revision = self.revealed_revision.wrapping_add(1);
+        self.revealed_chunk_history.0.push_back(RevealedChunkBatch {
+            revision: self.revealed_revision,
+            chunks,
+        });
+        while self.revealed_chunk_history.0.len() > REVEALED_CHUNK_HISTORY_LIMIT {
+            self.revealed_chunk_history.0.pop_front();
         }
     }
 

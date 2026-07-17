@@ -106,6 +106,12 @@ impl MapRasterizer<'_> {
         }
     }
 
+    pub(super) fn chunk_is_eligible(&self, coord: ChunkCoord, bounds: MapTextureBounds) -> bool {
+        chunk_intersects_bounds(coord, bounds)
+            && self.sim.world().chunks.contains_key(&coord)
+            && self.chunk_paint_state(coord).revealed
+    }
+
     /// Generated and chart-eligible chunks intersecting the requested bounds.
     /// Normal map work follows the sparse revealed set; debug reveal follows
     /// generated chunks so the explicit override still exposes uncharted land.
@@ -120,17 +126,13 @@ impl MapRasterizer<'_> {
                 Box::new(self.sim.revealed_chunks().iter().copied())
             };
         let coords = candidates
-            .filter(|coord| chunk_intersects_bounds(*coord, bounds))
-            .filter(|coord| {
-                (self.settings.debug_reveal_all || self.sim.world().chunks.contains_key(coord))
-                    && self.chunk_paint_state(*coord).revealed
-            })
+            .filter(|coord| self.chunk_is_eligible(*coord, bounds))
             .collect::<Vec<_>>();
         coords.into_iter()
     }
 }
 
-fn chunk_intersects_bounds(coord: ChunkCoord, bounds: MapTextureBounds) -> bool {
+pub(super) fn chunk_intersects_bounds(coord: ChunkCoord, bounds: MapTextureBounds) -> bool {
     if bounds.width == 0 || bounds.height == 0 {
         return false;
     }
