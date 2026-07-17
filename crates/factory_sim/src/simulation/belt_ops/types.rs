@@ -17,6 +17,14 @@ pub(in crate::simulation) enum TransportLaneKey {
     },
 }
 
+impl TransportLaneKey {
+    pub(in crate::simulation) const fn entity_id(self) -> EntityId {
+        match self {
+            Self::Belt { entity_id, .. } | Self::Splitter { entity_id, .. } => entity_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::simulation) struct TransportLaneIndex(usize);
 

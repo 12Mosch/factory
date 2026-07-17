@@ -211,6 +211,57 @@ fn belt_item_rendering_reuses_active_entities_when_sim_ticks() {
 }
 
 #[test]
+fn belt_item_rendering_interpolates_between_fixed_ticks() {
+    let mut sim = Simulation::new_test_world(123);
+    let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");
+    let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
+    let (x, y) = first_placeable_tile(&sim, belt, Direction::East);
+    let belt_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: belt,
+            x,
+            y,
+            direction: Direction::East,
+        },
+    )
+    .expect("belt should be placeable");
+    sim.insert_item_onto_belt(belt_id, 0, iron_ore)
+        .expect("empty belt should accept item");
+
+    let mut app = App::new();
+    app.insert_resource(SimResource::new(sim))
+        .insert_resource(visible_entity_ids([belt_id]))
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .init_resource::<RenderDetail>()
+        .init_resource::<BeltItemRenderPool>()
+        .add_systems(Update, sync_belt_item_rendering);
+
+    app.update();
+    let (_, before) = active_belt_item_sprite_state(&mut app).expect("sprite should spawn");
+
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .write_for_tests()
+        .tick();
+    let after =
+        belt_item_render_state(&app.world().resource::<SimResource>().read(), belt_id, 0, 0)
+            .expect("ticked item should have render state")
+            .0;
+    let timestep = app.world().resource::<Time<Fixed>>().timestep();
+    app.world_mut()
+        .resource_mut::<Time<Fixed>>()
+        .accumulate_overstep(timestep / 2);
+    app.update();
+
+    let (_, interpolated) =
+        active_belt_item_sprite_state(&mut app).expect("sprite should remain active");
+    assert!((interpolated.x - before.x).abs() > f32::EPSILON);
+    assert!((after.x - interpolated.x).abs() > f32::EPSILON);
+    assert!((interpolated.x - before.x - (after.x - before.x) * 0.5).abs() < 0.001);
+}
+
+#[test]
 fn collect_visible_belt_items_into_clears_stale_items_when_visibility_empty() {
     let mut sim = Simulation::new_test_world(123);
     let belt = find_entity_prototype_id(sim.catalog(), "transport_belt");

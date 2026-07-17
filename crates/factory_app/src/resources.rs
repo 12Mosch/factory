@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 #[derive(Resource)]
 pub struct SimResource {
     inner: Arc<RwLock<Simulation>>,
+    replacement_revision: u64,
 }
 
 pub type SimReadGuard<'a> = RwLockReadGuard<'a, Simulation>;
@@ -20,6 +21,7 @@ impl SimResource {
     pub fn new(sim: Simulation) -> Self {
         Self {
             inner: Arc::new(RwLock::new(sim)),
+            replacement_revision: 0,
         }
     }
 
@@ -41,7 +43,13 @@ impl SimResource {
             std::sync::TryLockError::WouldBlock => SimAccessError::Busy,
         })?;
         *guard = sim;
+        drop(guard);
+        self.replacement_revision = self.replacement_revision.wrapping_add(1);
         Ok(())
+    }
+
+    pub(crate) fn replacement_revision(&self) -> u64 {
+        self.replacement_revision
     }
 
     pub(crate) fn clone_handle(&self) -> Arc<RwLock<Simulation>> {

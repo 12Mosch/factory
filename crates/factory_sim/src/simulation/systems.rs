@@ -12,6 +12,8 @@ impl Simulation {
             &self.transport.graph,
             &mut self.transport.visit_states,
             &mut self.transport.active_lanes,
+            &mut self.transport.item_revision,
+            &mut self.transport.item_revisions_by_entity,
         );
         advancement.process_active_lanes();
         self.transport.active_lanes.finish_tick();

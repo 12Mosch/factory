@@ -43,8 +43,26 @@ pub struct BeltLane {
     pub items: SmallVec<[BeltItem; 8]>,
 }
 
+/// Persistent identity of one physical item while it remains in transport.
+///
+/// Routing preserves this value across belts and splitters. Removing an item
+/// into an inventory ends the identity's lifetime.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct BeltItemId(u64);
+
+impl BeltItemId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BeltItem {
+    pub id: BeltItemId,
     pub item_id: ItemId,
     pub position_subtile: u16,
 }

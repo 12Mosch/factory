@@ -42,9 +42,9 @@ pub use crate::inventory::{Inventory, InventoryError, ItemSlot, ItemStack};
 #[cfg(test)]
 pub(crate) use crate::inventory::{test_inventory, test_slot, test_stack};
 pub use crate::logistics::{
-    BeltError, BeltItem, BeltLane, BeltSegment, ContainerError, InserterError, InserterState,
-    InserterTransferPreview, SplitterError, SplitterState, UndergroundBeltLinkPreview,
-    UndergroundBeltSegment,
+    BeltError, BeltItem, BeltItemId, BeltLane, BeltSegment, ContainerError, InserterError,
+    InserterState, InserterTransferPreview, SplitterError, SplitterState,
+    UndergroundBeltLinkPreview, UndergroundBeltSegment,
 };
 pub use crate::machines::{
     AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BurnerEnergy, FurnaceError,

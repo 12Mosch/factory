@@ -1,13 +1,14 @@
 use bevy::prelude::*;
 use factory_data::ItemId;
-use factory_sim::{BELT_SUBTILES_PER_TILE, Direction};
+use factory_sim::{BELT_SUBTILES_PER_TILE, BeltItemId, Direction};
 
 use crate::constants::TILE_SIZE;
 
-use super::components::{BeltItemKey, VisibleBeltItemRenderState};
+use super::components::VisibleBeltItemRenderState;
 
 pub(super) fn transport_item_render_state_from_parts(
-    key: BeltItemKey,
+    key: BeltItemId,
+    lane_index: usize,
     dir: Direction,
     center: Vec3,
     item_id: ItemId,
@@ -17,7 +18,7 @@ pub(super) fn transport_item_render_state_from_parts(
     let along = direction_render_vector(dir);
     let perpendicular = Vec2::new(-along.y, along.x);
     let progress = f32::from(position_subtile) / f32::from(BELT_SUBTILES_PER_TILE) - 0.5;
-    let lane_offset = if key.lane_index == 0 { -0.18 } else { 0.18 };
+    let lane_offset = if lane_index == 0 { -0.18 } else { 0.18 };
     let offset = (along * progress + perpendicular * lane_offset) * TILE_SIZE;
     let translation = Vec3::new(center.x + offset.x, center.y + offset.y, 4.0);
 

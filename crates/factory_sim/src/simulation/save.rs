@@ -17,7 +17,8 @@ use bincode::Options;
 // v19: pending deterministic chunk-generation requests joined the snapshot.
 // v20: furnace and mining drill energy generalized to burner-or-electric
 // (MachineEnergy), enabling electric furnaces and electric mining drills.
-pub const SAVE_VERSION: u32 = 20;
+// v21: belt items gained stable identities used by incremental presentation.
+pub const SAVE_VERSION: u32 = 21;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -313,6 +314,7 @@ impl SimulationSnapshotOwned {
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
+        sim.transport.initialize_item_tracking(&sim.entities);
         sim.ensure_fluid_network_topology();
         sim.rebuild_pollution_emitter_index();
         sim

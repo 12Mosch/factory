@@ -389,11 +389,16 @@ pub(in crate::simulation::tests) fn seed_saturated_lane(
     positions: &[u16],
 ) {
     lane.items.clear();
-    lane.items
-        .extend(positions.iter().map(|position_subtile| BeltItem {
-            item_id,
-            position_subtile: *position_subtile,
-        }));
+    lane.items.extend(
+        positions
+            .iter()
+            .enumerate()
+            .map(|(index, position_subtile)| BeltItem {
+                id: BeltItemId::new(u64::from(*position_subtile) + index as u64 + 1),
+                item_id,
+                position_subtile: *position_subtile,
+            }),
+    );
 }
 
 pub(in crate::simulation::tests) struct SplitterFixture {

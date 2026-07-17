@@ -8,6 +8,12 @@ fn belt_moves_item_to_next_segment() {
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     sim.insert_item_onto_belt(belts[0], 0, iron_ore)
         .expect("empty belt entry should accept an item");
+    let item_id = crate::entity_access::belt_segment(&sim, belts[0])
+        .unwrap()
+        .lanes[0]
+        .items[0]
+        .id;
+    let destination_revision = sim.belt_entity_item_revision(belts[1]);
 
     for _ in 0..32 {
         sim.tick();
@@ -25,7 +31,12 @@ fn belt_moves_item_to_next_segment() {
         .lanes[0]
         .items;
     assert_eq!(second_lane.len(), 1);
+    assert_eq!(second_lane[0].id, item_id);
     assert_eq!(second_lane[0].item_id, iron_ore);
+    assert_ne!(
+        sim.belt_entity_item_revision(belts[1]),
+        destination_revision
+    );
 }
 
 #[test]
@@ -243,10 +254,12 @@ fn save_load_round_trip_preserves_splitter_internal_state_hash() {
         .get_mut(&fixture.splitter)
         .expect("placed splitter should have state");
     state.input_lanes[0][0].items.push(BeltItem {
+        id: BeltItemId::new(10_001),
         item_id: iron_ore,
         position_subtile: 64,
     });
     state.input_lanes[1][1].items.push(BeltItem {
+        id: BeltItemId::new(10_002),
         item_id: copper_ore,
         position_subtile: 128,
     });
@@ -517,6 +530,7 @@ fn underground_belt_blocks_when_exit_lane_is_full() {
             .expect("placed underground exit should have belt state");
         for position_subtile in [0, 64, 128, 192] {
             exit.lanes[0].items.push(BeltItem {
+                id: BeltItemId::new(u64::from(position_subtile) + 20_001),
                 item_id: copper_ore,
                 position_subtile,
             });
@@ -573,10 +587,12 @@ fn belt_pickup_uses_front_most_item_across_lanes() {
     let copper_ore = ItemId::new(1);
     let mut segment = BeltSegment::new(Direction::East, 8);
     segment.lanes[0].items.push(BeltItem {
+        id: BeltItemId::new(1),
         item_id: iron_ore,
         position_subtile: 100,
     });
     segment.lanes[1].items.push(BeltItem {
+        id: BeltItemId::new(2),
         item_id: copper_ore,
         position_subtile: 200,
     });
@@ -589,10 +605,12 @@ fn belt_removal_uses_front_most_matching_item_across_lanes() {
     let iron_ore = ItemId::new(0);
     let mut segment = BeltSegment::new(Direction::East, 8);
     segment.lanes[0].items.push(BeltItem {
+        id: BeltItemId::new(1),
         item_id: iron_ore,
         position_subtile: 100,
     });
     segment.lanes[1].items.push(BeltItem {
+        id: BeltItemId::new(2),
         item_id: iron_ore,
         position_subtile: 200,
     });

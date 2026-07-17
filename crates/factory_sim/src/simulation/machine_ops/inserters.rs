@@ -282,6 +282,7 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id)
         && let Some(lane_index) = remove_one_item_from_belt(segment, item_id)
     {
+        transport.mark_items_changed(entity_id);
         transport.mark_active_with_upstreams(TransportLaneKey::Belt {
             entity_id,
             lane_index,
@@ -295,6 +296,7 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
     if let Some(state) = entities.splitters.get_mut(&entity_id)
         && let Some((input_port, lane_index)) = remove_one_item_from_splitter(state, item_id)
     {
+        transport.mark_items_changed(entity_id);
         transport.mark_active_with_upstreams(TransportLaneKey::Splitter {
             entity_id,
             input_port,
@@ -487,7 +489,13 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         let Some(lane_index) = belt_output_lane_index(segment, item.item_id()) else {
             return false;
         };
-        insert_lane_item_at_entry(&mut segment.lanes[lane_index], item.item_id(), 0);
+        let belt_item = BeltItem {
+            id: transport.allocate_item_id(),
+            item_id: item.item_id(),
+            position_subtile: 0,
+        };
+        insert_lane_item_at_entry(&mut segment.lanes[lane_index], belt_item);
+        transport.mark_items_changed(entity_id);
         transport.mark_active(TransportLaneKey::Belt {
             entity_id,
             lane_index,
@@ -507,11 +515,13 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         let Some(lane_index) = splitter_output_lane_index(state, input_port, item.item_id()) else {
             return false;
         };
-        insert_lane_item_at_entry(
-            &mut state.input_lanes[input_port][lane_index],
-            item.item_id(),
-            0,
-        );
+        let belt_item = BeltItem {
+            id: transport.allocate_item_id(),
+            item_id: item.item_id(),
+            position_subtile: 0,
+        };
+        insert_lane_item_at_entry(&mut state.input_lanes[input_port][lane_index], belt_item);
+        transport.mark_items_changed(entity_id);
         transport.mark_active(TransportLaneKey::Splitter {
             entity_id,
             input_port,
