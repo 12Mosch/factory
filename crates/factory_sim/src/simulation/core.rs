@@ -34,6 +34,12 @@ impl Simulation {
             tick: 0,
             entity_topology_revision: 0,
             revealed_revision: 0,
+            pollution_map_revision: 0,
+            enemy_map_revision: 0,
+            power_map_revision: 0,
+            production_status_revision: 0,
+            production_map_statuses: Vec::new(),
+            production_map_status_scratch: Vec::new(),
             world,
             chunk_generation_queue: ChunkGenerationQueue::default(),
             chart: ChartState::default(),
@@ -117,12 +123,21 @@ impl Simulation {
         profiler.measure(ProfilePhase::ManualCrafting, || {
             self.advance_manual_crafting();
         });
+        self.refresh_production_status_revision();
 
         profiler.measure(ProfilePhase::Pollution, || {
+            let map_can_change = !self.pollution_emitters.active_emitters.is_empty()
+                || (self.tick.is_multiple_of(POLLUTION_SPREAD_INTERVAL_TICKS)
+                    && !self.pollution.chunks.is_empty());
             self.emit_pollution_from_machines();
             self.spread_and_absorb_pollution();
+            if map_can_change {
+                self.pollution_map_revision = self.pollution_map_revision.wrapping_add(1);
+            }
         });
         profiler.measure(ProfilePhase::Enemies, || {
+            let had_dynamic_map_markers =
+                !self.enemies.raids.is_empty() || !self.enemies.expansions.is_empty();
             self.advance_enemy_spawners();
             let mut combat_commands = CombatCommandBuffer::default();
             self.advance_enemies(&mut combat_commands);
@@ -130,6 +145,12 @@ impl Simulation {
             self.resolve_combat_commands(combat_commands);
             self.resolve_arrived_expansions();
             self.cleanup_enemy_groups();
+            if had_dynamic_map_markers
+                || !self.enemies.raids.is_empty()
+                || !self.enemies.expansions.is_empty()
+            {
+                self.enemy_map_revision = self.enemy_map_revision.wrapping_add(1);
+            }
         });
     }
 
@@ -147,6 +168,22 @@ impl Simulation {
 
     pub fn revealed_revision(&self) -> u64 {
         self.revealed_revision
+    }
+
+    pub fn pollution_map_revision(&self) -> u64 {
+        self.pollution_map_revision
+    }
+
+    pub fn enemy_map_revision(&self) -> u64 {
+        self.enemy_map_revision
+    }
+
+    pub fn power_map_revision(&self) -> u64 {
+        self.power_map_revision
+    }
+
+    pub fn production_status_revision(&self) -> u64 {
+        self.production_status_revision
     }
 
     pub fn current_tick(&self) -> Tick {
