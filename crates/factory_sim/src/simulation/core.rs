@@ -34,6 +34,7 @@ impl Simulation {
             tick: 0,
             entity_topology_revision: 0,
             revealed_revision: 0,
+            revealed_chunk_history: Default::default(),
             pollution_map_revision: 0,
             enemy_map_revision: 0,
             power_map_revision: 0,

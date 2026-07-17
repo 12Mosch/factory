@@ -131,6 +131,8 @@ pub struct Simulation {
     #[serde(skip, default)]
     revealed_revision: u64,
     #[serde(skip, default)]
+    revealed_chunk_history: RevealedChunkHistory,
+    #[serde(skip, default)]
     pollution_map_revision: u64,
     #[serde(skip, default)]
     enemy_map_revision: u64,
@@ -344,6 +346,29 @@ impl OnboardingProgress {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ChartState {
     pub revealed_chunks: BTreeSet<ChunkCoord>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RevealedChunkHistory(VecDeque<RevealedChunkBatch>);
+
+#[derive(Clone, Debug)]
+struct RevealedChunkBatch {
+    revision: u64,
+    chunks: Vec<ChunkCoord>,
+}
+
+// Reveal history is a bounded runtime presentation aid, not durable
+// simulation state.
+impl PartialEq for RevealedChunkHistory {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for RevealedChunkHistory {}
+
+impl Hash for RevealedChunkHistory {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]

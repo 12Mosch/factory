@@ -23,6 +23,42 @@ fn moving_player_into_another_chunk_reveals_that_chunk() {
 }
 
 #[test]
+fn reveal_history_returns_exact_new_chunks_since_revision() {
+    let mut sim = Simulation::new_test_world(123);
+    let target = ChunkCoord { x: 20, y: -17 };
+    sim.world
+        .ensure_chunks_around_chunk(target, 1)
+        .expect("target reveal neighborhood should be representable");
+    let before_revision = sim.revealed_revision();
+    let before = sim.revealed_chunks().clone();
+    sim.player = PlayerState::centered_on_tile(target.x * CHUNK_SIZE, target.y * CHUNK_SIZE);
+
+    sim.request_chunks_around_player();
+
+    let expected = sim
+        .revealed_chunks()
+        .difference(&before)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let changed = sim
+        .revealed_chunks_since(before_revision)
+        .expect("recent reveal changes should remain available")
+        .collect::<BTreeSet<_>>();
+    assert!(!expected.is_empty());
+    assert_eq!(changed, expected);
+}
+
+#[test]
+fn missing_reveal_history_requests_a_rebuild() {
+    let mut sim = Simulation::new_test_world(123);
+    let previous_revision = sim.revealed_revision();
+    sim.revealed_revision = previous_revision.wrapping_add(1);
+    sim.revealed_chunk_history.0.clear();
+
+    assert!(sim.revealed_chunks_since(previous_revision).is_none());
+}
+
+#[test]
 fn reveal_candidates_do_not_chart_ungenerated_chunks() {
     let mut sim = Simulation::new_test_world(123);
     let missing = ChunkCoord { x: 20, y: -17 };
