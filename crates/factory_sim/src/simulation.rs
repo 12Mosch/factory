@@ -47,9 +47,9 @@ pub use crate::logistics::{
     UndergroundBeltSegment,
 };
 pub use crate::machines::{
-    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BurnerDrillError,
-    BurnerEnergy, BurnerMiningDrillState, FurnaceError, FurnaceState, LabError, LabState,
-    MachineStatus, PumpjackState,
+    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BurnerEnergy, FurnaceError,
+    FurnaceState, LabError, LabState, MachineEnergy, MachineStatus, MiningDrillError,
+    MiningDrillState, PumpjackState,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
 pub use crate::pollution::{
@@ -83,8 +83,8 @@ pub const ITEM_STATISTICS_WINDOW_TICKS: u64 = 60 * FIXED_SIM_TICKS_PER_SECOND as
 /// 1024 units per tile.
 pub const POSITION_SCALE: i64 = 1024;
 const PLAYER_POSITION_SCALE: i64 = POSITION_SCALE;
-pub const BURNER_MINING_DRILL_FUEL_SLOT_INDEX: usize = 0;
-pub const BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
+pub const MINING_DRILL_FUEL_SLOT_INDEX: usize = 0;
+pub const MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_FUEL_SLOT_INDEX: usize = 0;
 pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
@@ -725,7 +725,9 @@ pub use self::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo, SaveLoadError,
     inspect_save_header, load_from_bytes, prototype_hash, save_to_bytes,
 };
-pub use self::scripted::scripted_inputs_for_red_science_factory;
+pub use self::scripted::{
+    scripted_inputs_for_chemical_science_factory, scripted_inputs_for_red_science_factory,
+};
 use self::statistics_ops::power_sample_is_recorded;
 use self::statistics_state::StatisticsSubsystem;
 pub use self::world_ops::ChunkNeighborhoodError;

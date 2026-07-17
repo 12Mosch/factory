@@ -2,8 +2,17 @@ use super::super::super::*;
 use super::*;
 
 pub(in crate::simulation::tests) fn place_stone_furnace(sim: &mut Simulation) -> EntityId {
-    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
-    let (x, y) = first_buildable_rect(&sim.world, 2, 2);
+    place_named_furnace(sim, "stone_furnace")
+}
+
+pub(in crate::simulation::tests) fn place_named_furnace(
+    sim: &mut Simulation,
+    furnace_name: &str,
+) -> EntityId {
+    let furnace = entity_id_by_name(&sim.world.prototypes, furnace_name);
+    let prototype = &sim.world.prototypes.entities[furnace.index()];
+    let (width, height) = (prototype.size.x, prototype.size.y);
+    let (x, y) = first_buildable_rect(&sim.world, width, height);
     crate::placement::place(
         sim,
         crate::placement::EntityPlacementRequest {
@@ -13,7 +22,7 @@ pub(in crate::simulation::tests) fn place_stone_furnace(sim: &mut Simulation) ->
             direction: Direction::North,
         },
     )
-    .expect("stone furnace should be placeable")
+    .unwrap_or_else(|_| panic!("{furnace_name} should be placeable"))
 }
 
 pub(in crate::simulation::tests) fn place_assembling_machine(sim: &mut Simulation) -> EntityId {

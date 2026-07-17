@@ -2,14 +2,42 @@ use super::super::*;
 use super::ids::*;
 use super::inventory::*;
 
-pub(in crate::simulation) fn validate_burner_mining_drill(
+/// A machine's energy state must use the variant its prototype declares: a
+/// burner prototype owns burner fuel state, an electric prototype has none.
+fn validate_machine_energy_matches_prototype(
     sim: &Simulation,
     entity_id: EntityId,
-    state: &BurnerMiningDrillState,
+    energy: &MachineEnergy,
 ) -> Result<(), SimValidationError> {
-    validate_item_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
+    let prototype = sim
+        .entities
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
+    let matches_prototype = match energy {
+        MachineEnergy::Burner(_) => prototype.burner.is_some(),
+        MachineEnergy::Electric => {
+            prototype.burner.is_none() && prototype.electric_energy_source.is_some()
+        }
+    };
+    if !matches_prototype {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+
+    Ok(())
+}
+
+pub(in crate::simulation) fn validate_mining_drill(
+    sim: &Simulation,
+    entity_id: EntityId,
+    state: &MiningDrillState,
+) -> Result<(), SimValidationError> {
+    validate_machine_energy_matches_prototype(sim, entity_id, &state.energy)?;
+    if let Some(fuel_slot) = state.energy.fuel_slot() {
+        validate_item_slot(&sim.world.prototypes, fuel_slot)?;
+        validate_slot_policy(sim, entity_id, fuel_slot, ItemSlotPolicy::Fuel)?;
+    }
     validate_item_slot(&sim.world.prototypes, state.output_slot)?;
-    validate_slot_policy(sim, entity_id, state.energy.fuel_slot, ItemSlotPolicy::Fuel)?;
     if let Some(stack) = state.output_slot.stack() {
         let is_solid_resource =
             sim.world
@@ -37,8 +65,8 @@ pub(in crate::simulation) fn validate_furnace(
     entity_id: EntityId,
     state: &FurnaceState,
 ) -> Result<(), SimValidationError> {
+    validate_machine_energy_matches_prototype(sim, entity_id, &state.energy)?;
     validate_item_slot(&sim.world.prototypes, state.input_slot)?;
-    validate_item_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
     validate_item_slot(&sim.world.prototypes, state.output_slot)?;
     validate_slot_policy(
         sim,
@@ -46,7 +74,10 @@ pub(in crate::simulation) fn validate_furnace(
         state.input_slot,
         ItemSlotPolicy::FurnaceIngredient,
     )?;
-    validate_slot_policy(sim, entity_id, state.energy.fuel_slot, ItemSlotPolicy::Fuel)?;
+    if let Some(fuel_slot) = state.energy.fuel_slot() {
+        validate_item_slot(&sim.world.prototypes, fuel_slot)?;
+        validate_slot_policy(sim, entity_id, fuel_slot, ItemSlotPolicy::Fuel)?;
+    }
 
     if let Some(recipe_id) = state.active_recipe {
         smelting_recipe_by_id(&sim.world.prototypes, recipe_id).ok_or(

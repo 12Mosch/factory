@@ -5,7 +5,15 @@ pub(in crate::simulation::tests) fn place_burner_drill_on_resource(
     sim: &mut Simulation,
     resource_item: ItemId,
 ) -> (EntityId, i64, i64, u32) {
-    let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
+    place_named_drill_on_resource(sim, "burner_mining_drill", resource_item)
+}
+
+pub(in crate::simulation::tests) fn place_named_drill_on_resource(
+    sim: &mut Simulation,
+    drill_name: &str,
+    resource_item: ItemId,
+) -> (EntityId, i64, i64, u32) {
+    let drill = entity_id_by_name(&sim.world.prototypes, drill_name);
     for (x, y) in all_tile_coords(&sim.world) {
         let Some(resource) = sim.world.tile_at(x, y).and_then(|tile| tile.resource) else {
             continue;
@@ -40,7 +48,7 @@ pub(in crate::simulation::tests) fn place_burner_drill_on_resource(
         return (entity_id, x, y, resource.amount);
     }
 
-    panic!("expected placeable resource tile for burner drill");
+    panic!("expected placeable resource tile for {drill_name}");
 }
 
 pub(in crate::simulation::tests) fn place_burner_drill_outputting_to_chest(
@@ -225,6 +233,6 @@ pub(in crate::simulation::tests) fn add_fuel_to_burner_drill(
 ) {
     sim.player_inventory = Inventory::player();
     set_inventory_slot(&mut sim.player_inventory, 0, fuel_item, count);
-    crate::entity_transfer::player_slot_to_burner_drill_fuel(sim, entity_id, 0)
+    crate::entity_transfer::player_slot_to_mining_drill_fuel(sim, entity_id, 0)
         .expect("fuel should transfer to burner drill");
 }

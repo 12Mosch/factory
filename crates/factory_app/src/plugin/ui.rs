@@ -27,7 +27,7 @@ use crate::ui::inventory_panel::{
     handle_container_slot_clicks, update_container_slot_text,
     update_inventory_transfer_feedback_text,
 };
-use crate::ui::machine_indicators::{update_burner_drill_indicators, update_machine_guidance};
+use crate::ui::machine_indicators::{update_machine_guidance, update_mining_drill_indicators};
 use crate::ui::manual_crafting::{
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
     sync_manual_crafting_panel,
@@ -129,7 +129,7 @@ impl Plugin for UiPlugin {
                         .after(sync_container_window)
                         .after(handle_container_slot_clicks)
                         .after(handle_sim_command_results),
-                    update_burner_drill_indicators,
+                    update_mining_drill_indicators,
                     update_machine_guidance.after(sync_container_window),
                     sync_objectives_panel,
                     handle_threat_alert_clicks.in_set(AppSet::UiInteraction),

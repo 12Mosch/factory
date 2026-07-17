@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
-    AssemblerError, BoilerError, BurnerDrillError, ContainerError, FurnaceError, SimCommand,
+    AssemblerError, BoilerError, ContainerError, FurnaceError, MiningDrillError, SimCommand,
     SlotTransferError,
 };
 
@@ -197,7 +197,7 @@ pub(crate) fn update_container_slot_text(
 pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransferError) -> String {
     match error {
         SlotTransferError::Transfer(error) => container_error_message(catalog, error),
-        SlotTransferError::BurnerDrill(error) => burner_drill_error_message(catalog, error),
+        SlotTransferError::MiningDrill(error) => mining_drill_error_message(catalog, error),
         SlotTransferError::Furnace(error) => furnace_error_message(catalog, error),
         SlotTransferError::Boiler(error) => boiler_error_message(catalog, error),
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
@@ -221,16 +221,17 @@ fn container_error_message(catalog: &PrototypeCatalog, error: ContainerError) ->
     }
 }
 
-fn burner_drill_error_message(catalog: &PrototypeCatalog, error: BurnerDrillError) -> String {
+fn mining_drill_error_message(catalog: &PrototypeCatalog, error: MiningDrillError) -> String {
     match error {
-        BurnerDrillError::MissingEntity(_) | BurnerDrillError::NotBurnerDrill(_) => {
+        MiningDrillError::MissingEntity(_) | MiningDrillError::NotMiningDrill(_) => {
             "Machine unavailable".to_string()
         }
-        BurnerDrillError::InvalidFuel(item_id) => wrong_item_message(catalog, item_id),
-        BurnerDrillError::InvalidSlot { .. } => "Invalid slot".to_string(),
-        BurnerDrillError::EmptySlot { .. } => "Empty slot".to_string(),
-        BurnerDrillError::InsufficientSpace => "No space".to_string(),
-        BurnerDrillError::UnknownItem => "Unknown item".to_string(),
+        MiningDrillError::InvalidFuel(item_id) => wrong_item_message(catalog, item_id),
+        MiningDrillError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        MiningDrillError::EmptySlot { .. } => "Empty slot".to_string(),
+        MiningDrillError::InsufficientSpace => "No space".to_string(),
+        MiningDrillError::NoFuelSlot => "Electric machine: no fuel slot".to_string(),
+        MiningDrillError::UnknownItem => "Unknown item".to_string(),
     }
 }
 
@@ -245,6 +246,7 @@ fn furnace_error_message(catalog: &PrototypeCatalog, error: FurnaceError) -> Str
         FurnaceError::InvalidSlot { .. } => "Invalid slot".to_string(),
         FurnaceError::EmptySlot { .. } => "Empty slot".to_string(),
         FurnaceError::InsufficientSpace => "No space".to_string(),
+        FurnaceError::NoFuelSlot => "Electric machine: no fuel slot".to_string(),
         FurnaceError::UnknownItem => "Unknown item".to_string(),
     }
 }

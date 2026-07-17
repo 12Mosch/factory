@@ -23,7 +23,7 @@ macro_rules! for_each_entity_state_map {
     ($callback:ident) => {
         $callback! {
             entity_inventories: crate::inventory::Inventory => Chest,
-            burner_mining_drills: crate::machines::BurnerMiningDrillState => MiningDrill,
+            mining_drills: crate::machines::MiningDrillState => MiningDrill,
             furnaces: crate::machines::FurnaceState => Furnace,
             assembling_machines: crate::machines::AssemblingMachineState => AssemblingMachine,
             labs: crate::machines::LabState => Lab,
@@ -124,8 +124,8 @@ mod tests {
     use crate::inventory::{test_inventory, test_slot, test_stack};
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
     use crate::machines::{
-        AssemblingMachineState, BurnerEnergy, BurnerMiningDrillState, FurnaceState, LabState,
-        PumpjackState,
+        AssemblingMachineState, BurnerEnergy, FurnaceState, LabState, MachineEnergy,
+        MiningDrillState, PumpjackState,
     };
     use crate::player::ManualMiningTarget;
     use crate::power::{
@@ -143,7 +143,9 @@ mod tests {
         // registry.
         // v16: EnemySpawnerState dropped absorbed_pollution_micro.
         // v18: gun turret damage and health state became typed combat data.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x9ff3_595e_dd96_fbda;
+        // v20: furnace and mining drill energy became MachineEnergy
+        // (burner-or-electric).
+        const EXPECTED_LAYOUT_HASH: u64 = 0x42f2_de97_d05a_5eca;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -213,10 +215,10 @@ mod tests {
             EntityId::new(1),
             test_inventory(vec![Some(test_stack(iron, 5))]),
         );
-        store.burner_mining_drills.insert(
+        store.mining_drills.insert(
             EntityId::new(2),
-            BurnerMiningDrillState {
-                energy: burner_energy(iron),
+            MiningDrillState {
+                energy: MachineEnergy::Burner(burner_energy(iron)),
                 mining_progress_ticks: 7,
                 mining_required_ticks: 60,
                 resource_target: Some(ManualMiningTarget { x: 2, y: 3 }),
@@ -227,7 +229,7 @@ mod tests {
             EntityId::new(3),
             FurnaceState {
                 input_slot: test_slot(test_stack(iron, 3)),
-                energy: burner_energy(iron),
+                energy: MachineEnergy::Burner(burner_energy(iron)),
                 output_slot: test_slot(test_stack(copper, 1)),
                 active_recipe: Some(recipe),
                 crafting_progress_ticks: 9,

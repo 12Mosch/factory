@@ -2,6 +2,48 @@ use crate::inventory::ItemSlot;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
+/// Energy source powering a machine that can be either fuel-burning or
+/// electric. Burner machines carry their fuel state inline; electric machines
+/// hold no per-entity energy state because power satisfaction is tracked by
+/// the electric network (`ElectricConsumerState`).
+#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
+pub enum MachineEnergy {
+    Burner(BurnerEnergy),
+    Electric,
+}
+
+impl MachineEnergy {
+    pub fn burner(&self) -> Option<&BurnerEnergy> {
+        match self {
+            Self::Burner(burner) => Some(burner),
+            Self::Electric => None,
+        }
+    }
+
+    pub fn burner_mut(&mut self) -> Option<&mut BurnerEnergy> {
+        match self {
+            Self::Burner(burner) => Some(burner),
+            Self::Electric => None,
+        }
+    }
+
+    pub fn fuel_slot(&self) -> Option<ItemSlot> {
+        self.burner().map(|burner| burner.fuel_slot)
+    }
+
+    pub fn fuel_slot_mut(&mut self) -> Option<&mut ItemSlot> {
+        self.burner_mut().map(|burner| &mut burner.fuel_slot)
+    }
+
+    /// Whether a burner is out of both stored energy and fuel; always false
+    /// for electric machines.
+    pub fn is_out_of_fuel(&self) -> bool {
+        self.burner().is_some_and(|burner| {
+            burner.fuel_slot.is_empty() && burner.energy_remaining_joules <= f64::EPSILON
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BurnerEnergy {
     pub fuel_slot: ItemSlot,

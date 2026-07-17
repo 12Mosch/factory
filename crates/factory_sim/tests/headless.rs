@@ -1,6 +1,15 @@
 use factory_sim::{
-    Simulation, load_from_bytes, save_to_bytes, scripted_inputs_for_red_science_factory,
+    SimCommand, Simulation, load_from_bytes, save_to_bytes, scripted_inputs_for_red_science_factory,
 };
+
+/// Advances the scripted chemical science factory by one tick, applying the
+/// fixture's recipe-selection program first, exactly like a scripted player
+/// would.
+fn tick_chemical_science_factory(sim: &mut Simulation) {
+    sim.apply_command(&SimCommand::RunChemicalScienceFactoryProgram)
+        .expect("chemical science program should apply");
+    sim.tick();
+}
 
 #[test]
 fn sim_runs_3600_ticks_without_bevy() {
@@ -65,6 +74,62 @@ fn save_load_preserves_state_hash() {
     let loaded = load_from_bytes(&bytes).unwrap();
 
     assert_eq!(before, loaded.state_hash());
+}
+
+#[test]
+fn chemical_science_factory_reaches_automated_chemical_science() {
+    let mut sim = Simulation::new_scripted_chemical_science_factory();
+
+    for _ in 0..100_000 {
+        tick_chemical_science_factory(&mut sim);
+    }
+
+    for technology in [
+        "chemical_science_pack",
+        "advanced_oil_processing",
+        "lubricant",
+        "advanced_material_processing_2",
+        "electric_energy_distribution_2",
+    ] {
+        assert!(
+            sim.research.is_unlocked(technology),
+            "{technology} should be researched by the scripted factory"
+        );
+    }
+    assert!(sim.validate_item_conservation());
+}
+
+#[test]
+fn chemical_science_factory_same_construction_same_hash() {
+    let mut a = Simulation::new_scripted_chemical_science_factory();
+    let mut b = Simulation::new_scripted_chemical_science_factory();
+
+    for _ in 0..5_000 {
+        tick_chemical_science_factory(&mut a);
+        tick_chemical_science_factory(&mut b);
+    }
+
+    assert_eq!(a.state_hash(), b.state_hash());
+}
+
+#[test]
+fn chemical_science_factory_save_load_then_continue_matches_original() {
+    let mut a = Simulation::new_scripted_chemical_science_factory();
+
+    for _ in 0..30_000 {
+        tick_chemical_science_factory(&mut a);
+    }
+
+    let bytes = save_to_bytes(&a).unwrap();
+    let mut b = load_from_bytes(&bytes).unwrap();
+    assert_eq!(a.state_hash(), b.state_hash());
+
+    for _ in 0..30_000 {
+        tick_chemical_science_factory(&mut a);
+        tick_chemical_science_factory(&mut b);
+    }
+
+    assert_eq!(a.state_hash(), b.state_hash());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use super::validation::machines::{
-    validate_assembler, validate_belt_segment, validate_boiler, validate_burner_mining_drill,
-    validate_furnace, validate_inserter, validate_lab, validate_splitter_state,
+    validate_assembler, validate_belt_segment, validate_boiler, validate_furnace,
+    validate_inserter, validate_lab, validate_mining_drill, validate_splitter_state,
 };
 use super::*;
 
@@ -37,9 +37,11 @@ impl EntityStateBehavior for Inventory {
     }
 }
 
-impl EntityStateBehavior for BurnerMiningDrillState {
+impl EntityStateBehavior for MiningDrillState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
-        push_item_slot(stacks, self.energy.fuel_slot);
+        if let Some(fuel_slot) = self.energy.fuel_slot() {
+            push_item_slot(stacks, fuel_slot);
+        }
         push_item_slot(stacks, self.output_slot);
     }
 
@@ -48,14 +50,16 @@ impl EntityStateBehavior for BurnerMiningDrillState {
         sim: &Simulation,
         entity_id: EntityId,
     ) -> Result<(), SimValidationError> {
-        validate_burner_mining_drill(sim, entity_id, self)
+        validate_mining_drill(sim, entity_id, self)
     }
 }
 
 impl EntityStateBehavior for FurnaceState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_item_slot(stacks, self.input_slot);
-        push_item_slot(stacks, self.energy.fuel_slot);
+        if let Some(fuel_slot) = self.energy.fuel_slot() {
+            push_item_slot(stacks, fuel_slot);
+        }
         push_item_slot(stacks, self.output_slot);
     }
 

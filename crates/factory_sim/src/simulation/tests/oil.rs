@@ -51,6 +51,20 @@ fn sim_with_powered_pumpjack() -> (Simulation, EntityId) {
     (sim, pumpjack_id)
 }
 
+fn unlock_advanced_oil_processing(sim: &mut Simulation) {
+    unlock_oil_processing(sim);
+    for technology in [
+        "plastics",
+        "sulfur_processing",
+        "advanced_electronics",
+        "engine",
+        "chemical_science_pack",
+        "advanced_oil_processing",
+    ] {
+        complete_research_by_name(sim, technology);
+    }
+}
+
 fn sim_with_powered_refinery() -> (Simulation, EntityId) {
     for seed in 0..64 {
         let mut sim = Simulation::new_test_world(seed);
@@ -281,7 +295,7 @@ fn oil_refinery_converts_crude_oil_to_petroleum_gas() {
     }
 
     let (input_fluid, input_amount) = fluid_box_amount(&sim, refinery_id, 0);
-    let (output_fluid, output_amount) = fluid_box_amount(&sim, refinery_id, 1);
+    let (output_fluid, output_amount) = fluid_box_amount(&sim, refinery_id, 4);
     assert_eq!(input_fluid, None, "both crude batches should be consumed");
     assert_eq!(input_amount, 0);
     assert_eq!(output_fluid, Some(petroleum_gas));
@@ -420,6 +434,127 @@ fn chemical_plant_stalls_without_fluid_ingredients() {
 }
 
 #[test]
+fn oil_refinery_runs_advanced_oil_processing_into_all_three_outputs() {
+    let (mut sim, refinery_id) = sim_with_powered_refinery();
+    unlock_advanced_oil_processing(&mut sim);
+    let crude_oil = fluid_id(&sim.world.prototypes, "crude_oil");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let heavy_oil = fluid_id(&sim.world.prototypes, "heavy_oil");
+    let light_oil = fluid_id(&sim.world.prototypes, "light_oil");
+    let petroleum_gas = fluid_id(&sim.world.prototypes, "petroleum_gas");
+    let recipe = recipe_id(&sim.world.prototypes, "advanced_oil_processing");
+
+    sim.select_assembler_recipe(refinery_id, recipe)
+        .expect("refinery should accept advanced oil processing");
+    set_fluid_box(&mut sim, refinery_id, 0, crude_oil, 200_000);
+    set_fluid_box(&mut sim, refinery_id, 1, water, 100_000);
+
+    for _ in 0..800 {
+        sim.tick();
+    }
+
+    assert_eq!(fluid_box_amount(&sim, refinery_id, 0), (None, 0));
+    assert_eq!(fluid_box_amount(&sim, refinery_id, 1), (None, 0));
+    assert_eq!(
+        fluid_box_amount(&sim, refinery_id, 2),
+        (Some(heavy_oil), 50_000),
+        "two crafts of 25 heavy oil each"
+    );
+    assert_eq!(
+        fluid_box_amount(&sim, refinery_id, 3),
+        (Some(light_oil), 90_000),
+        "two crafts of 45 light oil each"
+    );
+    assert_eq!(
+        fluid_box_amount(&sim, refinery_id, 4),
+        (Some(petroleum_gas), 110_000),
+        "two crafts of 55 petroleum gas each"
+    );
+}
+
+#[test]
+fn chemical_plant_cracks_heavy_oil_to_light_oil() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_advanced_oil_processing(&mut sim);
+    let plant_id = place_powered_chemical_plant(&mut sim);
+    let heavy_oil = fluid_id(&sim.world.prototypes, "heavy_oil");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let light_oil = fluid_id(&sim.world.prototypes, "light_oil");
+    let recipe = recipe_id(&sim.world.prototypes, "heavy_oil_cracking");
+
+    sim.select_assembler_recipe(plant_id, recipe)
+        .expect("chemical plant should accept heavy oil cracking");
+    set_fluid_box(&mut sim, plant_id, 0, heavy_oil, 80_000);
+    set_fluid_box(&mut sim, plant_id, 1, water, 60_000);
+
+    for _ in 0..400 {
+        sim.tick();
+    }
+
+    assert_eq!(fluid_box_amount(&sim, plant_id, 0), (None, 0));
+    assert_eq!(fluid_box_amount(&sim, plant_id, 1), (None, 0));
+    assert_eq!(
+        fluid_box_amount(&sim, plant_id, 2),
+        (Some(light_oil), 60_000),
+        "two crafts of 30 light oil each"
+    );
+}
+
+#[test]
+fn chemical_plant_cracks_light_oil_to_petroleum_gas() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_advanced_oil_processing(&mut sim);
+    let plant_id = place_powered_chemical_plant(&mut sim);
+    let light_oil = fluid_id(&sim.world.prototypes, "light_oil");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let petroleum_gas = fluid_id(&sim.world.prototypes, "petroleum_gas");
+    let recipe = recipe_id(&sim.world.prototypes, "light_oil_cracking");
+
+    sim.select_assembler_recipe(plant_id, recipe)
+        .expect("chemical plant should accept light oil cracking");
+    set_fluid_box(&mut sim, plant_id, 0, light_oil, 60_000);
+    set_fluid_box(&mut sim, plant_id, 1, water, 60_000);
+
+    for _ in 0..400 {
+        sim.tick();
+    }
+
+    assert_eq!(fluid_box_amount(&sim, plant_id, 0), (None, 0));
+    assert_eq!(fluid_box_amount(&sim, plant_id, 1), (None, 0));
+    assert_eq!(
+        fluid_box_amount(&sim, plant_id, 2),
+        (Some(petroleum_gas), 40_000),
+        "two crafts of 20 petroleum gas each"
+    );
+}
+
+#[test]
+fn chemical_plant_produces_lubricant_from_heavy_oil() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_advanced_oil_processing(&mut sim);
+    complete_research_by_name(&mut sim, "lubricant");
+    let plant_id = place_powered_chemical_plant(&mut sim);
+    let heavy_oil = fluid_id(&sim.world.prototypes, "heavy_oil");
+    let lubricant = fluid_id(&sim.world.prototypes, "lubricant");
+    let recipe = recipe_id(&sim.world.prototypes, "lubricant");
+
+    sim.select_assembler_recipe(plant_id, recipe)
+        .expect("chemical plant should accept lubricant recipe");
+    set_fluid_box(&mut sim, plant_id, 0, heavy_oil, 20_000);
+
+    for _ in 0..400 {
+        sim.tick();
+    }
+
+    assert_eq!(fluid_box_amount(&sim, plant_id, 0), (None, 0));
+    assert_eq!(
+        fluid_box_amount(&sim, plant_id, 2),
+        (Some(lubricant), 20_000),
+        "two crafts of 10 lubricant each"
+    );
+}
+
+#[test]
 fn refinery_with_full_fluid_output_reports_output_full() {
     let (mut sim, refinery_id) = sim_with_powered_refinery();
     unlock_oil_processing(&mut sim);
@@ -428,13 +563,13 @@ fn refinery_with_full_fluid_output_reports_output_full() {
     let recipe = recipe_id(&sim.world.prototypes, "basic_oil_processing");
     let output_capacity = sim.world.prototypes.entities
         [entity_id_by_name(&sim.world.prototypes, "oil_refinery").index()]
-    .fluid_boxes[1]
+    .fluid_boxes[4]
         .capacity_milliunits;
 
     sim.select_assembler_recipe(refinery_id, recipe)
         .expect("refinery should accept basic oil processing");
     set_fluid_box(&mut sim, refinery_id, 0, crude_oil, 100_000);
-    set_fluid_box(&mut sim, refinery_id, 1, petroleum_gas, output_capacity);
+    set_fluid_box(&mut sim, refinery_id, 4, petroleum_gas, output_capacity);
 
     assert_eq!(
         sim.machine_status_for_entity(refinery_id),

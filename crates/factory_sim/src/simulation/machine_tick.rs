@@ -1,10 +1,10 @@
 use super::*;
 
 mod assemblers;
-mod burner_drills;
 mod furnaces;
 mod inserters;
 mod labs;
+mod mining_drills;
 mod progress;
 mod pumpjacks;
 
@@ -26,7 +26,7 @@ impl Simulation {
 
     pub(super) fn advance_machines<P: TickProfiler>(&mut self, profiler: &mut P) {
         let mut context = self.machine_tick_context();
-        context.advance_burner_mining_drills(profiler);
+        context.advance_mining_drills(profiler);
         // No `profiler`: pumpjacks only touch their own fluid boxes and call
         // none of the sub-phase-profiled helpers (inventory transfers, resource
         // scans, ...). Their cost is already counted under ProfilePhase::Machines.

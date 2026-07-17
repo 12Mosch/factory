@@ -275,6 +275,14 @@ fn load_entities(
                 resolve_fluid_boxes(&name, size, entity.fluid_boxes, fluid_ids_by_name)?;
             let pumpjack =
                 resolve_pumpjack(&name, entity.pumpjack, item_ids_by_name, fluid_ids_by_name)?;
+            validate_machine_energy_source(
+                &name,
+                entity.entity_kind,
+                entity.furnace.as_ref(),
+                entity.mining_drill.is_some(),
+                entity.burner.is_some(),
+                entity.electric_energy_source.is_some(),
+            )?;
             validate_machine_fluid_roles(
                 &name,
                 entity.entity_kind,
@@ -293,6 +301,7 @@ fn load_entities(
                 building_menu_order: entity.building_menu_order,
                 inventory_slot_count: entity.inventory_slot_count,
                 burner: entity.burner,
+                furnace: entity.furnace,
                 mining_drill: entity
                     .mining_drill
                     .map(|mining_drill| MiningDrillPrototype {
@@ -341,6 +350,59 @@ fn load_entities(
             })
         })
         .collect()
+}
+
+/// Furnaces and mining drills work from exactly one energy source, so their
+/// prototypes must declare either a burner or an electric energy source (not
+/// both, not neither). Furnaces additionally need a `furnace` section with a
+/// positive crafting speed so smelting times are always well-defined.
+fn validate_machine_energy_source(
+    entity_name: &str,
+    entity_kind: crate::model::EntityKind,
+    furnace: Option<&crate::model::FurnacePrototype>,
+    has_mining_drill: bool,
+    has_burner: bool,
+    has_electric: bool,
+) -> Result<(), PrototypeLoadError> {
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidMachineEnergySource {
+            entity: entity_name.to_string(),
+            detail,
+        })
+    };
+
+    match entity_kind {
+        crate::model::EntityKind::Furnace => {
+            let Some(furnace) = furnace else {
+                return invalid("furnace entities require a furnace section");
+            };
+            if furnace.crafting_speed_numerator == 0 || furnace.crafting_speed_denominator == 0 {
+                return invalid("furnace crafting speed fraction must be positive");
+            }
+            if has_burner == has_electric {
+                return invalid(
+                    "furnace entities require exactly one of burner or electric_energy_source",
+                );
+            }
+        }
+        crate::model::EntityKind::MiningDrill => {
+            if !has_mining_drill {
+                return invalid("mining drill entities require a mining_drill section");
+            }
+            if has_burner == has_electric {
+                return invalid(
+                    "mining drill entities require exactly one of burner or electric_energy_source",
+                );
+            }
+        }
+        _ => {
+            if furnace.is_some() {
+                return invalid("only furnace entities may declare a furnace section");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn resolve_fluid_boxes(

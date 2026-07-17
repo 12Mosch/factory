@@ -19,7 +19,14 @@ fn furnace_smelts_iron_ore_to_iron_plate() {
     assert_eq!(state.input_slot.stack(), None);
     assert_eq!(state.output_slot.stack(), Some(test_stack(iron_plate, 1)));
     assert_eq!(state.crafting_progress_ticks, 0);
-    assert_eq!(state.energy.energy_remaining_joules, 3_685_000.0);
+    assert_eq!(
+        state
+            .energy
+            .burner()
+            .expect("burner machine")
+            .energy_remaining_joules,
+        3_685_000.0
+    );
 }
 
 #[test]
@@ -40,7 +47,14 @@ fn furnace_does_not_smelts_without_fuel() {
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(state.input_slot.stack(), Some(test_stack(iron_ore, 1)));
     assert_eq!(state.output_slot.stack(), None);
-    assert_eq!(state.energy.energy_remaining_joules, 0.0);
+    assert_eq!(
+        state
+            .energy
+            .burner()
+            .expect("burner machine")
+            .energy_remaining_joules,
+        0.0
+    );
     assert_eq!(state.crafting_progress_ticks, 0);
 }
 
@@ -66,8 +80,23 @@ fn furnace_blocks_when_output_full() {
     let state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
     assert_eq!(state.input_slot.stack(), Some(test_stack(iron_ore, 1)));
-    assert_eq!(state.energy.fuel_slot.stack(), Some(test_stack(coal, 1)));
-    assert_eq!(state.energy.energy_remaining_joules, 0.0);
+    assert_eq!(
+        state
+            .energy
+            .burner()
+            .expect("burner machine")
+            .fuel_slot
+            .stack(),
+        Some(test_stack(coal, 1))
+    );
+    assert_eq!(
+        state
+            .energy
+            .burner()
+            .expect("burner machine")
+            .energy_remaining_joules,
+        0.0
+    );
     assert_eq!(state.crafting_progress_ticks, 0);
     assert_eq!(
         state.output_slot.stack().map(|stack| stack.item_id()),
@@ -170,5 +199,92 @@ fn locked_smelting_recipes_are_not_selected_by_furnaces() {
     assert_eq!(
         sim.technology_progress(technology_id(&sim.world.prototypes, "automation")),
         Some(0)
+    );
+}
+
+#[test]
+fn steel_furnace_smelts_at_double_speed() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let entity_id = place_named_furnace(&mut sim, "steel_furnace");
+    add_furnace_input_and_fuel(&mut sim, entity_id, iron_ore, coal);
+
+    // A stone furnace needs 210 ticks for iron plates; the steel furnace's
+    // 2x crafting speed halves that.
+    for _ in 0..105 {
+        sim.tick();
+    }
+
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
+    assert_eq!(state.input_slot.stack(), None);
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_plate, 1)));
+}
+
+#[test]
+fn electric_furnace_smelts_from_grid_power_without_fuel_slot() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let furnace = entity_id_by_name(&sim.world.prototypes, "electric_furnace");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: furnace,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("electric furnace should be placeable");
+
+    sim.player_inventory = Inventory::player();
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_ore, 1);
+    crate::entity_transfer::player_slot_to_furnace_input(&mut sim, entity_id, 0)
+        .expect("ore should transfer to electric furnace input");
+    set_inventory_slot(&mut sim.player_inventory, 1, coal, 1);
+    assert_eq!(
+        crate::entity_transfer::player_slot_to_furnace_fuel(&mut sim, entity_id, 1),
+        Err(FurnaceError::NoFuelSlot)
+    );
+
+    // 2x crafting speed halves the 210-tick iron plate recipe; extra ticks
+    // cover the boiler and steam engine spinning up.
+    for _ in 0..160 {
+        sim.tick();
+    }
+
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
+    assert_eq!(state.energy, MachineEnergy::Electric);
+    assert_eq!(state.input_slot.stack(), None);
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_plate, 1)));
+}
+
+#[test]
+fn electric_furnace_without_power_reports_no_power() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let entity_id = place_named_furnace(&mut sim, "electric_furnace");
+    sim.player_inventory = Inventory::player();
+    set_inventory_slot(&mut sim.player_inventory, 0, iron_ore, 1);
+    crate::entity_transfer::player_slot_to_furnace_input(&mut sim, entity_id, 0)
+        .expect("ore should transfer to electric furnace input");
+
+    for _ in 0..210 {
+        sim.tick();
+    }
+
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
+    assert_eq!(state.input_slot.stack(), Some(test_stack(iron_ore, 1)));
+    assert_eq!(state.output_slot.stack(), None);
+    assert_eq!(
+        sim.machine_status_for_entity(entity_id),
+        Some(MachineStatus::NoPower)
     );
 }

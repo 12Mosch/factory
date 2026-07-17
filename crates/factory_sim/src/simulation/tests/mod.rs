@@ -2,7 +2,6 @@ mod support;
 
 mod assemblers;
 mod belts;
-mod burner_drills;
 mod combat;
 mod commands;
 mod construction;
@@ -12,6 +11,7 @@ mod inserters;
 mod inventory;
 mod manual_crafting;
 mod manual_mining;
+mod mining_drills;
 mod oil;
 mod onboarding;
 mod placement;

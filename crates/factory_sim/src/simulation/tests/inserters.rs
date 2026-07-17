@@ -95,7 +95,10 @@ fn inserter_moves_fuel_from_chest_to_furnace_fuel_slot() {
     let furnace =
         crate::entity_access::furnace_state(&sim, furnace_id).expect("furnace should have state");
     assert_eq!(furnace.input_slot.stack(), None);
-    assert_eq!(furnace.energy.fuel_slot.stack(), Some(test_stack(coal, 1)));
+    assert_eq!(
+        furnace.energy.fuel_slot().expect("burner furnace").stack(),
+        Some(test_stack(coal, 1))
+    );
 }
 
 #[test]

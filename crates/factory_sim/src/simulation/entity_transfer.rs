@@ -145,8 +145,8 @@ pub fn transfer_container_slot(
         InventoryPanel::Player => {
             match entity_access::machine_kind(sim, entity_id) {
                 Some(EntityKind::MiningDrill) => {
-                    return player_slot_to_burner_drill_fuel(sim, entity_id, slot_index)
-                        .map_err(SlotTransferError::BurnerDrill);
+                    return player_slot_to_mining_drill_fuel(sim, entity_id, slot_index)
+                        .map_err(SlotTransferError::MiningDrill);
                 }
                 Some(EntityKind::Furnace) => {
                     return player_slot_to_furnace(sim, entity_id, slot_index)
@@ -166,12 +166,12 @@ pub fn transfer_container_slot(
         }
         InventoryPanel::Container => entity_slot_to_player(sim, entity_id, slot_index),
         InventoryPanel::BurnerFuel => {
-            return burner_drill_fuel_to_player(sim, entity_id)
-                .map_err(SlotTransferError::BurnerDrill);
+            return mining_drill_fuel_to_player(sim, entity_id)
+                .map_err(SlotTransferError::MiningDrill);
         }
         InventoryPanel::BurnerOutput => {
-            return burner_drill_output_to_player(sim, entity_id)
-                .map_err(SlotTransferError::BurnerDrill);
+            return mining_drill_output_to_player(sim, entity_id)
+                .map_err(SlotTransferError::MiningDrill);
         }
         InventoryPanel::FurnaceInput => {
             return furnace_input_to_player(sim, entity_id).map_err(SlotTransferError::Furnace);
@@ -275,12 +275,17 @@ pub fn entity_slot_to_player(
     ))
 }
 
-pub fn player_slot_to_burner_drill_fuel(
+pub fn player_slot_to_mining_drill_fuel(
     sim: &mut Simulation,
     entity_id: EntityId,
     player_slot_index: usize,
-) -> Result<TransferOutcome, BurnerDrillError> {
-    let fuel_slot = sim.entities.burner_drill_state(entity_id)?.energy.fuel_slot;
+) -> Result<TransferOutcome, MiningDrillError> {
+    let fuel_slot = sim
+        .entities
+        .mining_drill_state(entity_id)?
+        .energy
+        .fuel_slot()
+        .ok_or(MiningDrillError::NoFuelSlot)?;
     let plan = plan_transfer(
         &sim.world.prototypes,
         TransferSource {
@@ -299,13 +304,14 @@ pub fn player_slot_to_burner_drill_fuel(
             )
         },
     )
-    .map_err(|error| map_plan_error(error, BurnerDrillError::InvalidFuel))?;
+    .map_err(|error| map_plan_error(error, MiningDrillError::InvalidFuel))?;
 
-    let fuel_slot = &mut sim
+    let fuel_slot = sim
         .entities
-        .burner_drill_state_mut(entity_id)?
+        .mining_drill_state_mut(entity_id)?
         .energy
-        .fuel_slot;
+        .fuel_slot_mut()
+        .expect("a planned drill fuel transfer targets a burner drill");
     Ok(commit_transfer(
         plan,
         TransferSourceMut::Slot(
@@ -317,16 +323,21 @@ pub fn player_slot_to_burner_drill_fuel(
     ))
 }
 
-pub fn burner_drill_fuel_to_player(
+pub fn mining_drill_fuel_to_player(
     sim: &mut Simulation,
     entity_id: EntityId,
-) -> Result<TransferOutcome, BurnerDrillError> {
-    let fuel_slot = sim.entities.burner_drill_state(entity_id)?.energy.fuel_slot;
+) -> Result<TransferOutcome, MiningDrillError> {
+    let fuel_slot = sim
+        .entities
+        .mining_drill_state(entity_id)?
+        .energy
+        .fuel_slot()
+        .ok_or(MiningDrillError::NoFuelSlot)?;
     let plan = plan_transfer(
         &sim.world.prototypes,
         TransferSource {
             slot: Some(&fuel_slot),
-            slot_index: BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
+            slot_index: MINING_DRILL_FUEL_SLOT_INDEX,
         },
         TransferDestination::Inventory(&sim.player_inventory),
         |item_id| {
@@ -340,13 +351,14 @@ pub fn burner_drill_fuel_to_player(
             )
         },
     )
-    .map_err(|error| map_plan_error(error, BurnerDrillError::InvalidFuel))?;
+    .map_err(|error| map_plan_error(error, MiningDrillError::InvalidFuel))?;
 
-    let fuel_slot = &mut sim
+    let fuel_slot = sim
         .entities
-        .burner_drill_state_mut(entity_id)?
+        .mining_drill_state_mut(entity_id)?
         .energy
-        .fuel_slot;
+        .fuel_slot_mut()
+        .expect("a planned drill fuel transfer targets a burner drill");
     Ok(commit_transfer(
         plan,
         TransferSourceMut::Slot(fuel_slot),
@@ -354,16 +366,16 @@ pub fn burner_drill_fuel_to_player(
     ))
 }
 
-pub fn burner_drill_output_to_player(
+pub fn mining_drill_output_to_player(
     sim: &mut Simulation,
     entity_id: EntityId,
-) -> Result<TransferOutcome, BurnerDrillError> {
-    let output_slot = sim.entities.burner_drill_state(entity_id)?.output_slot;
+) -> Result<TransferOutcome, MiningDrillError> {
+    let output_slot = sim.entities.mining_drill_state(entity_id)?.output_slot;
     let plan = plan_transfer(
         &sim.world.prototypes,
         TransferSource {
             slot: Some(&output_slot),
-            slot_index: BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX,
+            slot_index: MINING_DRILL_OUTPUT_SLOT_INDEX,
         },
         TransferDestination::Inventory(&sim.player_inventory),
         |item_id| {
@@ -377,9 +389,9 @@ pub fn burner_drill_output_to_player(
             )
         },
     )
-    .map_err(|error| map_plan_error(error, BurnerDrillError::InvalidFuel))?;
+    .map_err(|error| map_plan_error(error, MiningDrillError::InvalidFuel))?;
 
-    let output_slot = &mut sim.entities.burner_drill_state_mut(entity_id)?.output_slot;
+    let output_slot = &mut sim.entities.mining_drill_state_mut(entity_id)?.output_slot;
     Ok(commit_transfer(
         plan,
         TransferSourceMut::Slot(output_slot),
@@ -430,7 +442,12 @@ pub fn player_slot_to_furnace_fuel(
     entity_id: EntityId,
     player_slot_index: usize,
 ) -> Result<TransferOutcome, FurnaceError> {
-    let fuel_slot = sim.entities.furnace_state(entity_id)?.energy.fuel_slot;
+    let fuel_slot = sim
+        .entities
+        .furnace_state(entity_id)?
+        .energy
+        .fuel_slot()
+        .ok_or(FurnaceError::NoFuelSlot)?;
     let plan = plan_transfer(
         &sim.world.prototypes,
         TransferSource {
@@ -451,7 +468,12 @@ pub fn player_slot_to_furnace_fuel(
     )
     .map_err(|error| map_plan_error(error, FurnaceError::InvalidFuel))?;
 
-    let fuel_slot = &mut sim.entities.furnace_state_mut(entity_id)?.energy.fuel_slot;
+    let fuel_slot = sim
+        .entities
+        .furnace_state_mut(entity_id)?
+        .energy
+        .fuel_slot_mut()
+        .expect("a planned furnace fuel transfer targets a burner furnace");
     Ok(commit_transfer(
         plan,
         TransferSourceMut::Slot(
@@ -482,14 +504,24 @@ pub fn furnace_fuel_to_player(
     sim: &mut Simulation,
     entity_id: EntityId,
 ) -> Result<TransferOutcome, FurnaceError> {
-    let fuel_slot = sim.entities.furnace_state(entity_id)?.energy.fuel_slot;
+    let fuel_slot = sim
+        .entities
+        .furnace_state(entity_id)?
+        .energy
+        .fuel_slot()
+        .ok_or(FurnaceError::NoFuelSlot)?;
     transfer_furnace_slot_to_player(
         sim,
         entity_id,
         fuel_slot,
         FURNACE_FUEL_SLOT_INDEX,
         ItemSlotPolicy::Fuel,
-        |state| &mut state.energy.fuel_slot,
+        |state| {
+            state
+                .energy
+                .fuel_slot_mut()
+                .expect("a planned furnace fuel transfer targets a burner furnace")
+        },
     )
 }
 
@@ -739,14 +771,21 @@ fn player_slot_to_furnace(
         .ok_or(FurnaceError::InvalidSlot { slot_index })?
         .stack()
         .ok_or(FurnaceError::EmptySlot { slot_index })?;
-    let is_fuel = item_slot_policy_accepts(
-        sim.catalog(),
-        &sim.research,
-        &sim.entities,
-        ItemSlotPolicy::Fuel,
-        ItemSlotOperation::PlayerInsert,
-        stack.item_id(),
-    );
+    let has_fuel_slot = sim
+        .entities
+        .furnace_state(entity_id)?
+        .energy
+        .fuel_slot()
+        .is_some();
+    let is_fuel = has_fuel_slot
+        && item_slot_policy_accepts(
+            sim.catalog(),
+            &sim.research,
+            &sim.entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::PlayerInsert,
+            stack.item_id(),
+        );
 
     if is_fuel {
         player_slot_to_furnace_fuel(sim, entity_id, slot_index)

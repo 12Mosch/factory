@@ -11,9 +11,9 @@ impl Simulation {
             &mut total_by_status,
             EntityKind::MiningDrill,
             self.entities
-                .burner_mining_drills
+                .mining_drills
                 .iter()
-                .map(|(entity_id, state)| self.burner_mining_drill_status(*entity_id, state)),
+                .map(|(entity_id, state)| self.mining_drill_status(*entity_id, state)),
         );
         self.push_status_group(
             &mut groups,
@@ -21,8 +21,8 @@ impl Simulation {
             EntityKind::Furnace,
             self.entities
                 .furnaces
-                .values()
-                .map(|state| self.furnace_status(state)),
+                .iter()
+                .map(|(entity_id, state)| self.furnace_status(*entity_id, state)),
         );
         self.push_status_group(
             &mut groups,
@@ -90,11 +90,11 @@ impl Simulation {
     pub fn machine_status_for_entity(&self, entity_id: EntityId) -> Option<MachineStatus> {
         let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
 
-        if let Some(state) = self.entities.burner_mining_drills.get(&entity_id) {
-            return Some(self.burner_mining_drill_status(entity_id, state));
+        if let Some(state) = self.entities.mining_drills.get(&entity_id) {
+            return Some(self.mining_drill_status(entity_id, state));
         }
         if let Some(state) = self.entities.furnaces.get(&entity_id) {
-            return Some(self.furnace_status(state));
+            return Some(self.furnace_status(entity_id, state));
         }
         if let Some(state) = self.entities.assembling_machines.get(&entity_id) {
             return Some(self.assembler_status(entity_id, state));
@@ -253,11 +253,7 @@ impl Simulation {
         });
     }
 
-    fn burner_mining_drill_status(
-        &self,
-        entity_id: EntityId,
-        state: &BurnerMiningDrillState,
-    ) -> MachineStatus {
+    fn mining_drill_status(&self, entity_id: EntityId, state: &MiningDrillState) -> MachineStatus {
         let Some(placed) = self.entities.placed_entity(entity_id) else {
             return MachineStatus::Idle;
         };
@@ -283,14 +279,13 @@ impl Simulation {
         ) {
             return MachineStatus::OutputFull;
         }
-        if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
-        {
-            return MachineStatus::NoFuel;
+        if let Some(status) = self.machine_energy_status(entity_id, &state.energy) {
+            return status;
         }
         MachineStatus::Working
     }
 
-    fn furnace_status(&self, state: &FurnaceState) -> MachineStatus {
+    fn furnace_status(&self, entity_id: EntityId, state: &FurnaceState) -> MachineStatus {
         let Some((_, _, _, product)) =
             furnace_work_selection(&self.world.prototypes, &self.research, state.input_slot)
         else {
@@ -302,11 +297,31 @@ impl Simulation {
         {
             return MachineStatus::OutputFull;
         }
-        if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
-        {
-            return MachineStatus::NoFuel;
+        if let Some(status) = self.machine_energy_status(entity_id, &state.energy) {
+            return status;
         }
         MachineStatus::Working
+    }
+
+    /// Energy-starvation status shared by burner-or-electric machines: `None`
+    /// when the machine's energy source can currently supply work.
+    fn machine_energy_status(
+        &self,
+        entity_id: EntityId,
+        energy: &MachineEnergy,
+    ) -> Option<MachineStatus> {
+        match energy {
+            MachineEnergy::Burner(_) => energy.is_out_of_fuel().then_some(MachineStatus::NoFuel),
+            MachineEnergy::Electric => {
+                let satisfaction = self
+                    .power
+                    .entity_statuses
+                    .get(&entity_id)
+                    .map(|status| status.satisfaction_permyriad)
+                    .unwrap_or(0);
+                (satisfaction == 0).then_some(MachineStatus::NoPower)
+            }
+        }
     }
 
     fn assembler_status(

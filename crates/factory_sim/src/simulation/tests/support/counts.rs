@@ -23,16 +23,22 @@ pub(in crate::simulation::tests) fn total_item_count_in_sim(
             .values()
             .map(|furnace| {
                 count_slot_item(furnace.input_slot, item_id)
-                    + count_slot_item(furnace.energy.fuel_slot, item_id)
+                    + furnace
+                        .energy
+                        .fuel_slot()
+                        .map_or(0, |slot| count_slot_item(slot, item_id))
                     + count_slot_item(furnace.output_slot, item_id)
             })
             .sum::<u32>()
         + sim
             .entities
-            .burner_mining_drills
+            .mining_drills
             .values()
             .map(|drill| {
-                count_slot_item(drill.energy.fuel_slot, item_id)
+                drill
+                    .energy
+                    .fuel_slot()
+                    .map_or(0, |slot| count_slot_item(slot, item_id))
                     + count_slot_item(drill.output_slot, item_id)
             })
             .sum::<u32>()

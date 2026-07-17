@@ -3,9 +3,9 @@ use serde::Deserialize;
 use crate::model::{
     AmmoPrototype, AssemblingMachinePrototype, BoilerPrototype, BuildingCategory, BurnerPrototype,
     CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig, EntityKind, FluidBoxIo,
-    FluidConnectionSide, GunTurretPrototype, OffshorePumpPrototype, RepairToolPrototype,
-    ResourceExtraction, SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
-    UnitPrototype,
+    FluidConnectionSide, FurnacePrototype, GunTurretPrototype, OffshorePumpPrototype,
+    RepairToolPrototype, ResourceExtraction, SplitterPrototype, SteamEnginePrototype,
+    TransportBeltPrototype, UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -160,6 +160,7 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) inventory_slot_count: Option<usize>,
     pub(crate) burner: Option<BurnerPrototype>,
     pub(crate) mining_drill: Option<RawMiningDrillPrototype>,
+    pub(crate) furnace: Option<FurnacePrototype>,
     pub(crate) assembling_machine: Option<AssemblingMachinePrototype>,
     pub(crate) transport_belt: Option<TransportBeltPrototype>,
     pub(crate) splitter: Option<SplitterPrototype>,

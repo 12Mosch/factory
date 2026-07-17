@@ -207,7 +207,11 @@ fn apply_command_transfer_slot_routes_player_input_by_machine_kind() {
         Some(test_stack(iron_ore, 1))
     );
     assert_eq!(
-        furnace_state.energy.fuel_slot.stack(),
+        furnace_state
+            .energy
+            .fuel_slot()
+            .expect("burner furnace")
+            .stack(),
         Some(test_stack(coal, 1))
     );
 }
