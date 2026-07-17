@@ -128,7 +128,7 @@ impl TickProfiler for TickProfileCollector {
 
 impl Simulation {
     pub fn counts(&self) -> SimulationCounts {
-        let machine_count = self.entities.burner_mining_drills.len()
+        let machine_count = self.entities.mining_drills.len()
             + self.entities.furnaces.len()
             + self.entities.assembling_machines.len()
             + self.entities.labs.len();
@@ -190,9 +190,9 @@ impl Simulation {
 
     fn active_machine_count(&self) -> usize {
         self.entities
-            .burner_mining_drills
+            .mining_drills
             .iter()
-            .filter(|(entity_id, state)| self.burner_mining_drill_is_active(**entity_id, state))
+            .filter(|(entity_id, state)| self.mining_drill_is_active(**entity_id, state))
             .count()
             + self
                 .entities
@@ -214,14 +214,11 @@ impl Simulation {
                 .count()
     }
 
-    fn burner_mining_drill_is_active(
-        &self,
-        entity_id: EntityId,
-        state: &BurnerMiningDrillState,
-    ) -> bool {
-        if !state.energy.fuel_slot.is_empty()
-            || state.energy.energy_remaining_joules > f64::EPSILON
-            || state.mining_progress_ticks > 0
+    fn mining_drill_is_active(&self, entity_id: EntityId, state: &MiningDrillState) -> bool {
+        if state.mining_progress_ticks > 0
+            || state.energy.burner().is_some_and(|burner| {
+                !burner.fuel_slot.is_empty() || burner.energy_remaining_joules > f64::EPSILON
+            })
         {
             return true;
         }

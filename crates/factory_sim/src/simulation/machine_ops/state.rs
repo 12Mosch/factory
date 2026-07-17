@@ -20,7 +20,7 @@ pub(in crate::simulation) fn reservation_for_prototype(
         direction,
         footprint,
         entity_inventories: chest_inventory_for_prototype(prototype),
-        burner_mining_drills: burner_mining_drill_state_for_prototype(prototype),
+        mining_drills: mining_drill_state_for_prototype(prototype),
         furnaces: furnace_state_for_prototype(prototype),
         assembling_machines: assembling_machine_state_for_prototype(prototype),
         labs: lab_state_for_prototype(prototype),
@@ -50,22 +50,37 @@ fn chest_inventory_for_prototype(prototype: &factory_data::EntityPrototype) -> O
         .map(Inventory::with_slot_count)
 }
 
-fn burner_mining_drill_state_for_prototype(
+/// The energy source a freshly placed machine runs on, from its prototype's
+/// burner or electric section. Prototype validation guarantees furnaces and
+/// mining drills declare exactly one.
+fn machine_energy_for_prototype(
     prototype: &factory_data::EntityPrototype,
-) -> Option<BurnerMiningDrillState> {
+) -> Option<MachineEnergy> {
+    if let Some(burner) = prototype.burner.as_ref() {
+        return Some(MachineEnergy::Burner(BurnerEnergy {
+            fuel_slot: ItemSlot::default(),
+            energy_remaining_joules: 0.0,
+            energy_usage_watts: burner.energy_usage_watts as f64,
+        }));
+    }
+    prototype
+        .electric_energy_source
+        .is_some()
+        .then_some(MachineEnergy::Electric)
+}
+
+fn mining_drill_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<MiningDrillState> {
     if prototype.entity_kind != EntityKind::MiningDrill {
         return None;
     }
 
-    let burner = prototype.burner.as_ref()?;
     let mining_drill = prototype.mining_drill.as_ref()?;
+    let energy = machine_energy_for_prototype(prototype)?;
 
-    Some(BurnerMiningDrillState {
-        energy: BurnerEnergy {
-            fuel_slot: ItemSlot::default(),
-            energy_remaining_joules: 0.0,
-            energy_usage_watts: burner.energy_usage_watts as f64,
-        },
+    Some(MiningDrillState {
+        energy,
         mining_progress_ticks: 0,
         mining_required_ticks: mining_drill.ticks_per_item,
         resource_target: None,
@@ -78,15 +93,11 @@ fn furnace_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Opt
         return None;
     }
 
-    let burner = prototype.burner.as_ref()?;
+    let energy = machine_energy_for_prototype(prototype)?;
 
     Some(FurnaceState {
         input_slot: ItemSlot::default(),
-        energy: BurnerEnergy {
-            fuel_slot: ItemSlot::default(),
-            energy_remaining_joules: 0.0,
-            energy_usage_watts: burner.energy_usage_watts as f64,
-        },
+        energy,
         output_slot: ItemSlot::default(),
         active_recipe: None,
         crafting_progress_ticks: 0,

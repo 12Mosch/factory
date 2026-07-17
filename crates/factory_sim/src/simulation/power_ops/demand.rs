@@ -1,13 +1,13 @@
 use super::*;
 
 pub(super) fn consumer_power_demand_for(
-    catalog: &PrototypeCatalog,
+    world: &WorldSim,
     entities: &EntityStore,
     research: &ResearchState,
     entity_id: EntityId,
 ) -> Option<(u64, u64)> {
-    let energy_source = electric_consumer_power_source(catalog, entities, entity_id)?;
-    let active_usage_watts = if electric_consumer_can_work(catalog, entities, research, entity_id) {
+    let energy_source = electric_consumer_power_source(&world.prototypes, entities, entity_id)?;
+    let active_usage_watts = if electric_consumer_can_work(world, entities, research, entity_id) {
         energy_source.energy_usage_watts
     } else {
         0
@@ -36,13 +36,20 @@ fn electric_consumer_power_source<'a>(
 }
 
 fn electric_consumer_can_work(
-    catalog: &PrototypeCatalog,
+    world: &WorldSim,
     entities: &EntityStore,
     research: &ResearchState,
     entity_id: EntityId,
 ) -> bool {
+    let catalog = &world.prototypes;
     if let Some(state) = entities.assembling_machines.get(&entity_id) {
         return assembler_can_work(catalog, entities, research, entity_id, state);
+    }
+    if let Some(state) = entities.furnaces.get(&entity_id) {
+        return furnace_can_work(catalog, research, state);
+    }
+    if let Some(state) = entities.mining_drills.get(&entity_id) {
+        return mining_drill_can_work(world, entities, entity_id, state);
     }
     if let Some(state) = entities.labs.get(&entity_id) {
         return lab_can_work(catalog, research, state);
@@ -58,6 +65,52 @@ fn electric_consumer_can_work(
     }
 
     false
+}
+
+fn furnace_can_work(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    state: &FurnaceState,
+) -> bool {
+    let Some((_, _, _, product)) = furnace_work_selection(catalog, research, state.input_slot)
+    else {
+        return false;
+    };
+    state
+        .output_slot
+        .can_insert_item(catalog, product.item, product.amount)
+}
+
+fn mining_drill_can_work(
+    world: &WorldSim,
+    entities: &EntityStore,
+    entity_id: EntityId,
+    state: &MiningDrillState,
+) -> bool {
+    let Some(placed) = entities.placed_entity(entity_id) else {
+        return false;
+    };
+    let Some(mining_drill) = world
+        .prototypes
+        .entity(placed.prototype_id)
+        .and_then(|prototype| prototype.mining_drill.as_ref())
+    else {
+        return false;
+    };
+    let Some((_, resource_item)) =
+        first_resource_in_mining_area(world, &placed.footprint, mining_drill)
+    else {
+        return false;
+    };
+    let output_target = drill_output_target(entities, placed);
+    drill_output_target_can_accept(
+        &world.prototypes,
+        entities,
+        output_target,
+        state.output_slot,
+        resource_item,
+        1,
+    )
 }
 
 fn assembler_can_work(

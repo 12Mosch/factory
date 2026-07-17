@@ -87,30 +87,30 @@ impl EntityStore {
             .ok_or(LabError::NotLab(entity_id))
     }
 
-    pub(super) fn burner_drill_state(
+    pub(super) fn mining_drill_state(
         &self,
         entity_id: EntityId,
-    ) -> Result<&BurnerMiningDrillState, BurnerDrillError> {
+    ) -> Result<&MiningDrillState, MiningDrillError> {
         if !self.placed_entities.contains_key(&entity_id) {
-            return Err(BurnerDrillError::MissingEntity(entity_id));
+            return Err(MiningDrillError::MissingEntity(entity_id));
         }
 
-        self.burner_mining_drills
+        self.mining_drills
             .get(&entity_id)
-            .ok_or(BurnerDrillError::NotBurnerDrill(entity_id))
+            .ok_or(MiningDrillError::NotMiningDrill(entity_id))
     }
 
-    pub(super) fn burner_drill_state_mut(
+    pub(super) fn mining_drill_state_mut(
         &mut self,
         entity_id: EntityId,
-    ) -> Result<&mut BurnerMiningDrillState, BurnerDrillError> {
+    ) -> Result<&mut MiningDrillState, MiningDrillError> {
         if !self.placed_entities.contains_key(&entity_id) {
-            return Err(BurnerDrillError::MissingEntity(entity_id));
+            return Err(MiningDrillError::MissingEntity(entity_id));
         }
 
-        self.burner_mining_drills
+        self.mining_drills
             .get_mut(&entity_id)
-            .ok_or(BurnerDrillError::NotBurnerDrill(entity_id))
+            .ok_or(MiningDrillError::NotMiningDrill(entity_id))
     }
 
     pub(super) fn furnace_state(&self, entity_id: EntityId) -> Result<&FurnaceState, FurnaceError> {

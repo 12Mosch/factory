@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use factory_sim::{
-    BOILER_FUEL_SLOT_INDEX, BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
-    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
-    FURNACE_OUTPUT_SLOT_INDEX, MachineStatus,
+    BOILER_FUEL_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
+    FURNACE_OUTPUT_SLOT_INDEX, MINING_DRILL_FUEL_SLOT_INDEX, MINING_DRILL_OUTPUT_SLOT_INDEX,
+    MachineStatus,
 };
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
@@ -15,7 +15,7 @@ use crate::ui::resources::OpenContainer;
 pub(crate) struct BurnerEnergyText;
 
 #[derive(Component)]
-pub(crate) struct BurnerProgressFill;
+pub(crate) struct MachineProgressFill;
 
 #[derive(Component)]
 pub(crate) struct MachineGuidanceText;
@@ -87,7 +87,17 @@ pub(crate) fn update_machine_guidance(
     }
 }
 
-pub(crate) fn spawn_burner_drill_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+pub(crate) fn spawn_mining_drill_panel(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
+) {
+    let title = machine_panel_title(sim, entity_id, "Mining Drill");
+    let has_fuel_slot = factory_sim::entity_access::inventory_panel_slot_count(
+        sim,
+        Some(entity_id),
+        InventoryPanel::BurnerFuel,
+    ) > 0;
     root.spawn((
         Node {
             flex_direction: FlexDirection::Column,
@@ -99,16 +109,18 @@ pub(crate) fn spawn_burner_drill_panel(root: &mut bevy::ecs::hierarchy::ChildSpa
     ))
     .with_children(|panel| {
         panel.spawn((
-            Text::new("Burner Drill"),
+            Text::new(title),
             TextFont::from_font_size(14.0),
             TextColor(Color::WHITE),
         ));
-        panel.spawn((
-            Text::new("Energy: 0 J"),
-            TextFont::from_font_size(12.0),
-            TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            BurnerEnergyText,
-        ));
+        if has_fuel_slot {
+            panel.spawn((
+                Text::new("Energy: 0 J"),
+                TextFont::from_font_size(12.0),
+                TextColor(Color::srgb(0.86, 0.88, 0.82)),
+                BurnerEnergyText,
+            ));
+        }
         panel
             .spawn((
                 Node {
@@ -125,7 +137,7 @@ pub(crate) fn spawn_burner_drill_panel(root: &mut bevy::ecs::hierarchy::ChildSpa
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.33, 0.74, 0.48)),
-                BurnerProgressFill,
+                MachineProgressFill,
             ));
         panel
             .spawn((
@@ -136,23 +148,49 @@ pub(crate) fn spawn_burner_drill_panel(root: &mut bevy::ecs::hierarchy::ChildSpa
                 BackgroundColor(Color::NONE),
             ))
             .with_children(|slots| {
-                spawn_labeled_slot(
-                    slots,
-                    "Fuel",
-                    InventoryPanel::BurnerFuel,
-                    BURNER_MINING_DRILL_FUEL_SLOT_INDEX,
-                );
+                if has_fuel_slot {
+                    spawn_labeled_slot(
+                        slots,
+                        "Fuel",
+                        InventoryPanel::BurnerFuel,
+                        MINING_DRILL_FUEL_SLOT_INDEX,
+                    );
+                }
                 spawn_labeled_slot(
                     slots,
                     "Output",
                     InventoryPanel::BurnerOutput,
-                    BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX,
+                    MINING_DRILL_OUTPUT_SLOT_INDEX,
                 );
             });
     });
 }
 
-pub(crate) fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+/// Panel title from the open entity's prototype name, e.g. "Electric
+/// Furnace" for `electric_furnace`.
+fn machine_panel_title(
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
+    fallback: &str,
+) -> String {
+    sim.entities()
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.catalog().entity(placed.prototype_id))
+        .map(|prototype| crate::ui::formatting::format_recipe_display_name(&prototype.name))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+pub(crate) fn spawn_furnace_panel(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
+) {
+    let title = machine_panel_title(sim, entity_id, "Furnace");
+    let has_fuel_slot = factory_sim::entity_access::inventory_panel_slot_count(
+        sim,
+        Some(entity_id),
+        InventoryPanel::FurnaceFuel,
+    ) > 0;
     root.spawn((
         Node {
             flex_direction: FlexDirection::Column,
@@ -164,16 +202,18 @@ pub(crate) fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerC
     ))
     .with_children(|panel| {
         panel.spawn((
-            Text::new("Stone Furnace"),
+            Text::new(title),
             TextFont::from_font_size(14.0),
             TextColor(Color::WHITE),
         ));
-        panel.spawn((
-            Text::new("Energy: 0 J"),
-            TextFont::from_font_size(12.0),
-            TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            BurnerEnergyText,
-        ));
+        if has_fuel_slot {
+            panel.spawn((
+                Text::new("Energy: 0 J"),
+                TextFont::from_font_size(12.0),
+                TextColor(Color::srgb(0.86, 0.88, 0.82)),
+                BurnerEnergyText,
+            ));
+        }
         panel
             .spawn((
                 Node {
@@ -190,7 +230,7 @@ pub(crate) fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerC
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.82, 0.48, 0.24)),
-                BurnerProgressFill,
+                MachineProgressFill,
             ));
         panel
             .spawn((
@@ -207,12 +247,14 @@ pub(crate) fn spawn_furnace_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerC
                     InventoryPanel::FurnaceInput,
                     FURNACE_INPUT_SLOT_INDEX,
                 );
-                spawn_labeled_slot(
-                    slots,
-                    "Fuel",
-                    InventoryPanel::FurnaceFuel,
-                    FURNACE_FUEL_SLOT_INDEX,
-                );
+                if has_fuel_slot {
+                    spawn_labeled_slot(
+                        slots,
+                        "Fuel",
+                        InventoryPanel::FurnaceFuel,
+                        FURNACE_FUEL_SLOT_INDEX,
+                    );
+                }
                 spawn_labeled_slot(
                     slots,
                     "Output",
@@ -264,22 +306,25 @@ pub(crate) fn spawn_boiler_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCo
     });
 }
 
-pub(crate) fn update_burner_drill_indicators(
+pub(crate) fn update_machine_indicators(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
-    mut progress_fills: Query<&mut Node, With<BurnerProgressFill>>,
+    mut progress_fills: Query<&mut Node, With<MachineProgressFill>>,
 ) {
     let sim = sim.read();
     let indicator =
         open_container
             .entity_id
             .and_then(|entity_id| match open_machine_kind(&sim, entity_id)? {
-                OpenMachineKind::BurnerDrill => {
+                OpenMachineKind::MiningDrill => {
                     let state =
-                        factory_sim::entity_access::burner_drill_state(&sim, entity_id).ok()?;
+                        factory_sim::entity_access::mining_drill_state(&sim, entity_id).ok()?;
                     Some((
-                        state.energy.energy_remaining_joules,
+                        state
+                            .energy
+                            .burner()
+                            .map(|burner| burner.energy_remaining_joules),
                         state.mining_progress_ticks,
                         state.mining_required_ticks,
                     ))
@@ -287,20 +332,23 @@ pub(crate) fn update_burner_drill_indicators(
                 OpenMachineKind::Furnace => {
                     let state = factory_sim::entity_access::furnace_state(&sim, entity_id).ok()?;
                     Some((
-                        state.energy.energy_remaining_joules,
+                        state
+                            .energy
+                            .burner()
+                            .map(|burner| burner.energy_remaining_joules),
                         state.crafting_progress_ticks,
                         state.crafting_required_ticks,
                     ))
                 }
                 OpenMachineKind::Boiler => {
                     let state = factory_sim::entity_access::boiler_state(&sim, entity_id).ok()?;
-                    Some((state.energy.energy_remaining_joules, 0, 1))
+                    Some((Some(state.energy.energy_remaining_joules), 0, 1))
                 }
                 OpenMachineKind::Assembler => {
                     let state =
                         factory_sim::entity_access::assembler_state(&sim, entity_id).ok()?;
                     Some((
-                        0.0,
+                        None,
                         state.crafting_progress_ticks,
                         state.crafting_required_ticks,
                     ))
@@ -310,7 +358,8 @@ pub(crate) fn update_burner_drill_indicators(
 
     for mut text in &mut energy_texts {
         text.0 = indicator
-            .map(|(energy_remaining_joules, _, _)| {
+            .and_then(|(energy_remaining_joules, _, _)| energy_remaining_joules)
+            .map(|energy_remaining_joules| {
                 format!(
                     "Energy: {} J",
                     energy_remaining_joules.max(0.0).round() as u64

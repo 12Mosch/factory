@@ -1,11 +1,11 @@
-use super::progress::{ProgressAdvance, advance_burner_progress};
+use super::progress::{MachineEnergyContext, ProgressAdvance, advance_machine_progress};
 use super::*;
 
 impl MachineTickContext<'_> {
-    pub(super) fn advance_burner_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
-        let mut burner_mining_drills = std::mem::take(&mut self.entities.burner_mining_drills);
+    pub(super) fn advance_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
+        let mut mining_drills = std::mem::take(&mut self.entities.mining_drills);
 
-        for (&entity_id, state) in &mut burner_mining_drills {
+        for (&entity_id, state) in &mut mining_drills {
             let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
                 continue;
             };
@@ -52,8 +52,13 @@ impl MachineTickContext<'_> {
             }
 
             state.resource_target = Some(target);
-            let advance = advance_burner_progress(
-                &self.world.prototypes,
+            let advance = advance_machine_progress(
+                MachineEnergyContext {
+                    catalog: &self.world.prototypes,
+                    power: self.power,
+                    electric_consumers: &mut self.entities.electric_consumers,
+                    entity_id,
+                },
                 &mut state.energy,
                 &mut state.mining_progress_ticks,
                 state.mining_required_ticks,
@@ -96,14 +101,14 @@ impl MachineTickContext<'_> {
             }
         }
 
-        self.entities.burner_mining_drills = burner_mining_drills;
+        self.entities.mining_drills = mining_drills;
     }
 }
 
 fn insert_drill_output_from_state(
     entities: &mut EntityStore,
     transport: &mut TransportLaneCache,
-    state: &mut BurnerMiningDrillState,
+    state: &mut MiningDrillState,
     output_target: DrillOutputTarget,
     item_id: ItemId,
     count: u16,
@@ -163,7 +168,7 @@ fn insert_drill_output_from_state(
 fn try_export_stored_drill_output_from_state(
     entities: &mut EntityStore,
     transport: &mut TransportLaneCache,
-    state: &mut BurnerMiningDrillState,
+    state: &mut MiningDrillState,
     output_target: DrillOutputTarget,
     catalog: &PrototypeCatalog,
 ) -> bool {

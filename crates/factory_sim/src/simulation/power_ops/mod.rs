@@ -188,18 +188,18 @@ impl Simulation {
         self.ensure_fluid_network_topology();
         let mut networks = self.power.topology.network_accumulators();
 
-        let catalog = &self.world.prototypes;
+        let world = &self.world;
         let entities = &self.entities;
         let research = &self.research;
         let network_ids_by_entity = &self.power.topology.network_ids_by_entity;
         self.power.entity_statuses.retain(|entity_id, _| {
             entities.electric_consumers.contains_key(entity_id)
-                && electric_consumer_has_power_source(catalog, entities, *entity_id)
+                && electric_consumer_has_power_source(&world.prototypes, entities, *entity_id)
         });
 
         for &entity_id in entities.electric_consumers.keys() {
             let Some((active_usage_watts, drain_watts)) =
-                consumer_power_demand_for(catalog, entities, research, entity_id)
+                consumer_power_demand_for(world, entities, research, entity_id)
             else {
                 continue;
             };

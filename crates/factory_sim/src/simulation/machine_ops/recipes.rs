@@ -76,6 +76,22 @@ pub(in crate::simulation) fn furnace_input_accepts_item(
     first_matching_unlocked_smelting_recipe(catalog, research, item_id).is_some()
 }
 
+/// Smelting duration on a specific furnace: the recipe time scaled by the
+/// furnace prototype's crafting speed fraction.
+pub(in crate::simulation) fn furnace_required_ticks(
+    prototype: &factory_data::EntityPrototype,
+    recipe_ticks: u32,
+) -> u32 {
+    let Some(furnace) = prototype.furnace.as_ref() else {
+        return recipe_ticks;
+    };
+    assembler_required_ticks(
+        recipe_ticks,
+        furnace.crafting_speed_numerator,
+        furnace.crafting_speed_denominator,
+    )
+}
+
 pub(in crate::simulation) fn assembler_required_ticks(
     recipe_ticks: u32,
     speed_numerator: u32,

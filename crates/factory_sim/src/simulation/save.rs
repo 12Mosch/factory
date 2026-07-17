@@ -15,12 +15,16 @@ use bincode::Options;
 // v18: typed combat state, factions, resistance profiles, and attack
 // definitions replaced the previous untyped damage fields.
 // v19: pending deterministic chunk-generation requests joined the snapshot.
-pub const SAVE_VERSION: u32 = 19;
+// v20: furnace and mining drill energy generalized to burner-or-electric
+// (MachineEnergy), enabling electric furnaces and electric mining drills.
+pub const SAVE_VERSION: u32 = 20;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
 // v11: PrototypeCatalog gained the optional enemy_gameplay config section.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 11;
+// v12: EntityPrototype gained the furnace section (crafting speed for
+// burner-or-electric furnaces).
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 12;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

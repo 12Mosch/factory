@@ -1,4 +1,4 @@
-use super::progress::{ProgressAdvance, advance_burner_progress};
+use super::progress::{MachineEnergyContext, ProgressAdvance, advance_machine_progress};
 use super::*;
 
 impl MachineTickContext<'_> {
@@ -6,11 +6,14 @@ impl MachineTickContext<'_> {
         let mut furnaces = std::mem::take(&mut self.entities.furnaces);
 
         for (&entity_id, state) in &mut furnaces {
-            if self.entities.placed_entity(entity_id).is_none() {
+            let Some(placed) = self.entities.placed_entity(entity_id) else {
                 continue;
-            }
+            };
+            let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
+                continue;
+            };
 
-            let Some((recipe_id, required_ticks, ingredient, product)) =
+            let Some((recipe_id, recipe_ticks, ingredient, product)) =
                 furnace_work_selection(&self.world.prototypes, self.research, state.input_slot)
             else {
                 state.active_recipe = None;
@@ -18,6 +21,7 @@ impl MachineTickContext<'_> {
                 state.crafting_required_ticks = 0;
                 continue;
             };
+            let required_ticks = furnace_required_ticks(prototype, recipe_ticks);
 
             let output_can_accept = profiler.measure(ProfilePhase::InventoryTransfers, || {
                 state.output_slot.can_insert_item(
@@ -41,8 +45,13 @@ impl MachineTickContext<'_> {
                 state.crafting_required_ticks = required_ticks;
             }
 
-            let advance = advance_burner_progress(
-                &self.world.prototypes,
+            let advance = advance_machine_progress(
+                MachineEnergyContext {
+                    catalog: &self.world.prototypes,
+                    power: self.power,
+                    electric_consumers: &mut self.entities.electric_consumers,
+                    entity_id,
+                },
                 &mut state.energy,
                 &mut state.crafting_progress_ticks,
                 required_ticks,

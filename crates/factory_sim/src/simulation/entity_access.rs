@@ -17,11 +17,11 @@ pub fn inventory_mut(
     EntityStore::entity_inventory_mut(&mut sim.entities, entity_id)
 }
 
-pub fn burner_drill_state(
+pub fn mining_drill_state(
     sim: &Simulation,
     entity_id: EntityId,
-) -> Result<&BurnerMiningDrillState, BurnerDrillError> {
-    sim.entities.burner_drill_state(entity_id)
+) -> Result<&MiningDrillState, MiningDrillError> {
+    sim.entities.mining_drill_state(entity_id)
 }
 
 pub fn furnace_state(sim: &Simulation, entity_id: EntityId) -> Result<&FurnaceState, FurnaceError> {
@@ -86,12 +86,13 @@ pub fn inventory_panel_slot(
             .and_then(|id| EntityStore::entity_inventory(&sim.entities, id).ok())
             .and_then(|inventory| inventory.slot(slot_index)),
         InventoryPanel::BurnerFuel => entity_id
-            .and_then(|id| sim.entities.burner_drill_state(id).ok())
-            .filter(|_| slot_index == BURNER_MINING_DRILL_FUEL_SLOT_INDEX)
-            .and_then(|state| state.energy.fuel_slot.stack()),
+            .and_then(|id| sim.entities.mining_drill_state(id).ok())
+            .filter(|_| slot_index == MINING_DRILL_FUEL_SLOT_INDEX)
+            .and_then(|state| state.energy.fuel_slot())
+            .and_then(|slot| slot.stack()),
         InventoryPanel::BurnerOutput => entity_id
-            .and_then(|id| sim.entities.burner_drill_state(id).ok())
-            .filter(|_| slot_index == BURNER_MINING_DRILL_OUTPUT_SLOT_INDEX)
+            .and_then(|id| sim.entities.mining_drill_state(id).ok())
+            .filter(|_| slot_index == MINING_DRILL_OUTPUT_SLOT_INDEX)
             .and_then(|state| state.output_slot.stack()),
         InventoryPanel::FurnaceInput => entity_id
             .and_then(|id| sim.entities.furnace_state(id).ok())
@@ -100,7 +101,8 @@ pub fn inventory_panel_slot(
         InventoryPanel::FurnaceFuel => entity_id
             .and_then(|id| sim.entities.furnace_state(id).ok())
             .filter(|_| slot_index == FURNACE_FUEL_SLOT_INDEX)
-            .and_then(|state| state.energy.fuel_slot.stack()),
+            .and_then(|state| state.energy.fuel_slot())
+            .and_then(|slot| slot.stack()),
         InventoryPanel::FurnaceOutput => entity_id
             .and_then(|id| sim.entities.furnace_state(id).ok())
             .filter(|_| slot_index == FURNACE_OUTPUT_SLOT_INDEX)
@@ -129,12 +131,16 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::Container => entity_id
             .and_then(|id| EntityStore::entity_inventory(&sim.entities, id).ok())
             .map_or(0, |inventory| inventory.slots().len()),
-        InventoryPanel::BurnerFuel | InventoryPanel::BurnerOutput => entity_id
-            .and_then(|id| sim.entities.burner_drill_state(id).ok())
+        InventoryPanel::BurnerFuel => entity_id
+            .and_then(|id| sim.entities.mining_drill_state(id).ok())
+            .map_or(0, |state| usize::from(state.energy.fuel_slot().is_some())),
+        InventoryPanel::BurnerOutput => entity_id
+            .and_then(|id| sim.entities.mining_drill_state(id).ok())
             .map_or(0, |_| 1),
-        InventoryPanel::FurnaceInput
-        | InventoryPanel::FurnaceFuel
-        | InventoryPanel::FurnaceOutput => entity_id
+        InventoryPanel::FurnaceFuel => entity_id
+            .and_then(|id| sim.entities.furnace_state(id).ok())
+            .map_or(0, |state| usize::from(state.energy.fuel_slot().is_some())),
+        InventoryPanel::FurnaceInput | InventoryPanel::FurnaceOutput => entity_id
             .and_then(|id| sim.entities.furnace_state(id).ok())
             .map_or(0, |_| 1),
         InventoryPanel::BoilerFuel => entity_id

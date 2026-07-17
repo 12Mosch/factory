@@ -257,9 +257,17 @@ fn early_progression_spine_is_linear_through_fluid_handling() {
         "logistics_2",
         "fluid_handling",
     ];
-    // Defense hangs off the spine as an optional side branch; researching
-    // only spine technologies must still surface each spine step in order.
-    let defense_branch = ["stone_walls", "turrets"];
+    // Defense and the chemical-science era hang off the spine as optional
+    // side branches; researching only spine technologies must still surface
+    // each spine step in order.
+    let defense_branch = [
+        "stone_walls",
+        "turrets",
+        "electric_mining",
+        "electric_energy_distribution_1",
+        "advanced_material_processing",
+        "engine",
+    ];
     let mut completed = BTreeSet::new();
 
     for technology_name in expected {

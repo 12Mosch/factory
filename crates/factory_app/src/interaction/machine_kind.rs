@@ -4,7 +4,7 @@ use factory_sim::{EntityId, Simulation};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OpenMachineKind {
     Chest,
-    BurnerDrill,
+    MiningDrill,
     Furnace,
     Boiler,
     Assembler,
@@ -15,7 +15,7 @@ pub(crate) enum OpenMachineKind {
 pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option<OpenMachineKind> {
     match factory_sim::entity_access::machine_kind(sim, entity_id)? {
         EntityKind::Chest => Some(OpenMachineKind::Chest),
-        EntityKind::MiningDrill => Some(OpenMachineKind::BurnerDrill),
+        EntityKind::MiningDrill => Some(OpenMachineKind::MiningDrill),
         EntityKind::Furnace => Some(OpenMachineKind::Furnace),
         EntityKind::Boiler => Some(OpenMachineKind::Boiler),
         EntityKind::AssemblingMachine => Some(OpenMachineKind::Assembler),

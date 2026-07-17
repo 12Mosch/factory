@@ -104,7 +104,8 @@ fn slot_click_transfer_routes_furnace_input_fuel_and_output() {
         factory_sim::entity_access::furnace_state(&sim, entity_id)
             .expect("furnace should expose state")
             .energy
-            .fuel_slot,
+            .fuel_slot()
+            .expect("burner machine has a fuel slot"),
         Some(ItemStack::new(sim.catalog(), coal, 1).expect("expected valid test stack"))
     );
 
@@ -301,10 +302,11 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
 
     assert_eq!(sim.player_inventory().slots()[2], None);
     assert_eq!(
-        factory_sim::entity_access::burner_drill_state(&sim, entity_id)
+        factory_sim::entity_access::mining_drill_state(&sim, entity_id)
             .expect("burner drill should expose state")
             .energy
-            .fuel_slot,
+            .fuel_slot()
+            .expect("burner machine has a fuel slot"),
         Some(ItemStack::new(sim.catalog(), coal, 1).expect("expected valid test stack"))
     );
 
@@ -322,7 +324,7 @@ fn slot_click_transfer_handles_burner_drill_fuel_and_output() {
 
     assert_eq!(sim.player_inventory().count(coal), 1);
     assert_eq!(
-        factory_sim::entity_access::burner_drill_state(&sim, entity_id)
+        factory_sim::entity_access::mining_drill_state(&sim, entity_id)
             .expect("burner drill should expose state")
             .output_slot,
         None

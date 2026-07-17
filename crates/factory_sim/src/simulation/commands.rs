@@ -100,6 +100,10 @@ pub enum SimCommand {
         name: String,
     },
     BuildRedScienceResearchFixture,
+    BuildChemicalScienceFactoryFixture,
+    /// Applies the chemical science fixture's pending recipe selections as
+    /// research unlocks them. Idempotent; scripted runs apply it every tick.
+    RunChemicalScienceFactoryProgram,
 }
 
 /// An inventory region of the player or an open entity that a slot click can
@@ -122,7 +126,7 @@ pub enum InventoryPanel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotTransferError {
     Transfer(ContainerError),
-    BurnerDrill(BurnerDrillError),
+    MiningDrill(MiningDrillError),
     Furnace(FurnaceError),
     Boiler(BoilerError),
     Assembler(AssemblerError),
@@ -368,6 +372,14 @@ impl Simulation {
             }
             SimCommand::BuildRedScienceResearchFixture => {
                 self.build_red_science_research_fixture();
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::BuildChemicalScienceFactoryFixture => {
+                self.build_chemical_science_factory_fixture();
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::RunChemicalScienceFactoryProgram => {
+                self.run_chemical_science_factory_program();
                 Ok(SimCommandEffect::None)
             }
         }

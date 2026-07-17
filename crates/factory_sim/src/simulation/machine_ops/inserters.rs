@@ -151,15 +151,17 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     }
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
-        return item_slot_can_accept(
-            catalog,
-            research,
-            entities,
-            ItemSlotPolicy::Fuel,
-            ItemSlotOperation::InserterInsert,
-            furnace.energy.fuel_slot,
-            item,
-        ) || item_slot_can_accept(
+        return furnace.energy.fuel_slot().is_some_and(|fuel_slot| {
+            item_slot_can_accept(
+                catalog,
+                research,
+                entities,
+                ItemSlotPolicy::Fuel,
+                ItemSlotOperation::InserterInsert,
+                fuel_slot,
+                item,
+            )
+        }) || item_slot_can_accept(
             catalog,
             research,
             entities,
@@ -382,15 +384,17 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     }
 
     if let Some(furnace) = entities.furnaces.get(&entity_id) {
-        let fuel_accepts = item_slot_can_accept(
-            catalog,
-            research,
-            entities,
-            ItemSlotPolicy::Fuel,
-            ItemSlotOperation::InserterInsert,
-            furnace.energy.fuel_slot,
-            item,
-        );
+        let fuel_accepts = furnace.energy.fuel_slot().is_some_and(|fuel_slot| {
+            item_slot_can_accept(
+                catalog,
+                research,
+                entities,
+                ItemSlotPolicy::Fuel,
+                ItemSlotOperation::InserterInsert,
+                fuel_slot,
+                item,
+            )
+        });
         let input_accepts = !fuel_accepts
             && item_slot_can_accept(
                 catalog,
@@ -408,7 +412,8 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         if fuel_accepts {
             furnace
                 .energy
-                .fuel_slot
+                .fuel_slot_mut()
+                .expect("an accepting furnace fuel slot exists")
                 .insert_stack(catalog, item)
                 .expect("the checked furnace fuel slot should accept the item");
             return true;

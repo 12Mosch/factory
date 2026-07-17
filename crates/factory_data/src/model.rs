@@ -58,6 +58,7 @@ pub struct EntityPrototype {
     pub inventory_slot_count: Option<usize>,
     pub burner: Option<BurnerPrototype>,
     pub mining_drill: Option<MiningDrillPrototype>,
+    pub furnace: Option<FurnacePrototype>,
     pub assembling_machine: Option<AssemblingMachinePrototype>,
     pub transport_belt: Option<TransportBeltPrototype>,
     pub splitter: Option<SplitterPrototype>,
@@ -193,6 +194,16 @@ pub struct BurnerPrototype {
 pub struct MiningDrillPrototype {
     pub mining_area: IVec2,
     pub ticks_per_item: u32,
+}
+
+/// Furnace crafting behavior. The speed fraction scales smelting recipe
+/// times the same way assembler crafting speed does; the energy source
+/// (burner or electric) comes from the entity's `burner` /
+/// `electric_energy_source` sections.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct FurnacePrototype {
+    pub crafting_speed_numerator: u32,
+    pub crafting_speed_denominator: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

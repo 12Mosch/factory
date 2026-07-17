@@ -11,7 +11,7 @@ use crate::ui::inventory_panel::{
     spawn_slot_button,
 };
 use crate::ui::machine_indicators::{
-    spawn_boiler_panel, spawn_burner_drill_panel, spawn_furnace_panel, spawn_machine_guidance,
+    spawn_boiler_panel, spawn_furnace_panel, spawn_machine_guidance, spawn_mining_drill_panel,
 };
 use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
@@ -105,8 +105,8 @@ fn spawn_container_window_contents(
                 "Gun Turret",
                 container_slot_count(sim, entity_id),
             ),
-            OpenMachineKind::BurnerDrill => spawn_burner_drill_panel(machine_panel),
-            OpenMachineKind::Furnace => spawn_furnace_panel(machine_panel),
+            OpenMachineKind::MiningDrill => spawn_mining_drill_panel(machine_panel, sim, entity_id),
+            OpenMachineKind::Furnace => spawn_furnace_panel(machine_panel, sim, entity_id),
             OpenMachineKind::Boiler => spawn_boiler_panel(machine_panel),
             OpenMachineKind::Assembler => {
                 let prototype = sim
@@ -149,7 +149,7 @@ fn machine_panel_width(kind: OpenMachineKind) -> f32 {
     match kind {
         OpenMachineKind::Assembler => 420.0,
         OpenMachineKind::Chest | OpenMachineKind::Lab | OpenMachineKind::Turret => 244.0,
-        OpenMachineKind::BurnerDrill | OpenMachineKind::Furnace | OpenMachineKind::Boiler => 220.0,
+        OpenMachineKind::MiningDrill | OpenMachineKind::Furnace | OpenMachineKind::Boiler => 220.0,
     }
 }
 

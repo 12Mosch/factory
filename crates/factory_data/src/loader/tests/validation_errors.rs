@@ -322,7 +322,7 @@ fn invalid_collision_layers_fail() {
             entities: [(
                 id: 0,
                 name: "bad_entity",
-                entity_kind: Furnace,
+                entity_kind: Chest,
                 size: (x: 2, y: 2),
                 collision_mask: (layers: ["invalid"]),
             )],
@@ -336,6 +336,120 @@ fn invalid_collision_layers_fail() {
         error,
         PrototypeLoadError::InvalidCollisionLayer { owner, layer }
             if owner == "bad_entity" && layer == "invalid"
+    ));
+}
+
+#[test]
+fn furnace_without_furnace_section_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_furnace",
+                entity_kind: Furnace,
+                size: (x: 2, y: 2),
+                collision_mask: (layers: ["ground", "building"]),
+                burner: Some((energy_usage_watts: 90000)),
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("furnace without a furnace section should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidMachineEnergySource { entity, .. }
+            if entity == "bad_furnace"
+    ));
+}
+
+#[test]
+fn furnace_with_both_energy_sources_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_furnace",
+                entity_kind: Furnace,
+                size: (x: 2, y: 2),
+                collision_mask: (layers: ["ground", "building"]),
+                furnace: Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1)),
+                burner: Some((energy_usage_watts: 90000)),
+                electric_energy_source: Some((energy_usage_watts: 180000, drain_watts: 0)),
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("furnace with two energy sources should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidMachineEnergySource { entity, .. }
+            if entity == "bad_furnace"
+    ));
+}
+
+#[test]
+fn mining_drill_without_energy_source_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_drill",
+                entity_kind: MiningDrill,
+                size: (x: 2, y: 2),
+                collision_mask: (layers: ["ground", "building"]),
+                mining_drill: Some((mining_area: (x: 2, y: 2), ticks_per_item: 240)),
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("mining drill without an energy source should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidMachineEnergySource { entity, .. }
+            if entity == "bad_drill"
+    ));
+}
+
+#[test]
+fn non_furnace_with_furnace_section_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "bad_chest",
+                entity_kind: Chest,
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["ground", "building"]),
+                furnace: Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1)),
+            )],
+            tiles: [],
+        )
+        "#,
+    )
+    .expect_err("furnace section on a non-furnace entity should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidMachineEnergySource { entity, .. }
+            if entity == "bad_chest"
     ));
 }
 

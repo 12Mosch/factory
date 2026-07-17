@@ -6,7 +6,7 @@ pub(crate) fn chest_color() -> Color {
     Color::srgb(0.64, 0.43, 0.22)
 }
 
-pub(crate) fn burner_drill_color() -> Color {
+pub(crate) fn mining_drill_color() -> Color {
     Color::srgb(0.38, 0.44, 0.39)
 }
 
