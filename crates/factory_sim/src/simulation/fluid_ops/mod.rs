@@ -8,7 +8,7 @@ mod types;
 
 #[allow(unused_imports)]
 pub(in crate::simulation) use math::{ceil_div_u64, per_tick_milliunits};
-pub(in crate::simulation) use types::{FluidBoxKey, FluidNetworkTopology};
+pub(in crate::simulation) use types::{FluidBoxAssignment, FluidBoxKey, FluidNetworkTopology};
 
 use geometry::{
     FluidConnectionGeometry, rotated_fluid_connection_geometry, rotated_fluid_endpoint,

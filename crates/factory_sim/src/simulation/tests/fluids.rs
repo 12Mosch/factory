@@ -432,6 +432,89 @@ fn storage_tank_equalizes_with_connected_pipe_by_fill_percentage() {
 }
 
 #[test]
+fn only_mutated_fluid_network_is_invalidated_and_refreshed() {
+    let mut sim = Simulation::new_test_world(123);
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 1);
+    let first_pipe = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("first pipe should be placeable");
+    let second_pipe = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pipe,
+            x: x + 2,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("second pipe should be placeable");
+
+    sim.refresh_fluid_networks_after_dynamic_changes();
+    let first_network = sim
+        .fluid_network_id_for_box_key(FluidBoxKey {
+            entity_id: first_pipe,
+            box_index: 0,
+        })
+        .expect("first pipe should have a fluid network");
+    let second_network = sim
+        .fluid_network_id_for_box_key(FluidBoxKey {
+            entity_id: second_pipe,
+            box_index: 0,
+        })
+        .expect("second pipe should have a fluid network");
+    assert_ne!(first_network, second_network);
+    let unchanged_snapshot = sim.fluid_networks()[second_network as usize].clone();
+
+    assert_eq!(
+        sim.add_fluid_to_network(first_network, water, 10_000),
+        10_000
+    );
+    assert_eq!(
+        sim.fluids
+            .networks_needing_equalization
+            .iter()
+            .filter(|&&dirty| dirty)
+            .count(),
+        1
+    );
+    assert!(sim.fluids.networks_needing_equalization[first_network as usize]);
+    assert!(sim.fluids.networks_needing_snapshot[first_network as usize]);
+    assert!(!sim.fluids.networks_needing_snapshot[second_network as usize]);
+
+    sim.refresh_fluid_networks_after_dynamic_changes();
+
+    assert!(
+        sim.fluids
+            .networks_needing_equalization
+            .iter()
+            .all(|dirty| !dirty)
+    );
+    assert!(
+        sim.fluids
+            .networks_needing_snapshot
+            .iter()
+            .all(|dirty| !dirty)
+    );
+    assert_eq!(
+        sim.fluid_networks()[first_network as usize].total_milliunits,
+        10_000
+    );
+    assert_eq!(
+        sim.fluid_networks()[second_network as usize],
+        unchanged_snapshot
+    );
+}
+
+#[test]
 fn fluid_connection_directions_reports_joined_neighbors() {
     let mut sim = Simulation::new_test_world(123);
     let tank = entity_id_by_name(&sim.world.prototypes, "storage_tank");

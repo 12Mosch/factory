@@ -87,6 +87,9 @@ impl Simulation {
             added += inserted;
         }
 
+        if added > 0 {
+            self.fluids.mark_network_dirty(network_id);
+        }
         added
     }
 
@@ -130,6 +133,7 @@ impl Simulation {
         }
 
         debug_assert_eq!(remaining, 0);
+        self.fluids.mark_network_dirty(network_id);
         true
     }
 
@@ -253,74 +257,87 @@ impl Simulation {
         scan.accepts_fluid(fluid_id)
     }
 
-    pub(super) fn fluid_network_snapshot(
-        &self,
-        network: &FluidNetworkTopology,
-    ) -> FluidNetworkSnapshot {
-        let summary = self.fluid_network_dynamic_summary(network);
-        FluidNetworkSnapshot {
-            network_id: network.network_id,
-            fluid_id: summary.fluid_id,
-            total_milliunits: summary.total_milliunits,
-            capacity_milliunits: network.capacity_milliunits,
-            box_count: network.boxes.len(),
-            blocked: summary.blocked,
-            boxes: network
-                .boxes
-                .iter()
-                .filter_map(|box_topology| self.fluid_network_box_snapshot(box_topology))
-                .collect(),
-        }
-    }
-
-    pub(super) fn fluid_network_box_snapshot(
-        &self,
-        box_topology: &FluidNetworkBoxTopology,
-    ) -> Option<FluidNetworkBoxSnapshot> {
-        let key = box_topology.key;
-        let state = self
-            .entities
-            .fluid_boxes
-            .get(&key.entity_id)?
-            .get(key.box_index)?;
-
-        Some(FluidNetworkBoxSnapshot {
-            entity_id: key.entity_id,
-            box_index: key.box_index,
-            capacity_milliunits: box_topology.capacity_milliunits,
-            amount_milliunits: state.amount_milliunits,
-            fluid_id: state.fluid_id,
-            filter: box_topology.filter,
-        })
-    }
-
     pub(in crate::simulation) fn fluid_network_dynamic_summary(
         &self,
         network: &FluidNetworkTopology,
     ) -> FluidNetworkDynamicSummary {
-        let mut scan = FluidNetworkFluidScan::default();
-        let mut total_milliunits = 0_u64;
+        fluid_network_dynamic_summary(&self.entities, network)
+    }
+}
 
-        for box_topology in &network.boxes {
-            scan.observe_filter(box_topology.filter);
+pub(super) fn update_fluid_network_snapshot(
+    entities: &EntityStore,
+    network: &FluidNetworkTopology,
+    snapshot: &mut FluidNetworkSnapshot,
+) {
+    let summary = fluid_network_dynamic_summary(entities, network);
+    snapshot.network_id = network.network_id;
+    snapshot.fluid_id = summary.fluid_id;
+    snapshot.total_milliunits = summary.total_milliunits;
+    snapshot.capacity_milliunits = network.capacity_milliunits;
+    snapshot.box_count = network.boxes.len();
+    snapshot.blocked = summary.blocked;
 
-            let Some(state) = self
-                .entities
-                .fluid_boxes
-                .get(&box_topology.key.entity_id)
-                .and_then(|boxes| boxes.get(box_topology.key.box_index))
-            else {
-                continue;
-            };
-            total_milliunits = total_milliunits.saturating_add(state.amount_milliunits);
-            scan.observe_fluid_state(state);
+    let mut snapshot_box_index = 0;
+    for box_topology in &network.boxes {
+        let Some(box_snapshot) = fluid_network_box_snapshot(entities, box_topology) else {
+            continue;
+        };
+        if let Some(existing) = snapshot.boxes.get_mut(snapshot_box_index) {
+            *existing = box_snapshot;
+        } else {
+            snapshot.boxes.push(box_snapshot);
         }
+        snapshot_box_index += 1;
+    }
+    snapshot.boxes.truncate(snapshot_box_index);
+}
 
-        FluidNetworkDynamicSummary {
-            total_milliunits,
-            fluid_id: scan.fluid_id(),
-            blocked: scan.blocked(),
-        }
+fn fluid_network_box_snapshot(
+    entities: &EntityStore,
+    box_topology: &FluidNetworkBoxTopology,
+) -> Option<FluidNetworkBoxSnapshot> {
+    let key = box_topology.key;
+    let state = entities
+        .fluid_boxes
+        .get(&key.entity_id)?
+        .get(key.box_index)?;
+
+    Some(FluidNetworkBoxSnapshot {
+        entity_id: key.entity_id,
+        box_index: key.box_index,
+        capacity_milliunits: box_topology.capacity_milliunits,
+        amount_milliunits: state.amount_milliunits,
+        fluid_id: state.fluid_id,
+        filter: box_topology.filter,
+    })
+}
+
+pub(super) fn fluid_network_dynamic_summary(
+    entities: &EntityStore,
+    network: &FluidNetworkTopology,
+) -> FluidNetworkDynamicSummary {
+    let mut scan = FluidNetworkFluidScan::default();
+    let mut total_milliunits = 0_u64;
+
+    for box_topology in &network.boxes {
+        scan.observe_filter(box_topology.filter);
+
+        let Some(state) = entities
+            .fluid_boxes
+            .get(&box_topology.key.entity_id)
+            .and_then(|boxes| boxes.get(box_topology.key.box_index))
+        else {
+            continue;
+        };
+        total_milliunits = total_milliunits.saturating_add(state.amount_milliunits);
+        scan.observe_fluid_state(state);
+    }
+
+    FluidNetworkDynamicSummary {
+        total_milliunits,
+        fluid_id: scan.fluid_id(),
+        blocked: scan.blocked(),
     }
 }
 
