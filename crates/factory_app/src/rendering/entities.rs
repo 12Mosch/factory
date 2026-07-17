@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::constants::{
-    BURNER_DRILL_SPRITE_PADDING, CHEST_SPRITE_SIZE, TILE_SIZE, TRANSPORT_BELT_SPRITE_SIZE,
+    CHEST_SPRITE_SIZE, MINING_DRILL_SPRITE_PADDING, TILE_SIZE, TRANSPORT_BELT_SPRITE_SIZE,
 };
 use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{
@@ -223,8 +223,8 @@ pub(crate) fn entity_prototype_visual_style(
     let footprint = EntityFootprint::from_size(0, 0, prototype.size.x, prototype.size.y, direction);
     let machine_size = || {
         Vec2::new(
-            footprint.width as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
-            footprint.height as f32 * TILE_SIZE - BURNER_DRILL_SPRITE_PADDING,
+            footprint.width as f32 * TILE_SIZE - MINING_DRILL_SPRITE_PADDING,
+            footprint.height as f32 * TILE_SIZE - MINING_DRILL_SPRITE_PADDING,
         )
     };
 

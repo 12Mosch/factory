@@ -11,7 +11,7 @@ use crate::ui::formatting::{
     machine_recipe_choices,
 };
 use crate::ui::inventory_panel::{InventoryPanel, spawn_slot_button};
-use crate::ui::machine_indicators::BurnerProgressFill;
+use crate::ui::machine_indicators::MachineProgressFill;
 use crate::ui::resources::OpenContainer;
 
 #[derive(Component)]
@@ -134,7 +134,7 @@ pub(crate) fn spawn_assembler_panel(
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.34, 0.70, 0.86)),
-                BurnerProgressFill,
+                MachineProgressFill,
             ));
         panel
             .spawn((

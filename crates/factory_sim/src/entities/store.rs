@@ -144,8 +144,9 @@ mod tests {
         // v16: EnemySpawnerState dropped absorbed_pollution_micro.
         // v18: gun turret damage and health state became typed combat data.
         // v20: furnace and mining drill energy became MachineEnergy
-        // (burner-or-electric).
-        const EXPECTED_LAYOUT_HASH: u64 = 0x42f2_de97_d05a_5eca;
+        // (burner-or-electric); the fixture drill uses the electric variant
+        // so both enum arms are pinned.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x029c_5a71_7c77_f98d;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -215,10 +216,12 @@ mod tests {
             EntityId::new(1),
             test_inventory(vec![Some(test_stack(iron, 5))]),
         );
+        // The drill uses the electric variant and the furnace the burner
+        // variant so the golden layout covers both `MachineEnergy` arms.
         store.mining_drills.insert(
             EntityId::new(2),
             MiningDrillState {
-                energy: MachineEnergy::Burner(burner_energy(iron)),
+                energy: MachineEnergy::Electric,
                 mining_progress_ticks: 7,
                 mining_required_ticks: 60,
                 resource_target: Some(ManualMiningTarget { x: 2, y: 3 }),

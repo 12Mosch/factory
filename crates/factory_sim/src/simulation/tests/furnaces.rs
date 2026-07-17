@@ -213,9 +213,19 @@ fn steel_furnace_smelts_at_double_speed() {
 
     // A stone furnace needs 210 ticks for iron plates; the steel furnace's
     // 2x crafting speed halves that.
-    for _ in 0..105 {
+    for _ in 0..104 {
         sim.tick();
     }
+
+    let state =
+        crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");
+    assert_eq!(
+        state.output_slot.stack(),
+        None,
+        "the craft must not complete a tick early"
+    );
+
+    sim.tick();
 
     let state =
         crate::entity_access::furnace_state(&sim, entity_id).expect("furnace should expose state");

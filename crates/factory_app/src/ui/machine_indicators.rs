@@ -15,7 +15,7 @@ use crate::ui::resources::OpenContainer;
 pub(crate) struct BurnerEnergyText;
 
 #[derive(Component)]
-pub(crate) struct BurnerProgressFill;
+pub(crate) struct MachineProgressFill;
 
 #[derive(Component)]
 pub(crate) struct MachineGuidanceText;
@@ -137,7 +137,7 @@ pub(crate) fn spawn_mining_drill_panel(
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.33, 0.74, 0.48)),
-                BurnerProgressFill,
+                MachineProgressFill,
             ));
         panel
             .spawn((
@@ -230,7 +230,7 @@ pub(crate) fn spawn_furnace_panel(
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.82, 0.48, 0.24)),
-                BurnerProgressFill,
+                MachineProgressFill,
             ));
         panel
             .spawn((
@@ -306,11 +306,11 @@ pub(crate) fn spawn_boiler_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCo
     });
 }
 
-pub(crate) fn update_mining_drill_indicators(
+pub(crate) fn update_machine_indicators(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
-    mut progress_fills: Query<&mut Node, With<BurnerProgressFill>>,
+    mut progress_fills: Query<&mut Node, With<MachineProgressFill>>,
 ) {
     let sim = sim.read();
     let indicator =
