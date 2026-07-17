@@ -38,23 +38,21 @@ impl Simulation {
 
     pub(in crate::simulation) fn refresh_fluid_network_snapshots(&mut self) {
         self.ensure_fluid_network_topology();
+        self.fluids.networks.resize(
+            self.fluids.topology_networks.len(),
+            FluidNetworkSnapshot::default(),
+        );
         for network_index in 0..self.fluids.topology_networks.len() {
             if !self.fluids.networks_needing_snapshot[network_index] {
                 continue;
             }
             self.fluids.networks_needing_snapshot[network_index] = false;
-            if self.fluids.networks.len() == network_index {
-                self.fluids.networks.push(FluidNetworkSnapshot::default());
-            }
             update_fluid_network_snapshot(
                 &self.entities,
                 &self.fluids.topology_networks[network_index],
                 &mut self.fluids.networks[network_index],
             );
         }
-        self.fluids
-            .networks
-            .truncate(self.fluids.topology_networks.len());
     }
 
     pub(in crate::simulation) fn refresh_fluid_networks_after_dynamic_changes(&mut self) {
