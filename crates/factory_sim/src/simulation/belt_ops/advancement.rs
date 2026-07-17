@@ -1,11 +1,11 @@
-use super::cache::{
-    TransportLaneActiveStorage, TransportLaneGraph, TransportLaneVisitStorage, visit_state_index,
-};
+use super::cache::{TransportLaneActiveStorage, TransportLaneGraph, TransportLaneVisitStorage};
 use super::lane_access::{
-    belt_lane_can_accept_position, lane_exists, lane_is_empty, lane_mut,
-    lane_speed_subtiles_per_tick, set_lane_items, take_lane_items,
+    belt_lane_can_accept_position, lane_mut, set_lane_items, take_lane_for_advancement,
 };
-use super::types::{BeltLaneVisitState, TransportLaneDownstream, TransportLaneKey};
+use super::types::{
+    BeltLaneVisitState, TransportLaneDownstream, TransportLaneIndex, TransportLaneKey,
+    TransportLaneTraversalStep,
+};
 use super::*;
 
 pub(in crate::simulation) struct TransportBeltAdvancement<'a> {
@@ -31,45 +31,70 @@ impl<'a> TransportBeltAdvancement<'a> {
     }
 
     pub(in crate::simulation) fn process_active_lanes(&mut self) {
+        let mut traversal_stack = std::mem::take(&mut self.visit_states.traversal_stack);
         for index in 0..self.active_lanes.lanes.len() {
-            self.process_lane(self.active_lanes.lanes[index]);
+            self.process_lane(self.active_lanes.lanes[index], &mut traversal_stack);
         }
+        self.visit_states.traversal_stack = traversal_stack;
     }
 
-    fn process_lane(&mut self, key: TransportLaneKey) {
-        match self.visit_state(key) {
-            Some(BeltLaneVisitState::Done | BeltLaneVisitState::Processing) => return,
-            None => {}
-        }
+    fn process_lane(
+        &mut self,
+        root: TransportLaneIndex,
+        traversal_stack: &mut Vec<TransportLaneTraversalStep>,
+    ) {
+        debug_assert!(traversal_stack.is_empty());
+        traversal_stack.push(TransportLaneTraversalStep::Enter(root));
 
-        if !lane_exists(self.entities, key) {
-            return;
-        }
+        while let Some(step) = traversal_stack.pop() {
+            match step {
+                TransportLaneTraversalStep::Enter(index) => {
+                    match self.visit_state(index) {
+                        Some(BeltLaneVisitState::Done | BeltLaneVisitState::Processing) => continue,
+                        None => {}
+                    }
+                    let Some(key) = self.graph.key_for(index) else {
+                        continue;
+                    };
 
-        self.set_visit_state(key, BeltLaneVisitState::Processing);
-
-        let downstream = self.downstream_lane_keys(key);
-        for downstream_key in &downstream {
-            if self.visit_state(*downstream_key) != Some(BeltLaneVisitState::Processing) {
-                self.process_lane(*downstream_key);
+                    self.set_visit_state(index, BeltLaneVisitState::Processing);
+                    traversal_stack.push(TransportLaneTraversalStep::Exit(index));
+                    let downstream = self.downstream_lane_indices(index, key);
+                    for downstream_index in downstream.into_iter().rev() {
+                        if self.visit_state(downstream_index)
+                            != Some(BeltLaneVisitState::Processing)
+                        {
+                            traversal_stack
+                                .push(TransportLaneTraversalStep::Enter(downstream_index));
+                        }
+                    }
+                }
+                TransportLaneTraversalStep::Exit(index) => {
+                    let Some(key) = self.graph.key_for(index) else {
+                        continue;
+                    };
+                    if self.advance_lane_items(index, key) {
+                        self.mark_upstream_lanes_active(index);
+                    }
+                    self.set_visit_state(index, BeltLaneVisitState::Done);
+                }
             }
         }
-
-        if self.advance_lane_items(key) {
-            self.mark_upstream_lanes_active(key);
-        }
-        self.set_visit_state(key, BeltLaneVisitState::Done);
     }
 
-    fn downstream_lane_keys(&self, key: TransportLaneKey) -> SmallVec<[TransportLaneKey; 2]> {
-        match self.graph.downstream_for(key) {
+    fn downstream_lane_indices(
+        &self,
+        index: TransportLaneIndex,
+        key: TransportLaneKey,
+    ) -> SmallVec<[TransportLaneIndex; 2]> {
+        match self.graph.downstream_for(index) {
             TransportLaneDownstream::Missing => SmallVec::new(),
             TransportLaneDownstream::Belt { downstream } => {
-                let mut downstream_keys = SmallVec::new();
-                if let Some(key) = downstream {
-                    downstream_keys.push(key);
+                let mut downstream_indices = SmallVec::new();
+                if let Some(index) = downstream {
+                    downstream_indices.push(index);
                 }
-                downstream_keys
+                downstream_indices
             }
             TransportLaneDownstream::Splitter { outputs } => {
                 let preferred = self.splitter_preferred_output_port(key);
@@ -102,14 +127,10 @@ impl<'a> TransportBeltAdvancement<'a> {
             .unwrap_or(0)
     }
 
-    fn advance_lane_items(&mut self, key: TransportLaneKey) -> bool {
-        let Some(speed_subtiles_per_tick) = lane_speed_subtiles_per_tick(self.entities, key) else {
-            return false;
-        };
-        if lane_is_empty(self.entities, key) {
-            return false;
-        }
-        let Some(mut items) = take_lane_items(self.entities, key) else {
+    fn advance_lane_items(&mut self, index: TransportLaneIndex, key: TransportLaneKey) -> bool {
+        let Some((speed_subtiles_per_tick, mut items)) =
+            take_lane_for_advancement(self.entities, key)
+        else {
             return false;
         };
         let mut advanced_descending = SmallVec::<[BeltItem; 8]>::new();
@@ -126,7 +147,7 @@ impl<'a> TransportBeltAdvancement<'a> {
 
             if next_position >= BELT_SUBTILES_PER_TILE {
                 let carried_position = next_position - BELT_SUBTILES_PER_TILE;
-                if self.try_route_carried_item(key, item.item_id, carried_position) {
+                if self.try_route_carried_item(index, key, item.item_id, carried_position) {
                     lane_changed = true;
                     continue;
                 }
@@ -143,7 +164,7 @@ impl<'a> TransportBeltAdvancement<'a> {
 
         advanced_descending.reverse();
         if lane_changed && !advanced_descending.is_empty() {
-            self.active_lanes.mark_pending(key);
+            self.active_lanes.mark_pending(index);
         }
         set_lane_items(self.entities, key, advanced_descending);
         lane_changed
@@ -151,25 +172,27 @@ impl<'a> TransportBeltAdvancement<'a> {
 
     fn try_route_carried_item(
         &mut self,
-        source: TransportLaneKey,
+        source_index: TransportLaneIndex,
+        source_key: TransportLaneKey,
         item_id: ItemId,
         position_subtile: u16,
     ) -> bool {
-        match source {
-            TransportLaneKey::Belt { .. } => match self.graph.downstream_for(source) {
+        match source_key {
+            TransportLaneKey::Belt { .. } => match self.graph.downstream_for(source_index) {
                 TransportLaneDownstream::Belt {
                     downstream: Some(downstream),
                 } => self.try_insert_carried_item(downstream, item_id, position_subtile),
                 _ => false,
             },
             TransportLaneKey::Splitter { .. } => {
-                self.try_route_splitter_item(source, item_id, position_subtile)
+                self.try_route_splitter_item(source_index, source_key, item_id, position_subtile)
             }
         }
     }
 
     fn try_route_splitter_item(
         &mut self,
+        index: TransportLaneIndex,
         key: TransportLaneKey,
         item_id: ItemId,
         position_subtile: u16,
@@ -183,7 +206,7 @@ impl<'a> TransportBeltAdvancement<'a> {
             return false;
         };
         let preferred = self.splitter_preferred_output_port(key);
-        let TransportLaneDownstream::Splitter { outputs } = self.graph.downstream_for(key) else {
+        let TransportLaneDownstream::Splitter { outputs } = self.graph.downstream_for(index) else {
             return false;
         };
 
@@ -209,14 +232,17 @@ impl<'a> TransportBeltAdvancement<'a> {
 
     fn try_insert_carried_item(
         &mut self,
-        key: TransportLaneKey,
+        index: TransportLaneIndex,
         item_id: ItemId,
         position_subtile: u16,
     ) -> bool {
-        if self.visit_state(key) == Some(BeltLaneVisitState::Processing) {
+        if self.visit_state(index) == Some(BeltLaneVisitState::Processing) {
             return false;
         }
 
+        let Some(key) = self.graph.key_for(index) else {
+            return false;
+        };
         let Some(lane) = lane_mut(self.entities, key) else {
             return false;
         };
@@ -225,18 +251,18 @@ impl<'a> TransportBeltAdvancement<'a> {
         }
 
         insert_lane_item_at_entry(lane, item_id, position_subtile);
-        self.active_lanes.mark_pending(key);
+        self.active_lanes.mark_pending(index);
         true
     }
 
-    fn mark_upstream_lanes_active(&mut self, key: TransportLaneKey) {
-        for upstream in self.graph.upstream_for(key) {
-            self.active_lanes.mark_pending(*upstream);
+    fn mark_upstream_lanes_active(&mut self, index: TransportLaneIndex) {
+        for &upstream in self.graph.upstream_for(index) {
+            self.active_lanes.mark_pending(upstream);
         }
     }
 
-    fn visit_state(&self, key: TransportLaneKey) -> Option<BeltLaneVisitState> {
-        let state = self.visit_states.states.get(visit_state_index(key)?)?;
+    fn visit_state(&self, index: TransportLaneIndex) -> Option<BeltLaneVisitState> {
+        let state = self.visit_states.states.get(index.raw())?;
         if state.generation != self.visit_states.generation {
             return None;
         }
@@ -247,11 +273,8 @@ impl<'a> TransportBeltAdvancement<'a> {
         }
     }
 
-    fn set_visit_state(&mut self, key: TransportLaneKey, state: BeltLaneVisitState) {
-        let Some(index) = visit_state_index(key) else {
-            return;
-        };
-        let Some(slot) = self.visit_states.states.get_mut(index) else {
+    fn set_visit_state(&mut self, index: TransportLaneIndex, state: BeltLaneVisitState) {
+        let Some(slot) = self.visit_states.states.get_mut(index.raw()) else {
             return;
         };
         slot.generation = self.visit_states.generation;

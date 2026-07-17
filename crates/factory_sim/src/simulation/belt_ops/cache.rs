@@ -1,12 +1,14 @@
 use super::geometry::{belt_downstream_lane_key, splitter_output_lane_key};
-use super::types::{TransportLaneDownstream, TransportLaneKey};
+use super::types::{
+    TransportLaneDownstream, TransportLaneIndex, TransportLaneKey, TransportLaneTraversalStep,
+};
 use super::*;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(in crate::simulation) struct TransportLaneGraph {
-    pub(in crate::simulation::belt_ops) lane_keys: Vec<TransportLaneKey>,
+    lane_keys_by_index: Vec<Option<TransportLaneKey>>,
     downstream_by_index: Vec<TransportLaneDownstream>,
-    upstream_by_index: Vec<SmallVec<[TransportLaneKey; 2]>>,
+    upstream_by_index: Vec<SmallVec<[TransportLaneIndex; 2]>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -19,6 +21,7 @@ pub(in crate::simulation::belt_ops) struct TransportLaneVisitSlot {
 pub(in crate::simulation) struct TransportLaneVisitStorage {
     pub(in crate::simulation::belt_ops) generation: u32,
     pub(in crate::simulation::belt_ops) states: Vec<TransportLaneVisitSlot>,
+    pub(in crate::simulation::belt_ops) traversal_stack: Vec<TransportLaneTraversalStep>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -34,8 +37,8 @@ pub(in crate::simulation) struct TransportLaneActiveStorage {
     /// Current belt-phase work queue. After `finish_tick`, this becomes the
     /// next tick's queue and may receive producer/pickup wakeups via
     /// `mark_active` until the next belt phase begins.
-    pub(in crate::simulation::belt_ops) lanes: Vec<TransportLaneKey>,
-    pending_lanes: Vec<TransportLaneKey>,
+    pub(in crate::simulation::belt_ops) lanes: Vec<TransportLaneIndex>,
+    pending_lanes: Vec<TransportLaneIndex>,
     marks: Vec<TransportLaneActiveSlot>,
 }
 
@@ -45,7 +48,7 @@ pub(in crate::simulation) struct TransportLaneActiveStorage {
 /// data (lanes, item positions, splitter cursors) lives in [`EntityStore`].
 /// The graph is a derived adjacency index rebuilt from `entities` whenever the
 /// transport topology changes, `active_lanes` is the advancement work queue,
-/// and `visit_states` is per-tick DFS scratch.
+/// and `visit_states` is reusable per-tick traversal scratch.
 /// All of it is `#[serde(skip)]` and reconstructed on load.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(in crate::simulation) struct TransportLaneCache {
@@ -90,13 +93,18 @@ impl TransportLaneCache {
     }
 
     pub(in crate::simulation) fn mark_active(&mut self, key: TransportLaneKey) {
-        self.active_lanes.mark_active(key);
+        if let Some(index) = TransportLaneIndex::from_key(key) {
+            self.active_lanes.mark_active(index);
+        }
     }
 
     pub(in crate::simulation) fn mark_active_with_upstreams(&mut self, key: TransportLaneKey) {
-        self.active_lanes.mark_active(key);
-        for upstream in self.graph.upstream_for(key) {
-            self.active_lanes.mark_active(*upstream);
+        let Some(index) = TransportLaneIndex::from_key(key) else {
+            return;
+        };
+        self.active_lanes.mark_active(index);
+        for &upstream in self.graph.upstream_for(index) {
+            self.active_lanes.mark_active(upstream);
         }
     }
 }
@@ -104,14 +112,8 @@ impl TransportLaneCache {
 impl TransportLaneGraph {
     fn rebuild(&mut self, entities: &EntityStore) {
         let lane_count = transport_lane_index_len(entities);
-        self.lane_keys.clear();
-        self.lane_keys.reserve(
-            entities
-                .transport_belts
-                .len()
-                .saturating_mul(2)
-                .saturating_add(entities.splitters.len().saturating_mul(4)),
-        );
+        self.lane_keys_by_index.clear();
+        self.lane_keys_by_index.resize(lane_count, None);
         self.downstream_by_index.clear();
         self.downstream_by_index
             .resize(lane_count, TransportLaneDownstream::Missing);
@@ -125,16 +127,17 @@ impl TransportLaneGraph {
                     entity_id,
                     lane_index,
                 };
-                self.lane_keys.push(key);
-                let Some(index) = visit_state_index(key) else {
+                let Some(index) = TransportLaneIndex::from_key(key) else {
                     continue;
                 };
+                self.lane_keys_by_index[index.raw()] = Some(key);
                 let downstream = belt_downstream_lane_key(entities, entity_id, lane_index);
-                if let Some(slot) = self.downstream_by_index.get_mut(index) {
+                let downstream = downstream.and_then(TransportLaneIndex::from_key);
+                if let Some(slot) = self.downstream_by_index.get_mut(index.raw()) {
                     *slot = TransportLaneDownstream::Belt { downstream };
                 }
                 if let Some(downstream) = downstream {
-                    self.push_upstream(downstream, key);
+                    self.push_upstream(downstream, index);
                 }
             }
         }
@@ -147,19 +150,20 @@ impl TransportLaneGraph {
                         input_port,
                         lane_index,
                     };
-                    self.lane_keys.push(key);
-                    let Some(index) = visit_state_index(key) else {
+                    let Some(index) = TransportLaneIndex::from_key(key) else {
                         continue;
                     };
-                    let outputs = [
+                    self.lane_keys_by_index[index.raw()] = Some(key);
+                    let output_keys = [
                         splitter_output_lane_key(entities, entity_id, 0, lane_index),
                         splitter_output_lane_key(entities, entity_id, 1, lane_index),
                     ];
-                    if let Some(slot) = self.downstream_by_index.get_mut(index) {
+                    let outputs = output_keys.map(|key| key.and_then(TransportLaneIndex::from_key));
+                    if let Some(slot) = self.downstream_by_index.get_mut(index.raw()) {
                         *slot = TransportLaneDownstream::Splitter { outputs };
                     }
                     for output in outputs.into_iter().flatten() {
-                        self.push_upstream(output, key);
+                        self.push_upstream(output, index);
                     }
                 }
             }
@@ -168,29 +172,33 @@ impl TransportLaneGraph {
 
     pub(in crate::simulation::belt_ops) fn downstream_for(
         &self,
-        key: TransportLaneKey,
+        index: TransportLaneIndex,
     ) -> TransportLaneDownstream {
-        visit_state_index(key)
-            .and_then(|index| self.downstream_by_index.get(index))
+        self.downstream_by_index
+            .get(index.raw())
             .copied()
             .unwrap_or(TransportLaneDownstream::Missing)
     }
 
     pub(in crate::simulation::belt_ops) fn upstream_for(
         &self,
-        key: TransportLaneKey,
-    ) -> &[TransportLaneKey] {
-        visit_state_index(key)
-            .and_then(|index| self.upstream_by_index.get(index))
+        index: TransportLaneIndex,
+    ) -> &[TransportLaneIndex] {
+        self.upstream_by_index
+            .get(index.raw())
             .map(SmallVec::as_slice)
             .unwrap_or(&[])
     }
 
-    fn push_upstream(&mut self, downstream: TransportLaneKey, upstream: TransportLaneKey) {
-        let Some(index) = visit_state_index(downstream) else {
-            return;
-        };
-        if let Some(upstreams) = self.upstream_by_index.get_mut(index)
+    pub(in crate::simulation::belt_ops) fn key_for(
+        &self,
+        index: TransportLaneIndex,
+    ) -> Option<TransportLaneKey> {
+        self.lane_keys_by_index.get(index.raw()).copied().flatten()
+    }
+
+    fn push_upstream(&mut self, downstream: TransportLaneIndex, upstream: TransportLaneIndex) {
+        if let Some(upstreams) = self.upstream_by_index.get_mut(downstream.raw())
             && !upstreams.contains(&upstream)
         {
             upstreams.push(upstream);
@@ -238,10 +246,13 @@ impl TransportLaneActiveStorage {
         for (&entity_id, segment) in &entities.transport_belts {
             for (lane_index, lane) in segment.lanes.iter().enumerate() {
                 if !lane.items.is_empty() {
-                    self.mark_active(TransportLaneKey::Belt {
+                    let key = TransportLaneKey::Belt {
                         entity_id,
                         lane_index,
-                    });
+                    };
+                    if let Some(index) = TransportLaneIndex::from_key(key) {
+                        self.mark_active(index);
+                    }
                 }
             }
         }
@@ -250,11 +261,14 @@ impl TransportLaneActiveStorage {
             for (input_port, input_lanes) in state.input_lanes.iter().enumerate() {
                 for (lane_index, lane) in input_lanes.iter().enumerate() {
                     if !lane.items.is_empty() {
-                        self.mark_active(TransportLaneKey::Splitter {
+                        let key = TransportLaneKey::Splitter {
                             entity_id,
                             input_port,
                             lane_index,
-                        });
+                        };
+                        if let Some(index) = TransportLaneIndex::from_key(key) {
+                            self.mark_active(index);
+                        }
                     }
                 }
             }
@@ -282,22 +296,22 @@ impl TransportLaneActiveStorage {
         self.pending_lanes = pending_lanes;
     }
 
-    pub(in crate::simulation::belt_ops) fn mark_pending(&mut self, key: TransportLaneKey) {
+    pub(in crate::simulation::belt_ops) fn mark_pending(&mut self, index: TransportLaneIndex) {
         mark_active_lane(
             &mut self.marks,
             self.pending_generation,
-            key,
+            index,
             &mut self.pending_lanes,
             |mark| mark.pending_generation,
             |mark, generation| mark.pending_generation = generation,
         );
     }
 
-    fn mark_active(&mut self, key: TransportLaneKey) {
+    fn mark_active(&mut self, index: TransportLaneIndex) {
         mark_active_lane(
             &mut self.marks,
             self.active_generation,
-            key,
+            index,
             &mut self.lanes,
             |mark| mark.active_generation,
             |mark, generation| mark.active_generation = generation,
@@ -334,42 +348,20 @@ fn advance_generation(
 fn mark_active_lane(
     marks: &mut Vec<TransportLaneActiveSlot>,
     generation: u32,
-    key: TransportLaneKey,
-    lanes: &mut Vec<TransportLaneKey>,
+    index: TransportLaneIndex,
+    lanes: &mut Vec<TransportLaneIndex>,
     current_generation: impl Fn(&TransportLaneActiveSlot) -> u32,
     set_generation: impl Fn(&mut TransportLaneActiveSlot, u32),
 ) {
-    let Some(index) = visit_state_index(key) else {
-        return;
-    };
-    if marks.len() <= index {
-        marks.resize(index + 1, TransportLaneActiveSlot::default());
+    if marks.len() <= index.raw() {
+        marks.resize(index.raw() + 1, TransportLaneActiveSlot::default());
     }
-    let Some(mark) = marks.get_mut(index) else {
+    let Some(mark) = marks.get_mut(index.raw()) else {
         return;
     };
     if current_generation(mark) == generation {
         return;
     }
     set_generation(mark, generation);
-    lanes.push(key);
-}
-
-pub(in crate::simulation::belt_ops) fn visit_state_index(key: TransportLaneKey) -> Option<usize> {
-    let (entity_id, lane_offset) = match key {
-        TransportLaneKey::Belt {
-            entity_id,
-            lane_index,
-        } => (entity_id, lane_index),
-        TransportLaneKey::Splitter {
-            entity_id,
-            input_port,
-            lane_index,
-        } => (
-            entity_id,
-            input_port.checked_mul(2)?.checked_add(lane_index)?,
-        ),
-    };
-    let entity_index = usize::try_from(entity_id.raw()).ok()?;
-    entity_index.checked_mul(4)?.checked_add(lane_offset)
+    lanes.push(index);
 }

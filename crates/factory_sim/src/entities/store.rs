@@ -1,3 +1,4 @@
+use crate::entities::dense_map::DenseEntityMap;
 use crate::entities::{Direction, EntityFootprint, OccupancyGrid};
 use crate::ids::EntityId;
 use factory_data::{EntityKind, EntityPrototypeId};
@@ -60,7 +61,7 @@ macro_rules! define_entity_store {
         pub struct EntityStore {
             pub(crate) entities: Vec<SimEntity>,
             pub(crate) placed_entities: BTreeMap<EntityId, PlacedEntity>,
-            $(pub(crate) $field: BTreeMap<EntityId, $ty>,)*
+            $(pub(crate) $field: entity_state_map_type!($field, $ty),)*
             pub(crate) occupancy: OccupancyGrid,
             pub(crate) next_entity_id: u64,
         }
@@ -71,7 +72,7 @@ macro_rules! define_entity_store {
                 Self {
                     entities: Vec::new(),
                     placed_entities: BTreeMap::new(),
-                    $($field: BTreeMap::new(),)*
+                    $($field: Default::default(),)*
                     occupancy: OccupancyGrid::default(),
                     next_entity_id,
                 }
@@ -95,6 +96,18 @@ macro_rules! define_entity_store {
                 None
             }
         }
+    };
+}
+
+macro_rules! entity_state_map_type {
+    (transport_belts, $ty:ty) => {
+        DenseEntityMap<$ty>
+    };
+    (splitters, $ty:ty) => {
+        DenseEntityMap<$ty>
+    };
+    ($field:ident, $ty:ty) => {
+        BTreeMap<EntityId, $ty>
     };
 }
 for_each_entity_state_map!(define_entity_store);
