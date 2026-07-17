@@ -6,6 +6,8 @@ use std::time::Duration;
 use crate::rendering::resources::RenderSyncStats;
 use crate::resources::{SimProfileStats, SimResource, UpsStats};
 
+const DEBUG_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+
 #[derive(Component)]
 pub struct DebugOverlayText;
 
@@ -19,6 +21,30 @@ pub struct DebugOverlayVisible(pub bool);
 impl Default for DebugOverlayVisible {
     fn default() -> Self {
         Self(true)
+    }
+}
+
+/// Limits full simulation snapshots for the debug overlay to four per second.
+///
+/// The rendered text remains unchanged between snapshots, so there is no need
+/// to scan all belts and machines on every rendered frame.
+#[derive(Clone, Default)]
+struct DebugOverlayRefresh {
+    last_refresh_at: Option<Duration>,
+}
+
+impl DebugOverlayRefresh {
+    fn is_due(&mut self, now: Duration, force: bool) -> bool {
+        if !force
+            && self.last_refresh_at.is_some_and(|last_refresh_at| {
+                now.saturating_sub(last_refresh_at) < DEBUG_OVERLAY_REFRESH_INTERVAL
+            })
+        {
+            return false;
+        }
+
+        self.last_refresh_at = Some(now);
+        true
     }
 }
 
@@ -89,19 +115,20 @@ pub(crate) fn update_ups_stats(time: Res<Time<Real>>, mut stats: ResMut<UpsStats
     }
 }
 
+pub(crate) fn debug_overlay_refresh_due()
+-> impl FnMut(Res<Time<Real>>, Res<DebugOverlayVisible>) -> bool + Clone {
+    let mut refresh = DebugOverlayRefresh::default();
+    move |time, visible| visible.0 && refresh.is_due(time.elapsed(), visible.is_changed())
+}
+
 pub(crate) fn update_debug_overlay(
     sim: Res<SimResource>,
     stats: Res<UpsStats>,
     diagnostics: Res<DiagnosticsStore>,
     sim_profile: Res<SimProfileStats>,
     render_sync: Res<RenderSyncStats>,
-    visible: Res<DebugOverlayVisible>,
     mut overlay: Query<&mut Text, With<DebugOverlayText>>,
 ) {
-    if !visible.0 {
-        return;
-    }
-
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|diagnostic| diagnostic.smoothed());
@@ -305,5 +332,26 @@ mod tests {
         assert_eq!(format_watts(400), "400 W");
         assert_eq!(format_watts(15_100), "15.1 kW");
         assert_eq!(format_watts(1_800_000), "1.80 MW");
+    }
+
+    #[test]
+    fn debug_overlay_refresh_is_immediate_then_limited_to_four_hertz() {
+        let mut refresh = DebugOverlayRefresh::default();
+
+        assert!(refresh.is_due(Duration::ZERO, false));
+        assert!(!refresh.is_due(Duration::from_millis(249), false));
+        assert!(refresh.is_due(Duration::from_millis(250), false));
+        assert!(!refresh.is_due(Duration::from_millis(499), false));
+        assert!(refresh.is_due(Duration::from_millis(500), false));
+    }
+
+    #[test]
+    fn debug_overlay_refresh_can_be_forced_when_made_visible() {
+        let mut refresh = DebugOverlayRefresh::default();
+
+        assert!(refresh.is_due(Duration::ZERO, false));
+        assert!(refresh.is_due(Duration::from_millis(1), true));
+        assert!(!refresh.is_due(Duration::from_millis(250), false));
+        assert!(refresh.is_due(Duration::from_millis(251), false));
     }
 }

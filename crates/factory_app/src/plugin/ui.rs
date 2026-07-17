@@ -17,8 +17,8 @@ use crate::ui::assembler_panel::{
 use crate::ui::build_menu::handle_build_menu_buttons;
 use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{
-    DebugOverlayVisible, apply_debug_overlay_visibility, setup_debug_overlay, toggle_debug_overlay,
-    update_debug_overlay, update_ups_stats,
+    DebugOverlayVisible, apply_debug_overlay_visibility, debug_overlay_refresh_due,
+    setup_debug_overlay, toggle_debug_overlay, update_debug_overlay, update_ups_stats,
 };
 use crate::ui::enemy_settings::{
     EnemySettingsWindowState, handle_enemy_settings_buttons, sync_enemy_settings_window,
@@ -117,7 +117,9 @@ impl Plugin for UiPlugin {
                 Update,
                 (
                     apply_debug_overlay_visibility.after(toggle_debug_overlay),
-                    update_debug_overlay,
+                    update_debug_overlay
+                        .run_if(debug_overlay_refresh_due())
+                        .after(toggle_debug_overlay),
                     // The menu clears `open_container` when it opens; sync after
                     // it so the container window hides on the same frame.
                     sync_container_window.after(handle_build_menu_buttons),
