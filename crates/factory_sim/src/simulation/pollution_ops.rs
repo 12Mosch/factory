@@ -8,7 +8,11 @@ impl Simulation {
 
     /// Test and scenario hook: injects pollution directly into a chunk.
     pub fn add_pollution_micro(&mut self, coord: ChunkCoord, amount: u64) {
+        let before = self.pollution.amount_micro(coord);
         let overflowed = self.pollution.add_micro(coord, amount);
+        if self.pollution.amount_micro(coord) != before {
+            self.pollution_map_revision = self.pollution_map_revision.wrapping_add(1);
+        }
         self.record_pollution_addition_overflows(u64::from(overflowed));
     }
 

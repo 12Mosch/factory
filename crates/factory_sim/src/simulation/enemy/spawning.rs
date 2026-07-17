@@ -103,6 +103,11 @@ impl Simulation {
             }
         }
 
+        let pollution_changed = absorbed_by_base.values().any(|absorbed| *absorbed != 0);
+        if pollution_changed {
+            self.pollution_map_revision = self.pollution_map_revision.wrapping_add(1);
+            self.enemy_map_revision = self.enemy_map_revision.wrapping_add(1);
+        }
         for (base_id, absorbed) in absorbed_by_base {
             if absorbed == 0 {
                 continue;

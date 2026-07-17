@@ -119,32 +119,131 @@ pub(crate) struct MapDetailCacheKey {
     pub debug_reveal_all: bool,
     pub reveal_revision: u64,
     pub topology_revision: u64,
-    pub simulation_tick: u64,
-    pub ping_count: usize,
-    pub waypoint_count: usize,
+    pub pollution_revision: u64,
+    pub enemy_revision: u64,
+    pub power_revision: u64,
+    pub production_revision: u64,
+    pub marker_signature: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MapOverlayLayer {
+    Navigation,
+    Pollution,
+    Entities,
+    Power,
+    ProductionProblems,
+    Enemies,
+    Construction,
+    Player,
+    Markers,
+}
+
+impl MapOverlayLayer {
+    pub(crate) const ALL: [Self; 9] = [
+        Self::Navigation,
+        Self::Pollution,
+        Self::Entities,
+        Self::Power,
+        Self::ProductionProblems,
+        Self::Enemies,
+        Self::Construction,
+        Self::Player,
+        Self::Markers,
+    ];
+
+    const COUNT: usize = Self::ALL.len();
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+}
+
+#[derive(Default)]
+struct MapDetailCacheEntry {
+    key: Option<MapDetailCacheKey>,
+    layer_entities: [Vec<bevy::prelude::Entity>; MapOverlayLayer::COUNT],
 }
 
 #[derive(Resource, Default)]
 pub struct MapDetailCache {
-    entries: BTreeMap<bevy::prelude::Entity, MapDetailCacheKey>,
+    entries: BTreeMap<bevy::prelude::Entity, MapDetailCacheEntry>,
 }
 
 impl MapDetailCache {
-    pub(crate) fn needs_rebuild(
+    pub(crate) fn changed_layers(
         &mut self,
         root: bevy::prelude::Entity,
         key: MapDetailCacheKey,
-    ) -> bool {
-        if self.entries.get(&root) == Some(&key) {
-            false
-        } else {
-            self.entries.insert(root, key);
-            true
-        }
+    ) -> [bool; MapOverlayLayer::COUNT] {
+        let entry = self.entries.entry(root).or_default();
+        let Some(previous) = entry.key.replace(key) else {
+            return [true; MapOverlayLayer::COUNT];
+        };
+
+        let geometry_changed = previous.crop_bounds != key.crop_bounds
+            || previous.image_size_bits != key.image_size_bits;
+        let visibility_changed = previous.debug_reveal_all != key.debug_reveal_all
+            || previous.reveal_revision != key.reveal_revision;
+        let topology_changed = previous.topology_revision != key.topology_revision;
+        let overlay_changed = |overlay: MapOverlay| {
+            let bit = 1_u64 << overlay as usize;
+            (previous.overlay_bits ^ key.overlay_bits) & bit != 0
+        };
+        let overlay_enabled = |overlay: MapOverlay| {
+            let bit = 1_u64 << overlay as usize;
+            key.overlay_bits & bit != 0
+        };
+
+        [
+            geometry_changed
+                || previous.camera_bits != key.camera_bits
+                || previous.chunk_cursor != key.chunk_cursor,
+            geometry_changed
+                || visibility_changed
+                || (overlay_enabled(MapOverlay::Pollution)
+                    && previous.pollution_revision != key.pollution_revision)
+                || overlay_changed(MapOverlay::Pollution),
+            geometry_changed || visibility_changed || topology_changed,
+            geometry_changed
+                || visibility_changed
+                || topology_changed
+                || (overlay_enabled(MapOverlay::PowerNetworks)
+                    && previous.power_revision != key.power_revision)
+                || overlay_changed(MapOverlay::PowerNetworks),
+            geometry_changed
+                || visibility_changed
+                || topology_changed
+                || (overlay_enabled(MapOverlay::ProductionProblems)
+                    && previous.production_revision != key.production_revision)
+                || overlay_changed(MapOverlay::ProductionProblems),
+            geometry_changed
+                || visibility_changed
+                || topology_changed
+                || (overlay_enabled(MapOverlay::Enemies)
+                    && previous.enemy_revision != key.enemy_revision)
+                || overlay_changed(MapOverlay::Enemies),
+            geometry_changed
+                || visibility_changed
+                || topology_changed
+                || overlay_changed(MapOverlay::ConstructionPlans),
+            geometry_changed || previous.player_bits != key.player_bits,
+            geometry_changed || previous.marker_signature != key.marker_signature,
+        ]
+    }
+
+    pub(crate) fn layer_entities_mut(
+        &mut self,
+        root: bevy::prelude::Entity,
+        layer: MapOverlayLayer,
+    ) -> &mut Vec<bevy::prelude::Entity> {
+        &mut self.entries.entry(root).or_default().layer_entities[layer.index()]
     }
 
     pub fn clear(&mut self) {
-        self.entries.clear();
+        for entry in self.entries.values_mut() {
+            entry.key = None;
+        }
     }
 }
 
@@ -191,6 +290,25 @@ impl MapTextureBounds {
 mod tests {
     use super::*;
 
+    fn detail_key(overlays: MapOverlaySettings) -> MapDetailCacheKey {
+        MapDetailCacheKey {
+            crop_bounds: MapTextureBounds::default(),
+            image_size_bits: (176.0_f32.to_bits(), 176.0_f32.to_bits()),
+            player_bits: (0, 0),
+            camera_bits: None,
+            chunk_cursor: None,
+            overlay_bits: overlays.enabled_bits(),
+            debug_reveal_all: false,
+            reveal_revision: 0,
+            topology_revision: 0,
+            pollution_revision: 0,
+            enemy_revision: 0,
+            power_revision: 0,
+            production_revision: 0,
+            marker_signature: 0,
+        }
+    }
+
     #[test]
     fn overlay_defaults_enable_resources_enemies_and_plans_only() {
         let settings = MapOverlaySettings::default();
@@ -214,6 +332,42 @@ mod tests {
         settings.set_enabled(MapOverlay::Enemies, false);
         assert!(!settings.is_enabled(MapOverlay::Enemies));
         assert!(settings.is_enabled(MapOverlay::ConstructionPlans));
+    }
+
+    #[test]
+    fn detail_cache_invalidates_only_the_enabled_changed_subsystem() {
+        let mut cache = MapDetailCache::default();
+        let root = bevy::prelude::Entity::PLACEHOLDER;
+        let key = detail_key(MapOverlaySettings::default());
+        assert!(
+            cache
+                .changed_layers(root, key)
+                .into_iter()
+                .all(|changed| changed)
+        );
+        assert!(
+            cache
+                .changed_layers(root, key)
+                .into_iter()
+                .all(|changed| !changed)
+        );
+
+        let mut disabled_production_changed = key;
+        disabled_production_changed.production_revision = 1;
+        assert!(
+            cache
+                .changed_layers(root, disabled_production_changed)
+                .into_iter()
+                .all(|changed| !changed),
+            "disabled overlays must not wake up for simulation revisions"
+        );
+
+        let mut enabled_enemy_changed = disabled_production_changed;
+        enabled_enemy_changed.enemy_revision = 1;
+        let changed = cache.changed_layers(root, enabled_enemy_changed);
+        for (index, layer) in MapOverlayLayer::ALL.into_iter().enumerate() {
+            assert_eq!(changed[index], layer == MapOverlayLayer::Enemies);
+        }
     }
 
     #[test]

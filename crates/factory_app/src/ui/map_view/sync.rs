@@ -1,6 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::map::resources::{
     MapDetailCache, MapDetailCacheKey, MapDisplaySettings, MapOverlay, MapOverlayMarkers,
@@ -14,7 +15,7 @@ use super::components::{
 };
 use super::drawing::{
     MINIMAP_CONTENT_SIZE, MapOverlayContext, layer_button_border_color, layer_button_color,
-    rebuild_map_overlay, set_full_map_image_node_size, spawn_full_map, spawn_minimap,
+    reconcile_map_overlay, set_full_map_image_node_size, spawn_full_map, spawn_minimap,
 };
 use super::layout::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, camera_tile_rect, fullscreen_crop_bounds,
@@ -107,12 +108,15 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
             &params.settings,
             &params.markers,
         );
-        if !params.details.needs_rebuild(overlay_root, key) {
+        let changed_layers = params.details.changed_layers(overlay_root, key);
+        if !changed_layers.iter().any(|changed| *changed) {
             continue;
         }
-        rebuild_map_overlay(
+        reconcile_map_overlay(
             &mut commands,
             overlay_root,
+            &mut params.details,
+            changed_layers,
             MapOverlayContext {
                 crop_bounds,
                 image_size: Vec2::splat(MINIMAP_CONTENT_SIZE),
@@ -246,12 +250,15 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
             &params.settings,
             &params.markers,
         );
-        if !params.details.needs_rebuild(overlay_root, key) {
+        let changed_layers = params.details.changed_layers(overlay_root, key);
+        if !changed_layers.iter().any(|changed| *changed) {
             continue;
         }
-        rebuild_map_overlay(
+        reconcile_map_overlay(
             &mut commands,
             overlay_root,
+            &mut params.details,
+            changed_layers,
             MapOverlayContext {
                 crop_bounds,
                 image_size: display_size,
@@ -266,7 +273,7 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
     }
 }
 
-fn map_detail_cache_key(
+pub(super) fn map_detail_cache_key(
     crop_bounds: crate::map::resources::MapTextureBounds,
     image_size: Vec2,
     navigation: (
@@ -296,8 +303,35 @@ fn map_detail_cache_key(
         debug_reveal_all: settings.debug_reveal_all,
         reveal_revision: sim.revealed_revision(),
         topology_revision: sim.entity_topology_revision(),
-        simulation_tick: sim.tick_count(),
-        ping_count: markers.pings.len(),
-        waypoint_count: markers.waypoints.len(),
+        pollution_revision: sim.pollution_map_revision(),
+        enemy_revision: sim.enemy_map_revision(),
+        power_revision: sim.power_map_revision(),
+        production_revision: sim.production_status_revision(),
+        marker_signature: marker_signature(markers),
     }
+}
+
+fn marker_signature(markers: &MapOverlayMarkers) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    markers.pings.len().hash(&mut hasher);
+    for marker in &markers.pings {
+        marker.position.x.to_bits().hash(&mut hasher);
+        marker.position.y.to_bits().hash(&mut hasher);
+        let color = marker.color.to_srgba();
+        color.red.to_bits().hash(&mut hasher);
+        color.green.to_bits().hash(&mut hasher);
+        color.blue.to_bits().hash(&mut hasher);
+        color.alpha.to_bits().hash(&mut hasher);
+    }
+    markers.waypoints.len().hash(&mut hasher);
+    for marker in &markers.waypoints {
+        marker.position.x.to_bits().hash(&mut hasher);
+        marker.position.y.to_bits().hash(&mut hasher);
+        let color = marker.color.to_srgba();
+        color.red.to_bits().hash(&mut hasher);
+        color.green.to_bits().hash(&mut hasher);
+        color.blue.to_bits().hash(&mut hasher);
+        color.alpha.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
 }

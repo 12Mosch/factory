@@ -232,7 +232,21 @@ impl Simulation {
             // refreshed once after all machines have run.
             self.equalize_fluid_networks();
         }
-        self.power.networks = network_snapshots(&networks);
+        let next_networks = network_snapshots(&networks);
+        let map_changed = self.power.networks.len() != next_networks.len()
+            || self
+                .power
+                .networks
+                .iter()
+                .zip(&next_networks)
+                .any(|(previous, next)| {
+                    previous.network_id != next.network_id
+                        || previous.satisfaction_permyriad != next.satisfaction_permyriad
+                });
+        self.power.networks = next_networks;
+        if map_changed {
+            self.power_map_revision = self.power_map_revision.wrapping_add(1);
+        }
         self.power.summary = aggregate_power_summary(&self.power.networks);
         if self.any_steam_engine_can_generate(&self.power.topology.network_ids_by_entity) {
             self.onboarding_progress.record_electricity_generated();

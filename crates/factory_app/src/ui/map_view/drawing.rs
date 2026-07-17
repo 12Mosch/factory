@@ -4,7 +4,10 @@ use factory_sim::{
     CHUNK_SIZE, ChunkCoord, EntityFootprint, MachineStatus, Simulation, ThreatLocation,
 };
 
-use crate::map::resources::{MapDisplaySettings, MapOverlay, MapOverlayMarkers, MapTextureBounds};
+use crate::map::resources::{
+    MapDetailCache, MapDisplaySettings, MapOverlay, MapOverlayLayer, MapOverlayMarkers,
+    MapTextureBounds,
+};
 use crate::rendering::entities::entity_prototype_render_style;
 
 use super::components::{
@@ -55,89 +58,154 @@ pub(super) struct MapOverlayContext<'a> {
     pub(super) markers: &'a MapOverlayMarkers,
 }
 
-pub(super) fn rebuild_map_overlay(
+#[derive(Bundle, Clone)]
+struct MapOverlayPrimitive {
+    node: Node,
+    background: BackgroundColor,
+    border: BorderColor,
+    transform: UiTransform,
+    z_index: ZIndex,
+}
+
+impl MapOverlayPrimitive {
+    fn new(
+        node: Node,
+        background: BackgroundColor,
+        border: BorderColor,
+        transform: UiTransform,
+    ) -> Self {
+        Self {
+            node,
+            background,
+            border,
+            transform,
+            z_index: ZIndex(0),
+        }
+    }
+}
+
+pub(super) fn reconcile_map_overlay(
     commands: &mut Commands,
     overlay_root: Entity,
+    details: &mut MapDetailCache,
+    changed_layers: [bool; MapOverlayLayer::ALL.len()],
     context: MapOverlayContext,
 ) {
-    commands
-        .entity(overlay_root)
-        .despawn_related::<Children>()
-        .with_children(|overlay| {
-            if let Some(rect) = context.camera_rect.and_then(|rect| {
-                map_rect_for_world_rect(context.crop_bounds, context.image_size, rect)
-            }) {
-                spawn_rect_overlay(
-                    overlay,
-                    rect,
-                    Color::srgba(0.98, 0.92, 0.55, 0.96),
-                    Color::srgba(0.98, 0.92, 0.55, 0.10),
-                    2.0,
-                );
+    for (layer_index, layer) in MapOverlayLayer::ALL.into_iter().enumerate() {
+        if !changed_layers[layer_index] {
+            continue;
+        }
+
+        let mut desired = Vec::new();
+        match layer {
+            MapOverlayLayer::Navigation => {
+                if let Some(rect) = context.camera_rect.and_then(|rect| {
+                    map_rect_for_world_rect(context.crop_bounds, context.image_size, rect)
+                }) {
+                    spawn_rect_overlay(
+                        &mut desired,
+                        rect,
+                        Color::srgba(0.98, 0.92, 0.55, 0.96),
+                        Color::srgba(0.98, 0.92, 0.55, 0.10),
+                        2.0,
+                    );
+                }
+
+                if let Some(coord) = context.chunk_cursor
+                    && let Some(rect) =
+                        map_rect_for_chunk(context.crop_bounds, context.image_size, coord)
+                {
+                    spawn_rect_overlay(
+                        &mut desired,
+                        rect,
+                        Color::srgba(0.42, 0.88, 1.0, 0.95),
+                        Color::srgba(0.20, 0.66, 0.82, 0.16),
+                        2.0,
+                    );
+                }
             }
-
-            if let Some(coord) = context.chunk_cursor
-                && let Some(rect) =
-                    map_rect_for_chunk(context.crop_bounds, context.image_size, coord)
-            {
-                spawn_rect_overlay(
-                    overlay,
-                    rect,
-                    Color::srgba(0.42, 0.88, 1.0, 0.95),
-                    Color::srgba(0.20, 0.66, 0.82, 0.16),
-                    2.0,
-                );
+            MapOverlayLayer::Pollution => spawn_pollution_overlays(&mut desired, &context),
+            MapOverlayLayer::Entities => spawn_entity_overlays(&mut desired, &context),
+            MapOverlayLayer::Power => spawn_power_overlays(&mut desired, &context),
+            MapOverlayLayer::ProductionProblems => {
+                spawn_production_problem_overlays(&mut desired, &context);
             }
-
-            spawn_pollution_overlays(overlay, &context);
-            spawn_entity_overlays(overlay, &context);
-            spawn_power_overlays(overlay, &context);
-            spawn_production_problem_overlays(overlay, &context);
-            spawn_threat_overlays(overlay, &context);
-            spawn_construction_overlays(overlay, &context);
-
-            spawn_point_overlay(
-                overlay,
-                context.crop_bounds,
-                context.image_size,
-                context.player_position,
-                MAP_PLAYER_MARKER_SIZE,
-                Color::srgba(0.98, 0.96, 0.74, 0.98),
-                Color::srgba(0.02, 0.02, 0.018, 0.95),
-            );
-
-            for marker in &context.markers.pings {
+            MapOverlayLayer::Enemies => spawn_threat_overlays(&mut desired, &context),
+            MapOverlayLayer::Construction => spawn_construction_overlays(&mut desired, &context),
+            MapOverlayLayer::Player => {
                 spawn_point_overlay(
-                    overlay,
+                    &mut desired,
                     context.crop_bounds,
                     context.image_size,
-                    marker.position,
-                    MAP_PING_MARKER_SIZE,
-                    Color::NONE,
-                    marker.color,
+                    context.player_position,
+                    MAP_PLAYER_MARKER_SIZE,
+                    Color::srgba(0.98, 0.96, 0.74, 0.98),
+                    Color::srgba(0.02, 0.02, 0.018, 0.95),
                 );
             }
+            MapOverlayLayer::Markers => {
+                for marker in &context.markers.pings {
+                    spawn_point_overlay(
+                        &mut desired,
+                        context.crop_bounds,
+                        context.image_size,
+                        marker.position,
+                        MAP_PING_MARKER_SIZE,
+                        Color::NONE,
+                        marker.color,
+                    );
+                }
 
-            for marker in &context.markers.waypoints {
-                spawn_point_overlay(
-                    overlay,
-                    context.crop_bounds,
-                    context.image_size,
-                    marker.position,
-                    MAP_WAYPOINT_MARKER_SIZE,
-                    marker.color,
-                    Color::srgba(0.02, 0.02, 0.018, 0.92),
-                );
+                for marker in &context.markers.waypoints {
+                    spawn_point_overlay(
+                        &mut desired,
+                        context.crop_bounds,
+                        context.image_size,
+                        marker.position,
+                        MAP_WAYPOINT_MARKER_SIZE,
+                        marker.color,
+                        Color::srgba(0.02, 0.02, 0.018, 0.92),
+                    );
+                }
             }
-        });
+        }
+
+        for primitive in &mut desired {
+            primitive.z_index = ZIndex(layer_index as i32);
+        }
+        reconcile_overlay_layer(
+            commands,
+            overlay_root,
+            details.layer_entities_mut(overlay_root, layer),
+            desired,
+        );
+    }
+}
+
+fn reconcile_overlay_layer(
+    commands: &mut Commands,
+    overlay_root: Entity,
+    entities: &mut Vec<Entity>,
+    desired: Vec<MapOverlayPrimitive>,
+) {
+    let desired_len = desired.len();
+    let retained = entities.len().min(desired.len());
+    for (entity, primitive) in entities.iter().copied().zip(desired.iter()).take(retained) {
+        commands.entity(entity).insert(primitive.clone());
+    }
+    for primitive in desired.into_iter().skip(retained) {
+        let entity = commands.spawn(primitive).id();
+        commands.entity(overlay_root).add_child(entity);
+        entities.push(entity);
+    }
+    for entity in entities.drain(desired_len..) {
+        commands.entity(entity).despawn();
+    }
 }
 
 /// Red haze over polluted revealed chunks; opacity scales with the chunk's
 /// pollution level.
-fn spawn_pollution_overlays(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
-    context: &MapOverlayContext,
-) {
+fn spawn_pollution_overlays(parent: &mut Vec<MapOverlayPrimitive>, context: &MapOverlayContext) {
     // Below this level the haze would be invisible anyway; skip the rect.
     const MIN_VISIBLE_POLLUTION_MICRO: u64 = 100_000;
     // Pollution level rendered at full haze opacity (10 pollution units).
@@ -175,10 +243,7 @@ fn spawn_pollution_overlays(
     }
 }
 
-fn spawn_threat_overlays(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
-    context: &MapOverlayContext,
-) {
+fn spawn_threat_overlays(parent: &mut Vec<MapOverlayPrimitive>, context: &MapOverlayContext) {
     if !context.settings.overlays.is_enabled(MapOverlay::Enemies) {
         return;
     }
@@ -245,10 +310,7 @@ fn spawn_threat_overlays(
     }
 }
 
-fn spawn_power_overlays(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
-    context: &MapOverlayContext,
-) {
+fn spawn_power_overlays(parent: &mut Vec<MapOverlayPrimitive>, context: &MapOverlayContext) {
     if !context
         .settings
         .overlays
@@ -361,7 +423,7 @@ fn power_network_color(network_id: u32, satisfaction_permyriad: u32) -> Color {
 }
 
 fn spawn_production_problem_overlays(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    parent: &mut Vec<MapOverlayPrimitive>,
     context: &MapOverlayContext,
 ) {
     if !context
@@ -427,10 +489,7 @@ fn spawn_production_problem_overlays(
     }
 }
 
-fn spawn_construction_overlays(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
-    context: &MapOverlayContext,
-) {
+fn spawn_construction_overlays(parent: &mut Vec<MapOverlayPrimitive>, context: &MapOverlayContext) {
     if !context
         .settings
         .overlays
@@ -525,10 +584,7 @@ fn crop_chunk_coords(bounds: MapTextureBounds) -> impl Iterator<Item = ChunkCoor
     coords.into_iter()
 }
 
-fn spawn_entity_overlays(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
-    context: &MapOverlayContext,
-) {
+fn spawn_entity_overlays(parent: &mut Vec<MapOverlayPrimitive>, context: &MapOverlayContext) {
     if context.crop_bounds.width == 0 || context.crop_bounds.height == 0 {
         return;
     }
@@ -587,7 +643,7 @@ fn map_color_with_alpha(color: Color, alpha: f32) -> Color {
 }
 
 fn spawn_point_overlay(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    parent: &mut Vec<MapOverlayPrimitive>,
     crop_bounds: MapTextureBounds,
     image_size: Vec2,
     position: Vec2,
@@ -599,7 +655,7 @@ fn spawn_point_overlay(
         return;
     };
 
-    parent.spawn((
+    parent.push(MapOverlayPrimitive::new(
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(position.x - size * 0.5),
@@ -611,17 +667,18 @@ fn spawn_point_overlay(
         },
         BackgroundColor(fill),
         BorderColor::all(border),
+        UiTransform::default(),
     ));
 }
 
 fn spawn_rect_overlay(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    parent: &mut Vec<MapOverlayPrimitive>,
     rect: MapUiRect,
     border: Color,
     fill: Color,
     border_width: f32,
 ) {
-    parent.spawn((
+    parent.push(MapOverlayPrimitive::new(
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(rect.left),
@@ -633,11 +690,12 @@ fn spawn_rect_overlay(
         },
         BackgroundColor(fill),
         BorderColor::all(border),
+        UiTransform::default(),
     ));
 }
 
 fn spawn_world_line(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    parent: &mut Vec<MapOverlayPrimitive>,
     bounds: MapTextureBounds,
     image_size: Vec2,
     start: Vec2,
@@ -658,7 +716,7 @@ fn spawn_world_line(
 }
 
 fn spawn_ui_line(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands<'_>,
+    parent: &mut Vec<MapOverlayPrimitive>,
     start: Vec2,
     end: Vec2,
     width: f32,
@@ -670,7 +728,7 @@ fn spawn_ui_line(
         return;
     }
     let midpoint = (start + end) * 0.5;
-    parent.spawn((
+    parent.push(MapOverlayPrimitive::new(
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(midpoint.x - length * 0.5),
@@ -680,6 +738,7 @@ fn spawn_ui_line(
             ..default()
         },
         BackgroundColor(color),
+        BorderColor::DEFAULT,
         UiTransform::from_rotation(Rot2::radians(delta.y.atan2(delta.x))),
     ));
 }
