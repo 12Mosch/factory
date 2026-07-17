@@ -180,6 +180,7 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) research: &'a mut ResearchState,
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) power_demand_cache: &'a mut PowerDemandCache,
+    pub(super) fluids: &'a mut FluidSubsystem,
     pub(super) statistics: StatisticsContext<'a>,
     pub(super) onboarding_progress: &'a mut OnboardingProgress,
     pub(super) pollution_emitters: &'a mut PollutionEmitterIndex,
@@ -203,6 +204,13 @@ impl<'a> MachineTickContext<'a> {
 
     pub(super) fn mark_pollution_emitter_active(&mut self, entity_id: EntityId) {
         self.pollution_emitters.mark_active(entity_id);
+    }
+
+    pub(super) fn mark_fluid_box_dirty(&mut self, entity_id: EntityId, box_index: usize) {
+        self.fluids.mark_box_dirty(FluidBoxKey {
+            entity_id,
+            box_index,
+        });
     }
 
     pub(super) fn add_research_units(

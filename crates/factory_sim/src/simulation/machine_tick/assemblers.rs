@@ -101,6 +101,12 @@ impl MachineTickContext<'_> {
                     .expect("fluid recipe availability was checked before completion");
                 consume_fluid_ingredients(box_states, &ingredient_boxes, fluid_ingredients);
                 insert_fluid_products(box_states, &product_boxes, fluid_products);
+                for &box_index in ingredient_boxes.iter().chain(&product_boxes) {
+                    self.fluids.mark_box_dirty(FluidBoxKey {
+                        entity_id,
+                        box_index,
+                    });
+                }
             }
             // Recipe slices borrow prototypes here, so record through the field
             // instead of taking a mutable borrow of the whole tick context.

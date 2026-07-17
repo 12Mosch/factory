@@ -94,6 +94,21 @@ fn small_factory_benchmark_100_machines_1000_belts() {
 
 #[test]
 #[ignore]
+fn fluid_tick_allocation_benchmark_72_fixtures() {
+    run_factory_benchmark(FactoryBenchmarkSpec {
+        name: "fluid_tick_72_fixtures",
+        machines: 0,
+        belts: 0,
+        inserters: 0,
+        fluid_fixtures: 72,
+        warmup_ticks: 120,
+        measurement_ticks: 600,
+        assert_60_ups: false,
+    });
+}
+
+#[test]
+#[ignore]
 fn medium_factory_benchmark_1000_machines_10000_belts() {
     run_factory_benchmark(FactoryBenchmarkSpec {
         name: "medium_factory",
@@ -340,7 +355,7 @@ fn generate_extra_chunks(sim: &mut Simulation, spec: FactoryBenchmarkSpec) {
         .belts
         .saturating_add(spec.machines.saturating_mul(12))
         .saturating_add(spec.inserters.saturating_mul(2))
-        .saturating_add(spec.fluid_fixtures.saturating_mul(12));
+        .saturating_add(spec.fluid_fixtures.saturating_mul(256));
     let chunks_needed = requested_tiles.div_ceil((CHUNK_SIZE * CHUNK_SIZE) as usize);
     let radius = (((chunks_needed as f64).sqrt() / 2.0).ceil() as i32 + 3).max(4);
 

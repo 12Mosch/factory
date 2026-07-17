@@ -35,6 +35,13 @@ pub(in crate::simulation) struct FluidNetworkDynamicSummary {
     pub(in crate::simulation) blocked: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(in crate::simulation) struct FluidBoxAssignment {
+    pub(in crate::simulation) key: FluidBoxKey,
+    pub(in crate::simulation) capacity_milliunits: u64,
+    pub(in crate::simulation) amount_milliunits: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct FluidEndpoint {
     pub(super) x: WorldTileCoord,
