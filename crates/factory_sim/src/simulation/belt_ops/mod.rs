@@ -57,18 +57,17 @@ impl Simulation {
     }
 
     pub(super) fn refresh_transport_lane_graph(&mut self) {
-        let catalog_underground_distance = self
-            .world
-            .prototypes
-            .entities
-            .iter()
-            .filter_map(|prototype| prototype.transport_belt.as_ref())
-            .filter_map(|belt| belt.underground.as_ref())
-            .map(|underground| underground.max_distance)
-            .max()
-            .unwrap_or(0);
-        self.transport
-            .refresh(&self.entities, catalog_underground_distance);
+        let prototypes = &self.world.prototypes;
+        self.transport.refresh(&self.entities, || {
+            prototypes
+                .entities
+                .iter()
+                .filter_map(|prototype| prototype.transport_belt.as_ref())
+                .filter_map(|belt| belt.underground.as_ref())
+                .map(|underground| underground.max_distance)
+                .max()
+                .unwrap_or(0)
+        });
     }
 
     #[cfg(test)]

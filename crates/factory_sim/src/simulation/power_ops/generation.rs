@@ -165,7 +165,7 @@ impl Simulation {
         for (&(engine_id, output_watts), &(assignment_id, assignment)) in
             engine_output_watts.iter().zip(engine_assignments)
         {
-            debug_assert_eq!(engine_id, assignment_id);
+            assert_eq!(engine_id, assignment_id);
             if output_watts == 0 {
                 continue;
             }

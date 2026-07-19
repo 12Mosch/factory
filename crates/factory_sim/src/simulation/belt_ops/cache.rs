@@ -246,7 +246,7 @@ impl TransportLaneCache {
     pub(in crate::simulation) fn refresh(
         &mut self,
         entities: &EntityStore,
-        catalog_underground_distance: u8,
+        catalog_underground_distance: impl FnOnce() -> u8,
     ) {
         if self.dirty {
             self.rebuild_all(entities);
@@ -256,6 +256,7 @@ impl TransportLaneCache {
             return;
         }
 
+        let catalog_underground_distance = catalog_underground_distance();
         let regions = std::mem::take(&mut self.dirty_regions);
         match self
             .graph
@@ -1174,6 +1175,7 @@ fn mark_active_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn dense_lane_hot_record_fits_one_cache_line() {
@@ -1182,5 +1184,27 @@ mod tests {
             "transport lane record grew to {} bytes",
             std::mem::size_of::<TransportLaneRecord>()
         );
+    }
+
+    #[test]
+    fn catalog_distance_is_resolved_only_for_incremental_patches() {
+        let entities = EntityStore::empty(1);
+        let mut cache = TransportLaneCache::default();
+        let resolutions = Cell::new(0);
+        let resolve_distance = || {
+            resolutions.set(resolutions.get() + 1);
+            8
+        };
+
+        cache.refresh(&entities, resolve_distance);
+        cache.refresh(&entities, resolve_distance);
+        assert_eq!(resolutions.get(), 0);
+
+        cache.invalidate_region(TransportDirtyRegion {
+            entity_id: EntityId::new(1),
+            footprint: EntityFootprint::single_tile(0, 0),
+        });
+        cache.refresh(&entities, resolve_distance);
+        assert_eq!(resolutions.get(), 1);
     }
 }

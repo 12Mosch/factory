@@ -10,6 +10,22 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::BuildHasherDefault;
 pub(crate) use std::hash::{Hash, Hasher};
 
+/// Runtime-only caches are deliberately ignored by simulation equality and
+/// hashing because they are reconstructed from authoritative state.
+macro_rules! impl_runtime_only_identity {
+    ($type:ty) => {
+        impl PartialEq for $type {
+            fn eq(&self, _other: &Self) -> bool {
+                true
+            }
+        }
+
+        impl std::hash::Hash for $type {
+            fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+        }
+    };
+}
+
 pub use crate::combat::{
     AttackDefinition, AttackDelivery, CombatCommand, CombatCommandBuffer, CombatSource,
     CombatantId, Damage, DamageType, EnemySpawnerState, Faction, FactionRelation,

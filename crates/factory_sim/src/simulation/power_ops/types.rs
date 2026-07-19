@@ -43,12 +43,4 @@ pub(crate) struct PowerTickScratch {
     pub(super) remaining_available_by_network: Vec<u64>,
 }
 
-impl PartialEq for PowerTickScratch {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Hash for PowerTickScratch {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
+impl_runtime_only_identity!(PowerTickScratch);
