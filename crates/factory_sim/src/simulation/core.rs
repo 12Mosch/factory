@@ -106,7 +106,7 @@ impl Simulation {
         });
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
         profiler.measure(ProfilePhase::Fluids, || self.advance_fluids_before_power());
-        profiler.measure(ProfilePhase::PowerRebuild, || self.refresh_power_state());
+        profiler.measure(ProfilePhase::Power, || self.refresh_power_state());
 
         let machines = profiler.begin();
         self.advance_machines(profiler);

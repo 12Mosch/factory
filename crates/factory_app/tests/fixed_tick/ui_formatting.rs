@@ -26,7 +26,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         last_tick: SimulationTickProfile {
             belts: Duration::from_micros(100),
             fluids: Duration::from_micros(200),
-            power_rebuild: Duration::from_micros(300),
+            power: Duration::from_micros(300),
             machines: Duration::from_micros(400),
             inserters: Duration::from_micros(500),
             inventory_transfers: Duration::from_micros(600),
@@ -77,7 +77,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         "Entities:",
         "Power:",
         "fluids",
-        "power rebuild",
+        "power",
         "render sync total",
         "player",
         "world",

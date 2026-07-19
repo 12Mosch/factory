@@ -666,6 +666,10 @@ fn collect_render_sync_budget_stats(app: &mut App, frames: usize) -> RenderSyncB
     let mut samples = Vec::with_capacity(frames);
 
     for _ in 0..frames {
+        // Advance the simulation so every measured frame syncs real changes;
+        // rendering an unchanged world short-circuits in the caches and would
+        // measure nothing.
+        tick_sim_resource(app);
         app.update();
         samples.push(RenderSyncSample {
             stats: *app.world().resource::<RenderSyncStats>(),
