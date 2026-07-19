@@ -94,15 +94,17 @@ impl Simulation {
 }
 
 impl PowerTopologyCache {
-    pub(super) fn network_accumulators(&self) -> Vec<NetworkAccumulator> {
-        self.pole_counts
-            .iter()
-            .map(|pole_count| NetworkAccumulator {
-                pole_count: *pole_count,
-                satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
-                ..NetworkAccumulator::default()
-            })
-            .collect()
+    pub(super) fn reset_network_accumulators(&self, networks: &mut Vec<NetworkAccumulator>) {
+        networks.clear();
+        networks.extend(
+            self.pole_counts
+                .iter()
+                .map(|pole_count| NetworkAccumulator {
+                    pole_count: *pole_count,
+                    satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
+                    ..NetworkAccumulator::default()
+                }),
+        );
     }
 }
 

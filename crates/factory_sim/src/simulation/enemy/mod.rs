@@ -12,6 +12,7 @@ mod spawning;
 mod targeting;
 
 pub(super) use navigation::EnemyNavigation;
+pub(super) use spawning::EnemySpawningScratch;
 pub(super) use targeting::AttackTargetCache;
 
 /// Next tick a frequency-scaled schedule fires: `base_ticks` stretched by the
