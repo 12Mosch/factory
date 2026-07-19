@@ -14,6 +14,8 @@ use topology::*;
 #[allow(unused_imports)]
 use types::*;
 
+pub(super) use types::PowerTickScratch;
+
 impl Simulation {
     pub fn power_map_snapshot_in_tile_rect(
         &self,
@@ -192,7 +194,10 @@ impl Simulation {
         }
 
         self.ensure_fluid_network_topology();
-        let mut networks = self.power.topology.network_accumulators();
+        let mut scratch = std::mem::take(&mut self.power_tick_scratch);
+        self.power
+            .topology
+            .reset_network_accumulators(&mut scratch.networks);
 
         refresh_consumer_demand_cache(
             &self.world,
@@ -201,22 +206,25 @@ impl Simulation {
             &self.power.topology,
             &mut self.power.entity_statuses,
             &mut self.power_demand_cache,
-            &mut networks,
+            &mut scratch.networks,
         );
 
-        let engine_assignments = self.assign_steam_engines_to_fluid_networks(
+        self.assign_steam_engines_to_fluid_networks(
             &self.power.topology.network_ids_by_entity,
-            &networks,
+            &scratch.networks,
+            &mut scratch.engine_assignments,
+            &mut scratch.remaining_demand_by_network,
+            &mut scratch.remaining_steam_by_network,
         );
-        for assignment in engine_assignments.values() {
-            let network = &mut networks[assignment.network_id as usize];
+        for (_, assignment) in &scratch.engine_assignments {
+            let network = &mut scratch.networks[assignment.network_id as usize];
             network.producer_count += 1;
             network.available_production_watts = network
                 .available_production_watts
                 .saturating_add(assignment.available_power_output_watts);
         }
 
-        for network in &mut networks {
+        for network in &mut scratch.networks {
             let (production_watts, satisfaction_permyriad) = power_satisfaction(
                 network.available_production_watts,
                 network.consumption_watts,
@@ -225,25 +233,22 @@ impl Simulation {
             network.satisfaction_permyriad = satisfaction_permyriad;
         }
 
-        let engine_output_watts = actual_steam_engine_outputs(&networks, &engine_assignments);
-        if self.consume_steam_for_engine_output(engine_output_watts, &engine_assignments) {
+        actual_steam_engine_outputs(
+            &scratch.networks,
+            &scratch.engine_assignments,
+            &mut scratch.engine_outputs,
+            &mut scratch.remaining_production_by_network,
+            &mut scratch.remaining_available_by_network,
+        );
+        if self
+            .consume_steam_for_engine_output(&scratch.engine_outputs, &scratch.engine_assignments)
+        {
             // Machine systems consume their own box state later in this tick,
             // so redistribute changed steam now. Durable fluid snapshots are
             // refreshed once after all machines have run.
             self.equalize_fluid_networks();
         }
-        let next_networks = network_snapshots(&networks);
-        let map_changed = self.power.networks.len() != next_networks.len()
-            || self
-                .power
-                .networks
-                .iter()
-                .zip(&next_networks)
-                .any(|(previous, next)| {
-                    previous.network_id != next.network_id
-                        || previous.satisfaction_permyriad != next.satisfaction_permyriad
-                });
-        self.power.networks = next_networks;
+        let map_changed = refresh_network_snapshots(&scratch.networks, &mut self.power.networks);
         if map_changed {
             self.power_map_revision = self.power_map_revision.wrapping_add(1);
         }
@@ -251,6 +256,7 @@ impl Simulation {
         if self.any_steam_engine_can_generate(&self.power.topology.network_ids_by_entity) {
             self.onboarding_progress.record_electricity_generated();
         }
+        self.power_tick_scratch = scratch;
         for (network_index, consumers) in self
             .power_demand_cache
             .consumers_by_network

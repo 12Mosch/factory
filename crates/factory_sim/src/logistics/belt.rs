@@ -38,9 +38,19 @@ pub struct UndergroundBeltSegment {
     pub max_distance: u8,
 }
 
+/// Most items one lane of a single tile can hold: positions span
+/// `BELT_SUBTILES_PER_TILE` subtiles and validated states keep items at least
+/// `BELT_ITEM_SPACING_SUBTILES` apart. Invalid states spill to the heap
+/// instead of breaking.
+pub const BELT_LANE_ITEM_CAPACITY: usize = (crate::simulation::BELT_SUBTILES_PER_TILE
+    / crate::simulation::BELT_ITEM_SPACING_SUBTILES)
+    as usize;
+
+pub type BeltLaneItems = SmallVec<[BeltItem; BELT_LANE_ITEM_CAPACITY]>;
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BeltLane {
-    pub items: SmallVec<[BeltItem; 8]>,
+    pub items: BeltLaneItems,
 }
 
 /// Persistent identity of one physical item while it remains in transport.
@@ -109,6 +119,53 @@ impl SplitterState {
 impl Default for BeltSegment {
     fn default() -> Self {
         Self::new(Direction::default(), 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Serialize)]
+    struct LegacyBeltLane {
+        items: SmallVec<[BeltItem; 8]>,
+    }
+
+    #[test]
+    fn four_item_inline_lane_preserves_legacy_serialized_form() {
+        let items = [
+            BeltItem {
+                id: BeltItemId::new(1),
+                item_id: ItemId::new(2),
+                position_subtile: 0,
+            },
+            BeltItem {
+                id: BeltItemId::new(3),
+                item_id: ItemId::new(4),
+                position_subtile: 64,
+            },
+            BeltItem {
+                id: BeltItemId::new(5),
+                item_id: ItemId::new(6),
+                position_subtile: 128,
+            },
+            BeltItem {
+                id: BeltItemId::new(7),
+                item_id: ItemId::new(8),
+                position_subtile: 192,
+            },
+        ];
+        let lane = BeltLane {
+            items: items.into_iter().collect(),
+        };
+        let legacy = LegacyBeltLane {
+            items: items.into_iter().collect(),
+        };
+
+        assert_eq!(
+            bincode::serialize(&lane).expect("current lane should serialize"),
+            bincode::serialize(&legacy).expect("legacy lane should serialize")
+        );
     }
 }
 

@@ -299,6 +299,7 @@ impl SimulationSnapshotOwned {
                 topology_rebuilds: 0,
             },
             power_demand_cache: PowerDemandCache::default(),
+            power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,
@@ -312,6 +313,8 @@ impl SimulationSnapshotOwned {
             enemies: self.enemies,
             config: self.config,
             attack_targets: enemy::AttackTargetCache::default(),
+            enemy_target_chunks: combat_ops::EnemyChunkIndex::default(),
+            enemy_spawning_scratch: enemy::EnemySpawningScratch::default(),
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };

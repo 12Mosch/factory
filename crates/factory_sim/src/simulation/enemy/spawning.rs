@@ -1,6 +1,54 @@
 use super::*;
+use std::hash::{Hash, Hasher};
 
 const SPAWN_SEARCH_RINGS: i64 = 3;
+
+type ScratchMap<K, V> = HashMap<K, V, BuildHasherDefault<StableHasher>>;
+
+#[derive(Clone, Copy, Debug)]
+struct SpawnRequest {
+    spawner_id: EntityId,
+    unit: UnitPrototype,
+    mission: EnemyMission,
+    attack_budget_cost_micro: u64,
+}
+
+/// Reusable, runtime-only aggregation storage for enemy spawning. Hash-table
+/// iteration order is never observed; ordered spawner/base vectors preserve
+/// deterministic application order.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct EnemySpawningScratch {
+    alive_by_spawner: ScratchMap<EntityId, u32>,
+    guards_by_spawner: ScratchMap<EntityId, u32>,
+    projected_alive_by_spawner: ScratchMap<EntityId, u32>,
+    absorbed_by_base: ScratchMap<EnemyBaseId, u64>,
+    absorbed_base_order: Vec<EnemyBaseId>,
+    base_ids: Vec<EnemyBaseId>,
+    requests: Vec<SpawnRequest>,
+}
+
+impl EnemySpawningScratch {
+    fn clear(&mut self) {
+        self.alive_by_spawner.clear();
+        self.guards_by_spawner.clear();
+        self.projected_alive_by_spawner.clear();
+        self.absorbed_by_base.clear();
+        self.absorbed_base_order.clear();
+        self.base_ids.clear();
+        self.requests.clear();
+    }
+}
+
+impl PartialEq for EnemySpawningScratch {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Hash for EnemySpawningScratch {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SpawnError {
     SpawnerNotFound,
@@ -11,28 +59,33 @@ impl Simulation {
     /// Spawner behavior: drain pollution from the local chunk, convert it
     /// into attacking units, and keep a small idle guard detail alive.
     pub(in crate::simulation) fn advance_enemy_spawners(&mut self) {
-        struct SpawnRequest {
-            spawner_id: EntityId,
-            unit: UnitPrototype,
-            mission: EnemyMission,
-            attack_budget_cost_micro: u64,
-        }
-
-        let mut alive_by_spawner = BTreeMap::<EntityId, u32>::new();
-        let mut guards_by_spawner = BTreeMap::<EntityId, u32>::new();
+        self.enemy_spawning_scratch.clear();
         for enemy in self.enemies.enemies.values() {
             if let Some(spawner) = enemy.home_spawner {
-                *alive_by_spawner.entry(spawner).or_default() += 1;
+                *self
+                    .enemy_spawning_scratch
+                    .alive_by_spawner
+                    .entry(spawner)
+                    .or_default() += 1;
                 if enemy.mode == EnemyMode::Guard {
-                    *guards_by_spawner.entry(spawner).or_default() += 1;
+                    *self
+                        .enemy_spawning_scratch
+                        .guards_by_spawner
+                        .entry(spawner)
+                        .or_default() += 1;
                 }
             }
         }
-        let mut projected_alive_by_spawner = alive_by_spawner.clone();
+        self.enemy_spawning_scratch
+            .projected_alive_by_spawner
+            .extend(
+                self.enemy_spawning_scratch
+                    .alive_by_spawner
+                    .iter()
+                    .map(|(&spawner_id, &count)| (spawner_id, count)),
+            );
 
         self.advance_evolution_time();
-        let mut requests: Vec<SpawnRequest> = Vec::new();
-        let mut absorbed_by_base = BTreeMap::<EnemyBaseId, u64>::new();
         let mut attack_budget_overflows = 0_u64;
         let tick = self.tick;
         let raid_size = u64::from(self.raid_target_size());
@@ -40,13 +93,16 @@ impl Simulation {
             world,
             entities,
             pollution,
+            enemies,
+            enemy_spawning_scratch,
+            config: simulation_config,
             ..
         } = self;
         for (&spawner_id, state) in entities.enemy_spawners.iter_mut() {
             let Some(placed) = entities.placed_entities.get(&spawner_id) else {
                 continue;
             };
-            let Some(config) = world
+            let Some(spawner_config) = world
                 .prototypes
                 .entity(placed.prototype_id)
                 .and_then(|prototype| prototype.enemy_spawner.as_ref())
@@ -57,44 +113,64 @@ impl Simulation {
                 continue;
             };
 
-            let Some(base_id) = self.enemies.spawner_bases.get(&spawner_id).copied() else {
+            let Some(base_id) = enemies.spawner_bases.get(&spawner_id).copied() else {
                 continue;
             };
-            let cap = u64::from(config.unit_spawn_pollution_cost_milli) * 1000 * raid_size * 10;
+            let cap =
+                u64::from(spawner_config.unit_spawn_pollution_cost_milli) * 1000 * raid_size * 10;
             // Count what sibling spawners of this base already absorbed this
             // pass, so a multi-spawner base cannot overshoot its budget cap.
-            let existing_budget = self
-                .enemies
+            let existing_budget = enemies
                 .bases
                 .get(&base_id)
                 .map_or(0, |base| base.attack_budget_micro);
             let (budget, overflowed) = saturating_add_with_overflow(
                 existing_budget,
-                absorbed_by_base.get(&base_id).copied().unwrap_or(0),
+                enemy_spawning_scratch
+                    .absorbed_by_base
+                    .get(&base_id)
+                    .copied()
+                    .unwrap_or(0),
             );
             attack_budget_overflows = attack_budget_overflows.saturating_add(u64::from(overflowed));
-            let absorption = u64::from(config.pollution_absorption_per_tick_milli)
+            let absorption = u64::from(spawner_config.pollution_absorption_per_tick_milli)
                 * 1000
-                * u64::from(self.config.runtime.pollution_sensitivity_percent)
+                * u64::from(simulation_config.runtime.pollution_sensitivity_percent)
                 / 100;
             let absorbed = if budget < cap {
                 pollution.remove_micro(coord, absorption.min(cap - budget))
             } else {
                 0
             };
-            let absorbed_for_base = absorbed_by_base.entry(base_id).or_default();
+            let absorbed_for_base = match enemy_spawning_scratch.absorbed_by_base.entry(base_id) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    enemy_spawning_scratch.absorbed_base_order.push(base_id);
+                    entry.insert(0)
+                }
+            };
             let (sum, overflowed) = saturating_add_with_overflow(*absorbed_for_base, absorbed);
             *absorbed_for_base = sum;
             attack_budget_overflows = attack_budget_overflows.saturating_add(u64::from(overflowed));
 
-            let projected_alive = projected_alive_by_spawner.entry(spawner_id).or_default();
-            let guards = guards_by_spawner.get(&spawner_id).copied().unwrap_or(0);
+            let projected_alive = enemy_spawning_scratch
+                .projected_alive_by_spawner
+                .entry(spawner_id)
+                .or_default();
+            let guards = enemy_spawning_scratch
+                .guards_by_spawner
+                .get(&spawner_id)
+                .copied()
+                .unwrap_or(0);
             if tick >= state.next_free_spawn_tick {
-                state.next_free_spawn_tick = tick + u64::from(config.free_spawn_interval_ticks);
-                if guards < config.guard_units && *projected_alive < config.max_alive_units {
-                    requests.push(SpawnRequest {
+                state.next_free_spawn_tick =
+                    tick + u64::from(spawner_config.free_spawn_interval_ticks);
+                if guards < spawner_config.guard_units
+                    && *projected_alive < spawner_config.max_alive_units
+                {
+                    enemy_spawning_scratch.requests.push(SpawnRequest {
                         spawner_id,
-                        unit: config.unit,
+                        unit: spawner_config.unit,
                         mission: EnemyMission::Guard,
                         attack_budget_cost_micro: 0,
                     });
@@ -103,12 +179,18 @@ impl Simulation {
             }
         }
 
-        let pollution_changed = absorbed_by_base.values().any(|absorbed| *absorbed != 0);
+        let pollution_changed = self
+            .enemy_spawning_scratch
+            .absorbed_base_order
+            .iter()
+            .any(|base_id| self.enemy_spawning_scratch.absorbed_by_base[base_id] != 0);
         if pollution_changed {
             self.pollution_map_revision = self.pollution_map_revision.wrapping_add(1);
         }
         let mut pollution_contact_changed = false;
-        for (base_id, absorbed) in absorbed_by_base {
+        for index in 0..self.enemy_spawning_scratch.absorbed_base_order.len() {
+            let base_id = self.enemy_spawning_scratch.absorbed_base_order[index];
+            let absorbed = self.enemy_spawning_scratch.absorbed_by_base[&base_id];
             if absorbed == 0 {
                 continue;
             }
@@ -140,9 +222,12 @@ impl Simulation {
             .saturating_add(attack_budget_overflows);
 
         if self.config.runtime.proactive_raids {
-            let base_ids: Vec<_> = self.enemies.bases.keys().copied().collect();
+            self.enemy_spawning_scratch
+                .base_ids
+                .extend(self.enemies.bases.keys().copied());
             let target_size = usize::from(self.raid_target_size());
-            for base_id in base_ids {
+            for index in 0..self.enemy_spawning_scratch.base_ids.len() {
+                let base_id = self.enemy_spawning_scratch.base_ids[index];
                 let Some((&spawner_id, unit, cost, can_spawn)) = self
                     .enemies
                     .bases
@@ -160,7 +245,8 @@ impl Simulation {
                             spawner_id,
                             cfg.unit,
                             u64::from(cfg.unit_spawn_pollution_cost_milli) * 1000,
-                            projected_alive_by_spawner
+                            self.enemy_spawning_scratch
+                                .projected_alive_by_spawner
                                 .get(spawner_id)
                                 .copied()
                                 .unwrap_or(0)
@@ -180,18 +266,23 @@ impl Simulation {
                     && base.staged_units.len() < target_size
                     && can_spawn
                 {
-                    requests.push(SpawnRequest {
+                    self.enemy_spawning_scratch.requests.push(SpawnRequest {
                         spawner_id,
                         unit,
                         mission: EnemyMission::Staging(base_id),
                         attack_budget_cost_micro: cost,
                     });
-                    *projected_alive_by_spawner.entry(spawner_id).or_default() += 1;
+                    *self
+                        .enemy_spawning_scratch
+                        .projected_alive_by_spawner
+                        .entry(spawner_id)
+                        .or_default() += 1;
                 }
             }
         }
 
-        for request in requests {
+        let mut requests = std::mem::take(&mut self.enemy_spawning_scratch.requests);
+        for request in requests.drain(..) {
             if self
                 .spawn_enemy_near_spawner(request.spawner_id, &request.unit, request.mission)
                 .is_ok()
@@ -208,6 +299,7 @@ impl Simulation {
                 base.attack_budget_micro -= request.attack_budget_cost_micro;
             }
         }
+        self.enemy_spawning_scratch.requests = requests;
         self.cleanup_enemy_groups();
         self.launch_ready_raids();
         self.advance_expansions_and_growth();

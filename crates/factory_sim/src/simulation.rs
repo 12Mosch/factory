@@ -42,8 +42,8 @@ pub use crate::inventory::{Inventory, InventoryError, ItemSlot, ItemStack};
 #[cfg(test)]
 pub(crate) use crate::inventory::{test_inventory, test_slot, test_stack};
 pub use crate::logistics::{
-    BeltError, BeltItem, BeltItemId, BeltLane, BeltSegment, ContainerError, InserterError,
-    InserterState, InserterTransferPreview, SplitterError, SplitterState,
+    BeltError, BeltItem, BeltItemId, BeltLane, BeltLaneItems, BeltSegment, ContainerError,
+    InserterError, InserterState, InserterTransferPreview, SplitterError, SplitterState,
     UndergroundBeltLinkPreview, UndergroundBeltSegment,
 };
 pub use crate::machines::{
@@ -161,6 +161,8 @@ pub struct Simulation {
     power: PowerSubsystem,
     #[serde(skip)]
     power_demand_cache: PowerDemandCache,
+    #[serde(skip)]
+    power_tick_scratch: power_ops::PowerTickScratch,
     fluids: FluidSubsystem,
     statistics: StatisticsSubsystem,
     pollution: PollutionState,
@@ -175,6 +177,10 @@ pub struct Simulation {
 
     #[serde(skip)]
     attack_targets: enemy::AttackTargetCache,
+    #[serde(skip)]
+    enemy_target_chunks: combat_ops::EnemyChunkIndex,
+    #[serde(skip)]
+    enemy_spawning_scratch: enemy::EnemySpawningScratch,
     #[serde(skip)]
     enemy_navigation: enemy::EnemyNavigation,
     #[serde(skip)]

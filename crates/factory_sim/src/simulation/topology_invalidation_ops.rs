@@ -20,12 +20,17 @@ pub(crate) fn impact_for_prototype(
     }
 }
 
-pub(crate) fn apply_entity_topology_change(sim: &mut Simulation, impact: EntityTopologyImpact) {
+pub(crate) fn apply_entity_topology_change(
+    sim: &mut Simulation,
+    impact: EntityTopologyImpact,
+    entity_id: EntityId,
+    footprint: EntityFootprint,
+) {
     if impact.affects_power_topology {
         sim.invalidate_power_state();
     }
     if impact.affects_transport_lane_graph {
-        sim.invalidate_transport_lane_graph();
+        sim.invalidate_transport_lane_graph_region(entity_id, footprint);
     }
     sim.invalidate_fluid_state();
     sim.bump_entity_topology_revision();

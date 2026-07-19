@@ -14,11 +14,18 @@ pub(super) fn power_satisfaction(available_watts: u64, demand_watts: u64) -> (u6
     (available_watts, satisfaction as u32)
 }
 
-pub(super) fn network_snapshots(networks: &[NetworkAccumulator]) -> Vec<PowerNetworkSnapshot> {
-    networks
-        .iter()
-        .enumerate()
-        .map(|(network_id, network)| PowerNetworkSnapshot {
+pub(super) fn refresh_network_snapshots(
+    networks: &[NetworkAccumulator],
+    snapshots: &mut Vec<PowerNetworkSnapshot>,
+) -> bool {
+    let map_changed = snapshots.len() != networks.len()
+        || snapshots
+            .iter()
+            .zip(networks)
+            .any(|(previous, next)| previous.satisfaction_permyriad != next.satisfaction_permyriad);
+    snapshots.clear();
+    snapshots.extend(networks.iter().enumerate().map(|(network_id, network)| {
+        PowerNetworkSnapshot {
             network_id: network_id as u32,
             pole_count: network.pole_count,
             producer_count: network.producer_count,
@@ -27,8 +34,9 @@ pub(super) fn network_snapshots(networks: &[NetworkAccumulator]) -> Vec<PowerNet
             available_production_watts: network.available_production_watts,
             consumption_watts: network.consumption_watts,
             satisfaction_permyriad: network.satisfaction_permyriad,
-        })
-        .collect()
+        }
+    }));
+    map_changed
 }
 
 pub(super) fn aggregate_power_summary(networks: &[PowerNetworkSnapshot]) -> PowerSummary {

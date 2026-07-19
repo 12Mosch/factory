@@ -44,16 +44,40 @@ impl Simulation {
             || (prototype.entity_kind == EntityKind::Splitter && prototype.splitter.is_some())
     }
 
-    pub(super) fn invalidate_transport_lane_graph(&mut self) {
-        self.transport.invalidate();
+    pub(super) fn invalidate_transport_lane_graph_region(
+        &mut self,
+        entity_id: EntityId,
+        footprint: EntityFootprint,
+    ) {
+        self.transport
+            .invalidate_region(cache::TransportDirtyRegion {
+                entity_id,
+                footprint,
+            });
     }
 
     pub(super) fn refresh_transport_lane_graph(&mut self) {
-        self.transport.refresh(&self.entities);
+        let catalog_underground_distance = self
+            .world
+            .prototypes
+            .entities
+            .iter()
+            .filter_map(|prototype| prototype.transport_belt.as_ref())
+            .filter_map(|belt| belt.underground.as_ref())
+            .map(|underground| underground.max_distance)
+            .max()
+            .unwrap_or(0);
+        self.transport
+            .refresh(&self.entities, catalog_underground_distance);
     }
 
     #[cfg(test)]
     pub(super) fn transport_lane_graph_rebuild_count(&self) -> u64 {
         self.transport.rebuilds
+    }
+
+    #[cfg(test)]
+    pub(super) fn transport_lane_graph_patch_count(&self) -> u64 {
+        self.transport.patches
     }
 }

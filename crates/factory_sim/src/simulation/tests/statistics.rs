@@ -13,6 +13,7 @@ fn counts_report_entities_chunks_belts_items_machines_and_inserters() {
 
     let counts = sim.counts();
     assert_eq!(counts.entity_count, 9);
+    assert_eq!(counts.enemy_count, 0);
     assert_eq!(counts.chunk_count, 25);
     assert_eq!(counts.belt_count, 1);
     assert_eq!(counts.belt_item_count, 1);

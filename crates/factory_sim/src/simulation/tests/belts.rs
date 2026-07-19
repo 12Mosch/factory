@@ -65,11 +65,13 @@ fn transport_topology_edits_dirty_cached_lane_graph() {
     crate::entity_mutation::rotate(&mut sim, belts[0], Direction::North)
         .expect("placed belt should rotate");
     sim.advance_transport_belts();
-    assert_eq!(sim.transport_lane_graph_rebuild_count(), 2);
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+    assert_eq!(sim.transport_lane_graph_patch_count(), 1);
 
     crate::entity_mutation::remove(&mut sim, belts[1]).expect("placed belt should be removable");
     sim.advance_transport_belts();
-    assert_eq!(sim.transport_lane_graph_rebuild_count(), 3);
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+    assert_eq!(sim.transport_lane_graph_patch_count(), 2);
 }
 
 #[test]
@@ -83,7 +85,48 @@ fn destroying_transport_entity_dirties_cached_lane_graph() {
     crate::entity_mutation::destroy_to_player_inventory(&mut sim, belts[0])
         .expect("placed belt should be destroyable to player inventory");
     sim.advance_transport_belts();
-    assert_eq!(sim.transport_lane_graph_rebuild_count(), 2);
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+    assert_eq!(sim.transport_lane_graph_patch_count(), 1);
+}
+
+#[test]
+fn incremental_transport_patch_reuses_removed_lane_slots() {
+    let mut sim = Simulation::new_test_world(123);
+    let belts = place_belt_line(&mut sim, 2);
+    sim.advance_transport_belts();
+
+    let removed = crate::entity_mutation::remove(&mut sim, belts[1])
+        .expect("placed belt should be removable");
+    sim.advance_transport_belts();
+
+    let replacement = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: removed.prototype_id,
+            x: removed.x,
+            y: removed.y,
+            direction: Direction::East,
+        },
+    )
+    .expect("removed belt tile should accept a replacement");
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(belts[0], 0, iron_ore)
+        .expect("source belt should accept an item before cache refresh");
+
+    for _ in 0..32 {
+        sim.advance_transport_belts();
+    }
+
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 1);
+    assert_eq!(sim.transport_lane_graph_patch_count(), 2);
+    assert_eq!(
+        crate::entity_access::belt_segment(&sim, replacement)
+            .expect("replacement should have belt state")
+            .lanes[0]
+            .items
+            .len(),
+        1
+    );
 }
 
 #[test]
