@@ -161,6 +161,8 @@ pub struct Simulation {
     power: PowerSubsystem,
     #[serde(skip)]
     power_demand_cache: PowerDemandCache,
+    #[serde(skip)]
+    power_tick_scratch: power_ops::PowerTickScratch,
     fluids: FluidSubsystem,
     statistics: StatisticsSubsystem,
     pollution: PollutionState,
@@ -175,6 +177,10 @@ pub struct Simulation {
 
     #[serde(skip)]
     attack_targets: enemy::AttackTargetCache,
+    #[serde(skip)]
+    enemy_target_chunks: combat_ops::EnemyChunkIndex,
+    #[serde(skip)]
+    enemy_spawning_scratch: enemy::EnemySpawningScratch,
     #[serde(skip)]
     enemy_navigation: enemy::EnemyNavigation,
     #[serde(skip)]

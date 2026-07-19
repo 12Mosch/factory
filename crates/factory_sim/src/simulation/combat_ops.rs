@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 
 #[derive(Default)]
 struct AccumulatedDamage {
@@ -34,13 +35,14 @@ impl Simulation {
         }
         // Units move during their own simulation step, not during turret
         // fire, so one index is valid for this whole pass.
-        let enemy_chunks = EnemyChunkIndex::from_enemies(&self.enemies);
+        self.enemy_target_chunks.rebuild(&self.enemies);
         {
             let tick = self.tick;
             let Simulation {
                 world,
                 entities,
                 enemies,
+                enemy_target_chunks,
                 ..
             } = self;
 
@@ -69,7 +71,7 @@ impl Simulation {
                 let footprint = placed.footprint;
                 let range = i64::from(turret.range_tiles);
                 let target = if let Some(enemy_id) =
-                    nearest_enemy_in_range(enemies, &enemy_chunks, &footprint, range)
+                    nearest_enemy_in_range(enemies, enemy_target_chunks, &footprint, range)
                 {
                     Some(CombatantId::Enemy(enemy_id))
                 } else {
@@ -360,7 +362,7 @@ fn nearest_enemy_in_range(
         if distance > range {
             continue;
         }
-        if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+        if best.is_none_or(|current| (distance, enemy.id) < current) {
             best = Some((distance, enemy.id));
         }
     }
@@ -403,29 +405,32 @@ fn nearest_spawner_in_range(
     best.map(|(_, id)| id)
 }
 
-/// Short-lived spatial index for the turret pass. Keeping it local avoids
-/// serializing derived state while turning one scan per turret into one scan
-/// of the nearby generated chunks.
-struct EnemyChunkIndex {
+/// Runtime-only spatial index reused by each turret pass. It deliberately
+/// compares and hashes as empty derived state so capacity does not affect
+/// deterministic simulation identity.
+#[derive(Clone, Debug, Default)]
+pub(super) struct EnemyChunkIndex {
     chunks: BTreeMap<ChunkCoord, Vec<EnemyId>>,
 }
 
 impl EnemyChunkIndex {
-    fn from_enemies(enemies: &EnemySubsystem) -> Self {
-        let mut chunks = BTreeMap::<ChunkCoord, Vec<EnemyId>>::new();
+    fn rebuild(&mut self, enemies: &EnemySubsystem) {
+        for enemy_ids in self.chunks.values_mut() {
+            enemy_ids.clear();
+        }
         for enemy in enemies.enemies.values() {
             if let Some(coord) = ChunkCoord::from_tile(enemy.tile().0, enemy.tile().1) {
-                chunks.entry(coord).or_default().push(enemy.id);
+                self.chunks.entry(coord).or_default().push(enemy.id);
             }
         }
-        Self { chunks }
+        self.chunks.retain(|_, enemy_ids| !enemy_ids.is_empty());
     }
 
     fn ids_in_expanded_footprint(
         &self,
         footprint: &EntityFootprint,
         range: i64,
-    ) -> Box<dyn Iterator<Item = &EnemyId> + '_> {
+    ) -> impl Iterator<Item = &EnemyId> {
         let min_x = footprint.x.saturating_sub(range);
         let max_x = footprint
             .x
@@ -436,26 +441,32 @@ impl EnemyChunkIndex {
             .y
             .saturating_add(i64::from(footprint.height) - 1)
             .saturating_add(range);
-        let Some(min_chunk) = ChunkCoord::from_tile(min_x, min_y) else {
-            return Box::new(std::iter::empty());
-        };
-        let Some(max_chunk) = ChunkCoord::from_tile(max_x, max_y) else {
-            return Box::new(std::iter::empty());
-        };
-
-        Box::new(
-            self.chunks
-                .range(
-                    ChunkCoord {
-                        x: min_chunk.x,
-                        y: i32::MIN,
-                    }..=ChunkCoord {
-                        x: max_chunk.x,
-                        y: i32::MAX,
-                    },
-                )
-                .filter(move |(coord, _)| coord.y >= min_chunk.y && coord.y <= max_chunk.y)
-                .flat_map(|(_, enemy_ids)| enemy_ids),
-        )
+        ChunkCoord::from_tile(min_x, min_y)
+            .zip(ChunkCoord::from_tile(max_x, max_y))
+            .into_iter()
+            .flat_map(move |(min_chunk, max_chunk)| {
+                self.chunks
+                    .range(
+                        ChunkCoord {
+                            x: min_chunk.x,
+                            y: i32::MIN,
+                        }..=ChunkCoord {
+                            x: max_chunk.x,
+                            y: i32::MAX,
+                        },
+                    )
+                    .filter(move |(coord, _)| coord.y >= min_chunk.y && coord.y <= max_chunk.y)
+                    .flat_map(|(_, enemy_ids)| enemy_ids)
+            })
     }
+}
+
+impl PartialEq for EnemyChunkIndex {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Hash for EnemyChunkIndex {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }

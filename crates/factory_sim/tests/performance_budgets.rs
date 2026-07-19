@@ -149,11 +149,11 @@ fn enemy_heavy_benchmark_500_attackers_2000_structures() {
     let mut config = EnemyDifficultyPreset::Aggressive.config();
     config.preset = EnemyDifficultyPreset::Custom;
     config.world.base_density_percent = 0;
-    let mut sim = Simulation::new_with_config(
-        123,
-        factory_data::PrototypeCatalog::load_base().expect("base catalog should load"),
-        config,
-    );
+    let mut catalog =
+        factory_data::PrototypeCatalog::load_base().expect("base catalog should load");
+    let chest = entity_prototype_id_by_name(&catalog, "chest");
+    catalog.entities[chest.index()].max_health = Some(u32::MAX);
+    let mut sim = Simulation::new_with_config(123, catalog, config);
     for y in -12..=12 {
         for x in -12..=12 {
             sim.ensure_chunk_generated(ChunkCoord { x, y });
@@ -173,6 +173,15 @@ fn enemy_heavy_benchmark_500_attackers_2000_structures() {
     }
 
     run_warmup_ticks(&mut sim, 7_200);
+    let structure_count = sim
+        .entities()
+        .placed_entities()
+        .filter(|placed| placed.prototype_id == chest)
+        .count();
+    assert_eq!(
+        structure_count, 2_000,
+        "enemy-heavy fixture must retain all benchmark structures through warmup"
+    );
     let attacker_count = sim
         .enemies()
         .iter()
@@ -782,8 +791,9 @@ fn max_duration(
 
 fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
     println!(
-        "{name}:\n  counts: entities {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
+        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
         stats.counts.entity_count,
+        stats.counts.enemy_count,
         stats.counts.belt_count,
         stats.counts.belt_item_count,
         stats.counts.machine_count,
@@ -807,6 +817,9 @@ fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
         ms(stats.average.power),
         ms(stats.p95.power),
         ms(stats.max.power),
+        ms(stats.average.enemies),
+        ms(stats.p95.enemies),
+        ms(stats.max.enemies),
         stats.alloc_average_bytes,
         stats.alloc_average_count,
         stats.alloc_p95_bytes,

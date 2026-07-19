@@ -54,6 +54,7 @@ impl Simulation {
             research,
             power: PowerSubsystem::default(),
             power_demand_cache: PowerDemandCache::default(),
+            power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
@@ -63,6 +64,8 @@ impl Simulation {
             enemies: EnemySubsystem::default(),
             config,
             attack_targets: enemy::AttackTargetCache::default(),
+            enemy_target_chunks: combat_ops::EnemyChunkIndex::default(),
+            enemy_spawning_scratch: enemy::EnemySpawningScratch::default(),
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };

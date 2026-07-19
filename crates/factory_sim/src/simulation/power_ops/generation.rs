@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use super::types::{NetworkAccumulator, SteamEngineAssignment};
 use super::*;
 
@@ -8,32 +6,39 @@ impl Simulation {
         &self,
         network_ids_by_entity: &BTreeMap<EntityId, u32>,
         networks: &[NetworkAccumulator],
-    ) -> BTreeMap<EntityId, SteamEngineAssignment> {
+        assignments: &mut Vec<(EntityId, SteamEngineAssignment)>,
+        remaining_demand_by_network: &mut Vec<u64>,
+        remaining_steam_by_network: &mut Vec<u64>,
+    ) {
         let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
             .fluids
             .steam;
-        let mut assignments = BTreeMap::new();
-        let mut remaining_demand_by_network = networks
-            .iter()
-            .enumerate()
-            .map(|(network_id, network)| (network_id as u32, network.consumption_watts))
-            .collect::<BTreeMap<_, _>>();
-        let mut remaining_steam_by_network = self
+        assignments.clear();
+        remaining_demand_by_network.clear();
+        remaining_demand_by_network
+            .extend(networks.iter().map(|network| network.consumption_watts));
+        let fluid_network_count = self
             .fluids
             .topology_networks
             .iter()
-            .filter_map(|network| {
-                let summary = self.fluid_network_dynamic_summary(network);
-                (!summary.blocked && summary.fluid_id == Some(steam))
-                    .then_some((network.network_id, summary.total_milliunits))
-            })
-            .collect::<BTreeMap<_, _>>();
+            .map(|network| network.network_id as usize + 1)
+            .max()
+            .unwrap_or(0);
+        remaining_steam_by_network.clear();
+        remaining_steam_by_network.resize(fluid_network_count, 0);
+        for network in &self.fluids.topology_networks {
+            let summary = self.fluid_network_dynamic_summary(network);
+            if !summary.blocked && summary.fluid_id == Some(steam) {
+                remaining_steam_by_network[network.network_id as usize] = summary.total_milliunits;
+            }
+        }
 
         for engine_id in self.entities.steam_engines.keys().copied() {
             let Some(network_id) = network_ids_by_entity.get(&engine_id).copied() else {
                 continue;
             };
-            let Some(remaining_demand) = remaining_demand_by_network.get_mut(&network_id) else {
+            let Some(remaining_demand) = remaining_demand_by_network.get_mut(network_id as usize)
+            else {
                 continue;
             };
             if *remaining_demand == 0 {
@@ -48,7 +53,8 @@ impl Simulation {
             }) else {
                 continue;
             };
-            let Some(remaining_steam) = remaining_steam_by_network.get_mut(&steam_network_id)
+            let Some(remaining_steam) =
+                remaining_steam_by_network.get_mut(steam_network_id as usize)
             else {
                 continue;
             };
@@ -80,7 +86,7 @@ impl Simulation {
             }
             *remaining_steam -= steam_budget_milliunits;
             *remaining_demand = remaining_demand.saturating_sub(available_power_output_watts);
-            assignments.insert(
+            assignments.push((
                 engine_id,
                 SteamEngineAssignment {
                     network_id,
@@ -90,10 +96,8 @@ impl Simulation {
                     steam_budget_milliunits,
                     steam_consumption_per_tick_milliunits,
                 },
-            );
+            ));
         }
-
-        assignments
     }
 
     /// True when at least one steam engine is wired into a power network and
@@ -151,20 +155,20 @@ impl Simulation {
 
     pub(super) fn consume_steam_for_engine_output(
         &mut self,
-        engine_output_watts: BTreeMap<EntityId, u64>,
-        engine_assignments: &BTreeMap<EntityId, SteamEngineAssignment>,
+        engine_output_watts: &[(EntityId, u64)],
+        engine_assignments: &[(EntityId, SteamEngineAssignment)],
     ) -> bool {
         let steam = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
             .fluids
             .steam;
         let mut consumed_any = false;
-        for (engine_id, output_watts) in engine_output_watts {
+        for (&(engine_id, output_watts), &(assignment_id, assignment)) in
+            engine_output_watts.iter().zip(engine_assignments)
+        {
+            debug_assert_eq!(engine_id, assignment_id);
             if output_watts == 0 {
                 continue;
             }
-            let Some(assignment) = engine_assignments.get(&engine_id) else {
-                continue;
-            };
             let steam_to_consume = steam_consumed_for_output(
                 output_watts,
                 assignment.max_power_output_watts,
@@ -189,41 +193,41 @@ impl Simulation {
 
 pub(super) fn actual_steam_engine_outputs(
     networks: &[NetworkAccumulator],
-    engine_assignments: &BTreeMap<EntityId, SteamEngineAssignment>,
-) -> BTreeMap<EntityId, u64> {
-    let mut output_by_engine = BTreeMap::<EntityId, u64>::new();
-    let mut engines_by_network = BTreeMap::<u32, Vec<(EntityId, SteamEngineAssignment)>>::new();
+    engine_assignments: &[(EntityId, SteamEngineAssignment)],
+    output_by_engine: &mut Vec<(EntityId, u64)>,
+    remaining_production_by_network: &mut Vec<u64>,
+    remaining_available_by_network: &mut Vec<u64>,
+) {
+    output_by_engine.clear();
+    remaining_production_by_network.clear();
+    remaining_production_by_network.extend(networks.iter().map(|network| network.production_watts));
+    remaining_available_by_network.clear();
+    remaining_available_by_network.extend(
+        networks
+            .iter()
+            .map(|network| network.available_production_watts),
+    );
 
-    for (engine_id, assignment) in engine_assignments {
-        engines_by_network
-            .entry(assignment.network_id)
-            .or_default()
-            .push((*engine_id, *assignment));
-    }
-
-    for (network_id, engines) in engines_by_network {
-        let Some(network) = networks.get(network_id as usize) else {
+    for &(engine_id, assignment) in engine_assignments {
+        let network_index = assignment.network_id as usize;
+        let Some(remaining_production) = remaining_production_by_network.get_mut(network_index)
+        else {
             continue;
         };
-        let mut remaining_production = network.production_watts;
-        let mut remaining_available = network.available_production_watts;
-
-        for (engine_id, assignment) in engines {
-            if remaining_available == 0 || remaining_production == 0 {
-                break;
-            }
-            let actual_output = assignment
+        let remaining_available = &mut remaining_available_by_network[network_index];
+        let actual_output = if *remaining_available == 0 || *remaining_production == 0 {
+            0
+        } else {
+            assignment
                 .available_power_output_watts
-                .saturating_mul(remaining_production)
-                / remaining_available;
-            remaining_production = remaining_production.saturating_sub(actual_output);
-            remaining_available =
-                remaining_available.saturating_sub(assignment.available_power_output_watts);
-            output_by_engine.insert(engine_id, actual_output);
-        }
+                .saturating_mul(*remaining_production)
+                / *remaining_available
+        };
+        *remaining_production = remaining_production.saturating_sub(actual_output);
+        *remaining_available =
+            remaining_available.saturating_sub(assignment.available_power_output_watts);
+        output_by_engine.push((engine_id, actual_output));
     }
-
-    output_by_engine
 }
 
 pub(super) fn steam_consumed_for_output(
