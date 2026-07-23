@@ -8,10 +8,8 @@ struct AccumulatedDamage {
 }
 
 impl Simulation {
-    /// Gun turrets acquire the nearest enemy unit in range (falling back to
-    /// enemy spawners), consume magazine shots, and commit their attacks for
-    /// the tick's shared combat resolution phase.
-    pub(super) fn advance_gun_turrets(&mut self, commands: &mut CombatCommandBuffer) {
+    /// Advances every player defensive turret from one shared target snapshot.
+    pub(super) fn advance_defensive_turrets(&mut self, commands: &mut CombatCommandBuffer) {
         if self.onboarding_progress.loaded_gun_turrets == 0
             && self.entities.gun_turrets.iter().any(|(entity_id, state)| {
                 self.entities.placed_entities.contains_key(entity_id)
@@ -44,12 +42,15 @@ impl Simulation {
                 enemy_target_chunks,
                 ..
             } = self;
+            let placed_entities = &entities.placed_entities;
+            let enemy_spawners = &entities.enemy_spawners;
+            let occupancy = &entities.occupancy;
 
             for (&turret_id, state) in entities.gun_turrets.iter_mut() {
                 if tick < state.next_ready_tick {
                     continue;
                 }
-                let Some(placed) = entities.placed_entities.get(&turret_id) else {
+                let Some(placed) = placed_entities.get(&turret_id) else {
                     continue;
                 };
                 let Some(turret) = world
@@ -67,22 +68,15 @@ impl Simulation {
                     continue;
                 }
 
-                let footprint = placed.footprint;
-                let range = i64::from(turret.range_tiles);
-                let target = if let Some(enemy_id) =
-                    nearest_enemy_in_range(enemies, enemy_target_chunks, &footprint, range)
-                {
-                    Some(CombatantId::Enemy(enemy_id))
-                } else {
-                    nearest_spawner_in_range(
-                        &entities.enemy_spawners,
-                        &entities.placed_entities,
-                        &entities.occupancy,
-                        &footprint,
-                        range,
-                    )
-                    .map(CombatantId::Entity)
-                };
+                let target = defensive_target_from_parts(
+                    enemies,
+                    enemy_target_chunks,
+                    enemy_spawners,
+                    placed_entities,
+                    occupancy,
+                    &placed.footprint,
+                    turret.range_tiles,
+                );
 
                 if let Some(target) = target {
                     let attack = AttackDefinition::hitscan(
@@ -103,6 +97,91 @@ impl Simulation {
                 }
             }
         }
+
+        let mut demand_changed = Vec::new();
+        {
+            let Simulation {
+                world,
+                entities,
+                enemies,
+                enemy_target_chunks,
+                power,
+                ..
+            } = self;
+            let placed_entities = &entities.placed_entities;
+            let enemy_spawners = &entities.enemy_spawners;
+            let occupancy = &entities.occupancy;
+            let electric_consumers = &mut entities.electric_consumers;
+
+            for (&turret_id, state) in entities.laser_turrets.iter_mut() {
+                let Some(placed) = placed_entities.get(&turret_id) else {
+                    continue;
+                };
+                let Some(turret) = world
+                    .prototypes
+                    .entity(placed.prototype_id)
+                    .and_then(|prototype| prototype.laser_turret)
+                else {
+                    continue;
+                };
+                let target = defensive_target_from_parts(
+                    enemies,
+                    enemy_target_chunks,
+                    enemy_spawners,
+                    placed_entities,
+                    occupancy,
+                    &placed.footprint,
+                    turret.range_tiles,
+                );
+
+                let Some(target) = target else {
+                    if state.engaged {
+                        state.engaged = false;
+                        state.cooldown_remaining_ticks = 0;
+                        demand_changed.push(turret_id);
+                    }
+                    continue;
+                };
+                if !state.engaged {
+                    state.engaged = true;
+                    state.cooldown_remaining_ticks = 0;
+                    demand_changed.push(turret_id);
+                    // Power for active usage was not included in this tick's
+                    // accounting. Firing starts after the next accounting pass.
+                    continue;
+                }
+                if !electric_work_allowed_for(power, electric_consumers, turret_id) {
+                    continue;
+                }
+                if state.cooldown_remaining_ticks > 0 {
+                    state.cooldown_remaining_ticks -= 1;
+                    if state.cooldown_remaining_ticks > 0 {
+                        continue;
+                    }
+                }
+                commands.attack(
+                    CombatSource {
+                        owner: CombatantId::Entity(turret_id),
+                        faction: Faction::Player,
+                    },
+                    target,
+                    AttackDefinition::hitscan(
+                        Damage::new(turret.damage, DamageType::Laser),
+                        turret.cooldown_ticks,
+                        turret.range_tiles,
+                    ),
+                );
+                state.cooldown_remaining_ticks = turret.cooldown_ticks;
+            }
+        }
+        for entity_id in demand_changed {
+            self.invalidate_consumer_power_demand(entity_id);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn advance_gun_turrets(&mut self, commands: &mut CombatCommandBuffer) {
+        self.advance_defensive_turrets(commands);
     }
 
     /// Applies every attack committed from the tick's pre-resolution combat
@@ -136,6 +215,7 @@ impl Simulation {
             let amount = u32::try_from(damage.amount).unwrap_or(u32::MAX);
             match target {
                 CombatantId::Player => {
+                    let amount = self.absorb_player_damage_with_shields(amount);
                     self.player.health.current = self.player.health.current.saturating_sub(amount);
                 }
                 CombatantId::Entity(entity_id) => {
@@ -319,6 +399,24 @@ impl Simulation {
     }
 }
 
+fn defensive_target_from_parts(
+    enemies: &EnemySubsystem,
+    enemy_chunks: &EnemyChunkIndex,
+    enemy_spawners: &BTreeMap<EntityId, EnemySpawnerState>,
+    placed_entities: &BTreeMap<EntityId, PlacedEntity>,
+    occupancy: &OccupancyGrid,
+    footprint: &EntityFootprint,
+    range_tiles: u32,
+) -> Option<CombatantId> {
+    let range = i64::from(range_tiles);
+    nearest_enemy_in_range(enemies, enemy_chunks, footprint, range)
+        .map(CombatantId::Enemy)
+        .or_else(|| {
+            nearest_spawner_in_range(enemy_spawners, placed_entities, occupancy, footprint, range)
+                .map(CombatantId::Entity)
+        })
+}
+
 /// Breaks one magazine out of the turret's ammo inventory into loose shots.
 fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
     let Some((item_id, ammo)) = state
@@ -340,7 +438,7 @@ fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
         return;
     }
     state.loaded_shots = ammo.shots_per_item;
-    state.loaded_damage = Damage::physical(ammo.damage_per_shot);
+    state.loaded_damage = Damage::new(ammo.damage_per_shot, ammo.damage_type);
 }
 
 /// Nearest enemy unit whose tile lies within `range` of the turret

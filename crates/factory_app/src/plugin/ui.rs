@@ -23,6 +23,10 @@ use crate::ui::debug_overlay::{
 use crate::ui::enemy_settings::{
     EnemySettingsWindowState, handle_enemy_settings_buttons, sync_enemy_settings_window,
 };
+use crate::ui::equipment_window::{
+    handle_equipment_buttons, handle_equipment_command_results, sync_equipment_window,
+    update_equipment_selection_colors, update_equipment_window_text,
+};
 use crate::ui::inventory_panel::{
     handle_container_slot_clicks, update_container_slot_text,
     update_inventory_transfer_feedback_text,
@@ -37,8 +41,8 @@ use crate::ui::objectives_panel::{
 };
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
 use crate::ui::resources::{
-    CraftingWindowState, InventoryTransferFeedback, OpenContainer, ProductionStatsWindowState,
-    TechnologyWindowState,
+    CraftingWindowState, EquipmentWindowState, InventoryTransferFeedback, OpenContainer,
+    ProductionStatsWindowState, TechnologyWindowState,
 };
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
@@ -87,6 +91,7 @@ impl Plugin for UiPlugin {
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<ObjectivesPanelState>()
             .init_resource::<EnemySettingsWindowState>()
+            .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
             .add_systems(
                 Startup,
@@ -145,6 +150,19 @@ impl Plugin for UiPlugin {
                     sync_manual_crafting_panel
                         .after(handle_manual_crafting_tab_buttons)
                         .after(handle_manual_crafting_recipe_buttons),
+                )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_equipment_buttons.in_set(AppSet::UiInteraction),
+                    handle_equipment_command_results.in_set(AppSet::UiInteraction),
+                    sync_equipment_window
+                        .after(handle_equipment_buttons)
+                        .after(handle_equipment_command_results),
+                    update_equipment_window_text.after(sync_equipment_window),
+                    update_equipment_selection_colors.after(sync_equipment_window),
                 )
                     .in_set(InGameSet),
             )

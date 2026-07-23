@@ -47,6 +47,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     {
         return Err(SimValidationError::InvalidPlayerState);
     }
+    equipment_ops::validate_player_equipment(sim)?;
     validate_crafting_queue(sim)?;
     validate_research_state(sim)?;
     validate_enemies(sim)?;

@@ -27,7 +27,7 @@ use crate::rendering::resource_cells::ResourceRenderCache;
 use crate::rendering::resources::VisibleEntityIds;
 use crate::resources::{SimAccessError, SimResource};
 use crate::simulation::{SimCommandBacklog, SimCommandRequest, SimCommandResult};
-use crate::ui::resources::OpenContainer;
+use crate::ui::resources::{EquipmentWindowState, OpenContainer};
 use crate::world_setup::AppMode;
 
 static MANUAL_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -380,6 +380,7 @@ pub(crate) struct LoadState<'w> {
     pub(crate) autosave: ResMut<'w, AutosaveState>,
     pub(crate) build_state: ResMut<'w, BuildPlacementState>,
     pub(crate) open_container: ResMut<'w, OpenContainer>,
+    pub(crate) equipment_window: ResMut<'w, EquipmentWindowState>,
     pub(crate) map_cache: ResMut<'w, MapTextureCache>,
     pub(crate) map_details: ResMut<'w, MapDetailCache>,
     pub(crate) map_uploads: ResMut<'w, MapTextureUploadQueue>,
@@ -462,6 +463,7 @@ pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile:
     state.build_state.selected = None;
     state.build_state.last_status = Default::default();
     state.open_container.entity_id = None;
+    *state.equipment_window = EquipmentWindowState::default();
     state.window.open = false;
     state.autosave.last_autosave_tick = tick;
     *state.map_cache = MapTextureCache::default();

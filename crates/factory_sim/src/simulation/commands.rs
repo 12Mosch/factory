@@ -76,6 +76,19 @@ pub enum SimCommand {
     RepairEntity {
         entity_id: EntityId,
     },
+    EquipArmor {
+        inventory_slot: usize,
+    },
+    UnequipArmor,
+    InstallEquipment {
+        inventory_slot: usize,
+        x: u8,
+        y: u8,
+    },
+    RemoveEquipment {
+        x: u8,
+        y: u8,
+    },
     /// Places ghosts for the given blueprint entries with the blueprint
     /// origin at `(x, y)`; blocked entries are skipped.
     PasteBlueprint {
@@ -143,6 +156,7 @@ pub enum SimCommandError {
     Build(PlayerBuildError),
     Construction(ConstructionError),
     Repair(RepairError),
+    Equipment(PlayerEquipmentError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -342,6 +356,29 @@ impl Simulation {
             SimCommand::RepairEntity { entity_id } => {
                 self.repair_entity(entity_id)
                     .map_err(SimCommandError::Repair)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::EquipArmor { inventory_slot } => {
+                self.equip_armor(inventory_slot)
+                    .map_err(SimCommandError::Equipment)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::UnequipArmor => {
+                self.unequip_armor().map_err(SimCommandError::Equipment)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::InstallEquipment {
+                inventory_slot,
+                x,
+                y,
+            } => {
+                self.install_equipment(inventory_slot, x, y)
+                    .map_err(SimCommandError::Equipment)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::RemoveEquipment { x, y } => {
+                self.remove_equipment(x, y)
+                    .map_err(SimCommandError::Equipment)?;
                 Ok(SimCommandEffect::None)
             }
             SimCommand::PasteBlueprint { ref entities, x, y } => {

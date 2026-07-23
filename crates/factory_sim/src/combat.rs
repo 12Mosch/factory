@@ -1,5 +1,6 @@
 use crate::inventory::Inventory;
 use crate::{EnemyId, EntityId};
+pub use factory_data::DamageType;
 use serde::{Deserialize, Serialize};
 
 pub const GUN_TURRET_AMMO_SLOT_COUNT: usize = 1;
@@ -35,27 +36,6 @@ impl Faction {
 
     pub const fn is_hostile_to(self, other: Self) -> bool {
         matches!(self.relation_to(other), FactionRelation::Hostile)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum DamageType {
-    Physical,
-    Fire,
-    Explosion,
-    Acid,
-}
-
-impl DamageType {
-    pub const COUNT: usize = 4;
-
-    const fn index(self) -> usize {
-        match self {
-            Self::Physical => 0,
-            Self::Fire => 1,
-            Self::Explosion => 2,
-            Self::Acid => 3,
-        }
     }
 }
 
@@ -357,6 +337,12 @@ impl Default for GunTurretState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct LaserTurretState {
+    pub engaged: bool,
+    pub cooldown_remaining_ticks: u32,
 }
 
 /// Runtime state of an enemy spawner: the schedule for free guard spawns.

@@ -20,7 +20,8 @@ use crate::ui::map_view::{
     fullscreen_map_display_size, fullscreen_map_image_size,
 };
 use crate::ui::resources::{
-    CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
+    CraftingWindowState, EquipmentWindowState, OpenContainer, ProductionStatsWindowState,
+    TechnologyWindowState,
 };
 use crate::utils::remove_previous_word;
 use factory_sim::SimCommand;
@@ -35,6 +36,7 @@ pub(crate) struct WorldBlockingWindows<'w> {
     save_load: Res<'w, SaveLoadWindowState>,
     build_menu: Res<'w, BuildMenuState>,
     blueprint_library: Res<'w, BlueprintLibraryWindowState>,
+    equipment: Res<'w, EquipmentWindowState>,
 }
 
 impl WorldBlockingWindows<'_> {
@@ -48,6 +50,7 @@ impl WorldBlockingWindows<'_> {
             self.save_load.open,
             self.build_menu.open,
             self.blueprint_library.open,
+            self.equipment.open,
         )
     }
 }
@@ -62,6 +65,7 @@ fn world_blocking_windows_open(
     save_load_open: bool,
     build_menu_open: bool,
     blueprint_library_open: bool,
+    equipment_open: bool,
 ) -> bool {
     map_open
         || stats_open
@@ -71,6 +75,7 @@ fn world_blocking_windows_open(
         || save_load_open
         || build_menu_open
         || blueprint_library_open
+        || equipment_open
 }
 
 pub(crate) fn reset_app_input_state(
@@ -99,6 +104,7 @@ pub(crate) struct PanelInputResources<'w> {
     build_state: ResMut<'w, BuildPlacementState>,
     planner: ResMut<'w, PlannerState>,
     blueprint_library: ResMut<'w, BlueprintLibraryWindowState>,
+    equipment: ResMut<'w, EquipmentWindowState>,
 }
 
 pub(crate) fn handle_panel_input(
@@ -128,6 +134,7 @@ pub(crate) fn handle_panel_input(
             resources.save_load.open,
             resources.build_menu.open,
             resources.blueprint_library.open,
+            resources.equipment.open,
         );
         return;
     }
@@ -150,6 +157,7 @@ pub(crate) fn handle_panel_input(
             resources.save_load.open,
             resources.build_menu.open,
             resources.blueprint_library.open,
+            resources.equipment.open,
         );
         return;
     }
@@ -195,6 +203,15 @@ pub(crate) fn handle_panel_input(
             resources.open_container.entity_id = None;
         }
     }
+    if keyboard.just_pressed(KeyCode::KeyE) {
+        resources.equipment.open = !resources.equipment.open;
+        resources.equipment.selected_inventory_slot = None;
+        resources.equipment.feedback = None;
+        if resources.equipment.open {
+            resources.build_state.selected = None;
+            resources.open_container.entity_id = None;
+        }
+    }
     if keyboard.just_pressed(KeyCode::KeyB) && control_held {
         if resources.blueprint_library.open {
             resources.blueprint_library.close();
@@ -229,6 +246,10 @@ pub(crate) fn handle_panel_input(
             resources.input_state.escape_consumed = true;
         } else if resources.enemy_settings.open {
             resources.enemy_settings.open = false;
+            resources.input_state.escape_consumed = true;
+        } else if resources.equipment.open {
+            resources.equipment.open = false;
+            resources.equipment.selected_inventory_slot = None;
             resources.input_state.escape_consumed = true;
         } else if resources.technology.open {
             resources.technology.open = false;
@@ -267,6 +288,7 @@ pub(crate) fn handle_panel_input(
         resources.save_load.open,
         resources.build_menu.open,
         resources.blueprint_library.open,
+        resources.equipment.open,
     );
 }
 

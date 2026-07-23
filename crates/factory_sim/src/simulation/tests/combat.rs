@@ -813,6 +813,92 @@ fn unloaded_turret_does_not_fire() {
 }
 
 #[test]
+fn disconnected_laser_turret_engages_with_active_demand_but_cannot_fire() {
+    let mut sim = Simulation::new_test_world(123);
+    let laser = entity_id_by_name(&sim.world.prototypes, "laser_turret");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 8, 8);
+    let laser_id = place_at(&mut sim, laser, x, y, Direction::North);
+    let enemy_id = spawn_test_enemy_at(&mut sim, x + 4, y + 4);
+
+    sim.refresh_power_state();
+    let idle = sim.entity_power_status(laser_id).unwrap();
+    assert_eq!(idle.active_usage_watts, 0);
+    assert_eq!(idle.drain_watts, 24_000);
+
+    let health_before = sim.enemies().get(enemy_id).unwrap().health.current;
+    let mut commands = CombatCommandBuffer::default();
+    sim.advance_defensive_turrets(&mut commands);
+    assert!(
+        commands.is_empty(),
+        "acquisition waits for power accounting"
+    );
+    assert!(sim.entities.laser_turrets[&laser_id].engaged);
+
+    sim.refresh_power_state();
+    let engaged = sim.entity_power_status(laser_id).unwrap();
+    assert_eq!(engaged.active_usage_watts, 600_000);
+    assert_eq!(engaged.drain_watts, 24_000);
+    assert_eq!(engaged.satisfaction_permyriad, 0);
+    sim.advance_defensive_turrets(&mut commands);
+    sim.resolve_combat_commands(commands);
+    assert_eq!(
+        sim.enemies().get(enemy_id).unwrap().health.current,
+        health_before
+    );
+}
+
+#[test]
+fn laser_turret_fires_every_thirty_powered_ticks_after_accounting() {
+    let mut sim = Simulation::new_test_world(123);
+    let laser = entity_id_by_name(&sim.world.prototypes, "laser_turret");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 8, 8);
+    let laser_id = place_at(&mut sim, laser, x, y, Direction::North);
+    let enemy_id = spawn_test_enemy_at(&mut sim, x + 4, y + 4);
+    sim.enemies
+        .enemies
+        .get_mut(&enemy_id)
+        .unwrap()
+        .health
+        .maximum = 200;
+    sim.enemies
+        .enemies
+        .get_mut(&enemy_id)
+        .unwrap()
+        .health
+        .current = 200;
+
+    let mut commands = CombatCommandBuffer::default();
+    sim.advance_defensive_turrets(&mut commands);
+    assert!(commands.is_empty());
+    sim.power.entity_statuses.insert(
+        laser_id,
+        EntityPowerStatus {
+            satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
+            active_usage_watts: 600_000,
+            drain_watts: 24_000,
+            ..EntityPowerStatus::default()
+        },
+    );
+
+    sim.advance_defensive_turrets(&mut commands);
+    assert_eq!(commands.len(), 1);
+    sim.resolve_combat_commands(commands);
+    assert_eq!(sim.enemies().get(enemy_id).unwrap().health.current, 180);
+
+    for powered_tick in 1..30 {
+        let mut commands = CombatCommandBuffer::default();
+        sim.advance_defensive_turrets(&mut commands);
+        assert!(
+            commands.is_empty(),
+            "laser fired early on powered cooldown tick {powered_tick}"
+        );
+    }
+    let mut commands = CombatCommandBuffer::default();
+    sim.advance_defensive_turrets(&mut commands);
+    assert_eq!(commands.len(), 1);
+}
+
+#[test]
 fn gun_turret_destroys_spawner_in_range() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);

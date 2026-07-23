@@ -1,4 +1,6 @@
-use super::common::{first_available_hotbar_slot, hotbar_key_for_slot, test_app};
+use super::common::{
+    first_available_hotbar_slot, hotbar_key_for_slot, set_player_inventory_slot, test_app,
+};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -15,8 +17,9 @@ use factory_app::map::resources::{
 use factory_app::resources::SimResource;
 use factory_app::save_load::SaveLoadWindowState;
 use factory_app::ui::enemy_settings::EnemySettingsWindowState;
+use factory_app::ui::equipment_window::EquipmentInventoryButton;
 use factory_app::ui::resources::{
-    CraftingWindowState, ProductionStatsWindowState, TechnologyWindowState,
+    CraftingWindowState, EquipmentWindowState, ProductionStatsWindowState, TechnologyWindowState,
 };
 use std::time::Duration;
 
@@ -322,6 +325,58 @@ fn crafting_screen_toggles_with_c() {
     app.update();
 
     assert!(!app.world().resource::<CraftingWindowState>().open);
+}
+
+#[test]
+fn equipment_window_toggles_with_e_blocks_world_and_closes_with_escape() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    press_key(&mut app, KeyCode::KeyE);
+    app.update();
+    assert!(app.world().resource::<EquipmentWindowState>().open);
+    assert!(app.world().resource::<AppInputState>().world_blocked);
+
+    release_key(&mut app, KeyCode::KeyE);
+    press_key(&mut app, KeyCode::Escape);
+    app.update();
+    assert!(!app.world().resource::<EquipmentWindowState>().open);
+    assert!(app.world().resource::<AppInputState>().escape_consumed);
+}
+
+#[test]
+fn equipment_inventory_armor_click_enqueues_and_applies_equip_command() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    let armor = {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let armor = factory_data::item_id_by_name(sim.catalog(), "modular_armor");
+        set_player_inventory_slot(&mut sim, 10, armor, 1);
+        armor
+    };
+    app.world_mut().resource_mut::<EquipmentWindowState>().open = true;
+    app.update();
+    app.update();
+
+    {
+        let world = app.world_mut();
+        let mut buttons = world.query::<(&EquipmentInventoryButton, &mut Interaction)>();
+        let (_, mut interaction) = buttons
+            .iter_mut(world)
+            .find(|(button, _)| button.slot_index == 10)
+            .expect("equipment inventory slot should be spawned");
+        *interaction = Interaction::Pressed;
+    }
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<SimResource>()
+            .read()
+            .equipped_armor(),
+        Some(armor)
+    );
 }
 
 #[test]

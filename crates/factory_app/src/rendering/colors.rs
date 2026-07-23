@@ -74,6 +74,10 @@ pub(crate) fn gun_turret_color() -> Color {
     Color::srgb(0.62, 0.54, 0.30)
 }
 
+pub(crate) fn laser_turret_color() -> Color {
+    Color::srgb(0.12, 0.58, 0.78)
+}
+
 pub(crate) fn enemy_spawner_color() -> Color {
     Color::srgb(0.52, 0.22, 0.38)
 }

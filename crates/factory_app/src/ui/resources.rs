@@ -1,6 +1,7 @@
 use bevy::prelude::Resource;
 use factory_data::TechnologyId;
 use factory_sim::EntityId;
+use factory_sim::PlayerEquipmentError;
 
 #[derive(Resource, Default)]
 pub struct OpenContainer {
@@ -16,6 +17,14 @@ pub struct InventoryTransferFeedback {
 pub struct TechnologyWindowState {
     pub open: bool,
     pub selected: Option<TechnologyId>,
+}
+
+#[derive(Resource, Default)]
+pub struct EquipmentWindowState {
+    pub open: bool,
+    pub selected_inventory_slot: Option<usize>,
+    pub feedback: Option<String>,
+    pub last_error: Option<PlayerEquipmentError>,
 }
 
 #[derive(Resource)]

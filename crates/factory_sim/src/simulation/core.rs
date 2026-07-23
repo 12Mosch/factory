@@ -47,6 +47,7 @@ impl Simulation {
             entities,
             construction: ConstructionState::default(),
             player,
+            player_equipment: PlayerEquipmentState::default(),
             player_inventory,
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
@@ -144,12 +145,13 @@ impl Simulation {
             }
         });
         profiler.measure(ProfilePhase::Enemies, || {
+            self.advance_player_equipment();
             let had_dynamic_map_markers =
                 !self.enemies.raids.is_empty() || !self.enemies.expansions.is_empty();
             self.advance_enemy_spawners();
             let mut combat_commands = CombatCommandBuffer::default();
             self.advance_enemies(&mut combat_commands);
-            self.advance_gun_turrets(&mut combat_commands);
+            self.advance_defensive_turrets(&mut combat_commands);
             self.resolve_combat_commands(combat_commands);
             self.resolve_arrived_expansions();
             self.cleanup_enemy_groups();
@@ -229,6 +231,7 @@ impl Simulation {
         self.entities.hash(&mut hasher);
         self.construction.hash(&mut hasher);
         self.player.hash(&mut hasher);
+        self.player_equipment.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);
         self.manual_mining_progress.hash(&mut hasher);
         self.crafting_queue.hash(&mut hasher);

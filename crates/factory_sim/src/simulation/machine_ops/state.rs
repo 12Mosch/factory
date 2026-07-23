@@ -38,6 +38,7 @@ pub(in crate::simulation) fn reservation_for_prototype(
         enemy_spawners: enemy_spawner_state_for_prototype(prototype),
         entity_health: health_state_for_prototype(prototype),
         inserter_energy: inserter_energy_for_prototype(prototype),
+        laser_turrets: laser_turret_state_for_prototype(prototype),
     }
 }
 
@@ -264,6 +265,13 @@ fn gun_turret_state_for_prototype(
 ) -> Option<GunTurretState> {
     (prototype.entity_kind == EntityKind::GunTurret && prototype.gun_turret.is_some())
         .then(GunTurretState::new)
+}
+
+fn laser_turret_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<LaserTurretState> {
+    (prototype.entity_kind == EntityKind::LaserTurret && prototype.laser_turret.is_some())
+        .then_some(LaserTurretState::default())
 }
 
 fn enemy_spawner_state_for_prototype(

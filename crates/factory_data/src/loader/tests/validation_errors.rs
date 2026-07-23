@@ -799,3 +799,86 @@ fn enemy_spawner_without_enemy_gameplay_section_fails() {
         PrototypeLoadError::MissingEnemyGameplayConfig
     ));
 }
+
+#[test]
+fn invalid_armor_and_equipment_metadata_fail() {
+    let armor_error = PrototypeCatalog::from_ron_str(
+        r#"(
+            items: [(
+                id: 0, name: "armor", stack_size: 1,
+                armor: Some((
+                    grid_width: 0, grid_height: 5,
+                    resistances: [],
+                )),
+            )],
+            recipes: [], entities: [], tiles: [],
+        )"#,
+    )
+    .expect_err("zero-sized armor grids should fail");
+    assert!(matches!(
+        armor_error,
+        PrototypeLoadError::InvalidArmorMetadata { .. }
+    ));
+
+    let equipment_error = PrototypeCatalog::from_ron_str(
+        r#"(
+            items: [(
+                id: 0, name: "battery", stack_size: 1,
+                equipment: Some((
+                    width: 1, height: 2,
+                    effect: Battery(capacity_joules: 0),
+                )),
+            )],
+            recipes: [], entities: [], tiles: [],
+        )"#,
+    )
+    .expect_err("zero equipment capacity should fail");
+    assert!(matches!(
+        equipment_error,
+        PrototypeLoadError::InvalidEquipmentMetadata { .. }
+    ));
+}
+
+#[test]
+fn duplicate_or_over_one_hundred_percent_armor_resistance_fails() {
+    for resistances in [
+        "[(damage_type: Physical, flat_reduction: 0, percent_reduction_permyriad: 10001)]",
+        "[(damage_type: Physical, flat_reduction: 0, percent_reduction_permyriad: 1), (damage_type: Physical, flat_reduction: 2, percent_reduction_permyriad: 2)]",
+    ] {
+        let data = format!(
+            r#"(
+                items: [(
+                    id: 0, name: "armor", stack_size: 1,
+                    armor: Some((grid_width: 5, grid_height: 5, resistances: {resistances})),
+                )],
+                recipes: [], entities: [], tiles: [],
+            )"#
+        );
+        assert!(matches!(
+            PrototypeCatalog::from_ron_str(&data),
+            Err(PrototypeLoadError::InvalidArmorMetadata { .. })
+        ));
+    }
+}
+
+#[test]
+fn laser_turret_requires_health_electric_and_positive_turret_metadata() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"(
+            items: [(id: 0, name: "laser_turret", stack_size: 50)],
+            recipes: [],
+            entities: [(
+                id: 0, name: "laser_turret", entity_kind: LaserTurret,
+                building_category: Some(Defense), building_menu_order: Some(30),
+                size: (x: 2, y: 2), collision_mask: (layers: ["building"]),
+                laser_turret: Some((range_tiles: 15, damage: 20, cooldown_ticks: 30)),
+            )],
+            tiles: [],
+        )"#,
+    )
+    .expect_err("laser turrets without health and electric metadata should fail");
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidLaserTurretMetadata { .. }
+    ));
+}

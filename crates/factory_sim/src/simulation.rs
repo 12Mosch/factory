@@ -29,8 +29,8 @@ macro_rules! impl_runtime_only_identity {
 pub use crate::combat::{
     AttackDefinition, AttackDelivery, CombatCommand, CombatCommandBuffer, CombatSource,
     CombatantId, Damage, DamageType, EnemySpawnerState, Faction, FactionRelation,
-    GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState, HealthState, PLAYER_MAX_HEALTH, RepairError,
-    Resistance, ResistanceProfile, TargetPriority,
+    GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState, HealthState, LaserTurretState, PLAYER_MAX_HEALTH,
+    RepairError, Resistance, ResistanceProfile, TargetPriority,
 };
 pub use crate::construction::{
     Blueprint, BlueprintEntity, ConstructionError, ConstructionJob, ConstructionState, GhostEntity,
@@ -49,6 +49,7 @@ pub use crate::entities::{
     PlayerBuildError, SimEntity,
 };
 pub(crate) use crate::entities::{DenseEntityMap, EntityReservation};
+pub use crate::equipment::{InstalledEquipment, PlayerEquipmentError, PlayerEquipmentState};
 pub use crate::fluids::{
     FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState, FluidNetworkBoxSnapshot,
     FluidNetworkSnapshot,
@@ -169,6 +170,7 @@ pub struct Simulation {
     construction: ConstructionState,
 
     player: PlayerState,
+    player_equipment: PlayerEquipmentState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
@@ -721,6 +723,7 @@ pub enum SimValidationError {
         enemy_id: EnemyId,
     },
     InvalidPlayerState,
+    InvalidPlayerEquipment,
     InvalidEnemyState,
     AttackBudgetCapacityExceeded {
         base_id: EnemyBaseId,
@@ -742,6 +745,7 @@ mod entity_recovery_ops;
 mod entity_states;
 mod entity_store_ops;
 pub mod entity_transfer;
+mod equipment_ops;
 mod fluid_ops;
 mod fluid_state;
 mod generation;

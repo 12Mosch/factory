@@ -301,6 +301,30 @@ impl EntityStateBehavior for GunTurretState {
     }
 }
 
+impl EntityStateBehavior for LaserTurretState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let cooldown = sim
+            .entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.laser_turret)
+            .map(|turret| turret.cooldown_ticks)
+            .ok_or(SimValidationError::InvalidEntityState { entity_id })?;
+        if self.cooldown_remaining_ticks > cooldown
+            || (!self.engaged && self.cooldown_remaining_ticks != 0)
+        {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+        Ok(())
+    }
+}
+
 impl EntityStateBehavior for EnemySpawnerState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 

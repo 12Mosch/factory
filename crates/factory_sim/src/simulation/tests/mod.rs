@@ -5,6 +5,7 @@ mod belts;
 mod combat;
 mod commands;
 mod construction;
+mod equipment;
 mod fluids;
 mod furnaces;
 mod inserters;

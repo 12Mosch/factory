@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use crate::catalog::PrototypeCatalog;
 use crate::model::{ItemAmount, TechnologyEffect};
 
+use super::common::researchable_technology_ids;
+
 #[test]
 fn automation_technology_loads_research_cost_and_unlock_effect() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
@@ -43,6 +45,52 @@ fn automation_technology_loads_research_cost_and_unlock_effect() {
     assert_eq!(
         automation.effects,
         vec![TechnologyEffect::UnlockRecipe(assembling_machine_recipe)]
+    );
+}
+
+#[test]
+fn military_progression_is_reachable_and_uses_military_science() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let technology = |name: &str| {
+        catalog
+            .technologies
+            .iter()
+            .find(|technology| technology.name == name)
+            .unwrap()
+    };
+    let item = |name: &str| {
+        catalog
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap()
+            .id
+    };
+    let advanced_ammunition = technology("advanced_ammunition");
+    assert_eq!(
+        advanced_ammunition.prerequisites,
+        vec![
+            technology("turrets").id,
+            technology("advanced_material_processing").id,
+        ]
+    );
+    assert_eq!(
+        technology("military_science_pack").prerequisites,
+        vec![advanced_ammunition.id]
+    );
+    for name in ["laser_turret", "modular_armor"] {
+        let military_technology = technology(name);
+        assert_eq!(military_technology.required_units, 100);
+        assert!(
+            military_technology
+                .science_packs
+                .iter()
+                .any(|pack| pack.item == item("military_science_pack"))
+        );
+    }
+    assert_eq!(
+        researchable_technology_ids(&catalog).len(),
+        catalog.technologies.len()
     );
 }
 
