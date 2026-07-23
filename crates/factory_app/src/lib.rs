@@ -19,3 +19,8 @@ pub mod ui;
 
 pub use app::{app, run};
 pub use plugin::FactoryAppPlugin;
+
+#[cfg(test)]
+mod performance_tests;
+#[cfg(test)]
+mod test_performance;

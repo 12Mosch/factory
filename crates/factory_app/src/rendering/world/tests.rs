@@ -22,12 +22,12 @@ use crate::rendering::resources::{
 };
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
+use crate::test_performance::{
+    AllocationSample, BENCHMARK_LOCK, allocation_sample, reset_allocation_counters,
+};
 use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, Simulation};
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeSet;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 const RENDER_SYNC_SMALL_MEASUREMENT_FRAMES: usize = 300;
@@ -36,39 +36,6 @@ const RENDER_SYNC_SMALL_TOTAL_MAX_BUDGET: Duration = Duration::from_millis(8);
 const DENSE_BELT_ITEM_RENDER_BELTS: usize = 2_000;
 const DENSE_BELT_ITEM_RENDER_WARMUP_FRAMES: usize = 30;
 const DENSE_BELT_ITEM_RENDER_MEASUREMENT_FRAMES: usize = 120;
-
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
-static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-static BENCHMARK_LOCK: Mutex<()> = Mutex::new(());
-
-struct CountingAllocator;
-
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 
 #[test]
 fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
@@ -637,12 +604,6 @@ struct RenderSyncBudgetStats {
 }
 
 #[derive(Clone, Copy)]
-struct AllocationSample {
-    count: u64,
-    bytes: u64,
-}
-
-#[derive(Clone, Copy)]
 struct DenseBeltItemRenderSyncSample {
     stats: RenderSyncStats,
     allocations: AllocationSample,
@@ -886,18 +847,6 @@ fn tick_sim_resource(app: &mut App) {
         .resource_mut::<SimResource>()
         .write_for_tests()
         .tick();
-}
-
-fn reset_allocation_counters() {
-    ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-}
-
-fn allocation_sample() -> AllocationSample {
-    AllocationSample {
-        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
-    }
 }
 
 fn place_belts_across_generated_world(sim: &mut Simulation) {

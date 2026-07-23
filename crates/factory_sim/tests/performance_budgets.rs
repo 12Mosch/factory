@@ -4,6 +4,7 @@ use factory_sim::{
     Simulation, SimulationCounts, SimulationTickProfile, load_from_bytes, save_to_bytes,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -14,8 +15,14 @@ const SMOKE_ALLOC_P95_COUNT_BUDGET: u64 = 256;
 const SMALL_ALLOC_P95_BYTES_BUDGET: u64 = 1024 * 1024;
 const SMALL_ALLOC_P95_COUNT_BUDGET: u64 = 2_000;
 const ENEMY_HEAVY_PHASE_P95_BUDGET: Duration = Duration::from_millis(8);
+const ENEMY_HEAVY_PHASE_P99_BUDGET: Duration = Duration::from_millis(10);
+const ENEMY_HEAVY_PHASE_HITCH_BUDGET: Duration = Duration::from_nanos(16_667_000);
 const ENEMY_HEAVY_ALLOC_P95_BYTES_BUDGET: u64 = 1024 * 1024;
 const ENEMY_HEAVY_ALLOC_P95_COUNT_BUDGET: u64 = 2_000;
+const ENEMY_HEAVY_ALLOC_P99_BYTES_BUDGET: u64 = 1024 * 1024;
+const ENEMY_HEAVY_ALLOC_P99_COUNT_BUDGET: u64 = 2_000;
+const ENEMY_HEAVY_ALLOC_HITCH_BYTES_BUDGET: u64 = 4 * 1024 * 1024;
+const ENEMY_HEAVY_ALLOC_HITCH_COUNT_BUDGET: u64 = 8_000;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -308,16 +315,67 @@ fn enemy_heavy_benchmark_500_attackers_2000_structures() {
         attacker_count >= 500,
         "enemy-heavy fixture should retain at least 500 attackers, found {attacker_count}"
     );
+    let retained_attacker_ids = sim
+        .enemies()
+        .iter()
+        .filter(|enemy| enemy.mode == EnemyMode::Attack)
+        .take(500)
+        .map(|enemy| enemy.id)
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        retained_attacker_ids.len(),
+        500,
+        "enemy-heavy fixture should select 500 retained attacker identities"
+    );
 
-    let stats = collect_benchmark_stats(&mut sim, 300);
+    let mut min_retained_structures = usize::MAX;
+    let mut min_retained_fixture_attackers = usize::MAX;
+    let stats = collect_benchmark_stats_with_observer(&mut sim, 300, |sample| {
+        min_retained_structures = min_retained_structures.min(
+            sample
+                .entities()
+                .placed_entities()
+                .filter(|placed| placed.prototype_id == chest)
+                .count(),
+        );
+        min_retained_fixture_attackers = min_retained_fixture_attackers.min(
+            sample
+                .enemies()
+                .iter()
+                .filter(|enemy| {
+                    enemy.mode == EnemyMode::Attack && retained_attacker_ids.contains(&enemy.id)
+                })
+                .count(),
+        );
+    });
     print_benchmark_stats("enemy_heavy_500_attackers", stats);
     sim.validate_state()
         .expect("enemy-heavy budget run should leave a valid state");
+    assert_eq!(
+        min_retained_structures, 2_000,
+        "enemy-heavy fixture must retain all structures throughout measurement"
+    );
+    assert_eq!(
+        min_retained_fixture_attackers, 500,
+        "enemy-heavy fixture must retain the same 500 attacking units throughout measurement"
+    );
     assert!(
         stats.p95.enemies <= ENEMY_HEAVY_PHASE_P95_BUDGET,
         "enemy phase p95 {:.3} ms exceeded {:.3} ms",
         ms(stats.p95.enemies),
         ms(ENEMY_HEAVY_PHASE_P95_BUDGET)
+    );
+    assert!(
+        stats.p99.enemies <= ENEMY_HEAVY_PHASE_P99_BUDGET,
+        "enemy phase p99 {:.3} ms exceeded {:.3} ms",
+        ms(stats.p99.enemies),
+        ms(ENEMY_HEAVY_PHASE_P99_BUDGET)
+    );
+    assert!(
+        stats.max.enemies <= ENEMY_HEAVY_PHASE_HITCH_BUDGET,
+        "enemy phase max hitch {:.3} ms exceeded {:.3} ms",
+        ms(stats.max.enemies),
+        ms(ENEMY_HEAVY_PHASE_HITCH_BUDGET)
     );
     assert!(
         stats.alloc_p95_bytes <= ENEMY_HEAVY_ALLOC_P95_BYTES_BUDGET,
@@ -330,6 +388,30 @@ fn enemy_heavy_benchmark_500_attackers_2000_structures() {
         "allocation p95 {} allocs exceeded {} allocs",
         stats.alloc_p95_count,
         ENEMY_HEAVY_ALLOC_P95_COUNT_BUDGET
+    );
+    assert!(
+        stats.alloc_p99_bytes <= ENEMY_HEAVY_ALLOC_P99_BYTES_BUDGET,
+        "allocation p99 {} bytes exceeded {} bytes",
+        stats.alloc_p99_bytes,
+        ENEMY_HEAVY_ALLOC_P99_BYTES_BUDGET
+    );
+    assert!(
+        stats.alloc_p99_count <= ENEMY_HEAVY_ALLOC_P99_COUNT_BUDGET,
+        "allocation p99 {} allocs exceeded {} allocs",
+        stats.alloc_p99_count,
+        ENEMY_HEAVY_ALLOC_P99_COUNT_BUDGET
+    );
+    assert!(
+        stats.alloc_max_bytes <= ENEMY_HEAVY_ALLOC_HITCH_BYTES_BUDGET,
+        "allocation hitch {} bytes exceeded {} bytes",
+        stats.alloc_max_bytes,
+        ENEMY_HEAVY_ALLOC_HITCH_BYTES_BUDGET
+    );
+    assert!(
+        stats.alloc_max_count <= ENEMY_HEAVY_ALLOC_HITCH_COUNT_BUDGET,
+        "allocation-count hitch {} exceeded {}",
+        stats.alloc_max_count,
+        ENEMY_HEAVY_ALLOC_HITCH_COUNT_BUDGET
     );
 }
 
@@ -403,13 +485,16 @@ struct TickSample {
 struct BenchmarkStats {
     average: SimulationTickProfile,
     p95: SimulationTickProfile,
+    p99: SimulationTickProfile,
     max: SimulationTickProfile,
     counts: SimulationCounts,
     alloc_average_bytes: u64,
     alloc_p95_bytes: u64,
+    alloc_p99_bytes: u64,
     alloc_max_bytes: u64,
     alloc_average_count: u64,
     alloc_p95_count: u64,
+    alloc_p99_count: u64,
     alloc_max_count: u64,
 }
 
@@ -746,6 +831,14 @@ fn run_warmup_ticks(sim: &mut Simulation, ticks: usize) {
 }
 
 fn collect_benchmark_stats(sim: &mut Simulation, ticks: usize) -> BenchmarkStats {
+    collect_benchmark_stats_with_observer(sim, ticks, |_| {})
+}
+
+fn collect_benchmark_stats_with_observer(
+    sim: &mut Simulation,
+    ticks: usize,
+    mut observe: impl FnMut(&Simulation),
+) -> BenchmarkStats {
     assert!(ticks > 0);
     let mut samples = Vec::with_capacity(ticks);
 
@@ -757,6 +850,7 @@ fn collect_benchmark_stats(sim: &mut Simulation, ticks: usize) -> BenchmarkStats
             profile,
             allocations,
         });
+        observe(sim);
     }
 
     benchmark_stats(samples, sim.counts())
@@ -778,7 +872,9 @@ fn benchmark_stats(mut samples: Vec<TickSample>, counts: SimulationCounts) -> Be
     samples.sort_by_key(|sample| sample.profile.total);
     let average = average_profile(&samples);
     let p95_index = ((samples.len() * 95).div_ceil(100)).saturating_sub(1);
+    let p99_index = ((samples.len() * 99).div_ceil(100)).saturating_sub(1);
     let p95 = percentile_profile(&samples, p95_index);
+    let p99 = percentile_profile(&samples, p99_index);
     let max = max_profile(&samples);
 
     let mut allocation_bytes = samples
@@ -797,15 +893,18 @@ fn benchmark_stats(mut samples: Vec<TickSample>, counts: SimulationCounts) -> Be
     BenchmarkStats {
         average,
         p95,
+        p99,
         max,
         counts,
         alloc_average_bytes: total_bytes / allocation_bytes.len() as u64,
         alloc_p95_bytes: allocation_bytes[p95_index],
+        alloc_p99_bytes: allocation_bytes[p99_index],
         alloc_max_bytes: *allocation_bytes
             .last()
             .expect("allocation bytes should exist"),
         alloc_average_count: total_counts / allocation_counts.len() as u64,
         alloc_p95_count: allocation_counts[p95_index],
+        alloc_p99_count: allocation_counts[p99_index],
         alloc_max_count: *allocation_counts
             .last()
             .expect("allocation counts should exist"),
@@ -908,7 +1007,7 @@ fn max_duration(
 
 fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
     println!(
-        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
+        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, p99 {} bytes/{} allocs, max {} bytes/{} allocs",
         stats.counts.entity_count,
         stats.counts.enemy_count,
         stats.counts.belt_count,
@@ -918,29 +1017,38 @@ fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
         stats.counts.active_machines,
         ms(stats.average.total),
         ms(stats.p95.total),
+        ms(stats.p99.total),
         ms(stats.max.total),
         ms(stats.average.belts),
         ms(stats.p95.belts),
+        ms(stats.p99.belts),
         ms(stats.max.belts),
         ms(stats.average.inserters),
         ms(stats.p95.inserters),
+        ms(stats.p99.inserters),
         ms(stats.max.inserters),
         ms(stats.average.machines),
         ms(stats.p95.machines),
+        ms(stats.p99.machines),
         ms(stats.max.machines),
         ms(stats.average.fluids),
         ms(stats.p95.fluids),
+        ms(stats.p99.fluids),
         ms(stats.max.fluids),
         ms(stats.average.power),
         ms(stats.p95.power),
+        ms(stats.p99.power),
         ms(stats.max.power),
         ms(stats.average.enemies),
         ms(stats.p95.enemies),
+        ms(stats.p99.enemies),
         ms(stats.max.enemies),
         stats.alloc_average_bytes,
         stats.alloc_average_count,
         stats.alloc_p95_bytes,
         stats.alloc_p95_count,
+        stats.alloc_p99_bytes,
+        stats.alloc_p99_count,
         stats.alloc_max_bytes,
         stats.alloc_max_count,
     );
