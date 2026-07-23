@@ -12,6 +12,71 @@ impl Simulation {
         self.equalize_fluid_networks();
     }
 
+    pub(in crate::simulation) fn advance_fluid_pumps_after_power(&mut self) {
+        self.ensure_fluid_network_topology();
+        let pump_ids = self
+            .entities
+            .placed_entities
+            .values()
+            .filter_map(|placed| {
+                self.world
+                    .prototypes
+                    .entity(placed.prototype_id)
+                    .and_then(|prototype| prototype.pump.as_ref())
+                    .map(|_| placed.id)
+            })
+            .collect::<Vec<_>>();
+
+        for entity_id in pump_ids {
+            let Some(placed) = self.entities.placed_entity(entity_id) else {
+                continue;
+            };
+            let Some(pump) = self
+                .world
+                .prototypes
+                .entity(placed.prototype_id)
+                .and_then(|prototype| prototype.pump.as_ref())
+            else {
+                continue;
+            };
+            let amount = per_tick_milliunits(pump.pumping_speed_per_second_milliunits);
+            let Some(input_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+                entity_id,
+                box_index: 0,
+            }) else {
+                continue;
+            };
+            let Some(output_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+                entity_id,
+                box_index: 1,
+            }) else {
+                continue;
+            };
+            if input_network_id == output_network_id
+                || !electric_work_allowed_for(
+                    &self.power,
+                    &mut self.entities.electric_consumers,
+                    entity_id,
+                )
+            {
+                continue;
+            }
+            let Some(fluid_id) = self.fluid_network_fluid_id(input_network_id) else {
+                continue;
+            };
+            let transferable = amount
+                .min(self.fluid_network_total_for_fluid(input_network_id, fluid_id))
+                .min(self.fluid_network_available_capacity_for_fluid(output_network_id, fluid_id));
+            if transferable == 0
+                || !self.consume_fluid_from_network(input_network_id, fluid_id, transferable)
+            {
+                continue;
+            }
+            let added = self.add_fluid_to_network(output_network_id, fluid_id, transferable);
+            debug_assert_eq!(added, transferable);
+        }
+    }
+
     fn advance_offshore_pumps(&mut self) {
         let water = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes)
             .fluids

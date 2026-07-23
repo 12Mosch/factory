@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::ids::EntityId;
 use crate::simulation::disjoint_set::DisjointSet;
 
 use super::types::{
@@ -15,13 +16,17 @@ pub(super) fn build_fluid_network_topology_from_nodes(
 
     let mut disjoint_set = DisjointSet::new(nodes.len());
     let mut endpoint_boxes = BTreeMap::<FluidEndpoint, Vec<usize>>::new();
+    let mut underground_boxes = BTreeMap::<(EntityId, EntityId), Vec<usize>>::new();
     for (index, node) in nodes.iter().enumerate() {
         for endpoint in &node.endpoints {
             endpoint_boxes.entry(*endpoint).or_default().push(index);
         }
+        for pair in &node.underground_pairs {
+            underground_boxes.entry(*pair).or_default().push(index);
+        }
     }
 
-    for indices in endpoint_boxes.values() {
+    for indices in endpoint_boxes.values().chain(underground_boxes.values()) {
         let Some((&first, rest)) = indices.split_first() else {
             continue;
         };

@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use factory_sim::{
     BOILER_FUEL_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
-    FURNACE_OUTPUT_SLOT_INDEX, MINING_DRILL_FUEL_SLOT_INDEX, MINING_DRILL_OUTPUT_SLOT_INDEX,
-    MachineStatus,
+    FURNACE_OUTPUT_SLOT_INDEX, INSERTER_FUEL_SLOT_INDEX, MINING_DRILL_FUEL_SLOT_INDEX,
+    MINING_DRILL_OUTPUT_SLOT_INDEX, MachineStatus,
 };
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
@@ -306,6 +306,37 @@ pub(crate) fn spawn_boiler_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCo
     });
 }
 
+pub(crate) fn spawn_inserter_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(220.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new("Burner Inserter"),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel.spawn((
+            Text::new("Energy: 0 J"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            BurnerEnergyText,
+        ));
+        spawn_labeled_slot(
+            panel,
+            "Fuel",
+            InventoryPanel::InserterFuel,
+            INSERTER_FUEL_SLOT_INDEX,
+        );
+    });
+}
+
 pub(crate) fn update_machine_indicators(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
@@ -351,6 +382,15 @@ pub(crate) fn update_machine_indicators(
                         None,
                         state.crafting_progress_ticks,
                         state.crafting_required_ticks,
+                    ))
+                }
+                OpenMachineKind::Inserter => {
+                    let energy =
+                        factory_sim::entity_access::inserter_energy(&sim, entity_id).ok()?;
+                    Some((
+                        energy.burner().map(|burner| burner.energy_remaining_joules),
+                        0,
+                        1,
                     ))
                 }
                 OpenMachineKind::Chest | OpenMachineKind::Lab | OpenMachineKind::Turret => None,

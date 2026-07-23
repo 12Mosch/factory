@@ -172,8 +172,34 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
+            EntityKind::Pump => {
+                let Some(pump) = prototype.pump.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if pump.pumping_speed_per_second_milliunits == 0
+                    || prototype.electric_energy_source.is_none()
+                    || prototype.fluid_boxes.len() != 2
+                    || prototype.fluid_boxes[0].io != factory_data::FluidBoxIo::Input
+                    || prototype.fluid_boxes[1].io != factory_data::FluidBoxIo::Output
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
             EntityKind::Pipe | EntityKind::StorageTank => {
                 if prototype.fluid_boxes.len() != 1 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+                if prototype
+                    .underground_pipe
+                    .as_ref()
+                    .is_some_and(|underground| underground.max_distance == 0)
+                {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,
                     });
@@ -272,6 +298,11 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                         && inserter.drop_offset.x == 0
                         && inserter.drop_offset.y == 0)
                 {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+                if prototype.burner.is_some() == prototype.electric_energy_source.is_some() {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,
                     });

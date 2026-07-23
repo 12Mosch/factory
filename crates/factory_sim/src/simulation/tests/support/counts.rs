@@ -62,6 +62,16 @@ pub(in crate::simulation::tests) fn total_item_count_in_sim(
                 _ => 0,
             })
             .sum::<u32>()
+        + sim
+            .entities
+            .inserter_energy
+            .values()
+            .map(|energy| {
+                energy
+                    .fuel_slot()
+                    .map_or(0, |slot| count_slot_item(slot, item_id))
+            })
+            .sum::<u32>()
 }
 
 pub(in crate::simulation::tests) fn total_belt_count_for_item(

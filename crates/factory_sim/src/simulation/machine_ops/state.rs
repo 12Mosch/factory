@@ -37,6 +37,7 @@ pub(in crate::simulation) fn reservation_for_prototype(
         gun_turrets: gun_turret_state_for_prototype(prototype),
         enemy_spawners: enemy_spawner_state_for_prototype(prototype),
         entity_health: health_state_for_prototype(prototype),
+        inserter_energy: inserter_energy_for_prototype(prototype),
     }
 }
 
@@ -248,6 +249,14 @@ fn inserter_state_for_prototype(
 ) -> Option<InserterState> {
     (prototype.entity_kind == EntityKind::Inserter && prototype.inserter.is_some())
         .then_some(InserterState::WaitingForItem)
+}
+
+fn inserter_energy_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<MachineEnergy> {
+    (prototype.entity_kind == EntityKind::Inserter)
+        .then(|| machine_energy_for_prototype(prototype))
+        .flatten()
 }
 
 fn gun_turret_state_for_prototype(

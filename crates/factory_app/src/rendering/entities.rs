@@ -252,7 +252,7 @@ pub(crate) fn entity_prototype_visual_style(
             direction,
         )),
         EntityKind::Chest => Some(entity_visual_style(
-            chest_color(),
+            chest_color(&prototype.name),
             Vec2::splat(CHEST_SPRITE_SIZE),
             prototype.entity_kind,
             direction,
@@ -290,7 +290,7 @@ pub(crate) fn entity_prototype_visual_style(
             direction,
         )),
         EntityKind::Inserter => Some(entity_visual_style(
-            inserter_color(prototype.inserter.as_ref()),
+            inserter_color(prototype.inserter.as_ref(), prototype.burner.is_some()),
             machine_size(),
             prototype.entity_kind,
             direction,
@@ -314,6 +314,12 @@ pub(crate) fn entity_prototype_visual_style(
             direction,
         )),
         EntityKind::OffshorePump => Some(entity_visual_style(
+            offshore_pump_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Pump => Some(entity_visual_style(
             offshore_pump_color(),
             machine_size(),
             prototype.entity_kind,

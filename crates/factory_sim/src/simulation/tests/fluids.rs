@@ -2,6 +2,109 @@ use super::super::*;
 use super::support::*;
 
 #[test]
+fn underground_pipe_pair_connects_surface_networks_across_a_gap() {
+    let mut sim = Simulation::new_test_world(123);
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let entrance = entity_id_by_name(&sim.world.prototypes, "pipe_to_ground_entrance");
+    let exit = entity_id_by_name(&sim.world.prototypes, "pipe_to_ground_exit");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 7, 1);
+
+    let input_pipe = place_named_entity(&mut sim, pipe, x, y, Direction::North);
+    place_named_entity(&mut sim, entrance, x + 1, y, Direction::East);
+    place_named_entity(&mut sim, exit, x + 5, y, Direction::East);
+    let output_pipe = place_named_entity(&mut sim, pipe, x + 6, y, Direction::North);
+    set_fluid_box(&mut sim, input_pipe, 0, water, 100_000);
+
+    sim.tick();
+
+    assert_eq!(
+        sim.entities.fluid_boxes[&output_pipe][0].fluid_id,
+        Some(water)
+    );
+    assert_eq!(
+        sim.entities.fluid_boxes[&output_pipe][0].amount_milliunits,
+        25_000
+    );
+    assert_eq!(sim.fluid_networks().len(), 1);
+    assert_eq!(sim.fluid_networks()[0].boxes.len(), 4);
+}
+
+#[test]
+fn underground_pipe_does_not_pair_with_mismatched_direction() {
+    let mut sim = Simulation::new_test_world(123);
+    let entrance = entity_id_by_name(&sim.world.prototypes, "pipe_to_ground_entrance");
+    let exit = entity_id_by_name(&sim.world.prototypes, "pipe_to_ground_exit");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 5, 1);
+
+    let entrance_id = place_named_entity(&mut sim, entrance, x, y, Direction::East);
+    let exit_id = place_named_entity(&mut sim, exit, x + 4, y, Direction::West);
+    set_fluid_box(&mut sim, entrance_id, 0, water, 100_000);
+
+    sim.tick();
+
+    assert_eq!(sim.entities.fluid_boxes[&exit_id][0].fluid_id, None);
+    assert_eq!(sim.fluid_networks().len(), 2);
+}
+
+#[test]
+fn powered_pump_moves_fluid_only_from_input_to_output() {
+    let mut sim = Simulation::new_test_world(123);
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let pump = entity_id_by_name(&sim.world.prototypes, "pump");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 1, 4, (2, 2));
+
+    let input_pipe = place_named_entity(&mut sim, pipe, x, y, Direction::North);
+    let pump_id = place_named_entity(&mut sim, pump, x, y + 1, Direction::North);
+    let output_pipe = place_named_entity(&mut sim, pipe, x, y + 3, Direction::North);
+    set_fluid_box(&mut sim, input_pipe, 0, water, 100_000);
+
+    sim.tick();
+
+    assert_eq!(
+        sim.entities.fluid_boxes[&output_pipe][0].amount_milliunits,
+        10_000
+    );
+    assert_eq!(
+        sim.entities.fluid_boxes[&pump_id][1].amount_milliunits,
+        10_000
+    );
+    let output_before = sim.entities.fluid_boxes[&output_pipe][0].amount_milliunits
+        + sim.entities.fluid_boxes[&pump_id][1].amount_milliunits;
+    set_fluid_box(&mut sim, input_pipe, 0, water, 0);
+    set_fluid_box(&mut sim, pump_id, 0, water, 0);
+
+    sim.tick();
+
+    assert_eq!(
+        sim.entities.fluid_boxes[&output_pipe][0].amount_milliunits
+            + sim.entities.fluid_boxes[&pump_id][1].amount_milliunits,
+        output_before
+    );
+}
+
+fn place_named_entity(
+    sim: &mut Simulation,
+    prototype_id: EntityPrototypeId,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+    direction: Direction,
+) -> EntityId {
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id,
+            x,
+            y,
+            direction,
+        },
+    )
+    .expect("fluid fixture entity should be placeable")
+}
+
+#[test]
 fn boiler_fills_steam_buffer_without_demand_then_stops_when_full() {
     let mut sim = Simulation::new_test_world(123);
     let (_, _, boiler_id) = place_powered_fixture_origin_with_boiler(&mut sim, 1, 1, (1, 2));

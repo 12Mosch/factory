@@ -28,6 +28,14 @@ impl Simulation {
         self.fluid_network_total_for_fluid_in_topology(network, fluid_id)
     }
 
+    pub(in crate::simulation) fn fluid_network_fluid_id(&self, network_id: u32) -> Option<FluidId> {
+        let network = self.fluid_network_topology_by_id(network_id)?;
+        let summary = fluid_network_dynamic_summary(&self.entities, network);
+        (!summary.blocked && summary.total_milliunits > 0)
+            .then_some(summary.fluid_id)
+            .flatten()
+    }
+
     pub(in crate::simulation) fn fluid_network_available_capacity_for_fluid(
         &self,
         network_id: u32,

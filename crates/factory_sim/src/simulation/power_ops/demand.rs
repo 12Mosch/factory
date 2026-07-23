@@ -203,6 +203,13 @@ fn electric_consumer_can_work(
     if entities.pumpjacks.contains_key(&entity_id) {
         return pumpjack_can_work(catalog, entities, entity_id);
     }
+    if entities
+        .placed_entity(entity_id)
+        .and_then(|placed| catalog.entity(placed.prototype_id))
+        .is_some_and(|prototype| prototype.pump.is_some())
+    {
+        return true;
+    }
     if let (Some(placed), Some(state)) = (
         entities.placed_entity(entity_id),
         entities.inserters.get(&entity_id),

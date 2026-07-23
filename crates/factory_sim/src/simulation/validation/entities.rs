@@ -56,6 +56,9 @@ macro_rules! define_validate_entity_state_ownership {
             for entity_id in sim.entities.entity_health.keys() {
                 validate_health_owner(sim, *entity_id)?;
             }
+            for entity_id in sim.entities.inserter_energy.keys() {
+                validate_entity_state_kind(sim, *entity_id, EntityKind::Inserter)?;
+            }
 
             Ok(())
         }

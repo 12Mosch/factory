@@ -41,6 +41,7 @@ macro_rules! for_each_entity_state_map {
             gun_turrets: crate::combat::GunTurretState => GunTurret,
             enemy_spawners: crate::combat::EnemySpawnerState => EnemySpawner,
             entity_health: crate::combat::HealthState => _,
+            inserter_energy: crate::machines::MachineEnergy => _,
         }
     };
 }
@@ -160,7 +161,8 @@ mod tests {
         // (burner-or-electric); the fixture drill uses the electric variant
         // so both enum arms are pinned.
         // v21: transport items gained stable identities.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x3284_4334_556b_9bae;
+        // v22: inserter energy state was appended for burner inserters.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x8f37_df3b_a1dd_1ce0;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -337,6 +339,9 @@ mod tests {
         store
             .entity_health
             .insert(EntityId::new(18), HealthState::new(42, Faction::Player));
+        store
+            .inserter_energy
+            .insert(EntityId::new(14), MachineEnergy::Electric);
 
         store
     }

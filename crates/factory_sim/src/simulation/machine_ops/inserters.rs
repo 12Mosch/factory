@@ -184,6 +184,22 @@ pub(in crate::simulation) fn inserter_target_can_accept(
         );
     }
 
+    if let Some(fuel_slot) = entities
+        .inserter_energy
+        .get(&entity_id)
+        .and_then(MachineEnergy::fuel_slot)
+    {
+        return item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            fuel_slot,
+            item,
+        );
+    }
+
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
         return item_slot_policy_accepts(
             catalog,
@@ -456,6 +472,33 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         }
 
         return false;
+    }
+
+    if let Some(fuel_slot) = entities
+        .inserter_energy
+        .get(&entity_id)
+        .and_then(MachineEnergy::fuel_slot)
+    {
+        let fuel_accepts = item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            fuel_slot,
+            item,
+        );
+        if !fuel_accepts {
+            return false;
+        }
+        entities
+            .inserter_energy
+            .get_mut(&entity_id)
+            .and_then(MachineEnergy::fuel_slot_mut)
+            .expect("an accepting burner inserter fuel slot exists")
+            .insert_stack(catalog, item)
+            .expect("the checked burner inserter fuel slot should accept the item");
+        return true;
     }
 
     if entities.assembling_machines.contains_key(&entity_id) {

@@ -249,6 +249,22 @@ impl EntityStateBehavior for InserterState {
     }
 }
 
+impl EntityStateBehavior for MachineEnergy {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
+        if let Some(fuel_slot) = self.fuel_slot() {
+            push_item_slot(stacks, fuel_slot);
+        }
+    }
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        super::validation::machines::validate_inserter_energy(sim, entity_id, self)
+    }
+}
+
 impl EntityStateBehavior for GunTurretState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         // The opened magazine (`loaded_shots`) is lost; only unopened

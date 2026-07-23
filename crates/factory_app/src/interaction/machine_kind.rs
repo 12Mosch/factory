@@ -10,6 +10,7 @@ pub(crate) enum OpenMachineKind {
     Assembler,
     Lab,
     Turret,
+    Inserter,
 }
 
 pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option<OpenMachineKind> {
@@ -21,6 +22,12 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
         EntityKind::AssemblingMachine => Some(OpenMachineKind::Assembler),
         EntityKind::Lab => Some(OpenMachineKind::Lab),
         EntityKind::GunTurret => Some(OpenMachineKind::Turret),
+        EntityKind::Inserter => sim
+            .entities()
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.catalog().entity(placed.prototype_id))
+            .and_then(|prototype| prototype.burner.as_ref())
+            .map(|_| OpenMachineKind::Inserter),
         _ => None,
     }
 }

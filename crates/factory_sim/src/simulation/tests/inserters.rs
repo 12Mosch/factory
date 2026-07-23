@@ -2,6 +2,114 @@ use super::super::*;
 use super::support::*;
 
 #[test]
+fn burner_inserter_requires_and_consumes_fuel_to_move_items() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 2);
+    let (chest_id, inserter_id, furnace_id) =
+        place_chest_inserter_furnace_line_at(&mut sim, "burner_inserter", x, y);
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        iron_ore,
+        1,
+    );
+
+    for _ in 0..120 {
+        sim.tick();
+    }
+    assert_eq!(
+        crate::entity_access::inventory(&sim, chest_id)
+            .expect("chest should have inventory")
+            .count(iron_ore),
+        1
+    );
+
+    sim.entities
+        .inserter_energy_mut(inserter_id)
+        .expect("burner inserter should expose energy")
+        .fuel_slot_mut()
+        .expect("burner inserter should expose a fuel slot")
+        .insert_stack(&sim.world.prototypes, test_stack(coal, 1))
+        .expect("coal should fit the burner inserter fuel slot");
+    run_inserter_until_idle(&mut sim, inserter_id);
+
+    assert_eq!(
+        crate::entity_access::furnace_state(&sim, furnace_id)
+            .expect("furnace should have state")
+            .input_slot,
+        Some(test_stack(iron_ore, 1))
+    );
+    let energy = crate::entity_access::inserter_energy(&sim, inserter_id)
+        .expect("burner inserter should expose energy")
+        .burner()
+        .expect("burner inserter should use burner energy");
+    assert!(energy.energy_remaining_joules > 0.0);
+    assert_eq!(energy.fuel_slot.stack(), None);
+}
+
+#[test]
+fn inserter_can_refuel_a_burner_inserter() {
+    let mut sim = Simulation::new_test_world(123);
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let burner_inserter = entity_id_by_name(&sim.world.prototypes, "burner_inserter");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 1, (1, 2));
+
+    let chest_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chest should be placeable");
+    let feeder_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x: x + 1,
+            y,
+            direction: Direction::East,
+        },
+    )
+    .expect("feeder inserter should be placeable");
+    let burner_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: burner_inserter,
+            x: x + 2,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("burner inserter should be placeable");
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, chest_id)
+            .expect("chest should have inventory"),
+        0,
+        coal,
+        1,
+    );
+
+    run_inserter_until_idle(&mut sim, feeder_id);
+
+    assert_eq!(
+        crate::entity_access::inserter_energy(&sim, burner_id)
+            .expect("burner inserter should expose energy")
+            .fuel_slot()
+            .expect("burner inserter should expose fuel")
+            .stack(),
+        Some(test_stack(coal, 1))
+    );
+}
+
+#[test]
 fn inserter_does_not_place_invalid_items_into_lab() {
     let mut sim = Simulation::new_test_world(123);
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");

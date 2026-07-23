@@ -19,6 +19,47 @@ fn chest_entity_loads_inventory_slot_count() {
 }
 
 #[test]
+fn chest_variants_load_distinct_capacities() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    for (name, expected_slots) in [("chest", 16), ("iron_chest", 32), ("steel_chest", 48)] {
+        let chest = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain {name}"));
+        assert_eq!(chest.entity_kind, EntityKind::Chest);
+        assert_eq!(chest.inventory_slot_count, Some(expected_slots));
+    }
+}
+
+#[test]
+fn burner_inserter_loads_burner_energy_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    let inserter = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "burner_inserter")
+        .expect("base catalog should contain burner inserter");
+
+    assert_eq!(inserter.entity_kind, EntityKind::Inserter);
+    assert_eq!(
+        inserter
+            .burner
+            .as_ref()
+            .map(|burner| burner.energy_usage_watts),
+        Some(94_000)
+    );
+    assert!(inserter.electric_energy_source.is_none());
+    assert_eq!(
+        inserter
+            .inserter
+            .as_ref()
+            .map(|metadata| (metadata.pickup_ticks, metadata.drop_ticks)),
+        Some((50, 50))
+    );
+}
+
+#[test]
 fn lab_entity_loads_inventory_slot_count() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let lab = catalog

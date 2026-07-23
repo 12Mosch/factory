@@ -131,6 +131,18 @@ fn green_science_technologies_load_prerequisites_costs_and_unlocks() {
         .find(|recipe| recipe.name == "storage_tank")
         .expect("base catalog should contain storage tank recipe")
         .id;
+    let pipe_to_ground = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "pipe_to_ground")
+        .expect("base catalog should contain pipe to ground recipe")
+        .id;
+    let pump = catalog
+        .recipes
+        .iter()
+        .find(|recipe| recipe.name == "pump")
+        .expect("base catalog should contain pump recipe")
+        .id;
     let express_transport_belt = catalog
         .recipes
         .iter()
@@ -198,7 +210,11 @@ fn green_science_technologies_load_prerequisites_costs_and_unlocks() {
     assert_eq!(fluid_handling.research_time_ticks, 600);
     assert_eq!(
         fluid_handling.effects,
-        vec![TechnologyEffect::UnlockRecipe(storage_tank)]
+        vec![
+            TechnologyEffect::UnlockRecipe(storage_tank),
+            TechnologyEffect::UnlockRecipe(pipe_to_ground),
+            TechnologyEffect::UnlockRecipe(pump),
+        ]
     );
     assert_eq!(logistics_3.prerequisites, vec![fluid_handling.id]);
     assert_eq!(
