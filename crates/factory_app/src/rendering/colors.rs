@@ -54,6 +54,10 @@ pub(crate) fn offshore_pump_color() -> Color {
     Color::srgb(0.14, 0.48, 0.68)
 }
 
+pub(crate) fn pump_color() -> Color {
+    Color::srgb(0.22, 0.62, 0.78)
+}
+
 pub(crate) fn pipe_color() -> Color {
     Color::srgb(0.50, 0.57, 0.58)
 }

@@ -1,24 +1,23 @@
 use super::*;
 
+/// Read-only simulation state a consumer's power demand is derived from.
+#[derive(Clone, Copy)]
+pub(super) struct ConsumerDemandInputs<'a> {
+    pub(super) world: &'a WorldSim,
+    pub(super) entities: &'a EntityStore,
+    pub(super) fluids: &'a FluidSubsystem,
+    pub(super) research: &'a ResearchState,
+}
+
 pub(super) fn refresh_consumer_demand_cache(
-    world: &WorldSim,
-    entities: &EntityStore,
-    research: &ResearchState,
+    inputs: ConsumerDemandInputs<'_>,
     topology: &PowerTopologyCache,
     entity_statuses: &mut DenseEntityMap<EntityPowerStatus>,
     cache: &mut PowerDemandCache,
     networks: &mut [NetworkAccumulator],
 ) {
     if !cache.valid || cache.network_consumption_watts.len() != networks.len() {
-        rebuild_consumer_demand_cache(
-            world,
-            entities,
-            research,
-            topology,
-            entity_statuses,
-            cache,
-            networks.len(),
-        );
+        rebuild_consumer_demand_cache(inputs, topology, entity_statuses, cache, networks.len());
     } else {
         cache.refresh_consumers.clear();
         cache
@@ -33,7 +32,7 @@ pub(super) fn refresh_consumer_demand_cache(
                 continue;
             };
             let Some((active_usage_watts, drain_watts)) =
-                consumer_power_demand_for(world, entities, research, entity_id)
+                consumer_power_demand_for(inputs, entity_id)
             else {
                 cache.invalidate();
                 break;
@@ -56,15 +55,7 @@ pub(super) fn refresh_consumer_demand_cache(
         }
 
         if !cache.valid {
-            rebuild_consumer_demand_cache(
-                world,
-                entities,
-                research,
-                topology,
-                entity_statuses,
-                cache,
-                networks.len(),
-            );
+            rebuild_consumer_demand_cache(inputs, topology, entity_statuses, cache, networks.len());
         }
     }
 
@@ -75,9 +66,7 @@ pub(super) fn refresh_consumer_demand_cache(
 }
 
 fn rebuild_consumer_demand_cache(
-    world: &WorldSim,
-    entities: &EntityStore,
-    research: &ResearchState,
+    inputs: ConsumerDemandInputs<'_>,
     topology: &PowerTopologyCache,
     entity_statuses: &mut DenseEntityMap<EntityPowerStatus>,
     cache: &mut PowerDemandCache,
@@ -99,9 +88,8 @@ fn rebuild_consumer_demand_cache(
         .network_satisfaction_permyriad
         .resize(network_count, u32::MAX);
 
-    for &entity_id in entities.electric_consumers.keys() {
-        let Some((active_usage_watts, drain_watts)) =
-            consumer_power_demand_for(world, entities, research, entity_id)
+    for &entity_id in inputs.entities.electric_consumers.keys() {
+        let Some((active_usage_watts, drain_watts)) = consumer_power_demand_for(inputs, entity_id)
         else {
             continue;
         };
@@ -120,7 +108,7 @@ fn rebuild_consumer_demand_cache(
             },
         );
 
-        if consumer_demand_is_active(entities, world, entity_id) {
+        if consumer_demand_is_active(inputs.entities, inputs.world, entity_id) {
             cache.active_consumers.push(entity_id);
         }
         if let Some(network_id) = network_id {
@@ -147,21 +135,26 @@ fn consumer_demand_is_active(
         return true;
     }
 
-    entities.assembling_machines.contains_key(&entity_id)
-        && entities
-            .placed_entity(entity_id)
-            .and_then(|placed| world.prototypes.entity(placed.prototype_id))
-            .is_some_and(|prototype| !prototype.fluid_boxes.is_empty())
+    let Some(prototype) = entities
+        .placed_entity(entity_id)
+        .and_then(|placed| world.prototypes.entity(placed.prototype_id))
+    else {
+        return false;
+    };
+    // A pump's demand depends on the fluid networks it bridges, which change without the
+    // pump itself being marked dirty.
+    prototype.pump.is_some()
+        || (entities.assembling_machines.contains_key(&entity_id)
+            && !prototype.fluid_boxes.is_empty())
 }
 
 pub(super) fn consumer_power_demand_for(
-    world: &WorldSim,
-    entities: &EntityStore,
-    research: &ResearchState,
+    inputs: ConsumerDemandInputs<'_>,
     entity_id: EntityId,
 ) -> Option<(u64, u64)> {
-    let energy_source = electric_consumer_power_source(&world.prototypes, entities, entity_id)?;
-    let active_usage_watts = if electric_consumer_can_work(world, entities, research, entity_id) {
+    let energy_source =
+        electric_consumer_power_source(&inputs.world.prototypes, inputs.entities, entity_id)?;
+    let active_usage_watts = if electric_consumer_can_work(inputs, entity_id) {
         energy_source.energy_usage_watts
     } else {
         0
@@ -181,12 +174,13 @@ fn electric_consumer_power_source<'a>(
         .as_ref()
 }
 
-fn electric_consumer_can_work(
-    world: &WorldSim,
-    entities: &EntityStore,
-    research: &ResearchState,
-    entity_id: EntityId,
-) -> bool {
+fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: EntityId) -> bool {
+    let ConsumerDemandInputs {
+        world,
+        entities,
+        fluids,
+        research,
+    } = inputs;
     let catalog = &world.prototypes;
     if let Some(state) = entities.assembling_machines.get(&entity_id) {
         return assembler_can_work(catalog, entities, research, entity_id, state);
@@ -208,7 +202,7 @@ fn electric_consumer_can_work(
         .and_then(|placed| catalog.entity(placed.prototype_id))
         .is_some_and(|prototype| prototype.pump.is_some())
     {
-        return true;
+        return pump_fluid_transfer(catalog, entities, fluids, entity_id).is_some();
     }
     if let (Some(placed), Some(state)) = (
         entities.placed_entity(entity_id),

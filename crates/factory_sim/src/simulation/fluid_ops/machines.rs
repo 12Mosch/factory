@@ -1,6 +1,10 @@
 use crate::simulation::*;
 
 use super::math::per_tick_milliunits;
+use super::network_access::{
+    fluid_network_available_capacity_for_fluid, fluid_network_fluid_id,
+    fluid_network_id_for_box_key, fluid_network_total_for_fluid,
+};
 use super::types::FluidBoxKey;
 
 impl Simulation {
@@ -28,52 +32,34 @@ impl Simulation {
             .collect::<Vec<_>>();
 
         for entity_id in pump_ids {
-            let Some(placed) = self.entities.placed_entity(entity_id) else {
-                continue;
-            };
-            let Some(pump) = self
-                .world
-                .prototypes
-                .entity(placed.prototype_id)
-                .and_then(|prototype| prototype.pump.as_ref())
-            else {
-                continue;
-            };
-            let amount = per_tick_milliunits(pump.pumping_speed_per_second_milliunits);
-            let Some(input_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+            let Some(transfer) = pump_fluid_transfer(
+                &self.world.prototypes,
+                &self.entities,
+                &self.fluids,
                 entity_id,
-                box_index: 0,
-            }) else {
+            ) else {
                 continue;
             };
-            let Some(output_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+            if !electric_work_allowed_for(
+                &self.power,
+                &mut self.entities.electric_consumers,
                 entity_id,
-                box_index: 1,
-            }) else {
-                continue;
-            };
-            if input_network_id == output_network_id
-                || !electric_work_allowed_for(
-                    &self.power,
-                    &mut self.entities.electric_consumers,
-                    entity_id,
-                )
-            {
+            ) {
                 continue;
             }
-            let Some(fluid_id) = self.fluid_network_fluid_id(input_network_id) else {
-                continue;
-            };
-            let transferable = amount
-                .min(self.fluid_network_total_for_fluid(input_network_id, fluid_id))
-                .min(self.fluid_network_available_capacity_for_fluid(output_network_id, fluid_id));
-            if transferable == 0
-                || !self.consume_fluid_from_network(input_network_id, fluid_id, transferable)
-            {
+            if !self.consume_fluid_from_network(
+                transfer.input_network_id,
+                transfer.fluid_id,
+                transfer.amount_milliunits,
+            ) {
                 continue;
             }
-            let added = self.add_fluid_to_network(output_network_id, fluid_id, transferable);
-            debug_assert_eq!(added, transferable);
+            let added = self.add_fluid_to_network(
+                transfer.output_network_id,
+                transfer.fluid_id,
+                transfer.amount_milliunits,
+            );
+            debug_assert_eq!(added, transfer.amount_milliunits);
         }
     }
 
@@ -203,4 +189,64 @@ impl Simulation {
             self.pollution_emitters.mark_active(entity_id);
         }
     }
+}
+
+/// The fluid transfer a pump would perform this tick, ignoring its power supply.
+pub(in crate::simulation) struct PumpFluidTransfer {
+    pub(in crate::simulation) input_network_id: u32,
+    pub(in crate::simulation) output_network_id: u32,
+    pub(in crate::simulation) fluid_id: FluidId,
+    pub(in crate::simulation) amount_milliunits: u64,
+}
+
+/// Returns the transfer a pump can perform, or `None` when it has nothing to move.
+///
+/// Shared by the pump simulation step and the electric demand estimate so that an idle pump
+/// is never billed for active power usage. The fluid network topology must be current.
+pub(in crate::simulation) fn pump_fluid_transfer(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    fluids: &FluidSubsystem,
+    entity_id: EntityId,
+) -> Option<PumpFluidTransfer> {
+    let placed = entities.placed_entity(entity_id)?;
+    let pump = catalog.entity(placed.prototype_id)?.pump.as_ref()?;
+    let input_network_id = fluid_network_id_for_box_key(
+        fluids,
+        FluidBoxKey {
+            entity_id,
+            box_index: 0,
+        },
+    )?;
+    let output_network_id = fluid_network_id_for_box_key(
+        fluids,
+        FluidBoxKey {
+            entity_id,
+            box_index: 1,
+        },
+    )?;
+    if input_network_id == output_network_id {
+        return None;
+    }
+
+    let fluid_id = fluid_network_fluid_id(fluids, entities, input_network_id)?;
+    let amount_milliunits = per_tick_milliunits(pump.pumping_speed_per_second_milliunits)
+        .min(fluid_network_total_for_fluid(
+            fluids,
+            entities,
+            input_network_id,
+            fluid_id,
+        ))
+        .min(fluid_network_available_capacity_for_fluid(
+            fluids,
+            entities,
+            output_network_id,
+            fluid_id,
+        ));
+    (amount_milliunits > 0).then_some(PumpFluidTransfer {
+        input_network_id,
+        output_network_id,
+        fluid_id,
+        amount_milliunits,
+    })
 }

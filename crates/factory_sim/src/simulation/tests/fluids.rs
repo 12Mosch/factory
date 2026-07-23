@@ -85,6 +85,44 @@ fn powered_pump_moves_fluid_only_from_input_to_output() {
     );
 }
 
+#[test]
+fn pump_without_transferable_fluid_only_draws_idle_power() {
+    let mut sim = Simulation::new_test_world(123);
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let pump = entity_id_by_name(&sim.world.prototypes, "pump");
+    let water = fluid_id(&sim.world.prototypes, "water");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 1, 4, (2, 2));
+
+    let input_pipe = place_named_entity(&mut sim, pipe, x, y, Direction::North);
+    let pump_id = place_named_entity(&mut sim, pump, x, y + 1, Direction::North);
+    place_named_entity(&mut sim, pipe, x, y + 3, Direction::North);
+    set_fluid_box(&mut sim, input_pipe, 0, water, 100_000);
+
+    sim.tick();
+
+    let working = sim
+        .entity_power_status(pump_id)
+        .expect("powered pump should expose a power status");
+    assert!(
+        working.active_usage_watts > 0,
+        "a pump with fluid to move should draw active power"
+    );
+
+    set_fluid_box(&mut sim, input_pipe, 0, water, 0);
+    set_fluid_box(&mut sim, pump_id, 0, water, 0);
+
+    sim.tick();
+
+    let idle = sim
+        .entity_power_status(pump_id)
+        .expect("powered pump should retain a power status");
+    assert_eq!(
+        idle.active_usage_watts, 0,
+        "a pump with an empty input network should not draw active power"
+    );
+    assert_eq!(idle.drain_watts, working.drain_watts);
+}
+
 fn place_named_entity(
     sim: &mut Simulation,
     prototype_id: EntityPrototypeId,
