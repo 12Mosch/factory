@@ -67,6 +67,7 @@ impl Simulation {
 
     fn fluid_box_nodes(&self) -> Vec<FluidBoxNode> {
         let mut nodes = Vec::new();
+        let underground_pairs = self.underground_pipe_pairs();
         for placed in self.entities.placed_entities.values() {
             if !self.entities.fluid_boxes.contains_key(&placed.id) {
                 continue;
@@ -89,10 +90,57 @@ impl Simulation {
                     capacity_milliunits: fluid_box.capacity_milliunits,
                     filter: fluid_box.filter,
                     endpoints,
+                    underground_pairs: underground_pairs
+                        .get(&placed.id)
+                        .cloned()
+                        .unwrap_or_default(),
                 });
             }
         }
         nodes
+    }
+
+    fn underground_pipe_pairs(&self) -> BTreeMap<EntityId, Vec<(EntityId, EntityId)>> {
+        let mut pairs_by_entity = BTreeMap::<EntityId, Vec<(EntityId, EntityId)>>::new();
+        for placed in self.entities.placed_entities.values() {
+            let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
+                continue;
+            };
+            let Some(underground) = prototype
+                .underground_pipe
+                .as_ref()
+                .filter(|underground| underground.part == UndergroundBeltPart::Entrance)
+            else {
+                continue;
+            };
+            let Some(candidate_id) = paired_underground_entity(
+                &self.entities,
+                placed,
+                UndergroundEndpoint {
+                    part: underground.part,
+                    max_distance: underground.max_distance,
+                },
+                |candidate_id| {
+                    let candidate = self.entities.placed_entity(candidate_id)?;
+                    let candidate_pipe = self
+                        .world
+                        .prototypes
+                        .entity(candidate.prototype_id)?
+                        .underground_pipe
+                        .as_ref()?;
+                    Some(UndergroundEndpoint {
+                        part: candidate_pipe.part,
+                        max_distance: candidate_pipe.max_distance,
+                    })
+                },
+            ) else {
+                continue;
+            };
+            let pair = (placed.id, candidate_id);
+            pairs_by_entity.entry(placed.id).or_default().push(pair);
+            pairs_by_entity.entry(candidate_id).or_default().push(pair);
+        }
+        pairs_by_entity
     }
 }
 

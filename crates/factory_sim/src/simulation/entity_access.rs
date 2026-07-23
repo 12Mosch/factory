@@ -63,6 +63,13 @@ pub fn inserter_state(
     sim.entities.inserter_state(entity_id)
 }
 
+pub fn inserter_energy(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<&MachineEnergy, InserterError> {
+    sim.entities.inserter_energy(entity_id)
+}
+
 pub fn lab_state(sim: &Simulation, entity_id: EntityId) -> Result<&LabState, LabError> {
     sim.entities.lab_state(entity_id)
 }
@@ -113,6 +120,11 @@ pub fn inventory_panel_slot(
             .and_then(|id| sim.entities.boiler_state(id).ok())
             .filter(|_| slot_index == BOILER_FUEL_SLOT_INDEX)
             .and_then(|state| state.energy.fuel_slot.stack()),
+        InventoryPanel::InserterFuel => entity_id
+            .and_then(|id| sim.entities.inserter_energy(id).ok())
+            .filter(|_| slot_index == INSERTER_FUEL_SLOT_INDEX)
+            .and_then(MachineEnergy::fuel_slot)
+            .and_then(|slot| slot.stack()),
         InventoryPanel::AssemblerInput => entity_id
             .and_then(|id| sim.entities.assembler_state(id).ok())
             .and_then(|state| state.input_inventory.slot(slot_index)),
@@ -148,6 +160,9 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::BoilerFuel => entity_id
             .and_then(|id| sim.entities.boiler_state(id).ok())
             .map_or(0, |_| 1),
+        InventoryPanel::InserterFuel => entity_id
+            .and_then(|id| sim.entities.inserter_energy(id).ok())
+            .map_or(0, |energy| usize::from(energy.fuel_slot().is_some())),
         InventoryPanel::AssemblerInput => entity_id
             .and_then(|id| sim.entities.assembler_state(id).ok())
             .map_or(0, |state| state.input_inventory.slots().len()),

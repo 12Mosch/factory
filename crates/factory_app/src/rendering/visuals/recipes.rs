@@ -54,6 +54,7 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::SteamEngine => steam_engine_layers(&mut builder, style),
         EntityKind::Boiler => boiler_layers(&mut builder, style),
         EntityKind::OffshorePump => offshore_pump_layers(&mut builder, style),
+        EntityKind::Pump => offshore_pump_layers(&mut builder, style),
         EntityKind::Pumpjack => pumpjack_layers(&mut builder, style),
         EntityKind::Pipe => {}
         EntityKind::StorageTank => storage_tank_layers(&mut builder, style),

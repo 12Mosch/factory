@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
-    AssemblerError, BoilerError, ContainerError, FurnaceError, MiningDrillError, SimCommand,
-    SlotTransferError,
+    AssemblerError, BoilerError, ContainerError, FurnaceError, InserterError, MiningDrillError,
+    SimCommand, SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -201,6 +201,21 @@ pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransf
         SlotTransferError::Furnace(error) => furnace_error_message(catalog, error),
         SlotTransferError::Boiler(error) => boiler_error_message(catalog, error),
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
+        SlotTransferError::Inserter(error) => inserter_error_message(catalog, error),
+    }
+}
+
+fn inserter_error_message(catalog: &PrototypeCatalog, error: InserterError) -> String {
+    match error {
+        InserterError::MissingEntity(_) | InserterError::NotInserter(_) => {
+            "Machine unavailable".to_string()
+        }
+        InserterError::InvalidFuel(item_id) => wrong_item_message(catalog, item_id),
+        InserterError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        InserterError::EmptySlot { .. } => "Empty slot".to_string(),
+        InserterError::InsufficientSpace => "No space".to_string(),
+        InserterError::NoFuelSlot => "Electric machine: no fuel slot".to_string(),
+        InserterError::UnknownItem => "Unknown item".to_string(),
     }
 }
 

@@ -2,8 +2,12 @@ use bevy::prelude::*;
 use factory_data::{BasePrototypeIds, InserterPrototype, ItemId, PrototypeCatalog, TileId};
 use factory_sim::ResourceCell;
 
-pub(crate) fn chest_color() -> Color {
-    Color::srgb(0.64, 0.43, 0.22)
+pub(crate) fn chest_color(prototype_name: &str) -> Color {
+    match prototype_name {
+        "iron_chest" => Color::srgb(0.46, 0.50, 0.52),
+        "steel_chest" => Color::srgb(0.64, 0.69, 0.72),
+        _ => Color::srgb(0.64, 0.43, 0.22),
+    }
 }
 
 pub(crate) fn mining_drill_color() -> Color {
@@ -50,6 +54,10 @@ pub(crate) fn offshore_pump_color() -> Color {
     Color::srgb(0.14, 0.48, 0.68)
 }
 
+pub(crate) fn pump_color() -> Color {
+    Color::srgb(0.22, 0.62, 0.78)
+}
+
 pub(crate) fn pipe_color() -> Color {
     Color::srgb(0.50, 0.57, 0.58)
 }
@@ -90,7 +98,10 @@ pub(crate) fn splitter_color(speed_subtiles_per_tick: Option<u16>) -> Color {
     }
 }
 
-pub(crate) fn inserter_color(inserter: Option<&InserterPrototype>) -> Color {
+pub(crate) fn inserter_color(inserter: Option<&InserterPrototype>, is_burner: bool) -> Color {
+    if is_burner {
+        return Color::srgb(0.48, 0.30, 0.16);
+    }
     match inserter {
         Some(inserter)
             if inserter

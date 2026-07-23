@@ -18,14 +18,16 @@ use bincode::Options;
 // v20: furnace and mining drill energy generalized to burner-or-electric
 // (MachineEnergy), enabling electric furnaces and electric mining drills.
 // v21: belt items gained stable identities used by incremental presentation.
-pub const SAVE_VERSION: u32 = 21;
+// v22: inserter energy state joined the entity registry.
+pub const SAVE_VERSION: u32 = 22;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
 // v11: PrototypeCatalog gained the optional enemy_gameplay config section.
 // v12: EntityPrototype gained the furnace section (crafting speed for
 // burner-or-electric furnaces).
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 12;
+// v13: pumps and underground-pipe metadata joined EntityPrototype.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 13;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

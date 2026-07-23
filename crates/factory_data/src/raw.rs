@@ -4,8 +4,8 @@ use crate::model::{
     AmmoPrototype, AssemblingMachinePrototype, BoilerPrototype, BuildingCategory, BurnerPrototype,
     CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig, EntityKind, FluidBoxIo,
     FluidConnectionSide, FurnacePrototype, GunTurretPrototype, OffshorePumpPrototype,
-    RepairToolPrototype, ResourceExtraction, SplitterPrototype, SteamEnginePrototype,
-    TransportBeltPrototype, UnitPrototype,
+    PumpPrototype, RepairToolPrototype, ResourceExtraction, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -170,7 +170,9 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) steam_engine: Option<SteamEnginePrototype>,
     pub(crate) boiler: Option<BoilerPrototype>,
     pub(crate) offshore_pump: Option<OffshorePumpPrototype>,
+    pub(crate) pump: Option<PumpPrototype>,
     pub(crate) pumpjack: Option<RawPumpjackPrototype>,
+    pub(crate) underground_pipe: Option<UndergroundPipePrototype>,
     #[serde(default)]
     pub(crate) fluid_boxes: Vec<RawFluidBoxPrototype>,
     pub(crate) max_health: Option<u32>,

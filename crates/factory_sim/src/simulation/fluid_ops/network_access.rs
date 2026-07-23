@@ -10,11 +10,7 @@ impl Simulation {
         &self,
         key: FluidBoxKey,
     ) -> Option<u32> {
-        debug_assert!(
-            !self.fluids.topology_dirty,
-            "fluid topology must be ensured before querying network ids"
-        );
-        self.fluids.network_ids_by_box.get(&key).copied()
+        fluid_network_id_for_box_key(&self.fluids, key)
     }
 
     pub(in crate::simulation) fn fluid_network_total_for_fluid(
@@ -22,10 +18,7 @@ impl Simulation {
         network_id: u32,
         fluid_id: FluidId,
     ) -> u64 {
-        let Some(network) = self.fluid_network_topology_by_id(network_id) else {
-            return 0;
-        };
-        self.fluid_network_total_for_fluid_in_topology(network, fluid_id)
+        fluid_network_total_for_fluid(&self.fluids, &self.entities, network_id, fluid_id)
     }
 
     pub(in crate::simulation) fn fluid_network_available_capacity_for_fluid(
@@ -33,10 +26,12 @@ impl Simulation {
         network_id: u32,
         fluid_id: FluidId,
     ) -> u64 {
-        let Some(network) = self.fluid_network_topology_by_id(network_id) else {
-            return 0;
-        };
-        self.fluid_network_available_capacity_for_fluid_in_topology(network, fluid_id)
+        fluid_network_available_capacity_for_fluid(
+            &self.fluids,
+            &self.entities,
+            network_id,
+            fluid_id,
+        )
     }
 
     pub(in crate::simulation) fn add_fluid_to_network(
@@ -46,10 +41,10 @@ impl Simulation {
         amount_milliunits: u64,
     ) -> u64 {
         self.ensure_fluid_network_topology();
-        let Some(network) = self.fluid_network_topology_by_id(network_id) else {
+        let Some(network) = fluid_network_topology_by_id(&self.fluids, network_id) else {
             return 0;
         };
-        if !self.fluid_network_accepts_fluid(network, fluid_id) {
+        if !fluid_network_accepts_fluid(&self.entities, network, fluid_id) {
             return 0;
         }
 
@@ -100,10 +95,12 @@ impl Simulation {
         amount_milliunits: u64,
     ) -> bool {
         self.ensure_fluid_network_topology();
-        let Some(network) = self.fluid_network_topology_by_id(network_id) else {
+        let Some(network) = fluid_network_topology_by_id(&self.fluids, network_id) else {
             return false;
         };
-        if self.fluid_network_total_for_fluid_in_topology(network, fluid_id) < amount_milliunits {
+        if fluid_network_total_for_fluid_in_topology(&self.entities, network, fluid_id)
+            < amount_milliunits
+        {
             return false;
         }
 
@@ -137,132 +134,179 @@ impl Simulation {
         true
     }
 
-    fn fluid_network_topology_by_id(&self, network_id: u32) -> Option<&FluidNetworkTopology> {
-        debug_assert!(
-            !self.fluids.topology_dirty,
-            "fluid topology must be ensured before querying networks"
-        );
-        self.fluids
-            .topology_networks
-            .get(network_id as usize)
-            .filter(|network| network.network_id == network_id)
-    }
-
-    fn fluid_network_total_for_fluid_in_topology(
-        &self,
-        network: &FluidNetworkTopology,
-        fluid_id: FluidId,
-    ) -> u64 {
-        let mut scan = FluidNetworkFluidScan::default();
-        let mut total_milliunits = 0_u64;
-
-        for box_topology in &network.boxes {
-            scan.observe_filter(box_topology.filter);
-            if scan.blocked() {
-                return 0;
-            }
-
-            let Some(state) = self
-                .entities
-                .fluid_boxes
-                .get(&box_topology.key.entity_id)
-                .and_then(|boxes| boxes.get(box_topology.key.box_index))
-            else {
-                continue;
-            };
-            scan.observe_fluid_state(state);
-            if scan.blocked() {
-                return 0;
-            }
-            if state.fluid_id == Some(fluid_id) {
-                total_milliunits = total_milliunits.saturating_add(state.amount_milliunits);
-            }
-        }
-
-        total_milliunits
-    }
-
-    fn fluid_network_available_capacity_for_fluid_in_topology(
-        &self,
-        network: &FluidNetworkTopology,
-        fluid_id: FluidId,
-    ) -> u64 {
-        let mut scan = FluidNetworkFluidScan::default();
-        let mut available_milliunits = 0_u64;
-
-        for box_topology in &network.boxes {
-            scan.observe_filter(box_topology.filter);
-            if scan.blocked() {
-                return 0;
-            }
-
-            let Some(state) = self
-                .entities
-                .fluid_boxes
-                .get(&box_topology.key.entity_id)
-                .and_then(|boxes| boxes.get(box_topology.key.box_index))
-            else {
-                continue;
-            };
-            scan.observe_fluid_state(state);
-            if scan.blocked() {
-                return 0;
-            }
-            if !fluid_filter_accepts(box_topology.filter, fluid_id)
-                || state.fluid_id.is_some_and(|existing| existing != fluid_id)
-            {
-                continue;
-            }
-            available_milliunits = available_milliunits.saturating_add(
-                box_topology
-                    .capacity_milliunits
-                    .saturating_sub(state.amount_milliunits),
-            );
-        }
-
-        if scan.accepts_fluid(fluid_id) {
-            available_milliunits
-        } else {
-            0
-        }
-    }
-
-    fn fluid_network_accepts_fluid(
-        &self,
-        network: &FluidNetworkTopology,
-        fluid_id: FluidId,
-    ) -> bool {
-        let mut scan = FluidNetworkFluidScan::default();
-
-        for box_topology in &network.boxes {
-            scan.observe_filter(box_topology.filter);
-            if scan.blocked() {
-                return false;
-            }
-
-            let Some(state) = self
-                .entities
-                .fluid_boxes
-                .get(&box_topology.key.entity_id)
-                .and_then(|boxes| boxes.get(box_topology.key.box_index))
-            else {
-                continue;
-            };
-            scan.observe_fluid_state(state);
-            if scan.blocked() {
-                return false;
-            }
-        }
-
-        scan.accepts_fluid(fluid_id)
-    }
-
     pub(in crate::simulation) fn fluid_network_dynamic_summary(
         &self,
         network: &FluidNetworkTopology,
     ) -> FluidNetworkDynamicSummary {
         fluid_network_dynamic_summary(&self.entities, network)
     }
+}
+
+pub(in crate::simulation) fn fluid_network_id_for_box_key(
+    fluids: &FluidSubsystem,
+    key: FluidBoxKey,
+) -> Option<u32> {
+    debug_assert!(
+        !fluids.topology_dirty,
+        "fluid topology must be ensured before querying network ids"
+    );
+    fluids.network_ids_by_box.get(&key).copied()
+}
+
+pub(in crate::simulation) fn fluid_network_fluid_id(
+    fluids: &FluidSubsystem,
+    entities: &EntityStore,
+    network_id: u32,
+) -> Option<FluidId> {
+    let network = fluid_network_topology_by_id(fluids, network_id)?;
+    let summary = fluid_network_dynamic_summary(entities, network);
+    (!summary.blocked && summary.total_milliunits > 0)
+        .then_some(summary.fluid_id)
+        .flatten()
+}
+
+pub(in crate::simulation) fn fluid_network_total_for_fluid(
+    fluids: &FluidSubsystem,
+    entities: &EntityStore,
+    network_id: u32,
+    fluid_id: FluidId,
+) -> u64 {
+    let Some(network) = fluid_network_topology_by_id(fluids, network_id) else {
+        return 0;
+    };
+    fluid_network_total_for_fluid_in_topology(entities, network, fluid_id)
+}
+
+pub(in crate::simulation) fn fluid_network_available_capacity_for_fluid(
+    fluids: &FluidSubsystem,
+    entities: &EntityStore,
+    network_id: u32,
+    fluid_id: FluidId,
+) -> u64 {
+    let Some(network) = fluid_network_topology_by_id(fluids, network_id) else {
+        return 0;
+    };
+    fluid_network_available_capacity_for_fluid_in_topology(entities, network, fluid_id)
+}
+
+fn fluid_network_topology_by_id(
+    fluids: &FluidSubsystem,
+    network_id: u32,
+) -> Option<&FluidNetworkTopology> {
+    debug_assert!(
+        !fluids.topology_dirty,
+        "fluid topology must be ensured before querying networks"
+    );
+    fluids
+        .topology_networks
+        .get(network_id as usize)
+        .filter(|network| network.network_id == network_id)
+}
+
+fn fluid_network_total_for_fluid_in_topology(
+    entities: &EntityStore,
+    network: &FluidNetworkTopology,
+    fluid_id: FluidId,
+) -> u64 {
+    let mut scan = FluidNetworkFluidScan::default();
+    let mut total_milliunits = 0_u64;
+
+    for box_topology in &network.boxes {
+        scan.observe_filter(box_topology.filter);
+        if scan.blocked() {
+            return 0;
+        }
+
+        let Some(state) = entities
+            .fluid_boxes
+            .get(&box_topology.key.entity_id)
+            .and_then(|boxes| boxes.get(box_topology.key.box_index))
+        else {
+            continue;
+        };
+        scan.observe_fluid_state(state);
+        if scan.blocked() {
+            return 0;
+        }
+        if state.fluid_id == Some(fluid_id) {
+            total_milliunits = total_milliunits.saturating_add(state.amount_milliunits);
+        }
+    }
+
+    total_milliunits
+}
+
+fn fluid_network_available_capacity_for_fluid_in_topology(
+    entities: &EntityStore,
+    network: &FluidNetworkTopology,
+    fluid_id: FluidId,
+) -> u64 {
+    let mut scan = FluidNetworkFluidScan::default();
+    let mut available_milliunits = 0_u64;
+
+    for box_topology in &network.boxes {
+        scan.observe_filter(box_topology.filter);
+        if scan.blocked() {
+            return 0;
+        }
+
+        let Some(state) = entities
+            .fluid_boxes
+            .get(&box_topology.key.entity_id)
+            .and_then(|boxes| boxes.get(box_topology.key.box_index))
+        else {
+            continue;
+        };
+        scan.observe_fluid_state(state);
+        if scan.blocked() {
+            return 0;
+        }
+        if !fluid_filter_accepts(box_topology.filter, fluid_id)
+            || state.fluid_id.is_some_and(|existing| existing != fluid_id)
+        {
+            continue;
+        }
+        available_milliunits = available_milliunits.saturating_add(
+            box_topology
+                .capacity_milliunits
+                .saturating_sub(state.amount_milliunits),
+        );
+    }
+
+    if scan.accepts_fluid(fluid_id) {
+        available_milliunits
+    } else {
+        0
+    }
+}
+
+fn fluid_network_accepts_fluid(
+    entities: &EntityStore,
+    network: &FluidNetworkTopology,
+    fluid_id: FluidId,
+) -> bool {
+    let mut scan = FluidNetworkFluidScan::default();
+
+    for box_topology in &network.boxes {
+        scan.observe_filter(box_topology.filter);
+        if scan.blocked() {
+            return false;
+        }
+
+        let Some(state) = entities
+            .fluid_boxes
+            .get(&box_topology.key.entity_id)
+            .and_then(|boxes| boxes.get(box_topology.key.box_index))
+        else {
+            continue;
+        };
+        scan.observe_fluid_state(state);
+        if scan.blocked() {
+            return false;
+        }
+    }
+
+    scan.accepts_fluid(fluid_id)
 }
 
 pub(super) fn update_fluid_network_snapshot(

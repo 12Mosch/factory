@@ -20,4 +20,10 @@ pub struct InserterTransferPreview {
 pub enum InserterError {
     MissingEntity(EntityId),
     NotInserter(EntityId),
+    InvalidFuel(factory_data::ItemId),
+    InvalidSlot { slot_index: usize },
+    EmptySlot { slot_index: usize },
+    InsufficientSpace,
+    NoFuelSlot,
+    UnknownItem,
 }

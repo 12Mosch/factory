@@ -4,7 +4,7 @@ use super::inventory::*;
 
 /// A machine's energy state must use the variant its prototype declares: a
 /// burner prototype owns burner fuel state, an electric prototype has none.
-fn validate_machine_energy_matches_prototype(
+pub(in crate::simulation) fn validate_machine_energy_matches_prototype(
     sim: &Simulation,
     entity_id: EntityId,
     energy: &MachineEnergy,
@@ -24,6 +24,27 @@ fn validate_machine_energy_matches_prototype(
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
+    Ok(())
+}
+
+pub(in crate::simulation) fn validate_inserter_energy(
+    sim: &Simulation,
+    entity_id: EntityId,
+    energy: &MachineEnergy,
+) -> Result<(), SimValidationError> {
+    let prototype = sim
+        .entities
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
+    if prototype.entity_kind != EntityKind::Inserter {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+    validate_machine_energy_matches_prototype(sim, entity_id, energy)?;
+    if let Some(fuel_slot) = energy.fuel_slot() {
+        validate_item_slot(&sim.world.prototypes, fuel_slot)?;
+        validate_slot_policy(sim, entity_id, fuel_slot, ItemSlotPolicy::Fuel)?;
+    }
     Ok(())
 }
 
@@ -289,6 +310,9 @@ pub(in crate::simulation) fn validate_inserter(
     entity_id: EntityId,
     state: &InserterState,
 ) -> Result<(), SimValidationError> {
+    if !sim.entities.inserter_energy.contains_key(&entity_id) {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
     if let InserterState::Holding { item } = state {
         validate_item_stack(&sim.world.prototypes, *item)?;
     }

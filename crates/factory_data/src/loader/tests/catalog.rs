@@ -18,7 +18,7 @@ fn base_enemy_gameplay_values_are_valid_and_data_driven() {
     assert_eq!(enemy.expansion_candidate_limit, 128);
 }
 
-const ITEM_NAMES: [&str; 42] = [
+const ITEM_NAMES: [&str; 47] = [
     "iron_ore",
     "copper_ore",
     "coal",
@@ -61,11 +61,16 @@ const ITEM_NAMES: [&str; 42] = [
     "chemical_plant",
     "plastic_bar",
     "sulfur",
+    "burner_inserter",
+    "iron_chest",
+    "steel_chest",
+    "pipe_to_ground",
+    "pump",
 ];
 
 const FLUID_NAMES: [&str; 4] = ["water", "steam", "crude_oil", "petroleum_gas"];
 
-const RECIPE_NAMES: [&str; 38] = [
+const RECIPE_NAMES: [&str; 43] = [
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -104,9 +109,14 @@ const RECIPE_NAMES: [&str; 38] = [
     "basic_oil_processing",
     "plastic_bar",
     "sulfur",
+    "burner_inserter",
+    "iron_chest",
+    "steel_chest",
+    "pipe_to_ground",
+    "pump",
 ];
 
-const ENTITY_NAMES: [&str; 34] = [
+const ENTITY_NAMES: [&str; 40] = [
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -141,6 +151,12 @@ const ENTITY_NAMES: [&str; 34] = [
     "pumpjack",
     "oil_refinery",
     "chemical_plant",
+    "burner_inserter",
+    "iron_chest",
+    "steel_chest",
+    "pipe_to_ground_entrance",
+    "pipe_to_ground_exit",
+    "pump",
 ];
 
 const TILE_NAMES: [&str; 8] = [
@@ -163,10 +179,10 @@ const TECHNOLOGY_NAMES: [&str; 10] = [
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 54);
+    assert_eq!(catalog.items.len(), 59);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 54);
-    assert_eq!(catalog.entities.len(), 42);
+    assert_eq!(catalog.recipes.len(), 59);
+    assert_eq!(catalog.entities.len(), 48);
     assert_eq!(catalog.tiles.len(), 8);
     assert_eq!(catalog.technologies.len(), 22);
 }

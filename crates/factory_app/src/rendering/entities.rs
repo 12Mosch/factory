@@ -11,8 +11,9 @@ use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{
     assembler_color, boiler_color, chemical_plant_color, chest_color, electric_pole_color,
     enemy_spawner_color, furnace_color, gun_turret_color, inserter_color, lab_color,
-    mining_drill_color, offshore_pump_color, oil_refinery_color, pipe_color, pumpjack_color,
-    splitter_color, steam_engine_color, storage_tank_color, transport_belt_color, wall_color,
+    mining_drill_color, offshore_pump_color, oil_refinery_color, pipe_color, pump_color,
+    pumpjack_color, splitter_color, steam_engine_color, storage_tank_color, transport_belt_color,
+    wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
@@ -252,7 +253,7 @@ pub(crate) fn entity_prototype_visual_style(
             direction,
         )),
         EntityKind::Chest => Some(entity_visual_style(
-            chest_color(),
+            chest_color(&prototype.name),
             Vec2::splat(CHEST_SPRITE_SIZE),
             prototype.entity_kind,
             direction,
@@ -290,7 +291,7 @@ pub(crate) fn entity_prototype_visual_style(
             direction,
         )),
         EntityKind::Inserter => Some(entity_visual_style(
-            inserter_color(prototype.inserter.as_ref()),
+            inserter_color(prototype.inserter.as_ref(), prototype.burner.is_some()),
             machine_size(),
             prototype.entity_kind,
             direction,
@@ -315,6 +316,12 @@ pub(crate) fn entity_prototype_visual_style(
         )),
         EntityKind::OffshorePump => Some(entity_visual_style(
             offshore_pump_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::Pump => Some(entity_visual_style(
+            pump_color(),
             machine_size(),
             prototype.entity_kind,
             direction,

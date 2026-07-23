@@ -68,7 +68,9 @@ pub struct EntityPrototype {
     pub steam_engine: Option<SteamEnginePrototype>,
     pub boiler: Option<BoilerPrototype>,
     pub offshore_pump: Option<OffshorePumpPrototype>,
+    pub pump: Option<PumpPrototype>,
     pub pumpjack: Option<PumpjackPrototype>,
+    pub underground_pipe: Option<UndergroundPipePrototype>,
     pub fluid_boxes: Vec<FluidBoxPrototype>,
     /// Present when the entity can take damage and be destroyed.
     pub max_health: Option<u32>,
@@ -271,6 +273,11 @@ pub struct OffshorePumpPrototype {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PumpPrototype {
+    pub pumping_speed_per_second_milliunits: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct PumpjackPrototype {
     pub pumping_speed_per_second_milliunits: u64,
     /// Resource cell item this pumpjack must be placed over.
@@ -289,6 +296,12 @@ pub struct UndergroundBeltPrototype {
 pub enum UndergroundBeltPart {
     Entrance,
     Exit,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct UndergroundPipePrototype {
+    pub part: UndergroundBeltPart,
+    pub max_distance: u8,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -358,6 +371,7 @@ pub enum EntityKind {
     SteamEngine,
     Boiler,
     OffshorePump,
+    Pump,
     Pumpjack,
     Pipe,
     StorageTank,

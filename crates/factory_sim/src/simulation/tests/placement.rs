@@ -490,6 +490,37 @@ fn chest_placement_creates_sixteen_inventory_slots() {
 }
 
 #[test]
+fn upgraded_chests_create_larger_inventories() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y) = first_buildable_rect(&sim.world, 3, 1);
+
+    for (offset, name, expected_slots) in [
+        (0, "chest", 16),
+        (1, "iron_chest", 32),
+        (2, "steel_chest", 48),
+    ] {
+        let prototype_id = entity_id_by_name(&sim.world.prototypes, name);
+        let entity_id = crate::placement::place(
+            &mut sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id,
+                x: x + offset,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .unwrap_or_else(|_| panic!("{name} should be placeable"));
+        assert_eq!(
+            crate::entity_access::inventory(&sim, entity_id)
+                .expect("chest variant should have an inventory")
+                .slots()
+                .len(),
+            expected_slots
+        );
+    }
+}
+
+#[test]
 fn player_cannot_place_locked_entity_even_with_inventory_item() {
     let mut sim = Simulation::new_test_world(123);
     let assembler_entity = entity_id_by_name(&sim.world.prototypes, "assembling_machine");

@@ -105,6 +105,7 @@ pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_FUEL_SLOT_INDEX: usize = 0;
 pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
 pub const BOILER_FUEL_SLOT_INDEX: usize = 0;
+pub const INSERTER_FUEL_SLOT_INDEX: usize = 0;
 pub const ASSEMBLING_MACHINE_INPUT_SLOT_COUNT: usize = 4;
 pub const ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT: usize = 1;
 pub const BELT_SUBTILES_PER_TILE: u16 = 256;
@@ -763,6 +764,7 @@ mod statistics_ops;
 mod statistics_state;
 mod systems;
 mod topology_invalidation_ops;
+mod underground;
 mod validation;
 mod world_ops;
 
@@ -791,6 +793,7 @@ pub use self::scripted::{
 };
 use self::statistics_ops::power_sample_is_recorded;
 use self::statistics_state::StatisticsSubsystem;
+use self::underground::*;
 pub use self::world_ops::ChunkNeighborhoodError;
 use self::world_ops::*;
 

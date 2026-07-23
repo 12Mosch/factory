@@ -1,7 +1,7 @@
 use glam::IVec2;
 
 use crate::catalog::PrototypeCatalog;
-use crate::model::{EntityKind, FluidConnectionSide};
+use crate::model::{EntityKind, FluidBoxIo, FluidConnectionSide, UndergroundBeltPart};
 
 #[test]
 fn fluid_ids_are_stable_and_contiguous() {
@@ -95,5 +95,47 @@ fn fluid_metadata_resolves_to_valid_fluid_ids() {
     assert_eq!(
         storage_tank.fluid_boxes[0].connections[0].side,
         FluidConnectionSide::North
+    );
+}
+
+#[test]
+fn underground_pipe_and_pump_metadata_loads() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    let pipe_to_ground = crate::item_id_by_name(&catalog, "pipe_to_ground");
+
+    for (name, expected_part) in [
+        ("pipe_to_ground_entrance", UndergroundBeltPart::Entrance),
+        ("pipe_to_ground_exit", UndergroundBeltPart::Exit),
+    ] {
+        let endpoint = catalog
+            .entities
+            .iter()
+            .find(|prototype| prototype.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain {name}"));
+        assert_eq!(endpoint.entity_kind, EntityKind::Pipe);
+        assert_eq!(endpoint.build_item, Some(pipe_to_ground));
+        assert_eq!(
+            endpoint
+                .underground_pipe
+                .as_ref()
+                .map(|underground| (underground.part, underground.max_distance)),
+            Some((expected_part, 10))
+        );
+    }
+
+    let pump = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "pump")
+        .expect("base catalog should contain pump");
+    assert_eq!(pump.entity_kind, EntityKind::Pump);
+    assert_eq!(pump.fluid_boxes.len(), 2);
+    assert_eq!(pump.fluid_boxes[0].io, FluidBoxIo::Input);
+    assert_eq!(pump.fluid_boxes[1].io, FluidBoxIo::Output);
+    assert_eq!(
+        pump.pump
+            .as_ref()
+            .map(|metadata| metadata.pumping_speed_per_second_milliunits),
+        Some(1_200_000)
     );
 }

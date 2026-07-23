@@ -333,7 +333,9 @@ fn load_entities(
                 steam_engine: entity.steam_engine,
                 boiler: entity.boiler,
                 offshore_pump: entity.offshore_pump,
+                pump: entity.pump,
                 pumpjack,
+                underground_pipe: entity.underground_pipe,
                 fluid_boxes,
                 max_health: entity.max_health,
                 pollution_per_minute_milli: entity.pollution_per_minute_milli,
@@ -392,6 +394,13 @@ fn validate_machine_energy_source(
             if has_burner == has_electric {
                 return invalid(
                     "mining drill entities require exactly one of burner or electric_energy_source",
+                );
+            }
+        }
+        crate::model::EntityKind::Inserter => {
+            if has_burner == has_electric {
+                return invalid(
+                    "inserter entities require exactly one of burner or electric_energy_source",
                 );
             }
         }

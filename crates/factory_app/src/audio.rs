@@ -457,7 +457,8 @@ fn machine_loop_candidate(
         EntityKind::AssemblingMachine
         | EntityKind::Lab
         | EntityKind::SteamEngine
-        | EntityKind::OffshorePump => MachineLoopKind::Electric,
+        | EntityKind::OffshorePump
+        | EntityKind::Pump => MachineLoopKind::Electric,
         _ => return None,
     };
     Some(LoopCandidate {

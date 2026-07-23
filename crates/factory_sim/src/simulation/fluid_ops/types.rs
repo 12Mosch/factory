@@ -12,6 +12,7 @@ pub(super) struct FluidBoxNode {
     pub(super) capacity_milliunits: u64,
     pub(super) filter: Option<FluidId>,
     pub(super) endpoints: Vec<FluidEndpoint>,
+    pub(super) underground_pairs: Vec<(EntityId, EntityId)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

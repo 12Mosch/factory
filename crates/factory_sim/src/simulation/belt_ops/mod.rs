@@ -10,7 +10,7 @@ pub(super) use advancement::TransportBeltAdvancement;
 pub(super) use advancement::insert_lane_item_at_entry;
 pub(super) use cache::TransportLaneCache;
 #[allow(unused_imports)]
-pub(super) use geometry::{direction_tile_delta, splitter_port_tiles};
+pub(super) use geometry::splitter_port_tiles;
 pub(super) use lane_access::belt_lane_can_accept_position;
 pub(super) use types::TransportLaneKey;
 

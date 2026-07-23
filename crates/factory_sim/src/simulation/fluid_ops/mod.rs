@@ -7,6 +7,8 @@ mod network_builder;
 mod types;
 
 #[allow(unused_imports)]
+pub(in crate::simulation) use machines::{PumpFluidTransfer, pump_fluid_transfer};
+#[allow(unused_imports)]
 pub(in crate::simulation) use math::{ceil_div_u64, per_tick_milliunits};
 pub(in crate::simulation) use types::{FluidBoxAssignment, FluidBoxKey, FluidNetworkTopology};
 

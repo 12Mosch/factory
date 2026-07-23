@@ -200,9 +200,12 @@ impl Simulation {
             .reset_network_accumulators(&mut scratch.networks);
 
         refresh_consumer_demand_cache(
-            &self.world,
-            &self.entities,
-            &self.research,
+            ConsumerDemandInputs {
+                world: &self.world,
+                entities: &self.entities,
+                fluids: &self.fluids,
+                research: &self.research,
+            },
             &self.power.topology,
             &mut self.power.entity_statuses,
             &mut self.power_demand_cache,

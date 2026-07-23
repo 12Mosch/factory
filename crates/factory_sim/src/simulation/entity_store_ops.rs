@@ -225,6 +225,30 @@ impl EntityStore {
             .ok_or(InserterError::NotInserter(entity_id))
     }
 
+    pub(super) fn inserter_energy(
+        &self,
+        entity_id: EntityId,
+    ) -> Result<&MachineEnergy, InserterError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(InserterError::MissingEntity(entity_id));
+        }
+        self.inserter_energy
+            .get(&entity_id)
+            .ok_or(InserterError::NotInserter(entity_id))
+    }
+
+    pub(super) fn inserter_energy_mut(
+        &mut self,
+        entity_id: EntityId,
+    ) -> Result<&mut MachineEnergy, InserterError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(InserterError::MissingEntity(entity_id));
+        }
+        self.inserter_energy
+            .get_mut(&entity_id)
+            .ok_or(InserterError::NotInserter(entity_id))
+    }
+
     pub(super) fn splitter_state(
         &self,
         entity_id: EntityId,

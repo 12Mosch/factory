@@ -56,31 +56,25 @@ fn paired_underground_exit_lane_key(
     lane_index: usize,
 ) -> Option<TransportLaneKey> {
     let entrance_underground = entrance_segment.underground?;
-    let (dx, dy) = direction_tile_delta(entrance_segment.dir);
-    let max_offset = i32::from(entrance_underground.max_distance) + 1;
-
-    for offset in 1..=max_offset {
-        let Some(TransportEndpoint::Belt { entity_id }) = transport_endpoint_at(
-            entities,
-            entrance_placed.x + i64::from(dx * offset),
-            entrance_placed.y + i64::from(dy * offset),
-        ) else {
-            continue;
-        };
-        let Some(exit_segment) = entities.transport_belts.get(&entity_id) else {
-            continue;
-        };
-        let underground_distance = (offset - 1) as u8;
-
-        if is_valid_underground_pair(entrance_segment, exit_segment, underground_distance) {
-            return Some(TransportLaneKey::Belt {
-                entity_id,
-                lane_index,
-            });
-        }
-    }
-
-    None
+    let entity_id = paired_underground_entity(
+        entities,
+        entrance_placed,
+        UndergroundEndpoint {
+            part: entrance_underground.part,
+            max_distance: entrance_underground.max_distance,
+        },
+        |candidate_id| {
+            let underground = entities.transport_belts.get(&candidate_id)?.underground?;
+            Some(UndergroundEndpoint {
+                part: underground.part,
+                max_distance: underground.max_distance,
+            })
+        },
+    )?;
+    Some(TransportLaneKey::Belt {
+        entity_id,
+        lane_index,
+    })
 }
 
 pub(in crate::simulation::belt_ops) fn splitter_output_lane_key(
@@ -126,37 +120,9 @@ fn transport_endpoint_at(
     None
 }
 
-fn is_valid_underground_pair(
-    entrance: &BeltSegment,
-    exit: &BeltSegment,
-    underground_distance: u8,
-) -> bool {
-    let Some(entrance_underground) = entrance.underground else {
-        return false;
-    };
-    let Some(exit_underground) = exit.underground else {
-        return false;
-    };
-
-    entrance_underground.part == UndergroundBeltPart::Entrance
-        && exit_underground.part == UndergroundBeltPart::Exit
-        && entrance.dir == exit.dir
-        && underground_distance <= entrance_underground.max_distance
-        && underground_distance <= exit_underground.max_distance
-}
-
 fn underground_part(segment: &BeltSegment) -> Option<UndergroundBeltPart> {
     segment
         .underground
         .as_ref()
         .map(|underground| underground.part)
-}
-
-pub(in crate::simulation) fn direction_tile_delta(direction: Direction) -> (i32, i32) {
-    match direction {
-        Direction::North => (0, 1),
-        Direction::East => (1, 0),
-        Direction::South => (0, -1),
-        Direction::West => (-1, 0),
-    }
 }
