@@ -122,6 +122,123 @@ fn medium_factory_benchmark_1000_machines_10000_belts() {
     });
 }
 
+/// Diagnostic companion to the large stress benchmark: reports the worst
+/// belt-phase ticks with their tick indices and allocation activity so
+/// worst-case spikes can be attributed instead of averaged away.
+#[test]
+#[ignore]
+fn large_headless_belt_spike_diagnostics() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let spec = FactoryBenchmarkSpec {
+        name: "large_headless_spike_diagnostics",
+        machines: 5_000,
+        belts: 50_000,
+        inserters: 5_000,
+        fluid_fixtures: 500,
+        warmup_ticks: 60,
+        measurement_ticks: 300,
+        assert_60_ups: false,
+    };
+    let mut sim = build_factory_benchmark(spec);
+    run_warmup_ticks(&mut sim, spec.warmup_ticks);
+
+    let mut samples = Vec::with_capacity(spec.measurement_ticks);
+    for tick_index in 0..spec.measurement_ticks {
+        reset_allocation_counters();
+        let profile = sim.profiled_tick();
+        let allocations = allocation_sample();
+        samples.push((tick_index, profile, allocations));
+    }
+
+    let mut worst = samples.clone();
+    worst.sort_by_key(|(_, profile, _)| std::cmp::Reverse(profile.belts));
+    println!("worst belt-phase ticks:");
+    for (tick_index, profile, allocations) in worst.iter().take(8) {
+        println!(
+            "  tick {tick_index}: belts {:.3} ms, total {:.3} ms, allocations {} bytes / {} allocs",
+            ms(profile.belts),
+            ms(profile.total),
+            allocations.bytes,
+            allocations.count
+        );
+    }
+
+    worst.sort_by_key(|(_, profile, _)| std::cmp::Reverse(profile.total));
+    println!("worst total ticks:");
+    for (tick_index, profile, allocations) in worst.iter().take(8) {
+        println!(
+            "  tick {tick_index}: total {:.3} ms, belts {:.3} ms, machines {:.3} ms, fluids {:.3} ms, power {:.3} ms, enemies {:.3} ms, allocations {} bytes / {} allocs",
+            ms(profile.total),
+            ms(profile.belts),
+            ms(profile.machines),
+            ms(profile.fluids),
+            ms(profile.power),
+            ms(profile.enemies),
+            allocations.bytes,
+            allocations.count
+        );
+    }
+}
+
+/// Isolates the topology-refresh cost after one placement and removal in a
+/// 50k-belt world. The edited ticks should exercise the scoped graph patch,
+/// while the baseline captures ordinary belt advancement.
+#[test]
+#[ignore]
+fn large_transport_topology_patch_diagnostics() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let spec = FactoryBenchmarkSpec {
+        name: "large_transport_topology_patch_diagnostics",
+        machines: 0,
+        belts: 50_000,
+        inserters: 0,
+        fluid_fixtures: 0,
+        warmup_ticks: 10,
+        measurement_ticks: 0,
+        assert_60_ups: false,
+    };
+    let mut sim = build_factory_benchmark(spec);
+    run_warmup_ticks(&mut sim, spec.warmup_ticks);
+
+    let baseline = (0..16)
+        .map(|_| sim.profiled_tick().belts)
+        .max()
+        .unwrap_or_default();
+    let belt = entity_prototype_id_by_name(sim.catalog(), "transport_belt");
+    let request = deterministic_tile_coords(&sim)
+        .into_iter()
+        .map(|(x, y)| benchmark_placement_request(belt, x, y, Direction::East))
+        .find(|request| can_place(&sim, *request))
+        .expect("benchmark world should retain one free belt tile");
+    let placed = place_validated(&mut sim, request, "validated diagnostic belt should place");
+
+    reset_allocation_counters();
+    let placed_tick = sim.profiled_tick();
+    let placed_allocations = allocation_sample();
+    factory_sim::entity_mutation::remove(&mut sim, placed)
+        .expect("diagnostic belt should be removable");
+    reset_allocation_counters();
+    let removed_tick = sim.profiled_tick();
+    let removed_allocations = allocation_sample();
+
+    println!(
+        "large transport topology patch:\n  baseline belt max {:.3} ms\n  placement tick belts {:.3} ms, total {:.3} ms, {} bytes / {} allocs\n  removal tick belts {:.3} ms, total {:.3} ms, {} bytes / {} allocs",
+        ms(baseline),
+        ms(placed_tick.belts),
+        ms(placed_tick.total),
+        placed_allocations.bytes,
+        placed_allocations.count,
+        ms(removed_tick.belts),
+        ms(removed_tick.total),
+        removed_allocations.bytes,
+        removed_allocations.count,
+    );
+}
+
 #[test]
 #[ignore]
 fn large_headless_stress_5000_machines_50000_belts() {

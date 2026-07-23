@@ -1,5 +1,4 @@
 use super::*;
-use std::hash::{Hash, Hasher};
 
 const SPAWN_SEARCH_RINGS: i64 = 3;
 
@@ -39,15 +38,7 @@ impl EnemySpawningScratch {
     }
 }
 
-impl PartialEq for EnemySpawningScratch {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Hash for EnemySpawningScratch {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
+impl_runtime_only_identity!(EnemySpawningScratch);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SpawnError {

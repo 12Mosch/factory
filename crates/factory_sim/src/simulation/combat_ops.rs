@@ -1,6 +1,5 @@
 use super::*;
 use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
 
 #[derive(Default)]
 struct AccumulatedDamage {
@@ -461,12 +460,4 @@ impl EnemyChunkIndex {
     }
 }
 
-impl PartialEq for EnemyChunkIndex {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Hash for EnemyChunkIndex {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
+impl_runtime_only_identity!(EnemyChunkIndex);

@@ -54,6 +54,6 @@ fn place_validated_entity(
     if is_enemy_spawner {
         sim.on_enemy_spawner_placed(entity_id, request.x, request.y);
     }
-    apply_entity_topology_change(sim, impact);
+    apply_entity_topology_change(sim, impact, entity_id, footprint);
     entity_id
 }
