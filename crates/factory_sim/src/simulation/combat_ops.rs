@@ -98,6 +98,12 @@ impl Simulation {
             }
         }
 
+        self.advance_laser_turrets(commands);
+    }
+
+    /// Advances every laser turret, gating fire on available electric power and
+    /// invalidating power demand whenever a turret changes engagement state.
+    fn advance_laser_turrets(&mut self, commands: &mut CombatCommandBuffer) {
         let mut demand_changed = Vec::new();
         {
             let Simulation {

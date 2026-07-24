@@ -215,24 +215,8 @@ impl Simulation {
     }
 
     pub(super) fn apply_equipped_armor_resistances(&mut self) {
-        let mut profile = ResistanceProfile::NONE;
-        if let Some(armor) = self
-            .player_equipment
-            .equipped_armor
-            .and_then(|item_id| self.world.prototypes.item(item_id))
-            .and_then(|item| item.armor.as_ref())
-        {
-            for resistance in &armor.resistances {
-                profile = profile.with_resistance(
-                    resistance.damage_type,
-                    Resistance::new(
-                        resistance.flat_reduction,
-                        resistance.percent_reduction_permyriad,
-                    ),
-                );
-            }
-        }
-        self.player.health.resistances = profile;
+        self.player.health.resistances =
+            equipped_armor_resistance_profile(&self.world.prototypes, &self.player_equipment);
     }
 
     fn current_armor_prototype(&self) -> Result<&ArmorPrototype, PlayerEquipmentError> {
@@ -320,15 +304,27 @@ fn validate_equipment_remainders_and_resistance(
     {
         return Err(SimValidationError::InvalidPlayerEquipment);
     }
-    let mut expected = ResistanceProfile::NONE;
-    if let Some(armor) = sim
-        .player_equipment
+    let expected = equipped_armor_resistance_profile(&sim.world.prototypes, &sim.player_equipment);
+    if sim.player.health.resistances != expected {
+        return Err(SimValidationError::InvalidPlayerEquipment);
+    }
+    Ok(())
+}
+
+/// Builds the resistance profile granted by the player's equipped armor,
+/// returning [`ResistanceProfile::NONE`] when no armor (or no resistances) apply.
+fn equipped_armor_resistance_profile(
+    catalog: &PrototypeCatalog,
+    state: &PlayerEquipmentState,
+) -> ResistanceProfile {
+    let mut profile = ResistanceProfile::NONE;
+    if let Some(armor) = state
         .equipped_armor
-        .and_then(|item_id| sim.world.prototypes.item(item_id))
+        .and_then(|item_id| catalog.item(item_id))
         .and_then(|item| item.armor.as_ref())
     {
         for resistance in &armor.resistances {
-            expected = expected.with_resistance(
+            profile = profile.with_resistance(
                 resistance.damage_type,
                 Resistance::new(
                     resistance.flat_reduction,
@@ -337,10 +333,7 @@ fn validate_equipment_remainders_and_resistance(
             );
         }
     }
-    if sim.player.health.resistances != expected {
-        return Err(SimValidationError::InvalidPlayerEquipment);
-    }
-    Ok(())
+    profile
 }
 
 fn inventory_slot_error(inventory: &Inventory, slot_index: usize) -> PlayerEquipmentError {

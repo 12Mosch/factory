@@ -16,13 +16,7 @@ impl DamageType {
     pub const COUNT: usize = 5;
 
     pub const fn index(self) -> usize {
-        match self {
-            Self::Physical => 0,
-            Self::Fire => 1,
-            Self::Explosion => 2,
-            Self::Acid => 3,
-            Self::Laser => 4,
-        }
+        self as usize
     }
 }
 

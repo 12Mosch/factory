@@ -310,6 +310,10 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     || laser_turret.cooldown_ticks == 0
                     || prototype.max_health.is_none()
                     || prototype.electric_energy_source.is_none()
+                    || prototype
+                        .electric_energy_source
+                        .as_ref()
+                        .is_some_and(|source| source.drain_watts == 0)
                 {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,

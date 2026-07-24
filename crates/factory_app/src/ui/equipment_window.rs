@@ -182,12 +182,16 @@ pub(crate) fn handle_equipment_buttons(
             }));
             sounds.write(SoundEvent::UiClick);
         } else if item.equipment.is_some() {
-            window.selected_inventory_slot = Some(button.slot_index);
-            window.feedback = Some(format!(
-                "Selected {} — choose a grid cell",
-                format_item_display_name(sim.catalog(), item.id)
-            ));
-            sounds.write(SoundEvent::UiClick);
+            if sim.equipped_armor().is_some() {
+                window.selected_inventory_slot = Some(button.slot_index);
+                window.feedback = Some(format!(
+                    "Selected {} — choose a grid cell",
+                    format_item_display_name(sim.catalog(), item.id)
+                ));
+                sounds.write(SoundEvent::UiClick);
+            } else {
+                window.feedback = Some("Equip armor first".into());
+            }
         } else {
             window.feedback = Some("Select armor or powered equipment".into());
         }
@@ -249,7 +253,10 @@ pub(crate) fn handle_equipment_command_results(
                 window.last_error = Some(error);
                 window.feedback = Some(equipment_error_message(error).into());
             }
-            Err(_) => {}
+            Err(error) => {
+                window.last_error = None;
+                window.feedback = Some(format!("Equipment action failed: {error:?}"));
+            }
         }
     }
 }
