@@ -526,3 +526,41 @@ fn accumulator_entity_loads_storage_metadata() {
     assert!(accumulator.burner.is_none());
     assert!(accumulator.fluid_boxes.is_empty());
 }
+
+#[test]
+fn radar_entity_loads_scan_and_power_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    let radar = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "radar")
+        .expect("base catalog should contain radar");
+
+    assert_eq!(radar.id.index(), 52);
+    assert_eq!(radar.entity_kind, EntityKind::Radar);
+    assert_eq!(
+        radar.build_item,
+        catalog
+            .items
+            .iter()
+            .find(|item| item.name == "radar")
+            .map(|item| item.id)
+    );
+    assert_eq!(radar.size, IVec2::new(3, 3));
+    assert_eq!(radar.max_health, Some(250));
+    assert_eq!(radar.building_category, Some(BuildingCategory::Defense));
+    assert_eq!(radar.building_menu_order, Some(40));
+    assert_eq!(
+        radar.electric_energy_source,
+        Some(ElectricEnergySourcePrototype {
+            energy_usage_watts: 300_000,
+            drain_watts: 0,
+        })
+    );
+    let metadata = radar.radar.expect("radar should define scan metadata");
+    assert_eq!(metadata.nearby_reveal_radius_chunks, 3);
+    assert_eq!(metadata.nearby_scan_interval_ticks, 60);
+    assert_eq!(metadata.far_scan_radius_chunks, 14);
+    assert_eq!(metadata.far_scan_interval_ticks, 2_000);
+    assert!(radar.burner.is_none());
+}

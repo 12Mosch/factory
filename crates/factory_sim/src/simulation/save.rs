@@ -24,7 +24,9 @@ use bincode::Options;
 // v25: machine module state and beacon state joined the entity registry.
 // v26: solar panel and accumulator state maps and durable power storage
 // statistics joined the snapshot.
-pub const SAVE_VERSION: u32 = 26;
+// v27: radar state and durable pending radar-reveal generation requests joined
+// the snapshot.
+pub const SAVE_VERSION: u32 = 27;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -36,7 +38,8 @@ pub const SAVE_VERSION: u32 = 26;
 // v15: PrototypeCatalog gained the optional day_night_cycle config section.
 // v16: item module effects and entity module/beacon metadata.
 // v17: entity prototypes gained solar panel and accumulator metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 17;
+// v18: entity prototypes gained radar scan metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 18;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

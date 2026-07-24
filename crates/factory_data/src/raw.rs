@@ -5,9 +5,9 @@ use crate::model::{
     BeaconPrototype, BoilerPrototype, BuildingCategory, BurnerPrototype, CraftingCategory,
     ElectricEnergySourcePrototype, EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo,
     FluidConnectionSide, FurnacePrototype, GunTurretPrototype, LaserTurretPrototype,
-    ModuleEffectPrototype, OffshorePumpPrototype, PumpPrototype, RepairToolPrototype,
-    ResourceExtraction, SolarPanelPrototype, SplitterPrototype, SteamEnginePrototype,
-    TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    ModuleEffectPrototype, OffshorePumpPrototype, PumpPrototype, RadarPrototype,
+    RepairToolPrototype, ResourceExtraction, SolarPanelPrototype, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -180,6 +180,7 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) steam_engine: Option<SteamEnginePrototype>,
     pub(crate) solar_panel: Option<SolarPanelPrototype>,
     pub(crate) accumulator: Option<AccumulatorPrototype>,
+    pub(crate) radar: Option<RadarPrototype>,
     pub(crate) boiler: Option<BoilerPrototype>,
     pub(crate) offshore_pump: Option<OffshorePumpPrototype>,
     pub(crate) pump: Option<PumpPrototype>,

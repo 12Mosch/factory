@@ -20,6 +20,7 @@ pub mod pollution;
 pub mod power;
 pub mod prelude;
 pub mod prototypes;
+pub mod radar;
 pub mod research;
 pub mod tick;
 pub mod world;

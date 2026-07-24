@@ -12,8 +12,8 @@ use crate::rendering::colors::{
     accumulator_color, assembler_color, beacon_color, boiler_color, chemical_plant_color,
     chest_color, electric_pole_color, enemy_spawner_color, furnace_color, gun_turret_color,
     inserter_color, lab_color, laser_turret_color, mining_drill_color, offshore_pump_color,
-    oil_refinery_color, pipe_color, pump_color, pumpjack_color, solar_panel_color, splitter_color,
-    steam_engine_color, storage_tank_color, transport_belt_color, wall_color,
+    oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, solar_panel_color,
+    splitter_color, steam_engine_color, storage_tank_color, transport_belt_color, wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
@@ -386,6 +386,12 @@ pub(crate) fn entity_prototype_visual_style(
             prototype.entity_kind,
             direction,
         )),
+        EntityKind::Radar => Some(entity_visual_style(
+            radar_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
         EntityKind::ResourcePatch => None,
     }
 }
@@ -420,5 +426,12 @@ mod tests {
                 "{entity_name} should have a render style"
             );
         }
+    }
+
+    #[test]
+    fn radar_has_a_render_style() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let prototype_id = factory_data::entity_prototype_id_by_name(&catalog, "radar");
+        assert!(entity_prototype_render_style(&catalog, prototype_id, Direction::North).is_some());
     }
 }

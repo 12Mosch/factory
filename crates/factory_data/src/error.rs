@@ -142,6 +142,10 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidRadarMetadata {
+        entity: String,
+        detail: &'static str,
+    },
 }
 
 impl fmt::Display for PrototypeLoadError {
@@ -334,6 +338,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has invalid solar/storage metadata: {detail}"
+                )
+            }
+            Self::InvalidRadarMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid radar metadata: {detail}"
                 )
             }
         }

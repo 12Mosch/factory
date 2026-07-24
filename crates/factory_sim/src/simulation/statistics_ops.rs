@@ -200,7 +200,7 @@ impl Simulation {
         // Chart requests describe the player's current reveal neighborhood.
         // Drop obsolete work after a teleport instead of streaming terrain
         // that will no longer be revealed.
-        self.chunk_generation_queue.chart.clear();
+        self.chunk_generation_queue.player_chart.clear();
         let Ok((min_x, max_x, min_y, max_y)) =
             chunk_neighborhood_bounds(player_chunk, CHART_REVEAL_RADIUS_CHUNKS)
         else {
@@ -216,7 +216,7 @@ impl Simulation {
                         let priority = if coord == player_chunk {
                             ChunkGenerationPriority::Required
                         } else {
-                            ChunkGenerationPriority::Chart
+                            ChunkGenerationPriority::PlayerChart
                         };
                         self.request_chunk_generation(coord, priority);
                     }
@@ -248,6 +248,19 @@ impl Simulation {
                     GeneratedChunkReveal::NewlyRevealed
                 )
             {
+                revealed_chunks.push(coord);
+            }
+        }
+        self.finish_chunk_reveal(revealed_chunks);
+    }
+
+    pub(super) fn reveal_generated_chunks(&mut self, chunks: &[ChunkCoord]) {
+        let mut revealed_chunks = Vec::new();
+        for &coord in chunks {
+            if matches!(
+                self.reveal_generated_chunk(coord),
+                GeneratedChunkReveal::NewlyRevealed
+            ) {
                 revealed_chunks.push(coord);
             }
         }

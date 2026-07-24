@@ -65,6 +65,7 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::EnemySpawner => enemy_spawner_layers(&mut builder, style),
         EntityKind::SolarPanel => solar_panel_layers(&mut builder, style),
         EntityKind::Accumulator => accumulator_layers(&mut builder, style),
+        EntityKind::Radar => radar_layers(&mut builder, style),
         EntityKind::ResourcePatch => {}
     }
 
@@ -718,6 +719,51 @@ fn laser_turret_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyl
             Vec2::ZERO,
             0.16,
             Color::srgba(0.78, 0.98, 1.0, 0.98),
+        );
+}
+
+fn radar_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
+    let forward = direction_vec(style.direction);
+    builder
+        .scaled_rounded(
+            Vec2::new(0.76, 0.62),
+            Vec2::new(0.0, -0.08),
+            0.10,
+            Color::srgba(0.20, 0.23, 0.21, 0.96),
+            0.12,
+        )
+        .scaled_rounded(
+            Vec2::new(0.56, 0.42),
+            Vec2::new(0.0, 0.00),
+            0.12,
+            tinted(style.base_color, 0.12),
+            0.14,
+        )
+        .scaled(
+            Vec2::new(0.10, 0.50),
+            Vec2::new(0.0, 0.15),
+            0.14,
+            Color::srgba(0.70, 0.75, 0.70, 0.96),
+        )
+        .scaled_ellipse(
+            Vec2::new(0.19, 0.19),
+            Vec2::new(0.0, 0.30),
+            0.16,
+            Color::srgba(0.88, 0.72, 0.30, 0.98),
+        )
+        .oriented(
+            (Vec2::new(0.46, 0.14), Vec2::new(0.14, 0.46)),
+            (forward * 0.25, forward * 0.25),
+            style.direction,
+            0.18,
+            Color::srgba(0.82, 0.87, 0.82, 0.98),
+        )
+        .oriented(
+            (Vec2::new(0.08, 0.28), Vec2::new(0.28, 0.08)),
+            (forward * 0.18, forward * 0.18),
+            style.direction,
+            0.19,
+            Color::srgba(0.12, 0.15, 0.14, 0.94),
         );
 }
 

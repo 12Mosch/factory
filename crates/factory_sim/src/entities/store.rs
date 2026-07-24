@@ -46,6 +46,7 @@ macro_rules! for_each_entity_state_map {
             beacons: crate::machines::BeaconState => Beacon,
             solar_panels: crate::power::SolarPanelState => SolarPanel,
             accumulators: crate::power::AccumulatorState => Accumulator,
+            radars: crate::radar::RadarState => Radar,
         }
     };
 }
@@ -211,6 +212,7 @@ mod tests {
         AccumulatorState, BoilerState, ElectricConsumerState, ElectricPoleState, OffshorePumpState,
         SolarPanelState, SteamEngineState,
     };
+    use crate::radar::RadarState;
     use factory_data::{FluidId, ItemId, RecipeId, TechnologyId};
 
     #[test]
@@ -231,7 +233,8 @@ mod tests {
         // v23: laser turret state was appended.
         // v25: module state joined productive machines and beacon state was appended.
         // v26: solar panel and accumulator state maps were appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xd118_4bc7_c3fb_6e74;
+        // v27: radar state was appended.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x3527_acdb_63e7_8acf;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -369,6 +372,14 @@ mod tests {
             AccumulatorState {
                 stored_energy_joules: 4_321,
                 energy_remainder_watt_ticks: 17,
+            },
+        );
+        store.radars.insert(
+            EntityId::new(20),
+            RadarState {
+                nearby_scan_progress_ticks: 19,
+                far_scan_progress_ticks: 733,
+                far_scan_cursor: 42,
             },
         );
         store.boilers.insert(

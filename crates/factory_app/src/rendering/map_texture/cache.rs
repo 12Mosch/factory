@@ -417,7 +417,10 @@ mod tests {
     use bevy::asset::RenderAssetUsages;
     use bevy::image::ImageSampler;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    use factory_sim::{CHUNK_SIZE, ChunkCoord, ManualMiningTarget, WorldSim};
+    use factory_sim::{
+        CHUNK_SIZE, ChunkCoord, Direction, EntityFootprint, ManualMiningTarget, Simulation,
+        WorldSim,
+    };
     use std::hint::black_box;
 
     fn image_asset(width: u32, height: u32, data: Option<Vec<u8>>) -> Image {
@@ -455,6 +458,175 @@ mod tests {
         for settings in settings_variants {
             assert_incremental_update_matches_full_render_after_streaming_chunk(settings);
         }
+    }
+
+    #[test]
+    fn radar_reveal_marks_one_in_bounds_chunk_and_matches_full_render() {
+        let mut catalog = factory_data::PrototypeCatalog::load_base().expect("base catalog");
+        catalog.day_night_cycle = None;
+        let radar = catalog
+            .entities
+            .iter_mut()
+            .find(|prototype| prototype.name == "radar")
+            .expect("radar prototype");
+        radar
+            .radar
+            .as_mut()
+            .expect("radar metadata")
+            .nearby_scan_interval_ticks = u32::MAX;
+        radar
+            .radar
+            .as_mut()
+            .expect("radar metadata")
+            .far_scan_interval_ticks = 60;
+        radar
+            .electric_energy_source
+            .as_mut()
+            .expect("radar electric source")
+            .energy_usage_watts = 60_000;
+
+        let mut sim = Simulation::new(123, catalog);
+        let radar_id = place_solar_powered_radar(&mut sim);
+        let footprint = sim
+            .entities()
+            .placed_entity(radar_id)
+            .expect("radar remains placed")
+            .footprint;
+        let center =
+            ChunkCoord::from_tile(footprint.x + 1, footprint.y + 1).expect("radar center chunk");
+
+        let seed = sim.seed();
+        for coord in [
+            ChunkCoord {
+                x: center.x - 6,
+                y: center.y - 6,
+            },
+            ChunkCoord {
+                x: center.x + 6,
+                y: center.y + 6,
+            },
+        ] {
+            move_player_to_tile(&mut sim, first_walkable_tile_in_chunk(seed, coord));
+            for _ in 0..12 {
+                sim.tick();
+            }
+        }
+        assert!(
+            sim.tick_count() < 60,
+            "fixture setup must finish before the first far scan"
+        );
+
+        let target = ChunkCoord {
+            x: center.x - 4,
+            y: center.y + 4,
+        };
+        sim.ensure_chunk_generated(target);
+        assert!(!sim.is_chunk_revealed(target));
+
+        let settings = MapDisplaySettings::default();
+        let layer = MapTextureLayer::Surface;
+        let initial = generate_map_pixels_for_layer(&sim, &settings, layer);
+        assert!(initial.bounds.contains_chunk(target));
+        let initial_bounds = initial.bounds;
+        let mut cache = MapLayerTextureCache {
+            handle: Some(Handle::default()),
+            bounds: Some(initial.bounds),
+            pixels: Some(initial.data),
+            dirty_regions: Default::default(),
+            painted_chunks: Default::default(),
+            last_chunk_revision: sim.world().chunk_revision(),
+            last_resource_revision: sim.world().resource_revision(),
+            last_revealed_revision: sim.revealed_revision(),
+            last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
+            last_texture_update_tick: sim.tick_count(),
+        };
+        refresh_painted_chunks(&MapRasterizer::new(&sim, &settings, layer), &mut cache);
+        let revision = sim.revealed_revision();
+
+        while !sim.is_chunk_revealed(target) {
+            sim.tick();
+        }
+        assert_eq!(
+            sim.revealed_chunks_since(revision)
+                .expect("exact radar reveal history")
+                .collect::<Vec<_>>(),
+            vec![target]
+        );
+
+        update_map_pixels_incremental(&MapRasterizer::new(&sim, &settings, layer), &mut cache);
+        let full = generate_map_pixels_for_layer(&sim, &settings, layer);
+        assert_eq!(cache.bounds, Some(initial_bounds));
+        assert_eq!(cache.pixels.as_deref(), Some(full.data.as_slice()));
+
+        let mut expected = crate::map::resources::MapTextureDirtyRegions::default();
+        expected.mark_world_chunk(initial_bounds, target);
+        assert_eq!(cache.dirty_regions.rects(), expected.rects());
+    }
+
+    fn place_solar_powered_radar(sim: &mut Simulation) -> factory_sim::EntityId {
+        let radar = factory_data::entity_prototype_id_by_name(sim.catalog(), "radar");
+        let solar = factory_data::entity_prototype_id_by_name(sim.catalog(), "solar_panel");
+        let pole = factory_data::entity_prototype_id_by_name(sim.catalog(), "small_electric_pole");
+
+        let (x, y) = sim
+            .world()
+            .chunks
+            .values()
+            .flat_map(|chunk| {
+                let (min_x, min_y) = chunk.coord.min_tile();
+                (0..CHUNK_SIZE * CHUNK_SIZE).map(move |index| {
+                    (
+                        min_x + i64::from(index % CHUNK_SIZE),
+                        min_y + i64::from(index / CHUNK_SIZE),
+                    )
+                })
+            })
+            .find(|&(x, y)| {
+                let footprint = EntityFootprint {
+                    x,
+                    y,
+                    width: 7,
+                    height: 3,
+                };
+                sim.world().validate_entity_footprint(&footprint).is_ok()
+                    && footprint.tiles().into_iter().all(|(tile_x, tile_y)| {
+                        sim.world()
+                            .tile_at(tile_x, tile_y)
+                            .is_some_and(|tile| tile.resource.is_none())
+                    })
+                    && [(radar, x, y), (pole, x + 3, y + 1), (solar, x + 4, y)]
+                        .into_iter()
+                        .all(|(prototype_id, x, y)| {
+                            factory_sim::placement::validate(
+                                sim,
+                                factory_sim::placement::EntityPlacementRequest {
+                                    prototype_id,
+                                    x,
+                                    y,
+                                    direction: Direction::North,
+                                },
+                            )
+                            .is_ok()
+                        })
+            })
+            .expect("clear radar and solar fixture");
+
+        let place = |sim: &mut Simulation, prototype_id, x, y| {
+            factory_sim::placement::place(
+                sim,
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .expect("fixture entity should be placeable")
+        };
+        let radar_id = place(sim, radar, x, y);
+        place(sim, pole, x + 3, y + 1);
+        place(sim, solar, x + 4, y);
+        radar_id
     }
 
     fn assert_incremental_update_matches_full_render_after_streaming_chunk(
@@ -804,11 +976,14 @@ mod tests {
                 tile.1 as f32 + 0.5 - player_y,
             );
         };
-        attempt_move(sim);
-        if sim.player().tile_position() != tile {
-            sim.tick();
+        for _ in 0..3 {
             attempt_move(sim);
+            if sim.player().tile_position() == tile {
+                return;
+            }
+            sim.tick();
         }
+        attempt_move(sim);
         assert_eq!(sim.player().tile_position(), tile);
     }
 

@@ -918,3 +918,39 @@ fn solar_metadata_on_other_kind_fails() {
         matches!(error, PrototypeLoadError::InvalidSolarStorageMetadata { entity, .. } if entity == "chest")
     );
 }
+
+#[test]
+fn radar_without_metadata_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "radar", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "radar", entity_kind: Radar, build_item: Some("radar"), building_category: Some(Defense), building_menu_order: Some(40), size: (x: 3, y: 3), collision_mask: (layers: ["building"]), max_health: Some(250), electric_energy_source: Some((energy_usage_watts: 300000, drain_watts: 0)))],
+        tiles: [],
+    )"#).expect_err("radars require scan metadata");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRadarMetadata { entity, .. } if entity == "radar")
+    );
+}
+
+#[test]
+fn invalid_radar_ranges_fail() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "radar", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "radar", entity_kind: Radar, build_item: Some("radar"), building_category: Some(Defense), building_menu_order: Some(40), size: (x: 3, y: 3), collision_mask: (layers: ["building"]), max_health: Some(250), electric_energy_source: Some((energy_usage_watts: 300000, drain_watts: 0)), radar: Some((nearby_reveal_radius_chunks: 3, nearby_scan_interval_ticks: 60, far_scan_radius_chunks: 3, far_scan_interval_ticks: 2000)))],
+        tiles: [],
+    )"#).expect_err("far radar range must exceed nearby range");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRadarMetadata { entity, .. } if entity == "radar")
+    );
+}
+
+#[test]
+fn radar_metadata_on_other_kind_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "chest", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "chest", entity_kind: Chest, build_item: Some("chest"), building_category: Some(Storage), building_menu_order: Some(1), size: (x: 1, y: 1), collision_mask: (layers: ["building"]), inventory_slot_count: Some(16), radar: Some((nearby_reveal_radius_chunks: 3, nearby_scan_interval_ticks: 60, far_scan_radius_chunks: 14, far_scan_interval_ticks: 2000)))],
+        tiles: [],
+    )"#).expect_err("radar metadata only applies to radar entities");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRadarMetadata { entity, .. } if entity == "chest")
+    );
+}

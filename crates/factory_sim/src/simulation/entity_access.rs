@@ -40,6 +40,11 @@ pub fn accumulator_state(sim: &Simulation, entity_id: EntityId) -> Option<&Accum
     sim.entities.accumulators.get(&entity_id)
 }
 
+/// Durable scan progress for a radar, or `None` when `entity_id` is not a radar.
+pub fn radar_state(sim: &Simulation, entity_id: EntityId) -> Option<&RadarState> {
+    sim.entities.radars.get(&entity_id)
+}
+
 pub fn fluid_box_states(sim: &Simulation, entity_id: EntityId) -> Option<&[FluidBoxState]> {
     sim.entities.fluid_box_states(entity_id)
 }

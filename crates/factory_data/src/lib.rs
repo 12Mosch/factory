@@ -26,7 +26,7 @@ pub use model::{
     FluidBoxIo, FluidBoxPrototype, FluidConnectionPrototype, FluidConnectionSide, FluidPrototype,
     FurnacePrototype, GunTurretPrototype, InserterPrototype, ItemAmount, ItemPrototype,
     LaserTurretPrototype, MiningDrillPrototype, ModuleEffectPrototype, OffshorePumpPrototype,
-    PumpPrototype, PumpjackPrototype, RecipePrototype, RepairToolPrototype,
+    PumpPrototype, PumpjackPrototype, RadarPrototype, RecipePrototype, RepairToolPrototype,
     ResourceDistanceScalingConfig, ResourceExtraction, ResourceGenerationConfig,
     ResourcePatchGridConfig, SolarPanelPrototype, SplitterPrototype, StartingAreaConfig,
     SteamEnginePrototype, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig, TilePrototype,

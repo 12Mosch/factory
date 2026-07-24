@@ -146,6 +146,11 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                 return Err(SimValidationError::InvalidFluidId(fluid_id));
             }
         }
+        if prototype.entity_kind != EntityKind::Radar && prototype.radar.is_some() {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
+        }
 
         match prototype.entity_kind {
             EntityKind::ElectricPole => {
@@ -212,6 +217,25 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     || prototype.steam_engine.is_some()
                     || prototype.boiler.is_some()
                     || !prototype.fluid_boxes.is_empty()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::Radar => {
+                let Some(radar) = prototype.radar else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if radar.nearby_reveal_radius_chunks == 0
+                    || radar.nearby_scan_interval_ticks == 0
+                    || radar.far_scan_radius_chunks <= radar.nearby_reveal_radius_chunks
+                    || radar.far_scan_interval_ticks == 0
+                    || prototype.max_health.is_none_or(|health| health == 0)
+                    || prototype.electric_energy_source.is_none()
+                    || prototype.burner.is_some()
                 {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,

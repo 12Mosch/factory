@@ -158,6 +158,7 @@ pub struct EntityPrototype {
     pub steam_engine: Option<SteamEnginePrototype>,
     pub solar_panel: Option<SolarPanelPrototype>,
     pub accumulator: Option<AccumulatorPrototype>,
+    pub radar: Option<RadarPrototype>,
     pub boiler: Option<BoilerPrototype>,
     pub offshore_pump: Option<OffshorePumpPrototype>,
     pub pump: Option<PumpPrototype>,
@@ -385,6 +386,16 @@ pub struct AccumulatorPrototype {
     pub max_discharge_watts: u64,
 }
 
+/// Electric map scanner with a frequently refreshed nearby area and a slower
+/// deterministic long-range sweep.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RadarPrototype {
+    pub nearby_reveal_radius_chunks: u16,
+    pub nearby_scan_interval_ticks: u32,
+    pub far_scan_radius_chunks: u16,
+    pub far_scan_interval_ticks: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BoilerPrototype {
     pub water_consumption_per_second_milliunits: u64,
@@ -506,6 +517,7 @@ pub enum EntityKind {
     EnemySpawner,
     SolarPanel,
     Accumulator,
+    Radar,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

@@ -42,6 +42,7 @@ pub(in crate::simulation) fn reservation_for_prototype(
         inserter_energy: inserter_energy_for_prototype(prototype),
         laser_turrets: laser_turret_state_for_prototype(prototype),
         beacons: beacon_state_for_prototype(prototype),
+        radars: radar_state_for_prototype(prototype),
     }
 }
 
@@ -187,6 +188,11 @@ fn accumulator_state_for_prototype(
 ) -> Option<AccumulatorState> {
     (prototype.entity_kind == EntityKind::Accumulator && prototype.accumulator.is_some())
         .then_some(AccumulatorState::default())
+}
+
+fn radar_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<RadarState> {
+    (prototype.entity_kind == EntityKind::Radar && prototype.radar.is_some())
+        .then_some(RadarState::default())
 }
 
 fn boiler_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<BoilerState> {
