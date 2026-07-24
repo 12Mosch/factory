@@ -1,6 +1,7 @@
 mod accounting;
 mod demand;
 mod generation;
+mod storage;
 mod topology;
 mod types;
 
@@ -164,6 +165,8 @@ impl Simulation {
         prototype.electric_pole.is_some()
             || prototype.electric_energy_source.is_some()
             || prototype.steam_engine.is_some()
+            || prototype.solar_panel.is_some()
+            || prototype.accumulator.is_some()
             || prototype.boiler.is_some()
             || prototype.offshore_pump.is_some()
             || !prototype.fluid_boxes.is_empty()
@@ -212,9 +215,33 @@ impl Simulation {
             &mut scratch.networks,
         );
 
+        // Fuel-free solar is collected first so steam only covers the gap.
+        self.collect_solar_generation(
+            &self.power.topology.network_ids_by_entity,
+            &mut scratch.networks,
+        );
+        self.collect_accumulator_capabilities(
+            &self.power.topology.network_ids_by_entity,
+            &mut scratch.networks,
+            &mut scratch.accumulators_by_network,
+        );
+
+        // The regular-generation target is ordinary demand plus the charge
+        // capability accumulators can absorb; solar covers part of it, and
+        // steam is asked for the remainder.
+        scratch.steam_targets_by_network.clear();
+        scratch
+            .steam_targets_by_network
+            .extend(scratch.networks.iter().map(|network| {
+                network
+                    .consumption_watts
+                    .saturating_add(network.charge_capability_watts)
+                    .saturating_sub(network.solar_watts)
+            }));
+
         self.assign_steam_engines_to_fluid_networks(
             &self.power.topology.network_ids_by_entity,
-            &scratch.networks,
+            &scratch.steam_targets_by_network,
             &mut scratch.engine_assignments,
             &mut scratch.remaining_demand_by_network,
             &mut scratch.remaining_steam_by_network,
@@ -222,18 +249,13 @@ impl Simulation {
         for (_, assignment) in &scratch.engine_assignments {
             let network = &mut scratch.networks[assignment.network_id as usize];
             network.producer_count += 1;
-            network.available_production_watts = network
-                .available_production_watts
+            network.steam_available_watts = network
+                .steam_available_watts
                 .saturating_add(assignment.available_power_output_watts);
         }
 
         for network in &mut scratch.networks {
-            let (production_watts, satisfaction_permyriad) = power_satisfaction(
-                network.available_production_watts,
-                network.consumption_watts,
-            );
-            network.production_watts = production_watts;
-            network.satisfaction_permyriad = satisfaction_permyriad;
+            solve_network_storage_balance(network);
         }
 
         actual_steam_engine_outputs(
@@ -251,12 +273,23 @@ impl Simulation {
             // refreshed once after all machines have run.
             self.equalize_fluid_networks();
         }
+        // Fold this tick's charge/discharge into durable accumulator energy and
+        // report post-tick stored totals back into the network balances.
+        let mut networks = std::mem::take(&mut scratch.networks);
+        self.apply_accumulator_energy(
+            &mut networks,
+            &scratch.accumulators_by_network,
+            &mut scratch.allocation_scratch,
+        );
+        scratch.networks = networks;
         let map_changed = refresh_network_snapshots(&scratch.networks, &mut self.power.networks);
         if map_changed {
             self.power_map_revision = self.power_map_revision.wrapping_add(1);
         }
         self.power.summary = aggregate_power_summary(&self.power.networks);
-        if self.any_steam_engine_can_generate(&self.power.topology.network_ids_by_entity) {
+        if self.any_steam_engine_can_generate(&self.power.topology.network_ids_by_entity)
+            || self.any_solar_panel_can_generate(&self.power.topology.network_ids_by_entity)
+        {
             self.onboarding_progress.record_electricity_generated();
         }
         self.power_tick_scratch = scratch;

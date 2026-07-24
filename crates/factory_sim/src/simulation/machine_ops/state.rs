@@ -27,6 +27,8 @@ pub(in crate::simulation) fn reservation_for_prototype(
         electric_poles: electric_pole_state_for_prototype(prototype),
         electric_consumers: electric_consumer_state_for_prototype(prototype),
         steam_engines: steam_engine_state_for_prototype(prototype),
+        solar_panels: solar_panel_state_for_prototype(prototype),
+        accumulators: accumulator_state_for_prototype(prototype),
         boilers: boiler_state_for_prototype(prototype),
         offshore_pumps: offshore_pump_state_for_prototype(prototype),
         fluid_boxes: fluid_box_states_for_prototype(prototype),
@@ -171,6 +173,20 @@ fn steam_engine_state_for_prototype(
 ) -> Option<SteamEngineState> {
     (prototype.entity_kind == EntityKind::SteamEngine && prototype.steam_engine.is_some())
         .then_some(SteamEngineState)
+}
+
+fn solar_panel_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<SolarPanelState> {
+    (prototype.entity_kind == EntityKind::SolarPanel && prototype.solar_panel.is_some())
+        .then_some(SolarPanelState)
+}
+
+fn accumulator_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<AccumulatorState> {
+    (prototype.entity_kind == EntityKind::Accumulator && prototype.accumulator.is_some())
+        .then_some(AccumulatorState::default())
 }
 
 fn boiler_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<BoilerState> {

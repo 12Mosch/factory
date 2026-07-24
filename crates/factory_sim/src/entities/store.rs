@@ -44,6 +44,8 @@ macro_rules! for_each_entity_state_map {
             inserter_energy: crate::machines::MachineEnergy => _,
             laser_turrets: crate::combat::LaserTurretState => LaserTurret,
             beacons: crate::machines::BeaconState => Beacon,
+            solar_panels: crate::power::SolarPanelState => SolarPanel,
+            accumulators: crate::power::AccumulatorState => Accumulator,
         }
     };
 }
@@ -206,7 +208,8 @@ mod tests {
     };
     use crate::player::ManualMiningTarget;
     use crate::power::{
-        BoilerState, ElectricConsumerState, ElectricPoleState, OffshorePumpState, SteamEngineState,
+        AccumulatorState, BoilerState, ElectricConsumerState, ElectricPoleState, OffshorePumpState,
+        SolarPanelState, SteamEngineState,
     };
     use factory_data::{FluidId, ItemId, RecipeId, TechnologyId};
 
@@ -227,7 +230,8 @@ mod tests {
         // v22: inserter energy state was appended for burner inserters.
         // v23: laser turret state was appended.
         // v25: module state joined productive machines and beacon state was appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x9106_6fd1_4f8e_d2b1;
+        // v26: solar panel and accumulator state maps were appended.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x7d03_234a_7153_e4f0;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -357,6 +361,14 @@ mod tests {
         store
             .steam_engines
             .insert(EntityId::new(8), SteamEngineState);
+        store.solar_panels.insert(EntityId::new(8), SolarPanelState);
+        store.accumulators.insert(
+            EntityId::new(9),
+            AccumulatorState {
+                stored_energy_joules: 4_321,
+                energy_remainder_watt_ticks: 17,
+            },
+        );
         store.boilers.insert(
             EntityId::new(9),
             BoilerState {

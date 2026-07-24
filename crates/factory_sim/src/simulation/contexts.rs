@@ -111,6 +111,11 @@ impl<'a> StatisticsContext<'a> {
             available_production_watts: summary.available_production_watts,
             consumption_watts: summary.consumption_watts,
             satisfaction_permyriad: summary.satisfaction_permyriad,
+            accumulator_count: summary.accumulator_count,
+            accumulator_charge_watts: summary.accumulator_charge_watts,
+            accumulator_discharge_watts: summary.accumulator_discharge_watts,
+            accumulator_stored_energy_joules: summary.accumulator_stored_energy_joules,
+            accumulator_capacity_joules: summary.accumulator_capacity_joules,
         };
     }
 

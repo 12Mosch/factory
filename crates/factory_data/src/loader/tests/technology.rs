@@ -514,3 +514,62 @@ fn technology_science_pack_recipes_are_unlocked_before_they_are_required() {
         }
     }
 }
+
+#[test]
+fn solar_energy_technology_unlocks_solar_and_accumulator() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let technology = |name: &str| {
+        catalog
+            .technologies
+            .iter()
+            .find(|technology| technology.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain technology {name}"))
+    };
+    let recipe = |name: &str| {
+        catalog
+            .recipes
+            .iter()
+            .find(|recipe| recipe.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain recipe {name}"))
+            .id
+    };
+    let item = |name: &str| {
+        catalog
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain item {name}"))
+            .id
+    };
+
+    let solar_energy = technology("solar_energy");
+    assert_eq!(
+        solar_energy.prerequisites,
+        vec![
+            technology("sulfur_processing").id,
+            technology("electric_energy_distribution_1").id,
+        ]
+    );
+    assert_eq!(
+        solar_energy.science_packs,
+        vec![
+            ItemAmount {
+                item: item("automation_science_pack"),
+                amount: 1,
+            },
+            ItemAmount {
+                item: item("logistic_science_pack"),
+                amount: 1,
+            },
+        ]
+    );
+    assert_eq!(solar_energy.required_units, 250);
+    assert_eq!(solar_energy.research_time_ticks, 600);
+    assert_eq!(
+        solar_energy.effects,
+        vec![
+            TechnologyEffect::UnlockRecipe(recipe("solar_panel")),
+            TechnologyEffect::UnlockRecipe(recipe("accumulator")),
+        ]
+    );
+}

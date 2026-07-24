@@ -54,6 +54,14 @@ pub(crate) fn boiler_color() -> Color {
     Color::srgb(0.62, 0.35, 0.22)
 }
 
+pub(crate) fn solar_panel_color() -> Color {
+    Color::srgb(0.18, 0.38, 0.58)
+}
+
+pub(crate) fn accumulator_color() -> Color {
+    Color::srgb(0.34, 0.48, 0.40)
+}
+
 pub(crate) fn offshore_pump_color() -> Color {
     Color::srgb(0.14, 0.48, 0.68)
 }

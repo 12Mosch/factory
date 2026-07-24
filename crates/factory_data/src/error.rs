@@ -138,6 +138,10 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidSolarStorageMetadata {
+        entity: String,
+        detail: &'static str,
+    },
 }
 
 impl fmt::Display for PrototypeLoadError {
@@ -324,6 +328,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has an invalid energy source: {detail}"
+                )
+            }
+            Self::InvalidSolarStorageMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid solar/storage metadata: {detail}"
                 )
             }
         }

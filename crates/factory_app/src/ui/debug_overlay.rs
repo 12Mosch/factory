@@ -238,6 +238,18 @@ pub fn format_watts(watts: u64) -> String {
     }
 }
 
+pub fn format_joules(joules: u64) -> String {
+    if joules >= 1_000_000_000 {
+        format!("{:.2} GJ", joules as f64 / 1_000_000_000.0)
+    } else if joules >= 1_000_000 {
+        format!("{:.2} MJ", joules as f64 / 1_000_000.0)
+    } else if joules >= 1_000 {
+        format!("{:.1} kJ", joules as f64 / 1_000.0)
+    } else {
+        format!("{joules} J")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +302,7 @@ mod tests {
                 consumption_watts: 75_000,
                 satisfaction_permyriad: 10_000,
                 network_count: 1,
+                ..PowerSummary::default()
             },
         });
 

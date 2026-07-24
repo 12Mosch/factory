@@ -20,6 +20,7 @@ mod placement;
 mod player;
 mod power;
 mod research;
+mod solar;
 mod statistics;
 mod transfers;
 mod world_generation;

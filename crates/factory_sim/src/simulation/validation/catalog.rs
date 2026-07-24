@@ -178,6 +178,46 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
+            EntityKind::SolarPanel => {
+                let Some(solar_panel) = prototype.solar_panel.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if solar_panel.max_power_output_watts == 0
+                    || prototype.accumulator.is_some()
+                    || prototype.electric_energy_source.is_some()
+                    || prototype.burner.is_some()
+                    || prototype.steam_engine.is_some()
+                    || prototype.boiler.is_some()
+                    || !prototype.fluid_boxes.is_empty()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::Accumulator => {
+                let Some(accumulator) = prototype.accumulator.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if accumulator.capacity_joules == 0
+                    || accumulator.max_charge_watts == 0
+                    || accumulator.max_discharge_watts == 0
+                    || prototype.solar_panel.is_some()
+                    || prototype.electric_energy_source.is_some()
+                    || prototype.burner.is_some()
+                    || prototype.steam_engine.is_some()
+                    || prototype.boiler.is_some()
+                    || !prototype.fluid_boxes.is_empty()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
             EntityKind::Boiler => {
                 let Some(boiler) = prototype.boiler.as_ref() else {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {

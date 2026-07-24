@@ -338,6 +338,11 @@ pub(super) fn power_sample_is_recorded(sample: PowerStatisticsSample) -> bool {
         || sample.production_watts != 0
         || sample.available_production_watts != 0
         || sample.consumption_watts != 0
+        || sample.accumulator_count != 0
+        || sample.accumulator_charge_watts != 0
+        || sample.accumulator_discharge_watts != 0
+        || sample.accumulator_stored_energy_joules != 0
+        || sample.accumulator_capacity_joules != 0
 }
 
 pub(super) fn add_stat<K: Ord>(stats: &mut BTreeMap<K, u64>, key: K, amount: u64) {

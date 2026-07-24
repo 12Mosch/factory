@@ -882,3 +882,39 @@ fn laser_turret_requires_health_electric_and_positive_turret_metadata() {
         PrototypeLoadError::InvalidLaserTurretMetadata { .. }
     ));
 }
+
+#[test]
+fn solar_panel_without_metadata_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "solar_panel", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "solar_panel", entity_kind: SolarPanel, build_item: Some("solar_panel"), building_category: Some(Power), building_menu_order: Some(60), size: (x: 3, y: 3), collision_mask: (layers: ["building"]), max_health: Some(200))],
+        tiles: [],
+    )"#).expect_err("solar panels require solar metadata");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidSolarStorageMetadata { entity, .. } if entity == "solar_panel")
+    );
+}
+
+#[test]
+fn accumulator_with_zero_rates_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "accumulator", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "accumulator", entity_kind: Accumulator, build_item: Some("accumulator"), building_category: Some(Power), building_menu_order: Some(70), size: (x: 2, y: 2), collision_mask: (layers: ["building"]), max_health: Some(150), accumulator: Some((capacity_joules: 5000000, max_charge_watts: 0, max_discharge_watts: 300000)))],
+        tiles: [],
+    )"#).expect_err("accumulators require positive charge rate");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidSolarStorageMetadata { entity, .. } if entity == "accumulator")
+    );
+}
+
+#[test]
+fn solar_metadata_on_other_kind_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "chest", stack_size: 50)], recipes: [],
+        entities: [(id: 0, name: "chest", entity_kind: Chest, build_item: Some("chest"), building_category: Some(Storage), building_menu_order: Some(1), size: (x: 1, y: 1), collision_mask: (layers: ["building"]), inventory_slot_count: Some(16), solar_panel: Some((max_power_output_watts: 60000)))],
+        tiles: [],
+    )"#).expect_err("solar metadata only valid on solar panels");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidSolarStorageMetadata { entity, .. } if entity == "chest")
+    );
+}

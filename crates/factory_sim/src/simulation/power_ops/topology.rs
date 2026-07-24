@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::simulation::disjoint_set::DisjointSet;
 
-use super::types::{NetworkAccumulator, PoleNode};
+use super::types::{NetworkPowerBalance, PoleNode};
 use super::*;
 
 impl Simulation {
@@ -94,15 +94,15 @@ impl Simulation {
 }
 
 impl PowerTopologyCache {
-    pub(super) fn reset_network_accumulators(&self, networks: &mut Vec<NetworkAccumulator>) {
+    pub(super) fn reset_network_accumulators(&self, networks: &mut Vec<NetworkPowerBalance>) {
         networks.clear();
         networks.extend(
             self.pole_counts
                 .iter()
-                .map(|pole_count| NetworkAccumulator {
+                .map(|pole_count| NetworkPowerBalance {
                     pole_count: *pole_count,
                     satisfaction_permyriad: POWER_SATISFACTION_FULL_PERMYRIAD,
-                    ..NetworkAccumulator::default()
+                    ..NetworkPowerBalance::default()
                 }),
         );
     }
