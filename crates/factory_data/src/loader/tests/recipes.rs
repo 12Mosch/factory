@@ -226,6 +226,29 @@ fn production_and_utility_science_items_and_recipes_load_exactly() {
     }
 }
 
+#[test]
+fn radar_item_and_recipe_load_exactly() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    let radar = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "radar")
+        .expect("base catalog should contain radar item");
+
+    assert_eq!(radar.id.index(), 84);
+    assert_crafting_recipe(
+        &catalog,
+        "radar",
+        30,
+        &[
+            ("electronic_circuit", 5),
+            ("iron_gear_wheel", 5),
+            ("iron_plate", 10),
+        ],
+        &[("radar", 1)],
+    );
+}
+
 fn assert_recipe(
     catalog: &PrototypeCatalog,
     recipe_name: &str,

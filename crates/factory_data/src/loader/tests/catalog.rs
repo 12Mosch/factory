@@ -72,6 +72,7 @@ const ITEM_NAMES: &[&str] = &[
     "production_science_pack",
     "utility_science_pack",
     "space_science_pack",
+    "radar",
 ];
 
 const FLUID_NAMES: &[&str] = &["water", "steam", "crude_oil", "petroleum_gas"];
@@ -126,6 +127,7 @@ const RECIPE_NAMES: &[&str] = &[
     "production_science_pack",
     "utility_science_pack",
     "space_science_pack",
+    "radar",
 ];
 
 const ENTITY_NAMES: &[&str] = &[
@@ -169,6 +171,7 @@ const ENTITY_NAMES: &[&str] = &[
     "pipe_to_ground_entrance",
     "pipe_to_ground_exit",
     "pump",
+    "radar",
 ];
 
 const TILE_NAMES: &[&str] = &[
@@ -194,10 +197,10 @@ const TECHNOLOGY_NAMES: &[&str] = &[
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 84);
+    assert_eq!(catalog.items.len(), 85);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 84);
-    assert_eq!(catalog.entities.len(), 52);
+    assert_eq!(catalog.recipes.len(), 85);
+    assert_eq!(catalog.entities.len(), 53);
     assert_eq!(catalog.tiles.len(), 8);
     assert_eq!(catalog.technologies.len(), 34);
 }

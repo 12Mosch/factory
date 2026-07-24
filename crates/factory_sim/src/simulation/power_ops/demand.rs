@@ -128,7 +128,8 @@ fn consumer_demand_is_active(
     world: &WorldSim,
     entity_id: EntityId,
 ) -> bool {
-    if entities.inserters.contains_key(&entity_id)
+    if entities.radars.contains_key(&entity_id)
+        || entities.inserters.contains_key(&entity_id)
         || entities.mining_drills.contains_key(&entity_id)
         || entities.pumpjacks.contains_key(&entity_id)
     {
@@ -195,6 +196,9 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         research,
     } = inputs;
     let catalog = &world.prototypes;
+    if entities.radars.contains_key(&entity_id) {
+        return true;
+    }
     if let Some(state) = entities.assembling_machines.get(&entity_id) {
         return assembler_can_work(catalog, entities, research, entity_id, state);
     }

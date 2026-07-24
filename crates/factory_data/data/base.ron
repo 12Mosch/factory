@@ -235,6 +235,7 @@
         (id: 81, name: "beacon", stack_size: 20),
         (id: 82, name: "solar_panel", stack_size: 50),
         (id: 83, name: "accumulator", stack_size: 50),
+        (id: 84, name: "radar", stack_size: 50),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1181,6 +1182,18 @@
             ],
             products: [(item: "accumulator", amount: 1)],
         ),
+        (
+            id: 84,
+            name: "radar",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "electronic_circuit", amount: 5),
+                (item: "iron_gear_wheel", amount: 5),
+                (item: "iron_plate", amount: 10),
+            ],
+            products: [(item: "radar", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -2034,6 +2047,23 @@
                 capacity_joules: 5000000,
                 max_charge_watts: 300000,
                 max_discharge_watts: 300000,
+            )),
+        ),
+        (
+            id: 52,
+            name: "radar",
+            building_category: Some(Defense),
+            building_menu_order: Some(40),
+            entity_kind: Radar,
+            size: (x: 3, y: 3),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(250),
+            electric_energy_source: Some((energy_usage_watts: 300000, drain_watts: 0)),
+            radar: Some((
+                nearby_reveal_radius_chunks: 3,
+                nearby_scan_interval_ticks: 60,
+                far_scan_radius_chunks: 14,
+                far_scan_interval_ticks: 2000,
             )),
         ),
     ],

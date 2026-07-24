@@ -116,6 +116,7 @@ impl Simulation {
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
         profiler.measure(ProfilePhase::Fluids, || self.advance_fluids_before_power());
         profiler.measure(ProfilePhase::Power, || self.refresh_power_state());
+        profiler.measure(ProfilePhase::Radars, || self.advance_radars());
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();
         });
@@ -260,9 +261,12 @@ impl Simulation {
     }
 
     pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> ChunkGenerationResult {
-        self.remove_chunk_generation_request(coord);
+        let radar_reveal = self.remove_chunk_generation_request(coord);
         let result = self.world.ensure_chunk_generated(coord);
         self.initialize_generated_chunks(&result, false);
+        if radar_reveal {
+            self.reveal_generated_chunks(result.generated_chunks());
+        }
         result
     }
 

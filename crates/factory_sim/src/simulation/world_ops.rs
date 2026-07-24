@@ -430,8 +430,9 @@ pub(super) fn chunk_neighborhood_bounds(
 #[derive(Clone, Copy)]
 pub(super) enum ChunkGenerationPriority {
     Required,
-    Chart,
     Prefetch,
+    PlayerChart,
+    RadarReveal,
 }
 
 impl Simulation {
@@ -446,43 +447,52 @@ impl Simulation {
 
         match priority {
             ChunkGenerationPriority::Required => {
-                self.chunk_generation_queue.chart.remove(&coord);
+                self.chunk_generation_queue.player_chart.remove(&coord);
                 self.chunk_generation_queue.prefetch.remove(&coord);
                 self.chunk_generation_queue.required.insert(coord);
             }
-            ChunkGenerationPriority::Chart => {
+            ChunkGenerationPriority::PlayerChart => {
                 if !self.chunk_generation_queue.required.contains(&coord)
                     && !self.chunk_generation_queue.prefetch.contains(&coord)
                 {
-                    self.chunk_generation_queue.chart.insert(coord);
+                    self.chunk_generation_queue.player_chart.insert(coord);
                 }
             }
             ChunkGenerationPriority::Prefetch => {
                 if !self.chunk_generation_queue.required.contains(&coord) {
-                    self.chunk_generation_queue.chart.remove(&coord);
+                    self.chunk_generation_queue.player_chart.remove(&coord);
                     self.chunk_generation_queue.prefetch.insert(coord);
                 }
+            }
+            ChunkGenerationPriority::RadarReveal => {
+                self.chunk_generation_queue.radar_reveal.insert(coord);
             }
         }
     }
 
     pub(super) fn process_chunk_generation_queue(&mut self, budget: usize) -> usize {
         let mut generated_chunks = Vec::with_capacity(budget);
+        let mut radar_revealed_chunks = Vec::new();
         while generated_chunks.len() < budget {
             let coord = self
                 .chunk_generation_queue
                 .required
                 .pop_first()
                 .or_else(|| self.chunk_generation_queue.prefetch.pop_first())
-                .or_else(|| self.chunk_generation_queue.chart.pop_first());
+                .or_else(|| self.chunk_generation_queue.player_chart.pop_first())
+                .or_else(|| self.chunk_generation_queue.radar_reveal.first().copied());
             let Some(coord) = coord else {
                 break;
             };
-            generated_chunks.extend(
-                self.world
-                    .ensure_chunk_generated(coord)
-                    .into_generated_chunks(),
-            );
+            let radar_reveal = self.chunk_generation_queue.radar_reveal.remove(&coord);
+            let generated = self
+                .world
+                .ensure_chunk_generated(coord)
+                .into_generated_chunks();
+            if radar_reveal && !generated.is_empty() {
+                radar_revealed_chunks.push(coord);
+            }
+            generated_chunks.extend(generated);
         }
 
         let generated = generated_chunks.len();
@@ -491,6 +501,7 @@ impl Simulation {
             generated_chunks,
         );
         self.initialize_generated_chunks(&result, true);
+        self.reveal_generated_chunks(&radar_revealed_chunks);
         generated
     }
 
@@ -508,10 +519,11 @@ impl Simulation {
         self.seed_enemy_spawners_in_chunks(result.generated_chunks());
     }
 
-    pub(super) fn remove_chunk_generation_request(&mut self, coord: ChunkCoord) {
+    pub(super) fn remove_chunk_generation_request(&mut self, coord: ChunkCoord) -> bool {
         self.chunk_generation_queue.required.remove(&coord);
-        self.chunk_generation_queue.chart.remove(&coord);
+        self.chunk_generation_queue.player_chart.remove(&coord);
         self.chunk_generation_queue.prefetch.remove(&coord);
+        self.chunk_generation_queue.radar_reveal.remove(&coord)
     }
 }
 

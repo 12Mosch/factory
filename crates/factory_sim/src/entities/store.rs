@@ -46,6 +46,7 @@ macro_rules! for_each_entity_state_map {
             beacons: crate::machines::BeaconState => Beacon,
             solar_panels: crate::power::SolarPanelState => SolarPanel,
             accumulators: crate::power::AccumulatorState => Accumulator,
+            radars: crate::radar::RadarState => Radar,
         }
     };
 }
@@ -211,6 +212,7 @@ mod tests {
         AccumulatorState, BoilerState, ElectricConsumerState, ElectricPoleState, OffshorePumpState,
         SolarPanelState, SteamEngineState,
     };
+    use crate::radar::RadarState;
     use factory_data::{FluidId, ItemId, RecipeId, TechnologyId};
 
     #[test]
@@ -231,7 +233,8 @@ mod tests {
         // v23: laser turret state was appended.
         // v25: module state joined productive machines and beacon state was appended.
         // v26: solar panel and accumulator state maps were appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xd118_4bc7_c3fb_6e74;
+        // v27: radar state was appended.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x5e75_93e5_7b28_cfba;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -251,6 +254,10 @@ mod tests {
     #[test]
     fn entity_store_round_trip_preserves_populated_state() {
         let original = populated_entity_store();
+        assert_eq!(
+            original.machine_kind(EntityId::new(21)),
+            Some(EntityKind::Radar)
+        );
         let bytes = bincode::serialize(&original).expect("entity store should serialize");
         let restored: EntityStore =
             bincode::deserialize(&bytes).expect("entity store should deserialize");
@@ -265,9 +272,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(21);
+        let mut store = EntityStore::empty(22);
 
-        for raw in 1..=20 {
+        for raw in 1..=21 {
             let id = EntityId::new(raw);
             let tile = raw as i64;
             store.entities.push(SimEntity {
@@ -369,6 +376,15 @@ mod tests {
             AccumulatorState {
                 stored_energy_joules: 4_321,
                 energy_remainder_watt_ticks: 17,
+            },
+        );
+        store.radars.insert(
+            EntityId::new(21),
+            RadarState {
+                nearby_scan_progress_ticks: 19,
+                far_scan_progress_ticks: 733,
+                far_scan_cursor: 42,
+                far_scan_complete: false,
             },
         );
         store.boilers.insert(

@@ -80,6 +80,7 @@ pub use crate::power::{
     EntityPowerStatus, OffshorePumpState, PowerMapConnection, PowerMapConsumer, PowerMapPole,
     PowerMapSnapshot, PowerNetworkSnapshot, PowerSummary, SolarPanelState, SteamEngineState,
 };
+pub use crate::radar::RadarState;
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
@@ -405,8 +406,9 @@ impl Hash for RevealedChunkHistory {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 struct ChunkGenerationQueue {
     required: BTreeSet<ChunkCoord>,
-    chart: BTreeSet<ChunkCoord>,
     prefetch: BTreeSet<ChunkCoord>,
+    player_chart: BTreeSet<ChunkCoord>,
+    radar_reveal: BTreeSet<ChunkCoord>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -785,6 +787,7 @@ mod pollution_ops;
 mod power_ops;
 mod power_state;
 mod profiling;
+mod radar_ops;
 mod research_ops;
 mod save;
 mod scripted;

@@ -212,6 +212,35 @@ impl EntityStateBehavior for AccumulatorState {
     }
 }
 
+impl EntityStateBehavior for RadarState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let metadata = sim
+            .entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .filter(|prototype| prototype.entity_kind == EntityKind::Radar)
+            .and_then(|prototype| prototype.radar)
+            .ok_or(SimValidationError::InvalidEntityState { entity_id })?;
+        let candidate_count = crate::radar::far_scan_candidate_count(
+            metadata.nearby_reveal_radius_chunks,
+            metadata.far_scan_radius_chunks,
+        );
+        if self.nearby_scan_progress_ticks >= metadata.nearby_scan_interval_ticks
+            || self.far_scan_progress_ticks >= metadata.far_scan_interval_ticks
+            || self.far_scan_cursor >= candidate_count
+        {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+        Ok(())
+    }
+}
+
 impl EntityStateBehavior for BoilerState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_item_slot(stacks, self.energy.fuel_slot);

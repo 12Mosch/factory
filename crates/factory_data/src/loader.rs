@@ -340,6 +340,7 @@ fn load_entities(
             validate_laser_turret_metadata(&entity.name, &entity)?;
             validate_module_and_beacon_metadata(&entity.name, &entity)?;
             validate_solar_and_storage_metadata(&entity.name, &entity)?;
+            validate_radar_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
                     entity: entity.name,
@@ -432,6 +433,7 @@ fn load_entities(
                 steam_engine: entity.steam_engine,
                 solar_panel: entity.solar_panel,
                 accumulator: entity.accumulator,
+                radar: entity.radar,
                 boiler: entity.boiler,
                 offshore_pump: entity.offshore_pump,
                 pump: entity.pump,
@@ -644,6 +646,52 @@ fn validate_solar_and_storage_metadata(
             }
         }
     }
+    Ok(())
+}
+
+fn validate_radar_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRadarMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    match (entity.entity_kind, entity.radar) {
+        (EntityKind::Radar, Some(radar)) => {
+            if radar.nearby_reveal_radius_chunks == 0
+                || radar.nearby_scan_interval_ticks == 0
+                || radar.far_scan_radius_chunks <= radar.nearby_reveal_radius_chunks
+                || radar.far_scan_interval_ticks == 0
+            {
+                return invalid(
+                    "scan radii and intervals must be positive, and far radius must exceed nearby radius",
+                );
+            }
+            if entity
+                .electric_energy_source
+                .as_ref()
+                .is_none_or(|source| source.energy_usage_watts == 0)
+            {
+                return invalid("radars require a positive electric energy source");
+            }
+            if entity.burner.is_some() {
+                return invalid("radars cannot declare a burner energy source");
+            }
+            if entity.max_health.is_none_or(|health| health == 0) {
+                return invalid("radars require positive maximum health");
+            }
+        }
+        (EntityKind::Radar, None) => return invalid("radar entities require radar metadata"),
+        (_, Some(_)) => return invalid("radar metadata is only valid on radar entities"),
+        (_, None) => {}
+    }
+
     Ok(())
 }
 

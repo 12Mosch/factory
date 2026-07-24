@@ -19,6 +19,7 @@ mod onboarding;
 mod placement;
 mod player;
 mod power;
+mod radar;
 mod research;
 mod solar;
 mod statistics;

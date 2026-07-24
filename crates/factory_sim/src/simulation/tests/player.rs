@@ -156,13 +156,15 @@ fn generation_queue_uses_priority_then_stable_coordinate_order() {
     let required_second = ChunkCoord { x: 9, y: 9 };
     let chart = ChunkCoord { x: -20, y: -20 };
     let prefetch = ChunkCoord { x: -30, y: -30 };
+    let radar = ChunkCoord { x: 30, y: 30 };
 
+    sim.request_chunk_generation(radar, ChunkGenerationPriority::RadarReveal);
     sim.request_chunk_generation(prefetch, ChunkGenerationPriority::Prefetch);
     sim.request_chunk_generation(required_second, ChunkGenerationPriority::Required);
-    sim.request_chunk_generation(chart, ChunkGenerationPriority::Chart);
+    sim.request_chunk_generation(chart, ChunkGenerationPriority::PlayerChart);
     sim.request_chunk_generation(required_first, ChunkGenerationPriority::Required);
 
-    for expected in [required_first, required_second, prefetch, chart] {
+    for expected in [required_first, required_second, prefetch, chart, radar] {
         assert_eq!(sim.process_chunk_generation_queue(1), 1);
         assert!(sim.world.chunks.contains_key(&expected));
     }

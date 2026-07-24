@@ -62,6 +62,10 @@ pub(crate) fn accumulator_color() -> Color {
     Color::srgb(0.34, 0.48, 0.40)
 }
 
+pub(crate) fn radar_color() -> Color {
+    Color::srgb(0.16, 0.58, 0.26)
+}
+
 pub(crate) fn offshore_pump_color() -> Color {
     Color::srgb(0.14, 0.48, 0.68)
 }
