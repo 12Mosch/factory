@@ -379,6 +379,7 @@ fn power_summary_reports_production_consumption_and_satisfaction() {
             consumption_watts: 77_500,
             satisfaction_permyriad: 10_000,
             network_count: 1,
+            ..PowerSummary::default()
         }
     );
 }
@@ -401,6 +402,7 @@ fn initial_tick_builds_power_topology_once_and_preserves_power_summary() {
             consumption_watts: 77_500,
             satisfaction_permyriad: 10_000,
             network_count: 1,
+            ..PowerSummary::default()
         }
     );
 }

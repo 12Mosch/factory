@@ -233,6 +233,8 @@
             )),
         ),
         (id: 81, name: "beacon", stack_size: 20),
+        (id: 82, name: "solar_panel", stack_size: 50),
+        (id: 83, name: "accumulator", stack_size: 50),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1155,6 +1157,30 @@
             ],
             products: [(item: "beacon", amount: 1)],
         ),
+        (
+            id: 82,
+            name: "solar_panel",
+            category: Crafting,
+            crafting_time_ticks: 600,
+            ingredients: [
+                (item: "copper_plate", amount: 5),
+                (item: "electronic_circuit", amount: 15),
+                (item: "steel_plate", amount: 5),
+            ],
+            products: [(item: "solar_panel", amount: 1)],
+        ),
+        (
+            id: 83,
+            name: "accumulator",
+            category: Crafting,
+            crafting_time_ticks: 600,
+            ingredients: [
+                (item: "iron_plate", amount: 5),
+                (item: "copper_plate", amount: 5),
+                (item: "sulfur", amount: 2),
+            ],
+            products: [(item: "accumulator", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -1984,6 +2010,32 @@
             beacon: Some((effect_radius_tiles: 3, transmission_permyriad: 5000)),
             max_health: Some(200),
         ),
+        (
+            id: 50,
+            name: "solar_panel",
+            building_category: Some(Power),
+            building_menu_order: Some(60),
+            entity_kind: SolarPanel,
+            size: (x: 3, y: 3),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(200),
+            solar_panel: Some((max_power_output_watts: 60000)),
+        ),
+        (
+            id: 51,
+            name: "accumulator",
+            building_category: Some(Power),
+            building_menu_order: Some(70),
+            entity_kind: Accumulator,
+            size: (x: 2, y: 2),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(150),
+            accumulator: Some((
+                capacity_joules: 5000000,
+                max_charge_watts: 300000,
+                max_discharge_watts: 300000,
+            )),
+        ),
     ],
     tiles: [
         (
@@ -2489,6 +2541,25 @@
             required_units: 100,
             research_time_ticks: 600,
             effects: [UnlockRecipe("beacon")],
+        ),
+        (
+            id: 33,
+            name: "solar_energy",
+            prerequisites: [
+                "sulfur_processing",
+                "electric_energy_distribution_1",
+                "advanced_material_processing",
+            ],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 250,
+            research_time_ticks: 600,
+            effects: [
+                UnlockRecipe("solar_panel"),
+                UnlockRecipe("accumulator"),
+            ],
         ),
     ],
     enemy_gameplay: Some((

@@ -174,6 +174,44 @@ impl EntityStateBehavior for SteamEngineState {
     }
 }
 
+impl EntityStateBehavior for SolarPanelState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        _sim: &Simulation,
+        _entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        Ok(())
+    }
+}
+
+impl EntityStateBehavior for AccumulatorState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let capacity = sim
+            .entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.accumulator.as_ref())
+            .map(|accumulator| accumulator.capacity_joules)
+            .ok_or(SimValidationError::InvalidEntityState { entity_id })?;
+        let at_capacity = self.stored_energy_joules == capacity;
+        if self.energy_remainder_watt_ticks >= SIMULATION_TICKS_PER_SECOND as u8
+            || self.stored_energy_joules > capacity
+            || (at_capacity && self.energy_remainder_watt_ticks != 0)
+        {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+        Ok(())
+    }
+}
+
 impl EntityStateBehavior for BoilerState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_item_slot(stacks, self.energy.fuel_slot);

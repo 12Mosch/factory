@@ -25,7 +25,11 @@ impl DayNightCycleState {
         };
     }
 
-    fn daylight(self, config: DayNightCycleConfig) -> f32 {
+    /// Exact daylight fraction as a `(numerator, denominator)` pair. Using a
+    /// rational keeps solar output identical across platforms: the power solve
+    /// multiplies by the numerator and floors by the denominator in integer
+    /// arithmetic instead of routing watts through floating point.
+    fn daylight_ratio(self, config: DayNightCycleConfig) -> (u64, u64) {
         let cycle = config.cycle_length_ticks;
         let ramp = config.dawn_dusk_ticks;
         let dusk_start = cycle / 2;
@@ -33,16 +37,20 @@ impl DayNightCycleState {
         let dawn_start = cycle - ramp;
         let tick = self.tick_in_cycle;
 
-        let daylight = if tick < dusk_start {
-            1.0
+        if tick < dusk_start {
+            (1, 1)
         } else if tick < dusk_end {
-            1.0 - (tick - dusk_start) as f64 / ramp as f64
+            (ramp - (tick - dusk_start), ramp)
         } else if tick < dawn_start {
-            0.0
+            (0, 1)
         } else {
-            (tick - dawn_start) as f64 / ramp as f64
-        };
-        daylight as f32
+            (tick - dawn_start, ramp)
+        }
+    }
+
+    fn daylight(self, config: DayNightCycleConfig) -> f32 {
+        let (numerator, denominator) = self.daylight_ratio(config);
+        numerator as f32 / denominator as f32
     }
 }
 
@@ -55,6 +63,16 @@ impl Simulation {
         };
         self.day_night_cycle
             .map_or(1.0, |state| state.daylight(config))
+    }
+
+    /// Exact daylight fraction as `(numerator, denominator)` for deterministic
+    /// integer solar output. Disabled cycles report full daylight `(1, 1)`.
+    pub(crate) fn daylight_ratio(&self) -> (u64, u64) {
+        let Some(config) = self.catalog().day_night_cycle else {
+            return (1, 1);
+        };
+        self.day_night_cycle
+            .map_or((1, 1), |state| state.daylight_ratio(config))
     }
 
     pub(crate) fn advance_day_night_cycle(&mut self) {
@@ -131,6 +149,39 @@ mod tests {
             };
             assert_eq!(sim.daylight(), expected, "tick {expected_tick}");
         }
+    }
+
+    #[test]
+    fn daylight_ratio_is_exact_across_ramps() {
+        // Cycle 30, ramp 6: full day ticks 0..15, dusk 15..21, night 21..24,
+        // dawn 24..30. Ratios must reduce to exact tick-relative fractions.
+        let mut sim = simulation_with_cycle(30, 6);
+        let expected = [
+            (0, (1, 1)),
+            (14, (1, 1)),
+            (15, (6, 6)),
+            (18, (3, 6)),
+            (20, (1, 6)),
+            (21, (0, 1)),
+            (23, (0, 1)),
+            (24, (0, 6)),
+            (27, (3, 6)),
+            (29, (5, 6)),
+        ];
+        let mut next = 0u64;
+        for (tick, ratio) in expected {
+            while next < tick {
+                sim.tick();
+                next += 1;
+            }
+            assert_eq!(sim.daylight_ratio(), ratio, "tick {tick}");
+        }
+    }
+
+    #[test]
+    fn disabled_cycle_reports_full_daylight_ratio() {
+        let sim = simulation_without_cycle();
+        assert_eq!(sim.daylight_ratio(), (1, 1));
     }
 
     #[test]

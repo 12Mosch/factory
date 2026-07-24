@@ -1,6 +1,6 @@
 use factory_sim::{PowerNetworkSnapshot, PowerStatisticsSample, PowerSummary};
 
-use crate::ui::debug_overlay::format_watts;
+use crate::ui::debug_overlay::{format_joules, format_watts};
 use crate::ui::production_stats::PowerGraphPoint;
 
 pub fn power_summary_lines(
@@ -19,10 +19,21 @@ pub fn power_summary_lines(
             f64::from(summary.satisfaction_permyriad) / 100.0
         ),
         format!("Networks: {}", summary.network_count),
+        format!(
+            "Accumulators: {} (charge {}, discharge {})",
+            summary.accumulator_count,
+            format_watts(summary.accumulator_charge_watts),
+            format_watts(summary.accumulator_discharge_watts),
+        ),
+        format!(
+            "Stored energy: {} / {}",
+            format_joules(summary.accumulator_stored_energy_joules),
+            format_joules(summary.accumulator_capacity_joules),
+        ),
     ];
     lines.extend(networks.iter().map(|network| {
         format!(
-            "Network {}: poles {}, producers {}, consumers {}, prod {}, avail {}, cons {}, sat {:.1}%",
+            "Network {}: poles {}, producers {}, consumers {}, prod {}, avail {}, cons {}, sat {:.1}%, accs {} (chg {}, dis {}, {} / {})",
             network.network_id,
             network.pole_count,
             network.producer_count,
@@ -30,7 +41,12 @@ pub fn power_summary_lines(
             format_watts(network.production_watts),
             format_watts(network.available_production_watts),
             format_watts(network.consumption_watts),
-            f64::from(network.satisfaction_permyriad) / 100.0
+            f64::from(network.satisfaction_permyriad) / 100.0,
+            network.accumulator_count,
+            format_watts(network.accumulator_charge_watts),
+            format_watts(network.accumulator_discharge_watts),
+            format_joules(network.accumulator_stored_energy_joules),
+            format_joules(network.accumulator_capacity_joules),
         )
     }));
     lines

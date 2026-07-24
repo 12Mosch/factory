@@ -2,8 +2,8 @@ use glam::IVec2;
 
 use crate::catalog::PrototypeCatalog;
 use crate::model::{
-    AssemblingMachinePrototype, CraftingCategory, ElectricEnergySourcePrototype, EntityKind,
-    UndergroundBeltPart,
+    AssemblingMachinePrototype, BuildingCategory, CraftingCategory, ElectricEnergySourcePrototype,
+    EntityKind, UndergroundBeltPart,
 };
 
 #[test]
@@ -474,4 +474,55 @@ fn base_entities_have_valid_building_menu_metadata() {
             entity.name
         );
     }
+}
+
+#[test]
+fn solar_panel_entity_loads_solar_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    let solar_panel = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "solar_panel")
+        .expect("base catalog should contain solar panel");
+    assert_eq!(solar_panel.entity_kind, EntityKind::SolarPanel);
+    assert_eq!(solar_panel.size, IVec2::new(3, 3));
+    assert_eq!(solar_panel.max_health, Some(200));
+    assert_eq!(solar_panel.building_category, Some(BuildingCategory::Power));
+    assert_eq!(solar_panel.building_menu_order, Some(60));
+    let metadata = solar_panel
+        .solar_panel
+        .expect("solar panel should define solar metadata");
+    assert_eq!(metadata.max_power_output_watts, 60_000);
+    assert!(solar_panel.accumulator.is_none());
+    assert!(solar_panel.electric_energy_source.is_none());
+    assert!(solar_panel.burner.is_none());
+    assert!(solar_panel.steam_engine.is_none());
+    assert!(solar_panel.fluid_boxes.is_empty());
+}
+
+#[test]
+fn accumulator_entity_loads_storage_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    let accumulator = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "accumulator")
+        .expect("base catalog should contain accumulator");
+    assert_eq!(accumulator.entity_kind, EntityKind::Accumulator);
+    assert_eq!(accumulator.size, IVec2::new(2, 2));
+    assert_eq!(accumulator.max_health, Some(150));
+    assert_eq!(accumulator.building_category, Some(BuildingCategory::Power));
+    assert_eq!(accumulator.building_menu_order, Some(70));
+    let metadata = accumulator
+        .accumulator
+        .expect("accumulator should define storage metadata");
+    assert_eq!(metadata.capacity_joules, 5_000_000);
+    assert_eq!(metadata.max_charge_watts, 300_000);
+    assert_eq!(metadata.max_discharge_watts, 300_000);
+    assert!(accumulator.solar_panel.is_none());
+    assert!(accumulator.electric_energy_source.is_none());
+    assert!(accumulator.burner.is_none());
+    assert!(accumulator.fluid_boxes.is_empty());
 }

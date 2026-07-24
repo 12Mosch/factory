@@ -34,6 +34,12 @@ pub fn boiler_state(sim: &Simulation, entity_id: EntityId) -> Result<&BoilerStat
     sim.entities.boiler_state(entity_id)
 }
 
+/// Durable stored-energy state of an accumulator, or `None` when `entity_id`
+/// is not an accumulator. Accumulators are passive, so this is read-only.
+pub fn accumulator_state(sim: &Simulation, entity_id: EntityId) -> Option<&AccumulatorState> {
+    sim.entities.accumulators.get(&entity_id)
+}
+
 pub fn fluid_box_states(sim: &Simulation, entity_id: EntityId) -> Option<&[FluidBoxState]> {
     sim.entities.fluid_box_states(entity_id)
 }

@@ -90,5 +90,7 @@ fn entity_kind_name(kind: EntityKind) -> &'static str {
         EntityKind::GunTurret => "Gun turrets",
         EntityKind::LaserTurret => "Laser turrets",
         EntityKind::EnemySpawner => "Enemy spawners",
+        EntityKind::SolarPanel => "Solar panels",
+        EntityKind::Accumulator => "Accumulators",
     }
 }

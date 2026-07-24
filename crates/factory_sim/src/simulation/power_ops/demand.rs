@@ -14,7 +14,7 @@ pub(super) fn refresh_consumer_demand_cache(
     topology: &PowerTopologyCache,
     entity_statuses: &mut DenseEntityMap<EntityPowerStatus>,
     cache: &mut PowerDemandCache,
-    networks: &mut [NetworkAccumulator],
+    networks: &mut [NetworkPowerBalance],
 ) {
     if !cache.valid || cache.network_consumption_watts.len() != networks.len() {
         rebuild_consumer_demand_cache(inputs, topology, entity_statuses, cache, networks.len());

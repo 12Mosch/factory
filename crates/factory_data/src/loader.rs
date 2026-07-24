@@ -339,6 +339,7 @@ fn load_entities(
         .map(|entity| {
             validate_laser_turret_metadata(&entity.name, &entity)?;
             validate_module_and_beacon_metadata(&entity.name, &entity)?;
+            validate_solar_and_storage_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
                     entity: entity.name,
@@ -429,6 +430,8 @@ fn load_entities(
                     }),
                 electric_energy_source: entity.electric_energy_source,
                 steam_engine: entity.steam_engine,
+                solar_panel: entity.solar_panel,
+                accumulator: entity.accumulator,
                 boiler: entity.boiler,
                 offshore_pump: entity.offshore_pump,
                 pump: entity.pump,
@@ -566,6 +569,79 @@ fn validate_laser_turret_metadata(
                 entity: name.to_string(),
                 detail: "maximum health must be positive",
             });
+        }
+    }
+    Ok(())
+}
+
+/// Solar panels and accumulators are passive, fuel-free power participants.
+/// Their prototypes must carry the matching metadata, keep it off every other
+/// entity kind, and never mix in the ordinary machine energy sources (electric
+/// consumer, burner, steam, or fluid boxes) that would wire them into the
+/// consumer-demand model instead.
+fn validate_solar_and_storage_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidSolarStorageMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+    let no_energy_or_fluid = entity.electric_energy_source.is_none()
+        && entity.burner.is_none()
+        && entity.steam_engine.is_none()
+        && entity.boiler.is_none()
+        && entity.fluid_boxes.is_empty();
+
+    match entity.entity_kind {
+        EntityKind::SolarPanel => {
+            let Some(solar) = entity.solar_panel else {
+                return invalid("solar panel entities require solar_panel metadata");
+            };
+            if solar.max_power_output_watts == 0 {
+                return invalid("solar panel maximum output must be positive");
+            }
+            if entity.accumulator.is_some() {
+                return invalid("solar panels cannot declare accumulator metadata");
+            }
+            if !no_energy_or_fluid {
+                return invalid(
+                    "solar panels cannot declare electric, burner, steam, boiler, or fluid metadata",
+                );
+            }
+        }
+        EntityKind::Accumulator => {
+            let Some(accumulator) = entity.accumulator else {
+                return invalid("accumulator entities require accumulator metadata");
+            };
+            if accumulator.capacity_joules == 0
+                || accumulator.max_charge_watts == 0
+                || accumulator.max_discharge_watts == 0
+            {
+                return invalid(
+                    "accumulator capacity, charge, and discharge rates must be positive",
+                );
+            }
+            if entity.solar_panel.is_some() {
+                return invalid("accumulators cannot declare solar_panel metadata");
+            }
+            if !no_energy_or_fluid {
+                return invalid(
+                    "accumulators cannot declare electric, burner, steam, boiler, or fluid metadata",
+                );
+            }
+        }
+        _ => {
+            if entity.solar_panel.is_some() {
+                return invalid("solar_panel metadata is only valid on solar panel entities");
+            }
+            if entity.accumulator.is_some() {
+                return invalid("accumulator metadata is only valid on accumulator entities");
+            }
         }
     }
     Ok(())

@@ -22,7 +22,9 @@ use bincode::Options;
 // v23: laser turret and powered player equipment state joined the snapshot.
 // v24: deterministic day/night cycle phase joined the snapshot.
 // v25: machine module state and beacon state joined the entity registry.
-pub const SAVE_VERSION: u32 = 25;
+// v26: solar panel and accumulator state maps and durable power storage
+// statistics joined the snapshot.
+pub const SAVE_VERSION: u32 = 26;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -33,7 +35,8 @@ pub const SAVE_VERSION: u32 = 25;
 // v14: typed ammo, laser turrets, armor, and powered equipment metadata.
 // v15: PrototypeCatalog gained the optional day_night_cycle config section.
 // v16: item module effects and entity module/beacon metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 16;
+// v17: entity prototypes gained solar panel and accumulator metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 17;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

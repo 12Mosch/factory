@@ -1,13 +1,13 @@
 use serde::Deserialize;
 
 use crate::model::{
-    AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype, BeaconPrototype, BoilerPrototype,
-    BuildingCategory, BurnerPrototype, CraftingCategory, ElectricEnergySourcePrototype,
-    EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo, FluidConnectionSide,
-    FurnacePrototype, GunTurretPrototype, LaserTurretPrototype, ModuleEffectPrototype,
-    OffshorePumpPrototype, PumpPrototype, RepairToolPrototype, ResourceExtraction,
-    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype,
-    UnitPrototype,
+    AccumulatorPrototype, AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype,
+    BeaconPrototype, BoilerPrototype, BuildingCategory, BurnerPrototype, CraftingCategory,
+    ElectricEnergySourcePrototype, EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo,
+    FluidConnectionSide, FurnacePrototype, GunTurretPrototype, LaserTurretPrototype,
+    ModuleEffectPrototype, OffshorePumpPrototype, PumpPrototype, RepairToolPrototype,
+    ResourceExtraction, SolarPanelPrototype, SplitterPrototype, SteamEnginePrototype,
+    TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -178,6 +178,8 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) electric_pole: Option<RawElectricPolePrototype>,
     pub(crate) electric_energy_source: Option<ElectricEnergySourcePrototype>,
     pub(crate) steam_engine: Option<SteamEnginePrototype>,
+    pub(crate) solar_panel: Option<SolarPanelPrototype>,
+    pub(crate) accumulator: Option<AccumulatorPrototype>,
     pub(crate) boiler: Option<BoilerPrototype>,
     pub(crate) offshore_pump: Option<OffshorePumpPrototype>,
     pub(crate) pump: Option<PumpPrototype>,

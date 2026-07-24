@@ -63,6 +63,8 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::GunTurret => gun_turret_layers(&mut builder, style),
         EntityKind::LaserTurret => laser_turret_layers(&mut builder, style),
         EntityKind::EnemySpawner => enemy_spawner_layers(&mut builder, style),
+        EntityKind::SolarPanel => solar_panel_layers(&mut builder, style),
+        EntityKind::Accumulator => accumulator_layers(&mut builder, style),
         EntityKind::ResourcePatch => {}
     }
 
@@ -387,6 +389,60 @@ fn boiler_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
             0.11,
             Color::srgba(0.20, 0.22, 0.22, 0.70),
             0.45,
+        );
+}
+
+fn solar_panel_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+    // Dark metal frame with an inset photovoltaic cell grid.
+    builder.scaled_rounded(
+        Vec2::splat(0.94),
+        Vec2::ZERO,
+        0.02,
+        Color::srgba(0.10, 0.13, 0.18, 0.82),
+        0.18,
+    );
+    let cell = Vec2::splat(0.36);
+    for (column, row) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        builder.scaled_rounded(
+            cell,
+            Vec2::new(column * 0.24, row * 0.24),
+            0.05,
+            Color::srgba(0.24, 0.52, 0.78, 0.90),
+            0.14,
+        );
+    }
+}
+
+fn accumulator_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+    // Battery casing with two terminals and an internal charge bar.
+    builder
+        .scaled_rounded(
+            Vec2::new(0.82, 0.86),
+            Vec2::ZERO,
+            0.02,
+            Color::srgba(0.16, 0.24, 0.20, 0.86),
+            0.22,
+        )
+        .scaled_rounded(
+            Vec2::new(0.16, 0.12),
+            Vec2::new(-0.22, -0.40),
+            0.16,
+            Color::srgba(0.86, 0.82, 0.42, 0.92),
+            0.35,
+        )
+        .scaled_rounded(
+            Vec2::new(0.16, 0.12),
+            Vec2::new(0.22, -0.40),
+            0.16,
+            Color::srgba(0.86, 0.82, 0.42, 0.92),
+            0.35,
+        )
+        .scaled_rounded(
+            Vec2::new(0.52, 0.30),
+            Vec2::new(0.0, 0.16),
+            0.12,
+            Color::srgba(0.40, 0.86, 0.58, 0.86),
+            0.30,
         );
 }
 

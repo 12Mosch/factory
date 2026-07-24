@@ -1,11 +1,11 @@
-use super::types::{NetworkAccumulator, SteamEngineAssignment};
+use super::types::{NetworkPowerBalance, SteamEngineAssignment};
 use super::*;
 
 impl Simulation {
     pub(super) fn assign_steam_engines_to_fluid_networks(
         &self,
         network_ids_by_entity: &BTreeMap<EntityId, u32>,
-        networks: &[NetworkAccumulator],
+        steam_targets: &[u64],
         assignments: &mut Vec<(EntityId, SteamEngineAssignment)>,
         remaining_demand_by_network: &mut Vec<u64>,
         remaining_steam_by_network: &mut Vec<u64>,
@@ -15,8 +15,7 @@ impl Simulation {
             .steam;
         assignments.clear();
         remaining_demand_by_network.clear();
-        remaining_demand_by_network
-            .extend(networks.iter().map(|network| network.consumption_watts));
+        remaining_demand_by_network.extend_from_slice(steam_targets);
         let fluid_network_count = self
             .fluids
             .topology_networks
@@ -192,21 +191,23 @@ impl Simulation {
 }
 
 pub(super) fn actual_steam_engine_outputs(
-    networks: &[NetworkAccumulator],
+    networks: &[NetworkPowerBalance],
     engine_assignments: &[(EntityId, SteamEngineAssignment)],
     output_by_engine: &mut Vec<(EntityId, u64)>,
     remaining_production_by_network: &mut Vec<u64>,
     remaining_available_by_network: &mut Vec<u64>,
 ) {
+    // Steam engines produce exactly their assigned output: assignment already
+    // caps the network total to the post-solar target, so production and the
+    // available denominator both equal `steam_available_watts` and every
+    // engine emits its full share.
     output_by_engine.clear();
     remaining_production_by_network.clear();
-    remaining_production_by_network.extend(networks.iter().map(|network| network.production_watts));
+    remaining_production_by_network
+        .extend(networks.iter().map(|network| network.steam_available_watts));
     remaining_available_by_network.clear();
-    remaining_available_by_network.extend(
-        networks
-            .iter()
-            .map(|network| network.available_production_watts),
-    );
+    remaining_available_by_network
+        .extend(networks.iter().map(|network| network.steam_available_watts));
 
     for &(engine_id, assignment) in engine_assignments {
         let network_index = assignment.network_id as usize;

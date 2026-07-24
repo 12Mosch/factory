@@ -156,6 +156,8 @@ pub struct EntityPrototype {
     pub electric_pole: Option<ElectricPolePrototype>,
     pub electric_energy_source: Option<ElectricEnergySourcePrototype>,
     pub steam_engine: Option<SteamEnginePrototype>,
+    pub solar_panel: Option<SolarPanelPrototype>,
+    pub accumulator: Option<AccumulatorPrototype>,
     pub boiler: Option<BoilerPrototype>,
     pub offshore_pump: Option<OffshorePumpPrototype>,
     pub pump: Option<PumpPrototype>,
@@ -366,6 +368,23 @@ pub struct SteamEnginePrototype {
     pub steam_consumption_per_second_milliunits: u64,
 }
 
+/// Fuel-free generator whose output scales with the deterministic day/night
+/// cycle. Solar panels feed their network without consuming any fluid or item.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct SolarPanelPrototype {
+    /// Output at full daylight; scaled down by the current daylight ratio.
+    pub max_power_output_watts: u64,
+}
+
+/// Energy store that charges from network surplus and discharges into network
+/// deficit. Capacity and rates are expressed in joules and watts respectively.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct AccumulatorPrototype {
+    pub capacity_joules: u64,
+    pub max_charge_watts: u64,
+    pub max_discharge_watts: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct BoilerPrototype {
     pub water_consumption_per_second_milliunits: u64,
@@ -485,6 +504,8 @@ pub enum EntityKind {
     GunTurret,
     LaserTurret,
     EnemySpawner,
+    SolarPanel,
+    Accumulator,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

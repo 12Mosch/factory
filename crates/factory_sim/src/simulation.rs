@@ -76,9 +76,9 @@ pub use crate::pollution::{
 };
 pub(crate) use crate::pollution::{PollutionEmissionRate, saturating_add_with_overflow};
 pub use crate::power::{
-    BoilerError, BoilerState, ElectricConsumerState, ElectricPoleState, EntityPowerStatus,
-    OffshorePumpState, PowerMapConnection, PowerMapConsumer, PowerMapPole, PowerMapSnapshot,
-    PowerNetworkSnapshot, PowerSummary, SteamEngineState,
+    AccumulatorState, BoilerError, BoilerState, ElectricConsumerState, ElectricPoleState,
+    EntityPowerStatus, OffshorePumpState, PowerMapConnection, PowerMapConsumer, PowerMapPole,
+    PowerMapSnapshot, PowerNetworkSnapshot, PowerSummary, SolarPanelState, SteamEngineState,
 };
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
@@ -117,6 +117,9 @@ pub const BASIC_INSERTER_PICKUP_TICKS: u32 = 35;
 pub const BASIC_INSERTER_DROP_TICKS: u32 = 35;
 pub const POWER_SATISFACTION_FULL_PERMYRIAD: u32 = 10_000;
 const FIXED_SIM_TICKS_PER_SECOND_F64: f64 = 60.0;
+/// Fixed simulation rate in ticks per second, used for exact watt-tick energy
+/// accounting (one watt-tick is `1/SIMULATION_TICKS_PER_SECOND` joule).
+pub(crate) const SIMULATION_TICKS_PER_SECOND: u64 = 60;
 
 /// Pollution diffuses between chunks and is absorbed by terrain once per
 /// interval instead of every tick.
@@ -481,6 +484,11 @@ pub struct PowerStatisticsSample {
     pub available_production_watts: u64,
     pub consumption_watts: u64,
     pub satisfaction_permyriad: u32,
+    pub accumulator_count: usize,
+    pub accumulator_charge_watts: u64,
+    pub accumulator_discharge_watts: u64,
+    pub accumulator_stored_energy_joules: u64,
+    pub accumulator_capacity_joules: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

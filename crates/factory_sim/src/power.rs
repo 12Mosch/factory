@@ -16,6 +16,37 @@ pub struct ElectricConsumerState {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct SteamEngineState;
 
+/// Solar panels hold no durable per-entity state: their output is a pure
+/// function of the shared daylight ratio and the prototype's maximum output.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct SolarPanelState;
+
+/// Durable stored energy of one accumulator.
+///
+/// Energy is tracked in whole joules plus a sub-joule remainder measured in
+/// watt-ticks (one watt-tick is `1/60` joule at the 60 Hz simulation rate).
+/// The remainder keeps charge/discharge exact without any floating-point
+/// state: every tick converts watt-ticks to joules with integer division and
+/// carries the leftover forward.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct AccumulatorState {
+    pub(crate) stored_energy_joules: u64,
+    pub(crate) energy_remainder_watt_ticks: u8,
+}
+
+impl AccumulatorState {
+    /// Whole joules currently stored.
+    pub fn stored_energy_joules(&self) -> u64 {
+        self.stored_energy_joules
+    }
+
+    /// Sub-joule remainder in watt-ticks (`0..60`), preserving exact energy
+    /// between ticks.
+    pub fn energy_remainder_watt_ticks(&self) -> u8 {
+        self.energy_remainder_watt_ticks
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct BoilerState {
     pub energy: BurnerEnergy,
@@ -31,6 +62,11 @@ pub struct PowerSummary {
     pub consumption_watts: u64,
     pub satisfaction_permyriad: u32,
     pub network_count: usize,
+    pub accumulator_count: usize,
+    pub accumulator_charge_watts: u64,
+    pub accumulator_discharge_watts: u64,
+    pub accumulator_stored_energy_joules: u64,
+    pub accumulator_capacity_joules: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -43,6 +79,11 @@ pub struct PowerNetworkSnapshot {
     pub available_production_watts: u64,
     pub consumption_watts: u64,
     pub satisfaction_permyriad: u32,
+    pub accumulator_count: usize,
+    pub accumulator_charge_watts: u64,
+    pub accumulator_discharge_watts: u64,
+    pub accumulator_stored_energy_joules: u64,
+    pub accumulator_capacity_joules: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]

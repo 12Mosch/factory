@@ -67,6 +67,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
             consumption_watts: 0,
             satisfaction_permyriad: 10_000,
             network_count: 0,
+            ..PowerSummary::default()
         },
     });
 
@@ -189,6 +190,11 @@ fn power_stat_formatting_uses_summary_and_network_rows() {
         consumption_watts: 500,
         satisfaction_permyriad: 10_000,
         network_count: 1,
+        accumulator_count: 2,
+        accumulator_charge_watts: 300,
+        accumulator_discharge_watts: 0,
+        accumulator_stored_energy_joules: 2_500_000,
+        accumulator_capacity_joules: 10_000_000,
     };
     let networks = [factory_sim::PowerNetworkSnapshot {
         network_id: 7,
@@ -199,6 +205,11 @@ fn power_stat_formatting_uses_summary_and_network_rows() {
         available_production_watts: 1_000,
         consumption_watts: 500,
         satisfaction_permyriad: 10_000,
+        accumulator_count: 2,
+        accumulator_charge_watts: 300,
+        accumulator_discharge_watts: 0,
+        accumulator_stored_energy_joules: 2_500_000,
+        accumulator_capacity_joules: 10_000_000,
     }];
 
     let lines = power_summary_lines(summary, &networks);
@@ -206,6 +217,12 @@ fn power_stat_formatting_uses_summary_and_network_rows() {
     assert!(lines.iter().any(|line| line == "Production: 500 W"));
     assert!(lines.iter().any(|line| line.contains("Network 7")));
     assert!(lines.iter().any(|line| line.contains("poles 2")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Accumulators: 2") && line.contains("charge 300 W"))
+    );
+    assert!(lines.iter().any(|line| line.contains("2.50 MJ")));
 
     let samples = [
         factory_sim::PowerStatisticsSample {
