@@ -19,7 +19,7 @@ pub use ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId
 pub use model::{
     AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype, BiomeConfig, BoilerPrototype,
     BuildingCategory, BurnerPrototype, ClimateNoiseConfig, ClimateRange, CollisionLayer,
-    CollisionMask, CraftingCategory, DamageResistancePrototype, DamageType,
+    CollisionMask, CraftingCategory, DamageResistancePrototype, DamageType, DayNightCycleConfig,
     ElectricEnergySourcePrototype, ElectricPolePrototype, EnemyBaseGenerationConfig,
     EnemyGameplayConfig, EnemySpawnerPrototype, EntityKind, EntityPrototype,
     EquipmentEffectPrototype, EquipmentPrototype, FluidAmount, FluidBoxIo, FluidBoxPrototype,

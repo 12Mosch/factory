@@ -121,6 +121,7 @@ pub enum PrototypeLoadError {
     InvalidEnemyGameplayConfig {
         detail: &'static str,
     },
+    InvalidDayNightCycleConfig,
     InvalidMachineEnergySource {
         entity: String,
         detail: &'static str,
@@ -291,6 +292,10 @@ impl fmt::Display for PrototypeLoadError {
             Self::InvalidEnemyGameplayConfig { detail } => {
                 write!(formatter, "invalid enemy gameplay config: {detail}")
             }
+            Self::InvalidDayNightCycleConfig => write!(
+                formatter,
+                "invalid day/night cycle config: cycle and ramp lengths must be non-zero and four ramp lengths must fit strictly within one cycle"
+            ),
             Self::InvalidMachineEnergySource { entity, detail } => {
                 write!(
                     formatter,

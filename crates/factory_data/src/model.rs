@@ -3,6 +3,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 
+/// Deterministic timing for a world's day/night cycle.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct DayNightCycleConfig {
+    pub cycle_length_ticks: u64,
+    pub dawn_dusk_ticks: u64,
+}
+
+impl DayNightCycleConfig {
+    /// Returns whether the timing leaves non-empty full-day, dusk, night, and
+    /// dawn portions without overflowing while checking the ramp lengths.
+    pub const fn is_valid(self) -> bool {
+        if self.cycle_length_ticks == 0 || self.dawn_dusk_ticks == 0 {
+            return false;
+        }
+        match self.dawn_dusk_ticks.checked_mul(4) {
+            Some(total_ramp_ticks) => total_ramp_ticks < self.cycle_length_ticks,
+            None => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DamageType {
     Physical,

@@ -1,7 +1,7 @@
 use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 use crate::model::{
-    EnemyGameplayConfig, EntityPrototype, FluidPrototype, ItemPrototype, RecipePrototype,
-    TechnologyPrototype, TilePrototype, WorldGenerationConfig,
+    DayNightCycleConfig, EnemyGameplayConfig, EntityPrototype, FluidPrototype, ItemPrototype,
+    RecipePrototype, TechnologyPrototype, TilePrototype, WorldGenerationConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +15,8 @@ pub struct PrototypeCatalog {
     pub technologies: Vec<TechnologyPrototype>,
     pub world_generation: WorldGenerationConfig,
     pub enemy_gameplay: Option<EnemyGameplayConfig>,
+    #[serde(default)]
+    pub day_night_cycle: Option<DayNightCycleConfig>,
 }
 
 /// Generates a typed lookup method on [`PrototypeCatalog`]. Ids double as

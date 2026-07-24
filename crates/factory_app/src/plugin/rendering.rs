@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::AppSet;
+use super::{AppSet, InGameSet};
 use crate::map::resources::VisibleChunks;
 use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
@@ -8,6 +8,7 @@ use crate::rendering::belts::{
 use crate::rendering::camera::{
     follow_player_camera, setup_camera, update_render_detail, update_visible_chunks,
 };
+use crate::rendering::day_night::{spawn_day_night_tint, sync_day_night_tint};
 use crate::rendering::enemies::sync_enemy_rendering;
 use crate::rendering::entities::{
     measured_sync_placed_entity_rendering, update_visible_entity_ids,
@@ -50,7 +51,14 @@ impl Plugin for RenderingPlugin {
                     spawn_player,
                     spawn_cursor_tile_highlight,
                     spawn_manual_mining_progress_bar,
+                    spawn_day_night_tint,
                 ),
+            )
+            .add_systems(
+                Update,
+                sync_day_night_tint
+                    .in_set(InGameSet)
+                    .in_set(AppSet::RenderSync),
             )
             .add_systems(
                 Update,

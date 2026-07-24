@@ -1,4 +1,8 @@
 (
+    day_night_cycle: Some((
+        cycle_length_ticks: 25000,
+        dawn_dusk_ticks: 5000,
+    )),
     items: [
         (id: 7, name: "iron_gear_wheel", stack_size: 100),
         (id: 0, name: "iron_ore", stack_size: 100),

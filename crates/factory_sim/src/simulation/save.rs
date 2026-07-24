@@ -20,7 +20,8 @@ use bincode::Options;
 // v21: belt items gained stable identities used by incremental presentation.
 // v22: inserter energy state joined the entity registry.
 // v23: laser turret and powered player equipment state joined the snapshot.
-pub const SAVE_VERSION: u32 = 23;
+// v24: deterministic day/night cycle phase joined the snapshot.
+pub const SAVE_VERSION: u32 = 24;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -29,7 +30,8 @@ pub const SAVE_VERSION: u32 = 23;
 // burner-or-electric furnaces).
 // v13: pumps and underground-pipe metadata joined EntityPrototype.
 // v14: typed ammo, laser turrets, armor, and powered equipment metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 14;
+// v15: PrototypeCatalog gained the optional day_night_cycle config section.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 15;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -69,6 +71,7 @@ struct SaveHeader {
 #[derive(Deserialize)]
 struct SimulationSnapshotOwned {
     tick: u64,
+    day_night_cycle: Option<DayNightCycleState>,
     world_seed: u64,
     prototypes: PrototypeCatalog,
     chunks: BTreeMap<ChunkCoord, Chunk>,
@@ -214,6 +217,7 @@ pub fn prototype_hash(catalog: &PrototypeCatalog) -> u64 {
 #[derive(Serialize)]
 struct SimulationSnapshotRef<'a> {
     tick: u64,
+    day_night_cycle: Option<DayNightCycleState>,
     world_seed: u64,
     prototypes: &'a PrototypeCatalog,
     chunks: &'a BTreeMap<ChunkCoord, Chunk>,
@@ -244,6 +248,7 @@ impl<'a> SimulationSnapshotRef<'a> {
     fn from_simulation(sim: &'a Simulation) -> Self {
         Self {
             tick: sim.tick,
+            day_night_cycle: sim.day_night_cycle,
             world_seed: sim.world.seed,
             prototypes: &sim.world.prototypes,
             chunks: &sim.world.chunks,
@@ -276,6 +281,7 @@ impl SimulationSnapshotOwned {
     fn into_simulation(self) -> Simulation {
         let mut sim = Simulation {
             tick: self.tick,
+            day_night_cycle: self.day_night_cycle,
             entity_topology_revision: 0,
             revealed_revision: 0,
             revealed_chunk_history: Default::default(),

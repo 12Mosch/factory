@@ -1,3 +1,4 @@
+use crate::day_night::DayNightCycleState;
 pub(crate) use factory_data::{
     CraftingCategory, EntityKind, PrototypeCatalog, ResourceExtraction, TechnologyEffect, TileId,
     UndergroundBeltPart,
@@ -144,6 +145,7 @@ pub const STRUCTURE_WARNING_COOLDOWN_TICKS: u64 = 10 * FIXED_SIM_TICKS_PER_SECON
 #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct Simulation {
     tick: u64,
+    pub(crate) day_night_cycle: Option<DayNightCycleState>,
     #[serde(skip, default)]
     entity_topology_revision: u64,
     #[serde(skip, default)]
@@ -574,6 +576,16 @@ pub enum PollutionRemainderSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimValidationError {
+    InvalidDayNightCycleConfig,
+    DayNightCycleStatePresenceMismatch,
+    InvalidDayNightCycleTick {
+        tick_in_cycle: u64,
+        cycle_length_ticks: u64,
+    },
+    DayNightCyclePhaseMismatch {
+        expected: u64,
+        actual: u64,
+    },
     MissingTile {
         x: WorldTileCoord,
         y: WorldTileCoord,

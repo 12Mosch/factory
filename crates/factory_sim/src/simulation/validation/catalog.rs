@@ -4,6 +4,13 @@ use factory_data::EquipmentEffectPrototype;
 use std::collections::HashSet;
 
 pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError> {
+    if catalog
+        .day_night_cycle
+        .is_some_and(|config| !config.is_valid())
+    {
+        return Err(SimValidationError::InvalidDayNightCycleConfig);
+    }
+
     for (index, item) in catalog.items.iter().enumerate() {
         if item.id.index() != index {
             return Err(SimValidationError::UnknownItem(item.id));

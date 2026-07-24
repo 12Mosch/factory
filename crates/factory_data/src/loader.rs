@@ -64,6 +64,7 @@ impl PrototypeCatalog {
             technologies,
             world_generation,
             enemy_gameplay: raw.enemy_gameplay,
+            day_night_cycle: raw.day_night_cycle,
         })
     }
 }
@@ -77,6 +78,7 @@ struct ValidatedRawCatalog {
     technologies: Vec<RawTechnologyPrototype>,
     world_generation: Option<RawWorldGenerationConfig>,
     enemy_gameplay: Option<crate::model::EnemyGameplayConfig>,
+    day_night_cycle: Option<crate::model::DayNightCycleConfig>,
 }
 
 impl ValidatedRawCatalog {
@@ -98,6 +100,9 @@ impl ValidatedRawCatalog {
                     return Err(PrototypeLoadError::MissingEnemyGameplayConfig);
                 }
             }
+        }
+        if raw.day_night_cycle.is_some_and(|config| !config.is_valid()) {
+            return Err(PrototypeLoadError::InvalidDayNightCycleConfig);
         }
         let mut items = raw.items;
         validate_group(&mut items, "items")?;
@@ -126,6 +131,7 @@ impl ValidatedRawCatalog {
             technologies,
             world_generation: raw.world_generation,
             enemy_gameplay: raw.enemy_gameplay,
+            day_night_cycle: raw.day_night_cycle,
         })
     }
 }
