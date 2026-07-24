@@ -194,6 +194,9 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
     if let Some(state) = entities.labs.get(&entity_id) {
         return lab_can_work(catalog, research, state);
     }
+    if let Some(state) = entities.laser_turrets.get(&entity_id) {
+        return state.engaged;
+    }
     if entities.pumpjacks.contains_key(&entity_id) {
         return pumpjack_can_work(catalog, entities, entity_id);
     }

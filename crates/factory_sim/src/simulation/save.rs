@@ -19,7 +19,8 @@ use bincode::Options;
 // (MachineEnergy), enabling electric furnaces and electric mining drills.
 // v21: belt items gained stable identities used by incremental presentation.
 // v22: inserter energy state joined the entity registry.
-pub const SAVE_VERSION: u32 = 22;
+// v23: laser turret and powered player equipment state joined the snapshot.
+pub const SAVE_VERSION: u32 = 23;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -27,7 +28,8 @@ pub const SAVE_VERSION: u32 = 22;
 // v12: EntityPrototype gained the furnace section (crafting speed for
 // burner-or-electric furnaces).
 // v13: pumps and underground-pipe metadata joined EntityPrototype.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 13;
+// v14: typed ammo, laser turrets, armor, and powered equipment metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 14;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -78,6 +80,7 @@ struct SimulationSnapshotOwned {
     entities: EntityStore,
     construction: ConstructionState,
     player: PlayerState,
+    player_equipment: PlayerEquipmentState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
@@ -222,6 +225,7 @@ struct SimulationSnapshotRef<'a> {
     entities: &'a EntityStore,
     construction: &'a ConstructionState,
     player: PlayerState,
+    player_equipment: &'a PlayerEquipmentState,
     player_inventory: &'a Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: &'a CraftingQueue,
@@ -251,6 +255,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             entities: &sim.entities,
             construction: &sim.construction,
             player: sim.player,
+            player_equipment: &sim.player_equipment,
             player_inventory: &sim.player_inventory,
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: &sim.crafting_queue,
@@ -286,6 +291,7 @@ impl SimulationSnapshotOwned {
             entities: self.entities,
             construction: self.construction,
             player: self.player,
+            player_equipment: self.player_equipment,
             player_inventory: self.player_inventory,
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,

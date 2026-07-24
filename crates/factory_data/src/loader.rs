@@ -43,7 +43,7 @@ impl PrototypeCatalog {
         let raw: RawPrototypeCatalog = ron::from_str(data).map_err(PrototypeLoadError::Ron)?;
         let raw = ValidatedRawCatalog::from_raw(raw)?;
 
-        let (items, item_ids_by_name) = load_items(raw.items);
+        let (items, item_ids_by_name) = load_items(raw.items)?;
         let (fluids, fluid_ids_by_name) = load_fluids(raw.fluids);
         let (recipes, recipe_ids_by_name) =
             load_recipes(raw.recipes, &item_ids_by_name, &fluid_ids_by_name)?;
@@ -162,25 +162,83 @@ fn validate_enemy_gameplay(
     }
 }
 
-fn load_items(items: Vec<RawItemPrototype>) -> (Vec<ItemPrototype>, HashMap<String, ItemId>) {
+fn load_items(
+    items: Vec<RawItemPrototype>,
+) -> Result<(Vec<ItemPrototype>, HashMap<String, ItemId>), PrototypeLoadError> {
     let mut item_ids_by_name = HashMap::with_capacity(items.len());
     let items = items
         .into_iter()
         .map(|item| {
+            validate_item_metadata(&item)?;
             let id = ItemId::new(item.id);
             item_ids_by_name.insert(item.name.clone(), id);
-            ItemPrototype {
+            Ok(ItemPrototype {
                 id,
                 name: item.name,
                 stack_size: item.stack_size,
                 fuel_value_joules: item.fuel_value_joules,
                 ammo: item.ammo,
                 repair: item.repair,
-            }
+                armor: item.armor,
+                equipment: item.equipment,
+            })
         })
-        .collect();
+        .collect::<Result<_, PrototypeLoadError>>()?;
 
-    (items, item_ids_by_name)
+    Ok((items, item_ids_by_name))
+}
+
+fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadError> {
+    if item
+        .ammo
+        .is_some_and(|ammo| ammo.damage_per_shot == 0 || ammo.shots_per_item == 0)
+    {
+        return Err(PrototypeLoadError::InvalidAmmoMetadata {
+            item: item.name.clone(),
+            detail: "damage and shots per item must be positive",
+        });
+    }
+    if let Some(armor) = item.armor.as_ref() {
+        if armor.grid_width == 0 || armor.grid_height == 0 {
+            return Err(PrototypeLoadError::InvalidArmorMetadata {
+                item: item.name.clone(),
+                detail: "grid dimensions must be positive",
+            });
+        }
+        let mut types = std::collections::HashSet::new();
+        for resistance in &armor.resistances {
+            if resistance.percent_reduction_permyriad > 10_000 {
+                return Err(PrototypeLoadError::InvalidArmorMetadata {
+                    item: item.name.clone(),
+                    detail: "resistance percentages cannot exceed 100%",
+                });
+            }
+            if !types.insert(resistance.damage_type) {
+                return Err(PrototypeLoadError::InvalidArmorMetadata {
+                    item: item.name.clone(),
+                    detail: "resistance damage types must be unique",
+                });
+            }
+        }
+    }
+    if let Some(equipment) = item.equipment {
+        use crate::model::EquipmentEffectPrototype;
+        let effect_is_valid = match equipment.effect {
+            EquipmentEffectPrototype::PowerGeneration { power_watts } => power_watts > 0,
+            EquipmentEffectPrototype::Battery { capacity_joules } => capacity_joules > 0,
+            EquipmentEffectPrototype::EnergyShield {
+                capacity_points,
+                max_recharge_watts,
+            } => capacity_points > 0 && max_recharge_watts > 0,
+        };
+        if equipment.width == 0 || equipment.height == 0 || !effect_is_valid {
+            return Err(PrototypeLoadError::InvalidEquipmentMetadata {
+                item: item.name.clone(),
+                detail: "dimensions and effect power/capacity values must be positive",
+            });
+        }
+    }
+    Ok(())
 }
 
 fn load_fluids(fluids: Vec<RawFluidPrototype>) -> (Vec<FluidPrototype>, HashMap<String, FluidId>) {
@@ -249,6 +307,13 @@ fn load_entities(
     entities
         .into_iter()
         .map(|entity| {
+            validate_laser_turret_metadata(&entity.name, &entity)?;
+            if entity.size.x <= 0 || entity.size.y <= 0 {
+                return Err(PrototypeLoadError::InvalidEntityMetadata {
+                    entity: entity.name,
+                    detail: "dimensions must be positive",
+                });
+            }
             let name = entity.name;
             let size = IVec2::new(entity.size.x, entity.size.y);
             let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
@@ -340,6 +405,7 @@ fn load_entities(
                 max_health: entity.max_health,
                 pollution_per_minute_milli: entity.pollution_per_minute_milli,
                 gun_turret: entity.gun_turret,
+                laser_turret: entity.laser_turret,
                 enemy_spawner: entity.enemy_spawner.map(|spawner| EnemySpawnerPrototype {
                     max_alive_units: spawner.max_alive_units,
                     guard_units: spawner.guard_units,
@@ -352,6 +418,54 @@ fn load_entities(
             })
         })
         .collect()
+}
+
+fn validate_laser_turret_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    let is_laser = entity.entity_kind == crate::model::EntityKind::LaserTurret;
+    if is_laser
+        && (entity.max_health.is_none()
+            || entity.electric_energy_source.is_none()
+            || entity.laser_turret.is_none())
+    {
+        return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+            entity: name.to_string(),
+            detail: "laser turrets require health, electric, and laser-turret metadata",
+        });
+    }
+    if !is_laser && entity.laser_turret.is_some() {
+        return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+            entity: name.to_string(),
+            detail: "laser-turret metadata is only valid on laser turret entities",
+        });
+    }
+    if let Some(laser) = entity.laser_turret {
+        if laser.range_tiles == 0 || laser.damage == 0 || laser.cooldown_ticks == 0 {
+            return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+                entity: name.to_string(),
+                detail: "range, damage, and cooldown must be positive",
+            });
+        }
+        let electric = entity
+            .electric_energy_source
+            .as_ref()
+            .expect("presence checked above");
+        if electric.energy_usage_watts == 0 || electric.drain_watts == 0 {
+            return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+                entity: name.to_string(),
+                detail: "active power and idle drain must be positive",
+            });
+        }
+        if entity.max_health == Some(0) {
+            return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+                entity: name.to_string(),
+                detail: "maximum health must be positive",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Furnaces and mining drills work from exactly one energy source, so their

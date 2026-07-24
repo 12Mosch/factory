@@ -1,5 +1,7 @@
 use super::super::*;
 use super::ids::*;
+use factory_data::EquipmentEffectPrototype;
+use std::collections::HashSet;
 
 pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError> {
     for (index, item) in catalog.items.iter().enumerate() {
@@ -15,6 +17,31 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
             && repair.restore_health == 0
         {
             return Err(SimValidationError::UnknownItem(item.id));
+        }
+        if let Some(armor) = item.armor.as_ref() {
+            let mut types = HashSet::new();
+            if armor.grid_width == 0
+                || armor.grid_height == 0
+                || armor.resistances.iter().any(|resistance| {
+                    resistance.percent_reduction_permyriad > 10_000
+                        || !types.insert(resistance.damage_type)
+                })
+            {
+                return Err(SimValidationError::UnknownItem(item.id));
+            }
+        }
+        if let Some(equipment) = item.equipment {
+            let valid_effect = match equipment.effect {
+                EquipmentEffectPrototype::PowerGeneration { power_watts } => power_watts > 0,
+                EquipmentEffectPrototype::Battery { capacity_joules } => capacity_joules > 0,
+                EquipmentEffectPrototype::EnergyShield {
+                    capacity_points,
+                    max_recharge_watts,
+                } => capacity_points > 0 && max_recharge_watts > 0,
+            };
+            if equipment.width == 0 || equipment.height == 0 || !valid_effect {
+                return Err(SimValidationError::UnknownItem(item.id));
+            }
         }
     }
 
@@ -90,6 +117,11 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
     }
 
     for prototype in &catalog.entities {
+        if prototype.size.x <= 0 || prototype.size.y <= 0 {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
+        }
         if let Some(item_id) = prototype.build_item
             && !item_exists(catalog, item_id)
         {
@@ -261,6 +293,27 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                 if gun_turret.range_tiles == 0
                     || gun_turret.cooldown_ticks == 0
                     || prototype.max_health.is_none()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::LaserTurret => {
+                let Some(laser_turret) = prototype.laser_turret.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if laser_turret.range_tiles == 0
+                    || laser_turret.damage == 0
+                    || laser_turret.cooldown_ticks == 0
+                    || prototype.max_health.is_none()
+                    || prototype.electric_energy_source.is_none()
+                    || prototype
+                        .electric_energy_source
+                        .as_ref()
+                        .is_some_and(|source| source.drain_watts == 0)
                 {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
                         prototype_id: prototype.id,

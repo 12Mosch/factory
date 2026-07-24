@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::catalog::PrototypeCatalog;
-use crate::model::{EntityKind, TechnologyEffect};
+use crate::model::{DamageType, EntityKind, EquipmentEffectPrototype, TechnologyEffect};
 
 use super::common::{recipe_by_id, researchable_technology_ids};
 
@@ -21,6 +21,69 @@ fn coal_loads_fuel_value() {
 
     assert_eq!(coal.fuel_value_joules, Some(4_000_000));
     assert_eq!(iron_ore.fuel_value_joules, None);
+}
+
+#[test]
+fn military_items_load_typed_ammo_armor_and_powered_equipment() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let firearm = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "firearm_magazine")
+        .and_then(|item| item.ammo)
+        .unwrap();
+    let piercing = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "piercing_rounds_magazine")
+        .and_then(|item| item.ammo)
+        .unwrap();
+    assert_eq!((firearm.shots_per_item, firearm.damage_per_shot), (10, 5));
+    assert_eq!((piercing.shots_per_item, piercing.damage_per_shot), (10, 8));
+    assert_eq!(firearm.damage_type, DamageType::Physical);
+    assert_eq!(piercing.damage_type, DamageType::Physical);
+
+    let armor = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "modular_armor")
+        .and_then(|item| item.armor.as_ref())
+        .unwrap();
+    assert_eq!((armor.grid_width, armor.grid_height), (5, 5));
+    assert_eq!(armor.resistances.len(), 1);
+    assert_eq!(armor.resistances[0].damage_type, DamageType::Physical);
+    assert_eq!(armor.resistances[0].flat_reduction, 2);
+    assert_eq!(armor.resistances[0].percent_reduction_permyriad, 2_000);
+
+    let effects = [
+        "portable_solar_panel",
+        "battery_equipment",
+        "energy_shield_equipment",
+    ]
+    .map(|name| {
+        catalog
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .and_then(|item| item.equipment)
+            .unwrap()
+            .effect
+    });
+    assert_eq!(
+        effects,
+        [
+            EquipmentEffectPrototype::PowerGeneration {
+                power_watts: 60_000,
+            },
+            EquipmentEffectPrototype::Battery {
+                capacity_joules: 500_000,
+            },
+            EquipmentEffectPrototype::EnergyShield {
+                capacity_points: 50,
+                max_recharge_watts: 60_000,
+            },
+        ]
+    );
 }
 
 #[test]

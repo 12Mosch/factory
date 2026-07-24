@@ -29,6 +29,26 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidEntityMetadata {
+        entity: String,
+        detail: &'static str,
+    },
+    InvalidAmmoMetadata {
+        item: String,
+        detail: &'static str,
+    },
+    InvalidArmorMetadata {
+        item: String,
+        detail: &'static str,
+    },
+    InvalidEquipmentMetadata {
+        item: String,
+        detail: &'static str,
+    },
+    InvalidLaserTurretMetadata {
+        entity: String,
+        detail: &'static str,
+    },
     MissingFluidReference {
         owner: String,
         fluid: String,
@@ -141,6 +161,34 @@ impl fmt::Display for PrototypeLoadError {
             Self::InvalidBuildingMenuMetadata { entity, detail } => write!(
                 formatter,
                 "entity {entity:?} has invalid building menu metadata: {detail}"
+            ),
+            Self::InvalidEntityMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid metadata: {detail}"
+                )
+            }
+            Self::InvalidAmmoMetadata { item, detail } => {
+                write!(
+                    formatter,
+                    "item {item:?} has invalid ammunition metadata: {detail}"
+                )
+            }
+            Self::InvalidArmorMetadata { item, detail } => {
+                write!(
+                    formatter,
+                    "item {item:?} has invalid armor metadata: {detail}"
+                )
+            }
+            Self::InvalidEquipmentMetadata { item, detail } => {
+                write!(
+                    formatter,
+                    "item {item:?} has invalid equipment metadata: {detail}"
+                )
+            }
+            Self::InvalidLaserTurretMetadata { entity, detail } => write!(
+                formatter,
+                "entity {entity:?} has invalid laser turret metadata: {detail}"
             ),
             Self::MissingFluidReference { owner, fluid } => {
                 write!(

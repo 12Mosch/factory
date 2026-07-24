@@ -20,7 +20,8 @@ use crate::ui::map_view::{
     fullscreen_map_display_size, fullscreen_map_image_size,
 };
 use crate::ui::resources::{
-    CraftingWindowState, OpenContainer, ProductionStatsWindowState, TechnologyWindowState,
+    CraftingWindowState, EquipmentWindowState, OpenContainer, ProductionStatsWindowState,
+    TechnologyWindowState,
 };
 use crate::utils::remove_previous_word;
 use factory_sim::SimCommand;
@@ -35,42 +36,48 @@ pub(crate) struct WorldBlockingWindows<'w> {
     save_load: Res<'w, SaveLoadWindowState>,
     build_menu: Res<'w, BuildMenuState>,
     blueprint_library: Res<'w, BlueprintLibraryWindowState>,
+    equipment: Res<'w, EquipmentWindowState>,
+}
+
+/// Open/closed state of every window that blocks world interaction.
+struct WindowOpenFlags {
+    map: bool,
+    stats: bool,
+    crafting: bool,
+    audio_settings: bool,
+    enemy_settings: bool,
+    save_load: bool,
+    build_menu: bool,
+    blueprint_library: bool,
+    equipment: bool,
 }
 
 impl WorldBlockingWindows<'_> {
     fn any_open(&self) -> bool {
-        world_blocking_windows_open(
-            self.map.open,
-            self.stats.open,
-            self.crafting.open,
-            self.audio_settings.open,
-            self.enemy_settings.open,
-            self.save_load.open,
-            self.build_menu.open,
-            self.blueprint_library.open,
-        )
+        world_blocking_windows_open(WindowOpenFlags {
+            map: self.map.open,
+            stats: self.stats.open,
+            crafting: self.crafting.open,
+            audio_settings: self.audio_settings.open,
+            enemy_settings: self.enemy_settings.open,
+            save_load: self.save_load.open,
+            build_menu: self.build_menu.open,
+            blueprint_library: self.blueprint_library.open,
+            equipment: self.equipment.open,
+        })
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn world_blocking_windows_open(
-    map_open: bool,
-    stats_open: bool,
-    crafting_open: bool,
-    audio_settings_open: bool,
-    enemy_settings_open: bool,
-    save_load_open: bool,
-    build_menu_open: bool,
-    blueprint_library_open: bool,
-) -> bool {
-    map_open
-        || stats_open
-        || crafting_open
-        || audio_settings_open
-        || enemy_settings_open
-        || save_load_open
-        || build_menu_open
-        || blueprint_library_open
+fn world_blocking_windows_open(flags: WindowOpenFlags) -> bool {
+    flags.map
+        || flags.stats
+        || flags.crafting
+        || flags.audio_settings
+        || flags.enemy_settings
+        || flags.save_load
+        || flags.build_menu
+        || flags.blueprint_library
+        || flags.equipment
 }
 
 pub(crate) fn reset_app_input_state(
@@ -99,6 +106,7 @@ pub(crate) struct PanelInputResources<'w> {
     build_state: ResMut<'w, BuildPlacementState>,
     planner: ResMut<'w, PlannerState>,
     blueprint_library: ResMut<'w, BlueprintLibraryWindowState>,
+    equipment: ResMut<'w, EquipmentWindowState>,
 }
 
 pub(crate) fn handle_panel_input(
@@ -119,16 +127,17 @@ pub(crate) fn handle_panel_input(
             }
             resources.input_state.escape_consumed = true;
         }
-        resources.input_state.world_blocked = world_blocking_windows_open(
-            resources.map.open,
-            resources.stats.open,
-            resources.crafting.open,
-            resources.audio_settings.open,
-            resources.enemy_settings.open,
-            resources.save_load.open,
-            resources.build_menu.open,
-            resources.blueprint_library.open,
-        );
+        resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
+            map: resources.map.open,
+            stats: resources.stats.open,
+            crafting: resources.crafting.open,
+            audio_settings: resources.audio_settings.open,
+            enemy_settings: resources.enemy_settings.open,
+            save_load: resources.save_load.open,
+            build_menu: resources.build_menu.open,
+            blueprint_library: resources.blueprint_library.open,
+            equipment: resources.equipment.open,
+        });
         return;
     }
 
@@ -141,16 +150,17 @@ pub(crate) fn handle_panel_input(
             }
             resources.input_state.escape_consumed = true;
         }
-        resources.input_state.world_blocked = world_blocking_windows_open(
-            resources.map.open,
-            resources.stats.open,
-            resources.crafting.open,
-            resources.audio_settings.open,
-            resources.enemy_settings.open,
-            resources.save_load.open,
-            resources.build_menu.open,
-            resources.blueprint_library.open,
-        );
+        resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
+            map: resources.map.open,
+            stats: resources.stats.open,
+            crafting: resources.crafting.open,
+            audio_settings: resources.audio_settings.open,
+            enemy_settings: resources.enemy_settings.open,
+            save_load: resources.save_load.open,
+            build_menu: resources.build_menu.open,
+            blueprint_library: resources.blueprint_library.open,
+            equipment: resources.equipment.open,
+        });
         return;
     }
 
@@ -195,6 +205,15 @@ pub(crate) fn handle_panel_input(
             resources.open_container.entity_id = None;
         }
     }
+    if keyboard.just_pressed(KeyCode::KeyE) {
+        resources.equipment.open = !resources.equipment.open;
+        resources.equipment.selected_inventory_slot = None;
+        resources.equipment.feedback = None;
+        if resources.equipment.open {
+            resources.build_state.selected = None;
+            resources.open_container.entity_id = None;
+        }
+    }
     if keyboard.just_pressed(KeyCode::KeyB) && control_held {
         if resources.blueprint_library.open {
             resources.blueprint_library.close();
@@ -230,6 +249,10 @@ pub(crate) fn handle_panel_input(
         } else if resources.enemy_settings.open {
             resources.enemy_settings.open = false;
             resources.input_state.escape_consumed = true;
+        } else if resources.equipment.open {
+            resources.equipment.open = false;
+            resources.equipment.selected_inventory_slot = None;
+            resources.input_state.escape_consumed = true;
         } else if resources.technology.open {
             resources.technology.open = false;
             resources.input_state.escape_consumed = true;
@@ -258,16 +281,17 @@ pub(crate) fn handle_panel_input(
         }
     }
 
-    resources.input_state.world_blocked = world_blocking_windows_open(
-        resources.map.open,
-        resources.stats.open,
-        resources.crafting.open,
-        resources.audio_settings.open,
-        resources.enemy_settings.open,
-        resources.save_load.open,
-        resources.build_menu.open,
-        resources.blueprint_library.open,
-    );
+    resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
+        map: resources.map.open,
+        stats: resources.stats.open,
+        crafting: resources.crafting.open,
+        audio_settings: resources.audio_settings.open,
+        enemy_settings: resources.enemy_settings.open,
+        save_load: resources.save_load.open,
+        build_menu: resources.build_menu.open,
+        blueprint_library: resources.blueprint_library.open,
+        equipment: resources.equipment.open,
+    });
 }
 
 pub(crate) fn handle_build_menu_search_input(

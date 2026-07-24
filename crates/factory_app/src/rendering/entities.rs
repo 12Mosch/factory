@@ -11,9 +11,9 @@ use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{
     assembler_color, boiler_color, chemical_plant_color, chest_color, electric_pole_color,
     enemy_spawner_color, furnace_color, gun_turret_color, inserter_color, lab_color,
-    mining_drill_color, offshore_pump_color, oil_refinery_color, pipe_color, pump_color,
-    pumpjack_color, splitter_color, steam_engine_color, storage_tank_color, transport_belt_color,
-    wall_color,
+    laser_turret_color, mining_drill_color, offshore_pump_color, oil_refinery_color, pipe_color,
+    pump_color, pumpjack_color, splitter_color, steam_engine_color, storage_tank_color,
+    transport_belt_color, wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
@@ -352,6 +352,12 @@ pub(crate) fn entity_prototype_visual_style(
         )),
         EntityKind::GunTurret => Some(entity_visual_style(
             gun_turret_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::LaserTurret => Some(entity_visual_style(
+            laser_turret_color(),
             machine_size(),
             prototype.entity_kind,
             direction,

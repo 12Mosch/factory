@@ -60,6 +60,7 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::StorageTank => storage_tank_layers(&mut builder, style),
         EntityKind::Wall => wall_layers(&mut builder, style),
         EntityKind::GunTurret => gun_turret_layers(&mut builder, style),
+        EntityKind::LaserTurret => laser_turret_layers(&mut builder, style),
         EntityKind::EnemySpawner => enemy_spawner_layers(&mut builder, style),
         EntityKind::ResourcePatch => {}
     }
@@ -601,6 +602,36 @@ fn gun_turret_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle)
             Vec2::ZERO,
             0.14,
             Color::srgba(0.94, 0.78, 0.36, 0.72),
+        );
+}
+
+fn laser_turret_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
+    let along = direction_vec(style.direction);
+    builder
+        .tile(
+            Vec2::splat(0.62),
+            Vec2::ZERO,
+            0.10,
+            Color::srgba(0.05, 0.14, 0.22, 0.90),
+        )
+        .oriented(
+            (Vec2::new(0.72, 0.20), Vec2::new(0.20, 0.72)),
+            (along * 0.18, along * 0.18),
+            style.direction,
+            0.12,
+            Color::srgba(0.14, 0.72, 0.92, 0.94),
+        )
+        .tile(
+            Vec2::splat(0.36),
+            Vec2::ZERO,
+            0.14,
+            Color::srgba(0.20, 0.88, 1.0, 0.88),
+        )
+        .tile(
+            Vec2::splat(0.18),
+            Vec2::ZERO,
+            0.16,
+            Color::srgba(0.78, 0.98, 1.0, 0.98),
         );
 }
 

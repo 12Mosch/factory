@@ -42,6 +42,7 @@ macro_rules! for_each_entity_state_map {
             enemy_spawners: crate::combat::EnemySpawnerState => EnemySpawner,
             entity_health: crate::combat::HealthState => _,
             inserter_energy: crate::machines::MachineEnergy => _,
+            laser_turrets: crate::combat::LaserTurretState => LaserTurret,
         }
     };
 }
@@ -133,7 +134,9 @@ pub struct PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::combat::{Damage, EnemySpawnerState, Faction, GunTurretState, HealthState};
+    use crate::combat::{
+        Damage, EnemySpawnerState, Faction, GunTurretState, HealthState, LaserTurretState,
+    };
     use crate::fluids::FluidBoxState;
     use crate::inventory::{test_inventory, test_slot, test_stack};
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
@@ -162,7 +165,8 @@ mod tests {
         // so both enum arms are pinned.
         // v21: transport items gained stable identities.
         // v22: inserter energy state was appended for burner inserters.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x8f37_df3b_a1dd_1ce0;
+        // v23: laser turret state was appended.
+        const EXPECTED_LAYOUT_HASH: u64 = 0xe2c5_c5b7_701d_3da1;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -342,6 +346,13 @@ mod tests {
         store
             .inserter_energy
             .insert(EntityId::new(14), MachineEnergy::Electric);
+        store.laser_turrets.insert(
+            EntityId::new(18),
+            LaserTurretState {
+                engaged: true,
+                cooldown_remaining_ticks: 23,
+            },
+        );
 
         store
     }

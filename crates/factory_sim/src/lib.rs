@@ -6,6 +6,7 @@ pub mod construction;
 pub mod crafting;
 pub mod enemies;
 pub mod entities;
+pub mod equipment;
 pub mod error;
 pub mod fluids;
 pub mod hash;

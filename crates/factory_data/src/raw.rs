@@ -1,11 +1,12 @@
 use serde::Deserialize;
 
 use crate::model::{
-    AmmoPrototype, AssemblingMachinePrototype, BoilerPrototype, BuildingCategory, BurnerPrototype,
-    CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig, EntityKind, FluidBoxIo,
-    FluidConnectionSide, FurnacePrototype, GunTurretPrototype, OffshorePumpPrototype,
-    PumpPrototype, RepairToolPrototype, ResourceExtraction, SplitterPrototype,
-    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype, BoilerPrototype, BuildingCategory,
+    BurnerPrototype, CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig,
+    EntityKind, EquipmentPrototype, FluidBoxIo, FluidConnectionSide, FurnacePrototype,
+    GunTurretPrototype, LaserTurretPrototype, OffshorePumpPrototype, PumpPrototype,
+    RepairToolPrototype, ResourceExtraction, SplitterPrototype, SteamEnginePrototype,
+    TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -121,6 +122,8 @@ pub(crate) struct RawItemPrototype {
     pub(crate) fuel_value_joules: Option<u64>,
     pub(crate) ammo: Option<AmmoPrototype>,
     pub(crate) repair: Option<RepairToolPrototype>,
+    pub(crate) armor: Option<ArmorPrototype>,
+    pub(crate) equipment: Option<EquipmentPrototype>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +181,7 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) max_health: Option<u32>,
     pub(crate) pollution_per_minute_milli: Option<u32>,
     pub(crate) gun_turret: Option<GunTurretPrototype>,
+    pub(crate) laser_turret: Option<LaserTurretPrototype>,
     pub(crate) enemy_spawner: Option<RawEnemySpawnerPrototype>,
 }
 

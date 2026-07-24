@@ -3,6 +3,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum DamageType {
+    Physical,
+    Fire,
+    Explosion,
+    Acid,
+    Laser,
+}
+
+impl DamageType {
+    pub const COUNT: usize = 5;
+
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct FluidPrototype {
     pub id: FluidId,
@@ -19,18 +36,58 @@ pub struct ItemPrototype {
     pub ammo: Option<AmmoPrototype>,
     /// Present when the item can be consumed to repair damaged entities.
     pub repair: Option<RepairToolPrototype>,
+    /// Present when the item can be equipped as the player's armor.
+    pub armor: Option<ArmorPrototype>,
+    /// Present when the item can be installed in an equipped armor grid.
+    pub equipment: Option<EquipmentPrototype>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct AmmoPrototype {
     pub damage_per_shot: u32,
     pub shots_per_item: u32,
+    pub damage_type: DamageType,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RepairToolPrototype {
     /// Total health one item restores before it is used up.
     pub restore_health: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ArmorPrototype {
+    pub grid_width: u8,
+    pub grid_height: u8,
+    pub resistances: Vec<DamageResistancePrototype>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct DamageResistancePrototype {
+    pub damage_type: DamageType,
+    pub flat_reduction: u32,
+    pub percent_reduction_permyriad: u16,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct EquipmentPrototype {
+    pub width: u8,
+    pub height: u8,
+    pub effect: EquipmentEffectPrototype,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum EquipmentEffectPrototype {
+    PowerGeneration {
+        power_watts: u64,
+    },
+    Battery {
+        capacity_joules: u64,
+    },
+    EnergyShield {
+        capacity_points: u32,
+        max_recharge_watts: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -78,6 +135,7 @@ pub struct EntityPrototype {
     /// working, in milli-pollution-units per minute.
     pub pollution_per_minute_milli: Option<u32>,
     pub gun_turret: Option<GunTurretPrototype>,
+    pub laser_turret: Option<LaserTurretPrototype>,
     pub enemy_spawner: Option<EnemySpawnerPrototype>,
 }
 
@@ -95,6 +153,14 @@ pub enum BuildingCategory {
 pub struct GunTurretPrototype {
     /// Maximum distance from the turret's footprint to a target, in tiles.
     pub range_tiles: u32,
+    pub cooldown_ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct LaserTurretPrototype {
+    /// Maximum distance from the turret's footprint to a target, in tiles.
+    pub range_tiles: u32,
+    pub damage: u32,
     pub cooldown_ticks: u32,
 }
 
@@ -377,6 +443,7 @@ pub enum EntityKind {
     StorageTank,
     Wall,
     GunTurret,
+    LaserTurret,
     EnemySpawner,
 }
 
