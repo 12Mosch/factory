@@ -13,6 +13,7 @@ mod inventory;
 mod manual_crafting;
 mod manual_mining;
 mod mining_drills;
+mod modules;
 mod oil;
 mod onboarding;
 mod placement;

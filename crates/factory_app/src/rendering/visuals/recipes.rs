@@ -49,6 +49,7 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::Furnace => furnace_layers(&mut builder, style),
         EntityKind::AssemblingMachine => assembler_layers(&mut builder, style),
         EntityKind::Lab => lab_layers(&mut builder, style),
+        EntityKind::Beacon => beacon_layers(&mut builder, style),
         EntityKind::Inserter => inserter_layers(&mut builder, style),
         EntityKind::ElectricPole => electric_pole_layers(&mut builder, style),
         EntityKind::SteamEngine => steam_engine_layers(&mut builder, style),
@@ -276,6 +277,35 @@ fn lab_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
             0.11,
             Color::srgba(0.92, 0.80, 0.44, 0.42),
             0.45,
+        );
+}
+
+fn beacon_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+    builder
+        .scaled_ellipse(
+            Vec2::new(0.76, 0.30),
+            Vec2::ZERO,
+            0.09,
+            Color::srgba(0.08, 0.22, 0.30, 0.78),
+        )
+        .scaled_ellipse(
+            Vec2::new(0.54, 0.22),
+            Vec2::ZERO,
+            0.11,
+            Color::srgba(0.22, 0.82, 0.96, 0.62),
+        )
+        .scaled_rounded(
+            Vec2::new(0.12, 0.66),
+            Vec2::new(0.0, 0.04),
+            0.13,
+            Color::srgba(0.72, 0.94, 1.0, 0.92),
+            0.45,
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.18),
+            Vec2::new(0.0, 0.30),
+            0.15,
+            Color::srgba(0.88, 0.98, 1.0, 0.98),
         );
 }
 

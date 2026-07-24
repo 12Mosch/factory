@@ -101,6 +101,9 @@ pub struct WorldSim {
     pub(crate) chunk_revision: u64,
     #[serde(skip, default)]
     pub(crate) chunk_generation_history: ChunkGenerationHistory,
+    /// Catalog-derived bound used by local beacon lookups.
+    #[serde(skip, default)]
+    pub(crate) max_beacon_effect_radius_tiles: u16,
     pub(crate) resource_revision: u64,
     #[serde(skip, default)]
     pub(crate) resource_dirty_tiles: VecDeque<ResourceTileChange>,

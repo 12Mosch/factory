@@ -4,9 +4,9 @@ use crate::model::{
     AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype, BoilerPrototype, BuildingCategory,
     BurnerPrototype, CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig,
     EntityKind, EquipmentPrototype, FluidBoxIo, FluidConnectionSide, FurnacePrototype,
-    GunTurretPrototype, LaserTurretPrototype, OffshorePumpPrototype, PumpPrototype,
-    RepairToolPrototype, ResourceExtraction, SplitterPrototype, SteamEnginePrototype,
-    TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    GunTurretPrototype, LaserTurretPrototype, ModuleEffectPrototype, OffshorePumpPrototype,
+    PumpPrototype, RepairToolPrototype, ResourceExtraction, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -126,6 +126,7 @@ pub(crate) struct RawItemPrototype {
     pub(crate) repair: Option<RepairToolPrototype>,
     pub(crate) armor: Option<ArmorPrototype>,
     pub(crate) equipment: Option<EquipmentPrototype>,
+    pub(crate) module_effect: Option<ModuleEffectPrototype>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -163,6 +164,9 @@ pub(crate) struct RawEntityPrototype {
     #[serde(default)]
     pub(crate) building_menu_order: Option<u16>,
     pub(crate) inventory_slot_count: Option<usize>,
+    #[serde(default)]
+    pub(crate) module_slot_count: usize,
+    pub(crate) beacon: Option<crate::model::BeaconPrototype>,
     pub(crate) burner: Option<BurnerPrototype>,
     pub(crate) mining_drill: Option<RawMiningDrillPrototype>,
     pub(crate) furnace: Option<FurnacePrototype>,

@@ -1,11 +1,12 @@
 use crate::ids::EntityId;
 use crate::inventory::ItemSlot;
-use crate::machines::MachineEnergy;
+use crate::machines::{MachineEnergy, MachineModuleState};
 use factory_data::{ItemId, RecipeId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct FurnaceState {
+    pub modules: MachineModuleState,
     pub input_slot: ItemSlot,
     pub energy: MachineEnergy,
     pub output_slot: ItemSlot,

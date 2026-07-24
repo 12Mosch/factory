@@ -14,6 +14,7 @@ use crate::ui::machine_indicators::{
     spawn_boiler_panel, spawn_furnace_panel, spawn_inserter_panel, spawn_machine_guidance,
     spawn_mining_drill_panel,
 };
+use crate::ui::module_panel::{module_slot_count, spawn_module_panel};
 use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
 
@@ -110,6 +111,13 @@ fn spawn_container_window_contents(
             OpenMachineKind::Furnace => spawn_furnace_panel(machine_panel, sim, entity_id),
             OpenMachineKind::Boiler => spawn_boiler_panel(machine_panel),
             OpenMachineKind::Inserter => spawn_inserter_panel(machine_panel),
+            OpenMachineKind::Beacon => {
+                machine_panel.spawn((
+                    Text::new("Beacon"),
+                    TextFont::from_font_size(14.0),
+                    TextColor(Color::WHITE),
+                ));
+            }
             OpenMachineKind::Assembler => {
                 let prototype = sim
                     .entities()
@@ -140,6 +148,14 @@ fn spawn_container_window_contents(
                 );
             }
         }
+        let module_slots = module_slot_count(sim, entity_id);
+        if module_slots > 0 {
+            spawn_module_panel(
+                machine_panel,
+                module_slots,
+                snapshot.kind != OpenMachineKind::Beacon,
+            );
+        }
         if let Some(status) = sim.machine_status_for_entity(entity_id) {
             spawn_machine_guidance(machine_panel, status);
         }
@@ -150,7 +166,10 @@ fn spawn_container_window_contents(
 fn machine_panel_width(kind: OpenMachineKind) -> f32 {
     match kind {
         OpenMachineKind::Assembler => 420.0,
-        OpenMachineKind::Chest | OpenMachineKind::Lab | OpenMachineKind::Turret => 244.0,
+        OpenMachineKind::Chest
+        | OpenMachineKind::Lab
+        | OpenMachineKind::Turret
+        | OpenMachineKind::Beacon => 244.0,
         OpenMachineKind::MiningDrill
         | OpenMachineKind::Furnace
         | OpenMachineKind::Boiler

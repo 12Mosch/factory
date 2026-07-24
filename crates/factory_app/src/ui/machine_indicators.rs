@@ -393,7 +393,10 @@ pub(crate) fn update_machine_indicators(
                         1,
                     ))
                 }
-                OpenMachineKind::Chest | OpenMachineKind::Lab | OpenMachineKind::Turret => None,
+                OpenMachineKind::Chest
+                | OpenMachineKind::Lab
+                | OpenMachineKind::Turret
+                | OpenMachineKind::Beacon => None,
             });
 
     for mut text in &mut energy_texts {

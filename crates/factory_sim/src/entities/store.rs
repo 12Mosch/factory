@@ -43,6 +43,7 @@ macro_rules! for_each_entity_state_map {
             entity_health: crate::combat::HealthState => _,
             inserter_energy: crate::machines::MachineEnergy => _,
             laser_turrets: crate::combat::LaserTurretState => LaserTurret,
+            beacons: crate::machines::BeaconState => Beacon,
         }
     };
 }
@@ -97,6 +98,65 @@ macro_rules! define_entity_store {
                 $(machine_kind_check!(self, entity_id, $field, $kind);)*
                 None
             }
+
+            /// Module state shared by all productive module-bearing machines.
+            ///
+            /// Keep per-kind dispatch here so effect resolution, transfers,
+            /// pollution, power, and presentation cannot drift independently
+            /// when another productive machine type gains module support.
+            pub(crate) fn machine_module_state(
+                &self,
+                entity_id: EntityId,
+            ) -> Option<&crate::machines::MachineModuleState> {
+                if let Some(state) = self.assembling_machines.get(&entity_id) {
+                    Some(&state.modules)
+                } else if let Some(state) = self.furnaces.get(&entity_id) {
+                    Some(&state.modules)
+                } else if let Some(state) = self.mining_drills.get(&entity_id) {
+                    Some(&state.modules)
+                } else {
+                    self.labs.get(&entity_id).map(|state| &state.modules)
+                }
+            }
+
+            pub(crate) fn machine_module_state_mut(
+                &mut self,
+                entity_id: EntityId,
+            ) -> Option<&mut crate::machines::MachineModuleState> {
+                if let Some(state) = self.assembling_machines.get_mut(&entity_id) {
+                    Some(&mut state.modules)
+                } else if let Some(state) = self.furnaces.get_mut(&entity_id) {
+                    Some(&mut state.modules)
+                } else if let Some(state) = self.mining_drills.get_mut(&entity_id) {
+                    Some(&mut state.modules)
+                } else {
+                    self.labs.get_mut(&entity_id).map(|state| &mut state.modules)
+                }
+            }
+
+            /// Module slots for productive machines and passive beacons.
+            pub(crate) fn module_slots(
+                &self,
+                entity_id: EntityId,
+            ) -> Option<&crate::machines::ModuleSlots> {
+                self.machine_module_state(entity_id)
+                    .map(|modules| &modules.slots)
+                    .or_else(|| self.beacons.get(&entity_id).map(|state| &state.slots))
+            }
+
+            pub(crate) fn module_slots_mut(
+                &mut self,
+                entity_id: EntityId,
+            ) -> Option<&mut crate::machines::ModuleSlots> {
+                if self.machine_module_state(entity_id).is_some() {
+                    return self
+                        .machine_module_state_mut(entity_id)
+                        .map(|modules| &mut modules.slots);
+                }
+                self.beacons
+                    .get_mut(&entity_id)
+                    .map(|state| &mut state.slots)
+            }
         }
     };
 }
@@ -142,7 +202,7 @@ mod tests {
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
     use crate::machines::{
         AssemblingMachineState, BurnerEnergy, FurnaceState, LabState, MachineEnergy,
-        MiningDrillState, PumpjackState,
+        MachineModuleState, MiningDrillState, PumpjackState,
     };
     use crate::player::ManualMiningTarget;
     use crate::power::{
@@ -166,7 +226,8 @@ mod tests {
         // v21: transport items gained stable identities.
         // v22: inserter energy state was appended for burner inserters.
         // v23: laser turret state was appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xe2c5_c5b7_701d_3da1;
+        // v25: module state joined productive machines and beacon state was appended.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x9106_6fd1_4f8e_d2b1;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -241,6 +302,7 @@ mod tests {
         store.mining_drills.insert(
             EntityId::new(2),
             MiningDrillState {
+                modules: MachineModuleState::with_slot_count(0),
                 energy: MachineEnergy::Electric,
                 mining_progress_ticks: 7,
                 mining_required_ticks: 60,
@@ -251,6 +313,7 @@ mod tests {
         store.furnaces.insert(
             EntityId::new(3),
             FurnaceState {
+                modules: MachineModuleState::with_slot_count(0),
                 input_slot: test_slot(test_stack(iron, 3)),
                 energy: MachineEnergy::Burner(burner_energy(iron)),
                 output_slot: test_slot(test_stack(copper, 1)),
@@ -262,6 +325,7 @@ mod tests {
         store.assembling_machines.insert(
             EntityId::new(4),
             AssemblingMachineState {
+                modules: MachineModuleState::with_slot_count(0),
                 selected_recipe: Some(recipe),
                 input_inventory: test_inventory(vec![Some(test_stack(iron, 4))]),
                 output_inventory: test_inventory(vec![Some(test_stack(copper, 1))]),
@@ -274,6 +338,7 @@ mod tests {
         store.labs.insert(
             EntityId::new(5),
             LabState {
+                modules: MachineModuleState::with_slot_count(0),
                 inventory: test_inventory(vec![Some(test_stack(iron, 1))]),
                 active_technology: Some(technology),
                 progress_ticks: 13,

@@ -81,6 +81,61 @@ pub fn assembler_state(
     sim.entities.assembler_state(entity_id)
 }
 
+pub fn module_slots(sim: &Simulation, entity_id: EntityId) -> Result<&ModuleSlots, ModuleError> {
+    if let Some(slots) = sim.entities.module_slots(entity_id) {
+        Ok(slots)
+    } else if sim.entities.placed_entity(entity_id).is_some() {
+        Err(ModuleError::UnsupportedMachine(entity_id))
+    } else {
+        Err(ModuleError::MissingEntity(entity_id))
+    }
+}
+
+pub fn resolved_module_effects(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<ResolvedModuleEffects, ModuleError> {
+    if let Some(modules) = sim.entities.machine_module_state(entity_id) {
+        Ok(modules.resolved_effects)
+    } else if let Some(state) = sim.entities.beacons.get(&entity_id) {
+        let transmission = sim
+            .entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.beacon)
+            .map_or(0, |beacon| beacon.transmission_permyriad);
+        let mut effects = ResolvedModuleEffects::default();
+        for stack in state.slots.slots().iter().filter_map(|slot| slot.stack()) {
+            if let Some(effect) = sim
+                .world
+                .prototypes
+                .item(stack.item_id())
+                .and_then(|item| item.module_effect)
+            {
+                effects.add_effect(effect, transmission);
+            }
+        }
+        Ok(effects)
+    } else if sim.entities.placed_entity(entity_id).is_some() {
+        Err(ModuleError::UnsupportedMachine(entity_id))
+    } else {
+        Err(ModuleError::MissingEntity(entity_id))
+    }
+}
+
+pub fn productivity_progress_permyriad(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<u32, ModuleError> {
+    if let Some(modules) = sim.entities.machine_module_state(entity_id) {
+        Ok(modules.productivity_progress_permyriad)
+    } else if sim.entities.placed_entity(entity_id).is_some() {
+        Err(ModuleError::UnsupportedMachine(entity_id))
+    } else {
+        Err(ModuleError::MissingEntity(entity_id))
+    }
+}
+
 /// Resolves a displayed inventory panel slot without exposing the entity
 /// state's storage layout to presentation code.
 pub fn inventory_panel_slot(
@@ -131,6 +186,9 @@ pub fn inventory_panel_slot(
         InventoryPanel::AssemblerOutput => entity_id
             .and_then(|id| sim.entities.assembler_state(id).ok())
             .and_then(|state| state.output_inventory.slot(slot_index)),
+        InventoryPanel::Modules => entity_id
+            .and_then(|id| module_slots(sim, id).ok())
+            .and_then(|slots| slots.slot(slot_index)),
     }
 }
 
@@ -169,5 +227,8 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::AssemblerOutput => entity_id
             .and_then(|id| sim.entities.assembler_state(id).ok())
             .map_or(0, |state| state.output_inventory.slots().len()),
+        InventoryPanel::Modules => entity_id
+            .and_then(|id| module_slots(sim, id).ok())
+            .map_or(0, ModuleSlots::len),
     }
 }

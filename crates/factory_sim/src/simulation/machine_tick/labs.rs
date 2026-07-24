@@ -23,12 +23,22 @@ impl MachineTickContext<'_> {
                 state.required_ticks = 0;
                 continue;
             };
-            let required_ticks = technology.research_time_ticks;
+            let required_ticks = if state.active_technology == Some(technology_id) {
+                state.required_ticks
+            } else {
+                required_ticks_with_modules(
+                    technology.research_time_ticks,
+                    1,
+                    1,
+                    state.modules.resolved_effects,
+                )
+            };
             let science_packs = technology.science_packs.as_slice();
 
             if state.active_technology != Some(technology_id) {
                 state.active_technology = Some(technology_id);
                 state.progress_ticks = 0;
+                state.modules.productivity_progress_permyriad = 0;
             }
             state.required_ticks = required_ticks;
             let can_work = profiler.measure(ProfilePhase::InventoryTransfers, || {
@@ -53,6 +63,7 @@ impl MachineTickContext<'_> {
             if !completed {
                 continue;
             }
+            let output_units = 1 + state.modules.complete_productive_cycle();
 
             profiler.measure(ProfilePhase::InventoryTransfers, || {
                 for science_pack in science_packs {
@@ -69,7 +80,7 @@ impl MachineTickContext<'_> {
                     .record_item_consumed(science_pack.item, u64::from(science_pack.amount));
             }
             self.power_demand_cache.mark_dirty(entity_id);
-            self.add_research_units(1)
+            self.add_research_units(output_units.min(u64::from(u32::MAX)) as u32)
                 .expect("lab completion should have active research");
         }
 

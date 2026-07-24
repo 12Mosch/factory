@@ -76,35 +76,6 @@ pub(in crate::simulation) fn furnace_input_accepts_item(
     first_matching_unlocked_smelting_recipe(catalog, research, item_id).is_some()
 }
 
-/// Smelting duration on a specific furnace: the recipe time scaled by the
-/// furnace prototype's crafting speed fraction.
-pub(in crate::simulation) fn furnace_required_ticks(
-    prototype: &factory_data::EntityPrototype,
-    recipe_ticks: u32,
-) -> u32 {
-    let Some(furnace) = prototype.furnace.as_ref() else {
-        return recipe_ticks;
-    };
-    assembler_required_ticks(
-        recipe_ticks,
-        furnace.crafting_speed_numerator,
-        furnace.crafting_speed_denominator,
-    )
-}
-
-pub(in crate::simulation) fn assembler_required_ticks(
-    recipe_ticks: u32,
-    speed_numerator: u32,
-    speed_denominator: u32,
-) -> u32 {
-    let numerator = speed_numerator.max(1);
-    let denominator = speed_denominator.max(1);
-    recipe_ticks
-        .saturating_mul(denominator)
-        .saturating_add(numerator - 1)
-        / numerator
-}
-
 pub(in crate::simulation) fn assembler_is_empty_for_recipe_change(
     state: &AssemblingMachineState,
 ) -> bool {
@@ -200,6 +171,15 @@ pub(in crate::simulation) fn assembler_output_can_accept(
     output_inventory: &Inventory,
     products: &[factory_data::ItemAmount],
 ) -> bool {
+    assembler_output_can_accept_copies(catalog, output_inventory, products, 1)
+}
+
+pub(in crate::simulation) fn assembler_output_can_accept_copies(
+    catalog: &PrototypeCatalog,
+    output_inventory: &Inventory,
+    products: &[factory_data::ItemAmount],
+    copies: u64,
+) -> bool {
     let empty_slots = output_inventory
         .slots()
         .iter()
@@ -221,18 +201,20 @@ pub(in crate::simulation) fn assembler_output_can_accept(
         let required = products
             .iter()
             .filter(|candidate| candidate.item == product.item)
-            .map(|candidate| u32::from(candidate.amount))
-            .sum::<u32>();
+            .map(|candidate| u64::from(candidate.amount))
+            .sum::<u64>()
+            .saturating_mul(copies);
         let existing_capacity = output_inventory
             .slots()
             .iter()
             .filter_map(|slot| slot.stack())
             .filter(|stack| stack.item_id() == product.item)
             .map(|stack| stack_size.saturating_sub(u32::from(stack.count())))
-            .sum::<u32>();
+            .map(u64::from)
+            .sum::<u64>();
         let remaining = required.saturating_sub(existing_capacity);
         needed_empty_slots =
-            needed_empty_slots.saturating_add(remaining.div_ceil(stack_size) as usize);
+            needed_empty_slots.saturating_add(remaining.div_ceil(u64::from(stack_size)) as usize);
         if needed_empty_slots > empty_slots {
             return false;
         }
@@ -279,6 +261,15 @@ pub(in crate::simulation) fn fluid_product_box_indices(
     box_states: &[FluidBoxState],
     fluid_products: &[factory_data::FluidAmount],
 ) -> Option<Vec<usize>> {
+    fluid_product_box_indices_for_copies(prototype_boxes, box_states, fluid_products, 1)
+}
+
+pub(in crate::simulation) fn fluid_product_box_indices_for_copies(
+    prototype_boxes: &[factory_data::FluidBoxPrototype],
+    box_states: &[FluidBoxState],
+    fluid_products: &[factory_data::FluidAmount],
+    copies: u64,
+) -> Option<Vec<usize>> {
     let mut used = vec![false; prototype_boxes.len()];
     fluid_products
         .iter()
@@ -298,7 +289,7 @@ pub(in crate::simulation) fn fluid_product_box_indices(
                                     && prototype_box
                                         .capacity_milliunits
                                         .saturating_sub(state.amount_milliunits)
-                                        >= product.amount_milliunits
+                                        >= product.amount_milliunits.saturating_mul(copies)
                             })
                     })?;
             used[box_index] = true;
@@ -325,15 +316,18 @@ pub(in crate::simulation) fn consume_fluid_ingredients(
     }
 }
 
-pub(in crate::simulation) fn insert_fluid_products(
+pub(in crate::simulation) fn insert_fluid_product_copies(
     box_states: &mut [FluidBoxState],
     box_indices: &[usize],
     fluid_products: &[factory_data::FluidAmount],
+    copies: u64,
 ) {
     for (product, &box_index) in fluid_products.iter().zip(box_indices) {
         let state = &mut box_states[box_index];
         state.fluid_id = Some(product.fluid);
-        state.amount_milliunits += product.amount_milliunits;
+        state.amount_milliunits = state
+            .amount_milliunits
+            .saturating_add(product.amount_milliunits.saturating_mul(copies));
     }
 }
 
@@ -374,10 +368,12 @@ impl Simulation {
 
         state.selected_recipe = Some(recipe_id);
         state.crafting_progress_ticks = 0;
-        state.crafting_required_ticks = assembler_required_ticks(
+        state.modules.productivity_progress_permyriad = 0;
+        state.crafting_required_ticks = required_ticks_with_modules(
             recipe.crafting_time_ticks,
             state.crafting_speed_numerator,
             state.crafting_speed_denominator,
+            state.modules.resolved_effects,
         );
         self.invalidate_consumer_power_demand(entity_id);
 

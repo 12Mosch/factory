@@ -3,6 +3,7 @@ pub mod burner_energy;
 pub mod furnace;
 pub mod lab;
 pub mod mining_drill;
+pub mod modules;
 pub mod pumpjack;
 
 pub use crate::power::{BoilerError, BoilerState};
@@ -12,6 +13,9 @@ pub use self::burner_energy::{BurnerEnergy, MachineEnergy};
 pub use self::furnace::{FurnaceError, FurnaceState};
 pub use self::lab::{LabError, LabState};
 pub use self::mining_drill::{MiningDrillError, MiningDrillState};
+pub use self::modules::{
+    BeaconState, MachineModuleState, ModuleError, ModuleSlots, ResolvedModuleEffects,
+};
 pub use self::pumpjack::PumpjackState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

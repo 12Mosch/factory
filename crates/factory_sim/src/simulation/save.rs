@@ -21,7 +21,8 @@ use bincode::Options;
 // v22: inserter energy state joined the entity registry.
 // v23: laser turret and powered player equipment state joined the snapshot.
 // v24: deterministic day/night cycle phase joined the snapshot.
-pub const SAVE_VERSION: u32 = 24;
+// v25: machine module state and beacon state joined the entity registry.
+pub const SAVE_VERSION: u32 = 25;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -31,7 +32,8 @@ pub const SAVE_VERSION: u32 = 24;
 // v13: pumps and underground-pipe metadata joined EntityPrototype.
 // v14: typed ammo, laser turrets, armor, and powered equipment metadata.
 // v15: PrototypeCatalog gained the optional day_night_cycle config section.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 15;
+// v16: item module effects and entity module/beacon metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 16;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -334,6 +336,7 @@ impl SimulationSnapshotOwned {
         };
         sim.transport.initialize_item_tracking(&sim.entities);
         sim.ensure_fluid_network_topology();
+        sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();
         sim
     }

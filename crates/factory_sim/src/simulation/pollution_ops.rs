@@ -61,14 +61,40 @@ impl Simulation {
         let Some(chunk) = ChunkCoord::from_tile(x, y) else {
             return;
         };
+        let multiplier = entity_resolved_module_effects(&self.entities, entity_id).map_or(
+            10_000,
+            ResolvedModuleEffects::pollution_multiplier_permyriad,
+        );
+        let scaled_per_minute_milli = u64::from(per_minute_milli)
+            .saturating_mul(multiplier)
+            .saturating_add(9_999)
+            / 10_000;
         self.pollution_emitters.emitters.insert(
             entity_id,
             PollutionEmitter {
                 chunk,
-                rate: PollutionEmissionRate::from_per_minute_milli(per_minute_milli),
+                rate: PollutionEmissionRate::from_per_minute_milli(
+                    scaled_per_minute_milli.min(u64::from(u32::MAX)) as u32,
+                ),
                 active: false,
             },
         );
+    }
+
+    pub(super) fn refresh_pollution_emitter(&mut self, entity_id: EntityId) {
+        let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
+            return;
+        };
+        let was_active = self
+            .pollution_emitters
+            .emitters
+            .get(&entity_id)
+            .is_some_and(|emitter| emitter.active);
+        self.pollution_emitters.emitters.remove(&entity_id);
+        self.register_pollution_emitter(entity_id, placed.prototype_id, placed.x, placed.y);
+        if was_active {
+            self.pollution_emitters.mark_active(entity_id);
+        }
     }
 
     pub(super) fn unregister_pollution_emitter(&mut self, entity_id: EntityId) {
@@ -270,4 +296,13 @@ impl Simulation {
             .pollution_additions
             .saturating_add(count);
     }
+}
+
+fn entity_resolved_module_effects(
+    entities: &EntityStore,
+    entity_id: EntityId,
+) -> Option<ResolvedModuleEffects> {
+    entities
+        .machine_module_state(entity_id)
+        .map(|modules| modules.resolved_effects)
 }

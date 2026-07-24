@@ -19,6 +19,7 @@ pub(super) struct MachineEnergyContext<'a> {
     pub power: &'a PowerSubsystem,
     pub electric_consumers: &'a mut BTreeMap<EntityId, ElectricConsumerState>,
     pub entity_id: EntityId,
+    pub energy_multiplier_permyriad: u64,
 }
 
 /// Advances one tick of work on a machine driven by either energy source:
@@ -37,6 +38,7 @@ pub(super) fn advance_machine_progress<P: TickProfiler>(
             burner,
             progress_ticks,
             required_ticks,
+            context.energy_multiplier_permyriad,
             profiler,
         ),
         MachineEnergy::Electric => {
@@ -62,10 +64,13 @@ pub(super) fn advance_burner_progress<P: TickProfiler>(
     energy: &mut BurnerEnergy,
     progress_ticks: &mut u32,
     required_ticks: u32,
+    energy_multiplier_permyriad: u64,
     profiler: &mut P,
 ) -> MachineProgressAdvance {
     let mut consumed_fuel = None;
-    let joules_per_tick = energy.energy_usage_watts / FIXED_SIM_TICKS_PER_SECOND_F64;
+    let joules_per_tick = energy.energy_usage_watts * energy_multiplier_permyriad as f64
+        / 10_000.0
+        / FIXED_SIM_TICKS_PER_SECOND_F64;
     if energy.energy_remaining_joules + f64::EPSILON < joules_per_tick {
         consumed_fuel = profiler.measure(ProfilePhase::InventoryTransfers, || {
             try_consume_fuel(catalog, energy)

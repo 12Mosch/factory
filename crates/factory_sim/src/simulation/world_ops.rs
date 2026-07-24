@@ -6,6 +6,7 @@ impl WorldSim {
 
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
         let generator = WorldGenerator::from_catalog(&prototypes);
+        let max_beacon_effect_radius_tiles = prototypes.max_beacon_effect_radius_tiles();
         let chunks = generate_world_chunks(seed, &prototypes, &generator);
         Self {
             seed,
@@ -14,6 +15,7 @@ impl WorldSim {
             generator,
             chunk_revision: 0,
             chunk_generation_history: Default::default(),
+            max_beacon_effect_radius_tiles,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
         }
@@ -32,6 +34,7 @@ impl WorldSim {
         mut chunks: BTreeMap<ChunkCoord, Chunk>,
     ) -> Self {
         let generator = WorldGenerator::from_catalog(&prototypes);
+        let max_beacon_effect_radius_tiles = prototypes.max_beacon_effect_radius_tiles();
         for chunk in chunks.values_mut() {
             chunk.pollution_absorption_per_minute_milli = chunk
                 .tiles
@@ -53,6 +56,7 @@ impl WorldSim {
             generator,
             chunk_revision: 0,
             chunk_generation_history: Default::default(),
+            max_beacon_effect_radius_tiles,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
         }

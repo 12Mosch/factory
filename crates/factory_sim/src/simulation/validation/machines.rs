@@ -53,6 +53,14 @@ pub(in crate::simulation) fn validate_mining_drill(
     entity_id: EntityId,
     state: &MiningDrillState,
 ) -> Result<(), SimValidationError> {
+    validate_machine_modules(sim, entity_id, &state.modules)?;
+    let prototype = machine_prototype(sim, entity_id)?;
+    let expected_required = prototype.mining_drill.as_ref().map_or(0, |drill| {
+        required_ticks_with_modules(drill.ticks_per_item, 1, 1, state.modules.resolved_effects)
+    });
+    if state.mining_required_ticks != expected_required {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
     validate_machine_energy_matches_prototype(sim, entity_id, &state.energy)?;
     if let Some(fuel_slot) = state.energy.fuel_slot() {
         validate_item_slot(&sim.world.prototypes, fuel_slot)?;
@@ -86,6 +94,7 @@ pub(in crate::simulation) fn validate_furnace(
     entity_id: EntityId,
     state: &FurnaceState,
 ) -> Result<(), SimValidationError> {
+    validate_machine_modules(sim, entity_id, &state.modules)?;
     validate_machine_energy_matches_prototype(sim, entity_id, &state.energy)?;
     validate_item_slot(&sim.world.prototypes, state.input_slot)?;
     validate_item_slot(&sim.world.prototypes, state.output_slot)?;
@@ -101,12 +110,27 @@ pub(in crate::simulation) fn validate_furnace(
     }
 
     if let Some(recipe_id) = state.active_recipe {
-        smelting_recipe_by_id(&sim.world.prototypes, recipe_id).ok_or(
+        let recipe = smelting_recipe_by_id(&sim.world.prototypes, recipe_id).ok_or(
             SimValidationError::InvalidMachineRecipe {
                 entity_id,
                 recipe_id,
             },
         )?;
+        let furnace = machine_prototype(sim, entity_id)?
+            .furnace
+            .as_ref()
+            .ok_or(SimValidationError::InvalidEntityState { entity_id })?;
+        let expected = required_ticks_with_modules(
+            recipe.crafting_time_ticks,
+            furnace.crafting_speed_numerator,
+            furnace.crafting_speed_denominator,
+            state.modules.resolved_effects,
+        );
+        if state.crafting_required_ticks != expected {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+    } else if state.crafting_required_ticks != 0 {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
     Ok(())
@@ -128,6 +152,7 @@ pub(in crate::simulation) fn validate_assembler(
     entity_id: EntityId,
     state: &AssemblingMachineState,
 ) -> Result<(), SimValidationError> {
+    validate_machine_modules(sim, entity_id, &state.modules)?;
     validate_inventory(&sim.world.prototypes, &state.input_inventory)?;
     validate_inventory(&sim.world.prototypes, &state.output_inventory)?;
 
@@ -141,12 +166,16 @@ pub(in crate::simulation) fn validate_assembler(
     }
 
     let Some(recipe_id) = state.selected_recipe else {
+        if state.crafting_required_ticks != 0 {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
         return Ok(());
     };
 
     let machine_category =
         assembler_machine_category(&sim.world.prototypes, &sim.entities, entity_id);
-    sim.world
+    let recipe = sim
+        .world
         .prototypes
         .recipe(recipe_id)
         .filter(|recipe| recipe.category == machine_category)
@@ -154,6 +183,15 @@ pub(in crate::simulation) fn validate_assembler(
             entity_id,
             recipe_id,
         })?;
+    let expected = required_ticks_with_modules(
+        recipe.crafting_time_ticks,
+        state.crafting_speed_numerator,
+        state.crafting_speed_denominator,
+        state.modules.resolved_effects,
+    );
+    if state.crafting_required_ticks != expected {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
 
     Ok(())
 }
@@ -163,17 +201,65 @@ pub(in crate::simulation) fn validate_lab(
     entity_id: EntityId,
     state: &LabState,
 ) -> Result<(), SimValidationError> {
+    validate_machine_modules(sim, entity_id, &state.modules)?;
     validate_inventory(&sim.world.prototypes, &state.inventory)?;
     for slot in state.inventory.slots() {
         validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::SciencePack)?;
     }
 
     if let Some(technology_id) = state.active_technology
-        && sim.world.prototypes.technology(technology_id).is_none()
+        && let Some(technology) = sim.world.prototypes.technology(technology_id)
     {
+        let expected = required_ticks_with_modules(
+            technology.research_time_ticks,
+            1,
+            1,
+            state.modules.resolved_effects,
+        );
+        if state.required_ticks != expected {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+    } else if let Some(technology_id) = state.active_technology {
         return Err(SimValidationError::InvalidActiveResearch { technology_id });
+    } else if state.required_ticks != 0 {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
+    Ok(())
+}
+
+fn machine_prototype(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<&factory_data::EntityPrototype, SimValidationError> {
+    sim.entities
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))
+}
+
+fn validate_machine_modules(
+    sim: &Simulation,
+    entity_id: EntityId,
+    modules: &MachineModuleState,
+) -> Result<(), SimValidationError> {
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .ok_or(SimValidationError::OrphanEntityState(entity_id))?;
+    let prototype = sim.world.prototypes.entity(placed.prototype_id).ok_or(
+        SimValidationError::InvalidEntityPrototype {
+            entity_id,
+            prototype_id: placed.prototype_id,
+        },
+    )?;
+    if modules.slots.len() != prototype.module_slot_count
+        || modules.productivity_progress_permyriad >= 10_000
+        || modules.slots.validate(&sim.world.prototypes).is_err()
+        || modules.resolved_effects != resolve_machine_module_effects(sim, entity_id, placed)
+    {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
     Ok(())
 }
 

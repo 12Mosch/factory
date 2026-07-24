@@ -24,18 +24,16 @@ impl MachineTickContext<'_> {
             let products = recipe.products.as_slice();
             let fluid_ingredients = recipe.fluid_ingredients.as_slice();
             let fluid_products = recipe.fluid_products.as_slice();
-            let required_ticks = assembler_required_ticks(
-                recipe.crafting_time_ticks,
-                state.crafting_speed_numerator,
-                state.crafting_speed_denominator,
-            );
+            let required_ticks = state.crafting_required_ticks;
+            let output_copies = state.modules.output_copies_due();
 
             let can_craft_items = profiler.measure(ProfilePhase::InventoryTransfers, || {
                 assembler_has_ingredients(&state.input_inventory, ingredients)
-                    && assembler_output_can_accept(
+                    && assembler_output_can_accept_copies(
                         &self.world.prototypes,
                         &state.output_inventory,
                         products,
+                        output_copies,
                     )
             });
             let fluid_assignment = if fluid_ingredients.is_empty() && fluid_products.is_empty() {
@@ -48,10 +46,11 @@ impl MachineTickContext<'_> {
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
                 fluid_ingredient_box_indices(&prototype.fluid_boxes, box_states, fluid_ingredients)
-                    .zip(fluid_product_box_indices(
+                    .zip(fluid_product_box_indices_for_copies(
                         &prototype.fluid_boxes,
                         box_states,
                         fluid_products,
+                        output_copies,
                     ))
             };
 
@@ -78,6 +77,8 @@ impl MachineTickContext<'_> {
             if !completed {
                 continue;
             }
+            let bonus_copies = state.modules.complete_productive_cycle();
+            debug_assert_eq!(output_copies, 1 + bonus_copies);
 
             profiler.measure(ProfilePhase::InventoryTransfers, || {
                 for ingredient in ingredients {
@@ -86,11 +87,13 @@ impl MachineTickContext<'_> {
                         .remove(ingredient.item, ingredient.amount)
                         .expect("assembler checked ingredients before completion");
                 }
-                for product in products {
-                    state
-                        .output_inventory
-                        .insert(&self.world.prototypes, product.item, product.amount)
-                        .expect("assembler checked output capacity before completion");
+                for _ in 0..output_copies {
+                    for product in products {
+                        state
+                            .output_inventory
+                            .insert(&self.world.prototypes, product.item, product.amount)
+                            .expect("assembler checked output capacity before completion");
+                    }
                 }
             });
             if !fluid_ingredients.is_empty() || !fluid_products.is_empty() {
@@ -100,7 +103,12 @@ impl MachineTickContext<'_> {
                     .get_mut(&entity_id)
                     .expect("fluid recipe availability was checked before completion");
                 consume_fluid_ingredients(box_states, &ingredient_boxes, fluid_ingredients);
-                insert_fluid_products(box_states, &product_boxes, fluid_products);
+                insert_fluid_product_copies(
+                    box_states,
+                    &product_boxes,
+                    fluid_products,
+                    output_copies,
+                );
                 for &box_index in ingredient_boxes.iter().chain(&product_boxes) {
                     self.fluids.mark_box_dirty(FluidBoxKey {
                         entity_id,
@@ -115,16 +123,18 @@ impl MachineTickContext<'_> {
                     .record_item_consumed(ingredient.item, u64::from(ingredient.amount));
             }
             for product in products {
-                self.statistics
-                    .record_item_produced(product.item, u64::from(product.amount));
+                self.statistics.record_item_produced(
+                    product.item,
+                    u64::from(product.amount).saturating_mul(output_copies),
+                );
                 self.onboarding_progress.record_item_produced(
                     &self.base,
                     product.item,
-                    u64::from(product.amount),
+                    u64::from(product.amount).saturating_mul(output_copies),
                 );
                 self.onboarding_progress.record_counter(
                     |progress| &mut progress.assembler_items_produced,
-                    u64::from(product.amount),
+                    u64::from(product.amount).saturating_mul(output_copies),
                 );
             }
             for ingredient in fluid_ingredients {
@@ -132,12 +142,14 @@ impl MachineTickContext<'_> {
                     .record_fluid_consumed(ingredient.fluid, ingredient.amount_milliunits);
             }
             for product in fluid_products {
-                self.statistics
-                    .record_fluid_produced(product.fluid, product.amount_milliunits);
+                self.statistics.record_fluid_produced(
+                    product.fluid,
+                    product.amount_milliunits.saturating_mul(output_copies),
+                );
                 if product.fluid == self.base.fluids.petroleum_gas {
                     self.onboarding_progress.record_counter(
                         |progress| &mut progress.petroleum_gas_produced,
-                        product.amount_milliunits / 1_000,
+                        product.amount_milliunits.saturating_mul(output_copies) / 1_000,
                     );
                 }
             }

@@ -1,12 +1,13 @@
 use crate::ids::EntityId;
 use crate::inventory::ItemSlot;
-use crate::machines::MachineEnergy;
+use crate::machines::{MachineEnergy, MachineModuleState};
 use crate::player::ManualMiningTarget;
 use factory_data::ItemId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
 pub struct MiningDrillState {
+    pub modules: MachineModuleState,
     pub energy: MachineEnergy,
     pub mining_progress_ticks: u32,
     pub mining_required_ticks: u32,

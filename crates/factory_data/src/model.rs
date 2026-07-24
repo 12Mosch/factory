@@ -61,6 +61,16 @@ pub struct ItemPrototype {
     pub armor: Option<ArmorPrototype>,
     /// Present when the item can be installed in an equipped armor grid.
     pub equipment: Option<EquipmentPrototype>,
+    /// Present when the item can be installed in a machine or beacon module slot.
+    pub module_effect: Option<ModuleEffectPrototype>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ModuleEffectPrototype {
+    pub speed_delta_permyriad: i32,
+    pub productivity_permyriad: u32,
+    pub energy_delta_permyriad: i32,
+    pub pollution_delta_permyriad: i32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -134,6 +144,8 @@ pub struct EntityPrototype {
     pub building_category: Option<BuildingCategory>,
     pub building_menu_order: Option<u16>,
     pub inventory_slot_count: Option<usize>,
+    pub module_slot_count: usize,
+    pub beacon: Option<BeaconPrototype>,
     pub burner: Option<BurnerPrototype>,
     pub mining_drill: Option<MiningDrillPrototype>,
     pub furnace: Option<FurnacePrototype>,
@@ -158,6 +170,12 @@ pub struct EntityPrototype {
     pub gun_turret: Option<GunTurretPrototype>,
     pub laser_turret: Option<LaserTurretPrototype>,
     pub enemy_spawner: Option<EnemySpawnerPrototype>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct BeaconPrototype {
+    pub effect_radius_tiles: u16,
+    pub transmission_permyriad: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize, PartialOrd, Ord)]
@@ -453,6 +471,7 @@ pub enum EntityKind {
     TransportBelt,
     Splitter,
     Lab,
+    Beacon,
     Chest,
     ElectricPole,
     SteamEngine,

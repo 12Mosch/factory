@@ -39,6 +39,7 @@ pub(in crate::simulation) fn reservation_for_prototype(
         entity_health: health_state_for_prototype(prototype),
         inserter_energy: inserter_energy_for_prototype(prototype),
         laser_turrets: laser_turret_state_for_prototype(prototype),
+        beacons: beacon_state_for_prototype(prototype),
     }
 }
 
@@ -82,6 +83,7 @@ fn mining_drill_state_for_prototype(
     let energy = machine_energy_for_prototype(prototype)?;
 
     Some(MiningDrillState {
+        modules: MachineModuleState::with_slot_count(prototype.module_slot_count),
         energy,
         mining_progress_ticks: 0,
         mining_required_ticks: mining_drill.ticks_per_item,
@@ -98,6 +100,7 @@ fn furnace_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Opt
     let energy = machine_energy_for_prototype(prototype)?;
 
     Some(FurnaceState {
+        modules: MachineModuleState::with_slot_count(prototype.module_slot_count),
         input_slot: ItemSlot::default(),
         energy,
         output_slot: ItemSlot::default(),
@@ -117,6 +120,7 @@ fn assembling_machine_state_for_prototype(
     let assembling_machine = prototype.assembling_machine.as_ref()?;
 
     Some(AssemblingMachineState {
+        modules: MachineModuleState::with_slot_count(prototype.module_slot_count),
         selected_recipe: None,
         input_inventory: Inventory::with_slot_count(assembling_machine.input_slot_count),
         output_inventory: Inventory::with_slot_count(assembling_machine.output_slot_count),
@@ -129,6 +133,7 @@ fn assembling_machine_state_for_prototype(
 
 fn lab_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<LabState> {
     (prototype.entity_kind == EntityKind::Lab).then(|| LabState {
+        modules: MachineModuleState::with_slot_count(prototype.module_slot_count),
         inventory: Inventory::with_slot_count(
             prototype
                 .inventory_slot_count
@@ -138,6 +143,11 @@ fn lab_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<
         progress_ticks: 0,
         required_ticks: 0,
     })
+}
+
+fn beacon_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<BeaconState> {
+    (prototype.entity_kind == EntityKind::Beacon)
+        .then(|| BeaconState::with_slot_count(prototype.module_slot_count))
 }
 
 fn electric_pole_state_for_prototype(

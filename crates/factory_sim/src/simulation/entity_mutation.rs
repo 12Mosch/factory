@@ -21,9 +21,13 @@ pub fn rotate(
     construction_ops::clear_ghosts_overlapping_footprint(sim, &rotation.footprint);
     if let Some(old_footprint) = old_footprint
         && old_footprint != rotation.footprint
-        && rotation.impact.affects_transport_lane_graph
     {
-        sim.invalidate_transport_lane_graph_region(entity_id, old_footprint);
+        if rotation.impact.affects_transport_lane_graph {
+            sim.invalidate_transport_lane_graph_region(entity_id, old_footprint);
+        }
+        if let Some(radius) = rotation.impact.beacon_effect_radius_tiles {
+            sim.refresh_machines_in_beacon_region(old_footprint, radius);
+        }
     }
     apply_entity_topology_change(sim, rotation.impact, entity_id, rotation.footprint);
     Ok(())

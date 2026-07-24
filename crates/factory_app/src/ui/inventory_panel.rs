@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
     AssemblerError, BoilerError, ContainerError, FurnaceError, InserterError, MiningDrillError,
-    SimCommand, SlotTransferError,
+    ModuleError, SimCommand, SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -202,6 +202,18 @@ pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransf
         SlotTransferError::Boiler(error) => boiler_error_message(catalog, error),
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
         SlotTransferError::Inserter(error) => inserter_error_message(catalog, error),
+        SlotTransferError::Module(error) => module_error_message(catalog, error),
+    }
+}
+
+fn module_error_message(catalog: &PrototypeCatalog, error: ModuleError) -> String {
+    match error {
+        ModuleError::MissingEntity(_) => "Machine unavailable".to_string(),
+        ModuleError::UnsupportedMachine(_) => "Machine has no module slots".to_string(),
+        ModuleError::InvalidModule(item_id) => wrong_item_message(catalog, item_id),
+        ModuleError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        ModuleError::EmptySlot { .. } => "Empty slot".to_string(),
+        ModuleError::InsufficientSpace => "Module slots full".to_string(),
     }
 }
 

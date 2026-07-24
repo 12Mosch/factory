@@ -43,6 +43,7 @@ impl EntityStateBehavior for MiningDrillState {
             push_item_slot(stacks, fuel_slot);
         }
         push_item_slot(stacks, self.output_slot);
+        push_module_stacks(stacks, &self.modules.slots);
     }
 
     fn validate_state(
@@ -61,6 +62,7 @@ impl EntityStateBehavior for FurnaceState {
             push_item_slot(stacks, fuel_slot);
         }
         push_item_slot(stacks, self.output_slot);
+        push_module_stacks(stacks, &self.modules.slots);
     }
 
     fn validate_state(
@@ -76,6 +78,7 @@ impl EntityStateBehavior for AssemblingMachineState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_inventory_stacks(stacks, &self.input_inventory);
         push_inventory_stacks(stacks, &self.output_inventory);
+        push_module_stacks(stacks, &self.modules.slots);
     }
 
     fn validate_state(
@@ -90,6 +93,7 @@ impl EntityStateBehavior for AssemblingMachineState {
 impl EntityStateBehavior for LabState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_inventory_stacks(stacks, &self.inventory);
+        push_module_stacks(stacks, &self.modules.slots);
     }
 
     fn validate_state(
@@ -99,6 +103,35 @@ impl EntityStateBehavior for LabState {
     ) -> Result<(), SimValidationError> {
         validate_lab(sim, entity_id, self)
     }
+}
+
+impl EntityStateBehavior for BeaconState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
+        push_module_stacks(stacks, &self.slots);
+    }
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let prototype = sim
+            .entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .ok_or(SimValidationError::InvalidEntityState { entity_id })?;
+        if prototype.entity_kind != EntityKind::Beacon
+            || self.slots.len() != prototype.module_slot_count
+            || self.slots.validate(&sim.world.prototypes).is_err()
+        {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+        Ok(())
+    }
+}
+
+fn push_module_stacks(stacks: &mut Vec<ItemStack>, modules: &ModuleSlots) {
+    stacks.extend(modules.slots().iter().filter_map(|slot| slot.stack()));
 }
 
 impl EntityStateBehavior for ElectricPoleState {
