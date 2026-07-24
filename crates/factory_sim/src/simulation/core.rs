@@ -116,7 +116,7 @@ impl Simulation {
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
         profiler.measure(ProfilePhase::Fluids, || self.advance_fluids_before_power());
         profiler.measure(ProfilePhase::Power, || self.refresh_power_state());
-        self.advance_radars();
+        profiler.measure(ProfilePhase::Radars, || self.advance_radars());
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();
         });

@@ -724,6 +724,7 @@ fn laser_turret_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyl
 
 fn radar_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
     let forward = direction_vec(style.direction);
+    let highlight_offset = builder.directional_offset(style.direction, Vec2::splat(0.30));
     builder
         .scaled_rounded(
             Vec2::new(0.76, 0.62),
@@ -739,15 +740,16 @@ fn radar_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
             tinted(style.base_color, 0.12),
             0.14,
         )
-        .scaled(
-            Vec2::new(0.10, 0.50),
-            Vec2::new(0.0, 0.15),
+        .oriented(
+            (Vec2::new(0.50, 0.10), Vec2::new(0.10, 0.50)),
+            (forward * 0.15, forward * 0.15),
+            style.direction,
             0.14,
             Color::srgba(0.70, 0.75, 0.70, 0.96),
         )
         .scaled_ellipse(
             Vec2::new(0.19, 0.19),
-            Vec2::new(0.0, 0.30),
+            highlight_offset,
             0.16,
             Color::srgba(0.88, 0.72, 0.30, 0.98),
         )

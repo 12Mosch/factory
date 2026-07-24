@@ -27,6 +27,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
             belts: Duration::from_micros(100),
             fluids: Duration::from_micros(200),
             power: Duration::from_micros(300),
+            radars: Duration::from_micros(350),
             machines: Duration::from_micros(400),
             inserters: Duration::from_micros(500),
             inventory_transfers: Duration::from_micros(600),

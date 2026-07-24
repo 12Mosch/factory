@@ -6,6 +6,7 @@ pub struct RadarState {
     pub(crate) nearby_scan_progress_ticks: u32,
     pub(crate) far_scan_progress_ticks: u32,
     pub(crate) far_scan_cursor: u64,
+    pub(crate) far_scan_complete: bool,
 }
 
 impl RadarState {
@@ -19,6 +20,10 @@ impl RadarState {
 
     pub const fn far_scan_cursor(&self) -> u64 {
         self.far_scan_cursor
+    }
+
+    pub const fn far_scan_complete(&self) -> bool {
+        self.far_scan_complete
     }
 }
 

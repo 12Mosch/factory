@@ -51,6 +51,27 @@ fn set_radar_far_interval(sim: &mut Simulation, ticks: u32) {
         .far_scan_interval_ticks = ticks;
 }
 
+fn set_radar_nearby_interval(sim: &mut Simulation, ticks: u32) {
+    sim.world
+        .prototypes
+        .entities
+        .iter_mut()
+        .find(|prototype| prototype.name == "radar")
+        .and_then(|prototype| prototype.radar.as_mut())
+        .expect("radar metadata")
+        .nearby_scan_interval_ticks = ticks;
+}
+
+fn radar_metadata(sim: &Simulation) -> factory_data::RadarPrototype {
+    sim.world
+        .prototypes
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "radar")
+        .and_then(|prototype| prototype.radar)
+        .expect("radar metadata")
+}
+
 #[test]
 fn radar_recipe_and_entity_are_initially_unlocked() {
     let sim = Simulation::new_test_world(123);
@@ -86,6 +107,7 @@ fn disconnected_radar_does_not_advance() {
 #[test]
 fn full_and_half_power_use_the_deterministic_work_cadence() {
     let mut fully_powered = Simulation::new_test_world(123);
+    set_radar_nearby_interval(&mut fully_powered, 60);
     set_radar_far_interval(&mut fully_powered, 60);
     let (x, y) = first_buildable_rect_without_resource(&fully_powered.world, 3, 3);
     let full_radar = place_radar(&mut fully_powered, x, y);
@@ -114,6 +136,7 @@ fn full_and_half_power_use_the_deterministic_work_cadence() {
     );
 
     let mut half_powered = Simulation::new_test_world(123);
+    set_radar_nearby_interval(&mut half_powered, 60);
     set_radar_far_interval(&mut half_powered, 60);
     let (x, y) = first_buildable_rect_without_resource(&half_powered.world, 3, 3);
     let half_radar = place_radar(&mut half_powered, x, y);
@@ -149,9 +172,11 @@ fn nearby_pulse_reveals_generated_chunks_and_queues_missing_chunks() {
     let radar_id = place_radar(&mut sim, x, y);
     grant_power(&mut sim, radar_id, 10_000);
     let center = radar_center_chunk(&sim, radar_id);
-    let candidates = (-3..=3)
+    let metadata = radar_metadata(&sim);
+    let radius = i32::from(metadata.nearby_reveal_radius_chunks);
+    let candidates = (-radius..=radius)
         .flat_map(|dy| {
-            (-3..=3).map(move |dx| ChunkCoord {
+            (-radius..=radius).map(move |dx| ChunkCoord {
                 x: center.x + dx,
                 y: center.y + dy,
             })
@@ -159,7 +184,7 @@ fn nearby_pulse_reveals_generated_chunks_and_queues_missing_chunks() {
         .collect::<BTreeSet<_>>();
     let previously_revealed = sim.revealed_chunks().clone();
 
-    for _ in 0..60 {
+    for _ in 0..metadata.nearby_scan_interval_ticks {
         sim.advance_radars();
     }
 
@@ -221,6 +246,50 @@ fn far_scan_reveals_generated_target_immediately_and_exactly() {
             .expect("radar state")
             .far_scan_cursor(),
         1
+    );
+}
+
+#[test]
+fn completed_far_sweep_uses_and_preserves_the_fast_path() {
+    let mut sim = Simulation::new_test_world(123);
+    set_radar_nearby_interval(&mut sim, u32::MAX);
+    set_radar_far_interval(&mut sim, 1);
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 3, 3);
+    let radar_id = place_radar(&mut sim, x, y);
+    grant_power(&mut sim, radar_id, 10_000);
+    let center = radar_center_chunk(&sim, radar_id);
+    let metadata = radar_metadata(&sim);
+    let nearby = i32::from(metadata.nearby_reveal_radius_chunks);
+    let far = i32::from(metadata.far_scan_radius_chunks);
+    let initially_revealed = sim.chart.revealed_chunks.clone();
+    for dy in -far..=far {
+        for dx in -far..=far {
+            if dx.abs().max(dy.abs()) > nearby {
+                sim.chart.revealed_chunks.insert(ChunkCoord {
+                    x: center.x + dx,
+                    y: center.y + dy,
+                });
+            }
+        }
+    }
+
+    sim.advance_radars();
+    let state = crate::entity_access::radar_state(&sim, radar_id).expect("radar state");
+    assert!(state.far_scan_complete());
+    let completed_cursor = state.far_scan_cursor();
+
+    sim.advance_radars();
+    let state = crate::entity_access::radar_state(&sim, radar_id).expect("radar state");
+    assert!(state.far_scan_complete());
+    assert_eq!(state.far_scan_cursor(), completed_cursor);
+
+    sim.chart.revealed_chunks = initially_revealed;
+    let loaded = load_from_bytes(&save_to_bytes(&sim).expect("save completed radar"))
+        .expect("load completed radar");
+    assert!(
+        crate::entity_access::radar_state(&loaded, radar_id)
+            .expect("loaded radar state")
+            .far_scan_complete()
     );
 }
 

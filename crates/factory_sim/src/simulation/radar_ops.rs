@@ -27,7 +27,9 @@ impl Simulation {
             }
             if state.far_scan_progress_ticks >= metadata.far_scan_interval_ticks {
                 state.far_scan_progress_ticks = 0;
-                self.complete_far_radar_scan(center, metadata, state);
+                if !state.far_scan_complete {
+                    state.far_scan_complete = self.complete_far_radar_scan(center, metadata, state);
+                }
             }
         }
         self.entities.radars = radars;
@@ -78,7 +80,7 @@ impl Simulation {
         center: ChunkCoord,
         metadata: factory_data::RadarPrototype,
         state: &mut RadarState,
-    ) {
+    ) -> bool {
         let candidate_count = crate::radar::far_scan_candidate_count(
             metadata.nearby_reveal_radius_chunks,
             metadata.far_scan_radius_chunks,
@@ -111,8 +113,9 @@ impl Simulation {
             } else {
                 self.request_chunk_generation(coord, ChunkGenerationPriority::RadarReveal);
             }
-            return;
+            return false;
         }
+        true
     }
 }
 
@@ -126,27 +129,29 @@ fn far_scan_offset(nearby_radius: u16, far_radius: u16, mut cursor: u64) -> Opti
             continue;
         }
 
-        let radius = i32::try_from(radius).ok()?;
+        let radius = i32::try_from(radius).expect("u16 radar radius always fits in i32");
         let side_len = radius as u64 * 2;
+        let ring_offset =
+            |offset| i32::try_from(offset).expect("radar ring offset always fits in i32");
         let offset = if cursor < side_len {
             ChunkCoord {
-                x: -radius + i32::try_from(cursor).ok()?,
+                x: -radius + ring_offset(cursor),
                 y: radius,
             }
         } else if cursor < side_len * 2 {
             ChunkCoord {
                 x: radius,
-                y: radius - i32::try_from(cursor - side_len).ok()?,
+                y: radius - ring_offset(cursor - side_len),
             }
         } else if cursor < side_len * 3 {
             ChunkCoord {
-                x: radius - i32::try_from(cursor - side_len * 2).ok()?,
+                x: radius - ring_offset(cursor - side_len * 2),
                 y: -radius,
             }
         } else {
             ChunkCoord {
                 x: -radius,
-                y: -radius + i32::try_from(cursor - side_len * 3).ok()?,
+                y: -radius + ring_offset(cursor - side_len * 3),
             }
         };
         return Some(offset);

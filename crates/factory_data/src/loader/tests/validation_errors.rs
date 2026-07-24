@@ -944,6 +944,46 @@ fn invalid_radar_ranges_fail() {
 }
 
 #[test]
+fn radar_with_zero_nearby_radius_fails() {
+    assert_invalid_radar_fields(0, 60, 14, 2_000, Some(250), true, false);
+}
+
+#[test]
+fn radar_with_zero_far_radius_fails() {
+    assert_invalid_radar_fields(3, 60, 0, 2_000, Some(250), true, false);
+}
+
+#[test]
+fn radar_with_zero_nearby_interval_fails() {
+    assert_invalid_radar_fields(3, 0, 14, 2_000, Some(250), true, false);
+}
+
+#[test]
+fn radar_with_zero_far_interval_fails() {
+    assert_invalid_radar_fields(3, 60, 14, 0, Some(250), true, false);
+}
+
+#[test]
+fn radar_without_electric_power_fails() {
+    assert_invalid_radar_fields(3, 60, 14, 2_000, Some(250), false, false);
+}
+
+#[test]
+fn radar_with_burner_power_fails() {
+    assert_invalid_radar_fields(3, 60, 14, 2_000, Some(250), true, true);
+}
+
+#[test]
+fn radar_with_zero_health_fails() {
+    assert_invalid_radar_fields(3, 60, 14, 2_000, Some(0), true, false);
+}
+
+#[test]
+fn radar_without_health_fails() {
+    assert_invalid_radar_fields(3, 60, 14, 2_000, None, true, false);
+}
+
+#[test]
 fn radar_metadata_on_other_kind_fails() {
     let error = PrototypeCatalog::from_ron_str(r#"(
         items: [(id: 0, name: "chest", stack_size: 50)], recipes: [],
@@ -952,5 +992,59 @@ fn radar_metadata_on_other_kind_fails() {
     )"#).expect_err("radar metadata only applies to radar entities");
     assert!(
         matches!(error, PrototypeLoadError::InvalidRadarMetadata { entity, .. } if entity == "chest")
+    );
+}
+
+fn assert_invalid_radar_fields(
+    nearby_radius: u16,
+    nearby_interval: u32,
+    far_radius: u16,
+    far_interval: u32,
+    health: Option<u32>,
+    electric: bool,
+    burner: bool,
+) {
+    let health = health.map_or_else(String::new, |health| format!("max_health: Some({health}),"));
+    let electric = if electric {
+        "electric_energy_source: Some((energy_usage_watts: 300000, drain_watts: 0)),"
+    } else {
+        ""
+    };
+    let burner = if burner {
+        "burner: Some((energy_usage_watts: 300000)),"
+    } else {
+        ""
+    };
+    let ron = format!(
+        r#"(
+            items: [(id: 0, name: "radar", stack_size: 50)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "radar",
+                entity_kind: Radar,
+                build_item: Some("radar"),
+                building_category: Some(Defense),
+                building_menu_order: Some(40),
+                size: (x: 3, y: 3),
+                collision_mask: (layers: ["building"]),
+                {health}
+                {electric}
+                {burner}
+                radar: Some((
+                    nearby_reveal_radius_chunks: {nearby_radius},
+                    nearby_scan_interval_ticks: {nearby_interval},
+                    far_scan_radius_chunks: {far_radius},
+                    far_scan_interval_ticks: {far_interval},
+                )),
+            )],
+            tiles: [],
+        )"#
+    );
+    let error =
+        PrototypeCatalog::from_ron_str(&ron).expect_err("invalid radar declaration should fail");
+    assert!(
+        matches!(&error, PrototypeLoadError::InvalidRadarMetadata { entity, .. } if entity == "radar"),
+        "unexpected radar validation error: {error}"
     );
 }

@@ -176,12 +176,13 @@ fn large_headless_belt_spike_diagnostics() {
     println!("worst total ticks:");
     for (tick_index, profile, allocations) in worst.iter().take(8) {
         println!(
-            "  tick {tick_index}: total {:.3} ms, belts {:.3} ms, machines {:.3} ms, fluids {:.3} ms, power {:.3} ms, enemies {:.3} ms, allocations {} bytes / {} allocs",
+            "  tick {tick_index}: total {:.3} ms, belts {:.3} ms, machines {:.3} ms, fluids {:.3} ms, power {:.3} ms, radars {:.3} ms, enemies {:.3} ms, allocations {} bytes / {} allocs",
             ms(profile.total),
             ms(profile.belts),
             ms(profile.machines),
             ms(profile.fluids),
             ms(profile.power),
+            ms(profile.radars),
             ms(profile.enemies),
             allocations.bytes,
             allocations.count
@@ -919,6 +920,7 @@ fn average_profile(samples: &[TickSample]) -> SimulationTickProfile {
         belts: average_duration(samples, len, |profile| profile.belts),
         fluids: average_duration(samples, len, |profile| profile.fluids),
         power: average_duration(samples, len, |profile| profile.power),
+        radars: average_duration(samples, len, |profile| profile.radars),
         machines: average_duration(samples, len, |profile| profile.machines),
         inserters: average_duration(samples, len, |profile| profile.inserters),
         inventory_transfers: average_duration(samples, len, |profile| profile.inventory_transfers),
@@ -937,6 +939,7 @@ fn percentile_profile(samples: &[TickSample], index: usize) -> SimulationTickPro
         belts: percentile_duration(samples, index, |profile| profile.belts),
         fluids: percentile_duration(samples, index, |profile| profile.fluids),
         power: percentile_duration(samples, index, |profile| profile.power),
+        radars: percentile_duration(samples, index, |profile| profile.radars),
         machines: percentile_duration(samples, index, |profile| profile.machines),
         inserters: percentile_duration(samples, index, |profile| profile.inserters),
         inventory_transfers: percentile_duration(samples, index, |profile| {
@@ -957,6 +960,7 @@ fn max_profile(samples: &[TickSample]) -> SimulationTickProfile {
         belts: max_duration(samples, |profile| profile.belts),
         fluids: max_duration(samples, |profile| profile.fluids),
         power: max_duration(samples, |profile| profile.power),
+        radars: max_duration(samples, |profile| profile.radars),
         machines: max_duration(samples, |profile| profile.machines),
         inserters: max_duration(samples, |profile| profile.inserters),
         inventory_transfers: max_duration(samples, |profile| profile.inventory_transfers),

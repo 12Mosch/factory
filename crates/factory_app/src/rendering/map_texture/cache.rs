@@ -543,9 +543,20 @@ mod tests {
         refresh_painted_chunks(&MapRasterizer::new(&sim, &settings, layer), &mut cache);
         let revision = sim.revealed_revision();
 
-        while !sim.is_chunk_revealed(target) {
+        const REVEAL_WAIT_LIMIT_TICKS: usize = 60;
+        for _ in 0..REVEAL_WAIT_LIMIT_TICKS {
+            if sim.is_chunk_revealed(target) {
+                break;
+            }
             sim.tick();
         }
+        assert!(
+            sim.is_chunk_revealed(target),
+            "radar did not reveal {target:?} within {REVEAL_WAIT_LIMIT_TICKS} ticks; tick={}, radar_state={:?}, power_status={:?}",
+            sim.tick_count(),
+            factory_sim::entity_access::radar_state(&sim, radar_id),
+            sim.entity_power_status(radar_id),
+        );
         assert_eq!(
             sim.revealed_chunks_since(revision)
                 .expect("exact radar reveal history")
@@ -626,6 +637,14 @@ mod tests {
         let radar_id = place(sim, radar, x, y);
         place(sim, pole, x + 3, y + 1);
         place(sim, solar, x + 4, y);
+        sim.tick();
+        let power_status = sim
+            .entity_power_status(radar_id)
+            .expect("solar-powered radar fixture should report power state");
+        assert!(
+            power_status.satisfaction_permyriad > 0,
+            "solar-powered radar fixture is disconnected or unpowered: {power_status:?}"
+        );
         radar_id
     }
 
@@ -976,6 +995,8 @@ mod tests {
                 tile.1 as f32 + 0.5 - player_y,
             );
         };
+        // Streaming each axis can consume up to three extra simulation ticks;
+        // callers must include that observable cost in timing budgets.
         for _ in 0..3 {
             attempt_move(sim);
             if sim.player().tile_position() == tile {
