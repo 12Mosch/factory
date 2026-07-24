@@ -15,6 +15,9 @@ impl DayNightCycleState {
     }
 
     fn advance(&mut self, cycle_length_ticks: u64) {
+        if cycle_length_ticks == 0 {
+            return;
+        }
         self.tick_in_cycle = if self.tick_in_cycle == cycle_length_ticks - 1 {
             0
         } else {
