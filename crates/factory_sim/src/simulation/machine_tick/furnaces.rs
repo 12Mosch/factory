@@ -48,7 +48,7 @@ impl MachineTickContext<'_> {
                 })
             });
             if !output_can_accept {
-                if state.active_recipe != Some(recipe_id) {
+                if recipe_changed {
                     state.crafting_progress_ticks = 0;
                 }
                 state.active_recipe = Some(recipe_id);
@@ -56,7 +56,7 @@ impl MachineTickContext<'_> {
                 continue;
             }
 
-            if state.active_recipe != Some(recipe_id) {
+            if recipe_changed {
                 state.active_recipe = Some(recipe_id);
                 state.crafting_progress_ticks = 0;
                 state.crafting_required_ticks = required_ticks;
