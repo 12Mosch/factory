@@ -135,6 +135,7 @@ pub enum InventoryPanel {
     InserterFuel,
     AssemblerInput,
     AssemblerOutput,
+    Modules,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,6 +146,7 @@ pub enum SlotTransferError {
     Boiler(BoilerError),
     Assembler(AssemblerError),
     Inserter(InserterError),
+    Module(ModuleError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

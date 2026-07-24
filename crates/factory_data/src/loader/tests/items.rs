@@ -87,6 +87,46 @@ fn military_items_load_typed_ammo_armor_and_powered_equipment() {
 }
 
 #[test]
+fn module_items_and_beacon_load_exact_metadata() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let expected = [
+        ("speed_module_1", 2_000, 0, 5_000, 0),
+        ("speed_module_2", 3_000, 0, 6_000, 0),
+        ("speed_module_3", 5_000, 0, 7_000, 0),
+        ("productivity_module_1", -500, 400, 4_000, 500),
+        ("productivity_module_2", -1_000, 600, 6_000, 700),
+        ("productivity_module_3", -1_500, 1_000, 8_000, 1_000),
+        ("efficiency_module_1", 0, 0, -3_000, 0),
+        ("efficiency_module_2", 0, 0, -4_000, 0),
+        ("efficiency_module_3", 0, 0, -5_000, 0),
+    ];
+    for (name, speed, productivity, energy, pollution) in expected {
+        let item = catalog
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let effect = item.module_effect.expect("module metadata should resolve");
+        assert_eq!(item.stack_size, 50);
+        assert_eq!(effect.speed_delta_permyriad, speed);
+        assert_eq!(effect.productivity_permyriad, productivity);
+        assert_eq!(effect.energy_delta_permyriad, energy);
+        assert_eq!(effect.pollution_delta_permyriad, pollution);
+    }
+
+    let beacon = catalog
+        .entities
+        .iter()
+        .find(|entity| entity.name == "beacon")
+        .expect("beacon entity should load");
+    assert_eq!(beacon.entity_kind, EntityKind::Beacon);
+    assert_eq!(beacon.module_slot_count, 2);
+    assert_eq!(beacon.size, glam::IVec2::new(3, 3));
+    assert_eq!(beacon.beacon.unwrap().effect_radius_tiles, 3);
+    assert_eq!(beacon.beacon.unwrap().transmission_permyriad, 5_000);
+}
+
+#[test]
 fn placeable_items_have_acquisition_paths() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let item_ids = catalog

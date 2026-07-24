@@ -187,6 +187,7 @@ fn load_items(
                 repair: item.repair,
                 armor: item.armor,
                 equipment: item.equipment,
+                module_effect: item.module_effect,
             })
         })
         .collect::<Result<_, PrototypeLoadError>>()?;
@@ -195,6 +196,29 @@ fn load_items(
 }
 
 fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadError> {
+    if let Some(effect) = item.module_effect {
+        if effect.speed_delta_permyriad == 0
+            && effect.productivity_permyriad == 0
+            && effect.energy_delta_permyriad == 0
+            && effect.pollution_delta_permyriad == 0
+        {
+            return Err(PrototypeLoadError::InvalidModuleMetadata {
+                item: item.name.clone(),
+                detail: "at least one effect must be non-zero",
+            });
+        }
+        if item.fuel_value_joules.is_some()
+            || item.ammo.is_some()
+            || item.repair.is_some()
+            || item.armor.is_some()
+            || item.equipment.is_some()
+        {
+            return Err(PrototypeLoadError::InvalidModuleMetadata {
+                item: item.name.clone(),
+                detail: "modules cannot also be fuel, ammunition, repair tools, armor, or equipment",
+            });
+        }
+    }
     if item
         .ammo
         .is_some_and(|ammo| ammo.damage_per_shot == 0 || ammo.shots_per_item == 0)
@@ -314,6 +338,7 @@ fn load_entities(
         .into_iter()
         .map(|entity| {
             validate_laser_turret_metadata(&entity.name, &entity)?;
+            validate_module_and_beacon_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
                     entity: entity.name,
@@ -371,6 +396,8 @@ fn load_entities(
                 building_category: entity.building_category,
                 building_menu_order: entity.building_menu_order,
                 inventory_slot_count: entity.inventory_slot_count,
+                module_slot_count: entity.module_slot_count,
+                beacon: entity.beacon,
                 burner: entity.burner,
                 furnace: entity.furnace,
                 mining_drill: entity
@@ -424,6 +451,76 @@ fn load_entities(
             })
         })
         .collect()
+}
+
+fn validate_module_and_beacon_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let supports_modules = matches!(
+        entity.entity_kind,
+        EntityKind::AssemblingMachine
+            | EntityKind::Furnace
+            | EntityKind::MiningDrill
+            | EntityKind::Lab
+            | EntityKind::Beacon
+    );
+    if entity.module_slot_count > 0 && !supports_modules {
+        return Err(PrototypeLoadError::InvalidModuleSlotMetadata {
+            entity: name.to_string(),
+            detail: "this entity kind cannot declare module slots",
+        });
+    }
+    if entity.module_slot_count > u16::MAX as usize {
+        return Err(PrototypeLoadError::InvalidModuleSlotMetadata {
+            entity: name.to_string(),
+            detail: "module slot count exceeds supported fixed-point aggregation",
+        });
+    }
+
+    match (entity.entity_kind, entity.beacon) {
+        (EntityKind::Beacon, Some(beacon)) => {
+            if entity.module_slot_count == 0 {
+                return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                    entity: name.to_string(),
+                    detail: "beacons require at least one module slot",
+                });
+            }
+            if beacon.effect_radius_tiles == 0 || beacon.transmission_permyriad == 0 {
+                return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                    entity: name.to_string(),
+                    detail: "effect radius and transmission must be positive",
+                });
+            }
+            if entity.assembling_machine.is_some()
+                || entity.furnace.is_some()
+                || entity.mining_drill.is_some()
+                || entity.burner.is_some()
+                || entity.electric_energy_source.is_some()
+            {
+                return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                    entity: name.to_string(),
+                    detail: "passive beacons cannot carry machine or energy-source metadata",
+                });
+            }
+        }
+        (EntityKind::Beacon, None) => {
+            return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                entity: name.to_string(),
+                detail: "beacon entities require beacon metadata",
+            });
+        }
+        (_, Some(_)) => {
+            return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                entity: name.to_string(),
+                detail: "beacon metadata is only valid on beacon entities",
+            });
+        }
+        (_, None) => {}
+    }
+    Ok(())
 }
 
 fn validate_laser_turret_metadata(

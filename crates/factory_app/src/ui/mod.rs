@@ -13,6 +13,7 @@ pub(crate) mod layout;
 pub(crate) mod machine_indicators;
 pub(crate) mod manual_crafting;
 pub mod map_view;
+pub(crate) mod module_panel;
 pub mod objectives_panel;
 pub mod production_stats;
 pub mod resources;

@@ -137,3 +137,40 @@ pub(in crate::simulation) fn drill_output_target_can_accept(
         DrillOutputTarget::Blocked => false,
     }
 }
+
+pub(in crate::simulation) fn drill_productivity_output_can_fit(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    output_target: DrillOutputTarget,
+    internal_output_slot: ItemSlot,
+    item_id: ItemId,
+    copies: u64,
+) -> bool {
+    let Ok(copies) = u16::try_from(copies) else {
+        return false;
+    };
+    match output_target {
+        DrillOutputTarget::InternalSlot => {
+            internal_output_slot.can_insert_item(catalog, item_id, copies)
+        }
+        DrillOutputTarget::Inventory(_) => drill_output_target_can_accept(
+            catalog,
+            entities,
+            output_target,
+            internal_output_slot,
+            item_id,
+            copies,
+        ),
+        DrillOutputTarget::Belt(_) | DrillOutputTarget::Splitter { .. } => {
+            drill_output_target_can_accept(
+                catalog,
+                entities,
+                output_target,
+                internal_output_slot,
+                item_id,
+                1,
+            ) && (copies == 1 || internal_output_slot.can_insert_item(catalog, item_id, copies - 1))
+        }
+        DrillOutputTarget::Blocked => false,
+    }
+}

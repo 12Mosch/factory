@@ -36,14 +36,15 @@ impl MachineTickContext<'_> {
                 continue;
             };
 
+            let output_copies = state.modules.output_copies_due();
             let output_can_accept = profiler.measure(ProfilePhase::InventoryTransfers, || {
-                drill_output_target_can_accept(
+                drill_productivity_output_can_fit(
                     &self.world.prototypes,
                     self.entities,
                     output_target,
                     state.output_slot,
                     resource_item,
-                    1,
+                    output_copies,
                 )
             });
             if !output_can_accept {
@@ -58,6 +59,10 @@ impl MachineTickContext<'_> {
                     power: self.power,
                     electric_consumers: &mut self.entities.electric_consumers,
                     entity_id,
+                    energy_multiplier_permyriad: state
+                        .modules
+                        .resolved_effects
+                        .energy_multiplier_permyriad(),
                 },
                 &mut state.energy,
                 &mut state.mining_progress_ticks,
@@ -74,6 +79,7 @@ impl MachineTickContext<'_> {
             if !matches!(advance.result, ProgressAdvance::Completed) {
                 continue;
             }
+            state.modules.complete_productive_cycle();
 
             let mined = self
                 .world
@@ -82,26 +88,69 @@ impl MachineTickContext<'_> {
             debug_assert_eq!(mined.resource_item, resource_item);
             debug_assert_eq!(mined.amount, 1);
             profiler.measure(ProfilePhase::InventoryTransfers, || {
-                insert_drill_output_from_state(
+                insert_productive_drill_output(
                     self.entities,
                     self.transport,
                     state,
                     output_target,
                     mined.resource_item,
-                    mined.amount as u16,
+                    output_copies as u16,
                     &self.world.prototypes,
                 );
             });
-            self.record_item_produced(mined.resource_item, u64::from(mined.amount));
+            self.record_item_produced(mined.resource_item, output_copies);
             if mined.resource_item == self.base.items.iron_ore {
-                self.onboarding_progress.record_counter(
-                    |progress| &mut progress.iron_ore_drill_mined,
-                    u64::from(mined.amount),
-                );
+                self.onboarding_progress
+                    .record_counter(|progress| &mut progress.iron_ore_drill_mined, output_copies);
             }
         }
 
         self.entities.mining_drills = mining_drills;
+    }
+}
+
+fn insert_productive_drill_output(
+    entities: &mut EntityStore,
+    transport: &mut TransportLaneCache,
+    state: &mut MiningDrillState,
+    output_target: DrillOutputTarget,
+    item_id: ItemId,
+    copies: u16,
+    catalog: &PrototypeCatalog,
+) {
+    match output_target {
+        DrillOutputTarget::InternalSlot | DrillOutputTarget::Inventory(_) => {
+            insert_drill_output_from_state(
+                entities,
+                transport,
+                state,
+                output_target,
+                item_id,
+                copies,
+                catalog,
+            );
+        }
+        DrillOutputTarget::Belt(_) | DrillOutputTarget::Splitter { .. } => {
+            insert_drill_output_from_state(
+                entities,
+                transport,
+                state,
+                output_target,
+                item_id,
+                1,
+                catalog,
+            );
+            let surplus = copies.saturating_sub(1);
+            if surplus > 0 {
+                state
+                    .output_slot
+                    .insert(catalog, item_id, surplus)
+                    .expect("productive drill surplus capacity was checked");
+            }
+        }
+        DrillOutputTarget::Blocked => {
+            unreachable!("blocked drill output is checked before mining");
+        }
     }
 }
 

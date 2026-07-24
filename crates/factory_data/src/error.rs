@@ -45,6 +45,18 @@ pub enum PrototypeLoadError {
         item: String,
         detail: &'static str,
     },
+    InvalidModuleMetadata {
+        item: String,
+        detail: &'static str,
+    },
+    InvalidModuleSlotMetadata {
+        entity: String,
+        detail: &'static str,
+    },
+    InvalidBeaconMetadata {
+        entity: String,
+        detail: &'static str,
+    },
     InvalidLaserTurretMetadata {
         entity: String,
         detail: &'static str,
@@ -187,6 +199,18 @@ impl fmt::Display for PrototypeLoadError {
                     "item {item:?} has invalid equipment metadata: {detail}"
                 )
             }
+            Self::InvalidModuleMetadata { item, detail } => write!(
+                formatter,
+                "item {item:?} has invalid module metadata: {detail}"
+            ),
+            Self::InvalidModuleSlotMetadata { entity, detail } => write!(
+                formatter,
+                "entity {entity:?} has invalid module-slot metadata: {detail}"
+            ),
+            Self::InvalidBeaconMetadata { entity, detail } => write!(
+                formatter,
+                "entity {entity:?} has invalid beacon metadata: {detail}"
+            ),
             Self::InvalidLaserTurretMetadata { entity, detail } => write!(
                 formatter,
                 "entity {entity:?} has invalid laser turret metadata: {detail}"

@@ -76,6 +76,7 @@ fn entity_kind_name(kind: EntityKind) -> &'static str {
         EntityKind::TransportBelt => "Transport belts",
         EntityKind::Splitter => "Splitters",
         EntityKind::Lab => "Labs",
+        EntityKind::Beacon => "Beacons",
         EntityKind::Chest => "Chests",
         EntityKind::ElectricPole => "Electric poles",
         EntityKind::SteamEngine => "Steam engines",

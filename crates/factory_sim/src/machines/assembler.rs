@@ -1,3 +1,4 @@
+use super::MachineModuleState;
 use crate::ids::EntityId;
 use crate::inventory::Inventory;
 use factory_data::{ItemId, RecipeId};
@@ -5,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct AssemblingMachineState {
+    pub modules: MachineModuleState,
     pub selected_recipe: Option<RecipeId>,
     pub input_inventory: Inventory,
     pub output_inventory: Inventory,

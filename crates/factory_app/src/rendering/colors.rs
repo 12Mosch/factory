@@ -38,6 +38,10 @@ pub(crate) fn lab_color() -> Color {
     Color::srgb(0.48, 0.36, 0.66)
 }
 
+pub(crate) fn beacon_color() -> Color {
+    Color::srgb(0.24, 0.58, 0.72)
+}
+
 pub(crate) fn electric_pole_color() -> Color {
     Color::srgb(0.78, 0.61, 0.30)
 }

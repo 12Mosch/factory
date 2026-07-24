@@ -35,6 +35,15 @@ impl PrototypeCatalog {
         self.items.len()
     }
 
+    pub fn max_beacon_effect_radius_tiles(&self) -> u16 {
+        self.entities
+            .iter()
+            .filter_map(|prototype| prototype.beacon)
+            .map(|beacon| beacon.effect_radius_tiles)
+            .max()
+            .unwrap_or(0)
+    }
+
     catalog_accessor!(item, items, ItemId, ItemPrototype);
     catalog_accessor!(fluid, fluids, FluidId, FluidPrototype);
     catalog_accessor!(recipe, recipes, RecipeId, RecipePrototype);

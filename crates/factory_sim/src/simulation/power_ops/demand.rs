@@ -155,11 +155,24 @@ pub(super) fn consumer_power_demand_for(
     let energy_source =
         electric_consumer_power_source(&inputs.world.prototypes, inputs.entities, entity_id)?;
     let active_usage_watts = if electric_consumer_can_work(inputs, entity_id) {
-        energy_source.energy_usage_watts
+        let multiplier = entity_module_energy_multiplier(inputs.entities, entity_id);
+        energy_source
+            .energy_usage_watts
+            .saturating_mul(multiplier)
+            .saturating_add(9_999)
+            / 10_000
     } else {
         0
     };
     Some((active_usage_watts, energy_source.drain_watts))
+}
+
+fn entity_module_energy_multiplier(entities: &EntityStore, entity_id: EntityId) -> u64 {
+    entities
+        .machine_module_state(entity_id)
+        .map_or(10_000, |modules| {
+            modules.resolved_effects.energy_multiplier_permyriad()
+        })
 }
 
 fn electric_consumer_power_source<'a>(
@@ -226,9 +239,12 @@ fn furnace_can_work(
     else {
         return false;
     };
-    state
-        .output_slot
-        .can_insert_item(catalog, product.item, product.amount)
+    state.output_slot.can_insert_item(
+        catalog,
+        product.item,
+        u16::try_from(u64::from(product.amount).saturating_mul(state.modules.output_copies_due()))
+            .unwrap_or(u16::MAX),
+    )
 }
 
 fn mining_drill_can_work(
@@ -253,13 +269,13 @@ fn mining_drill_can_work(
         return false;
     };
     let output_target = drill_output_target(entities, placed);
-    drill_output_target_can_accept(
+    drill_productivity_output_can_fit(
         &world.prototypes,
         entities,
         output_target,
         state.output_slot,
         resource_item,
-        1,
+        state.modules.output_copies_due(),
     )
 }
 
@@ -275,7 +291,12 @@ fn assembler_can_work(
     };
 
     if !assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
-        || !assembler_output_can_accept(catalog, &state.output_inventory, &recipe.products)
+        || !assembler_output_can_accept_copies(
+            catalog,
+            &state.output_inventory,
+            &recipe.products,
+            state.modules.output_copies_due(),
+        )
     {
         return false;
     }
@@ -301,8 +322,13 @@ fn assembler_can_work(
         &recipe.fluid_ingredients,
     )
     .is_some()
-        && fluid_product_box_indices(&prototype.fluid_boxes, box_states, &recipe.fluid_products)
-            .is_some()
+        && fluid_product_box_indices_for_copies(
+            &prototype.fluid_boxes,
+            box_states,
+            &recipe.fluid_products,
+            state.modules.output_copies_due(),
+        )
+        .is_some()
 }
 
 fn pumpjack_can_work(

@@ -65,9 +65,10 @@ pub use crate::logistics::{
     UndergroundBeltLinkPreview, UndergroundBeltSegment,
 };
 pub use crate::machines::{
-    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BurnerEnergy, FurnaceError,
-    FurnaceState, LabError, LabState, MachineEnergy, MachineStatus, MiningDrillError,
-    MiningDrillState, PumpjackState,
+    AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BeaconState, BurnerEnergy,
+    FurnaceError, FurnaceState, LabError, LabState, MachineEnergy, MachineModuleState,
+    MachineStatus, MiningDrillError, MiningDrillState, ModuleError, ModuleSlots, PumpjackState,
+    ResolvedModuleEffects,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
 pub use crate::pollution::{
@@ -763,6 +764,9 @@ mod fluid_state;
 mod generation;
 mod inventory_ops;
 mod machine_ops;
+mod module_ops;
+pub(in crate::simulation) use module_ops::required_ticks_with_modules;
+pub(in crate::simulation) use module_ops::resolve_machine_module_effects;
 mod machine_tick;
 pub mod placement;
 mod placement_mutation_ops;

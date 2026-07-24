@@ -16,22 +16,39 @@ impl MachineTickContext<'_> {
             let Some((recipe_id, recipe_ticks, ingredient, product)) =
                 furnace_work_selection(&self.world.prototypes, self.research, state.input_slot)
             else {
-                state.active_recipe = None;
                 state.crafting_progress_ticks = 0;
-                state.crafting_required_ticks = 0;
                 continue;
             };
-            let required_ticks = furnace_required_ticks(prototype, recipe_ticks);
+            let recipe_changed = state.active_recipe != Some(recipe_id);
+            if recipe_changed {
+                state.modules.productivity_progress_permyriad = 0;
+            }
+            let required_ticks = if recipe_changed {
+                let furnace = prototype
+                    .furnace
+                    .as_ref()
+                    .expect("validated furnace has crafting metadata");
+                required_ticks_with_modules(
+                    recipe_ticks,
+                    furnace.crafting_speed_numerator,
+                    furnace.crafting_speed_denominator,
+                    state.modules.resolved_effects,
+                )
+            } else {
+                state.crafting_required_ticks
+            };
+            let output_copies = state.modules.output_copies_due();
+            let output_amount = u64::from(product.amount).saturating_mul(output_copies);
 
             let output_can_accept = profiler.measure(ProfilePhase::InventoryTransfers, || {
-                state.output_slot.can_insert_item(
-                    &self.world.prototypes,
-                    product.item,
-                    product.amount,
-                )
+                u16::try_from(output_amount).is_ok_and(|amount| {
+                    state
+                        .output_slot
+                        .can_insert_item(&self.world.prototypes, product.item, amount)
+                })
             });
             if !output_can_accept {
-                if state.active_recipe != Some(recipe_id) {
+                if recipe_changed {
                     state.crafting_progress_ticks = 0;
                 }
                 state.active_recipe = Some(recipe_id);
@@ -39,7 +56,7 @@ impl MachineTickContext<'_> {
                 continue;
             }
 
-            if state.active_recipe != Some(recipe_id) {
+            if recipe_changed {
                 state.active_recipe = Some(recipe_id);
                 state.crafting_progress_ticks = 0;
                 state.crafting_required_ticks = required_ticks;
@@ -51,6 +68,10 @@ impl MachineTickContext<'_> {
                     power: self.power,
                     electric_consumers: &mut self.entities.electric_consumers,
                     entity_id,
+                    energy_multiplier_permyriad: state
+                        .modules
+                        .resolved_effects
+                        .energy_multiplier_permyriad(),
                 },
                 &mut state.energy,
                 &mut state.crafting_progress_ticks,
@@ -67,6 +88,7 @@ impl MachineTickContext<'_> {
             if !matches!(advance.result, ProgressAdvance::Completed) {
                 continue;
             }
+            state.modules.complete_productive_cycle();
 
             profiler.measure(ProfilePhase::InventoryTransfers, || {
                 state
@@ -75,17 +97,15 @@ impl MachineTickContext<'_> {
                     .expect("selected furnace input should still contain ingredient");
                 state
                     .output_slot
-                    .insert(&self.world.prototypes, product.item, product.amount)
+                    .insert(&self.world.prototypes, product.item, output_amount as u16)
                     .expect("the checked furnace output slot should accept the product");
             });
             self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
-            self.record_item_produced(product.item, u64::from(product.amount));
+            self.record_item_produced(product.item, output_amount);
             self.power_demand_cache.mark_dirty(entity_id);
             if product.item == self.base.items.iron_plate {
-                self.onboarding_progress.record_counter(
-                    |progress| &mut progress.iron_plates_smelted,
-                    u64::from(product.amount),
-                );
+                self.onboarding_progress
+                    .record_counter(|progress| &mut progress.iron_plates_smelted, output_amount);
             }
         }
 

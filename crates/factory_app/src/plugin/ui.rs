@@ -36,6 +36,7 @@ use crate::ui::manual_crafting::{
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
     sync_manual_crafting_panel,
 };
+use crate::ui::module_panel::update_module_panel;
 use crate::ui::objectives_panel::{
     ObjectivesPanelState, setup_objectives_panel, sync_objectives_panel,
 };
@@ -151,6 +152,12 @@ impl Plugin for UiPlugin {
                         .after(handle_manual_crafting_tab_buttons)
                         .after(handle_manual_crafting_recipe_buttons),
                 )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                update_module_panel
+                    .after(sync_container_window)
                     .in_set(InGameSet),
             )
             .add_systems(
