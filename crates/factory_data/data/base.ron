@@ -2545,7 +2545,11 @@
         (
             id: 33,
             name: "solar_energy",
-            prerequisites: ["sulfur_processing", "electric_energy_distribution_1"],
+            prerequisites: [
+                "sulfur_processing",
+                "electric_energy_distribution_1",
+                "advanced_material_processing",
+            ],
             science_packs: [
                 (item: "automation_science_pack", amount: 1),
                 (item: "logistic_science_pack", amount: 1),

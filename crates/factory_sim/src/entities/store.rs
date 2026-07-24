@@ -231,7 +231,7 @@ mod tests {
         // v23: laser turret state was appended.
         // v25: module state joined productive machines and beacon state was appended.
         // v26: solar panel and accumulator state maps were appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x7d03_234a_7153_e4f0;
+        const EXPECTED_LAYOUT_HASH: u64 = 0xd118_4bc7_c3fb_6e74;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -265,9 +265,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(19);
+        let mut store = EntityStore::empty(21);
 
-        for raw in 1..=18 {
+        for raw in 1..=20 {
             let id = EntityId::new(raw);
             let tile = raw as i64;
             store.entities.push(SimEntity {
@@ -361,9 +361,11 @@ mod tests {
         store
             .steam_engines
             .insert(EntityId::new(8), SteamEngineState);
-        store.solar_panels.insert(EntityId::new(8), SolarPanelState);
+        store
+            .solar_panels
+            .insert(EntityId::new(19), SolarPanelState);
         store.accumulators.insert(
-            EntityId::new(9),
+            EntityId::new(20),
             AccumulatorState {
                 stored_energy_joules: 4_321,
                 energy_remainder_watt_ticks: 17,

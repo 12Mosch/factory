@@ -73,7 +73,9 @@ impl Simulation {
         networks: &mut [NetworkPowerBalance],
         accumulators_by_network: &mut Vec<Vec<AccumulatorEntry>>,
     ) {
-        accumulators_by_network.clear();
+        for accumulators in accumulators_by_network.iter_mut() {
+            accumulators.clear();
+        }
         accumulators_by_network.resize_with(networks.len(), Vec::new);
         for (&entity_id, state) in &self.entities.accumulators {
             let Some(network_id) = network_ids_by_entity.get(&entity_id).copied() else {
@@ -91,9 +93,9 @@ impl Simulation {
                 continue;
             };
             let stored_watt_ticks = stored_watt_ticks(state);
-            let headroom_watt_ticks = u128::from(prototype.capacity_joules)
-                * u128::from(SIMULATION_TICKS_PER_SECOND)
-                - stored_watt_ticks;
+            let headroom_watt_ticks = (u128::from(prototype.capacity_joules)
+                * u128::from(SIMULATION_TICKS_PER_SECOND))
+            .saturating_sub(stored_watt_ticks);
             let charge_capability_watts =
                 headroom_watt_ticks.min(u128::from(prototype.max_charge_watts)) as u64;
             let discharge_capability_watts =

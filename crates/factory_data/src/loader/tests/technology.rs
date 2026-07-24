@@ -548,6 +548,7 @@ fn solar_energy_technology_unlocks_solar_and_accumulator() {
         vec![
             technology("sulfur_processing").id,
             technology("electric_energy_distribution_1").id,
+            technology("advanced_material_processing").id,
         ]
     );
     assert_eq!(
