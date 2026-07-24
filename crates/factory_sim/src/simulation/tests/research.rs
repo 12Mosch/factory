@@ -668,6 +668,105 @@ fn red_only_research_does_not_consume_green_packs() {
 }
 
 #[test]
+fn labs_atomically_consume_five_science_pack_types_per_research_unit() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let pack_ids = [
+        "automation_science_pack",
+        "logistic_science_pack",
+        "chemical_science_pack",
+        "production_science_pack",
+        "utility_science_pack",
+    ]
+    .map(|name| item_id(&catalog, name));
+    let technology_id = technology_id(&catalog, "logistics");
+    let technology = catalog
+        .technologies
+        .iter_mut()
+        .find(|technology| technology.id == technology_id)
+        .expect("logistics technology should exist");
+    technology.science_packs = pack_ids
+        .map(|item| factory_data::ItemAmount { item, amount: 1 })
+        .to_vec();
+    technology.required_units = 2;
+    technology.research_time_ticks = 600;
+
+    let (complete_sim, complete_lab_id) =
+        run_five_pack_lab_scenario(&catalog, technology_id, pack_ids, None);
+    let military = item_id(&catalog, "military_science_pack");
+
+    assert_eq!(complete_sim.technology_progress(technology_id), Some(1));
+    let complete_inventory =
+        crate::entity_access::inventory(&complete_sim, complete_lab_id).unwrap();
+    for pack in pack_ids {
+        assert_eq!(
+            complete_inventory.count(pack),
+            0,
+            "exactly one of every required pack should be consumed"
+        );
+    }
+    assert_eq!(
+        complete_inventory.count(military),
+        1,
+        "an unrelated science pack should not be consumed"
+    );
+
+    let missing_pack = pack_ids[4];
+    let (missing_sim, missing_lab_id) =
+        run_five_pack_lab_scenario(&catalog, technology_id, pack_ids, Some(missing_pack));
+
+    assert_eq!(missing_sim.technology_progress(technology_id), Some(0));
+    let lab = crate::entity_access::lab_state(&missing_sim, missing_lab_id).unwrap();
+    assert_eq!(lab.progress_ticks, 0);
+    for pack in pack_ids {
+        assert_eq!(
+            lab.inventory.count(pack),
+            u32::from(pack != missing_pack),
+            "missing a required pack should prevent all partial consumption"
+        );
+    }
+    assert_eq!(lab.inventory.count(military), 1);
+}
+
+fn run_five_pack_lab_scenario(
+    catalog: &PrototypeCatalog,
+    technology_id: TechnologyId,
+    pack_ids: [ItemId; 5],
+    missing_pack: Option<ItemId>,
+) -> (Simulation, EntityId) {
+    let mut sim = Simulation::new(123, catalog.clone());
+    let military = item_id(catalog, "military_science_pack");
+    let lab_id = place_lab(&mut sim);
+    sim.select_research(technology_id)
+        .expect("five-pack test technology should be selectable");
+
+    // Reverse slot order proves consumption follows required-pack data rather
+    // than relying on science packs occupying matching inventory positions.
+    for (slot, pack) in pack_ids.iter().rev().enumerate() {
+        if Some(*pack) != missing_pack {
+            set_inventory_slot(
+                crate::entity_access::inventory_mut(&mut sim, lab_id)
+                    .expect("lab should expose inventory"),
+                slot,
+                *pack,
+                1,
+            );
+        }
+    }
+    set_inventory_slot(
+        crate::entity_access::inventory_mut(&mut sim, lab_id).unwrap(),
+        pack_ids.len(),
+        military,
+        1,
+    );
+
+    for _ in 0..600 {
+        sim.tick();
+    }
+
+    (sim, lab_id)
+}
+
+#[test]
 fn research_progress_and_queue_survive_save_load() {
     let mut sim = Simulation::new_test_world(123);
     let automation = technology_id(&sim.world.prototypes, "automation");

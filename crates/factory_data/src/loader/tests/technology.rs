@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::catalog::PrototypeCatalog;
 use crate::model::{ItemAmount, TechnologyEffect};
 
-use super::common::researchable_technology_ids;
+use super::common::{expected_item_amounts, researchable_technology_ids};
 
 #[test]
 fn automation_technology_loads_research_cost_and_unlock_effect() {
@@ -88,6 +88,112 @@ fn military_progression_is_reachable_and_uses_military_science() {
                 .any(|pack| pack.item == item("military_science_pack"))
         );
     }
+    assert_eq!(
+        researchable_technology_ids(&catalog).len(),
+        catalog.technologies.len()
+    );
+}
+
+#[test]
+fn production_and_utility_science_technologies_form_parallel_rgb_branches() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let technology = |name: &str| {
+        catalog
+            .technologies
+            .iter()
+            .find(|technology| technology.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain {name} technology"))
+    };
+    let recipe = |name: &str| crate::recipe_id_by_name(&catalog, name);
+    let rgb_cost = expected_item_amounts(
+        &catalog,
+        &[
+            ("automation_science_pack", 1),
+            ("logistic_science_pack", 1),
+            ("chemical_science_pack", 1),
+        ],
+    );
+
+    let production = technology("production_science_pack");
+    assert_eq!(production.id.index(), 26);
+    assert_eq!(
+        production.prerequisites,
+        vec![technology("advanced_material_processing_2").id]
+    );
+    assert_eq!(production.science_packs, rgb_cost);
+    assert_eq!(production.required_units, 100);
+    assert_eq!(production.research_time_ticks, 600);
+    assert_eq!(
+        production.effects,
+        vec![TechnologyEffect::UnlockRecipe(recipe(
+            "production_science_pack"
+        ))]
+    );
+
+    let utility = technology("utility_science_pack");
+    assert_eq!(utility.id.index(), 27);
+    assert_eq!(utility.prerequisites, vec![technology("lubricant").id]);
+    assert_eq!(utility.science_packs, production.science_packs);
+    assert_eq!(utility.required_units, 100);
+    assert_eq!(utility.research_time_ticks, 600);
+    assert_eq!(
+        utility.effects,
+        [
+            "low_density_structure",
+            "processing_unit",
+            "flying_robot_frame",
+            "utility_science_pack",
+        ]
+        .map(|name| TechnologyEffect::UnlockRecipe(recipe(name)))
+        .to_vec()
+    );
+
+    assert!(!production.prerequisites.contains(&utility.id));
+    assert!(!utility.prerequisites.contains(&production.id));
+
+    // The capstone joins both parallel branches and consumes every non-military
+    // pack type at once, so it can only be researched once both the production
+    // and utility branches are complete.
+    let space = technology("space_science_pack");
+    assert_eq!(space.id.index(), 28);
+    assert_eq!(space.prerequisites, vec![production.id, utility.id]);
+    assert_eq!(
+        space.science_packs,
+        expected_item_amounts(
+            &catalog,
+            &[
+                ("automation_science_pack", 1),
+                ("logistic_science_pack", 1),
+                ("chemical_science_pack", 1),
+                ("production_science_pack", 1),
+                ("utility_science_pack", 1),
+            ],
+        )
+    );
+    let consumed_packs = space
+        .science_packs
+        .iter()
+        .map(|pack| pack.item)
+        .collect::<BTreeSet<_>>();
+    for pack_name in [
+        "automation_science_pack",
+        "logistic_science_pack",
+        "chemical_science_pack",
+        "production_science_pack",
+        "utility_science_pack",
+    ] {
+        assert!(
+            consumed_packs.contains(&crate::item_id_by_name(&catalog, pack_name)),
+            "space science research should consume {pack_name}"
+        );
+    }
+    assert_eq!(space.required_units, 150);
+    assert_eq!(space.research_time_ticks, 600);
+    assert_eq!(
+        space.effects,
+        vec![TechnologyEffect::UnlockRecipe(recipe("space_science_pack"))]
+    );
+
     assert_eq!(
         researchable_technology_ids(&catalog).len(),
         catalog.technologies.len()

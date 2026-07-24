@@ -209,3 +209,40 @@ fn prerequisites_researched(sim: &factory_sim::Simulation, technology_id: Techno
                 .all(|prerequisite_id| sim.is_technology_unlocked(*prerequisite_id))
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_science_technology_cost_formats_all_rgb_packs_and_units() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let technology = catalog
+            .technology(factory_data::technology_id_by_name(
+                &catalog,
+                "production_science_pack",
+            ))
+            .expect("production science technology should exist");
+
+        assert_eq!(
+            science_cost_text(&catalog, technology),
+            "Automation Science Pack x1, Logistic Science Pack x1, Chemical Science Pack x1; 100 units"
+        );
+    }
+
+    #[test]
+    fn utility_science_unlocks_format_all_intermediates_and_pack() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let technology = catalog
+            .technology(factory_data::technology_id_by_name(
+                &catalog,
+                "utility_science_pack",
+            ))
+            .expect("utility science technology should exist");
+
+        assert_eq!(
+            unlock_text(&catalog, technology),
+            "Low Density Structure, Processing Unit, Flying Robot Frame, Utility Science Pack"
+        );
+    }
+}

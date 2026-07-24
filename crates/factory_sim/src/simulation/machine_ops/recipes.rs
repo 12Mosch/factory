@@ -441,6 +441,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lab_science_precheck_handles_five_pack_types_and_new_pack_shortages() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+        let pack_ids = [
+            "automation_science_pack",
+            "logistic_science_pack",
+            "chemical_science_pack",
+            "production_science_pack",
+            "utility_science_pack",
+        ]
+        .map(|name| item_id(&catalog, name));
+        let science_packs = pack_ids
+            .map(|item| factory_data::ItemAmount { item, amount: 1 })
+            .to_vec();
+        let inventory_with = |included_packs: &[ItemId]| {
+            Inventory::from_slots(
+                &catalog,
+                included_packs
+                    .iter()
+                    .map(|item| {
+                        ItemSlot::from_stack(
+                            &catalog,
+                            ItemStack::new(&catalog, *item, 1)
+                                .expect("science stack should be valid"),
+                        )
+                        .expect("science slot should be valid")
+                    })
+                    .collect(),
+            )
+            .expect("lab test inventory should be valid")
+        };
+
+        assert!(lab_has_science_packs(
+            &inventory_with(&pack_ids),
+            &science_packs
+        ));
+        assert!(!lab_has_science_packs(
+            &inventory_with(&pack_ids[..4]),
+            &science_packs
+        ));
+    }
+
+    #[test]
     fn assembler_inventory_checks_aggregate_duplicate_items_without_temporary_maps() {
         let sim = Simulation::new_test_world(123);
         let iron = item_id(&sim.world.prototypes, "iron_plate");

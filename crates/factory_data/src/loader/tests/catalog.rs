@@ -18,7 +18,7 @@ fn base_enemy_gameplay_values_are_valid_and_data_driven() {
     assert_eq!(enemy.expansion_candidate_limit, 128);
 }
 
-const ITEM_NAMES: [&str; 47] = [
+const ITEM_NAMES: &[&str] = &[
     "iron_ore",
     "copper_ore",
     "coal",
@@ -66,11 +66,17 @@ const ITEM_NAMES: [&str; 47] = [
     "steel_chest",
     "pipe_to_ground",
     "pump",
+    "low_density_structure",
+    "processing_unit",
+    "flying_robot_frame",
+    "production_science_pack",
+    "utility_science_pack",
+    "space_science_pack",
 ];
 
-const FLUID_NAMES: [&str; 4] = ["water", "steam", "crude_oil", "petroleum_gas"];
+const FLUID_NAMES: &[&str] = &["water", "steam", "crude_oil", "petroleum_gas"];
 
-const RECIPE_NAMES: [&str; 43] = [
+const RECIPE_NAMES: &[&str] = &[
     "iron_plate",
     "copper_plate",
     "steel_plate",
@@ -114,9 +120,15 @@ const RECIPE_NAMES: [&str; 43] = [
     "steel_chest",
     "pipe_to_ground",
     "pump",
+    "low_density_structure",
+    "processing_unit",
+    "flying_robot_frame",
+    "production_science_pack",
+    "utility_science_pack",
+    "space_science_pack",
 ];
 
-const ENTITY_NAMES: [&str; 40] = [
+const ENTITY_NAMES: &[&str] = &[
     "iron_ore_patch",
     "copper_ore_patch",
     "coal_patch",
@@ -159,10 +171,10 @@ const ENTITY_NAMES: [&str; 40] = [
     "pump",
 ];
 
-const TILE_NAMES: [&str; 8] = [
+const TILE_NAMES: &[&str] = &[
     "grass", "dirt", "water", "sand", "forest", "snow", "swamp", "rock",
 ];
-const TECHNOLOGY_NAMES: [&str; 10] = [
+const TECHNOLOGY_NAMES: &[&str] = &[
     "logistics",
     "automation",
     "electric_power",
@@ -173,32 +185,35 @@ const TECHNOLOGY_NAMES: [&str; 10] = [
     "oil_processing",
     "plastics",
     "sulfur_processing",
+    "production_science_pack",
+    "utility_science_pack",
+    "space_science_pack",
 ];
 
 #[test]
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 66);
+    assert_eq!(catalog.items.len(), 72);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 66);
+    assert_eq!(catalog.recipes.len(), 72);
     assert_eq!(catalog.entities.len(), 49);
     assert_eq!(catalog.tiles.len(), 8);
-    assert_eq!(catalog.technologies.len(), 26);
+    assert_eq!(catalog.technologies.len(), 29);
 }
 
 #[test]
 fn base_catalog_contains_expected_names() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    for name in ITEM_NAMES {
+    for &name in ITEM_NAMES {
         assert!(
             catalog.items.iter().any(|prototype| prototype.name == name),
             "missing item {name}"
         );
     }
 
-    for name in FLUID_NAMES {
+    for &name in FLUID_NAMES {
         assert!(
             catalog
                 .fluids
@@ -208,7 +223,7 @@ fn base_catalog_contains_expected_names() {
         );
     }
 
-    for name in RECIPE_NAMES {
+    for &name in RECIPE_NAMES {
         assert!(
             catalog
                 .recipes
@@ -218,7 +233,7 @@ fn base_catalog_contains_expected_names() {
         );
     }
 
-    for name in ENTITY_NAMES {
+    for &name in ENTITY_NAMES {
         assert!(
             catalog
                 .entities
@@ -228,14 +243,14 @@ fn base_catalog_contains_expected_names() {
         );
     }
 
-    for name in TILE_NAMES {
+    for &name in TILE_NAMES {
         assert!(
             catalog.tiles.iter().any(|prototype| prototype.name == name),
             "missing tile {name}"
         );
     }
 
-    for name in TECHNOLOGY_NAMES {
+    for &name in TECHNOLOGY_NAMES {
         assert!(
             catalog
                 .technologies
