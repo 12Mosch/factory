@@ -150,6 +150,50 @@ fn production_and_utility_science_technologies_form_parallel_rgb_branches() {
 
     assert!(!production.prerequisites.contains(&utility.id));
     assert!(!utility.prerequisites.contains(&production.id));
+
+    // The capstone joins both parallel branches and consumes every non-military
+    // pack type at once, so it can only be researched once both the production
+    // and utility branches are complete.
+    let space = technology("space_science_pack");
+    assert_eq!(space.id.index(), 28);
+    assert_eq!(space.prerequisites, vec![production.id, utility.id]);
+    assert_eq!(
+        space.science_packs,
+        expected_item_amounts(
+            &catalog,
+            &[
+                ("automation_science_pack", 1),
+                ("logistic_science_pack", 1),
+                ("chemical_science_pack", 1),
+                ("production_science_pack", 1),
+                ("utility_science_pack", 1),
+            ],
+        )
+    );
+    let consumed_packs = space
+        .science_packs
+        .iter()
+        .map(|pack| pack.item)
+        .collect::<BTreeSet<_>>();
+    for pack_name in [
+        "automation_science_pack",
+        "logistic_science_pack",
+        "chemical_science_pack",
+        "production_science_pack",
+        "utility_science_pack",
+    ] {
+        assert!(
+            consumed_packs.contains(&crate::item_id_by_name(&catalog, pack_name)),
+            "space science research should consume {pack_name}"
+        );
+    }
+    assert_eq!(space.required_units, 150);
+    assert_eq!(space.research_time_ticks, 600);
+    assert_eq!(
+        space.effects,
+        vec![TechnologyEffect::UnlockRecipe(recipe("space_science_pack"))]
+    );
+
     assert_eq!(
         researchable_technology_ids(&catalog).len(),
         catalog.technologies.len()

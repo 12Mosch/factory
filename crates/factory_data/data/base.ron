@@ -132,6 +132,7 @@
         (id: 68, name: "flying_robot_frame", stack_size: 50),
         (id: 69, name: "production_science_pack", stack_size: 200),
         (id: 70, name: "utility_science_pack", stack_size: 200),
+        (id: 71, name: "space_science_pack", stack_size: 200),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -923,6 +924,18 @@
                 (item: "flying_robot_frame", amount: 1),
             ],
             products: [(item: "utility_science_pack", amount: 3)],
+        ),
+        (
+            id: 71,
+            name: "space_science_pack",
+            category: Crafting,
+            crafting_time_ticks: 1260,
+            ingredients: [
+                (item: "low_density_structure", amount: 1),
+                (item: "processing_unit", amount: 1),
+                (item: "flying_robot_frame", amount: 1),
+            ],
+            products: [(item: "space_science_pack", amount: 1)],
         ),
     ],
     entities: [
@@ -2158,6 +2171,21 @@
                 UnlockRecipe("flying_robot_frame"),
                 UnlockRecipe("utility_science_pack"),
             ],
+        ),
+        (
+            id: 28,
+            name: "space_science_pack",
+            prerequisites: ["production_science_pack", "utility_science_pack"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+                (item: "production_science_pack", amount: 1),
+                (item: "utility_science_pack", amount: 1),
+            ],
+            required_units: 150,
+            research_time_ticks: 600,
+            effects: [UnlockRecipe("space_science_pack")],
         ),
     ],
     enemy_gameplay: Some((
