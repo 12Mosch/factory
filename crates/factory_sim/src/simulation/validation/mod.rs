@@ -27,6 +27,7 @@ use self::world::{
 
 pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_catalog(&sim.world.prototypes)?;
+    crate::day_night::validate_day_night_cycle_state(sim)?;
     validate_world_resources(&sim.world)?;
     validate_chart_state(sim)?;
     validate_item_statistics(sim)?;

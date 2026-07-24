@@ -24,6 +24,8 @@ pub(crate) struct RawPrototypeCatalog {
     pub(crate) world_generation: Option<RawWorldGenerationConfig>,
     #[serde(default)]
     pub(crate) enemy_gameplay: Option<EnemyGameplayConfig>,
+    #[serde(default)]
+    pub(crate) day_night_cycle: Option<crate::model::DayNightCycleConfig>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -32,6 +32,10 @@ impl Simulation {
 
         let mut sim = Self {
             tick: 0,
+            day_night_cycle: world
+                .prototypes
+                .day_night_cycle
+                .map(|_| DayNightCycleState::new()),
             entity_topology_revision: 0,
             revealed_revision: 0,
             revealed_chunk_history: Default::default(),
@@ -101,6 +105,7 @@ impl Simulation {
 
     pub(crate) fn advance_one_tick<P: TickProfiler>(&mut self, profiler: &mut P) {
         self.tick += 1;
+        self.advance_day_night_cycle();
         self.advance_statistics_to_current_tick();
         self.request_chunks_around_player();
         self.process_chunk_generation_queue(CHUNK_GENERATION_BUDGET_PER_TICK);
@@ -220,6 +225,7 @@ impl Simulation {
         let mut hasher = StableHasher::default();
         "factory-sim-state-v1".hash(&mut hasher);
         self.tick.hash(&mut hasher);
+        self.day_night_cycle.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
         prototype_hash(&self.world.prototypes).hash(&mut hasher);
         self.world.chunks.hash(&mut hasher);

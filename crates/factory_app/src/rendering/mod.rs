@@ -3,6 +3,7 @@ pub(crate) mod build_preview;
 pub(crate) mod camera;
 pub(crate) mod colors;
 pub(crate) mod construction;
+pub(crate) mod day_night;
 pub(crate) mod enemies;
 pub(crate) mod entities;
 pub(crate) mod manual_mining;

@@ -4,6 +4,7 @@ pub mod combat;
 pub mod constants;
 pub mod construction;
 pub mod crafting;
+mod day_night;
 pub mod enemies;
 pub mod entities;
 pub mod equipment;
