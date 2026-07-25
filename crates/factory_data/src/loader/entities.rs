@@ -1,0 +1,728 @@
+use std::collections::HashMap;
+
+use glam::IVec2;
+
+use crate::error::PrototypeLoadError;
+use crate::ids::{EntityPrototypeId, FluidId, ItemId};
+use crate::model::{
+    ElectricPolePrototype, EnemySpawnerPrototype, EntityPrototype, FluidBoxPrototype,
+    FluidConnectionPrototype, FluidConnectionSide, InserterPrototype, MiningDrillPrototype,
+    PumpjackPrototype,
+};
+use crate::raw::{
+    RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawPumpjackPrototype,
+};
+use crate::validation::resolve_collision_mask;
+
+pub(super) fn load_entities(
+    entities: Vec<RawEntityPrototype>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<Vec<EntityPrototype>, PrototypeLoadError> {
+    entities
+        .into_iter()
+        .map(|entity| {
+            validate_laser_turret_metadata(&entity.name, &entity)?;
+            validate_module_and_beacon_metadata(&entity.name, &entity)?;
+            validate_solar_and_storage_metadata(&entity.name, &entity)?;
+            validate_radar_metadata(&entity.name, &entity)?;
+            validate_circuit_metadata(&entity.name, &entity)?;
+            if entity.size.x <= 0 || entity.size.y <= 0 {
+                return Err(PrototypeLoadError::InvalidEntityMetadata {
+                    entity: entity.name,
+                    detail: "dimensions must be positive",
+                });
+            }
+            let name = entity.name;
+            let size = IVec2::new(entity.size.x, entity.size.y);
+            let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
+            match (
+                build_item.is_some(),
+                entity.building_category,
+                entity.building_menu_order,
+            ) {
+                (true, Some(_), Some(_)) | (false, None, None) => {}
+                (true, _, _) => {
+                    return Err(PrototypeLoadError::InvalidBuildingMenuMetadata {
+                        entity: name,
+                        detail: "buildable entities require category and menu order",
+                    });
+                }
+                (false, _, _) => {
+                    return Err(PrototypeLoadError::InvalidBuildingMenuMetadata {
+                        entity: name,
+                        detail: "non-buildable entities must not define category or menu order",
+                    });
+                }
+            }
+            let fluid_boxes =
+                resolve_fluid_boxes(&name, size, entity.fluid_boxes, fluid_ids_by_name)?;
+            let pumpjack =
+                resolve_pumpjack(&name, entity.pumpjack, item_ids_by_name, fluid_ids_by_name)?;
+            validate_machine_energy_source(
+                &name,
+                entity.entity_kind,
+                entity.furnace.as_ref(),
+                entity.mining_drill.is_some(),
+                entity.burner.is_some(),
+                entity.electric_energy_source.is_some(),
+            )?;
+            validate_machine_fluid_roles(
+                &name,
+                entity.entity_kind,
+                &fluid_boxes,
+                pumpjack.as_ref(),
+                fluid_ids_by_name,
+            )?;
+            Ok(EntityPrototype {
+                id: EntityPrototypeId::new(entity.id),
+                name: name.clone(),
+                entity_kind: entity.entity_kind,
+                size,
+                collision_mask: resolve_collision_mask(name, entity.collision_mask)?,
+                build_item,
+                building_category: entity.building_category,
+                building_menu_order: entity.building_menu_order,
+                inventory_slot_count: entity.inventory_slot_count,
+                module_slot_count: entity.module_slot_count,
+                beacon: entity.beacon,
+                burner: entity.burner,
+                furnace: entity.furnace,
+                mining_drill: entity
+                    .mining_drill
+                    .map(|mining_drill| MiningDrillPrototype {
+                        mining_area: IVec2::new(
+                            mining_drill.mining_area.x,
+                            mining_drill.mining_area.y,
+                        ),
+                        ticks_per_item: mining_drill.ticks_per_item,
+                    }),
+                assembling_machine: entity.assembling_machine,
+                transport_belt: entity.transport_belt,
+                splitter: entity.splitter,
+                inserter: entity.inserter.map(|inserter| InserterPrototype {
+                    pickup_offset: IVec2::new(inserter.pickup_offset.x, inserter.pickup_offset.y),
+                    drop_offset: IVec2::new(inserter.drop_offset.x, inserter.drop_offset.y),
+                    pickup_ticks: inserter.pickup_ticks,
+                    drop_ticks: inserter.drop_ticks,
+                }),
+                electric_pole: entity
+                    .electric_pole
+                    .map(|electric_pole| ElectricPolePrototype {
+                        supply_area_tiles: IVec2::new(
+                            electric_pole.supply_area_tiles.x,
+                            electric_pole.supply_area_tiles.y,
+                        ),
+                        wire_reach_tiles_x2: electric_pole.wire_reach_tiles_x2,
+                    }),
+                electric_energy_source: entity.electric_energy_source,
+                steam_engine: entity.steam_engine,
+                solar_panel: entity.solar_panel,
+                accumulator: entity.accumulator,
+                radar: entity.radar,
+                boiler: entity.boiler,
+                offshore_pump: entity.offshore_pump,
+                pump: entity.pump,
+                pumpjack,
+                underground_pipe: entity.underground_pipe,
+                fluid_boxes,
+                max_health: entity.max_health,
+                pollution_per_minute_milli: entity.pollution_per_minute_milli,
+                gun_turret: entity.gun_turret,
+                laser_turret: entity.laser_turret,
+                enemy_spawner: entity.enemy_spawner.map(|spawner| EnemySpawnerPrototype {
+                    max_alive_units: spawner.max_alive_units,
+                    guard_units: spawner.guard_units,
+                    free_spawn_interval_ticks: spawner.free_spawn_interval_ticks,
+                    unit_spawn_pollution_cost_milli: spawner.unit_spawn_pollution_cost_milli,
+                    pollution_absorption_per_tick_milli: spawner
+                        .pollution_absorption_per_tick_milli,
+                    unit: spawner.unit,
+                }),
+                circuit_connector: entity.circuit_connector,
+                combinator: entity.combinator,
+            })
+        })
+        .collect()
+}
+
+/// Circuit metadata is only coherent when the entity kind, the connector
+/// layout, and the combinator section agree. Rejecting mismatches here keeps
+/// the simulation free of "combinator without an output port" style checks.
+fn validate_circuit_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::{CircuitPortLayout, CombinatorKind, EntityKind};
+
+    let invalid = |detail: &'static str| {
+        Err(PrototypeLoadError::InvalidCircuitMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    let combinator_kind = match entity.entity_kind {
+        EntityKind::ConstantCombinator => Some(CombinatorKind::Constant),
+        EntityKind::ArithmeticCombinator => Some(CombinatorKind::Arithmetic),
+        EntityKind::DeciderCombinator => Some(CombinatorKind::Decider),
+        _ => None,
+    };
+
+    match (combinator_kind, entity.combinator) {
+        (Some(expected), Some(combinator)) => {
+            if combinator.kind != expected {
+                return invalid("combinator kind must match the entity kind");
+            }
+            match expected {
+                CombinatorKind::Constant if combinator.constant_slot_count == 0 => {
+                    return invalid("constant combinators require at least one signal slot");
+                }
+                CombinatorKind::Arithmetic | CombinatorKind::Decider
+                    if combinator.constant_slot_count != 0 =>
+                {
+                    return invalid("only constant combinators declare signal slots");
+                }
+                _ => {}
+            }
+        }
+        (Some(_), None) => return invalid("combinator entities require combinator metadata"),
+        (None, Some(_)) => return invalid("combinator metadata is only valid on combinators"),
+        (None, None) => {}
+    }
+
+    let Some(connector) = entity.circuit_connector else {
+        if combinator_kind.is_some() {
+            return invalid("combinators require a circuit connector");
+        }
+        if entity.entity_kind == EntityKind::Lamp {
+            return invalid("lamps require a circuit connector");
+        }
+        return Ok(());
+    };
+
+    if connector.wire_reach_tiles_x2 == 0 {
+        return invalid("circuit wire reach must be positive");
+    }
+    let expected_layout = if combinator_kind.is_some() {
+        CircuitPortLayout::InputOutput
+    } else {
+        CircuitPortLayout::Single
+    };
+    if connector.ports != expected_layout {
+        return invalid("only combinators use separate input and output connectors");
+    }
+    // A constant combinator publishes its configured rows, not stored goods,
+    // and no combinator is gated by a condition of its own.
+    if combinator_kind.is_some() && (connector.reads_contents || connector.controllable) {
+        return invalid("combinators neither read contents nor take an enable condition");
+    }
+    if entity.entity_kind == EntityKind::Lamp && !connector.controllable {
+        return invalid("lamps require a controllable circuit connector");
+    }
+
+    Ok(())
+}
+
+fn validate_module_and_beacon_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let supports_modules = matches!(
+        entity.entity_kind,
+        EntityKind::AssemblingMachine
+            | EntityKind::Furnace
+            | EntityKind::MiningDrill
+            | EntityKind::Lab
+            | EntityKind::Beacon
+    );
+    if entity.module_slot_count > 0 && !supports_modules {
+        return Err(PrototypeLoadError::InvalidModuleSlotMetadata {
+            entity: name.to_string(),
+            detail: "this entity kind cannot declare module slots",
+        });
+    }
+    if entity.module_slot_count > u16::MAX as usize {
+        return Err(PrototypeLoadError::InvalidModuleSlotMetadata {
+            entity: name.to_string(),
+            detail: "module slot count exceeds supported fixed-point aggregation",
+        });
+    }
+
+    match (entity.entity_kind, entity.beacon) {
+        (EntityKind::Beacon, Some(beacon)) => {
+            if entity.module_slot_count == 0 {
+                return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                    entity: name.to_string(),
+                    detail: "beacons require at least one module slot",
+                });
+            }
+            if beacon.effect_radius_tiles == 0 || beacon.transmission_permyriad == 0 {
+                return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                    entity: name.to_string(),
+                    detail: "effect radius and transmission must be positive",
+                });
+            }
+            if entity.assembling_machine.is_some()
+                || entity.furnace.is_some()
+                || entity.mining_drill.is_some()
+                || entity.burner.is_some()
+                || entity.electric_energy_source.is_some()
+            {
+                return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                    entity: name.to_string(),
+                    detail: "passive beacons cannot carry machine or energy-source metadata",
+                });
+            }
+        }
+        (EntityKind::Beacon, None) => {
+            return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                entity: name.to_string(),
+                detail: "beacon entities require beacon metadata",
+            });
+        }
+        (_, Some(_)) => {
+            return Err(PrototypeLoadError::InvalidBeaconMetadata {
+                entity: name.to_string(),
+                detail: "beacon metadata is only valid on beacon entities",
+            });
+        }
+        (_, None) => {}
+    }
+    Ok(())
+}
+
+fn validate_laser_turret_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    let is_laser = entity.entity_kind == crate::model::EntityKind::LaserTurret;
+    if is_laser
+        && (entity.max_health.is_none()
+            || entity.electric_energy_source.is_none()
+            || entity.laser_turret.is_none())
+    {
+        return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+            entity: name.to_string(),
+            detail: "laser turrets require health, electric, and laser-turret metadata",
+        });
+    }
+    if !is_laser && entity.laser_turret.is_some() {
+        return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+            entity: name.to_string(),
+            detail: "laser-turret metadata is only valid on laser turret entities",
+        });
+    }
+    if let Some(laser) = entity.laser_turret {
+        if laser.range_tiles == 0 || laser.damage == 0 || laser.cooldown_ticks == 0 {
+            return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+                entity: name.to_string(),
+                detail: "range, damage, and cooldown must be positive",
+            });
+        }
+        let electric = entity
+            .electric_energy_source
+            .as_ref()
+            .expect("presence checked above");
+        if electric.energy_usage_watts == 0 || electric.drain_watts == 0 {
+            return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+                entity: name.to_string(),
+                detail: "active power and idle drain must be positive",
+            });
+        }
+        if entity.max_health == Some(0) {
+            return Err(PrototypeLoadError::InvalidLaserTurretMetadata {
+                entity: name.to_string(),
+                detail: "maximum health must be positive",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Solar panels and accumulators are passive, fuel-free power participants.
+/// Their prototypes must carry the matching metadata, keep it off every other
+/// entity kind, and never mix in the ordinary machine energy sources (electric
+/// consumer, burner, steam, or fluid boxes) that would wire them into the
+/// consumer-demand model instead.
+fn validate_solar_and_storage_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidSolarStorageMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+    let no_energy_or_fluid = entity.electric_energy_source.is_none()
+        && entity.burner.is_none()
+        && entity.steam_engine.is_none()
+        && entity.boiler.is_none()
+        && entity.fluid_boxes.is_empty();
+
+    match entity.entity_kind {
+        EntityKind::SolarPanel => {
+            let Some(solar) = entity.solar_panel else {
+                return invalid("solar panel entities require solar_panel metadata");
+            };
+            if solar.max_power_output_watts == 0 {
+                return invalid("solar panel maximum output must be positive");
+            }
+            if entity.accumulator.is_some() {
+                return invalid("solar panels cannot declare accumulator metadata");
+            }
+            if !no_energy_or_fluid {
+                return invalid(
+                    "solar panels cannot declare electric, burner, steam, boiler, or fluid metadata",
+                );
+            }
+        }
+        EntityKind::Accumulator => {
+            let Some(accumulator) = entity.accumulator else {
+                return invalid("accumulator entities require accumulator metadata");
+            };
+            if accumulator.capacity_joules == 0
+                || accumulator.max_charge_watts == 0
+                || accumulator.max_discharge_watts == 0
+            {
+                return invalid(
+                    "accumulator capacity, charge, and discharge rates must be positive",
+                );
+            }
+            if entity.solar_panel.is_some() {
+                return invalid("accumulators cannot declare solar_panel metadata");
+            }
+            if !no_energy_or_fluid {
+                return invalid(
+                    "accumulators cannot declare electric, burner, steam, boiler, or fluid metadata",
+                );
+            }
+        }
+        _ => {
+            if entity.solar_panel.is_some() {
+                return invalid("solar_panel metadata is only valid on solar panel entities");
+            }
+            if entity.accumulator.is_some() {
+                return invalid("accumulator metadata is only valid on accumulator entities");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_radar_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRadarMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    match (entity.entity_kind, entity.radar) {
+        (EntityKind::Radar, Some(radar)) => {
+            if radar.nearby_reveal_radius_chunks == 0
+                || radar.nearby_scan_interval_ticks == 0
+                || radar.far_scan_radius_chunks <= radar.nearby_reveal_radius_chunks
+                || radar.far_scan_interval_ticks == 0
+            {
+                return invalid(
+                    "scan radii and intervals must be positive, and far radius must exceed nearby radius",
+                );
+            }
+            if entity
+                .electric_energy_source
+                .as_ref()
+                .is_none_or(|source| source.energy_usage_watts == 0)
+            {
+                return invalid("radars require a positive electric energy source");
+            }
+            if entity.burner.is_some() {
+                return invalid("radars cannot declare a burner energy source");
+            }
+            if entity.max_health.is_none_or(|health| health == 0) {
+                return invalid("radars require positive maximum health");
+            }
+        }
+        (EntityKind::Radar, None) => return invalid("radar entities require radar metadata"),
+        (_, Some(_)) => return invalid("radar metadata is only valid on radar entities"),
+        (_, None) => {}
+    }
+
+    Ok(())
+}
+
+/// Furnaces and mining drills work from exactly one energy source, so their
+/// prototypes must declare either a burner or an electric energy source (not
+/// both, not neither). Furnaces additionally need a `furnace` section with a
+/// positive crafting speed so smelting times are always well-defined.
+fn validate_machine_energy_source(
+    entity_name: &str,
+    entity_kind: crate::model::EntityKind,
+    furnace: Option<&crate::model::FurnacePrototype>,
+    has_mining_drill: bool,
+    has_burner: bool,
+    has_electric: bool,
+) -> Result<(), PrototypeLoadError> {
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidMachineEnergySource {
+            entity: entity_name.to_string(),
+            detail,
+        })
+    };
+
+    match entity_kind {
+        crate::model::EntityKind::Furnace => {
+            let Some(furnace) = furnace else {
+                return invalid("furnace entities require a furnace section");
+            };
+            if furnace.crafting_speed_numerator == 0 || furnace.crafting_speed_denominator == 0 {
+                return invalid("furnace crafting speed fraction must be positive");
+            }
+            if has_burner == has_electric {
+                return invalid(
+                    "furnace entities require exactly one of burner or electric_energy_source",
+                );
+            }
+        }
+        crate::model::EntityKind::MiningDrill => {
+            if !has_mining_drill {
+                return invalid("mining drill entities require a mining_drill section");
+            }
+            if has_burner == has_electric {
+                return invalid(
+                    "mining drill entities require exactly one of burner or electric_energy_source",
+                );
+            }
+        }
+        crate::model::EntityKind::Inserter => {
+            if has_burner == has_electric {
+                return invalid(
+                    "inserter entities require exactly one of burner or electric_energy_source",
+                );
+            }
+        }
+        _ => {
+            if furnace.is_some() {
+                return invalid("only furnace entities may declare a furnace section");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_fluid_boxes(
+    entity_name: &str,
+    entity_size: IVec2,
+    fluid_boxes: Vec<RawFluidBoxPrototype>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<Vec<FluidBoxPrototype>, PrototypeLoadError> {
+    fluid_boxes
+        .into_iter()
+        .enumerate()
+        .map(|(box_index, fluid_box)| {
+            if fluid_box.capacity_milliunits == 0 || fluid_box.connections.is_empty() {
+                return Err(PrototypeLoadError::InvalidFluidBox {
+                    entity: entity_name.to_string(),
+                    box_index,
+                });
+            }
+            let filter = fluid_box
+                .filter
+                .map(|fluid_name| {
+                    fluid_ids_by_name.get(&fluid_name).copied().ok_or_else(|| {
+                        PrototypeLoadError::MissingFluidReference {
+                            owner: entity_name.to_string(),
+                            fluid: fluid_name,
+                        }
+                    })
+                })
+                .transpose()?;
+            let connections = fluid_box
+                .connections
+                .into_iter()
+                .enumerate()
+                .map(|(connection_index, connection)| {
+                    validate_fluid_connection_geometry(
+                        entity_name,
+                        box_index,
+                        connection_index,
+                        entity_size,
+                        &connection,
+                    )?;
+                    Ok(FluidConnectionPrototype {
+                        local_offset: IVec2::new(
+                            connection.local_offset.x,
+                            connection.local_offset.y,
+                        ),
+                        side: connection.side,
+                    })
+                })
+                .collect::<Result<_, PrototypeLoadError>>()?;
+
+            Ok(FluidBoxPrototype {
+                capacity_milliunits: fluid_box.capacity_milliunits,
+                filter,
+                io: fluid_box.io,
+                connections,
+            })
+        })
+        .collect()
+}
+
+fn resolve_pumpjack(
+    entity_name: &str,
+    pumpjack: Option<RawPumpjackPrototype>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<Option<PumpjackPrototype>, PrototypeLoadError> {
+    let Some(pumpjack) = pumpjack else {
+        return Ok(None);
+    };
+
+    let resource_item = *item_ids_by_name
+        .get(&pumpjack.resource_item)
+        .ok_or_else(|| PrototypeLoadError::MissingPumpjackResourceItem {
+            entity: entity_name.to_string(),
+            item: pumpjack.resource_item.clone(),
+        })?;
+    let output_fluid = *fluid_ids_by_name
+        .get(&pumpjack.output_fluid)
+        .ok_or_else(|| PrototypeLoadError::MissingFluidReference {
+            owner: entity_name.to_string(),
+            fluid: pumpjack.output_fluid.clone(),
+        })?;
+
+    Ok(Some(PumpjackPrototype {
+        pumping_speed_per_second_milliunits: pumpjack.pumping_speed_per_second_milliunits,
+        resource_item,
+        output_fluid,
+    }))
+}
+
+fn validate_fluid_connection_geometry(
+    entity_name: &str,
+    box_index: usize,
+    connection_index: usize,
+    entity_size: IVec2,
+    connection: &RawFluidConnectionPrototype,
+) -> Result<(), PrototypeLoadError> {
+    let x = connection.local_offset.x;
+    let y = connection.local_offset.y;
+    let on_entity = x >= 0 && y >= 0 && x < entity_size.x && y < entity_size.y;
+    let on_side = match connection.side {
+        FluidConnectionSide::North => y == 0,
+        FluidConnectionSide::East => x == entity_size.x - 1,
+        FluidConnectionSide::South => y == entity_size.y - 1,
+        FluidConnectionSide::West => x == 0,
+    };
+
+    if on_entity && on_side {
+        Ok(())
+    } else {
+        Err(PrototypeLoadError::InvalidFluidConnection {
+            entity: entity_name.to_string(),
+            box_index,
+            connection_index,
+        })
+    }
+}
+
+fn validate_machine_fluid_roles(
+    entity_name: &str,
+    entity_kind: crate::model::EntityKind,
+    fluid_boxes: &[FluidBoxPrototype],
+    pumpjack: Option<&PumpjackPrototype>,
+    fluid_ids_by_name: &HashMap<String, FluidId>,
+) -> Result<(), PrototypeLoadError> {
+    let required_fluid = |fluid_name: &str| {
+        fluid_ids_by_name.get(fluid_name).copied().ok_or_else(|| {
+            PrototypeLoadError::MissingFluidReference {
+                owner: entity_name.to_string(),
+                fluid: fluid_name.to_string(),
+            }
+        })
+    };
+
+    match entity_kind {
+        crate::model::EntityKind::OffshorePump => {
+            require_fluid_box_filters(entity_name, fluid_boxes, &[Some(required_fluid("water")?)])
+        }
+        crate::model::EntityKind::Boiler => require_fluid_box_filters(
+            entity_name,
+            fluid_boxes,
+            &[
+                Some(required_fluid("water")?),
+                Some(required_fluid("steam")?),
+            ],
+        ),
+        crate::model::EntityKind::SteamEngine => {
+            require_fluid_box_filters(entity_name, fluid_boxes, &[Some(required_fluid("steam")?)])
+        }
+        crate::model::EntityKind::Pumpjack => {
+            let Some(pumpjack) = pumpjack else {
+                return Err(PrototypeLoadError::InvalidFluidBox {
+                    entity: entity_name.to_string(),
+                    box_index: 0,
+                });
+            };
+            require_fluid_box_filters(entity_name, fluid_boxes, &[Some(pumpjack.output_fluid)])
+        }
+        _ => Ok(()),
+    }
+}
+
+fn require_fluid_box_filters(
+    entity_name: &str,
+    fluid_boxes: &[FluidBoxPrototype],
+    expected_filters: &[Option<FluidId>],
+) -> Result<(), PrototypeLoadError> {
+    if fluid_boxes.len() != expected_filters.len() {
+        return Err(PrototypeLoadError::InvalidFluidBox {
+            entity: entity_name.to_string(),
+            box_index: fluid_boxes.len(),
+        });
+    }
+
+    for (box_index, (fluid_box, expected_filter)) in
+        fluid_boxes.iter().zip(expected_filters.iter()).enumerate()
+    {
+        if fluid_box.filter != *expected_filter {
+            return Err(PrototypeLoadError::InvalidFluidBox {
+                entity: entity_name.to_string(),
+                box_index,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_entity_build_item(
+    entity_name: &str,
+    raw_build_item: Option<String>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+) -> Result<Option<ItemId>, PrototypeLoadError> {
+    match raw_build_item {
+        Some(item_name) => {
+            let item_id = *item_ids_by_name.get(&item_name).ok_or_else(|| {
+                PrototypeLoadError::MissingEntityBuildItem {
+                    entity: entity_name.to_string(),
+                    item: item_name.clone(),
+                }
+            })?;
+            Ok(Some(item_id))
+        }
+        None => Ok(item_ids_by_name.get(entity_name).copied()),
+    }
+}
