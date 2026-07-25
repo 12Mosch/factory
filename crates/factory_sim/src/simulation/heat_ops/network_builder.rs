@@ -73,20 +73,14 @@ fn heat_network_topology(
 
     for index in indices {
         let node = &nodes[*index];
-        let capacity = node
-            .specific_heat_joules_per_degree
-            .saturating_mul(u64::from(
-                node.max_temperature_degrees
-                    .saturating_sub(factory_data::HEAT_AMBIENT_TEMPERATURE_DEGREES),
-            ));
         buffers.push(HeatNetworkBufferTopology {
             entity_id: node.entity_id,
             specific_heat_joules_per_degree: node.specific_heat_joules_per_degree,
-            capacity_joules: capacity,
+            capacity_joules: node.capacity_joules,
         });
         specific_heat_joules_per_degree =
             specific_heat_joules_per_degree.saturating_add(node.specific_heat_joules_per_degree);
-        capacity_joules = capacity_joules.saturating_add(capacity);
+        capacity_joules = capacity_joules.saturating_add(node.capacity_joules);
     }
 
     HeatNetworkTopology {

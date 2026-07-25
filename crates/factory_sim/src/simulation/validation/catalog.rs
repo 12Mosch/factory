@@ -453,6 +453,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
             EntityKind::HeatPipe => {
                 if prototype.heat_buffer.is_none()
                     || prototype.heat_energy_source.is_some()
+                    || prototype.nuclear_reactor.is_some()
                     || prototype.burner.is_some()
                     || prototype.electric_energy_source.is_some()
                     || !prototype.fluid_boxes.is_empty()
@@ -484,6 +485,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     || heat_source.energy_usage_watts == 0
                     || heat_source.min_working_temperature_degrees
                         > heat_buffer.max_temperature_degrees
+                    || prototype.nuclear_reactor.is_some()
                     || prototype.burner.is_some()
                     || prototype.electric_energy_source.is_some()
                 {

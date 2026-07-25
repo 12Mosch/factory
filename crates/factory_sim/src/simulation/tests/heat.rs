@@ -252,7 +252,7 @@ fn adjacent_reactors_boost_each_other_without_burning_extra_fuel() {
 
     sim.tick();
 
-    let bonus = sim
+    let reactor_prototype = sim
         .world
         .prototypes
         .entity(
@@ -263,11 +263,36 @@ fn adjacent_reactors_boost_each_other_without_burning_extra_fuel() {
         )
         .and_then(|prototype| prototype.nuclear_reactor)
         .expect("nuclear reactor prototype");
-    let base_per_tick = bonus.heat_output_watts / SIMULATION_TICKS_PER_SECOND;
-    // Both reactors share one network, so the bonus shows up in the network total.
+    let base_per_tick = reactor_prototype.heat_output_watts / SIMULATION_TICKS_PER_SECOND;
+    assert_eq!(
+        reactor_prototype.neighbour_bonus_permyriad, 10_000,
+        "this test's expected output assumes one neighbour doubles a reactor"
+    );
+
+    // Both reactors share one network, so the bonus shows up in the network total:
+    // two reactors, each doubled by its single neighbour.
     assert_eq!(sim.heat_networks().len(), 1);
-    let doubled = base_per_tick * 2;
-    assert_eq!(sim.heat_networks()[0].energy_joules, doubled * 2);
+    assert_eq!(sim.heat_networks()[0].energy_joules, base_per_tick * 4);
+
+    // The bonus is free heat, not extra fuel: each reactor burnt exactly the one
+    // cell it was given.
+    let spent = item_id(&sim.world.prototypes, "used_up_uranium_fuel_cell");
+    for reactor_id in [first, second] {
+        let state = sim
+            .entities
+            .nuclear_reactor_state(reactor_id)
+            .expect("reactor state");
+        assert!(state.energy.fuel_slot.is_empty());
+        assert_eq!(
+            state.output_slot.stack().map(|stack| stack.count()),
+            Some(1),
+            "a boosted reactor must not consume more than one cell"
+        );
+        assert_eq!(
+            state.output_slot.stack().map(|stack| stack.item_id()),
+            Some(spent)
+        );
+    }
 }
 
 /// Warm-up is the defining pacing of a heat network: below its minimum working
@@ -428,11 +453,19 @@ fn reactor_heat_reaches_a_distant_exchanger_and_powers_a_turbine() {
         sim.tick();
     }
 
+    let min_working_millidegrees = u64::from(
+        sim.entities
+            .placed_entity(exchanger_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.heat_energy_source)
+            .expect("heat exchanger declares a heat energy source")
+            .min_working_temperature_degrees,
+    ) * 1_000;
     assert!(
         sim.entity_heat_status(exchanger_id)
             .expect("exchanger exposes heat status")
             .temperature_millidegrees
-            > 500_000,
+            > min_working_millidegrees,
         "the exchanger should stay above its minimum working temperature"
     );
     assert!(

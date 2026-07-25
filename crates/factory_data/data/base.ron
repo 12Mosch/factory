@@ -2564,8 +2564,9 @@
             )),
         ),
         // Draws 10 MW of heat once its buffer passes 500 degrees, so four
-        // exchangers consume one reactor. Water in on the north edge, steam out
-        // on the south, matching the boiler layout.
+        // exchangers consume one reactor. Heat enters from the south edge and
+        // water and steam sit on opposite corners of the north edge, so a heat
+        // pipe run and the water/steam pipes approach from opposite sides.
         (
             id: 61,
             name: "heat_exchanger",

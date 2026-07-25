@@ -699,6 +699,9 @@ fn validate_heat_metadata(
             if heat_energy_source.is_some() || has_burner || has_electric || boiler.is_some() {
                 return invalid("heat pipes only carry heat and consume no energy");
             }
+            if nuclear_reactor.is_some() {
+                return invalid("heat pipes carry heat but never produce it");
+            }
         }
         EntityKind::HeatExchanger => {
             let Some(heat_energy_source) = heat_energy_source else {
@@ -712,6 +715,9 @@ fn validate_heat_metadata(
             }
             if has_burner || has_electric {
                 return invalid("heat exchangers run on heat alone");
+            }
+            if nuclear_reactor.is_some() {
+                return invalid("heat exchangers consume heat but never produce it");
             }
             if heat_energy_source.energy_usage_watts == 0 {
                 return invalid("heat exchanger energy usage must be positive");

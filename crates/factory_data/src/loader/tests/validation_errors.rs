@@ -987,6 +987,33 @@ fn solar_metadata_on_other_kind_fails() {
     );
 }
 
+/// Reactor output belongs to reactors alone: a heat pipe or exchanger declaring it
+/// would silently carry inert metadata that reads as if it produced heat.
+#[test]
+fn reactor_metadata_on_heat_pipe_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "heat_pipe", stack_size: 100)], recipes: [],
+        entities: [(id: 0, name: "heat_pipe", entity_kind: HeatPipe, build_item: Some("heat_pipe"), building_category: Some(Power), building_menu_order: Some(90), size: (x: 1, y: 1), collision_mask: (layers: ["building"]), max_health: Some(100), nuclear_reactor: Some((heat_output_watts: 40000000, neighbour_bonus_permyriad: 10000)), heat_buffer: Some((specific_heat_joules_per_degree: 100000, max_temperature_degrees: 1000, connections: [(local_offset: (x: 0, y: 0), side: North)])))],
+        tiles: [],
+    )"#).expect_err("heat pipes must not declare reactor output");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidHeatMetadata { entity, .. } if entity == "heat_pipe")
+    );
+}
+
+#[test]
+fn reactor_metadata_on_heat_exchanger_fails() {
+    let error = PrototypeCatalog::from_ron_str(r#"(
+        items: [(id: 0, name: "heat_exchanger", stack_size: 50)], recipes: [],
+        fluids: [(id: 0, name: "water"), (id: 1, name: "steam")],
+        entities: [(id: 0, name: "heat_exchanger", entity_kind: HeatExchanger, build_item: Some("heat_exchanger"), building_category: Some(Power), building_menu_order: Some(100), size: (x: 3, y: 2), collision_mask: (layers: ["building"]), max_health: Some(200), boiler: Some((water_consumption_per_second_milliunits: 103000, steam_output_per_second_milliunits: 103000)), heat_energy_source: Some((energy_usage_watts: 10000000, min_working_temperature_degrees: 500)), nuclear_reactor: Some((heat_output_watts: 40000000, neighbour_bonus_permyriad: 10000)), heat_buffer: Some((specific_heat_joules_per_degree: 100000, max_temperature_degrees: 1000, connections: [(local_offset: (x: 1, y: 1), side: South)])), fluid_boxes: [(capacity_milliunits: 200000, filter: Some("water"), connections: [(local_offset: (x: 0, y: 0), side: North)]), (capacity_milliunits: 200000, filter: Some("steam"), connections: [(local_offset: (x: 2, y: 0), side: North)])])],
+        tiles: [],
+    )"#).expect_err("heat exchangers must not declare reactor output");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidHeatMetadata { entity, .. } if entity == "heat_exchanger")
+    );
+}
+
 #[test]
 fn radar_without_metadata_fails() {
     let error = PrototypeCatalog::from_ron_str(r#"(

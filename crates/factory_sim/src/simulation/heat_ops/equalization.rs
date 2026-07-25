@@ -80,6 +80,7 @@ impl Simulation {
             nodes.push(HeatBufferNode {
                 entity_id: placed.id,
                 specific_heat_joules_per_degree: heat_buffer.specific_heat_joules_per_degree,
+                capacity_joules: heat_buffer.capacity_joules(),
                 max_temperature_degrees: heat_buffer.max_temperature_degrees,
                 endpoints,
             });

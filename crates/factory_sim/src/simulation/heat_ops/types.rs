@@ -7,6 +7,10 @@ use crate::simulation::*;
 pub(super) struct HeatBufferNode {
     pub(super) entity_id: EntityId,
     pub(super) specific_heat_joules_per_degree: u64,
+    /// Energy the buffer holds at its maximum temperature, taken from the
+    /// prototype so the capacity formula lives in exactly one place.
+    pub(super) capacity_joules: u64,
+    /// Kept alongside the capacity because it is the network solve's fill order.
     pub(super) max_temperature_degrees: u32,
     pub(super) endpoints: Vec<EdgeEndpoint>,
 }

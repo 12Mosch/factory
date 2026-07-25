@@ -525,31 +525,53 @@ impl Simulation {
         else {
             return MachineStatus::Idle;
         };
-        let water_amount = per_tick_milliunits(boiler.water_consumption_per_second_milliunits);
-        let steam_amount = per_tick_milliunits(boiler.steam_output_per_second_milliunits);
-        let Some(water_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 0,
-        }) else {
-            return MachineStatus::NoFluid;
-        };
-        let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 1,
-        }) else {
-            return MachineStatus::NoFluid;
-        };
-        if self.fluid_network_total_for_fluid(water_network_id, water) < water_amount {
-            return MachineStatus::NoFluid;
-        }
-        if self.fluid_network_available_capacity_for_fluid(steam_network_id, steam) < steam_amount {
-            return MachineStatus::OutputFull;
+        if let Some(blocker) = self.boiler_fluid_blocker(entity_id, boiler, water, steam) {
+            return blocker;
         }
         if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
         {
             return MachineStatus::NoFuel;
         }
         MachineStatus::Working
+    }
+
+    /// Whatever stops a water-to-steam converter this tick on the fluid side, or
+    /// `None` when water is available and the steam has somewhere to go.
+    ///
+    /// Shared by boilers and heat exchangers: they differ only in where their
+    /// energy comes from, so letting the fluid rules drift apart would report two
+    /// different statuses for the same blocked pipe.
+    fn boiler_fluid_blocker(
+        &self,
+        entity_id: EntityId,
+        boiler: &factory_data::BoilerPrototype,
+        water: FluidId,
+        steam: FluidId,
+    ) -> Option<MachineStatus> {
+        // An unnetworked box is itself a blocker, so neither lookup may use `?`:
+        // `None` from this helper means "the fluids are fine".
+        let Some(water_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+            entity_id,
+            box_index: 0,
+        }) else {
+            return Some(MachineStatus::NoFluid);
+        };
+        let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+            entity_id,
+            box_index: 1,
+        }) else {
+            return Some(MachineStatus::NoFluid);
+        };
+
+        let water_amount = per_tick_milliunits(boiler.water_consumption_per_second_milliunits);
+        let steam_amount = per_tick_milliunits(boiler.steam_output_per_second_milliunits);
+        if self.fluid_network_total_for_fluid(water_network_id, water) < water_amount {
+            return Some(MachineStatus::NoFluid);
+        }
+        if self.fluid_network_available_capacity_for_fluid(steam_network_id, steam) < steam_amount {
+            return Some(MachineStatus::OutputFull);
+        }
+        None
     }
 
     fn nuclear_reactor_status(
@@ -621,25 +643,8 @@ impl Simulation {
         let Some(heat_buffer) = prototype.heat_buffer.as_ref() else {
             return MachineStatus::Idle;
         };
-        let Some(water_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 0,
-        }) else {
-            return MachineStatus::NoFluid;
-        };
-        let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 1,
-        }) else {
-            return MachineStatus::NoFluid;
-        };
-        let water_amount = per_tick_milliunits(boiler.water_consumption_per_second_milliunits);
-        let steam_amount = per_tick_milliunits(boiler.steam_output_per_second_milliunits);
-        if self.fluid_network_total_for_fluid(water_network_id, water) < water_amount {
-            return MachineStatus::NoFluid;
-        }
-        if self.fluid_network_available_capacity_for_fluid(steam_network_id, steam) < steam_amount {
-            return MachineStatus::OutputFull;
+        if let Some(blocker) = self.boiler_fluid_blocker(entity_id, boiler, water, steam) {
+            return blocker;
         }
         let stored = self
             .entities

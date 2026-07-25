@@ -100,7 +100,7 @@ pub fn pixel_at(map: &factory_app::rendering::map_texture::MapPixels, tile: (i64
 /// Nearest rather than first-in-chunk-order: hand-mining tests have to walk the
 /// player there, and a tile on the far side of the starting area can be cut off
 /// by terrain, which would fail the test for reasons unrelated to what it checks.
-pub fn first_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::ResourceCell) {
+pub fn nearest_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::ResourceCell) {
     let (player_x, player_y) = sim.player().position_tiles();
     sim.world()
         .chunks
