@@ -2,6 +2,7 @@ mod support;
 
 mod assemblers;
 mod belts;
+mod circuits;
 mod combat;
 mod commands;
 mod construction;

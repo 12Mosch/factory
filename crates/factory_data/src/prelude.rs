@@ -1,7 +1,8 @@
 pub use crate::{
     AccumulatorPrototype, AssemblingMachinePrototype, BaseFluidIds, BaseItemIds, BasePrototypeIds,
     BaseTileIds, BeaconPrototype, BiomeConfig, BoilerPrototype, BuildingCategory, BurnerPrototype,
-    ClimateNoiseConfig, ClimateRange, CollisionLayer, CollisionMask, CraftingCategory,
+    CircuitConnectorPrototype, CircuitPortLayout, ClimateNoiseConfig, ClimateRange, CollisionLayer,
+    CollisionMask, CombinatorKind, CombinatorPrototype, CraftingCategory,
     DamageResistancePrototype, DamageType, DayNightCycleConfig, ElectricEnergySourcePrototype,
     ElectricPolePrototype, EnemyGameplayConfig, EntityKind, EntityPrototype, EntityPrototypeId,
     EquipmentEffectPrototype, EquipmentPrototype, FluidAmount, FluidBoxIo, FluidBoxPrototype,
@@ -13,7 +14,8 @@ pub use crate::{
     ResourcePatchGridConfig, SolarPanelPrototype, StartingAreaConfig, SteamEnginePrototype,
     TechnologyEffect, TechnologyId, TechnologyPrototype, TerrainNoiseConfig, TileId,
     TilePlacementPrototype, TilePrototype, TransportBeltPrototype, UndergroundBeltPart,
-    UndergroundBeltPrototype, UndergroundPipePrototype, WORLD_GENERATION_FORMAT_VERSION,
-    WorldGenerationConfig, entity_prototype_id_by_name, fluid_id_by_name, item_id_by_name,
-    recipe_id_by_name, technology_id_by_name, tile_id_by_name,
+    UndergroundBeltPrototype, UndergroundPipePrototype, VirtualSignalId, VirtualSignalKind,
+    VirtualSignalPrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    entity_prototype_id_by_name, fluid_id_by_name, item_id_by_name, recipe_id_by_name,
+    technology_id_by_name, tile_id_by_name,
 };

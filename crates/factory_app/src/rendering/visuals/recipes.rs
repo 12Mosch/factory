@@ -66,6 +66,10 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::SolarPanel => solar_panel_layers(&mut builder, style),
         EntityKind::Accumulator => accumulator_layers(&mut builder, style),
         EntityKind::Radar => radar_layers(&mut builder, style),
+        EntityKind::ConstantCombinator
+        | EntityKind::ArithmeticCombinator
+        | EntityKind::DeciderCombinator => combinator_layers(&mut builder, style),
+        EntityKind::Lamp => lamp_layers(&mut builder, style),
         EntityKind::ResourcePatch => {}
     }
 
@@ -719,6 +723,61 @@ fn laser_turret_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyl
             Vec2::ZERO,
             0.16,
             Color::srgba(0.78, 0.98, 1.0, 0.98),
+        );
+}
+
+/// Flat housing with a display panel and two wire terminals. The terminals sit
+/// on the entity's facing axis so an input-output combinator reads as directed
+/// even though all three kinds share one silhouette.
+fn combinator_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
+    let forward = direction_vec(style.direction);
+    builder
+        .scaled_rounded(
+            Vec2::new(0.84, 0.88),
+            Vec2::ZERO,
+            0.0,
+            Color::srgba(0.14, 0.16, 0.20, 0.92),
+            0.16,
+        )
+        .scaled_rounded(
+            Vec2::new(0.58, 0.40),
+            Vec2::ZERO,
+            0.0,
+            tinted(style.base_color, 0.24),
+            0.18,
+        )
+        .scaled_rounded(
+            Vec2::new(0.34, 0.10),
+            forward * 0.36,
+            0.0,
+            Color::srgba(0.82, 0.78, 0.44, 0.94),
+            0.30,
+        )
+        .scaled_rounded(
+            Vec2::new(0.34, 0.10),
+            forward * -0.36,
+            0.0,
+            Color::srgba(0.52, 0.56, 0.62, 0.94),
+            0.30,
+        );
+}
+
+/// A lamp is a ring around a bulb; the lit state comes through `base_color`,
+/// so the cached visual varies with it and no per-frame tinting is needed.
+fn lamp_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
+    builder
+        .scaled_rounded(
+            Vec2::new(0.86, 0.86),
+            Vec2::ZERO,
+            0.0,
+            Color::srgba(0.20, 0.20, 0.22, 0.94),
+            0.40,
+        )
+        .scaled_ellipse(
+            Vec2::new(0.56, 0.56),
+            Vec2::ZERO,
+            0.0,
+            tinted(style.base_color, 0.30),
         );
 }
 

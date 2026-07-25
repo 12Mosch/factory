@@ -61,6 +61,7 @@ impl Simulation {
             power_demand_cache: PowerDemandCache::default(),
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::default(),
+            circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
             capacity_overflows: CapacityOverflowCounters::default(),
@@ -113,9 +114,13 @@ impl Simulation {
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
+        // Circuits resolve first so every gated consumer later in the tick
+        // sees the same, already-settled network state.
+        profiler.measure(ProfilePhase::Circuits, || self.advance_circuit_networks());
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
         profiler.measure(ProfilePhase::Fluids, || self.advance_fluids_before_power());
         profiler.measure(ProfilePhase::Power, || self.refresh_power_state());
+        profiler.measure(ProfilePhase::Circuits, || self.refresh_lamps());
         profiler.measure(ProfilePhase::Radars, || self.advance_radars());
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();

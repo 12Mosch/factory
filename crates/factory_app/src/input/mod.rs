@@ -6,3 +6,4 @@ pub mod panels;
 pub(crate) mod planner;
 pub(crate) mod repair;
 pub mod resources;
+pub(crate) mod wiring;

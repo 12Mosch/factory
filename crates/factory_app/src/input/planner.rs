@@ -246,7 +246,9 @@ pub(crate) fn handle_planner_drag(
                 }));
             state.planner.set_tool(PlannerTool::None);
         }
-        PlannerTool::None | PlannerTool::Paste => {}
+        // The wire tool is click-per-connector, not drag-select, so it never
+        // reaches this branch (the guard above filters it out).
+        PlannerTool::None | PlannerTool::Paste | PlannerTool::Wire(_) => {}
     }
 }
 

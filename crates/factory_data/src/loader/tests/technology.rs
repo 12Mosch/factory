@@ -427,10 +427,11 @@ fn early_progression_spine_is_linear_through_fluid_handling() {
         "logistics_2",
         "fluid_handling",
     ];
-    // Defense and the chemical-science era hang off the spine as optional
-    // side branches; researching only spine technologies must still surface
-    // each spine step in order.
-    let defense_branch = [
+    // Defense, the circuit network, and the chemical-science era hang off the
+    // spine as optional side branches; researching only spine technologies
+    // must still surface each spine step in order.
+    let side_branches = [
+        "circuit_network",
         "stone_walls",
         "turrets",
         "electric_mining",
@@ -446,7 +447,7 @@ fn early_progression_spine_is_linear_through_fluid_handling() {
             .iter()
             .filter(|technology| {
                 !completed.contains(&technology.id)
-                    && !defense_branch.contains(&technology.name.as_str())
+                    && !side_branches.contains(&technology.name.as_str())
                     && technology
                         .prerequisites
                         .iter()

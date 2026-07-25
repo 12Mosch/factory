@@ -1,7 +1,10 @@
-use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
+use crate::ids::{
+    EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId, VirtualSignalId,
+};
 use crate::model::{
     DayNightCycleConfig, EnemyGameplayConfig, EntityPrototype, FluidPrototype, ItemPrototype,
-    RecipePrototype, TechnologyPrototype, TilePrototype, WorldGenerationConfig,
+    RecipePrototype, TechnologyPrototype, TilePrototype, VirtualSignalKind, VirtualSignalPrototype,
+    WorldGenerationConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +16,10 @@ pub struct PrototypeCatalog {
     pub entities: Vec<EntityPrototype>,
     pub tiles: Vec<TilePrototype>,
     pub technologies: Vec<TechnologyPrototype>,
+    /// Signal channels with no item or fluid identity. Empty in catalogs that
+    /// carry no circuit-network content.
+    #[serde(default)]
+    pub virtual_signals: Vec<VirtualSignalPrototype>,
     pub world_generation: WorldGenerationConfig,
     pub enemy_gameplay: Option<EnemyGameplayConfig>,
     #[serde(default)]
@@ -44,7 +51,32 @@ impl PrototypeCatalog {
             .unwrap_or(0)
     }
 
+    /// Longest circuit wire any prototype can span, in half tiles. Used to
+    /// bound the candidate search when the player drags a wire.
+    pub fn max_circuit_wire_reach_tiles_x2(&self) -> u16 {
+        self.entities
+            .iter()
+            .filter_map(|prototype| prototype.circuit_connector)
+            .map(|connector| connector.wire_reach_tiles_x2)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The wildcard virtual signal of `kind`, if the catalog defines one.
+    pub fn wildcard_virtual_signal(&self, kind: VirtualSignalKind) -> Option<VirtualSignalId> {
+        self.virtual_signals
+            .iter()
+            .find(|signal| signal.kind == kind)
+            .map(|signal| signal.id)
+    }
+
     catalog_accessor!(item, items, ItemId, ItemPrototype);
+    catalog_accessor!(
+        virtual_signal,
+        virtual_signals,
+        VirtualSignalId,
+        VirtualSignalPrototype
+    );
     catalog_accessor!(fluid, fluids, FluidId, FluidPrototype);
     catalog_accessor!(recipe, recipes, RecipeId, RecipePrototype);
     catalog_accessor!(entity, entities, EntityPrototypeId, EntityPrototype);

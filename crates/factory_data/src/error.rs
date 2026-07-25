@@ -158,6 +158,10 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidCircuitMetadata {
+        entity: String,
+        detail: &'static str,
+    },
 }
 
 impl fmt::Display for PrototypeLoadError {
@@ -366,6 +370,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has invalid radar metadata: {detail}"
+                )
+            }
+            Self::InvalidCircuitMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid circuit metadata: {detail}"
                 )
             }
         }

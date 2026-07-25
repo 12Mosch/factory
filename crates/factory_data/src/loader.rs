@@ -4,7 +4,9 @@ use std::path::Path;
 
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
-use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
+use crate::ids::{
+    EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId, VirtualSignalId,
+};
 use crate::model::{
     BiomeConfig, ClimateNoiseConfig, ClimateRange, ElectricPolePrototype,
     EnemyBaseGenerationConfig, EnemySpawnerPrototype, EntityPrototype, FluidBoxPrototype,
@@ -12,14 +14,15 @@ use crate::model::{
     ItemPrototype, MiningDrillPrototype, PumpjackPrototype, RecipePrototype,
     ResourceDistanceScalingConfig, ResourceGenerationConfig, ResourcePatchGridConfig,
     StartingAreaConfig, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig,
-    TilePlacementPrototype, TilePrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    TilePlacementPrototype, TilePrototype, VirtualSignalKind, VirtualSignalPrototype,
+    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };
 use crate::raw::{
     RawBiomeConfig, RawClimateNoise, RawClimateRange, RawEnemyBaseGeneration, RawEntityPrototype,
     RawFluidBoxPrototype, RawFluidConnectionPrototype, RawFluidPrototype, RawItemPrototype,
     RawPrototypeCatalog, RawPumpjackPrototype, RawRecipePrototype, RawResourceGeneration,
     RawTechnologyEffect, RawTechnologyPrototype, RawTerrainNoise, RawTilePrototype,
-    RawWorldGenerationConfig,
+    RawVirtualSignalPrototype, RawWorldGenerationConfig,
 };
 use crate::validation::{
     resolve_collision_mask, resolve_fluid_amounts, resolve_item_amounts, validate_group,
@@ -57,6 +60,8 @@ impl PrototypeCatalog {
         let technologies =
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
         validate_technology_prerequisite_graph(&technologies)?;
+        let virtual_signals = load_virtual_signals(raw.virtual_signals)?;
+        validate_circuit_content(&entities, &virtual_signals)?;
         let world_generation =
             load_world_generation(raw.world_generation, &item_ids_by_name, &tiles, &entities)?;
 
@@ -67,11 +72,69 @@ impl PrototypeCatalog {
             entities,
             tiles,
             technologies,
+            virtual_signals,
             world_generation,
             enemy_gameplay: raw.enemy_gameplay,
             day_night_cycle: raw.day_night_cycle,
         })
     }
+}
+
+fn load_virtual_signals(
+    signals: Vec<RawVirtualSignalPrototype>,
+) -> Result<Vec<VirtualSignalPrototype>, PrototypeLoadError> {
+    signals
+        .into_iter()
+        .map(|signal| {
+            Ok(VirtualSignalPrototype {
+                id: VirtualSignalId::new(signal.id),
+                name: signal.name,
+                kind: signal.kind,
+            })
+        })
+        .collect()
+}
+
+/// Cross-checks circuit content that only makes sense as a whole: wildcard
+/// signals must be unique, and combinators need both a connector and the
+/// wildcard vocabulary their operand editors rely on.
+fn validate_circuit_content(
+    entities: &[EntityPrototype],
+    virtual_signals: &[VirtualSignalPrototype],
+) -> Result<(), PrototypeLoadError> {
+    for kind in [
+        VirtualSignalKind::Each,
+        VirtualSignalKind::Anything,
+        VirtualSignalKind::Everything,
+    ] {
+        if virtual_signals
+            .iter()
+            .filter(|signal| signal.kind == kind)
+            .count()
+            > 1
+        {
+            return Err(PrototypeLoadError::InvalidCircuitMetadata {
+                entity: format!("{kind:?}"),
+                detail: "each wildcard signal kind may be declared at most once",
+            });
+        }
+    }
+
+    let has_combinator = entities
+        .iter()
+        .any(|prototype| prototype.combinator.is_some());
+    if has_combinator
+        && !virtual_signals
+            .iter()
+            .any(|signal| signal.kind == VirtualSignalKind::Each)
+    {
+        return Err(PrototypeLoadError::InvalidCircuitMetadata {
+            entity: "combinator".to_string(),
+            detail: "catalogs with combinators must declare an Each wildcard signal",
+        });
+    }
+
+    Ok(())
 }
 
 struct ValidatedRawCatalog {
@@ -81,6 +144,7 @@ struct ValidatedRawCatalog {
     entities: Vec<RawEntityPrototype>,
     tiles: Vec<RawTilePrototype>,
     technologies: Vec<RawTechnologyPrototype>,
+    virtual_signals: Vec<RawVirtualSignalPrototype>,
     world_generation: Option<RawWorldGenerationConfig>,
     enemy_gameplay: Option<crate::model::EnemyGameplayConfig>,
     day_night_cycle: Option<crate::model::DayNightCycleConfig>,
@@ -127,6 +191,9 @@ impl ValidatedRawCatalog {
         let mut technologies = raw.technologies;
         validate_group(&mut technologies, "technologies")?;
 
+        let mut virtual_signals = raw.virtual_signals;
+        validate_group(&mut virtual_signals, "virtual_signals")?;
+
         Ok(Self {
             items,
             fluids,
@@ -134,6 +201,7 @@ impl ValidatedRawCatalog {
             entities,
             tiles,
             technologies,
+            virtual_signals,
             world_generation: raw.world_generation,
             enemy_gameplay: raw.enemy_gameplay,
             day_night_cycle: raw.day_night_cycle,
@@ -372,6 +440,7 @@ fn load_entities(
             validate_module_and_beacon_metadata(&entity.name, &entity)?;
             validate_solar_and_storage_metadata(&entity.name, &entity)?;
             validate_radar_metadata(&entity.name, &entity)?;
+            validate_circuit_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
                     entity: entity.name,
@@ -484,9 +553,89 @@ fn load_entities(
                         .pollution_absorption_per_tick_milli,
                     unit: spawner.unit,
                 }),
+                circuit_connector: entity.circuit_connector,
+                combinator: entity.combinator,
             })
         })
         .collect()
+}
+
+/// Circuit metadata is only coherent when the entity kind, the connector
+/// layout, and the combinator section agree. Rejecting mismatches here keeps
+/// the simulation free of "combinator without an output port" style checks.
+fn validate_circuit_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::{CircuitPortLayout, CombinatorKind, EntityKind};
+
+    let invalid = |detail: &'static str| {
+        Err(PrototypeLoadError::InvalidCircuitMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    let combinator_kind = match entity.entity_kind {
+        EntityKind::ConstantCombinator => Some(CombinatorKind::Constant),
+        EntityKind::ArithmeticCombinator => Some(CombinatorKind::Arithmetic),
+        EntityKind::DeciderCombinator => Some(CombinatorKind::Decider),
+        _ => None,
+    };
+
+    match (combinator_kind, entity.combinator) {
+        (Some(expected), Some(combinator)) => {
+            if combinator.kind != expected {
+                return invalid("combinator kind must match the entity kind");
+            }
+            match expected {
+                CombinatorKind::Constant if combinator.constant_slot_count == 0 => {
+                    return invalid("constant combinators require at least one signal slot");
+                }
+                CombinatorKind::Arithmetic | CombinatorKind::Decider
+                    if combinator.constant_slot_count != 0 =>
+                {
+                    return invalid("only constant combinators declare signal slots");
+                }
+                _ => {}
+            }
+        }
+        (Some(_), None) => return invalid("combinator entities require combinator metadata"),
+        (None, Some(_)) => return invalid("combinator metadata is only valid on combinators"),
+        (None, None) => {}
+    }
+
+    let Some(connector) = entity.circuit_connector else {
+        if combinator_kind.is_some() {
+            return invalid("combinators require a circuit connector");
+        }
+        if entity.entity_kind == EntityKind::Lamp {
+            return invalid("lamps require a circuit connector");
+        }
+        return Ok(());
+    };
+
+    if connector.wire_reach_tiles_x2 == 0 {
+        return invalid("circuit wire reach must be positive");
+    }
+    let expected_layout = if combinator_kind.is_some() {
+        CircuitPortLayout::InputOutput
+    } else {
+        CircuitPortLayout::Single
+    };
+    if connector.ports != expected_layout {
+        return invalid("only combinators use separate input and output connectors");
+    }
+    // A constant combinator publishes its configured rows, not stored goods,
+    // and no combinator is gated by a condition of its own.
+    if combinator_kind.is_some() && (connector.reads_contents || connector.controllable) {
+        return invalid("combinators neither read contents nor take an enable condition");
+    }
+    if entity.entity_kind == EntityKind::Lamp && !connector.controllable {
+        return invalid("lamps require a controllable circuit connector");
+    }
+
+    Ok(())
 }
 
 fn validate_module_and_beacon_metadata(

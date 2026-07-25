@@ -160,6 +160,9 @@ pub enum PlannerTool {
     CaptureBlueprint,
     /// Clipboard blueprint follows the cursor; click to paste ghosts.
     Paste,
+    /// Circuit wire of one color in hand: click two connectors to join them,
+    /// right-click an entity to cut every wire of this color on it.
+    Wire(factory_sim::WireColor),
 }
 
 /// Construction-planning input state: the active tool, an in-progress drag
@@ -173,6 +176,9 @@ pub struct PlannerState {
     /// preview/paste, in 90-degree clockwise steps (0..=3). Never persisted
     /// to the saved blueprint.
     pub rotation_steps: u8,
+    /// First connector picked while the wire tool is active; the next click
+    /// completes the connection.
+    pub wire_anchor: Option<factory_sim::CircuitNode>,
 }
 
 impl PlannerState {
@@ -180,6 +186,7 @@ impl PlannerState {
         self.tool = tool;
         self.drag_start = None;
         self.rotation_steps = 0;
+        self.wire_anchor = None;
     }
 }
 

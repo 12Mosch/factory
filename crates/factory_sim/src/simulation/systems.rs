@@ -14,6 +14,7 @@ impl Simulation {
             &mut self.transport.active_runs,
             &mut self.transport.item_revision,
             &mut self.transport.item_revisions_by_entity,
+            &self.circuits.disabled_entities,
         );
         advancement.process_active_runs();
         self.transport.active_runs.finish_tick();

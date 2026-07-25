@@ -1,5 +1,6 @@
 mod simulation;
 
+pub mod circuits;
 pub mod combat;
 pub mod constants;
 pub mod construction;

@@ -478,6 +478,108 @@ impl EntityStateBehavior for HealthState {
     }
 }
 
+// Wires are refunded by the destroy path itself (it has to walk the neighbor
+// entries to unlink them anyway), so the state contributes no recovery stacks
+// of its own.
+impl EntityStateBehavior for CircuitEntityState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        circuit_ops::validate_circuit_entity_state(sim, entity_id, self)
+    }
+}
+
+impl EntityStateBehavior for ConstantCombinatorState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let slot_count = combinator_prototype(sim, entity_id)?.constant_slot_count;
+        if self.slots.len() != usize::from(slot_count) {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+        for slot in &self.slots {
+            if let Some(signal) = slot.signal {
+                circuit_ops::validate_signal(sim, entity_id, signal)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl EntityStateBehavior for ArithmeticCombinatorState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        combinator_prototype(sim, entity_id)?;
+        circuit_ops::validate_operand(sim, entity_id, self.left)?;
+        circuit_ops::validate_operand(sim, entity_id, self.right)?;
+        if let Some(output) = self.output {
+            circuit_ops::validate_signal(sim, entity_id, output)?;
+        }
+        circuit_ops::validate_combinator_outputs(sim, entity_id, &self.outputs)
+    }
+}
+
+impl EntityStateBehavior for DeciderCombinatorState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        combinator_prototype(sim, entity_id)?;
+        if let Some(left) = self.left {
+            circuit_ops::validate_signal(sim, entity_id, left)?;
+        }
+        circuit_ops::validate_operand(sim, entity_id, self.right)?;
+        if let Some(output) = self.output {
+            circuit_ops::validate_signal(sim, entity_id, output)?;
+        }
+        circuit_ops::validate_combinator_outputs(sim, entity_id, &self.outputs)
+    }
+}
+
+impl EntityStateBehavior for LampState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        sim.entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .filter(|prototype| prototype.circuit_connector.is_some())
+            .map(|_| ())
+            .ok_or(SimValidationError::InvalidEntityState { entity_id })
+    }
+}
+
+fn combinator_prototype(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<factory_data::CombinatorPrototype, SimValidationError> {
+    sim.entities
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+        .and_then(|prototype| prototype.combinator)
+        .ok_or(SimValidationError::InvalidEntityState { entity_id })
+}
+
 fn push_inventory_stacks(stacks: &mut Vec<ItemStack>, inventory: &Inventory) {
     stacks.extend(inventory.slots().iter().filter_map(|slot| slot.stack()));
 }

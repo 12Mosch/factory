@@ -177,6 +177,11 @@ impl MachineTickContext<'_> {
         energy: &mut MachineEnergy,
         profiler: &mut P,
     ) -> bool {
+        // A circuit condition gates the inserter before any fuel is burned, so
+        // a disabled burner inserter does not waste its fuel idling.
+        if !self.circuit_work_allowed(entity_id) {
+            return false;
+        }
         match energy {
             MachineEnergy::Electric => self.electric_work_allowed(entity_id),
             MachineEnergy::Burner(burner) => {

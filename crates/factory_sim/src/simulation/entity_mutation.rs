@@ -34,6 +34,10 @@ pub fn rotate(
 }
 
 pub fn remove(sim: &mut Simulation, entity_id: EntityId) -> Option<PlacedEntity> {
+    // Non-recovering removal (destroyed by enemies, cleared by fixtures): the
+    // wires are lost along with the entity's contents, but the neighbors must
+    // still be unlinked.
+    sim.unlink_circuit_wires(entity_id);
     let removed = sim.entities.remove_placed_entity(entity_id);
     if let Some(removed) = &removed {
         sim.unregister_pollution_emitter(entity_id);

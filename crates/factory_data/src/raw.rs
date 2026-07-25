@@ -2,12 +2,13 @@ use serde::Deserialize;
 
 use crate::model::{
     AccumulatorPrototype, AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype,
-    BeaconPrototype, BoilerPrototype, BuildingCategory, BurnerPrototype, CraftingCategory,
-    ElectricEnergySourcePrototype, EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo,
-    FluidConnectionSide, FurnacePrototype, GunTurretPrototype, LaserTurretPrototype,
-    ModuleEffectPrototype, OffshorePumpPrototype, PumpPrototype, RadarPrototype,
-    RepairToolPrototype, ResourceExtraction, SolarPanelPrototype, SplitterPrototype,
-    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    BeaconPrototype, BoilerPrototype, BuildingCategory, BurnerPrototype, CircuitConnectorPrototype,
+    CombinatorPrototype, CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig,
+    EntityKind, EquipmentPrototype, FluidBoxIo, FluidConnectionSide, FurnacePrototype,
+    GunTurretPrototype, LaserTurretPrototype, ModuleEffectPrototype, OffshorePumpPrototype,
+    PumpPrototype, RadarPrototype, RepairToolPrototype, ResourceExtraction, SolarPanelPrototype,
+    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype,
+    UnitPrototype, VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -21,6 +22,8 @@ pub(crate) struct RawPrototypeCatalog {
     pub(crate) tiles: Vec<RawTilePrototype>,
     #[serde(default)]
     pub(crate) technologies: Vec<RawTechnologyPrototype>,
+    #[serde(default)]
+    pub(crate) virtual_signals: Vec<RawVirtualSignalPrototype>,
     #[serde(default)]
     pub(crate) world_generation: Option<RawWorldGenerationConfig>,
     #[serde(default)]
@@ -210,6 +213,18 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) gun_turret: Option<GunTurretPrototype>,
     pub(crate) laser_turret: Option<LaserTurretPrototype>,
     pub(crate) enemy_spawner: Option<RawEnemySpawnerPrototype>,
+    #[serde(default)]
+    pub(crate) circuit_connector: Option<CircuitConnectorPrototype>,
+    #[serde(default)]
+    pub(crate) combinator: Option<CombinatorPrototype>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawVirtualSignalPrototype {
+    pub(crate) id: u16,
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) kind: VirtualSignalKind,
 }
 
 #[derive(Debug, Deserialize)]
@@ -379,6 +394,16 @@ impl RawPrototype for RawTilePrototype {
 }
 
 impl RawPrototype for RawTechnologyPrototype {
+    fn id(&self) -> u16 {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl RawPrototype for RawVirtualSignalPrototype {
     fn id(&self) -> u16 {
         self.id
     }

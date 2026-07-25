@@ -9,6 +9,7 @@ use crate::input::panels::handle_blueprint_rename_input;
 use crate::input::planner::{
     handle_ghost_click, handle_paste_click, handle_planner_drag, handle_planner_keys,
 };
+use crate::input::wiring::{handle_wire_click, handle_wire_tool_keys};
 use crate::rendering::construction::{
     ConstructionRenderState, spawn_planner_selection_rect, sync_construction_rendering,
     update_paste_preview, update_planner_selection_rect,
@@ -32,6 +33,10 @@ impl Plugin for ConstructionPlugin {
                 Update,
                 (
                     handle_planner_keys.before(handle_planner_drag),
+                    // Tool selection first, so a key pressed this frame does
+                    // not also register as a click for the previous tool.
+                    handle_wire_tool_keys.before(handle_wire_click),
+                    handle_wire_click.in_set(AppSet::UiInteraction),
                     handle_planner_drag.in_set(AppSet::UiInteraction),
                     handle_paste_click.in_set(AppSet::UiInteraction),
                     // Ghost clicks must not race the build click: an active

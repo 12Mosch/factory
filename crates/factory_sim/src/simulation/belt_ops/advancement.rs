@@ -29,9 +29,12 @@ pub(in crate::simulation) struct TransportBeltAdvancement<'a> {
     active_runs: &'a mut TransportRunActiveStorage,
     item_revision: &'a mut u64,
     item_revisions_by_entity: &'a mut Vec<u64>,
+    /// Entities a circuit condition switched off this tick, sorted by id.
+    disabled_entities: &'a [EntityId],
 }
 
 impl<'a> TransportBeltAdvancement<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::simulation) fn new(
         entities: &'a mut EntityStore,
         graph: &'a TransportLaneGraph,
@@ -39,6 +42,7 @@ impl<'a> TransportBeltAdvancement<'a> {
         active_runs: &'a mut TransportRunActiveStorage,
         item_revision: &'a mut u64,
         item_revisions_by_entity: &'a mut Vec<u64>,
+        disabled_entities: &'a [EntityId],
     ) -> Self {
         Self {
             entities,
@@ -47,7 +51,16 @@ impl<'a> TransportBeltAdvancement<'a> {
             active_runs,
             item_revision,
             item_revisions_by_entity,
+            disabled_entities,
         }
+    }
+
+    /// A belt switched off by a circuit condition holds its items in place.
+    /// Upstream belts still push onto it until its entry position fills, so
+    /// backpressure builds the same way a blocked belt would.
+    fn is_disabled(&self, entity_id: EntityId) -> bool {
+        !self.disabled_entities.is_empty()
+            && self.disabled_entities.binary_search(&entity_id).is_ok()
     }
 
     pub(in crate::simulation) fn process_active_runs(&mut self) {
@@ -229,6 +242,9 @@ impl<'a> TransportBeltAdvancement<'a> {
         speed_subtiles_per_tick: u16,
         routing: LaneRouting,
     ) -> bool {
+        if self.is_disabled(key.entity_id()) {
+            return false;
+        }
         let Some(lane) = lane_mut(self.entities, key) else {
             return false;
         };

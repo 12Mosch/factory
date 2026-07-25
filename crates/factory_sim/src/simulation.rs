@@ -27,6 +27,12 @@ macro_rules! impl_runtime_only_identity {
     };
 }
 
+pub use crate::circuits::{
+    ArithmeticCombinatorState, ArithmeticOperation, CircuitCondition, CircuitConnections,
+    CircuitEntityState, CircuitNode, Comparator, ConnectorPort, ConstantCombinatorState,
+    ConstantSignalSlot, DeciderCombinatorState, DeciderOutputValue, LampState, SignalId,
+    SignalOperand, SignalSet, WireColor,
+};
 pub use crate::combat::{
     AttackDefinition, AttackDelivery, CombatCommand, CombatCommandBuffer, CombatSource,
     CombatantId, Damage, DamageType, EnemySpawnerState, Faction, FactionRelation,
@@ -190,6 +196,8 @@ pub struct Simulation {
     #[serde(skip)]
     power_tick_scratch: power_ops::PowerTickScratch,
     fluids: FluidSubsystem,
+    #[serde(skip)]
+    circuits: CircuitSubsystem,
     statistics: StatisticsSubsystem,
     pollution: PollutionState,
     #[serde(skip, default)]
@@ -642,6 +650,14 @@ pub enum SimValidationError {
     InvalidFluidNetwork {
         network_id: u32,
     },
+    /// A stored signal does not exist in the catalog.
+    InvalidCircuitSignal {
+        entity_id: EntityId,
+    },
+    /// A wire is recorded on one endpoint but not the other.
+    UnmirroredCircuitWire {
+        entity_id: EntityId,
+    },
     InvalidRecipeItem {
         recipe_id: RecipeId,
         item_id: ItemId,
@@ -754,6 +770,8 @@ pub enum SimValidationError {
 }
 
 mod belt_ops;
+pub mod circuit_ops;
+mod circuit_state;
 mod combat_ops;
 mod commands;
 pub mod construction_ops;
@@ -798,9 +816,12 @@ pub mod tile_placement_ops;
 mod topology_invalidation_ops;
 mod underground;
 mod validation;
+mod wire_reach;
 mod world_ops;
 
 use self::belt_ops::*;
+pub use self::circuit_ops::{CircuitError, CircuitWire};
+use self::circuit_state::CircuitSubsystem;
 pub use self::commands::{
     InventoryPanel, SimCommand, SimCommandEffect, SimCommandError, SlotTransferError,
 };
@@ -829,6 +850,7 @@ pub use self::tile_placement_ops::{
     TilePlacementError, TilePlacementRequest, tile_placement_for_item, validate_tile_placement,
 };
 use self::underground::*;
+use self::wire_reach::{centers_within_reach_x2, footprint_center_x2};
 pub use self::world_ops::ChunkNeighborhoodError;
 use self::world_ops::*;
 

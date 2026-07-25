@@ -153,22 +153,18 @@ pub(super) fn connect_poles_within_wire_reach(
 }
 
 pub(super) fn poles_are_within_mutual_reach(first: &PoleNode<'_>, second: &PoleNode<'_>) -> bool {
+    // The shorter of the two reaches wins, so a long-reach pole cannot pull a
+    // wire further than its partner allows.
     let reach_x2 = i64::from(
         first
             .prototype
             .wire_reach_tiles_x2
             .min(second.prototype.wire_reach_tiles_x2),
     );
-    let dx = i128::from(first.center_x2) - i128::from(second.center_x2);
-    let dy = i128::from(first.center_y2) - i128::from(second.center_y2);
-
-    dx * dx + dy * dy <= i128::from(reach_x2) * i128::from(reach_x2)
-}
-
-pub(super) fn footprint_center_x2(footprint: &EntityFootprint) -> (WorldTileCoord, WorldTileCoord) {
-    (
-        footprint.x.saturating_mul(2) + i64::from(footprint.width),
-        footprint.y.saturating_mul(2) + i64::from(footprint.height),
+    centers_within_reach_x2(
+        (first.center_x2, first.center_y2),
+        (second.center_x2, second.center_y2),
+        reach_x2,
     )
 }
 
