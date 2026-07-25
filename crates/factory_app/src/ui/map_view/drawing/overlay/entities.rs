@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use factory_sim::{ChunkCoord, EntityFootprint, Simulation};
 
 use super::MapOverlayContext;
+use super::bounds::inclusive_max_tile;
 use super::primitives::{MapOverlayPrimitive, spawn_rect_overlay};
 use crate::map::resources::MapDisplaySettings;
 use crate::rendering::entities::entity_prototype_render_style;
@@ -11,12 +12,9 @@ pub(super) fn spawn_entity_overlays(
     overlays: &mut Vec<MapOverlayPrimitive>,
     context: &MapOverlayContext,
 ) {
-    if context.crop_bounds.width == 0 || context.crop_bounds.height == 0 {
+    let Some((max_x, max_y)) = inclusive_max_tile(context.crop_bounds) else {
         return;
-    }
-
-    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
-    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    };
     for entity_id in context.sim.entities().occupancy().entity_ids_in_tile_rect(
         context.crop_bounds.min_x,
         max_x,

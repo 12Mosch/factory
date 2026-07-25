@@ -1,3 +1,4 @@
+mod bounds;
 mod construction;
 mod entities;
 mod pollution;

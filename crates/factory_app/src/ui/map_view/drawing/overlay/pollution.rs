@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use factory_sim::ChunkCoord;
 
 use super::MapOverlayContext;
+use super::bounds::inclusive_max_tile;
 use super::primitives::{MapOverlayPrimitive, spawn_rect_overlay};
 use crate::map::resources::{MapOverlay, MapTextureBounds};
 use crate::ui::map_view::layout::map_rect_for_chunk;
@@ -50,11 +51,9 @@ pub(super) fn spawn_pollution_overlays(
 }
 
 fn crop_chunk_coords(bounds: MapTextureBounds) -> impl Iterator<Item = ChunkCoord> {
-    if bounds.width == 0 || bounds.height == 0 {
+    let Some((max_x, max_y)) = inclusive_max_tile(bounds) else {
         return Vec::new().into_iter();
-    }
-    let max_x = bounds.min_x + i64::from(bounds.width.saturating_sub(1));
-    let max_y = bounds.min_y + i64::from(bounds.height.saturating_sub(1));
+    };
     let mut coords = Vec::new();
     if let (Some(min), Some(max)) = (
         ChunkCoord::from_tile(bounds.min_x, bounds.min_y),

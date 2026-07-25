@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use factory_sim::{CHUNK_SIZE, ThreatLocation};
 
 use super::MapOverlayContext;
+use super::bounds::inclusive_max_tile;
 use super::primitives::{MapOverlayPrimitive, spawn_point_overlay, spawn_rect_overlay};
 use crate::map::resources::MapOverlay;
 use crate::ui::map_view::layout::map_rect_for_chunk;
@@ -13,8 +14,9 @@ pub(super) fn spawn_threat_overlays(
     if !context.settings.overlays.is_enabled(MapOverlay::Enemies) {
         return;
     }
-    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
-    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    let Some((max_x, max_y)) = inclusive_max_tile(context.crop_bounds) else {
+        return;
+    };
     let snapshot = context.sim.enemy_map_snapshot_in_tile_rect(
         context.crop_bounds.min_x,
         max_x,

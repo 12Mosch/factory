@@ -9,8 +9,9 @@ pub(crate) const MINIMAP_FRAME_SIZE: f32 = 184.0;
 pub(crate) const MINIMAP_RIGHT_OFFSET: f32 = 14.0;
 pub(crate) const MINIMAP_TOP_OFFSET: f32 = 14.0;
 const MINIMAP_PADDING: f32 = 4.0;
+const MINIMAP_BORDER_WIDTH: f32 = 1.0;
 pub(in crate::ui::map_view) const MINIMAP_CONTENT_SIZE: f32 =
-    MINIMAP_FRAME_SIZE - MINIMAP_PADDING * 2.0;
+    MINIMAP_FRAME_SIZE - (MINIMAP_PADDING + MINIMAP_BORDER_WIDTH) * 2.0;
 
 pub(in crate::ui::map_view) fn spawn_minimap(
     commands: &mut Commands,
@@ -27,7 +28,7 @@ pub(in crate::ui::map_view) fn spawn_minimap(
                 width: Val::Px(MINIMAP_FRAME_SIZE),
                 height: Val::Px(MINIMAP_FRAME_SIZE),
                 padding: UiRect::all(Val::Px(MINIMAP_PADDING)),
-                border: UiRect::all(Val::Px(1.0)),
+                border: UiRect::all(Val::Px(MINIMAP_BORDER_WIDTH)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.02, 0.025, 0.027, 0.88)),

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 
 use super::MapOverlayContext;
+use super::bounds::inclusive_max_tile;
 use super::entities::entity_footprint_is_visible;
 use super::primitives::{MapOverlayPrimitive, spawn_point_overlay, spawn_world_line};
 use crate::map::resources::MapOverlay;
@@ -15,13 +16,12 @@ pub(super) fn spawn_power_overlays(
         .settings
         .overlays
         .is_enabled(MapOverlay::PowerNetworks)
-        || context.crop_bounds.width == 0
-        || context.crop_bounds.height == 0
     {
         return;
     }
-    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
-    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    let Some((max_x, max_y)) = inclusive_max_tile(context.crop_bounds) else {
+        return;
+    };
     let snapshot = context.sim.power_map_snapshot_in_tile_rect(
         context.crop_bounds.min_x,
         max_x,
@@ -66,14 +66,14 @@ pub(super) fn spawn_power_overlays(
         );
     }
     for pole in snapshot.poles {
-        if !poles.contains_key(&pole.entity_id) {
+        let Some(position) = poles.get(&pole.entity_id) else {
             continue;
-        }
+        };
         spawn_point_overlay(
             overlays,
             context.crop_bounds,
             context.image_size,
-            Vec2::new(pole.center_x2 as f32 * 0.5, pole.center_y2 as f32 * 0.5),
+            *position,
             6.0,
             power_network_color(pole.network_id, pole.satisfaction_permyriad),
             Color::BLACK,

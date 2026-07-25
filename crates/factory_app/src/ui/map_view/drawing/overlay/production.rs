@@ -3,6 +3,7 @@ use factory_data::EntityKind;
 use factory_sim::MachineStatus;
 
 use super::MapOverlayContext;
+use super::bounds::inclusive_max_tile;
 use super::entities::entity_footprint_is_visible;
 use super::primitives::{MapOverlayPrimitive, spawn_point_overlay};
 use crate::map::resources::MapOverlay;
@@ -15,13 +16,12 @@ pub(super) fn spawn_production_problem_overlays(
         .settings
         .overlays
         .is_enabled(MapOverlay::ProductionProblems)
-        || context.crop_bounds.width == 0
-        || context.crop_bounds.height == 0
     {
         return;
     }
-    let max_x = context.crop_bounds.min_x + i64::from(context.crop_bounds.width) - 1;
-    let max_y = context.crop_bounds.min_y + i64::from(context.crop_bounds.height) - 1;
+    let Some((max_x, max_y)) = inclusive_max_tile(context.crop_bounds) else {
+        return;
+    };
     for entity_id in context.sim.entities().occupancy().entity_ids_in_tile_rect(
         context.crop_bounds.min_x,
         max_x,
