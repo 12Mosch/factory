@@ -260,6 +260,19 @@ impl Simulation {
         &self.world
     }
 
+    /// Rewrites a terrain tile directly, bypassing the gameplay rules that
+    /// govern player placement (see
+    /// [`crate::tile_placement_ops::place_tile_from_player_inventory`]). This
+    /// is the entry point for world fixtures, scripted setups, and tools.
+    pub fn set_tile<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &mut self,
+        x: X,
+        y: Y,
+        tile_id: TileId,
+    ) -> Result<(), TerrainMutationError> {
+        self.world.set_tile(x, y, tile_id)
+    }
+
     pub fn ensure_chunk_generated(&mut self, coord: ChunkCoord) -> ChunkGenerationResult {
         let radar_reveal = self.remove_chunk_generation_request(coord);
         let result = self.world.ensure_chunk_generated(coord);

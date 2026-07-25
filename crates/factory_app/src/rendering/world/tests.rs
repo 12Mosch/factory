@@ -172,6 +172,99 @@ fn generating_neighbor_remeshes_cached_shoreline_chunk() {
     assert_ne!(before, after, "newly known coast should add foam geometry");
 }
 
+#[test]
+fn paving_a_tile_remeshes_its_cached_chunk() {
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let mut sim = Simulation::new_test_world(321);
+    sim.ensure_chunk_generated(coord);
+    let concrete = BasePrototypeIds::from_catalog(sim.catalog()).tiles.concrete;
+    let (x, y) = coord.tile_at(4, 4);
+    let mut app = terrain_render_app(sim, coord);
+    app.update();
+
+    let handle = app.world().resource::<WorldRenderCache>().chunk_meshes[&coord].clone();
+    let before = mesh_quads(
+        app.world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .expect("cached chunk mesh should exist"),
+    );
+
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .write_for_tests()
+        .set_tile(x, y, concrete)
+        .expect("generated ground tile should accept concrete");
+    app.update();
+
+    let cache = app.world().resource::<WorldRenderCache>();
+    assert_eq!(
+        cache.chunk_meshes[&coord], handle,
+        "a terrain rewrite should reuse the cached mesh asset"
+    );
+    let after = mesh_quads(
+        app.world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .expect("remeshed chunk should reuse its cached asset"),
+    );
+    assert_ne!(before, after, "paving should change the chunk mesh");
+}
+
+#[test]
+fn filling_a_border_tile_remeshes_the_neighboring_chunk() {
+    let cached = ChunkCoord { x: 0, y: 0 };
+    let neighbor = ChunkCoord { x: -1, y: 0 };
+    let mut sim = Simulation::new_test_world(654);
+    sim.ensure_chunk_generated(cached);
+    sim.ensure_chunk_generated(neighbor);
+    let ids = BasePrototypeIds::from_catalog(sim.catalog()).tiles;
+
+    // Water on both sides of the shared border: the cached chunk's edge tile
+    // draws no foam there until the neighbor stops being water.
+    let (border_x, border_y) = cached.tile_at(0, 6);
+    sim.set_tile(border_x, border_y, ids.water)
+        .expect("border tile should accept water");
+    sim.set_tile(border_x - 1, border_y, ids.water)
+        .expect("neighboring border tile should accept water");
+
+    let mut app = App::new();
+    app.insert_resource(SimResource::new(sim))
+        .insert_resource(visible_for_chunks([cached, neighbor]))
+        .init_resource::<WorldRenderCache>()
+        .init_resource::<PresentationReloadToken>()
+        .insert_resource(Assets::<Mesh>::default())
+        .insert_resource(Assets::<ColorMaterial>::default())
+        .add_systems(Update, sync_visible_world_tiles);
+    app.update();
+
+    let handle = app.world().resource::<WorldRenderCache>().chunk_meshes[&cached].clone();
+    let before = mesh_quads(
+        app.world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .expect("cached border chunk mesh should exist"),
+    );
+
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .write_for_tests()
+        .set_tile(border_x - 1, border_y, ids.landfill)
+        .expect("neighboring water tile should accept landfill");
+    app.update();
+
+    let after = mesh_quads(
+        app.world()
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .expect("remeshed border chunk should reuse its cached asset"),
+    );
+    assert_ne!(
+        before, after,
+        "filling across the border should add foam to the cached chunk"
+    );
+}
+
 fn terrain_render_app(sim: Simulation, visible_coord: ChunkCoord) -> App {
     let mut app = App::new();
     app.insert_resource(SimResource::new(sim))

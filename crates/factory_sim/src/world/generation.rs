@@ -1,5 +1,5 @@
 use crate::simulation::WorldGenerator;
-use crate::world::{Chunk, ChunkCoord, ResourceTileChange};
+use crate::world::{Chunk, ChunkCoord, ResourceTileChange, TerrainTileChange};
 use factory_data::PrototypeCatalog;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -107,6 +107,16 @@ pub struct WorldSim {
     pub(crate) resource_revision: u64,
     #[serde(skip, default)]
     pub(crate) resource_dirty_tiles: VecDeque<ResourceTileChange>,
+    /// Bumped by every post-generation terrain write. Chunks carry the tile
+    /// ids themselves, so only the change history is runtime-only.
+    pub(crate) terrain_revision: u64,
+    #[serde(skip, default)]
+    pub(crate) terrain_dirty_tiles: VecDeque<TerrainTileChange>,
+    /// Bumped only by terrain writes that change a tile's collision. Consumers
+    /// that care about traversability rather than appearance (enemy
+    /// navigation) key off this, so paving a large area does not churn their
+    /// caches when nothing about movement changed.
+    pub(crate) walkability_revision: u64,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +126,8 @@ struct SerializedWorldSim {
     chunks: BTreeMap<ChunkCoord, Chunk>,
     #[serde(default)]
     resource_revision: u64,
+    #[serde(default)]
+    terrain_revision: u64,
 }
 
 impl<'de> Deserialize<'de> for WorldSim {
@@ -130,6 +142,7 @@ impl<'de> Deserialize<'de> for WorldSim {
         let mut world =
             Self::from_snapshot(serialized.seed, serialized.prototypes, serialized.chunks);
         world.resource_revision = serialized.resource_revision;
+        world.terrain_revision = serialized.terrain_revision;
         Ok(world)
     }
 }

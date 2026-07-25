@@ -184,6 +184,17 @@ pub(crate) fn handle_build_bar_button_clicks(
     }
 }
 
+/// Whether a hotbar selection is researched. Terrain items are gated by
+/// owning the item rather than by an entity unlock, so they always pass.
+fn selection_unlocked(
+    sim: &factory_sim::Simulation,
+    selection: crate::build::resources::BuildSelection,
+) -> bool {
+    selection
+        .entity_prototype_id()
+        .is_none_or(|prototype_id| sim.is_entity_unlocked(prototype_id))
+}
+
 pub(crate) fn update_build_bar_visuals(
     sim: Res<SimResource>,
     hotbar: Res<HotbarState>,
@@ -199,8 +210,8 @@ pub(crate) fn update_build_bar_visuals(
             continue;
         };
         let selected = build_state.selected == Some(selection);
-        let unlocked = sim.read().is_entity_unlocked(selection.prototype_id);
-        let available = unlocked && sim.read().player_inventory().count(selection.item_id) > 0;
+        let available = selection_unlocked(&sim.read(), selection)
+            && sim.read().player_inventory().count(selection.item_id) > 0;
         *background = BackgroundColor(slot_background_color(*interaction, selected, available));
         *border = BorderColor::all(if selected {
             Color::srgb(0.94, 0.66, 0.20)
@@ -229,12 +240,20 @@ pub(crate) fn update_build_bar_visuals(
             continue;
         };
         let sim = sim.read();
-        let prototype = sim.catalog().entity(selection.prototype_id);
-        text.0 = prototype
-            .map(|prototype| compact_item_name(&prototype.name))
-            .unwrap_or_default();
-        let available = prototype.is_some()
-            && sim.is_entity_unlocked(selection.prototype_id)
+        // Terrain items have no entity prototype, so the label falls back to
+        // the item's own name.
+        let name = selection
+            .entity_prototype_id()
+            .and_then(|prototype_id| sim.catalog().entity(prototype_id))
+            .map(|prototype| prototype.name.as_str())
+            .or_else(|| {
+                sim.catalog()
+                    .item(selection.item_id)
+                    .map(|item| item.name.as_str())
+            });
+        text.0 = name.map(compact_item_name).unwrap_or_default();
+        let available = name.is_some()
+            && selection_unlocked(&sim, selection)
             && sim.player_inventory().count(selection.item_id) > 0;
         *color = TextColor(if available {
             Color::WHITE
@@ -293,12 +312,19 @@ pub(crate) fn update_build_status_text(
                 .unwrap_or(BuildPlacementStatus::Ready)
         }
     });
-    let live_status = paste_status.or_else(|| {
-        build_state
-            .selected
-            .and(preview_state.preview.as_ref())
-            .and_then(|preview| build_status_from_preview(sim.read().catalog(), preview))
-    });
+    let live_status = paste_status
+        .or_else(|| {
+            build_state
+                .selected
+                .and(preview_state.tile_status.as_ref())
+                .cloned()
+        })
+        .or_else(|| {
+            build_state
+                .selected
+                .and(preview_state.preview.as_ref())
+                .and_then(|preview| build_status_from_preview(sim.read().catalog(), preview))
+        });
     let status = live_status.as_ref().unwrap_or(&build_state.last_status);
 
     let (message, color) = match status {

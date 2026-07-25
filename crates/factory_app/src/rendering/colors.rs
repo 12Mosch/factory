@@ -284,6 +284,9 @@ pub(crate) fn resource_color(resource: ResourceCell, ids: RenderPrototypeIds) ->
 pub(crate) struct RenderPrototypeIds {
     dirt: TileId,
     water: TileId,
+    landfill: TileId,
+    stone_path: TileId,
+    concrete: TileId,
     iron_ore: ItemId,
     copper_ore: ItemId,
     coal: ItemId,
@@ -297,6 +300,9 @@ impl RenderPrototypeIds {
         Self {
             dirt: ids.tiles.dirt,
             water: ids.tiles.water,
+            landfill: ids.tiles.landfill,
+            stone_path: ids.tiles.stone_path,
+            concrete: ids.tiles.concrete,
             iron_ore: ids.items.iron_ore,
             copper_ore: ids.items.copper_ore,
             coal: ids.items.coal,
@@ -309,8 +315,14 @@ impl RenderPrototypeIds {
         tile_id == self.water
     }
 
-    pub(crate) fn is_dirt(self, tile_id: TileId) -> bool {
-        tile_id == self.dirt
+    /// Bare, vegetation-free ground that takes dirt-toned detail flecks.
+    pub(crate) fn is_bare_ground(self, tile_id: TileId) -> bool {
+        tile_id == self.dirt || tile_id == self.landfill
+    }
+
+    /// Player-laid paving, drawn with slab seams instead of vegetation.
+    pub(crate) fn is_paved(self, tile_id: TileId) -> bool {
+        tile_id == self.stone_path || tile_id == self.concrete
     }
 }
 

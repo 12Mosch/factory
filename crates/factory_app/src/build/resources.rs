@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use factory_data::BuildingCategory;
-use factory_data::{EntityPrototypeId, ItemId};
+use factory_data::{EntityPrototypeId, ItemId, TileId};
 use factory_sim::{Blueprint, Direction, WorldTileCoord};
 
 #[derive(Resource, Default)]
@@ -85,15 +85,54 @@ impl BuildMenuState {
 pub struct BuildPlacementPreviewState {
     pub cursor_tile: Option<(WorldTileCoord, WorldTileCoord)>,
     pub preview: Option<factory_sim::BuildPlacementPreview>,
+    /// Resolved status for a terrain selection. Tile rules ("Landfill needs
+    /// water") are finer-grained than the shared placement-issue vocabulary,
+    /// so the status line prefers this when it is set.
+    pub tile_status: Option<BuildPlacementStatus>,
     /// Whether the preview reflects ghost placement (shift held) rather than
     /// an immediate build.
     pub ghost: bool,
 }
 
+/// What a build selection places when the player clicks a tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildTarget {
+    Entity(EntityPrototypeId),
+    /// Rewrites the clicked terrain tile instead of placing an entity.
+    Tile(TileId),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildSelection {
-    pub prototype_id: EntityPrototypeId,
+    pub target: BuildTarget,
     pub item_id: ItemId,
+}
+
+impl BuildSelection {
+    pub fn entity(prototype_id: EntityPrototypeId, item_id: ItemId) -> Self {
+        Self {
+            target: BuildTarget::Entity(prototype_id),
+            item_id,
+        }
+    }
+
+    pub fn tile(tile_id: TileId, item_id: ItemId) -> Self {
+        Self {
+            target: BuildTarget::Tile(tile_id),
+            item_id,
+        }
+    }
+
+    pub fn entity_prototype_id(self) -> Option<EntityPrototypeId> {
+        match self.target {
+            BuildTarget::Entity(prototype_id) => Some(prototype_id),
+            BuildTarget::Tile(_) => None,
+        }
+    }
+
+    pub fn places_tile(self) -> bool {
+        matches!(self.target, BuildTarget::Tile(_))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

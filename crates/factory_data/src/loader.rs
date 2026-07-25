@@ -11,8 +11,8 @@ use crate::model::{
     FluidConnectionPrototype, FluidConnectionSide, FluidPrototype, InserterPrototype, ItemAmount,
     ItemPrototype, MiningDrillPrototype, PumpjackPrototype, RecipePrototype,
     ResourceDistanceScalingConfig, ResourceGenerationConfig, ResourcePatchGridConfig,
-    StartingAreaConfig, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig, TilePrototype,
-    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    StartingAreaConfig, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig,
+    TilePlacementPrototype, TilePrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };
 use crate::raw::{
     RawBiomeConfig, RawClimateNoise, RawClimateRange, RawEnemyBaseGeneration, RawEntityPrototype,
@@ -43,12 +43,17 @@ impl PrototypeCatalog {
         let raw: RawPrototypeCatalog = ron::from_str(data).map_err(PrototypeLoadError::Ron)?;
         let raw = ValidatedRawCatalog::from_raw(raw)?;
 
-        let (items, item_ids_by_name) = load_items(raw.items)?;
+        // Tiles load first because items may pave a tile by name.
+        let tiles = load_tiles(raw.tiles)?;
+        let tile_ids_by_name = tiles
+            .iter()
+            .map(|tile| (tile.name.clone(), tile.id))
+            .collect::<HashMap<_, _>>();
+        let (items, item_ids_by_name) = load_items(raw.items, &tile_ids_by_name)?;
         let (fluids, fluid_ids_by_name) = load_fluids(raw.fluids);
         let (recipes, recipe_ids_by_name) =
             load_recipes(raw.recipes, &item_ids_by_name, &fluid_ids_by_name)?;
         let entities = load_entities(raw.entities, &item_ids_by_name, &fluid_ids_by_name)?;
-        let tiles = load_tiles(raw.tiles)?;
         let technologies =
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
         validate_technology_prerequisite_graph(&technologies)?;
@@ -170,6 +175,7 @@ fn validate_enemy_gameplay(
 
 fn load_items(
     items: Vec<RawItemPrototype>,
+    tile_ids_by_name: &HashMap<String, TileId>,
 ) -> Result<(Vec<ItemPrototype>, HashMap<String, ItemId>), PrototypeLoadError> {
     let mut item_ids_by_name = HashMap::with_capacity(items.len());
     let items = items
@@ -178,6 +184,30 @@ fn load_items(
             validate_item_metadata(&item)?;
             let id = ItemId::new(item.id);
             item_ids_by_name.insert(item.name.clone(), id);
+            let place_as_tile = item
+                .place_as_tile
+                .map(|placement| {
+                    let tile = tile_ids_by_name
+                        .get(&placement.tile)
+                        .copied()
+                        .ok_or_else(|| PrototypeLoadError::MissingItemPlacementTile {
+                            item: item.name.clone(),
+                            tile: placement.tile.clone(),
+                        })?;
+                    if placement.building_menu_order == 0 {
+                        return Err(PrototypeLoadError::InvalidTilePlacementMetadata {
+                            item: item.name.clone(),
+                            detail: "building_menu_order must be at least 1",
+                        });
+                    }
+                    Ok::<_, PrototypeLoadError>(TilePlacementPrototype {
+                        tile,
+                        fills_water: placement.fills_water,
+                        building_category: placement.building_category,
+                        building_menu_order: placement.building_menu_order,
+                    })
+                })
+                .transpose()?;
             Ok(ItemPrototype {
                 id,
                 name: item.name,
@@ -188,6 +218,7 @@ fn load_items(
                 armor: item.armor,
                 equipment: item.equipment,
                 module_effect: item.module_effect,
+                place_as_tile,
             })
         })
         .collect::<Result<_, PrototypeLoadError>>()?;
@@ -1324,12 +1355,19 @@ fn load_tiles(tiles: Vec<RawTilePrototype>) -> Result<Vec<TilePrototype>, Protot
         .into_iter()
         .map(|tile| {
             let name = tile.name;
+            if tile.walking_speed_percent == 0 {
+                return Err(PrototypeLoadError::InvalidTileMetadata {
+                    tile: name,
+                    detail: "walking_speed_percent must be at least 1",
+                });
+            }
             Ok(TilePrototype {
                 id: TileId::new(tile.id),
                 name: name.clone(),
                 collision_mask: resolve_collision_mask(name, tile.collision_mask)?,
                 pollution_absorption_per_minute_milli: tile.pollution_absorption_per_minute_milli,
                 color: tile.color,
+                walking_speed_percent: tile.walking_speed_percent,
             })
         })
         .collect()

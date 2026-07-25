@@ -140,10 +140,15 @@ fn append_terrain_details(
             continue;
         }
 
+        if ids.is_paved(tile.tile_id) {
+            append_paving_seams(x, y, min_x, min_y, buffers);
+            continue;
+        }
+
         // Sparse, tiny flecks read as grass blades or pebbles without turning
         // every tile into additional geometry.
         if detail.is_multiple_of(7) {
-            let fleck_color = if ids.is_dirt(tile.tile_id) {
+            let fleck_color = if ids.is_bare_ground(tile.tile_id) {
                 Color::srgba(0.68, 0.56, 0.35, 0.34)
             } else {
                 Color::srgba(0.48, 0.66, 0.30, 0.30)
@@ -185,6 +190,33 @@ fn append_terrain_details(
                 Color::srgba(0.08, 0.12, 0.075, 0.14),
             );
         }
+    }
+}
+
+/// Slab seams for paved tiles. Seams land on every other tile boundary, so a
+/// paved area reads as regular slabs at an average of one extra quad per tile
+/// rather than the two a full grid would cost.
+fn append_paving_seams(x: i64, y: i64, min_x: f32, min_y: f32, buffers: &mut MeshBuffers<'_>) {
+    const SEAM_WIDTH: f32 = 0.3;
+    let seam = Color::srgba(0.08, 0.08, 0.09, 0.22);
+
+    if x.rem_euclid(2) == 0 {
+        append_quad(
+            buffers,
+            [min_x, min_y],
+            [min_x + SEAM_WIDTH, min_y + TILE_SIZE],
+            0.02,
+            seam,
+        );
+    }
+    if y.rem_euclid(2) == 0 {
+        append_quad(
+            buffers,
+            [min_x, min_y],
+            [min_x + TILE_SIZE, min_y + SEAM_WIDTH],
+            0.02,
+            seam,
+        );
     }
 }
 

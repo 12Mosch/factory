@@ -4,8 +4,8 @@ use bevy::window::PrimaryWindow;
 use factory_sim::SimCommand;
 
 use crate::build::resources::{
-    BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT, HotbarState,
-    PlannerState, PlannerTool,
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, BuildTarget, HOTBAR_SLOT_COUNT,
+    HotbarState, PlannerState, PlannerTool,
 };
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -115,25 +115,30 @@ pub(crate) fn handle_build_world_click(
         return;
     };
 
-    // Shift-click plans a ghost instead of building immediately.
+    // Shift-click plans a ghost instead of building immediately. Terrain has
+    // no ghost form, so tile items always place immediately.
     let ghost = keyboard.as_deref().is_some_and(|keyboard| {
         keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
     });
-    let command = if ghost {
-        SimCommand::PlaceGhost {
-            prototype_id: selection.prototype_id,
+    let command = match selection.target {
+        BuildTarget::Tile(_) => SimCommand::PlaceTileFromPlayerInventory {
+            item_id: selection.item_id,
+            x,
+            y,
+        },
+        BuildTarget::Entity(prototype_id) if ghost => SimCommand::PlaceGhost {
+            prototype_id,
             x,
             y,
             direction: state.build_state.direction,
-        }
-    } else {
-        SimCommand::PlaceEntityFromPlayerInventory {
-            prototype_id: selection.prototype_id,
+        },
+        BuildTarget::Entity(prototype_id) => SimCommand::PlaceEntityFromPlayerInventory {
+            prototype_id,
             item_id: selection.item_id,
             x,
             y,
             direction: state.build_state.direction,
-        }
+        },
     };
     state.commands.write(SimCommandRequest(command));
 }
@@ -176,11 +181,14 @@ pub fn select_build_selection(
         return false;
     }
 
-    if !sim.is_entity_unlocked(selection.prototype_id) {
+    // Terrain items are gated by owning the item, not by an entity unlock.
+    if let Some(prototype_id) = selection.entity_prototype_id()
+        && !sim.is_entity_unlocked(prototype_id)
+    {
         build_state.selected = None;
         build_state.last_status = BuildPlacementStatus::Locked(format!(
             "{} locked",
-            entity_display_name(sim.catalog(), selection.prototype_id)
+            entity_display_name(sim.catalog(), prototype_id)
                 .unwrap_or_else(|| "Building".to_string())
         ));
         return false;

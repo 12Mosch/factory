@@ -36,6 +36,11 @@ fn footprint_center_tile(footprint: &EntityFootprint) -> (WorldTileCoord, WorldT
 struct NavigationGridRevision {
     entity_topology: u64,
     world_chunks: u64,
+    /// Landfill rewrites walkability inside already-generated chunks, which
+    /// the chunk revision alone does not observe. Keyed on walkability rather
+    /// than terrain so paving a large area, which never changes collision,
+    /// does not discard every flow field.
+    world_walkability: u64,
 }
 
 /// Derived navigation state shared by all enemy units. It is omitted from
@@ -68,10 +73,16 @@ impl Hash for EnemyNavigation {
 }
 
 impl EnemyNavigation {
-    pub(super) fn begin_tick(&mut self, entity_topology: u64, world_chunks: u64) {
+    pub(super) fn begin_tick(
+        &mut self,
+        entity_topology: u64,
+        world_chunks: u64,
+        world_walkability: u64,
+    ) {
         let revision = NavigationGridRevision {
             entity_topology,
             world_chunks,
+            world_walkability,
         };
         if self.revision != Some(revision) {
             self.raid_fields.clear();
@@ -218,7 +229,7 @@ mod tests {
         let footprint = test_footprint(0, 0);
         let mut navigation = EnemyNavigation::default();
 
-        navigation.begin_tick(0, 0);
+        navigation.begin_tick(0, 0, 0);
         for raid in 1..=20 {
             navigation.sync_raid(RaidId::new(raid), target, footprint);
         }
@@ -237,13 +248,81 @@ mod tests {
         let mut navigation = EnemyNavigation::default();
         let raid_id = RaidId::new(1);
 
-        navigation.begin_tick(3, 5);
+        navigation.begin_tick(3, 5, 0);
         navigation.sync_raid(raid_id, target, footprint);
         navigation.advance_raid_fields(&sim.world, &sim.entities);
         assert!(navigation.raid_fields[&raid_id].initialized);
 
-        navigation.begin_tick(4, 5);
+        navigation.begin_tick(4, 5, 0);
         assert!(navigation.raid_fields.is_empty());
+    }
+
+    #[test]
+    fn navigation_revision_discards_fields_when_walkability_changes() {
+        let sim = Simulation::new_test_world(11);
+        let target = EntityId::new(1);
+        let footprint = test_footprint(0, 0);
+        let mut navigation = EnemyNavigation::default();
+        let raid_id = RaidId::new(1);
+
+        navigation.begin_tick(3, 5, 7);
+        navigation.sync_raid(raid_id, target, footprint);
+        navigation.advance_raid_fields(&sim.world, &sim.entities);
+        assert!(navigation.raid_fields[&raid_id].initialized);
+
+        // Landfill changes walkability inside chunks that already exist, so
+        // the flow fields must be rebuilt even though nothing else moved.
+        navigation.begin_tick(3, 5, 8);
+        assert!(navigation.raid_fields.is_empty());
+    }
+
+    #[test]
+    fn paving_terrain_does_not_discard_navigation_fields() {
+        let mut sim = Simulation::new_test_world(11);
+        let concrete = factory_data::BasePrototypeIds::from_catalog(&sim.world.prototypes)
+            .tiles
+            .concrete;
+        let target = EntityId::new(1);
+        let footprint = test_footprint(0, 0);
+        let mut navigation = EnemyNavigation::default();
+        let raid_id = RaidId::new(1);
+
+        navigation.begin_tick(3, 5, sim.world.walkability_revision());
+        navigation.sync_raid(raid_id, target, footprint);
+        navigation.advance_raid_fields(&sim.world, &sim.entities);
+        assert!(navigation.raid_fields[&raid_id].initialized);
+
+        // Paving walkable ground only changes appearance and walking speed, so
+        // bulk paving must not churn every raid's flow field.
+        let paved = sim
+            .world
+            .chunks
+            .values()
+            .flat_map(|chunk| {
+                chunk.tiles.iter().enumerate().filter_map(|(index, tile)| {
+                    let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                    let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                    (tile.collision.walkable
+                        && tile.collision.buildable
+                        && tile.resource.is_none()
+                        && tile.tile_id != concrete)
+                        .then(|| chunk.coord.tile_at(local_x, local_y))
+                })
+            })
+            .take(32)
+            .collect::<Vec<_>>();
+        assert!(!paved.is_empty(), "test world should contain plain ground");
+        let before_walkability = sim.world.walkability_revision();
+        for (x, y) in paved {
+            sim.world
+                .set_tile(x, y, concrete)
+                .expect("plain ground should accept concrete");
+        }
+
+        assert_eq!(sim.world.walkability_revision(), before_walkability);
+        assert!(sim.world.terrain_revision() > 0, "paving is still recorded");
+        navigation.begin_tick(3, 5, sim.world.walkability_revision());
+        assert!(navigation.raid_fields.contains_key(&raid_id));
     }
 
     #[test]
@@ -285,7 +364,7 @@ mod tests {
     fn independent_requests_defer_before_exceeding_the_tick_budget() {
         let sim = Simulation::new_test_world(23);
         let mut navigation = EnemyNavigation::default();
-        navigation.begin_tick(0, 0);
+        navigation.begin_tick(0, 0, 0);
         let footprint = test_footprint(39, 0);
         let mut completed = 0;
 

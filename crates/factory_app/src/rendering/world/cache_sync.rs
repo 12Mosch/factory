@@ -1,7 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::sprite_render::AlphaMode2d;
-use factory_sim::ChunkCoord;
+use factory_sim::{CHUNK_SIZE, ChunkCoord};
 use std::collections::BTreeSet;
 use std::time::Instant;
 
@@ -60,6 +60,7 @@ pub(super) fn sync_visible_world_tiles_impl(
     if cache.last_reload_token == token.value
         && cache.last_visible_revision == visible.revision
         && cache.last_chunk_revision == sim.world().chunk_revision()
+        && cache.last_terrain_revision == sim.world().terrain_revision()
     {
         return;
     }
@@ -102,14 +103,32 @@ pub(super) fn sync_visible_world_tiles_impl(
         })
         .clone();
 
-    let affected_cached_neighbors = match sim
+    let mut stale_meshes = match sim
         .world()
         .chunk_generation_since(cache.last_chunk_revision)
     {
         Some(result) => cached_neighbors_of(result.generated_chunks(), &cache.chunk_meshes),
         None => cache.chunk_meshes.keys().copied().collect(),
     };
-    for coord in affected_cached_neighbors {
+    match sim
+        .world()
+        .terrain_dirty_tiles_since(cache.last_terrain_revision)
+    {
+        Some(changes) => {
+            for change in changes {
+                add_chunks_affected_by_tile(
+                    change.x,
+                    change.y,
+                    &cache.chunk_meshes,
+                    &mut stale_meshes,
+                );
+            }
+        }
+        // The caller fell behind the bounded history; rebuild everything.
+        None => stale_meshes.extend(cache.chunk_meshes.keys().copied()),
+    }
+
+    for coord in stale_meshes {
         let (Some(chunk), Some(handle)) = (
             sim.world().chunks.get(&coord),
             cache.chunk_meshes.get(&coord),
@@ -146,6 +165,44 @@ pub(super) fn sync_visible_world_tiles_impl(
 
     cache.last_visible_revision = visible.revision;
     cache.last_chunk_revision = sim.world().chunk_revision();
+    cache.last_terrain_revision = sim.world().terrain_revision();
+}
+
+/// Cached chunk meshes that a rewritten tile invalidates: its own chunk, plus
+/// the cardinal neighbor across each chunk border the tile sits on. Water foam
+/// is drawn from the neighboring tile, so filling a border tile changes the
+/// adjacent chunk's mesh too.
+fn add_chunks_affected_by_tile(
+    x: i64,
+    y: i64,
+    cached_meshes: &std::collections::BTreeMap<ChunkCoord, Handle<Mesh>>,
+    affected: &mut BTreeSet<ChunkCoord>,
+) {
+    let Some(coord) = ChunkCoord::from_tile(x, y) else {
+        return;
+    };
+    if cached_meshes.contains_key(&coord) {
+        affected.insert(coord);
+    }
+
+    let size = i64::from(CHUNK_SIZE);
+    let local_x = x.rem_euclid(size);
+    let local_y = y.rem_euclid(size);
+    let border_offsets = [
+        (local_x == 0).then_some((-1, 0)),
+        (local_x == size - 1).then_some((1, 0)),
+        (local_y == 0).then_some((0, -1)),
+        (local_y == size - 1).then_some((0, 1)),
+    ];
+    for (dx, dy) in border_offsets.into_iter().flatten() {
+        let (Some(nx), Some(ny)) = (coord.x.checked_add(dx), coord.y.checked_add(dy)) else {
+            continue;
+        };
+        let neighbor = ChunkCoord { x: nx, y: ny };
+        if cached_meshes.contains_key(&neighbor) {
+            affected.insert(neighbor);
+        }
+    }
 }
 
 fn cached_neighbors_of(

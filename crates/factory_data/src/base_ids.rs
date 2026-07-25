@@ -66,6 +66,8 @@ pub struct BaseItemIds {
     pub chemical_plant: ItemId,
     pub plastic_bar: ItemId,
     pub sulfur: ItemId,
+    pub landfill: ItemId,
+    pub concrete: ItemId,
 }
 
 impl BaseItemIds {
@@ -118,6 +120,8 @@ impl BaseItemIds {
             chemical_plant: item_id_by_name(catalog, "chemical_plant"),
             plastic_bar: item_id_by_name(catalog, "plastic_bar"),
             sulfur: item_id_by_name(catalog, "sulfur"),
+            landfill: item_id_by_name(catalog, "landfill"),
+            concrete: item_id_by_name(catalog, "concrete"),
         }
     }
 
@@ -150,6 +154,9 @@ pub struct BaseTileIds {
     pub grass: TileId,
     pub dirt: TileId,
     pub water: TileId,
+    pub landfill: TileId,
+    pub stone_path: TileId,
+    pub concrete: TileId,
 }
 
 impl BaseTileIds {
@@ -158,6 +165,9 @@ impl BaseTileIds {
             grass: tile_id_by_name(catalog, "grass"),
             dirt: tile_id_by_name(catalog, "dirt"),
             water: tile_id_by_name(catalog, "water"),
+            landfill: tile_id_by_name(catalog, "landfill"),
+            stone_path: tile_id_by_name(catalog, "stone_path"),
+            concrete: tile_id_by_name(catalog, "concrete"),
         }
     }
 }

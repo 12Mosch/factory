@@ -56,10 +56,10 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
     app.update();
     {
         let mut build = app.world_mut().resource_mut::<BuildPlacementState>();
-        build.selected = Some(BuildSelection {
-            prototype_id: EntityPrototypeId::new(0),
-            item_id: ItemId::new(0),
-        });
+        build.selected = Some(BuildSelection::entity(
+            EntityPrototypeId::new(0),
+            ItemId::new(0),
+        ));
     }
     app.world_mut().resource_mut::<OpenContainer>().entity_id = Some(EntityId::new(999));
     press_key(&mut app, KeyCode::F9);

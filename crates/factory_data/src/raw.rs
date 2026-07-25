@@ -128,6 +128,23 @@ pub(crate) struct RawItemPrototype {
     pub(crate) armor: Option<ArmorPrototype>,
     pub(crate) equipment: Option<EquipmentPrototype>,
     pub(crate) module_effect: Option<ModuleEffectPrototype>,
+    #[serde(default)]
+    pub(crate) place_as_tile: Option<RawTilePlacement>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawTilePlacement {
+    /// Tile name, resolved to a `TileId` against the tile group.
+    pub(crate) tile: String,
+    #[serde(default)]
+    pub(crate) fills_water: bool,
+    #[serde(default = "default_tile_building_category")]
+    pub(crate) building_category: BuildingCategory,
+    pub(crate) building_menu_order: u16,
+}
+
+const fn default_tile_building_category() -> BuildingCategory {
+    BuildingCategory::Terrain
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,10 +275,17 @@ pub(crate) struct RawTilePrototype {
     /// color is glaringly visible rather than silently invisible.
     #[serde(default = "default_tile_color")]
     pub(crate) color: [u8; 3],
+    /// Walking speed percentage; defaults to the unmodified base speed.
+    #[serde(default = "default_walking_speed_percent")]
+    pub(crate) walking_speed_percent: u16,
 }
 
 fn default_tile_color() -> [u8; 3] {
     [255, 0, 255]
+}
+
+const fn default_walking_speed_percent() -> u16 {
+    100
 }
 
 #[derive(Debug, Deserialize)]

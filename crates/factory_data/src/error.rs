@@ -49,6 +49,18 @@ pub enum PrototypeLoadError {
         item: String,
         detail: &'static str,
     },
+    InvalidTileMetadata {
+        tile: String,
+        detail: &'static str,
+    },
+    MissingItemPlacementTile {
+        item: String,
+        tile: String,
+    },
+    InvalidTilePlacementMetadata {
+        item: String,
+        detail: &'static str,
+    },
     InvalidModuleSlotMetadata {
         entity: String,
         detail: &'static str,
@@ -210,6 +222,16 @@ impl fmt::Display for PrototypeLoadError {
             Self::InvalidModuleMetadata { item, detail } => write!(
                 formatter,
                 "item {item:?} has invalid module metadata: {detail}"
+            ),
+            Self::InvalidTileMetadata { tile, detail } => {
+                write!(formatter, "tile {tile:?} has invalid metadata: {detail}")
+            }
+            Self::MissingItemPlacementTile { item, tile } => {
+                write!(formatter, "item {item:?} paves missing tile {tile:?}")
+            }
+            Self::InvalidTilePlacementMetadata { item, detail } => write!(
+                formatter,
+                "item {item:?} has invalid tile placement metadata: {detail}"
             ),
             Self::InvalidModuleSlotMetadata { entity, detail } => write!(
                 formatter,

@@ -29,8 +29,8 @@ pub use model::{
     PumpPrototype, PumpjackPrototype, RadarPrototype, RecipePrototype, RepairToolPrototype,
     ResourceDistanceScalingConfig, ResourceExtraction, ResourceGenerationConfig,
     ResourcePatchGridConfig, SolarPanelPrototype, SplitterPrototype, StartingAreaConfig,
-    SteamEnginePrototype, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig, TilePrototype,
-    TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype,
-    UndergroundPipePrototype, UnitPrototype, WORLD_GENERATION_FORMAT_VERSION,
-    WorldGenerationConfig,
+    SteamEnginePrototype, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig,
+    TilePlacementPrototype, TilePrototype, TransportBeltPrototype, UndergroundBeltPart,
+    UndergroundBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };

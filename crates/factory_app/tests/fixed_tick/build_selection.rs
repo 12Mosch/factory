@@ -5,10 +5,11 @@ use super::common::{
 };
 use bevy::prelude::*;
 use factory_app::build::resources::{
-    BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT, HotbarState,
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, BuildTarget, HOTBAR_SLOT_COUNT,
+    HotbarState,
 };
 use factory_app::placement::build::{
-    buildable_prototypes, default_hotbar_slots, place_selected_building_at_tile,
+    buildable_prototypes, default_hotbar_slots, place_selection_at_tile,
 };
 use factory_app::resources::SimResource;
 use factory_data::{EntityKind, PrototypeCatalog};
@@ -21,10 +22,11 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
     let buildables = buildable_prototypes(&catalog);
     let buildable_names = buildables
         .iter()
-        .map(|buildable| {
-            catalog.entities[buildable.prototype_id.index()]
-                .name
-                .as_str()
+        .map(|buildable| match buildable.target {
+            BuildTarget::Entity(prototype_id) => {
+                catalog.entities[prototype_id.index()].name.as_str()
+            }
+            BuildTarget::Tile(_) => catalog.items[buildable.item_id.index()].name.as_str(),
         })
         .collect::<Vec<_>>();
 
@@ -56,9 +58,17 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
         );
     }
     assert!(buildables.iter().all(|buildable| {
-        let entity = &catalog.entities[buildable.prototype_id.index()];
-        entity.entity_kind != EntityKind::ResourcePatch
-            && entity.build_item == Some(buildable.item_id)
+        match buildable.target {
+            BuildTarget::Entity(prototype_id) => {
+                let entity = &catalog.entities[prototype_id.index()];
+                entity.entity_kind != EntityKind::ResourcePatch
+                    && entity.build_item == Some(buildable.item_id)
+            }
+            // Terrain buildables are backed by the item's own paving metadata.
+            BuildTarget::Tile(tile) => catalog.items[buildable.item_id.index()]
+                .place_as_tile
+                .is_some_and(|placement| placement.tile == tile),
+        }
     }));
 }
 
@@ -202,10 +212,8 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
         (assembler_entity, assembler_item, automation)
     };
     let slot_index = 0;
-    app.world_mut().resource_mut::<HotbarState>().slots[slot_index] = Some(BuildSelection {
-        prototype_id: assembler_entity,
-        item_id: assembler_item,
-    });
+    app.world_mut().resource_mut::<HotbarState>().slots[slot_index] =
+        Some(BuildSelection::entity(assembler_entity, assembler_item));
     {
         let catalog = app
             .world()
@@ -253,10 +261,7 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
 
     assert_eq!(
         app.world().resource::<BuildPlacementState>().selected,
-        Some(BuildSelection {
-            prototype_id: assembler_entity,
-            item_id: assembler_item,
-        })
+        Some(BuildSelection::entity(assembler_entity, assembler_item))
     );
 }
 
@@ -273,12 +278,9 @@ fn place_selected_building_consumes_inventory() {
         .expect("test inventory should accept belt");
     let before_entities = sim.entities().placed_len();
 
-    let status = place_selected_building_at_tile(
+    let status = place_selection_at_tile(
         &mut sim,
-        BuildSelection {
-            prototype_id: belt,
-            item_id: belt_item,
-        },
+        BuildSelection::entity(belt, belt_item),
         Direction::North,
         x,
         y,
@@ -287,6 +289,91 @@ fn place_selected_building_consumes_inventory() {
     assert!(matches!(status, BuildPlacementStatus::Placed(_)));
     assert_eq!(sim.player_inventory().count(belt_item), 0);
     assert_eq!(sim.entities().placed_len(), before_entities + 1);
+}
+
+/// A generated, resource-free, unoccupied ground tile, and the same tile
+/// rewritten to water so landfill has something to fill.
+fn plain_ground_tile(sim: &Simulation) -> (i64, i64) {
+    let (player_x, player_y) = sim.player().tile_position();
+    sim.world()
+        .chunks
+        .values()
+        .flat_map(|chunk| {
+            chunk.tiles.iter().enumerate().filter_map(|(index, tile)| {
+                let local_x = (index as i32).rem_euclid(factory_sim::CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(factory_sim::CHUNK_SIZE);
+                let (x, y) = chunk.coord.tile_at(local_x, local_y);
+                (tile.resource.is_none()
+                    && tile.collision.walkable
+                    && tile.collision.buildable
+                    && (x, y) != (player_x, player_y)
+                    && sim.entities().occupancy().entity_at(x, y).is_none())
+                .then_some((x, y))
+            })
+        })
+        .next()
+        .expect("test world should contain a plain ground tile")
+}
+
+#[test]
+fn place_selected_tile_fills_water_and_consumes_inventory() {
+    let mut sim = Simulation::new_test_world(123);
+    let ids = factory_data::BasePrototypeIds::from_catalog(sim.catalog());
+    let (x, y) = plain_ground_tile(&sim);
+    sim.set_tile(x, y, ids.tiles.water)
+        .expect("ground tile should accept water");
+    *sim.player_inventory_mut() = Inventory::player();
+    let catalog = sim.catalog().clone();
+    sim.player_inventory_mut()
+        .insert(&catalog, ids.items.landfill, 1)
+        .expect("test inventory should accept landfill");
+
+    let status = place_selection_at_tile(
+        &mut sim,
+        BuildSelection::tile(ids.tiles.landfill, ids.items.landfill),
+        Direction::North,
+        x,
+        y,
+    );
+
+    assert!(matches!(status, BuildPlacementStatus::Placed(_)));
+    assert_eq!(
+        sim.world().tile_at(x, y).expect("filled tile").tile_id,
+        ids.tiles.landfill
+    );
+    assert_eq!(sim.player_inventory().count(ids.items.landfill), 0);
+}
+
+#[test]
+fn failed_selected_tile_placement_keeps_inventory() {
+    let mut sim = Simulation::new_test_world(123);
+    let ids = factory_data::BasePrototypeIds::from_catalog(sim.catalog());
+    let (x, y) = plain_ground_tile(&sim);
+    *sim.player_inventory_mut() = Inventory::player();
+    let catalog = sim.catalog().clone();
+    sim.player_inventory_mut()
+        .insert(&catalog, ids.items.landfill, 1)
+        .expect("test inventory should accept landfill");
+    let before = sim.world().tile_at(x, y).expect("ground tile").tile_id;
+
+    // Landfill on dry land is rejected, so nothing is spent.
+    let status = place_selection_at_tile(
+        &mut sim,
+        BuildSelection::tile(ids.tiles.landfill, ids.items.landfill),
+        Direction::North,
+        x,
+        y,
+    );
+
+    assert_eq!(
+        status,
+        BuildPlacementStatus::CannotPlace("Landfill needs water".to_string())
+    );
+    assert_eq!(
+        sim.world().tile_at(x, y).expect("ground tile").tile_id,
+        before
+    );
+    assert_eq!(sim.player_inventory().count(ids.items.landfill), 1);
 }
 
 #[test]
@@ -311,12 +398,9 @@ fn failed_selected_building_placement_keeps_inventory() {
     )
     .expect("blocking belt should be placeable");
 
-    let status = place_selected_building_at_tile(
+    let status = place_selection_at_tile(
         &mut sim,
-        BuildSelection {
-            prototype_id: belt,
-            item_id: belt_item,
-        },
+        BuildSelection::entity(belt, belt_item),
         Direction::North,
         x,
         y,

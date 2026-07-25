@@ -23,5 +23,6 @@ mod radar;
 mod research;
 mod solar;
 mod statistics;
+mod terrain;
 mod transfers;
 mod world_generation;

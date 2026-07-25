@@ -4,14 +4,17 @@ use factory_data::{
 };
 use factory_sim::{
     BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview,
-    ConstructionError, Direction, EntityDestroyError, PlayerBuildError, Simulation,
+    ConstructionError, Direction, EntityDestroyError, EntityFootprint, PlayerBuildError,
+    Simulation, TilePlacementError, TilePlacementRequest,
 };
 
-use crate::build::resources::{BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT};
+use crate::build::resources::{
+    BuildPlacementStatus, BuildSelection, BuildTarget, HOTBAR_SLOT_COUNT,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildablePrototype {
-    pub prototype_id: EntityPrototypeId,
+    pub target: BuildTarget,
     pub item_id: ItemId,
     pub display_name: String,
     pub category: BuildingCategory,
@@ -22,12 +25,15 @@ pub struct BuildablePrototype {
 impl BuildablePrototype {
     pub fn selection(&self) -> BuildSelection {
         BuildSelection {
-            prototype_id: self.prototype_id,
+            target: self.target,
             item_id: self.item_id,
         }
     }
 }
 
+/// Everything the player can put down from the build menu: entities with a
+/// build item, plus items that rewrite terrain. Both flow through the same
+/// menu, hotbar, and selection state.
 pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototype> {
     let mut buildables = Vec::new();
 
@@ -43,7 +49,7 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
         }
 
         buildables.push(BuildablePrototype {
-            prototype_id: entity.id,
+            target: BuildTarget::Entity(entity.id),
             item_id,
             display_name: display_name(&entity.name),
             category: entity
@@ -53,6 +59,21 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
                 .building_menu_order
                 .expect("validated buildable has a building menu order"),
             required_technology: required_technology(catalog, item_id),
+        });
+    }
+
+    for item in &catalog.items {
+        let Some(placement) = item.place_as_tile else {
+            continue;
+        };
+
+        buildables.push(BuildablePrototype {
+            target: BuildTarget::Tile(placement.tile),
+            item_id: item.id,
+            display_name: display_name(&item.name),
+            category: placement.building_category,
+            menu_order: placement.building_menu_order,
+            required_technology: required_technology(catalog, item.id),
         });
     }
 
@@ -98,17 +119,38 @@ pub fn next_direction(direction: Direction) -> Direction {
     }
 }
 
-pub fn place_selected_building_at_tile(
+pub fn place_selection_at_tile(
     sim: &mut Simulation,
     selection: BuildSelection,
     direction: Direction,
     x: factory_sim::WorldTileCoord,
     y: factory_sim::WorldTileCoord,
 ) -> BuildPlacementStatus {
+    let prototype_id = match selection.target {
+        BuildTarget::Entity(prototype_id) => prototype_id,
+        BuildTarget::Tile(_) => {
+            return match factory_sim::tile_placement_ops::place_tile_from_player_inventory(
+                sim,
+                TilePlacementRequest {
+                    item_id: selection.item_id,
+                    x,
+                    y,
+                },
+            ) {
+                Ok(()) => BuildPlacementStatus::Placed(format!(
+                    "Placed {}",
+                    item_display_name(sim.catalog(), selection.item_id)
+                        .unwrap_or_else(|| "Tile".to_string())
+                )),
+                Err(error) => tile_status_from_error(sim.catalog(), error),
+            };
+        }
+    };
+
     match factory_sim::placement::place_from_player_inventory(
         sim,
         factory_sim::placement::PlayerPlacementRequest {
-            prototype_id: selection.prototype_id,
+            prototype_id,
             item_id: selection.item_id,
             x,
             y,
@@ -117,10 +159,101 @@ pub fn place_selected_building_at_tile(
     ) {
         Ok(_) => BuildPlacementStatus::Placed(format!(
             "Placed {}",
-            entity_display_name(sim.catalog(), selection.prototype_id)
+            entity_display_name(sim.catalog(), prototype_id)
                 .unwrap_or_else(|| "Building".to_string())
         )),
         Err(error) => build_status_from_error(sim.catalog(), error),
+    }
+}
+
+/// Cursor preview for a terrain selection. Terrain has no entity footprint,
+/// so this reports a single-tile footprint plus the same issue vocabulary the
+/// entity preview uses, letting the existing preview renderer and status line
+/// handle both without a second code path.
+pub(crate) fn tile_placement_preview(
+    sim: &Simulation,
+    item_id: ItemId,
+    x: factory_sim::WorldTileCoord,
+    y: factory_sim::WorldTileCoord,
+) -> (BuildPlacementPreview, BuildPlacementStatus) {
+    let error =
+        match factory_sim::validate_tile_placement(sim, TilePlacementRequest { item_id, x, y }) {
+            Ok(_) if sim.player_inventory().count(item_id) == 0 => {
+                Some(TilePlacementError::InsufficientInventory { item_id })
+            }
+            Ok(_) => None,
+            Err(error) => Some(error),
+        };
+
+    let footprint = Some(EntityFootprint::single_tile(x, y));
+    let Some(error) = error else {
+        return (
+            BuildPlacementPreview {
+                footprint,
+                issues: Vec::new(),
+            },
+            BuildPlacementStatus::Ready,
+        );
+    };
+
+    let kind = match error {
+        TilePlacementError::InsufficientInventory { item_id } => {
+            BuildPlacementIssueKind::InsufficientInventory { item_id }
+        }
+        TilePlacementError::OutsideGeneratedChunks { .. } => {
+            BuildPlacementIssueKind::OutsideGeneratedChunks
+        }
+        // The remaining cases mean the click cannot change this tile. The
+        // precise reason still reaches the player through the status text; the
+        // preview only needs to paint the tile as blocked.
+        TilePlacementError::RequiresWater { .. }
+        | TilePlacementError::RequiresSolidGround { .. }
+        | TilePlacementError::AlreadyPlaced { .. }
+        | TilePlacementError::SupportsOffshorePump { .. }
+        | TilePlacementError::UnknownItem(_)
+        | TilePlacementError::ItemDoesNotPlaceTile { .. } => {
+            BuildPlacementIssueKind::TerrainBlocked
+        }
+    };
+
+    (
+        BuildPlacementPreview {
+            footprint,
+            issues: vec![BuildPlacementIssue {
+                tile: Some((x, y)),
+                kind,
+            }],
+        },
+        tile_status_from_error(sim.catalog(), error),
+    )
+}
+
+pub(crate) fn tile_status_from_error(
+    catalog: &PrototypeCatalog,
+    error: TilePlacementError,
+) -> BuildPlacementStatus {
+    match error {
+        TilePlacementError::InsufficientInventory { item_id } => {
+            BuildPlacementStatus::MissingInventory(short_inventory_need(catalog, item_id))
+        }
+        TilePlacementError::RequiresWater { .. } => {
+            BuildPlacementStatus::CannotPlace("Landfill needs water".to_string())
+        }
+        TilePlacementError::RequiresSolidGround { .. } => {
+            BuildPlacementStatus::CannotPlace("Paving needs solid ground".to_string())
+        }
+        TilePlacementError::AlreadyPlaced { .. } => {
+            BuildPlacementStatus::CannotPlace("Tile already placed".to_string())
+        }
+        TilePlacementError::SupportsOffshorePump { .. } => {
+            BuildPlacementStatus::CannotPlace("An offshore pump needs this water".to_string())
+        }
+        TilePlacementError::OutsideGeneratedChunks { .. } => {
+            BuildPlacementStatus::CannotPlace("Outside generated area".to_string())
+        }
+        TilePlacementError::UnknownItem(_) | TilePlacementError::ItemDoesNotPlaceTile { .. } => {
+            BuildPlacementStatus::CannotPlace("Cannot place this item".to_string())
+        }
     }
 }
 
@@ -411,10 +544,11 @@ mod tests {
         let technology_name = |entity_name: &str| {
             let buildable = buildables
                 .iter()
-                .find(|buildable| {
-                    catalog
-                        .entity(buildable.prototype_id)
-                        .is_some_and(|entity| entity.name == entity_name)
+                .find(|buildable| match buildable.target {
+                    BuildTarget::Entity(prototype_id) => catalog
+                        .entity(prototype_id)
+                        .is_some_and(|entity| entity.name == entity_name),
+                    BuildTarget::Tile(_) => false,
                 })
                 .expect("buildable should exist");
             buildable
