@@ -147,6 +147,18 @@ pub(in crate::simulation) fn validate_boiler(
     Ok(())
 }
 
+pub(in crate::simulation) fn validate_nuclear_reactor(
+    sim: &Simulation,
+    entity_id: EntityId,
+    state: &NuclearReactorState,
+) -> Result<(), SimValidationError> {
+    validate_item_slot(&sim.world.prototypes, state.energy.fuel_slot)?;
+    validate_slot_policy(sim, entity_id, state.energy.fuel_slot, ItemSlotPolicy::Fuel)?;
+    validate_item_slot(&sim.world.prototypes, state.output_slot)?;
+
+    Ok(())
+}
+
 pub(in crate::simulation) fn validate_assembler(
     sim: &Simulation,
     entity_id: EntityId,

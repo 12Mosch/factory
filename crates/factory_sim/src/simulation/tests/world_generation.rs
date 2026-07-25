@@ -280,11 +280,58 @@ fn seed_123_contains_all_resource_item_types() {
 
     let configured = &world.prototypes.world_generation.resources;
     assert!(!configured.is_empty());
-    for resource in configured {
+    // Only guaranteed starting patches must land in the starting area. Resources
+    // without one (uranium) are found by expanding; see the test below.
+    for resource in configured
+        .iter()
+        .filter(|resource| resource.starting_patch.is_some())
+    {
         assert!(
             resource_items.contains(&resource.resource_item),
             "missing generated resource item {:?}",
             resource.resource_item
+        );
+    }
+}
+
+/// Resources without a starting patch still have to be findable, otherwise their
+/// whole production chain would be unreachable.
+#[test]
+fn resources_without_a_starting_patch_generate_further_out() {
+    let mut world = WorldSim::new_seeded(123);
+    let expected = world
+        .prototypes
+        .world_generation
+        .resources
+        .iter()
+        .filter(|resource| resource.starting_patch.is_none())
+        .map(|resource| resource.resource_item)
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !expected.is_empty(),
+        "the base world should keep at least one resource behind expansion"
+    );
+
+    let search_radius_chunks = 24;
+    for chunk_x in -search_radius_chunks..=search_radius_chunks {
+        for chunk_y in -search_radius_chunks..=search_radius_chunks {
+            world.ensure_chunk_generated(ChunkCoord {
+                x: chunk_x,
+                y: chunk_y,
+            });
+        }
+    }
+    let generated = world
+        .chunks
+        .values()
+        .flat_map(|chunk| chunk.tiles.iter())
+        .filter_map(|tile| tile.resource.map(|resource| resource.resource_item))
+        .collect::<BTreeSet<_>>();
+
+    for resource_item in expected {
+        assert!(
+            generated.contains(&resource_item),
+            "expansion resource {resource_item:?} never generates"
         );
     }
 }

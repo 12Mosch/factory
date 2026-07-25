@@ -432,7 +432,92 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
+            EntityKind::NuclearReactor => {
+                let Some(reactor) = prototype.nuclear_reactor else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if reactor.heat_output_watts == 0
+                    || prototype.heat_buffer.is_none()
+                    || prototype.burner.is_some()
+                    || prototype.electric_energy_source.is_some()
+                    || prototype.heat_energy_source.is_some()
+                    || prototype.max_health.is_none_or(|health| health == 0)
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::HeatPipe => {
+                if prototype.heat_buffer.is_none()
+                    || prototype.heat_energy_source.is_some()
+                    || prototype.nuclear_reactor.is_some()
+                    || prototype.burner.is_some()
+                    || prototype.electric_energy_source.is_some()
+                    || !prototype.fluid_boxes.is_empty()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
+            EntityKind::HeatExchanger => {
+                let Some(boiler) = prototype.boiler.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                let Some(heat_source) = prototype.heat_energy_source else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                let Some(heat_buffer) = prototype.heat_buffer.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if boiler.water_consumption_per_second_milliunits == 0
+                    || boiler.steam_output_per_second_milliunits == 0
+                    || prototype.fluid_boxes.len() != 2
+                    || heat_source.energy_usage_watts == 0
+                    || heat_source.min_working_temperature_degrees
+                        > heat_buffer.max_temperature_degrees
+                    || prototype.nuclear_reactor.is_some()
+                    || prototype.burner.is_some()
+                    || prototype.electric_energy_source.is_some()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
             _ => {}
+        }
+
+        // Heat metadata belongs only to the heat network kinds handled above.
+        if !matches!(
+            prototype.entity_kind,
+            EntityKind::NuclearReactor | EntityKind::HeatPipe | EntityKind::HeatExchanger
+        ) && (prototype.heat_buffer.is_some()
+            || prototype.heat_energy_source.is_some()
+            || prototype.nuclear_reactor.is_some())
+        {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
+        }
+        if let Some(heat_buffer) = prototype.heat_buffer.as_ref()
+            && (heat_buffer.specific_heat_joules_per_degree == 0
+                || heat_buffer.max_temperature_degrees
+                    <= factory_data::HEAT_AMBIENT_TEMPERATURE_DEGREES
+                || heat_buffer.connections.is_empty())
+        {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
         }
 
         if let Some(electric_energy_source) = prototype.electric_energy_source.as_ref()

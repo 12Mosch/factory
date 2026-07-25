@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
     AssemblerError, BoilerError, ContainerError, FurnaceError, InserterError, MiningDrillError,
-    ModuleError, SimCommand, SlotTransferError,
+    ModuleError, NuclearReactorError, SimCommand, SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -200,6 +200,7 @@ pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransf
         SlotTransferError::MiningDrill(error) => mining_drill_error_message(catalog, error),
         SlotTransferError::Furnace(error) => furnace_error_message(catalog, error),
         SlotTransferError::Boiler(error) => boiler_error_message(catalog, error),
+        SlotTransferError::NuclearReactor(error) => nuclear_reactor_error_message(catalog, error),
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
         SlotTransferError::Inserter(error) => inserter_error_message(catalog, error),
         SlotTransferError::Module(error) => module_error_message(catalog, error),
@@ -288,6 +289,21 @@ fn boiler_error_message(catalog: &PrototypeCatalog, error: BoilerError) -> Strin
         BoilerError::EmptySlot { .. } => "Empty slot".to_string(),
         BoilerError::InsufficientSpace => "No space".to_string(),
         BoilerError::UnknownItem => "Unknown item".to_string(),
+    }
+}
+
+fn nuclear_reactor_error_message(catalog: &PrototypeCatalog, error: NuclearReactorError) -> String {
+    match error {
+        NuclearReactorError::MissingEntity(_) | NuclearReactorError::NotNuclearReactor(_) => {
+            "Machine unavailable".to_string()
+        }
+        NuclearReactorError::InvalidFuel(item_id) | NuclearReactorError::InvalidOutput(item_id) => {
+            wrong_item_message(catalog, item_id)
+        }
+        NuclearReactorError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        NuclearReactorError::EmptySlot { .. } => "Empty slot".to_string(),
+        NuclearReactorError::InsufficientSpace => "No space".to_string(),
+        NuclearReactorError::UnknownItem => "Unknown item".to_string(),
     }
 }
 

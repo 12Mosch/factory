@@ -38,6 +38,7 @@ pub(crate) fn apply_entity_topology_change(
         sim.invalidate_transport_lane_graph_region(entity_id, footprint);
     }
     sim.invalidate_fluid_state();
+    sim.invalidate_heat_state();
     if impact.refresh_module_machine {
         sim.refresh_module_effects(entity_id);
     }

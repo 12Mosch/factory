@@ -1,10 +1,10 @@
 use crate::simulation::*;
 
-use super::geometry::rotated_fluid_endpoint;
 use super::math::proportional_amount;
 use super::network_access::{fluid_network_dynamic_summary, update_fluid_network_snapshot};
 use super::network_builder::build_fluid_network_topology_from_nodes;
 use super::types::{FluidBoxAssignment, FluidBoxNode, FluidNetworkTopology};
+use crate::simulation::edge_geometry::rotated_edge_endpoint;
 
 impl Simulation {
     pub(in crate::simulation) fn ensure_fluid_network_topology(&mut self) {
@@ -80,7 +80,7 @@ impl Simulation {
                 let endpoints = fluid_box
                     .connections
                     .iter()
-                    .filter_map(|connection| rotated_fluid_endpoint(placed, prototype, connection))
+                    .filter_map(|connection| rotated_edge_endpoint(placed, prototype, connection))
                     .collect();
                 nodes.push(FluidBoxNode {
                     key: FluidBoxKey {

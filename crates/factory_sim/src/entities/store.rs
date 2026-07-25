@@ -52,6 +52,10 @@ macro_rules! for_each_entity_state_map {
             arithmetic_combinators: crate::circuits::ArithmeticCombinatorState => ArithmeticCombinator,
             decider_combinators: crate::circuits::DeciderCombinatorState => DeciderCombinator,
             lamps: crate::circuits::LampState => Lamp,
+            heat_buffers: crate::heat::HeatBufferState => _,
+            nuclear_reactors: crate::heat::NuclearReactorState => NuclearReactor,
+            heat_pipes: crate::heat::HeatPipeState => HeatPipe,
+            heat_exchangers: crate::heat::HeatExchangerState => HeatExchanger,
         }
     };
 }
@@ -211,6 +215,7 @@ mod tests {
         Damage, EnemySpawnerState, Faction, GunTurretState, HealthState, LaserTurretState,
     };
     use crate::fluids::FluidBoxState;
+    use crate::heat::{HeatBufferState, HeatExchangerState, HeatPipeState, NuclearReactorState};
     use crate::inventory::{test_inventory, test_slot, test_stack};
     use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
     use crate::machines::{
@@ -246,7 +251,9 @@ mod tests {
         // v27: radar state was appended.
         // v28: circuit connections, combinator configuration, and lamp state
         // were appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xcead_01a8_0da8_8818;
+        // v29: heat buffer, nuclear reactor, heat pipe, and heat exchanger state
+        // were appended for heat networks.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x5bae_c6bf_8be4_db56;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -284,9 +291,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(26);
+        let mut store = EntityStore::empty(30);
 
-        for raw in 1..=25 {
+        for raw in 1..=29 {
             let id = EntityId::new(raw);
             let tile = raw as i64;
             store.entities.push(SimEntity {
@@ -518,6 +525,38 @@ mod tests {
         store
             .lamps
             .insert(EntityId::new(25), LampState { lit: true });
+
+        // Heat network state: a reactor with fuel and residue, the pipe carrying
+        // its heat, and the exchanger drawing from it.
+        store.heat_buffers.insert(
+            EntityId::new(26),
+            HeatBufferState {
+                energy_joules: 123_456_789,
+            },
+        );
+        store.heat_buffers.insert(
+            EntityId::new(27),
+            HeatBufferState {
+                energy_joules: 4_096,
+            },
+        );
+        store.heat_buffers.insert(
+            EntityId::new(28),
+            HeatBufferState {
+                energy_joules: 65_535,
+            },
+        );
+        store.nuclear_reactors.insert(
+            EntityId::new(26),
+            NuclearReactorState {
+                energy: burner_energy(iron),
+                output_slot: test_slot(test_stack(copper, 3)),
+            },
+        );
+        store.heat_pipes.insert(EntityId::new(27), HeatPipeState);
+        store
+            .heat_exchangers
+            .insert(EntityId::new(28), HeatExchangerState);
 
         store
     }

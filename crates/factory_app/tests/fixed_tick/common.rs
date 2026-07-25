@@ -95,7 +95,13 @@ pub fn pixel_at(map: &factory_app::rendering::map_texture::MapPixels, tile: (i64
     ]
 }
 
-pub fn first_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::ResourceCell) {
+/// The minable resource tile closest to the player.
+///
+/// Nearest rather than first-in-chunk-order: hand-mining tests have to walk the
+/// player there, and a tile on the far side of the starting area can be cut off
+/// by terrain, which would fail the test for reasons unrelated to what it checks.
+pub fn nearest_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::ResourceCell) {
+    let (player_x, player_y) = sim.player().position_tiles();
     sim.world()
         .chunks
         .values()
@@ -114,7 +120,11 @@ pub fn first_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim::
                     Some((x, y, resource))
                 })
         })
-        .next()
+        .min_by_key(|(x, y, _)| {
+            let dx = *x - player_x as i64;
+            let dy = *y - player_y as i64;
+            (dx * dx + dy * dy, *x, *y)
+        })
         .expect("generated world should contain a minable resource tile")
 }
 

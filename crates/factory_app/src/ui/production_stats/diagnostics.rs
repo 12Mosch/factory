@@ -62,6 +62,7 @@ fn machine_status_name(status: MachineStatus) -> &'static str {
         MachineStatus::NoPower => "No power",
         MachineStatus::NoInput => "No input",
         MachineStatus::NoFluid => "No fluid",
+        MachineStatus::NoHeat => "Too cold",
         MachineStatus::OutputFull => "Output full",
     }
 }
@@ -97,5 +98,8 @@ fn entity_kind_name(kind: EntityKind) -> &'static str {
         EntityKind::ConstantCombinator => "Constant combinators",
         EntityKind::ArithmeticCombinator => "Arithmetic combinators",
         EntityKind::DeciderCombinator => "Decider combinators",
+        EntityKind::NuclearReactor => "Nuclear reactors",
+        EntityKind::HeatPipe => "Heat pipes",
+        EntityKind::HeatExchanger => "Heat exchangers",
     }
 }

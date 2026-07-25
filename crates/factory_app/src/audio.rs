@@ -451,14 +451,17 @@ fn machine_loop_candidate(
     let placed = sim.entities().placed_entity(entity_id)?;
     let prototype = sim.catalog().entity(placed.prototype_id)?;
     let loop_kind = match prototype.entity_kind {
-        EntityKind::MiningDrill | EntityKind::Furnace | EntityKind::Boiler => {
-            MachineLoopKind::Burner
-        }
+        // A reactor burns fuel cells, so it shares the burner loop.
+        EntityKind::MiningDrill
+        | EntityKind::Furnace
+        | EntityKind::Boiler
+        | EntityKind::NuclearReactor => MachineLoopKind::Burner,
         EntityKind::AssemblingMachine
         | EntityKind::Lab
         | EntityKind::SteamEngine
         | EntityKind::OffshorePump
-        | EntityKind::Pump => MachineLoopKind::Electric,
+        | EntityKind::Pump
+        | EntityKind::HeatExchanger => MachineLoopKind::Electric,
         _ => return None,
     };
     Some(LoopCandidate {

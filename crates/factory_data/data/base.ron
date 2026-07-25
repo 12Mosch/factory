@@ -248,6 +248,25 @@
         (id: 90, name: "arithmetic_combinator", stack_size: 50),
         (id: 91, name: "decider_combinator", stack_size: 50),
         (id: 92, name: "lamp", stack_size: 50),
+        (id: 93, name: "uranium_ore", stack_size: 50),
+        (id: 94, name: "uranium_235", stack_size: 100),
+        (id: 95, name: "uranium_238", stack_size: 100),
+        // A fuel cell is fuel like coal is, but it leaves residue behind: the
+        // reactor drops a used cell into its output slot for every cell burnt,
+        // which is what reprocessing feeds on.
+        (
+            id: 96,
+            name: "uranium_fuel_cell",
+            stack_size: 50,
+            fuel_value_joules: Some(8000000000),
+            burnt_result: Some("used_up_uranium_fuel_cell"),
+        ),
+        (id: 97, name: "used_up_uranium_fuel_cell", stack_size: 50),
+        (id: 98, name: "centrifuge", stack_size: 10),
+        (id: 99, name: "nuclear_reactor", stack_size: 10),
+        (id: 100, name: "heat_pipe", stack_size: 100),
+        (id: 101, name: "heat_exchanger", stack_size: 50),
+        (id: 102, name: "steam_turbine", stack_size: 20),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1294,6 +1313,103 @@
             ],
             fluid_ingredients: [(fluid: "water", amount: 100)],
             products: [(item: "concrete", amount: 10)],
+        ),
+        // Nuclear chain. Enrichment is deterministic here: one centrifuge run
+        // splits ore into a little fissile U-235 and a lot of U-238, and a fuel
+        // cell needs both, so the ratio is what paces reactor fuel.
+        (
+            id: 93,
+            name: "uranium_processing",
+            category: Centrifuging,
+            crafting_time_ticks: 720,
+            ingredients: [(item: "uranium_ore", amount: 10)],
+            products: [
+                (item: "uranium_235", amount: 1),
+                (item: "uranium_238", amount: 15),
+            ],
+        ),
+        (
+            id: 94,
+            name: "uranium_fuel_cell",
+            category: Crafting,
+            crafting_time_ticks: 600,
+            ingredients: [
+                (item: "iron_plate", amount: 10),
+                (item: "uranium_235", amount: 1),
+                (item: "uranium_238", amount: 19),
+            ],
+            products: [(item: "uranium_fuel_cell", amount: 10)],
+        ),
+        // Closes the loop: spent cells go back to the centrifuge instead of
+        // piling up, returning part of their U-238.
+        (
+            id: 95,
+            name: "nuclear_fuel_reprocessing",
+            category: Centrifuging,
+            crafting_time_ticks: 3600,
+            ingredients: [(item: "used_up_uranium_fuel_cell", amount: 5)],
+            products: [(item: "uranium_238", amount: 3)],
+        ),
+        (
+            id: 96,
+            name: "centrifuge",
+            category: Crafting,
+            crafting_time_ticks: 240,
+            ingredients: [
+                (item: "concrete", amount: 100),
+                (item: "steel_plate", amount: 50),
+                (item: "iron_gear_wheel", amount: 100),
+                (item: "advanced_circuit", amount: 100),
+            ],
+            products: [(item: "centrifuge", amount: 1)],
+        ),
+        (
+            id: 97,
+            name: "nuclear_reactor",
+            category: Crafting,
+            crafting_time_ticks: 480,
+            ingredients: [
+                (item: "concrete", amount: 500),
+                (item: "steel_plate", amount: 500),
+                (item: "advanced_circuit", amount: 500),
+                (item: "copper_plate", amount: 500),
+            ],
+            products: [(item: "nuclear_reactor", amount: 1)],
+        ),
+        (
+            id: 98,
+            name: "heat_pipe",
+            category: Crafting,
+            crafting_time_ticks: 60,
+            ingredients: [
+                (item: "copper_plate", amount: 20),
+                (item: "steel_plate", amount: 10),
+            ],
+            products: [(item: "heat_pipe", amount: 1)],
+        ),
+        (
+            id: 99,
+            name: "heat_exchanger",
+            category: Crafting,
+            crafting_time_ticks: 180,
+            ingredients: [
+                (item: "copper_plate", amount: 100),
+                (item: "steel_plate", amount: 10),
+                (item: "pipe", amount: 10),
+            ],
+            products: [(item: "heat_exchanger", amount: 1)],
+        ),
+        (
+            id: 100,
+            name: "steam_turbine",
+            category: Crafting,
+            crafting_time_ticks: 180,
+            ingredients: [
+                (item: "copper_plate", amount: 50),
+                (item: "iron_gear_wheel", amount: 50),
+                (item: "pipe", amount: 20),
+            ],
+            products: [(item: "steam_turbine", amount: 1)],
         ),
     ],
     entities: [
@@ -2373,6 +2489,150 @@
                 controllable: true,
             )),
         ),
+        (
+            id: 57,
+            name: "uranium_ore_patch",
+            entity_kind: ResourcePatch,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["resource"]),
+        ),
+        (
+            id: 58,
+            name: "centrifuge",
+            building_category: Some(Production),
+            building_menu_order: Some(70),
+            entity_kind: AssemblingMachine,
+            module_slot_count: 2,
+            size: (x: 3, y: 3),
+            collision_mask: (layers: ["ground", "building"]),
+            assembling_machine: Some((
+                crafting_speed_numerator: 1,
+                crafting_speed_denominator: 1,
+                input_slot_count: 2,
+                output_slot_count: 2,
+                crafting_category: Centrifuging,
+            )),
+            electric_energy_source: Some((energy_usage_watts: 350000, drain_watts: 12000)),
+            max_health: Some(300),
+            pollution_per_minute_milli: Some(4000),
+        ),
+        // 40 MW of heat per reactor, doubled for each reactor sharing an edge.
+        // The heat buffer is the reactor's own thermal mass: 1 MJ per degree up
+        // to 1000 degrees, so a running reactor stores nearly a gigajoule.
+        (
+            id: 59,
+            name: "nuclear_reactor",
+            building_category: Some(Power),
+            building_menu_order: Some(80),
+            entity_kind: NuclearReactor,
+            size: (x: 5, y: 5),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(500),
+            nuclear_reactor: Some((
+                heat_output_watts: 40000000,
+                neighbour_bonus_permyriad: 10000,
+            )),
+            heat_buffer: Some((
+                specific_heat_joules_per_degree: 1000000,
+                max_temperature_degrees: 1000,
+                connections: [
+                    (local_offset: (x: 2, y: 0), side: North),
+                    (local_offset: (x: 4, y: 2), side: East),
+                    (local_offset: (x: 2, y: 4), side: South),
+                    (local_offset: (x: 0, y: 2), side: West),
+                ],
+            )),
+        ),
+        (
+            id: 60,
+            name: "heat_pipe",
+            building_category: Some(Power),
+            building_menu_order: Some(90),
+            entity_kind: HeatPipe,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(100),
+            heat_buffer: Some((
+                specific_heat_joules_per_degree: 100000,
+                max_temperature_degrees: 1000,
+                connections: [
+                    (local_offset: (x: 0, y: 0), side: North),
+                    (local_offset: (x: 0, y: 0), side: East),
+                    (local_offset: (x: 0, y: 0), side: South),
+                    (local_offset: (x: 0, y: 0), side: West),
+                ],
+            )),
+        ),
+        // Draws 10 MW of heat once its buffer passes 500 degrees, so four
+        // exchangers consume one reactor. Heat enters from the south edge and
+        // water and steam sit on opposite corners of the north edge, so a heat
+        // pipe run and the water/steam pipes approach from opposite sides.
+        (
+            id: 61,
+            name: "heat_exchanger",
+            building_category: Some(Power),
+            building_menu_order: Some(100),
+            entity_kind: HeatExchanger,
+            size: (x: 3, y: 2),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(200),
+            boiler: Some((
+                water_consumption_per_second_milliunits: 103000,
+                steam_output_per_second_milliunits: 103000,
+            )),
+            heat_energy_source: Some((
+                energy_usage_watts: 10000000,
+                min_working_temperature_degrees: 500,
+            )),
+            heat_buffer: Some((
+                specific_heat_joules_per_degree: 100000,
+                max_temperature_degrees: 1000,
+                connections: [
+                    (local_offset: (x: 1, y: 1), side: South),
+                ],
+            )),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 200000,
+                    filter: Some("water"),
+                    connections: [
+                        (local_offset: (x: 0, y: 0), side: North),
+                    ],
+                ),
+                (
+                    capacity_milliunits: 200000,
+                    filter: Some("steam"),
+                    connections: [
+                        (local_offset: (x: 2, y: 0), side: North),
+                    ],
+                ),
+            ],
+        ),
+        // The turbine is a steam engine with nuclear-scale throughput; it burns
+        // the same steam a boiler makes, so it also works behind a boiler.
+        (
+            id: 62,
+            name: "steam_turbine",
+            building_category: Some(Power),
+            building_menu_order: Some(110),
+            entity_kind: SteamEngine,
+            size: (x: 3, y: 5),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(500),
+            steam_engine: Some((
+                max_power_output_watts: 5800000,
+                steam_consumption_per_second_milliunits: 60000,
+            )),
+            fluid_boxes: [
+                (
+                    capacity_milliunits: 200000,
+                    filter: Some("steam"),
+                    connections: [
+                        (local_offset: (x: 0, y: 1), side: West),
+                    ],
+                ),
+            ],
+        ),
     ],
     tiles: [
         (
@@ -2961,6 +3221,55 @@
                 UnlockRecipe("lamp"),
             ],
         ),
+        (
+            id: 37,
+            name: "uranium_processing",
+            prerequisites: ["concrete", "advanced_electronics"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+            ],
+            required_units: 200,
+            research_time_ticks: 900,
+            effects: [
+                UnlockRecipe("centrifuge"),
+                UnlockRecipe("uranium_processing"),
+            ],
+        ),
+        (
+            id: 38,
+            name: "nuclear_power",
+            prerequisites: ["uranium_processing"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+            ],
+            required_units: 800,
+            research_time_ticks: 900,
+            effects: [
+                UnlockRecipe("uranium_fuel_cell"),
+                UnlockRecipe("nuclear_reactor"),
+                UnlockRecipe("heat_pipe"),
+                UnlockRecipe("heat_exchanger"),
+                UnlockRecipe("steam_turbine"),
+            ],
+        ),
+        (
+            id: 39,
+            name: "nuclear_fuel_reprocessing",
+            prerequisites: ["nuclear_power", "production_science_pack"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+                (item: "production_science_pack", amount: 1),
+            ],
+            required_units: 50,
+            research_time_ticks: 900,
+            effects: [UnlockRecipe("nuclear_fuel_reprocessing")],
+        ),
     ],
     // Signal channels with no item or fluid identity. The three
     // wildcards are combinator operands rather than values a network can
@@ -3109,6 +3418,17 @@
                 radius: 4,
                 richness: 900,
                 starting_patch: Some((x: -26, y: 4)),
+            ),
+            // No starting patch: uranium has to be found by expanding, which is
+            // what gates nuclear power behind exploration rather than research
+            // alone.
+            (
+                item: "uranium_ore",
+                extraction: Solid,
+                selection_weight: 14,
+                radius: 6,
+                richness: 400,
+                starting_patch: None,
             ),
         ],
         // Nests appear beyond the starting area; expanding outward or letting

@@ -27,5 +27,6 @@ impl_inventory_error_conversion!(ContainerError, "container");
 impl_inventory_error_conversion!(MiningDrillError, "burner drill");
 impl_inventory_error_conversion!(FurnaceError, "furnace");
 impl_inventory_error_conversion!(BoilerError, "boiler");
+impl_inventory_error_conversion!(NuclearReactorError, "nuclear reactor");
 impl_inventory_error_conversion!(AssemblerError, "assembler");
 impl_inventory_error_conversion!(InserterError, "inserter");

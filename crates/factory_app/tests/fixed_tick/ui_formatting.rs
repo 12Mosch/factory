@@ -1,6 +1,6 @@
 use super::common::{
     all_tile_coords, complete_research_by_name, entity_id_by_name, first_buildable_rect,
-    first_resource_tile_for_app, format_item_name_for_test, item_id_by_name,
+    format_item_name_for_test, item_id_by_name, nearest_resource_tile_for_app,
     place_powered_fixture_origin, recipe_id_by_name, set_player_inventory_slot,
     technology_id_by_name,
 };
@@ -97,7 +97,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
 #[test]
 fn production_stat_formatting_shows_per_minute_and_totals() {
     let mut sim = Simulation::new_test_world(123);
-    let (x, y, resource) = first_resource_tile_for_app(&sim);
+    let (x, y, resource) = nearest_resource_tile_for_app(&sim);
     sim.move_player_by_tiles(
         x as f32 - sim.player().position_tiles().0,
         y as f32 - sim.player().position_tiles().1,

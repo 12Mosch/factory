@@ -9,6 +9,7 @@ mod construction;
 mod equipment;
 mod fluids;
 mod furnaces;
+mod heat;
 mod inserters;
 mod inventory;
 mod manual_crafting;

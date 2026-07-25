@@ -55,6 +55,11 @@ pub struct ItemPrototype {
     pub name: String,
     pub stack_size: u16,
     pub fuel_value_joules: Option<u64>,
+    /// Item left behind when one unit of this fuel is burnt. Only nuclear
+    /// reactors honour it: they refuse to start a fuel cell unless the residue
+    /// fits, which is what makes spent fuel reprocessing a closed loop. Ordinary
+    /// burners (furnaces, boilers, burner inserters) burn residue-free fuels.
+    pub burnt_result: Option<ItemId>,
     /// Present when the item can be loaded into gun turrets as ammunition.
     pub ammo: Option<AmmoPrototype>,
     /// Present when the item can be consumed to repair damaged entities.
@@ -258,6 +263,11 @@ pub struct EntityPrototype {
     pub pumpjack: Option<PumpjackPrototype>,
     pub underground_pipe: Option<UndergroundPipePrototype>,
     pub fluid_boxes: Vec<FluidBoxPrototype>,
+    /// Present on every entity that participates in a heat network.
+    pub heat_buffer: Option<HeatBufferPrototype>,
+    /// Present when the entity works off heat drawn from its own heat buffer.
+    pub heat_energy_source: Option<HeatEnergySourcePrototype>,
+    pub nuclear_reactor: Option<NuclearReactorPrototype>,
     /// Present when the entity can take damage and be destroyed.
     pub max_health: Option<u32>,
     /// Pollution emitted into the entity's chunk while it is actively
@@ -382,18 +392,82 @@ pub enum FluidBoxIo {
     Output,
 }
 
+/// One tile-edge opening on an entity's footprint: the local tile the opening
+/// sits on plus which of that tile's four edges it faces. Fluid boxes and heat
+/// buffers both join to neighbours across such edges, so they share this shape
+/// and the rotation maths that resolves it into world space.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
-pub struct FluidConnectionPrototype {
+pub struct EdgeConnectionPrototype {
     pub local_offset: IVec2,
-    pub side: FluidConnectionSide,
+    pub side: ConnectionSide,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
-pub enum FluidConnectionSide {
+pub enum ConnectionSide {
     North,
     East,
     South,
     West,
+}
+
+/// Fluid-facing names for the shared edge-connection types. Fluid prototypes and
+/// the pipe-connection preview read better with them, and they keep the fluid
+/// call sites unchanged now that heat networks share the geometry.
+pub type FluidConnectionPrototype = EdgeConnectionPrototype;
+pub type FluidConnectionSide = ConnectionSide;
+
+/// Ambient temperature every heat buffer starts and settles at, in degrees.
+/// Heat buffer energy is stored relative to this floor, so an idle network holds
+/// exactly zero joules and cannot be drained into negative temperatures.
+pub const HEAT_AMBIENT_TEMPERATURE_DEGREES: u32 = 15;
+
+/// A thermal mass that joins its neighbours into a heat network.
+///
+/// `specific_heat_joules_per_degree` is how much energy raises this buffer by
+/// one degree; together with `max_temperature_degrees` it fixes the buffer's
+/// energy capacity above [`HEAT_AMBIENT_TEMPERATURE_DEGREES`]. Heat networks
+/// settle to a common temperature, so a buffer's specific heat is also its
+/// share of the network's stored energy.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct HeatBufferPrototype {
+    pub specific_heat_joules_per_degree: u64,
+    pub max_temperature_degrees: u32,
+    pub connections: Vec<EdgeConnectionPrototype>,
+}
+
+impl HeatBufferPrototype {
+    /// Energy the buffer holds at `max_temperature_degrees`, measured above
+    /// ambient. This is the capacity the network solve fills.
+    pub fn capacity_joules(&self) -> u64 {
+        let degrees_above_ambient = self
+            .max_temperature_degrees
+            .saturating_sub(HEAT_AMBIENT_TEMPERATURE_DEGREES);
+        self.specific_heat_joules_per_degree
+            .saturating_mul(u64::from(degrees_above_ambient))
+    }
+}
+
+/// Energy source that draws from the entity's own heat buffer, the heat
+/// counterpart of [`ElectricEnergySourcePrototype`] and [`BurnerPrototype`].
+/// The entity only works once its buffer reaches
+/// `min_working_temperature_degrees`, which is what makes a cold heat network
+/// warm up before it delivers power.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct HeatEnergySourcePrototype {
+    pub energy_usage_watts: u64,
+    pub min_working_temperature_degrees: u32,
+}
+
+/// Burns fuel cells into its own heat buffer instead of into electricity, and
+/// leaves the fuel's [`ItemPrototype::burnt_result`] in an output slot.
+///
+/// `neighbour_bonus_permyriad` is the extra output each reactor sharing a
+/// footprint edge contributes, so a row of reactors is worth more than the same
+/// reactors spread out.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct NuclearReactorPrototype {
+    pub heat_output_watts: u64,
+    pub neighbour_bonus_permyriad: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -593,6 +667,7 @@ pub enum CraftingCategory {
     Crafting,
     OilProcessing,
     Chemistry,
+    Centrifuging,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -626,6 +701,13 @@ pub enum EntityKind {
     ConstantCombinator,
     ArithmeticCombinator,
     DeciderCombinator,
+    /// Burns fuel cells into its heat buffer; see [`NuclearReactorPrototype`].
+    NuclearReactor,
+    /// Passive thermal mass that only carries heat between its neighbours.
+    HeatPipe,
+    /// Boils water into steam using heat instead of burnt fuel, so it reuses
+    /// [`BoilerPrototype`] with a [`HeatEnergySourcePrototype`].
+    HeatExchanger,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

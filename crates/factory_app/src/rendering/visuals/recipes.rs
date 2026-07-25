@@ -32,8 +32,9 @@ pub(super) fn visual_layers(
 fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
     let mut builder = VisualLayerBuilder::new(style.size);
 
-    // Pipes paint their own silhouette so arms only appear toward connected neighbors.
-    if style.kind == EntityKind::Pipe {
+    // Pipes and heat pipes paint their own silhouette so arms only appear toward
+    // connected neighbors.
+    if matches!(style.kind, EntityKind::Pipe | EntityKind::HeatPipe) {
         pipe_layers(&mut builder, style);
         return builder.finish();
     }
@@ -57,7 +58,9 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::OffshorePump => offshore_pump_layers(&mut builder, style),
         EntityKind::Pump => offshore_pump_layers(&mut builder, style),
         EntityKind::Pumpjack => pumpjack_layers(&mut builder, style),
-        EntityKind::Pipe => {}
+        EntityKind::Pipe | EntityKind::HeatPipe => {}
+        EntityKind::NuclearReactor => nuclear_reactor_layers(&mut builder, style),
+        EntityKind::HeatExchanger => heat_exchanger_layers(&mut builder, style),
         EntityKind::StorageTank => storage_tank_layers(&mut builder, style),
         EntityKind::Wall => wall_layers(&mut builder, style),
         EntityKind::GunTurret => gun_turret_layers(&mut builder, style),
@@ -395,6 +398,58 @@ fn boiler_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
             Color::srgba(0.20, 0.22, 0.22, 0.70),
             0.45,
         );
+}
+
+/// A containment ring around a glowing core, so a reactor reads as the heat source
+/// at the center of a network rather than as another boiler.
+fn nuclear_reactor_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+    builder
+        .scaled_rounded(
+            Vec2::splat(0.86),
+            Vec2::ZERO,
+            0.02,
+            Color::srgba(0.16, 0.14, 0.15, 0.78),
+            0.14,
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.58),
+            Vec2::ZERO,
+            0.08,
+            Color::srgba(0.30, 0.22, 0.20, 0.86),
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.40),
+            Vec2::ZERO,
+            0.10,
+            Color::srgba(0.98, 0.62, 0.24, 0.80),
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.20),
+            Vec2::ZERO,
+            0.12,
+            Color::srgba(1.0, 0.92, 0.66, 0.92),
+        );
+}
+
+/// Heat in on one side, steam out the other: a hot inlet manifold beside a bank of
+/// cool boiling tubes.
+fn heat_exchanger_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+    builder.scaled_rounded(
+        Vec2::new(0.26, 0.72),
+        Vec2::new(-0.30, 0.0),
+        0.09,
+        Color::srgba(0.96, 0.52, 0.20, 0.72),
+        0.35,
+    );
+    for offset in [-0.02, 0.16, 0.34] {
+        builder.scaled_rounded(
+            Vec2::new(0.16, 0.66),
+            Vec2::new(offset, 0.0),
+            0.11,
+            Color::srgba(0.74, 0.84, 0.88, 0.74),
+            0.40,
+        );
+    }
 }
 
 fn solar_panel_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {

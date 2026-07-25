@@ -51,7 +51,61 @@ pub(in crate::simulation) fn reservation_for_prototype(
         arithmetic_combinators: arithmetic_combinator_state_for_prototype(prototype),
         decider_combinators: decider_combinator_state_for_prototype(prototype),
         lamps: lamp_state_for_prototype(prototype),
+        heat_buffers: heat_buffer_state_for_prototype(prototype),
+        nuclear_reactors: nuclear_reactor_state_for_prototype(prototype),
+        heat_pipes: heat_pipe_state_for_prototype(prototype),
+        heat_exchangers: heat_exchanger_state_for_prototype(prototype),
     }
+}
+
+/// Every heat network participant starts at ambient temperature, which is zero
+/// stored energy.
+fn heat_buffer_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<HeatBufferState> {
+    prototype
+        .heat_buffer
+        .is_some()
+        .then_some(HeatBufferState::default())
+}
+
+fn nuclear_reactor_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<NuclearReactorState> {
+    if prototype.entity_kind != EntityKind::NuclearReactor {
+        return None;
+    }
+
+    let reactor = prototype.nuclear_reactor?;
+    prototype.heat_buffer.as_ref()?;
+
+    Some(NuclearReactorState {
+        // A reactor's "energy usage" is the rate it turns fuel into heat, which
+        // is the base output before any neighbour bonus.
+        energy: BurnerEnergy {
+            fuel_slot: ItemSlot::default(),
+            energy_remaining_joules: 0.0,
+            energy_usage_watts: reactor.heat_output_watts as f64,
+        },
+        output_slot: ItemSlot::default(),
+    })
+}
+
+fn heat_pipe_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<HeatPipeState> {
+    (prototype.entity_kind == EntityKind::HeatPipe && prototype.heat_buffer.is_some())
+        .then_some(HeatPipeState)
+}
+
+fn heat_exchanger_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<HeatExchangerState> {
+    (prototype.entity_kind == EntityKind::HeatExchanger
+        && prototype.heat_buffer.is_some()
+        && prototype.heat_energy_source.is_some()
+        && prototype.boiler.is_some())
+    .then_some(HeatExchangerState)
 }
 
 fn constant_combinator_state_for_prototype(

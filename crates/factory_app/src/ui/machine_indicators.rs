@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use factory_sim::{
     BOILER_FUEL_SLOT_INDEX, FURNACE_FUEL_SLOT_INDEX, FURNACE_INPUT_SLOT_INDEX,
     FURNACE_OUTPUT_SLOT_INDEX, INSERTER_FUEL_SLOT_INDEX, MINING_DRILL_FUEL_SLOT_INDEX,
-    MINING_DRILL_OUTPUT_SLOT_INDEX, MachineStatus,
+    MINING_DRILL_OUTPUT_SLOT_INDEX, MachineStatus, NUCLEAR_REACTOR_FUEL_SLOT_INDEX,
+    NUCLEAR_REACTOR_OUTPUT_SLOT_INDEX,
 };
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
@@ -16,6 +17,11 @@ pub(crate) struct BurnerEnergyText;
 
 #[derive(Component)]
 pub(crate) struct MachineProgressFill;
+
+/// Heat-buffer temperature readout. A heat network's whole behaviour hangs on
+/// temperature, so reactors, pipes, and exchangers all show theirs.
+#[derive(Component)]
+pub(crate) struct HeatTemperatureText;
 
 #[derive(Component)]
 pub(crate) struct MachineGuidanceText;
@@ -49,6 +55,9 @@ pub(crate) fn format_machine_guidance(status: MachineStatus) -> &'static str {
         MachineStatus::NoPower => "No power — connect the machine to a powered electric network.",
         MachineStatus::NoInput => "Missing input — add the required ingredients or resources.",
         MachineStatus::NoFluid => "Missing fluid — connect a pipe carrying the required fluid.",
+        MachineStatus::NoHeat => {
+            "Too cold — the heat network needs more reactor output or time to warm up."
+        }
         MachineStatus::OutputFull => {
             "Output blocked — clear the output or connect space for products."
         }
@@ -65,6 +74,7 @@ fn machine_guidance_color(status: MachineStatus) -> Color {
         MachineStatus::NoPower => Color::srgb(1.0, 0.52, 0.30),
         MachineStatus::NoInput => Color::srgb(1.0, 0.72, 0.30),
         MachineStatus::NoFluid => Color::srgb(1.0, 0.72, 0.30),
+        MachineStatus::NoHeat => Color::srgb(1.0, 0.72, 0.30),
         MachineStatus::OutputFull => Color::srgb(1.0, 0.72, 0.30),
     }
 }
@@ -306,6 +316,96 @@ pub(crate) fn spawn_boiler_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCo
     });
 }
 
+pub(crate) fn spawn_nuclear_reactor_panel(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
+) {
+    let title = machine_panel_title(sim, entity_id, "Nuclear Reactor");
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(220.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new(title),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        spawn_heat_temperature_text(panel);
+        panel.spawn((
+            Text::new("Energy: 0 J"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            BurnerEnergyText,
+        ));
+        panel
+            .spawn((
+                Node {
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|slots| {
+                spawn_labeled_slot(
+                    slots,
+                    "Fuel",
+                    InventoryPanel::NuclearReactorFuel,
+                    NUCLEAR_REACTOR_FUEL_SLOT_INDEX,
+                );
+                spawn_labeled_slot(
+                    slots,
+                    "Spent",
+                    InventoryPanel::NuclearReactorOutput,
+                    NUCLEAR_REACTOR_OUTPUT_SLOT_INDEX,
+                );
+            });
+    });
+}
+
+/// Panel for heat entities with nothing to configure (heat pipes, heat
+/// exchangers). The temperature alone is what a player needs to diagnose why a
+/// heat network is not making steam.
+pub(crate) fn spawn_heat_buffer_panel(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
+) {
+    let title = machine_panel_title(sim, entity_id, "Heat Buffer");
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(220.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new(title),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        spawn_heat_temperature_text(panel);
+    });
+}
+
+fn spawn_heat_temperature_text(panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+    panel.spawn((
+        Text::new("Temperature: -"),
+        TextFont::from_font_size(12.0),
+        TextColor(Color::srgb(0.96, 0.78, 0.62)),
+        HeatTemperatureText,
+    ));
+}
+
 pub(crate) fn spawn_inserter_panel(root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
     root.spawn((
         Node {
@@ -341,6 +441,7 @@ pub(crate) fn update_machine_indicators(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
+    mut temperature_texts: Query<&mut Text, (With<HeatTemperatureText>, Without<BurnerEnergyText>)>,
     mut progress_fills: Query<&mut Node, With<MachineProgressFill>>,
 ) {
     let sim = sim.read();
@@ -393,8 +494,14 @@ pub(crate) fn update_machine_indicators(
                         1,
                     ))
                 }
+                OpenMachineKind::NuclearReactor => {
+                    let state =
+                        factory_sim::entity_access::nuclear_reactor_state(&sim, entity_id).ok()?;
+                    Some((Some(state.energy.energy_remaining_joules), 0, 1))
+                }
                 // No burner energy and no crafting progress to report.
-                OpenMachineKind::Chest
+                OpenMachineKind::HeatBuffer
+                | OpenMachineKind::Chest
                 | OpenMachineKind::Lab
                 | OpenMachineKind::Turret
                 | OpenMachineKind::Beacon
@@ -414,6 +521,19 @@ pub(crate) fn update_machine_indicators(
                 )
             })
             .unwrap_or_else(|| "Energy: 0 J".to_string());
+    }
+
+    let heat_status = open_container
+        .entity_id
+        .and_then(|entity_id| sim.entity_heat_status(entity_id));
+    for mut text in &mut temperature_texts {
+        text.0 = match heat_status {
+            Some(status) => format!(
+                "Temperature: {:.1} °C",
+                status.temperature_millidegrees as f64 / 1_000.0
+            ),
+            None => "Temperature: -".to_string(),
+        };
     }
 
     for mut node in &mut progress_fills {

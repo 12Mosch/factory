@@ -2,10 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::ids::EntityId;
 use crate::simulation::disjoint_set::DisjointSet;
+use crate::simulation::edge_geometry::EdgeEndpoint;
 
-use super::types::{
-    FluidBoxKey, FluidBoxNode, FluidEndpoint, FluidNetworkBoxTopology, FluidNetworkTopology,
-};
+use super::types::{FluidBoxKey, FluidBoxNode, FluidNetworkBoxTopology, FluidNetworkTopology};
 
 pub(super) fn build_fluid_network_topology_from_nodes(
     nodes: &[FluidBoxNode],
@@ -15,7 +14,7 @@ pub(super) fn build_fluid_network_topology_from_nodes(
     }
 
     let mut disjoint_set = DisjointSet::new(nodes.len());
-    let mut endpoint_boxes = BTreeMap::<FluidEndpoint, Vec<usize>>::new();
+    let mut endpoint_boxes = BTreeMap::<EdgeEndpoint, Vec<usize>>::new();
     let mut underground_boxes = BTreeMap::<(EntityId, EntityId), Vec<usize>>::new();
     for (index, node) in nodes.iter().enumerate() {
         for endpoint in &node.endpoints {

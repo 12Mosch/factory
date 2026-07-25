@@ -80,6 +80,11 @@ pub(in crate::simulation) fn peek_inserter_source_item(
         return furnace.output_slot.stack().map(|stack| stack.item_id());
     }
 
+    // Only spent fuel cells leave a reactor; the fuel slot is an input.
+    if let Some(reactor) = entities.nuclear_reactors.get(&entity_id) {
+        return reactor.output_slot.stack().map(|stack| stack.item_id());
+    }
+
     if let Some(assembler) = entities.assembling_machines.get(&entity_id) {
         return assembler
             .output_inventory
@@ -184,6 +189,18 @@ pub(in crate::simulation) fn inserter_target_can_accept(
         );
     }
 
+    if let Some(reactor) = entities.nuclear_reactors.get(&entity_id) {
+        return item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            reactor.energy.fuel_slot,
+            item,
+        );
+    }
+
     if let Some(fuel_slot) = entities
         .inserter_energy
         .get(&entity_id)
@@ -275,6 +292,20 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
             return None;
         }
         furnace.output_slot.remove(item_id, 1).ok()?;
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
+    }
+
+    if let Some(reactor) = entities.nuclear_reactors.get_mut(&entity_id) {
+        if !item_slot_policy_allows_operation(
+            ItemSlotPolicy::OutputOnly,
+            ItemSlotOperation::InserterExtract,
+        ) {
+            return None;
+        }
+        reactor.output_slot.remove(item_id, 1).ok()?;
         return Some(
             ItemStack::new(catalog, item_id, 1)
                 .expect("a removed inserter source item should form a valid stack"),
@@ -472,6 +503,30 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         }
 
         return false;
+    }
+
+    if let Some(reactor) = entities.nuclear_reactors.get(&entity_id) {
+        let fuel_accepts = item_slot_can_accept(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::Fuel,
+            ItemSlotOperation::InserterInsert,
+            reactor.energy.fuel_slot,
+            item,
+        );
+        if !fuel_accepts {
+            return false;
+        }
+        entities
+            .nuclear_reactors
+            .get_mut(&entity_id)
+            .expect("reactor presence was checked above")
+            .energy
+            .fuel_slot
+            .insert_stack(catalog, item)
+            .expect("the checked reactor fuel slot should accept the item");
+        return true;
     }
 
     if let Some(fuel_slot) = entities

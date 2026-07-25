@@ -5,6 +5,7 @@ mod construction;
 mod crafting;
 mod entities;
 mod fluids;
+mod heat;
 mod ids;
 pub(in crate::simulation) mod inventory;
 pub(in crate::simulation) mod machines;
@@ -18,6 +19,7 @@ use self::entities::{
     validate_enemies, validate_entity_occupancy, validate_entity_state_ownership_and_kind,
 };
 use self::fluids::{validate_fluid_box_states, validate_fluid_network_snapshots};
+use self::heat::{validate_heat_buffer_states, validate_heat_network_snapshots};
 use self::inventory::validate_inventory;
 use self::research::validate_research_state;
 use self::world::{
@@ -40,6 +42,8 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_construction_state(sim)?;
     validate_fluid_box_states(sim)?;
     validate_fluid_network_snapshots(sim)?;
+    validate_heat_buffer_states(sim)?;
+    validate_heat_network_snapshots(sim)?;
 
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
     if !sim.player.health.is_valid()

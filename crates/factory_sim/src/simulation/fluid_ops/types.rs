@@ -1,3 +1,4 @@
+use crate::simulation::edge_geometry::EdgeEndpoint;
 use crate::simulation::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -11,7 +12,7 @@ pub(super) struct FluidBoxNode {
     pub(super) key: FluidBoxKey,
     pub(super) capacity_milliunits: u64,
     pub(super) filter: Option<FluidId>,
-    pub(super) endpoints: Vec<FluidEndpoint>,
+    pub(super) endpoints: Vec<EdgeEndpoint>,
     pub(super) underground_pairs: Vec<(EntityId, EntityId)>,
 }
 
@@ -41,17 +42,4 @@ pub(in crate::simulation) struct FluidBoxAssignment {
     pub(in crate::simulation) key: FluidBoxKey,
     pub(in crate::simulation) capacity_milliunits: u64,
     pub(in crate::simulation) amount_milliunits: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) struct FluidEndpoint {
-    pub(super) x: WorldTileCoord,
-    pub(super) y: WorldTileCoord,
-    pub(super) axis: FluidEndpointAxis,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) enum FluidEndpointAxis {
-    Horizontal,
-    Vertical,
 }

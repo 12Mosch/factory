@@ -28,5 +28,9 @@ pub enum MachineStatus {
     NoPower,
     NoInput,
     NoFluid,
+    /// A heat consumer whose buffer has not reached its minimum working
+    /// temperature. Distinct from `NoFuel`: the network needs more reactor
+    /// output or time to warm up, not fuel in this machine.
+    NoHeat,
     OutputFull,
 }

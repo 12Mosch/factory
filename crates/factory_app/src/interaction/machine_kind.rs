@@ -12,6 +12,11 @@ pub(crate) enum OpenMachineKind {
     Turret,
     Inserter,
     Beacon,
+    NuclearReactor,
+    /// A heat network entity with nothing to configure (heat pipe, heat
+    /// exchanger). Opening it shows its temperature, which is what explains a
+    /// heat network that is not yet making steam.
+    HeatBuffer,
     ConstantCombinator,
     ArithmeticCombinator,
     DeciderCombinator,
@@ -31,6 +36,8 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
         EntityKind::AssemblingMachine => Some(OpenMachineKind::Assembler),
         EntityKind::Lab => Some(OpenMachineKind::Lab),
         EntityKind::Beacon => Some(OpenMachineKind::Beacon),
+        EntityKind::NuclearReactor => Some(OpenMachineKind::NuclearReactor),
+        EntityKind::HeatPipe | EntityKind::HeatExchanger => Some(OpenMachineKind::HeatBuffer),
         EntityKind::GunTurret => Some(OpenMachineKind::Turret),
         EntityKind::ConstantCombinator => Some(OpenMachineKind::ConstantCombinator),
         EntityKind::ArithmeticCombinator => Some(OpenMachineKind::ArithmeticCombinator),

@@ -5,12 +5,13 @@ use glam::IVec2;
 use crate::error::PrototypeLoadError;
 use crate::ids::{EntityPrototypeId, FluidId, ItemId};
 use crate::model::{
-    ElectricPolePrototype, EnemySpawnerPrototype, EntityPrototype, FluidBoxPrototype,
-    FluidConnectionPrototype, FluidConnectionSide, InserterPrototype, MiningDrillPrototype,
-    PumpjackPrototype,
+    ConnectionSide, EdgeConnectionPrototype, ElectricPolePrototype, EnemySpawnerPrototype,
+    EntityPrototype, FluidBoxPrototype, HeatBufferPrototype, InserterPrototype,
+    MiningDrillPrototype, PumpjackPrototype,
 };
 use crate::raw::{
-    RawEntityPrototype, RawFluidBoxPrototype, RawFluidConnectionPrototype, RawPumpjackPrototype,
+    RawEdgeConnectionPrototype, RawEntityPrototype, RawFluidBoxPrototype, RawHeatBufferPrototype,
+    RawPumpjackPrototype,
 };
 use crate::validation::resolve_collision_mask;
 
@@ -57,6 +58,18 @@ pub(super) fn load_entities(
             }
             let fluid_boxes =
                 resolve_fluid_boxes(&name, size, entity.fluid_boxes, fluid_ids_by_name)?;
+            let heat_buffer = resolve_heat_buffer(&name, size, entity.heat_buffer)?;
+            validate_heat_metadata(
+                &name,
+                entity.entity_kind,
+                heat_buffer.as_ref(),
+                entity.heat_energy_source.as_ref(),
+                entity.nuclear_reactor.as_ref(),
+                entity.boiler.as_ref(),
+                entity.burner.is_some(),
+                entity.electric_energy_source.is_some(),
+                entity.inventory_slot_count,
+            )?;
             let pumpjack =
                 resolve_pumpjack(&name, entity.pumpjack, item_ids_by_name, fluid_ids_by_name)?;
             validate_machine_energy_source(
@@ -126,6 +139,9 @@ pub(super) fn load_entities(
                 pumpjack,
                 underground_pipe: entity.underground_pipe,
                 fluid_boxes,
+                heat_buffer,
+                heat_energy_source: entity.heat_energy_source,
+                nuclear_reactor: entity.nuclear_reactor,
                 max_health: entity.max_health,
                 pollution_per_minute_milli: entity.pollution_per_minute_milli,
                 gun_turret: entity.gun_turret,
@@ -363,6 +379,8 @@ fn validate_solar_and_storage_metadata(
         && entity.burner.is_none()
         && entity.steam_engine.is_none()
         && entity.boiler.is_none()
+        && entity.heat_buffer.is_none()
+        && entity.heat_energy_source.is_none()
         && entity.fluid_boxes.is_empty();
 
     match entity.entity_kind {
@@ -548,27 +566,14 @@ fn resolve_fluid_boxes(
                     })
                 })
                 .transpose()?;
-            let connections = fluid_box
-                .connections
-                .into_iter()
-                .enumerate()
-                .map(|(connection_index, connection)| {
-                    validate_fluid_connection_geometry(
-                        entity_name,
+            let connections =
+                resolve_edge_connections(fluid_box.connections, entity_size, |index| {
+                    PrototypeLoadError::InvalidFluidConnection {
+                        entity: entity_name.to_string(),
                         box_index,
-                        connection_index,
-                        entity_size,
-                        &connection,
-                    )?;
-                    Ok(FluidConnectionPrototype {
-                        local_offset: IVec2::new(
-                            connection.local_offset.x,
-                            connection.local_offset.y,
-                        ),
-                        side: connection.side,
-                    })
-                })
-                .collect::<Result<_, PrototypeLoadError>>()?;
+                        connection_index: index,
+                    }
+                })?;
 
             Ok(FluidBoxPrototype {
                 capacity_milliunits: fluid_box.capacity_milliunits,
@@ -578,6 +583,167 @@ fn resolve_fluid_boxes(
             })
         })
         .collect()
+}
+
+fn resolve_heat_buffer(
+    entity_name: &str,
+    entity_size: IVec2,
+    heat_buffer: Option<RawHeatBufferPrototype>,
+) -> Result<Option<HeatBufferPrototype>, PrototypeLoadError> {
+    let Some(heat_buffer) = heat_buffer else {
+        return Ok(None);
+    };
+
+    let invalid = |detail| PrototypeLoadError::InvalidHeatMetadata {
+        entity: entity_name.to_string(),
+        detail,
+    };
+    if heat_buffer.specific_heat_joules_per_degree == 0 {
+        return Err(invalid("heat buffer specific heat must be positive"));
+    }
+    if heat_buffer.max_temperature_degrees <= crate::model::HEAT_AMBIENT_TEMPERATURE_DEGREES {
+        return Err(invalid(
+            "heat buffer maximum temperature must exceed the ambient temperature",
+        ));
+    }
+    if heat_buffer.connections.is_empty() {
+        return Err(invalid("heat buffers require at least one connection"));
+    }
+
+    let connections = resolve_edge_connections(heat_buffer.connections, entity_size, |index| {
+        PrototypeLoadError::InvalidHeatConnection {
+            entity: entity_name.to_string(),
+            connection_index: index,
+        }
+    })?;
+
+    Ok(Some(HeatBufferPrototype {
+        specific_heat_joules_per_degree: heat_buffer.specific_heat_joules_per_degree,
+        max_temperature_degrees: heat_buffer.max_temperature_degrees,
+        connections,
+    }))
+}
+
+/// Resolves tile-edge openings shared by fluid boxes and heat buffers, checking
+/// that every opening sits on the footprint edge it claims to face.
+fn resolve_edge_connections(
+    connections: Vec<RawEdgeConnectionPrototype>,
+    entity_size: IVec2,
+    invalid_connection: impl Fn(usize) -> PrototypeLoadError,
+) -> Result<Vec<EdgeConnectionPrototype>, PrototypeLoadError> {
+    connections
+        .into_iter()
+        .enumerate()
+        .map(|(connection_index, connection)| {
+            if !edge_connection_is_on_footprint_edge(entity_size, &connection) {
+                return Err(invalid_connection(connection_index));
+            }
+            Ok(EdgeConnectionPrototype {
+                local_offset: IVec2::new(connection.local_offset.x, connection.local_offset.y),
+                side: connection.side,
+            })
+        })
+        .collect()
+}
+
+/// Heat metadata is only coherent when the kind, the buffer, and the energy
+/// source agree: reactors produce into a buffer, heat exchangers consume from
+/// one, heat pipes only carry heat, and no other kind touches heat at all.
+#[allow(clippy::too_many_arguments)]
+fn validate_heat_metadata(
+    name: &str,
+    entity_kind: crate::model::EntityKind,
+    heat_buffer: Option<&HeatBufferPrototype>,
+    heat_energy_source: Option<&crate::model::HeatEnergySourcePrototype>,
+    nuclear_reactor: Option<&crate::model::NuclearReactorPrototype>,
+    boiler: Option<&crate::model::BoilerPrototype>,
+    has_burner: bool,
+    has_electric: bool,
+    inventory_slot_count: Option<usize>,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidHeatMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    match entity_kind {
+        EntityKind::NuclearReactor => {
+            let Some(reactor) = nuclear_reactor else {
+                return invalid("nuclear reactors require nuclear_reactor metadata");
+            };
+            if heat_buffer.is_none() {
+                return invalid("nuclear reactors require a heat buffer to produce into");
+            }
+            if reactor.heat_output_watts == 0 {
+                return invalid("nuclear reactor heat output must be positive");
+            }
+            if has_burner || has_electric || heat_energy_source.is_some() {
+                return invalid(
+                    "nuclear reactors consume fuel cells directly and declare no other energy source",
+                );
+            }
+            if inventory_slot_count.is_some() {
+                return invalid(
+                    "nuclear reactors use their own fuel and spent-fuel slots, not an inventory",
+                );
+            }
+        }
+        EntityKind::HeatPipe => {
+            if heat_buffer.is_none() {
+                return invalid("heat pipes require a heat buffer");
+            }
+            if heat_energy_source.is_some() || has_burner || has_electric || boiler.is_some() {
+                return invalid("heat pipes only carry heat and consume no energy");
+            }
+            if nuclear_reactor.is_some() {
+                return invalid("heat pipes carry heat but never produce it");
+            }
+        }
+        EntityKind::HeatExchanger => {
+            let Some(heat_energy_source) = heat_energy_source else {
+                return invalid("heat exchangers require a heat energy source");
+            };
+            let Some(heat_buffer) = heat_buffer else {
+                return invalid("heat exchangers require a heat buffer to draw from");
+            };
+            if boiler.is_none() {
+                return invalid("heat exchangers require boiler water and steam rates");
+            }
+            if has_burner || has_electric {
+                return invalid("heat exchangers run on heat alone");
+            }
+            if nuclear_reactor.is_some() {
+                return invalid("heat exchangers consume heat but never produce it");
+            }
+            if heat_energy_source.energy_usage_watts == 0 {
+                return invalid("heat exchanger energy usage must be positive");
+            }
+            if heat_energy_source.min_working_temperature_degrees
+                > heat_buffer.max_temperature_degrees
+            {
+                return invalid(
+                    "heat exchanger minimum working temperature exceeds its buffer maximum",
+                );
+            }
+        }
+        _ => {
+            if heat_buffer.is_some() {
+                return invalid("heat buffers are only valid on heat network entities");
+            }
+            if heat_energy_source.is_some() {
+                return invalid("heat energy sources are only valid on heat network entities");
+            }
+            if nuclear_reactor.is_some() {
+                return invalid("nuclear_reactor metadata is only valid on nuclear reactors");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn resolve_pumpjack(
@@ -610,32 +776,23 @@ fn resolve_pumpjack(
     }))
 }
 
-fn validate_fluid_connection_geometry(
-    entity_name: &str,
-    box_index: usize,
-    connection_index: usize,
+/// Whether an opening sits inside the footprint and on the very edge it faces,
+/// so it can only ever join a neighbour across that edge.
+fn edge_connection_is_on_footprint_edge(
     entity_size: IVec2,
-    connection: &RawFluidConnectionPrototype,
-) -> Result<(), PrototypeLoadError> {
+    connection: &RawEdgeConnectionPrototype,
+) -> bool {
     let x = connection.local_offset.x;
     let y = connection.local_offset.y;
     let on_entity = x >= 0 && y >= 0 && x < entity_size.x && y < entity_size.y;
     let on_side = match connection.side {
-        FluidConnectionSide::North => y == 0,
-        FluidConnectionSide::East => x == entity_size.x - 1,
-        FluidConnectionSide::South => y == entity_size.y - 1,
-        FluidConnectionSide::West => x == 0,
+        ConnectionSide::North => y == 0,
+        ConnectionSide::East => x == entity_size.x - 1,
+        ConnectionSide::South => y == entity_size.y - 1,
+        ConnectionSide::West => x == 0,
     };
 
-    if on_entity && on_side {
-        Ok(())
-    } else {
-        Err(PrototypeLoadError::InvalidFluidConnection {
-            entity: entity_name.to_string(),
-            box_index,
-            connection_index,
-        })
-    }
+    on_entity && on_side
 }
 
 fn validate_machine_fluid_roles(
@@ -658,14 +815,18 @@ fn validate_machine_fluid_roles(
         crate::model::EntityKind::OffshorePump => {
             require_fluid_box_filters(entity_name, fluid_boxes, &[Some(required_fluid("water")?)])
         }
-        crate::model::EntityKind::Boiler => require_fluid_box_filters(
-            entity_name,
-            fluid_boxes,
-            &[
-                Some(required_fluid("water")?),
-                Some(required_fluid("steam")?),
-            ],
-        ),
+        // Heat exchangers are boilers with a heat energy source, so they carry
+        // the same water-in / steam-out box layout.
+        crate::model::EntityKind::Boiler | crate::model::EntityKind::HeatExchanger => {
+            require_fluid_box_filters(
+                entity_name,
+                fluid_boxes,
+                &[
+                    Some(required_fluid("water")?),
+                    Some(required_fluid("steam")?),
+                ],
+            )
+        }
         crate::model::EntityKind::SteamEngine => {
             require_fluid_box_filters(entity_name, fluid_boxes, &[Some(required_fluid("steam")?)])
         }
