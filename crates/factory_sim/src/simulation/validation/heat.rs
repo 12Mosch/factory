@@ -104,8 +104,16 @@ pub(super) fn validate_heat_network_snapshots(sim: &Simulation) -> Result<(), Si
         }
     }
 
-    if networked_buffers != expected_buffers {
-        return Err(SimValidationError::InvalidHeatNetwork { network_id: 0 });
+    // A buffer that no network claims (or that a network claims twice over) is a
+    // property of that buffer, not of any one network, so report the buffer
+    // itself: naming a network id here could only ever be a guess.
+    if let Some(entity_id) = expected_buffers
+        .symmetric_difference(&networked_buffers)
+        .next()
+    {
+        return Err(SimValidationError::InvalidHeatBufferState {
+            entity_id: *entity_id,
+        });
     }
 
     Ok(())

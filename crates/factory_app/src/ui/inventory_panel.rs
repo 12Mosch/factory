@@ -297,7 +297,9 @@ fn nuclear_reactor_error_message(catalog: &PrototypeCatalog, error: NuclearReact
         NuclearReactorError::MissingEntity(_) | NuclearReactorError::NotNuclearReactor(_) => {
             "Machine unavailable".to_string()
         }
-        NuclearReactorError::InvalidFuel(item_id) => wrong_item_message(catalog, item_id),
+        NuclearReactorError::InvalidFuel(item_id) | NuclearReactorError::InvalidOutput(item_id) => {
+            wrong_item_message(catalog, item_id)
+        }
         NuclearReactorError::InvalidSlot { .. } => "Invalid slot".to_string(),
         NuclearReactorError::EmptySlot { .. } => "Empty slot".to_string(),
         NuclearReactorError::InsufficientSpace => "No space".to_string(),

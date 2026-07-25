@@ -1014,7 +1014,7 @@ pub fn nuclear_reactor_output_to_player(
             )
         },
     )
-    .map_err(|error| map_plan_error(error, NuclearReactorError::InvalidFuel))?;
+    .map_err(|error| map_plan_error(error, NuclearReactorError::InvalidOutput))?;
 
     let output_slot = &mut sim
         .entities

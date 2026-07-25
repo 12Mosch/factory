@@ -125,8 +125,16 @@ pub enum NuclearReactorError {
     MissingEntity(EntityId),
     NotNuclearReactor(EntityId),
     InvalidFuel(crate::prototypes::ItemId),
-    InvalidSlot { slot_index: usize },
-    EmptySlot { slot_index: usize },
+    /// An item in the spent-fuel output slot was refused. Kept separate from
+    /// [`Self::InvalidFuel`] so a rejection always names the slot it came from
+    /// rather than describing a spent cell as invalid fuel.
+    InvalidOutput(crate::prototypes::ItemId),
+    InvalidSlot {
+        slot_index: usize,
+    },
+    EmptySlot {
+        slot_index: usize,
+    },
     InsufficientSpace,
     UnknownItem,
 }
