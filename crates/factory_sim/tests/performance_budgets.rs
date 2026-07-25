@@ -176,11 +176,12 @@ fn large_headless_belt_spike_diagnostics() {
     println!("worst total ticks:");
     for (tick_index, profile, allocations) in worst.iter().take(8) {
         println!(
-            "  tick {tick_index}: total {:.3} ms, belts {:.3} ms, machines {:.3} ms, fluids {:.3} ms, power {:.3} ms, radars {:.3} ms, enemies {:.3} ms, allocations {} bytes / {} allocs",
+            "  tick {tick_index}: total {:.3} ms, belts {:.3} ms, machines {:.3} ms, fluids {:.3} ms, heat {:.3} ms, power {:.3} ms, radars {:.3} ms, enemies {:.3} ms, allocations {} bytes / {} allocs",
             ms(profile.total),
             ms(profile.belts),
             ms(profile.machines),
             ms(profile.fluids),
+            ms(profile.heat),
             ms(profile.power),
             ms(profile.radars),
             ms(profile.enemies),
@@ -919,6 +920,7 @@ fn average_profile(samples: &[TickSample]) -> SimulationTickProfile {
         entity_motion: average_duration(samples, len, |profile| profile.entity_motion),
         belts: average_duration(samples, len, |profile| profile.belts),
         fluids: average_duration(samples, len, |profile| profile.fluids),
+        heat: average_duration(samples, len, |profile| profile.heat),
         circuits: average_duration(samples, len, |profile| profile.circuits),
         lamps: average_duration(samples, len, |profile| profile.lamps),
         power: average_duration(samples, len, |profile| profile.power),
@@ -940,6 +942,7 @@ fn percentile_profile(samples: &[TickSample], index: usize) -> SimulationTickPro
         entity_motion: percentile_duration(samples, index, |profile| profile.entity_motion),
         belts: percentile_duration(samples, index, |profile| profile.belts),
         fluids: percentile_duration(samples, index, |profile| profile.fluids),
+        heat: percentile_duration(samples, index, |profile| profile.heat),
         circuits: percentile_duration(samples, index, |profile| profile.circuits),
         lamps: percentile_duration(samples, index, |profile| profile.lamps),
         power: percentile_duration(samples, index, |profile| profile.power),
@@ -963,6 +966,7 @@ fn max_profile(samples: &[TickSample]) -> SimulationTickProfile {
         entity_motion: max_duration(samples, |profile| profile.entity_motion),
         belts: max_duration(samples, |profile| profile.belts),
         fluids: max_duration(samples, |profile| profile.fluids),
+        heat: max_duration(samples, |profile| profile.heat),
         circuits: max_duration(samples, |profile| profile.circuits),
         lamps: max_duration(samples, |profile| profile.lamps),
         power: max_duration(samples, |profile| profile.power),

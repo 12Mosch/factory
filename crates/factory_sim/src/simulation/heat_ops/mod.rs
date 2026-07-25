@@ -1,34 +1,27 @@
 mod equalization;
 mod machines;
-mod math;
 mod network_access;
 mod network_builder;
 mod types;
 
-#[allow(unused_imports)]
-pub(in crate::simulation) use machines::{PumpFluidTransfer, pump_fluid_transfer};
-#[allow(unused_imports)]
-pub(in crate::simulation) use math::{ceil_div_u64, per_tick_milliunits};
-pub(in crate::simulation) use types::{FluidBoxAssignment, FluidBoxKey, FluidNetworkTopology};
+pub(in crate::simulation) use types::HeatNetworkTopology;
 
+use super::*;
 use crate::simulation::edge_geometry::{
     EdgeConnectionGeometry, rotated_edge_connection_geometry, rotated_edge_endpoint,
     tile_step_direction,
 };
 
-use super::*;
-
 impl Simulation {
-    pub(super) fn invalidate_fluid_state(&mut self) {
-        self.fluids.clear_networks();
+    pub(super) fn invalidate_heat_state(&mut self) {
+        self.heat.clear_networks();
     }
 
-    /// For each cardinal direction (indexed by [`Direction::index`]), whether `entity_id` has
-    /// a fluid connection joined to a matching connection on the adjacent entity.
-    pub(in crate::simulation) fn fluid_connection_directions(
-        &self,
-        entity_id: EntityId,
-    ) -> [bool; 4] {
+    /// For each cardinal direction (indexed by [`Direction::index`]), whether
+    /// `entity_id` has a heat connection joined to a matching connection on the
+    /// adjacent entity. Heat pipes render their arms from this, the same way
+    /// pipes do for fluids.
+    pub fn heat_connection_directions(&self, entity_id: EntityId) -> [bool; 4] {
         let mut connected = [false; 4];
         let Some(placed) = self.entities.placed_entity(entity_id) else {
             return connected;
@@ -36,12 +29,11 @@ impl Simulation {
         let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
             return connected;
         };
+        let Some(heat_buffer) = prototype.heat_buffer.as_ref() else {
+            return connected;
+        };
 
-        for connection in prototype
-            .fluid_boxes
-            .iter()
-            .flat_map(|fluid_box| &fluid_box.connections)
-        {
+        for connection in &heat_buffer.connections {
             let Some(geometry) = rotated_edge_connection_geometry(placed, prototype, connection)
             else {
                 continue;
@@ -51,13 +43,13 @@ impl Simulation {
             };
             if !connected[direction.index()] {
                 connected[direction.index()] =
-                    self.fluid_connection_joins_neighbor(entity_id, geometry);
+                    self.heat_connection_joins_neighbor(entity_id, geometry);
             }
         }
         connected
     }
 
-    fn fluid_connection_joins_neighbor(
+    fn heat_connection_joins_neighbor(
         &self,
         entity_id: EntityId,
         geometry: EdgeConnectionGeometry,
@@ -66,7 +58,7 @@ impl Simulation {
         let Some(neighbor_id) = self.entities.occupancy.entity_at(facing_x, facing_y) else {
             return false;
         };
-        if neighbor_id == entity_id || !self.entities.fluid_boxes.contains_key(&neighbor_id) {
+        if neighbor_id == entity_id || !self.entities.heat_buffers.contains_key(&neighbor_id) {
             return false;
         }
         let Some(neighbor) = self.entities.placed_entity(neighbor_id) else {
@@ -77,17 +69,13 @@ impl Simulation {
         };
 
         neighbor_prototype
-            .fluid_boxes
-            .iter()
-            .flat_map(|fluid_box| &fluid_box.connections)
-            .any(|connection| {
-                rotated_edge_endpoint(neighbor, neighbor_prototype, connection)
-                    == Some(geometry.endpoint)
+            .heat_buffer
+            .as_ref()
+            .is_some_and(|heat_buffer| {
+                heat_buffer.connections.iter().any(|connection| {
+                    rotated_edge_endpoint(neighbor, neighbor_prototype, connection)
+                        == Some(geometry.endpoint)
+                })
             })
-    }
-
-    #[cfg(test)]
-    pub(super) fn fluid_topology_rebuild_count(&self) -> u64 {
-        self.fluids.topology_rebuilds
     }
 }

@@ -162,6 +162,22 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidHeatMetadata {
+        entity: String,
+        detail: &'static str,
+    },
+    InvalidHeatConnection {
+        entity: String,
+        connection_index: usize,
+    },
+    MissingBurntResultItem {
+        item: String,
+        burnt_result: String,
+    },
+    InvalidItemFuelMetadata {
+        item: String,
+        detail: &'static str,
+    },
 }
 
 impl fmt::Display for PrototypeLoadError {
@@ -376,6 +392,29 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has invalid circuit metadata: {detail}"
+                )
+            }
+            Self::InvalidHeatMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid heat metadata: {detail}"
+                )
+            }
+            Self::InvalidHeatConnection {
+                entity,
+                connection_index,
+            } => write!(
+                formatter,
+                "entity {entity:?} has invalid heat connection {connection_index}"
+            ),
+            Self::MissingBurntResultItem { item, burnt_result } => write!(
+                formatter,
+                "item {item:?} references unknown burnt result item {burnt_result:?}"
+            ),
+            Self::InvalidItemFuelMetadata { item, detail } => {
+                write!(
+                    formatter,
+                    "item {item:?} has invalid fuel metadata: {detail}"
                 )
             }
         }

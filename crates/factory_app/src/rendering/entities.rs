@@ -10,9 +10,10 @@ use crate::constants::{
 use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{
     accumulator_color, arithmetic_combinator_color, assembler_color, beacon_color, boiler_color,
-    chemical_plant_color, chest_color, constant_combinator_color, decider_combinator_color,
-    electric_pole_color, enemy_spawner_color, furnace_color, gun_turret_color, inserter_color,
-    lab_color, lamp_color, laser_turret_color, mining_drill_color, offshore_pump_color,
+    centrifuge_color, chemical_plant_color, chest_color, constant_combinator_color,
+    decider_combinator_color, electric_pole_color, enemy_spawner_color, furnace_color,
+    gun_turret_color, heat_exchanger_color, heat_pipe_color, inserter_color, lab_color, lamp_color,
+    laser_turret_color, mining_drill_color, nuclear_reactor_color, offshore_pump_color,
     oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, solar_panel_color,
     splitter_color, steam_engine_color, storage_tank_color, transport_belt_color, wall_color,
 };
@@ -153,6 +154,9 @@ fn entity_connection_mask(
         EntityKind::Pipe => ConnectionMask::from_directions(
             factory_sim::entity_access::fluid_connection_directions(sim, placed.id),
         ),
+        EntityKind::HeatPipe => ConnectionMask::from_directions(
+            factory_sim::entity_access::heat_connection_directions(sim, placed.id),
+        ),
         EntityKind::TransportBelt => belt_connection_mask(sim, placed),
         _ => ConnectionMask::EMPTY,
     }
@@ -284,6 +288,7 @@ pub(crate) fn entity_prototype_visual_style(
             {
                 Some(CraftingCategory::OilProcessing) => oil_refinery_color(),
                 Some(CraftingCategory::Chemistry) => chemical_plant_color(),
+                Some(CraftingCategory::Centrifuging) => centrifuge_color(),
                 _ => assembler_color(),
             },
             machine_size(),
@@ -376,6 +381,24 @@ pub(crate) fn entity_prototype_visual_style(
         )),
         EntityKind::EnemySpawner => Some(entity_visual_style(
             enemy_spawner_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::NuclearReactor => Some(entity_visual_style(
+            nuclear_reactor_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::HeatPipe => Some(entity_visual_style(
+            heat_pipe_color(),
+            Vec2::splat(TRANSPORT_BELT_SPRITE_SIZE),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::HeatExchanger => Some(entity_visual_style(
+            heat_exchanger_color(),
             machine_size(),
             prototype.entity_kind,
             direction,

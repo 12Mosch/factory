@@ -10,12 +10,18 @@ pub(super) fn load_items(
     tile_ids_by_name: &HashMap<String, TileId>,
 ) -> Result<(Vec<ItemPrototype>, HashMap<String, ItemId>), PrototypeLoadError> {
     let mut item_ids_by_name = HashMap::with_capacity(items.len());
-    let items = items
+    // Burnt results are resolved after this pass so a fuel may name residue
+    // declared later in the list.
+    let mut burnt_result_names = Vec::new();
+    let mut items = items
         .into_iter()
         .map(|item| {
             validate_item_metadata(&item)?;
             let id = ItemId::new(item.id);
             item_ids_by_name.insert(item.name.clone(), id);
+            if let Some(burnt_result) = item.burnt_result.clone() {
+                burnt_result_names.push((item.name.clone(), burnt_result));
+            }
             let place_as_tile = item
                 .place_as_tile
                 .map(|placement| {
@@ -45,6 +51,7 @@ pub(super) fn load_items(
                 name: item.name,
                 stack_size: item.stack_size,
                 fuel_value_joules: item.fuel_value_joules,
+                burnt_result: None,
                 ammo: item.ammo,
                 repair: item.repair,
                 armor: item.armor,
@@ -53,12 +60,43 @@ pub(super) fn load_items(
                 place_as_tile,
             })
         })
-        .collect::<Result<_, PrototypeLoadError>>()?;
+        .collect::<Result<Vec<ItemPrototype>, PrototypeLoadError>>()?;
+
+    for (item_name, burnt_result_name) in burnt_result_names {
+        let burnt_result = item_ids_by_name
+            .get(&burnt_result_name)
+            .copied()
+            .ok_or_else(|| PrototypeLoadError::MissingBurntResultItem {
+                item: item_name.clone(),
+                burnt_result: burnt_result_name,
+            })?;
+        let item = items
+            .iter_mut()
+            .find(|item| item.name == item_name)
+            .expect("burnt results are collected from the items being loaded");
+        item.burnt_result = Some(burnt_result);
+    }
 
     Ok((items, item_ids_by_name))
 }
 
 fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadError> {
+    // A residue is what remains after burning, so it is meaningless without a
+    // fuel value, and self-reference would make a fuel burn into itself.
+    if let Some(burnt_result) = item.burnt_result.as_deref() {
+        if item.fuel_value_joules.is_none() {
+            return Err(PrototypeLoadError::InvalidItemFuelMetadata {
+                item: item.name.clone(),
+                detail: "burnt results require a fuel value",
+            });
+        }
+        if burnt_result == item.name {
+            return Err(PrototypeLoadError::InvalidItemFuelMetadata {
+                item: item.name.clone(),
+                detail: "a fuel cannot burn into itself",
+            });
+        }
+    }
     if let Some(effect) = item.module_effect {
         if effect.speed_delta_permyriad == 0
             && effect.productivity_permyriad == 0

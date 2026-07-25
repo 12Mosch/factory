@@ -61,6 +61,7 @@ impl Simulation {
             power_demand_cache: PowerDemandCache::default(),
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::default(),
+            heat: HeatSubsystem::default(),
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
@@ -119,6 +120,11 @@ impl Simulation {
         profiler.measure(ProfilePhase::Circuits, || self.advance_circuit_networks());
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
         profiler.measure(ProfilePhase::Fluids, || self.advance_fluids_before_power());
+        // Heat runs between fluids and power: reactors and exchangers turn stored
+        // heat into steam, and the turbines that burn it are solved by the power
+        // pass, so the steam has to exist before power runs.
+        profiler.measure(ProfilePhase::Heat, || self.advance_heat_networks());
+        profiler.measure(ProfilePhase::Fluids, || self.equalize_fluid_networks());
         profiler.measure(ProfilePhase::Power, || self.refresh_power_state());
         profiler.measure(ProfilePhase::Lamps, || self.refresh_lamps());
         profiler.measure(ProfilePhase::Radars, || self.advance_radars());
@@ -255,6 +261,7 @@ impl Simulation {
         self.power.networks.hash(&mut hasher);
         self.power.entity_statuses.hash(&mut hasher);
         self.fluids.networks.hash(&mut hasher);
+        self.heat.networks.hash(&mut hasher);
         self.circuits.topology.network_ids.hash(&mut hasher);
         self.circuits.topology.network_count.hash(&mut hasher);
         for network in &self.circuits.networks {

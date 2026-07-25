@@ -61,6 +61,10 @@ pub use crate::fluids::{
     FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState, FluidNetworkBoxSnapshot,
     FluidNetworkSnapshot,
 };
+pub use crate::heat::{
+    EntityHeatStatus, HeatBufferState, HeatExchangerState, HeatNetworkBufferSnapshot,
+    HeatNetworkSnapshot, HeatPipeState, NuclearReactorError, NuclearReactorState,
+};
 pub use crate::ids::{EntityId, Tick};
 pub use crate::inventory::{Inventory, InventoryError, ItemSlot, ItemStack};
 #[cfg(test)]
@@ -115,6 +119,8 @@ pub const FURNACE_INPUT_SLOT_INDEX: usize = 0;
 pub const FURNACE_FUEL_SLOT_INDEX: usize = 0;
 pub const FURNACE_OUTPUT_SLOT_INDEX: usize = 0;
 pub const BOILER_FUEL_SLOT_INDEX: usize = 0;
+pub const NUCLEAR_REACTOR_FUEL_SLOT_INDEX: usize = 0;
+pub const NUCLEAR_REACTOR_OUTPUT_SLOT_INDEX: usize = 0;
 pub const INSERTER_FUEL_SLOT_INDEX: usize = 0;
 pub const ASSEMBLING_MACHINE_INPUT_SLOT_COUNT: usize = 4;
 pub const ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT: usize = 1;
@@ -196,6 +202,7 @@ pub struct Simulation {
     #[serde(skip)]
     power_tick_scratch: power_ops::PowerTickScratch,
     fluids: FluidSubsystem,
+    heat: HeatSubsystem,
     #[serde(skip)]
     circuits: CircuitSubsystem,
     statistics: StatisticsSubsystem,
@@ -650,6 +657,12 @@ pub enum SimValidationError {
     InvalidFluidNetwork {
         network_id: u32,
     },
+    InvalidHeatBufferState {
+        entity_id: EntityId,
+    },
+    InvalidHeatNetwork {
+        network_id: u32,
+    },
     /// A stored signal does not exist in the catalog.
     InvalidCircuitSignal {
         entity_id: EntityId,
@@ -779,6 +792,7 @@ mod contexts;
 mod core;
 mod diagnostics_ops;
 mod disjoint_set;
+mod edge_geometry;
 mod enemy;
 pub mod entity_access;
 pub mod entity_mutation;
@@ -790,6 +804,8 @@ mod equipment_ops;
 mod fluid_ops;
 mod fluid_state;
 mod generation;
+mod heat_ops;
+mod heat_state;
 mod inventory_ops;
 mod machine_ops;
 mod module_ops;
@@ -833,6 +849,7 @@ use self::fluid_ops::*;
 use self::fluid_state::FluidSubsystem;
 pub(crate) use self::generation::WorldGenerator;
 use self::generation::*;
+use self::heat_state::HeatSubsystem;
 use self::machine_ops::*;
 use self::power_state::{PowerDemandCache, PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};

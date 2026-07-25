@@ -255,6 +255,84 @@ impl EntityStateBehavior for BoilerState {
     }
 }
 
+// Heat buffer energy is validated against the prototype capacity by
+// `validate_heat_buffer_states` and holds no recoverable items.
+impl EntityStateBehavior for HeatBufferState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let capacity = sim
+            .entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.heat_buffer.as_ref())
+            .map(factory_data::HeatBufferPrototype::capacity_joules)
+            .ok_or(SimValidationError::InvalidEntityState { entity_id })?;
+        if self.energy_joules > capacity {
+            return Err(SimValidationError::InvalidHeatBufferState { entity_id });
+        }
+        Ok(())
+    }
+}
+
+impl EntityStateBehavior for NuclearReactorState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
+        push_item_slot(stacks, self.energy.fuel_slot);
+        push_item_slot(stacks, self.output_slot);
+    }
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        super::validation::machines::validate_nuclear_reactor(sim, entity_id, self)
+    }
+}
+
+impl EntityStateBehavior for HeatPipeState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        require_heat_kind(sim, entity_id, EntityKind::HeatPipe)
+    }
+}
+
+impl EntityStateBehavior for HeatExchangerState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        require_heat_kind(sim, entity_id, EntityKind::HeatExchanger)
+    }
+}
+
+/// Confirms a heat state entry sits on an entity of the expected kind that
+/// actually declares a heat buffer, so a stale entry can never look valid.
+fn require_heat_kind(
+    sim: &Simulation,
+    entity_id: EntityId,
+    expected: EntityKind,
+) -> Result<(), SimValidationError> {
+    sim.entities
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+        .filter(|prototype| prototype.entity_kind == expected && prototype.heat_buffer.is_some())
+        .map(|_| ())
+        .ok_or(SimValidationError::InvalidEntityState { entity_id })
+}
+
 impl EntityStateBehavior for OffshorePumpState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 

@@ -12,6 +12,7 @@ pub mod equipment;
 pub mod error;
 pub mod fluids;
 pub mod hash;
+pub mod heat;
 pub mod ids;
 pub mod inventory;
 pub mod logistics;

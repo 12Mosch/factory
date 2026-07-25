@@ -54,6 +54,26 @@ pub(crate) fn boiler_color() -> Color {
     Color::srgb(0.62, 0.35, 0.22)
 }
 
+/// The centrifuge sits with the nuclear family rather than with the other
+/// assemblers, because what it makes is uranium.
+pub(crate) fn centrifuge_color() -> Color {
+    Color::srgb(0.44, 0.50, 0.30)
+}
+
+/// Reactor, heat pipe, and exchanger share a warm copper-to-red family so a heat
+/// network reads as one system, distinct from the cool blues of steam and water.
+pub(crate) fn nuclear_reactor_color() -> Color {
+    Color::srgb(0.58, 0.26, 0.20)
+}
+
+pub(crate) fn heat_pipe_color() -> Color {
+    Color::srgb(0.72, 0.40, 0.24)
+}
+
+pub(crate) fn heat_exchanger_color() -> Color {
+    Color::srgb(0.66, 0.44, 0.32)
+}
+
 pub(crate) fn solar_panel_color() -> Color {
     Color::srgb(0.18, 0.38, 0.58)
 }

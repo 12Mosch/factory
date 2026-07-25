@@ -3,12 +3,13 @@ use serde::Deserialize;
 use crate::model::{
     AccumulatorPrototype, AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype,
     BeaconPrototype, BoilerPrototype, BuildingCategory, BurnerPrototype, CircuitConnectorPrototype,
-    CombinatorPrototype, CraftingCategory, ElectricEnergySourcePrototype, EnemyGameplayConfig,
-    EntityKind, EquipmentPrototype, FluidBoxIo, FluidConnectionSide, FurnacePrototype,
-    GunTurretPrototype, LaserTurretPrototype, ModuleEffectPrototype, OffshorePumpPrototype,
-    PumpPrototype, RadarPrototype, RepairToolPrototype, ResourceExtraction, SolarPanelPrototype,
-    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype,
-    UnitPrototype, VirtualSignalKind,
+    CombinatorPrototype, ConnectionSide, CraftingCategory, ElectricEnergySourcePrototype,
+    EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo, FurnacePrototype,
+    GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, ModuleEffectPrototype,
+    NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype, RadarPrototype,
+    RepairToolPrototype, ResourceExtraction, SolarPanelPrototype, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -126,6 +127,10 @@ pub(crate) struct RawItemPrototype {
     pub(crate) name: String,
     pub(crate) stack_size: u16,
     pub(crate) fuel_value_joules: Option<u64>,
+    /// Item name of the residue left after burning one unit, resolved against
+    /// the item group once every item is known.
+    #[serde(default)]
+    pub(crate) burnt_result: Option<String>,
     pub(crate) ammo: Option<AmmoPrototype>,
     pub(crate) repair: Option<RepairToolPrototype>,
     pub(crate) armor: Option<ArmorPrototype>,
@@ -208,6 +213,12 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) underground_pipe: Option<UndergroundPipePrototype>,
     #[serde(default)]
     pub(crate) fluid_boxes: Vec<RawFluidBoxPrototype>,
+    #[serde(default)]
+    pub(crate) heat_buffer: Option<RawHeatBufferPrototype>,
+    #[serde(default)]
+    pub(crate) heat_energy_source: Option<HeatEnergySourcePrototype>,
+    #[serde(default)]
+    pub(crate) nuclear_reactor: Option<NuclearReactorPrototype>,
     pub(crate) max_health: Option<u32>,
     pub(crate) pollution_per_minute_milli: Option<u32>,
     pub(crate) gun_turret: Option<GunTurretPrototype>,
@@ -254,9 +265,18 @@ pub(crate) struct RawFluidBoxPrototype {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawFluidConnectionPrototype {
+pub(crate) struct RawEdgeConnectionPrototype {
     pub(crate) local_offset: RawIVec2,
-    pub(crate) side: FluidConnectionSide,
+    pub(crate) side: ConnectionSide,
+}
+
+pub(crate) type RawFluidConnectionPrototype = RawEdgeConnectionPrototype;
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawHeatBufferPrototype {
+    pub(crate) specific_heat_joules_per_degree: u64,
+    pub(crate) max_temperature_degrees: u32,
+    pub(crate) connections: Vec<RawEdgeConnectionPrototype>,
 }
 
 #[derive(Debug, Deserialize)]

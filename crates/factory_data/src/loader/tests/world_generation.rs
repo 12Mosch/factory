@@ -2,6 +2,7 @@ use glam::IVec2;
 
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
+use crate::item_id_by_name;
 use crate::model::{
     ResourceDistanceScalingConfig, ResourceExtraction, TerrainNoiseConfig,
     WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
@@ -68,7 +69,7 @@ fn base_catalog_defines_world_generation() {
     assert_eq!(config.patch_grid.cell_size, 40);
     assert_eq!(config.patch_grid.patch_chance_percent, 60);
     assert!(config.distance_scaling.is_some());
-    assert_eq!(config.resources.len(), 5);
+    assert_eq!(config.resources.len(), 6);
     assert_eq!(
         config
             .resources
@@ -77,12 +78,13 @@ fn base_catalog_defines_world_generation() {
             .count(),
         1
     );
-    assert!(
-        config
-            .resources
-            .iter()
-            .all(|resource| resource.starting_patch.is_some())
-    );
+    // Every resource the early game needs is guaranteed near spawn. Uranium is
+    // the deliberate exception: nuclear power is gated on expanding to find it,
+    // not only on research.
+    let uranium_ore = item_id_by_name(&catalog, "uranium_ore");
+    assert!(config.resources.iter().all(|resource| {
+        resource.starting_patch.is_some() == (resource.resource_item != uranium_ore)
+    }));
 }
 
 #[test]

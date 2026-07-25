@@ -54,6 +54,20 @@ impl Simulation {
         for entity_id in self.entities.pumpjacks.keys() {
             push_production_map_status(&mut next, *entity_id, self.pumpjack_status(*entity_id));
         }
+        for (entity_id, state) in &self.entities.nuclear_reactors {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.nuclear_reactor_status(*entity_id, state),
+            );
+        }
+        for entity_id in self.entities.heat_exchangers.keys() {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.heat_exchanger_status(*entity_id, fluids.water, fluids.steam),
+            );
+        }
 
         if next != self.production_map_statuses {
             self.production_status_revision = self.production_status_revision.wrapping_add(1);
@@ -138,6 +152,23 @@ impl Simulation {
                 .keys()
                 .map(|entity_id| self.pumpjack_status(*entity_id)),
         );
+        self.push_status_group(
+            &mut groups,
+            &mut total_by_status,
+            EntityKind::NuclearReactor,
+            self.entities
+                .nuclear_reactors
+                .iter()
+                .map(|(entity_id, state)| self.nuclear_reactor_status(*entity_id, state)),
+        );
+        self.push_status_group(
+            &mut groups,
+            &mut total_by_status,
+            EntityKind::HeatExchanger,
+            self.entities.heat_exchangers.keys().map(|entity_id| {
+                self.heat_exchanger_status(*entity_id, fluids.water, fluids.steam)
+            }),
+        );
 
         MachineStatusSnapshot {
             groups,
@@ -174,6 +205,12 @@ impl Simulation {
         }
         if self.entities.pumpjacks.contains_key(&entity_id) {
             return Some(self.pumpjack_status(entity_id));
+        }
+        if let Some(state) = self.entities.nuclear_reactors.get(&entity_id) {
+            return Some(self.nuclear_reactor_status(entity_id, state));
+        }
+        if self.entities.heat_exchangers.contains_key(&entity_id) {
+            return Some(self.heat_exchanger_status(entity_id, fluids.water, fluids.steam));
         }
 
         None
@@ -511,6 +548,111 @@ impl Simulation {
         if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
         {
             return MachineStatus::NoFuel;
+        }
+        MachineStatus::Working
+    }
+
+    fn nuclear_reactor_status(
+        &self,
+        entity_id: EntityId,
+        state: &NuclearReactorState,
+    ) -> MachineStatus {
+        if state.energy.fuel_slot.is_empty() && state.energy.energy_remaining_joules <= f64::EPSILON
+        {
+            return MachineStatus::NoFuel;
+        }
+        // A reactor at maximum temperature holds its fuel; the network is not
+        // taking the heat away fast enough.
+        let capacity = self.heat_buffer_capacity_joules(entity_id);
+        let stored = self
+            .entities
+            .heat_buffers
+            .get(&entity_id)
+            .map_or(0, |buffer| buffer.energy_joules);
+        if stored >= capacity {
+            return MachineStatus::OutputFull;
+        }
+        // Spent fuel cells with nowhere to go stop the reactor between cells.
+        if state.energy.energy_remaining_joules <= f64::EPSILON
+            && self.reactor_residue_is_blocked(state)
+        {
+            return MachineStatus::OutputFull;
+        }
+        MachineStatus::Working
+    }
+
+    /// Whether the next fuel cell's residue has nowhere to go, which is what
+    /// stops a fuelled reactor between cells.
+    fn reactor_residue_is_blocked(&self, state: &NuclearReactorState) -> bool {
+        let Some(fuel_item) = state.energy.fuel_slot.stack().map(|stack| stack.item_id()) else {
+            return false;
+        };
+        let Some(burnt_result) = self
+            .world
+            .prototypes
+            .item(fuel_item)
+            .and_then(|item| item.burnt_result)
+        else {
+            return false;
+        };
+        !state
+            .output_slot
+            .can_insert_item(&self.world.prototypes, burnt_result, 1)
+    }
+
+    fn heat_exchanger_status(
+        &self,
+        entity_id: EntityId,
+        water: FluidId,
+        steam: FluidId,
+    ) -> MachineStatus {
+        let Some(placed) = self.entities.placed_entity(entity_id) else {
+            return MachineStatus::Idle;
+        };
+        let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
+            return MachineStatus::Idle;
+        };
+        let Some(boiler) = prototype.boiler.as_ref() else {
+            return MachineStatus::Idle;
+        };
+        let Some(heat_source) = prototype.heat_energy_source else {
+            return MachineStatus::Idle;
+        };
+        let Some(heat_buffer) = prototype.heat_buffer.as_ref() else {
+            return MachineStatus::Idle;
+        };
+        let Some(water_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+            entity_id,
+            box_index: 0,
+        }) else {
+            return MachineStatus::NoFluid;
+        };
+        let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
+            entity_id,
+            box_index: 1,
+        }) else {
+            return MachineStatus::NoFluid;
+        };
+        let water_amount = per_tick_milliunits(boiler.water_consumption_per_second_milliunits);
+        let steam_amount = per_tick_milliunits(boiler.steam_output_per_second_milliunits);
+        if self.fluid_network_total_for_fluid(water_network_id, water) < water_amount {
+            return MachineStatus::NoFluid;
+        }
+        if self.fluid_network_available_capacity_for_fluid(steam_network_id, steam) < steam_amount {
+            return MachineStatus::OutputFull;
+        }
+        let stored = self
+            .entities
+            .heat_buffers
+            .get(&entity_id)
+            .map_or(0, |buffer| buffer.energy_joules);
+        let minimum = crate::heat::energy_for_temperature(
+            heat_source.min_working_temperature_degrees,
+            heat_buffer.specific_heat_joules_per_degree,
+        )
+        .max(heat_source.energy_usage_watts / SIMULATION_TICKS_PER_SECOND);
+        if stored < minimum {
+            return MachineStatus::NoHeat;
         }
         MachineStatus::Working
     }

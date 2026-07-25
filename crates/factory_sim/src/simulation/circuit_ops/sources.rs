@@ -109,7 +109,9 @@ impl Simulation {
             | EntityKind::Pump
             | EntityKind::Pumpjack
             | EntityKind::Pipe
-            | EntityKind::StorageTank => {
+            | EntityKind::StorageTank
+            // Heat exchangers hold water and steam boxes like a boiler does.
+            | EntityKind::HeatExchanger => {
                 let Some(boxes) = self.entities.fluid_boxes.get(&entity_id) else {
                     return;
                 };
@@ -144,7 +146,11 @@ impl Simulation {
             | EntityKind::Lamp
             | EntityKind::ConstantCombinator
             | EntityKind::ArithmeticCombinator
-            | EntityKind::DeciderCombinator => {}
+            | EntityKind::DeciderCombinator
+            // Reactors and heat pipes carry temperature rather than a signal
+            // the circuit network can express as an item or fluid count.
+            | EntityKind::NuclearReactor
+            | EntityKind::HeatPipe => {}
         }
     }
 
