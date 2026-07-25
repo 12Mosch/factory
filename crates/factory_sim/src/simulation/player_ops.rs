@@ -11,11 +11,24 @@ impl Simulation {
             return;
         }
 
-        let distance = PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND * delta_seconds;
+        // Paved terrain under the player scales the step. Sampling the tile
+        // the player currently stands on (rather than the destination) keeps
+        // the speed a function of already-established state, so a step never
+        // depends on terrain the player has not reached yet.
+        let distance = PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND
+            * delta_seconds
+            * self.player_walking_speed_multiplier();
         self.move_player_by_tiles(
             direction_x / direction_length * distance,
             direction_y / direction_length * distance,
         );
+    }
+
+    /// Walking speed multiplier from the tile underfoot, where 1.0 is the
+    /// unmodified base speed.
+    pub fn player_walking_speed_multiplier(&self) -> f32 {
+        let (tile_x, tile_y) = self.player.tile_position();
+        f32::from(self.world.walking_speed_percent_at(tile_x, tile_y)) / 100.0
     }
 
     pub fn move_player_by_tiles(&mut self, delta_x_tiles: f32, delta_y_tiles: f32) {

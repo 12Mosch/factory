@@ -69,11 +69,8 @@ pub(super) fn generate_chunk(seed: u64, coord: ChunkCoord, generator: &WorldGene
         for local_x in 0..CHUNK_SIZE {
             let (x, y) = coord.tile_at(local_x, local_y);
             let tile = generate_tile(seed, x, y, generator, &centers);
-            pollution_absorption_per_minute_milli += generator
-                .tile_pollution_absorption_per_minute_milli
-                .get(tile.tile_id.index())
-                .copied()
-                .unwrap_or(0);
+            pollution_absorption_per_minute_milli +=
+                generator.pollution_absorption_per_minute_milli(tile.tile_id);
             tiles.push(tile);
         }
     }
@@ -92,7 +89,7 @@ pub(super) fn generate_tile(
     rules: &WorldGenerator,
     centers: &[ResourcePatchCenter],
 ) -> TileCell {
-    let (tile_id, mut collision) = generate_terrain(seed, x, y, rules);
+    let (tile_id, collision) = generate_terrain(seed, x, y, rules);
     // Resource patches only overlay ground-like terrain.
     let resource = if collision.walkable && collision.buildable {
         resource_at_patch_tile(seed, x, y, centers, rules.edge_noise)
@@ -100,19 +97,30 @@ pub(super) fn generate_tile(
         None
     };
 
-    if let Some(resource) = resource {
-        // Fluid resources are extracted by pumpjacks, never mined.
-        collision = TileCollision {
-            walkable: true,
-            buildable: false,
-            minable: rules.resource_is_minable(resource.resource_item),
-        };
-    }
-
     TileCell {
         tile_id,
-        collision,
+        collision: apply_resource_collision(rules, collision, resource),
         resource,
+    }
+}
+
+/// Overlays a resource cell's collision rules onto terrain collision.
+/// Generation and post-generation terrain writes share this so a paved
+/// resource tile keeps behaving like a resource tile.
+pub(super) fn apply_resource_collision(
+    rules: &WorldGenerator,
+    terrain: TileCollision,
+    resource: Option<ResourceCell>,
+) -> TileCollision {
+    match resource {
+        // Resource patches only overlay ground-like terrain.
+        Some(resource) if terrain.walkable && terrain.buildable => TileCollision {
+            walkable: true,
+            buildable: false,
+            // Fluid resources are extracted by pumpjacks, never mined.
+            minable: rules.resource_is_minable(resource.resource_item),
+        },
+        _ => terrain,
     }
 }
 
@@ -773,6 +781,9 @@ pub(crate) struct WorldGenerator {
     /// biome is buildable so no elevation bias is needed.
     spawn_bias: Option<SpawnTerrainBias>,
     pub(super) tile_pollution_absorption_per_minute_milli: Vec<u64>,
+    /// Per-`TileId` walking speed percentages, indexed like the absorption
+    /// table so the player movement step is a table lookup.
+    tile_walking_speed_percent: Vec<u16>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -857,6 +868,11 @@ impl WorldGenerator {
             .iter()
             .map(|tile| u64::from(tile.pollution_absorption_per_minute_milli))
             .collect();
+        let tile_walking_speed_percent = prototypes
+            .tiles
+            .iter()
+            .map(|tile| tile.walking_speed_percent)
+            .collect();
 
         Self {
             biomes,
@@ -873,7 +889,24 @@ impl WorldGenerator {
             distance_scaling: config.distance_scaling,
             spawn_bias,
             tile_pollution_absorption_per_minute_milli,
+            tile_walking_speed_percent,
         }
+    }
+
+    /// Walking speed percentage for a tile; unknown ids fall back to the
+    /// unmodified base speed.
+    pub(super) fn walking_speed_percent(&self, tile_id: TileId) -> u16 {
+        self.tile_walking_speed_percent
+            .get(tile_id.index())
+            .copied()
+            .unwrap_or(100)
+    }
+
+    pub(super) fn pollution_absorption_per_minute_milli(&self, tile_id: TileId) -> u64 {
+        self.tile_pollution_absorption_per_minute_milli
+            .get(tile_id.index())
+            .copied()
+            .unwrap_or(0)
     }
 
     fn resource_is_minable(&self, resource_item: ItemId) -> bool {

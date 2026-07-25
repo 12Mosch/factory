@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use factory_sim::{ChunkCoord, ResourceTileChange, Simulation};
+use factory_sim::{ChunkCoord, ResourceTileChange, Simulation, TerrainTileChange};
 
 use crate::map::resources::{
     MapDisplaySettings, MapLayerTextureCache, MapTextureBounds, MapTextureCache, MapTextureLayer,
@@ -65,6 +65,7 @@ fn update_layer_map_texture(
     let tick_count = sim.tick_count();
     let chunk_changed = cache.last_chunk_revision != sim.world().chunk_revision();
     let resource_changed = cache.last_resource_revision != sim.world().resource_revision();
+    let terrain_changed = cache.last_terrain_revision != sim.world().terrain_revision();
     let revealed_changed = cache.last_revealed_revision != revealed_revision;
     let debug_changed = cache.last_debug_flags != debug_flags;
     let map_changed = if settings.debug_reveal_all {
@@ -72,9 +73,12 @@ fn update_layer_map_texture(
     } else {
         revealed_changed
     };
+    // Only the surface layer paints terrain; the resource layer draws resource
+    // cells, which a terrain rewrite leaves alone.
     let needs_update = cache.handle.is_none()
         || map_changed
         || debug_changed
+        || (layer == MapTextureLayer::Surface && terrain_changed)
         || (layer == MapTextureLayer::Resources && resource_changed);
 
     if !needs_update {
@@ -97,6 +101,7 @@ fn update_layer_map_texture(
 
     cache.last_chunk_revision = sim.world().chunk_revision();
     cache.last_resource_revision = sim.world().resource_revision();
+    cache.last_terrain_revision = sim.world().terrain_revision();
     cache.last_revealed_revision = revealed_revision;
     cache.last_debug_flags = debug_flags;
     cache.last_texture_update_tick = tick_count;
@@ -111,6 +116,7 @@ fn update_map_pixels_incremental(rasterizer: &MapRasterizer<'_>, cache: &mut Map
     };
     let mut dirty_chunks = exact_dirty_chunks(rasterizer, cache, map_changed);
     let dirty_resource_tiles = exact_dirty_resource_tiles(rasterizer, cache);
+    let dirty_terrain_tiles = exact_dirty_terrain_tiles(rasterizer, cache);
     let new_bounds = if map_changed {
         map_texture_bounds(rasterizer.sim, rasterizer.settings).unwrap_or_default()
     } else {
@@ -138,7 +144,7 @@ fn update_map_pixels_incremental(rasterizer: &MapRasterizer<'_>, cache: &mut Map
         }
     }
 
-    if dirty_chunks.is_none() || dirty_resource_tiles.is_none() {
+    if dirty_chunks.is_none() || dirty_resource_tiles.is_none() || dirty_terrain_tiles.is_none() {
         repaint_all_chunks(rasterizer, cache);
     } else {
         repaint_dirty_chunks(
@@ -149,12 +155,25 @@ fn update_map_pixels_incremental(rasterizer: &MapRasterizer<'_>, cache: &mut Map
                 .expect("checked exact dirty chunk history"),
         );
         if rasterizer.layer == MapTextureLayer::Resources {
-            repaint_dirty_resource_tiles(
+            repaint_dirty_tiles(
                 rasterizer,
                 cache,
                 dirty_resource_tiles
                     .as_deref()
-                    .expect("checked exact resource history"),
+                    .expect("checked exact resource history")
+                    .iter()
+                    .map(|change| (change.x, change.y)),
+            );
+        }
+        if rasterizer.layer == MapTextureLayer::Surface {
+            repaint_dirty_tiles(
+                rasterizer,
+                cache,
+                dirty_terrain_tiles
+                    .as_deref()
+                    .expect("checked exact terrain history")
+                    .iter()
+                    .map(|change| (change.x, change.y)),
             );
         }
     }
@@ -210,6 +229,23 @@ fn exact_dirty_resource_tiles(
         .sim
         .world()
         .resource_dirty_tiles_since(cache.last_resource_revision)
+        .map(Iterator::collect)
+}
+
+fn exact_dirty_terrain_tiles(
+    rasterizer: &MapRasterizer<'_>,
+    cache: &MapLayerTextureCache,
+) -> Option<Vec<TerrainTileChange>> {
+    if rasterizer.layer != MapTextureLayer::Surface
+        || cache.last_terrain_revision == rasterizer.sim.world().terrain_revision()
+    {
+        return Some(Vec::new());
+    }
+
+    rasterizer
+        .sim
+        .world()
+        .terrain_dirty_tiles_since(cache.last_terrain_revision)
         .map(Iterator::collect)
 }
 
@@ -277,15 +313,14 @@ fn repaint_dirty_chunks(
     }
 }
 
-fn repaint_dirty_resource_tiles(
+/// Repaints individual tiles that changed inside already-painted chunks.
+/// Shared by the resource layer (mined-out cells) and the surface layer
+/// (runtime terrain mutation).
+fn repaint_dirty_tiles(
     rasterizer: &MapRasterizer<'_>,
     cache: &mut MapLayerTextureCache,
-    changes: &[ResourceTileChange],
+    tiles: impl Iterator<Item = (i64, i64)>,
 ) {
-    if changes.is_empty() {
-        return;
-    }
-
     let Some(bounds) = cache.bounds else {
         return;
     };
@@ -293,15 +328,13 @@ fn repaint_dirty_resource_tiles(
         return;
     };
 
-    for change in changes.iter().filter(|change| {
-        bounds.contains_tile((change.x, change.y))
-            && ChunkCoord::from_tile(change.x, change.y)
+    for (x, y) in tiles.filter(|&(x, y)| {
+        bounds.contains_tile((x, y))
+            && ChunkCoord::from_tile(x, y)
                 .is_some_and(|coord| rasterizer.chunk_paint_state(coord).revealed)
     }) {
-        rasterizer.repaint_tile(data, bounds, change.x, change.y);
-        cache
-            .dirty_regions
-            .mark_world_tile(bounds, change.x, change.y);
+        rasterizer.repaint_tile(data, bounds, x, y);
+        cache.dirty_regions.mark_world_tile(bounds, x, y);
     }
 }
 
@@ -536,6 +569,7 @@ mod tests {
             painted_chunks: Default::default(),
             last_chunk_revision: sim.world().chunk_revision(),
             last_resource_revision: sim.world().resource_revision(),
+            last_terrain_revision: sim.world().terrain_revision(),
             last_revealed_revision: sim.revealed_revision(),
             last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
             last_texture_update_tick: sim.tick_count(),
@@ -663,6 +697,7 @@ mod tests {
                 painted_chunks: Default::default(),
                 last_chunk_revision: sim.world().chunk_revision(),
                 last_resource_revision: sim.world().resource_revision(),
+                last_terrain_revision: sim.world().terrain_revision(),
                 last_revealed_revision: sim.revealed_revision(),
                 last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
                 last_texture_update_tick: sim.tick_count(),
@@ -718,6 +753,66 @@ mod tests {
     }
 
     #[test]
+    fn terrain_rewrite_repaints_only_the_changed_surface_tile() {
+        let mut sim = Simulation::new_test_world(123);
+        let concrete = factory_data::BasePrototypeIds::from_catalog(sim.catalog())
+            .tiles
+            .concrete;
+        let settings = MapDisplaySettings {
+            debug_reveal_all: true,
+            show_chunk_grid: false,
+            ..default()
+        };
+        let layer = MapTextureLayer::Surface;
+        let initial = generate_map_pixels_for_layer(&sim, &settings, layer);
+        let bounds = initial.bounds;
+        let mut images = Assets::<Image>::default();
+        let handle = images.add(image_asset(bounds.width, bounds.height, None));
+        let mut cache = MapLayerTextureCache {
+            handle: Some(handle),
+            bounds: Some(bounds),
+            pixels: Some(initial.data),
+            dirty_regions: Default::default(),
+            painted_chunks: Default::default(),
+            last_chunk_revision: sim.world().chunk_revision(),
+            last_resource_revision: sim.world().resource_revision(),
+            last_terrain_revision: sim.world().terrain_revision(),
+            last_revealed_revision: sim.revealed_revision(),
+            last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
+            last_texture_update_tick: sim.tick_count(),
+        };
+        refresh_painted_chunks(&MapRasterizer::new(&sim, &settings, layer), &mut cache);
+
+        let target = *sim
+            .world()
+            .chunks
+            .keys()
+            .next()
+            .expect("test world should have chunks");
+        let (x, y) = target.tile_at(3, 5);
+        sim.set_tile(x, y, concrete)
+            .expect("generated tile should accept concrete");
+
+        update_map_pixels_incremental(&MapRasterizer::new(&sim, &settings, layer), &mut cache);
+
+        let full = generate_map_pixels_for_layer(&sim, &settings, layer);
+        assert_eq!(cache.bounds, Some(bounds));
+        assert_eq!(
+            cache.pixels.as_deref(),
+            Some(full.data.as_slice()),
+            "the incremental repaint must match a full rebuild"
+        );
+
+        let mut expected = crate::map::resources::MapTextureDirtyRegions::default();
+        expected.mark_world_tile(bounds, x, y);
+        assert_eq!(
+            cache.dirty_regions.rects(),
+            expected.rects(),
+            "only the rewritten tile should be marked dirty"
+        );
+    }
+
+    #[test]
     fn changed_chunk_queues_chunk_rect_upload() {
         let sim = Simulation::new_test_world(123);
         let settings = MapDisplaySettings {
@@ -741,6 +836,7 @@ mod tests {
             painted_chunks: Default::default(),
             last_chunk_revision: sim.world().chunk_revision(),
             last_resource_revision: sim.world().resource_revision(),
+            last_terrain_revision: sim.world().terrain_revision(),
             last_revealed_revision: sim.revealed_revision(),
             last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
             last_texture_update_tick: sim.tick_count(),
@@ -829,6 +925,7 @@ mod tests {
             painted_chunks: Default::default(),
             last_chunk_revision: base_sim.world().chunk_revision(),
             last_resource_revision: base_sim.world().resource_revision(),
+            last_terrain_revision: base_sim.world().terrain_revision(),
             last_revealed_revision: base_sim.revealed_revision(),
             last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
             last_texture_update_tick: base_sim.tick_count(),
@@ -847,6 +944,7 @@ mod tests {
                 painted_chunks: base_cache.painted_chunks.clone(),
                 last_chunk_revision: base_cache.last_chunk_revision,
                 last_resource_revision: base_cache.last_resource_revision,
+                last_terrain_revision: base_cache.last_terrain_revision,
                 last_revealed_revision: base_cache.last_revealed_revision,
                 last_debug_flags: base_cache.last_debug_flags,
                 last_texture_update_tick: base_cache.last_texture_update_tick,
@@ -914,6 +1012,7 @@ mod tests {
             painted_chunks: Default::default(),
             last_chunk_revision: sim.world().chunk_revision(),
             last_resource_revision: sim.world().resource_revision(),
+            last_terrain_revision: sim.world().terrain_revision(),
             last_revealed_revision: sim.revealed_revision(),
             last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
             last_texture_update_tick: sim.tick_count(),

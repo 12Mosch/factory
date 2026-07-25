@@ -5,10 +5,11 @@ use super::common::{
 };
 use bevy::prelude::*;
 use factory_app::build::resources::{
-    BuildPlacementState, BuildPlacementStatus, BuildSelection, HOTBAR_SLOT_COUNT, HotbarState,
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, BuildTarget, HOTBAR_SLOT_COUNT,
+    HotbarState,
 };
 use factory_app::placement::build::{
-    buildable_prototypes, default_hotbar_slots, place_selected_building_at_tile,
+    buildable_prototypes, default_hotbar_slots, place_selection_at_tile,
 };
 use factory_app::resources::SimResource;
 use factory_data::{EntityKind, PrototypeCatalog};
@@ -21,10 +22,11 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
     let buildables = buildable_prototypes(&catalog);
     let buildable_names = buildables
         .iter()
-        .map(|buildable| {
-            catalog.entities[buildable.prototype_id.index()]
-                .name
-                .as_str()
+        .map(|buildable| match buildable.target {
+            BuildTarget::Entity(prototype_id) => {
+                catalog.entities[prototype_id.index()].name.as_str()
+            }
+            BuildTarget::Tile(_) => catalog.items[buildable.item_id.index()].name.as_str(),
         })
         .collect::<Vec<_>>();
 
@@ -56,9 +58,17 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
         );
     }
     assert!(buildables.iter().all(|buildable| {
-        let entity = &catalog.entities[buildable.prototype_id.index()];
-        entity.entity_kind != EntityKind::ResourcePatch
-            && entity.build_item == Some(buildable.item_id)
+        match buildable.target {
+            BuildTarget::Entity(prototype_id) => {
+                let entity = &catalog.entities[prototype_id.index()];
+                entity.entity_kind != EntityKind::ResourcePatch
+                    && entity.build_item == Some(buildable.item_id)
+            }
+            // Terrain buildables are backed by the item's own paving metadata.
+            BuildTarget::Tile(tile) => catalog.items[buildable.item_id.index()]
+                .place_as_tile
+                .is_some_and(|placement| placement.tile == tile),
+        }
     }));
 }
 
@@ -202,10 +212,8 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
         (assembler_entity, assembler_item, automation)
     };
     let slot_index = 0;
-    app.world_mut().resource_mut::<HotbarState>().slots[slot_index] = Some(BuildSelection {
-        prototype_id: assembler_entity,
-        item_id: assembler_item,
-    });
+    app.world_mut().resource_mut::<HotbarState>().slots[slot_index] =
+        Some(BuildSelection::entity(assembler_entity, assembler_item));
     {
         let catalog = app
             .world()
@@ -253,10 +261,7 @@ fn build_bar_rejects_locked_buildable_and_allows_after_research() {
 
     assert_eq!(
         app.world().resource::<BuildPlacementState>().selected,
-        Some(BuildSelection {
-            prototype_id: assembler_entity,
-            item_id: assembler_item,
-        })
+        Some(BuildSelection::entity(assembler_entity, assembler_item))
     );
 }
 
@@ -273,12 +278,9 @@ fn place_selected_building_consumes_inventory() {
         .expect("test inventory should accept belt");
     let before_entities = sim.entities().placed_len();
 
-    let status = place_selected_building_at_tile(
+    let status = place_selection_at_tile(
         &mut sim,
-        BuildSelection {
-            prototype_id: belt,
-            item_id: belt_item,
-        },
+        BuildSelection::entity(belt, belt_item),
         Direction::North,
         x,
         y,
@@ -311,12 +313,9 @@ fn failed_selected_building_placement_keeps_inventory() {
     )
     .expect("blocking belt should be placeable");
 
-    let status = place_selected_building_at_tile(
+    let status = place_selection_at_tile(
         &mut sim,
-        BuildSelection {
-            prototype_id: belt,
-            item_id: belt_item,
-        },
+        BuildSelection::entity(belt, belt_item),
         Direction::North,
         x,
         y,

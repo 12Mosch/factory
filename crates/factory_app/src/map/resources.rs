@@ -506,6 +506,9 @@ pub struct MapLayerTextureCache {
     pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
+    /// Last terrain-write revision painted into this layer, so runtime tile
+    /// mutation repaints exactly the rewritten tiles.
+    pub last_terrain_revision: u64,
     pub last_revealed_revision: u64,
     pub last_debug_flags: (bool, bool),
     pub last_texture_update_tick: u64,

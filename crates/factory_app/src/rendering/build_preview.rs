@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::build::resources::{BuildPlacementPreviewState, BuildPlacementState};
+use crate::build::resources::{BuildPlacementPreviewState, BuildPlacementState, BuildTarget};
 use crate::constants::TILE_SIZE;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
+use crate::placement::build::tile_placement_preview;
 use crate::rendering::entities::entity_prototype_render_style;
 use crate::rendering::transforms::{entity_translation, tile_translation};
 use crate::resources::SimResource;
@@ -77,12 +78,13 @@ pub(crate) fn update_build_preview(
         return;
     };
 
-    let (_, size) = entity_prototype_render_style(
-        sim.read().catalog(),
-        selection.prototype_id,
-        build_state.direction,
-    )
-    .unwrap_or((Color::WHITE, Vec2::splat(TILE_SIZE)));
+    // Terrain covers exactly the clicked tile, so it uses the default size.
+    let (_, size) = selection
+        .entity_prototype_id()
+        .and_then(|prototype_id| {
+            entity_prototype_render_style(sim.read().catalog(), prototype_id, build_state.direction)
+        })
+        .unwrap_or((Color::WHITE, Vec2::splat(TILE_SIZE)));
 
     transform.translation = entity_translation(&footprint, 20.0);
     sprite.custom_size = Some(size);
@@ -154,11 +156,13 @@ pub(crate) fn update_build_placement_preview_state(
     let Some(selection) = build_state.selected else {
         preview_state.cursor_tile = None;
         preview_state.preview = None;
+        preview_state.tile_status = None;
         return;
     };
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
         preview_state.cursor_tile = None;
         preview_state.preview = None;
+        preview_state.tile_status = None;
         return;
     };
 
@@ -167,10 +171,25 @@ pub(crate) fn update_build_placement_preview_state(
     });
     preview_state.cursor_tile = Some((x, y));
     preview_state.ghost = ghost;
+
+    let prototype_id = match selection.target {
+        BuildTarget::Entity(prototype_id) => prototype_id,
+        BuildTarget::Tile(_) => {
+            let (preview, status) = tile_placement_preview(&sim.read(), selection.item_id, x, y);
+            preview_state.preview = Some(preview);
+            preview_state.tile_status = Some(status);
+            // Terrain never has a ghost form, so a held shift must not make
+            // the cursor read as ghost placement.
+            preview_state.ghost = false;
+            return;
+        }
+    };
+
+    preview_state.tile_status = None;
     preview_state.preview = Some(if ghost {
         factory_sim::construction_ops::preview_ghost_placement(
             &sim.read(),
-            selection.prototype_id,
+            prototype_id,
             x,
             y,
             build_state.direction,
@@ -179,7 +198,7 @@ pub(crate) fn update_build_placement_preview_state(
         factory_sim::placement::preview_from_player_inventory(
             &sim.read(),
             factory_sim::placement::PlayerPlacementRequest {
-                prototype_id: selection.prototype_id,
+                prototype_id,
                 item_id: selection.item_id,
                 x,
                 y,

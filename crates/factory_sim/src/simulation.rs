@@ -86,7 +86,7 @@ pub use crate::research::{
 };
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
-    TileCell, TileCollision, WorldSim, WorldTileCoord,
+    TerrainMutationError, TerrainTileChange, TileCell, TileCollision, WorldSim, WorldTileCoord,
 };
 
 pub const CHUNK_SIZE: i32 = 32;
@@ -794,6 +794,7 @@ mod scripted;
 mod statistics_ops;
 mod statistics_state;
 mod systems;
+pub mod tile_placement_ops;
 mod topology_invalidation_ops;
 mod underground;
 mod validation;
@@ -824,6 +825,9 @@ pub use self::scripted::{
 };
 use self::statistics_ops::power_sample_is_recorded;
 use self::statistics_state::StatisticsSubsystem;
+pub use self::tile_placement_ops::{
+    TilePlacementError, TilePlacementRequest, tile_placement_for_item, validate_tile_placement,
+};
 use self::underground::*;
 pub use self::world_ops::ChunkNeighborhoodError;
 use self::world_ops::*;

@@ -39,6 +39,13 @@ pub enum SimCommand {
         y: WorldTileCoord,
         direction: Direction,
     },
+    /// Paves the terrain tile at `(x, y)` with the item's tile, consuming one
+    /// item. Landfill fills water; stone brick and concrete pave ground.
+    PlaceTileFromPlayerInventory {
+        item_id: ItemId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    },
     /// Plans an entity as a ghost without consuming items.
     PlaceGhost {
         prototype_id: EntityPrototypeId,
@@ -159,6 +166,7 @@ pub enum SimCommandError {
     Construction(ConstructionError),
     Repair(RepairError),
     Equipment(PlayerEquipmentError),
+    TilePlacement(TilePlacementError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -172,6 +180,11 @@ pub enum SimCommandEffect {
         total: u32,
     },
     EntityPlaced(EntityId),
+    TilePlaced {
+        item_id: ItemId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    },
     GhostPlaced(GhostId),
     DeconstructionMarked {
         marked: usize,
@@ -282,6 +295,14 @@ impl Simulation {
                 .map_err(SimCommandError::Build)?;
                 self.record_early_game_placement(item_id);
                 Ok(SimCommandEffect::EntityPlaced(entity_id))
+            }
+            SimCommand::PlaceTileFromPlayerInventory { item_id, x, y } => {
+                tile_placement_ops::place_tile_from_player_inventory(
+                    self,
+                    TilePlacementRequest { item_id, x, y },
+                )
+                .map_err(SimCommandError::TilePlacement)?;
+                Ok(SimCommandEffect::TilePlaced { item_id, x, y })
             }
             SimCommand::PlaceGhost {
                 prototype_id,

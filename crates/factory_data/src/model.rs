@@ -63,6 +63,24 @@ pub struct ItemPrototype {
     pub equipment: Option<EquipmentPrototype>,
     /// Present when the item can be installed in a machine or beacon module slot.
     pub module_effect: Option<ModuleEffectPrototype>,
+    /// Present when placing the item rewrites the targeted terrain tile
+    /// instead of building an entity (landfill, stone path, concrete).
+    pub place_as_tile: Option<TilePlacementPrototype>,
+}
+
+/// How an item mutates terrain when placed.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TilePlacementPrototype {
+    pub tile: TileId,
+    /// Fill items replace non-walkable terrain (water) and may only be placed
+    /// there; paving items are the inverse and require solid ground. Keeping
+    /// the two disjoint stops landfill from being wasted on dry land and stops
+    /// paving from bridging water.
+    pub fills_water: bool,
+    /// Build-menu placement, mirroring the same fields on buildable entities
+    /// so terrain items and buildings share one menu and hotbar.
+    pub building_category: BuildingCategory,
+    pub building_menu_order: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -189,6 +207,8 @@ pub enum BuildingCategory {
     Fluids,
     Storage,
     Defense,
+    /// Items that rewrite terrain instead of placing an entity.
+    Terrain,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -447,6 +467,9 @@ pub struct TilePrototype {
     /// Pollution absorbed by one tile of this terrain, in
     /// milli-pollution-units per minute.
     pub pollution_absorption_per_minute_milli: u32,
+    /// Player walking speed on this terrain as a percentage of the base speed.
+    /// 100 is unmodified; paved tiles declare a value above 100.
+    pub walking_speed_percent: u16,
     /// Base sRGB color `[r, g, b]` used by the front-end to paint this
     /// terrain. Inert data here (this crate has no rendering dependency); the
     /// renderer reads it to give each biome a visual identity instead of

@@ -98,6 +98,10 @@ pub struct WorldRenderCache {
     pub material: Option<Handle<ColorMaterial>>,
     pub last_visible_revision: u64,
     pub last_chunk_revision: u64,
+    /// Last terrain-write revision baked into the cached meshes. Runtime tile
+    /// mutation changes tiles inside chunks that already exist, which the
+    /// chunk revision never observes.
+    pub last_terrain_revision: u64,
     pub last_reload_token: u64,
 }
 

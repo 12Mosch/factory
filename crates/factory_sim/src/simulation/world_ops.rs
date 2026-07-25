@@ -3,6 +3,7 @@ use super::*;
 impl WorldSim {
     const CHUNK_GENERATION_HISTORY_LIMIT: usize = 4096;
     const RESOURCE_DIRTY_HISTORY_LIMIT: usize = 4096;
+    pub(in crate::simulation) const TERRAIN_DIRTY_HISTORY_LIMIT: usize = 4096;
 
     pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
         let generator = WorldGenerator::from_catalog(&prototypes);
@@ -18,6 +19,8 @@ impl WorldSim {
             max_beacon_effect_radius_tiles,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
+            terrain_revision: 0,
+            terrain_dirty_tiles: VecDeque::new(),
         }
     }
 
@@ -39,13 +42,7 @@ impl WorldSim {
             chunk.pollution_absorption_per_minute_milli = chunk
                 .tiles
                 .iter()
-                .map(|tile| {
-                    generator
-                        .tile_pollution_absorption_per_minute_milli
-                        .get(tile.tile_id.index())
-                        .copied()
-                        .unwrap_or(0)
-                })
+                .map(|tile| generator.pollution_absorption_per_minute_milli(tile.tile_id))
                 .sum();
         }
 
@@ -59,6 +56,8 @@ impl WorldSim {
             max_beacon_effect_radius_tiles,
             resource_revision: 0,
             resource_dirty_tiles: VecDeque::new(),
+            terrain_revision: 0,
+            terrain_dirty_tiles: VecDeque::new(),
         }
     }
 
@@ -200,6 +199,107 @@ impl WorldSim {
                 .copied()
                 .filter(move |change| change.revision > revision),
         )
+    }
+
+    pub fn terrain_revision(&self) -> u64 {
+        self.terrain_revision
+    }
+
+    /// Terrain tiles rewritten after `revision`.
+    ///
+    /// `None` means the caller fell behind the bounded runtime history and
+    /// must rebuild its derived state from `chunks`.
+    pub fn terrain_dirty_tiles_since(
+        &self,
+        revision: u64,
+    ) -> Option<impl Iterator<Item = TerrainTileChange> + '_> {
+        if revision > self.terrain_revision {
+            return None;
+        }
+
+        if revision < self.terrain_revision
+            && self
+                .terrain_dirty_tiles
+                .front()
+                .is_none_or(|change| change.revision > revision.saturating_add(1))
+        {
+            return None;
+        }
+
+        Some(
+            self.terrain_dirty_tiles
+                .iter()
+                .copied()
+                .filter(move |change| change.revision > revision),
+        )
+    }
+
+    /// Walking speed on the tile at `(x, y)` as a percentage of the base
+    /// player speed. Ungenerated tiles report the unmodified base speed.
+    pub fn walking_speed_percent_at<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &self,
+        x: X,
+        y: Y,
+    ) -> u16 {
+        self.tile_at(x, y)
+            .map(|tile| self.generator.walking_speed_percent(tile.tile_id))
+            .unwrap_or(100)
+    }
+
+    /// Rewrites the terrain tile at `(x, y)`, refreshing every piece of state
+    /// derived from a tile id: collision, the chunk's pollution absorption
+    /// cache, and the terrain change history that presentation consumers
+    /// replay. Any resource cell on the tile is preserved.
+    ///
+    /// This is the only post-generation terrain write path; callers that
+    /// enforce gameplay rules (landfill needs water, paving needs ground)
+    /// validate before calling.
+    pub fn set_tile<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &mut self,
+        x: X,
+        y: Y,
+        tile_id: TileId,
+    ) -> Result<(), TerrainMutationError> {
+        let x = x.into();
+        let y = y.into();
+        if self.prototypes.tile(tile_id).is_none() {
+            return Err(TerrainMutationError::UnknownTile(tile_id));
+        }
+        let (coord, index) = chunk_coord_and_tile_index(x, y)
+            .ok_or(TerrainMutationError::OutsideGeneratedChunks { x, y })?;
+
+        let terrain = tile_collision(&self.prototypes, tile_id);
+        let chunk = self
+            .chunks
+            .get_mut(&coord)
+            .ok_or(TerrainMutationError::OutsideGeneratedChunks { x, y })?;
+        let tile = chunk
+            .tiles
+            .get_mut(index)
+            .ok_or(TerrainMutationError::OutsideGeneratedChunks { x, y })?;
+        let previous_tile_id = tile.tile_id;
+        if previous_tile_id == tile_id {
+            return Err(TerrainMutationError::Unchanged { x, y });
+        }
+
+        tile.tile_id = tile_id;
+        tile.collision = apply_resource_collision(&self.generator, terrain, tile.resource);
+
+        // The chunk absorption cache is a running sum, so swap the old tile's
+        // contribution for the new one rather than rescanning the chunk.
+        let previous_absorption = self
+            .generator
+            .pollution_absorption_per_minute_milli(previous_tile_id);
+        let absorption = self
+            .generator
+            .pollution_absorption_per_minute_milli(tile_id);
+        chunk.pollution_absorption_per_minute_milli = chunk
+            .pollution_absorption_per_minute_milli
+            .saturating_sub(previous_absorption)
+            .saturating_add(absorption);
+
+        self.record_terrain_tile_change(x, y, tile_id);
+        Ok(())
     }
 
     pub fn mine_resource_at<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
@@ -400,6 +500,25 @@ impl WorldSim {
 
         while self.resource_dirty_tiles.len() > Self::RESOURCE_DIRTY_HISTORY_LIMIT {
             self.resource_dirty_tiles.pop_front();
+        }
+    }
+
+    fn record_terrain_tile_change(
+        &mut self,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+        tile_id: TileId,
+    ) {
+        self.terrain_revision = self.terrain_revision.wrapping_add(1);
+        self.terrain_dirty_tiles.push_back(TerrainTileChange {
+            revision: self.terrain_revision,
+            x,
+            y,
+            tile_id,
+        });
+
+        while self.terrain_dirty_tiles.len() > Self::TERRAIN_DIRTY_HISTORY_LIMIT {
+            self.terrain_dirty_tiles.pop_front();
         }
     }
 }

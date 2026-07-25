@@ -6,8 +6,8 @@ use factory_sim::Simulation;
 
 use crate::audio::SoundEvent;
 use crate::build::resources::{
-    BuildMenuState, BuildPlacementState, BuildSelection, BuildingMenuView, HotbarState,
-    PlannerState,
+    BuildMenuState, BuildPlacementState, BuildSelection, BuildTarget, BuildingMenuView,
+    HotbarState, PlannerState,
 };
 use crate::input::build::{select_build_selection, technology_window_open};
 use crate::placement::build::{BuildablePrototype, buildable_prototypes, display_name};
@@ -17,13 +17,14 @@ use crate::ui::resources::{OpenContainer, TechnologyWindowState};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 use crate::utils::compact_item_name;
 
-const CATEGORIES: [BuildingCategory; 6] = [
+const CATEGORIES: [BuildingCategory; 7] = [
     BuildingCategory::Logistics,
     BuildingCategory::Production,
     BuildingCategory::Power,
     BuildingCategory::Fluids,
     BuildingCategory::Storage,
     BuildingCategory::Defense,
+    BuildingCategory::Terrain,
 ];
 const CELL_WIDTH: f32 = 168.0;
 const CELL_HEIGHT: f32 = 92.0;
@@ -259,7 +260,7 @@ fn sort_buildables(buildables: &mut [BuildablePrototype]) {
             .cmp(&right.category)
             .then_with(|| left.menu_order.cmp(&right.menu_order))
             .then_with(|| normalize(&left.display_name).cmp(&normalize(&right.display_name)))
-            .then_with(|| left.prototype_id.cmp(&right.prototype_id))
+            .then_with(|| left.item_id.cmp(&right.item_id))
     });
 }
 
@@ -274,7 +275,10 @@ fn entry_from_buildable(
         .required_technology
         .and_then(|id| catalog.technology(id))
         .map(|technology| display_name(&technology.name));
-    let unlocked = sim.is_entity_unlocked(selection.prototype_id);
+    // Terrain items are gated by owning the item, not by an entity unlock.
+    let unlocked = selection
+        .entity_prototype_id()
+        .is_none_or(|prototype_id| sim.is_entity_unlocked(prototype_id));
     let progression = required.unwrap_or_else(|| {
         if unlocked {
             "Starter"
@@ -285,9 +289,7 @@ fn entry_from_buildable(
     });
     BuildMenuEntry {
         selection,
-        internal_name: catalog
-            .entity(selection.prototype_id)
-            .map_or_else(String::new, |e| e.name.clone()),
+        internal_name: internal_name(catalog, &buildable).to_string(),
         compact_name: compact_item_name(&buildable.display_name.to_lowercase().replace(' ', "_")),
         display_name: buildable.display_name,
         category: buildable.category,
@@ -298,13 +300,24 @@ fn entry_from_buildable(
     }
 }
 
+/// The catalog-internal name a buildable is searchable by: the entity name
+/// for buildings, the item name for terrain items.
+fn internal_name<'a>(catalog: &'a PrototypeCatalog, buildable: &BuildablePrototype) -> &'a str {
+    match buildable.target {
+        BuildTarget::Entity(prototype_id) => catalog
+            .entity(prototype_id)
+            .map_or("", |entity| entity.name.as_str()),
+        BuildTarget::Tile(_) => catalog
+            .item(buildable.item_id)
+            .map_or("", |item| item.name.as_str()),
+    }
+}
+
 fn matches_search(buildable: &BuildablePrototype, catalog: &PrototypeCatalog, query: &str) -> bool {
     if query.is_empty() {
         return true;
     }
-    let internal = catalog
-        .entity(buildable.prototype_id)
-        .map_or("", |e| e.name.as_str());
+    let internal = internal_name(catalog, buildable);
     let technology = buildable
         .required_technology
         .and_then(|id| catalog.technology(id))
@@ -347,6 +360,7 @@ fn category_name(category: BuildingCategory) -> &'static str {
         BuildingCategory::Fluids => "Fluids",
         BuildingCategory::Storage => "Storage",
         BuildingCategory::Defense => "Defense",
+        BuildingCategory::Terrain => "Terrain",
     }
 }
 

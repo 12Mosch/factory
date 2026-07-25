@@ -101,11 +101,12 @@ fn zero_inventory_selection_stays_armed_for_ghost_planning() {
     app.update();
     let selection = {
         let sim = &app.world().resource::<SimResource>().read();
-        let selection = BuildSelection {
-            prototype_id: entity_id_by_name(sim.catalog(), "transport_belt"),
-            item_id: item_id_by_name(sim.catalog(), "transport_belt"),
-        };
-        assert!(sim.is_entity_unlocked(selection.prototype_id));
+        let prototype_id = entity_id_by_name(sim.catalog(), "transport_belt");
+        let selection = BuildSelection::entity(
+            prototype_id,
+            item_id_by_name(sim.catalog(), "transport_belt"),
+        );
+        assert!(sim.is_entity_unlocked(prototype_id));
         assert_eq!(sim.player_inventory().count(selection.item_id), 0);
         selection
     };
