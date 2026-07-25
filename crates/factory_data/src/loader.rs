@@ -57,7 +57,7 @@ impl PrototypeCatalog {
         let technologies =
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
         validate_technology_prerequisite_graph(&technologies)?;
-        let virtual_signals = load_virtual_signals(raw.virtual_signals)?;
+        let virtual_signals = load_virtual_signals(raw.virtual_signals);
         validate_circuit_content(&entities, &virtual_signals)?;
         let world_generation =
             load_world_generation(raw.world_generation, &item_ids_by_name, &tiles, &entities)?;

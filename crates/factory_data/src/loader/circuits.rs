@@ -5,15 +5,13 @@ use crate::raw::RawVirtualSignalPrototype;
 
 pub(super) fn load_virtual_signals(
     signals: Vec<RawVirtualSignalPrototype>,
-) -> Result<Vec<VirtualSignalPrototype>, PrototypeLoadError> {
+) -> Vec<VirtualSignalPrototype> {
     signals
         .into_iter()
-        .map(|signal| {
-            Ok(VirtualSignalPrototype {
-                id: VirtualSignalId::new(signal.id),
-                name: signal.name,
-                kind: signal.kind,
-            })
+        .map(|signal| VirtualSignalPrototype {
+            id: VirtualSignalId::new(signal.id),
+            name: signal.name,
+            kind: signal.kind,
         })
         .collect()
 }
