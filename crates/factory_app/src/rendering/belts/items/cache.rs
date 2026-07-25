@@ -23,15 +23,23 @@ pub(super) struct CachedBelt {
 /// a dirty belt address its own render entities without scanning every item.
 #[derive(Default)]
 pub(super) struct BeltItemRenderCache {
-    pub(super) items: SparseSlotMap<BeltItemId, CachedBeltItem>,
-    pub(super) belts: SparseSlotMap<EntityId, CachedBelt>,
-    pub(super) last_item_revision: u64,
-    pub(super) sim_replacement_revision: u64,
-    pub(super) labels_visible: bool,
-    pub(super) interpolation_frame: u64,
+    items: SparseSlotMap<BeltItemId, CachedBeltItem>,
+    belts: SparseSlotMap<EntityId, CachedBelt>,
+    last_item_revision: u64,
+    sim_replacement_revision: u64,
+    labels_visible: bool,
+    interpolation_frame: u64,
 }
 
 impl BeltItemRenderCache {
+    pub(super) fn has_items(&self) -> bool {
+        !self.items.is_empty()
+    }
+
+    pub(super) fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
     pub(super) fn item(&self, item_id: BeltItemId) -> Option<&CachedBeltItem> {
         self.items.get(item_id)
     }
@@ -48,6 +56,14 @@ impl BeltItemRenderCache {
         self.items.remove(item_id)
     }
 
+    pub(super) fn items_mut(&mut self) -> impl Iterator<Item = (BeltItemId, &mut CachedBeltItem)> {
+        self.items.iter_mut()
+    }
+
+    pub(super) fn take_items(&mut self) -> impl Iterator<Item = CachedBeltItem> + use<> + 'static {
+        std::mem::take(&mut self.items).into_values()
+    }
+
     pub(super) fn belt(&self, entity_id: EntityId) -> Option<&CachedBelt> {
         self.belts.get(entity_id)
     }
@@ -59,9 +75,46 @@ impl BeltItemRenderCache {
     pub(super) fn insert_belt(&mut self, entity_id: EntityId, belt: CachedBelt) {
         self.belts.insert(entity_id, belt);
     }
+
+    pub(super) fn belts(&self) -> impl Iterator<Item = (EntityId, &CachedBelt)> {
+        self.belts.iter()
+    }
+
+    pub(super) fn clear_belts(&mut self) {
+        self.belts.clear();
+    }
+
+    pub(super) fn last_item_revision(&self) -> u64 {
+        self.last_item_revision
+    }
+
+    pub(super) fn set_last_item_revision(&mut self, revision: u64) {
+        self.last_item_revision = revision;
+    }
+
+    pub(super) fn sim_replacement_revision(&self) -> u64 {
+        self.sim_replacement_revision
+    }
+
+    pub(super) fn set_sim_replacement_revision(&mut self, revision: u64) {
+        self.sim_replacement_revision = revision;
+    }
+
+    pub(super) fn labels_visible(&self) -> bool {
+        self.labels_visible
+    }
+
+    pub(super) fn set_labels_visible(&mut self, visible: bool) {
+        self.labels_visible = visible;
+    }
+
+    pub(super) fn advance_interpolation_frame(&mut self) -> u64 {
+        self.interpolation_frame = self.interpolation_frame.wrapping_add(1).max(1);
+        self.interpolation_frame
+    }
 }
 
-pub(super) trait SlotId: Copy + Eq {
+trait SlotId: Copy + Eq {
     fn raw(self) -> u64;
 }
 
@@ -83,15 +136,15 @@ const MAX_DIRECT_SLOT_PAGES: usize = 4_096;
 const VACANT_SLOT: u32 = u32::MAX;
 type SlotPage = [u32; SLOT_PAGE_SIZE];
 
-pub(super) struct SparseSlotMap<I, T> {
+struct SparseSlotMap<I, T> {
     direct_pages: Vec<Option<Box<SlotPage>>>,
     sparse_pages: HashMap<u64, Box<SlotPage>>,
-    pub(super) entries: Vec<SparseSlotEntry<I, T>>,
+    entries: Vec<SparseSlotEntry<I, T>>,
 }
 
-pub(super) struct SparseSlotEntry<I, T> {
+struct SparseSlotEntry<I, T> {
     id: I,
-    pub(super) value: T,
+    value: T,
 }
 
 impl<I: SlotId, T> SparseSlotMap<I, T> {
@@ -140,28 +193,32 @@ impl<I: SlotId, T> SparseSlotMap<I, T> {
         Some(removed.value)
     }
 
-    pub(super) fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.entries.len()
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub(super) fn iter(&self) -> impl Iterator<Item = (I, &T)> {
+    fn iter(&self) -> impl Iterator<Item = (I, &T)> {
         self.entries.iter().map(|entry| (entry.id, &entry.value))
     }
 
-    pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = (I, &mut T)> {
+    fn iter_mut(&mut self) -> impl Iterator<Item = (I, &mut T)> {
         self.entries
             .iter_mut()
             .map(|entry| (entry.id, &mut entry.value))
     }
 
-    pub(super) fn clear(&mut self) {
+    fn clear(&mut self) {
         self.direct_pages.clear();
         self.sparse_pages.clear();
         self.entries.clear();
+    }
+
+    fn into_values(self) -> impl Iterator<Item = T> {
+        self.entries.into_iter().map(|entry| entry.value)
     }
 
     fn entry_index(&self, id: I) -> Option<usize> {

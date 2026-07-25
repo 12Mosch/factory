@@ -1,17 +1,11 @@
-use bevy::prelude::{Color, Vec2, Vec3};
+use bevy::prelude::{Color, Vec3};
 use factory_data::{BasePrototypeIds, ItemId};
-#[cfg(test)]
-use factory_sim::BELT_SUBTILES_PER_TILE;
 use factory_sim::{EntityId, Simulation};
 use std::collections::HashSet;
 
-#[cfg(test)]
-use crate::constants::TILE_SIZE;
 use crate::rendering::transforms::tile_translation;
 
 use super::super::components::VisibleBeltItemRenderState;
-#[cfg(test)]
-use super::super::render_state::direction_render_vector;
 use super::super::render_state::{
     splitter_port_tiles_for_render, transport_item_render_state_from_parts,
 };
@@ -137,17 +131,18 @@ pub(crate) fn transport_item_render_state_with_ids(
         let item = segment.lanes.get(lane_index)?.items.get(item_index)?;
         (segment.dir, item, tile_translation(placed.x, placed.y, 4.0))
     };
-    let along = direction_render_vector(dir);
-    let perpendicular = Vec2::new(-along.y, along.x);
-    let progress = f32::from(item.position_subtile) / f32::from(BELT_SUBTILES_PER_TILE) - 0.5;
-    let lane_offset = if lane_index == 0 { -0.18 } else { 0.18 };
-    let offset = (along * progress + perpendicular * lane_offset) * TILE_SIZE;
     let color = belt_item_color(item.item_id, ids);
-
-    Some((
-        Vec3::new(center.x + offset.x, center.y + offset.y, 4.0),
+    let render_state = transport_item_render_state_from_parts(
+        item.id,
+        lane_index,
+        dir,
+        center,
+        item.item_id,
+        item.position_subtile,
         color,
-    ))
+    );
+
+    Some((render_state.translation, render_state.color))
 }
 
 pub(crate) fn belt_item_color(item_id: ItemId, ids: BasePrototypeIds) -> Color {

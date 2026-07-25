@@ -78,28 +78,27 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
     } = params;
 
     if !detail.show_belt_items {
-        if detail.is_changed() && !cache.items.is_empty() {
+        if detail.is_changed() && cache.has_items() {
             pool_cached_belt_items(&mut cache, &mut pool, &mut sprites, &mut labels);
         }
         return;
     }
 
-    let sim_replaced = cache.sim_replacement_revision != sim.replacement_revision();
+    let sim_replaced = cache.sim_replacement_revision() != sim.replacement_revision();
     if sim_replaced {
-        cache.sim_replacement_revision = sim.replacement_revision();
+        cache.set_sim_replacement_revision(sim.replacement_revision());
         pool_cached_belt_items(&mut cache, &mut pool, &mut sprites, &mut labels);
     }
     let alpha = fixed_time
         .as_deref()
         .map_or(1.0, Time::<Fixed>::overstep_fraction)
         .clamp(0.0, 1.0);
-    cache.interpolation_frame = cache.interpolation_frame.wrapping_add(1).max(1);
-    let interpolation_frame = cache.interpolation_frame;
+    let interpolation_frame = cache.advance_interpolation_frame();
     scratch.interpolated_items = 0;
     let sim = sim.read();
     let ids = BasePrototypeIds::from_catalog(sim.catalog());
     let visibility_changed = visible_entity_ids.is_changed() || detail.is_changed() || sim_replaced;
-    let items_changed = cache.last_item_revision != sim.belt_item_revision();
+    let items_changed = cache.last_item_revision() != sim.belt_item_revision();
     if visibility_changed || items_changed {
         collect_changed_belts(
             &sim,
@@ -124,7 +123,7 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
             &mut sprites,
             &mut labels,
         );
-        cache.last_item_revision = sim.belt_item_revision();
+        cache.set_last_item_revision(sim.belt_item_revision());
     }
 
     interpolate_belt_items(
@@ -159,7 +158,7 @@ fn collect_changed_belts(
     }
     if visibility_changed {
         changed_belts.extend(
-            cache.belts.iter().filter_map(|(entity_id, _)| {
+            cache.belts().filter_map(|(entity_id, _)| {
                 (!visible_ids.contains(&entity_id)).then_some(entity_id)
             }),
         );
@@ -262,9 +261,9 @@ fn sync_changed_belts(
         }
     }
 
-    if cache.labels_visible != show_labels {
+    if cache.labels_visible() != show_labels {
         sync_label_visibility(commands, sim, show_labels, pool, cache, labels);
-        cache.labels_visible = show_labels;
+        cache.set_labels_visible(show_labels);
     }
 }
 
@@ -315,7 +314,7 @@ fn sync_current_belt(
     old_belt.item_ids.clear();
     for item in scratch.visible_items.iter().copied() {
         old_belt.item_ids.push(item.key);
-        if let Some(cached) = cache.item_mut(item.key) {
+        let reused_cached_item = if let Some(cached) = cache.item_mut(item.key) {
             cached.owner = entity_id;
             cached.previous_translation = cached.target_translation;
             cached.target_translation = item.translation;
@@ -326,29 +325,38 @@ fn sync_current_belt(
             let translation = cached
                 .previous_translation
                 .lerp(cached.target_translation, alpha);
-            if let Ok((_, mut marker, mut transform, mut sprite, _)) =
-                sprites.get_mut(cached.sprite)
-            {
-                transform.translation = translation;
-                if item_type_changed {
-                    marker.item_id = item.item_id;
-                    *sprite = visual_assets
-                        .belt_item_sprite(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE));
+            match sprites.get_mut(cached.sprite) {
+                Ok((_, mut marker, mut transform, mut sprite, _)) => {
+                    transform.translation = translation;
+                    if item_type_changed {
+                        marker.item_id = item.item_id;
+                        *sprite = visual_assets
+                            .belt_item_sprite(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE));
+                    }
+                    if let Some(label_entity) = cached.label
+                        && let Ok((_, mut marker, mut transform, mut text, _)) =
+                            labels.get_mut(label_entity)
+                    {
+                        transform.translation = label_translation(translation);
+                        if item_type_changed {
+                            marker.item_id = item.item_id;
+                            text.0 = belt_item_label(sim, item.item_id);
+                        }
+                    }
+                    cached.interpolation_frame = interpolation_frame;
+                    scratch.interpolated_items += 1;
+                    true
                 }
+                Err(_) => false,
             }
-            if let Some(label_entity) = cached.label
-                && let Ok((_, mut marker, mut transform, mut text, _)) =
-                    labels.get_mut(label_entity)
-            {
-                transform.translation = label_translation(translation);
-                if item_type_changed {
-                    marker.item_id = item.item_id;
-                    text.0 = belt_item_label(sim, item.item_id);
-                }
-            }
-            cached.interpolation_frame = interpolation_frame;
-            scratch.interpolated_items += 1;
+        } else {
+            false
+        };
+        if reused_cached_item {
             continue;
+        }
+        if let Some(stale_item) = cache.remove_item(item.key) {
+            pool_cached_item(stale_item, pool, sprites, labels);
         }
 
         let sprite = spawn_or_reuse_belt_item_sprite(commands, pool, visual_assets, item);
@@ -396,10 +404,10 @@ fn interpolate_belt_items(
         Without<BeltItemSprite>,
     >,
 ) {
-    if already_interpolated == cache.items.len() {
+    if already_interpolated == cache.item_count() {
         return;
     }
-    for (key, item) in cache.items.iter_mut() {
+    for (key, item) in cache.items_mut() {
         if item.interpolation_frame == interpolation_frame {
             continue;
         }
@@ -436,7 +444,7 @@ fn sync_label_visibility(
         Without<BeltItemSprite>,
     >,
 ) {
-    for (key, item) in cache.items.iter_mut() {
+    for (key, item) in cache.items_mut() {
         if show_labels && item.label.is_none() {
             let render_state = VisibleBeltItemRenderState {
                 key,
@@ -450,12 +458,13 @@ fn sync_label_visibility(
                 pool,
                 render_state,
             ));
-        } else if !show_labels && let Some(entity) = item.label.take() {
-            if let Ok((_, mut marker, _, _, mut visibility)) = labels.get_mut(entity) {
-                marker.active = false;
-                *visibility = Visibility::Hidden;
-            }
-            push_unique(&mut pool.labels, entity);
+        } else if !show_labels
+            && let Some(entity) = item.label.take()
+            && let Ok((_, mut marker, _, _, mut visibility)) = labels.get_mut(entity)
+            && deactivate(&mut marker.active)
+        {
+            *visibility = Visibility::Hidden;
+            pool.labels.push(entity);
         }
     }
 }
@@ -484,11 +493,10 @@ fn pool_cached_belt_items(
         Without<BeltItemSprite>,
     >,
 ) {
-    let items = std::mem::take(&mut cache.items);
-    for entry in items.entries {
-        pool_cached_item(entry.value, pool, sprites, labels);
+    for item in cache.take_items() {
+        pool_cached_item(item, pool, sprites, labels);
     }
-    cache.belts.clear();
+    cache.clear_belts();
 }
 
 fn pool_cached_item(
@@ -515,17 +523,18 @@ fn pool_cached_item(
         Without<BeltItemSprite>,
     >,
 ) {
-    if let Ok((_, mut marker, _, _, mut visibility)) = sprites.get_mut(item.sprite) {
-        marker.active = false;
+    if let Ok((_, mut marker, _, _, mut visibility)) = sprites.get_mut(item.sprite)
+        && deactivate(&mut marker.active)
+    {
         *visibility = Visibility::Hidden;
+        pool.sprites.push(item.sprite);
     }
-    push_unique(&mut pool.sprites, item.sprite);
-    if let Some(label) = item.label {
-        if let Ok((_, mut marker, _, _, mut visibility)) = labels.get_mut(label) {
-            marker.active = false;
-            *visibility = Visibility::Hidden;
-        }
-        push_unique(&mut pool.labels, label);
+    if let Some(label) = item.label
+        && let Ok((_, mut marker, _, _, mut visibility)) = labels.get_mut(label)
+        && deactivate(&mut marker.active)
+    {
+        *visibility = Visibility::Hidden;
+        pool.labels.push(label);
     }
 }
 
@@ -570,8 +579,6 @@ pub(super) fn spawn_or_reuse_belt_item_sprite(
     )
 }
 
-pub(super) fn push_unique(pool: &mut Vec<Entity>, entity: Entity) {
-    if !pool.contains(&entity) {
-        pool.push(entity);
-    }
+fn deactivate(active: &mut bool) -> bool {
+    std::mem::take(active)
 }
