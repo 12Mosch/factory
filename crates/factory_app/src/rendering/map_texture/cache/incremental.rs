@@ -10,13 +10,9 @@ use super::repaint::{repaint_all_chunks, repaint_dirty_chunks, repaint_dirty_til
 pub(super) fn update_map_pixels_incremental(
     rasterizer: &MapRasterizer<'_>,
     cache: &mut MapLayerTextureCache,
+    map_changed: bool,
 ) {
     let old_bounds = cache.bounds.unwrap_or_default();
-    let map_changed = if rasterizer.settings.debug_reveal_all {
-        cache.last_chunk_revision != rasterizer.sim.world().chunk_revision()
-    } else {
-        cache.last_revealed_revision != rasterizer.sim.revealed_revision()
-    };
     let MapTextureChanges {
         mut dirty_chunks,
         dirty_resource_tiles,

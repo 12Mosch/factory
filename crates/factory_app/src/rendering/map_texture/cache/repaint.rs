@@ -77,8 +77,11 @@ pub(super) fn refresh_painted_chunks(
     rasterizer: &MapRasterizer<'_>,
     cache: &mut MapLayerTextureCache,
 ) {
+    let bounds = cache
+        .bounds
+        .expect("bounds must be set before refresh_painted_chunks");
     cache.painted_chunks = rasterizer
-        .eligible_chunk_coords(cache.bounds.unwrap_or_default())
+        .eligible_chunk_coords(bounds)
         .map(|coord| (coord, rasterizer.chunk_paint_state(coord)))
         .collect();
 }

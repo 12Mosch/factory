@@ -153,7 +153,11 @@ fn radar_reveal_marks_one_in_bounds_chunk_and_matches_full_render() {
         vec![target]
     );
 
-    update_map_pixels_incremental(&MapRasterizer::new(&sim, &settings, layer), &mut cache);
+    update_map_pixels_incremental(
+        &MapRasterizer::new(&sim, &settings, layer),
+        &mut cache,
+        true,
+    );
     let full = generate_map_pixels_for_layer(&sim, &settings, layer);
     assert_eq!(cache.bounds, Some(initial_bounds));
     assert_eq!(cache.pixels.as_deref(), Some(full.data.as_slice()));
@@ -291,7 +295,7 @@ fn assert_incremental_update_matches_full_render_after_streaming_chunk(
 
     for (layer, cache) in layers.iter().zip(caches.iter_mut()) {
         let rasterizer = MapRasterizer::new(&sim, &settings, *layer);
-        update_map_pixels_incremental(&rasterizer, cache);
+        update_map_pixels_incremental(&rasterizer, cache, true);
 
         let full = generate_map_pixels_for_layer(&sim, &settings, *layer);
         assert_eq!(
@@ -348,7 +352,11 @@ fn terrain_rewrite_repaints_only_the_changed_surface_tile() {
     sim.set_tile(x, y, concrete)
         .expect("generated tile should accept concrete");
 
-    update_map_pixels_incremental(&MapRasterizer::new(&sim, &settings, layer), &mut cache);
+    update_map_pixels_incremental(
+        &MapRasterizer::new(&sim, &settings, layer),
+        &mut cache,
+        false,
+    );
 
     let full = generate_map_pixels_for_layer(&sim, &settings, layer);
     assert_eq!(cache.bounds, Some(bounds));
@@ -510,7 +518,7 @@ fn bench_incremental_update_on_bounds_growth() {
 
         let started = std::time::Instant::now();
         let rasterizer = MapRasterizer::new(&sim, &settings, MapTextureLayer::Surface);
-        update_map_pixels_incremental(&rasterizer, &mut cache);
+        update_map_pixels_incremental(&rasterizer, &mut cache, true);
         samples.push(started.elapsed());
 
         if iteration + 1 == ITERATIONS {
@@ -588,7 +596,7 @@ fn bench_resource_tile_partial_upload_vs_full_buffer_upload() {
         mine_one_resource(&mut sim, resource_tile);
         let dirty_started = std::time::Instant::now();
         let rasterizer = MapRasterizer::new(&sim, &settings, layer);
-        update_map_pixels_incremental(&rasterizer, &mut cache);
+        update_map_pixels_incremental(&rasterizer, &mut cache, false);
 
         let mut uploads = MapTextureUploadQueue::default();
         upload_layer_texture(&mut cache, &mut images, &mut uploads);

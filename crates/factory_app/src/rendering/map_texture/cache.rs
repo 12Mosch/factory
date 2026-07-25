@@ -101,7 +101,7 @@ fn update_layer_map_texture(
         cache.dirty_regions.mark_full();
         refresh_painted_chunks(&rasterizer, cache);
     } else {
-        update_map_pixels_incremental(&rasterizer, cache);
+        update_map_pixels_incremental(&rasterizer, cache, map_changed);
     }
 
     upload_layer_texture(cache, images, uploads);
