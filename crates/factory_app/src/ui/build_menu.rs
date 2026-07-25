@@ -17,13 +17,14 @@ use crate::ui::resources::{OpenContainer, TechnologyWindowState};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 use crate::utils::compact_item_name;
 
-const CATEGORIES: [BuildingCategory; 7] = [
+const CATEGORIES: [BuildingCategory; 8] = [
     BuildingCategory::Logistics,
     BuildingCategory::Production,
     BuildingCategory::Power,
     BuildingCategory::Fluids,
     BuildingCategory::Storage,
     BuildingCategory::Defense,
+    BuildingCategory::Circuit,
     BuildingCategory::Terrain,
 ];
 const CELL_WIDTH: f32 = 168.0;
@@ -360,6 +361,7 @@ fn category_name(category: BuildingCategory) -> &'static str {
         BuildingCategory::Fluids => "Fluids",
         BuildingCategory::Storage => "Storage",
         BuildingCategory::Defense => "Defense",
+        BuildingCategory::Circuit => "Circuit",
         BuildingCategory::Terrain => "Terrain",
     }
 }

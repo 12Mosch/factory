@@ -26,7 +26,9 @@ use bincode::Options;
 // statistics joined the snapshot.
 // v27: radar state and durable pending radar-reveal generation requests joined
 // the snapshot.
-pub const SAVE_VERSION: u32 = 27;
+// v28: circuit wire connections, per-entity circuit configuration, combinator
+// state, and lamp state joined the entity registry.
+pub const SAVE_VERSION: u32 = 28;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -39,7 +41,8 @@ pub const SAVE_VERSION: u32 = 27;
 // v16: item module effects and entity module/beacon metadata.
 // v17: entity prototypes gained solar panel and accumulator metadata.
 // v18: entity prototypes gained radar scan metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 18;
+// v19: virtual signals, circuit connectors, and combinator metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 19;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -323,6 +326,7 @@ impl SimulationSnapshotOwned {
             power_demand_cache: PowerDemandCache::default(),
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
+            circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,
                 fluids: self.fluid_statistics,
@@ -342,6 +346,7 @@ impl SimulationSnapshotOwned {
         };
         sim.transport.initialize_item_tracking(&sim.entities);
         sim.ensure_fluid_network_topology();
+        sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();
         sim

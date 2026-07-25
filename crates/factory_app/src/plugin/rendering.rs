@@ -8,6 +8,7 @@ use crate::rendering::belts::{
 use crate::rendering::camera::{
     follow_player_camera, setup_camera, update_render_detail, update_visible_chunks,
 };
+use crate::rendering::circuits::{CircuitWireRenderState, sync_circuit_wire_rendering};
 use crate::rendering::day_night::{spawn_day_night_tint, sync_day_night_tint};
 use crate::rendering::enemies::sync_enemy_rendering;
 use crate::rendering::entities::{
@@ -44,6 +45,7 @@ impl Plugin for RenderingPlugin {
             .init_resource::<VisualAssetCache>()
             .init_resource::<WorldRenderCache>()
             .init_resource::<BeltItemRenderPool>()
+            .init_resource::<CircuitWireRenderState>()
             .add_systems(
                 Startup,
                 (
@@ -82,6 +84,7 @@ impl Plugin for RenderingPlugin {
                     sync_enemy_rendering,
                     measured_sync_belt_direction_rendering,
                     measured_sync_belt_item_rendering,
+                    sync_circuit_wire_rendering,
                 )
                     .chain()
                     .in_set(AppSet::RenderSync),

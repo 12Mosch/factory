@@ -93,5 +93,9 @@ fn entity_kind_name(kind: EntityKind) -> &'static str {
         EntityKind::SolarPanel => "Solar panels",
         EntityKind::Accumulator => "Accumulators",
         EntityKind::Radar => "Radars",
+        EntityKind::Lamp => "Lamps",
+        EntityKind::ConstantCombinator => "Constant combinators",
+        EntityKind::ArithmeticCombinator => "Arithmetic combinators",
+        EntityKind::DeciderCombinator => "Decider combinators",
     }
 }

@@ -393,10 +393,15 @@ pub(crate) fn update_machine_indicators(
                         1,
                     ))
                 }
+                // No burner energy and no crafting progress to report.
                 OpenMachineKind::Chest
                 | OpenMachineKind::Lab
                 | OpenMachineKind::Turret
-                | OpenMachineKind::Beacon => None,
+                | OpenMachineKind::Beacon
+                | OpenMachineKind::ConstantCombinator
+                | OpenMachineKind::ArithmeticCombinator
+                | OpenMachineKind::DeciderCombinator
+                | OpenMachineKind::Circuit => None,
             });
 
     for mut text in &mut energy_texts {

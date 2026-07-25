@@ -31,6 +31,9 @@ pub(crate) fn destroy_to_player_inventory(
             })?;
     }
 
+    // Unlink before removal: the reverse links live on the neighbors, and
+    // `remove_placed_entity` only drops this entity's own side.
+    sim.unlink_circuit_wires(entity_id);
     let removed = sim
         .entities
         .remove_placed_entity(entity_id)
@@ -59,6 +62,7 @@ pub(crate) fn entity_recovery_stacks(
         .expect("an entity's validated build item should form a valid stack"),
     );
     push_entity_state_recovery_stacks(&sim.world.prototypes, &sim.entities, placed.id, &mut stacks);
+    sim.circuit_wire_recovery_stacks(placed.id, &mut stacks);
 
     Ok(stacks)
 }

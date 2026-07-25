@@ -61,6 +61,7 @@ impl Simulation {
             power_demand_cache: PowerDemandCache::default(),
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::default(),
+            circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
             capacity_overflows: CapacityOverflowCounters::default(),
@@ -113,9 +114,13 @@ impl Simulation {
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
+        // Circuits resolve first so every gated consumer later in the tick
+        // sees the same, already-settled network state.
+        profiler.measure(ProfilePhase::Circuits, || self.advance_circuit_networks());
         profiler.measure(ProfilePhase::Belts, || self.advance_transport_belts());
         profiler.measure(ProfilePhase::Fluids, || self.advance_fluids_before_power());
         profiler.measure(ProfilePhase::Power, || self.refresh_power_state());
+        profiler.measure(ProfilePhase::Lamps, || self.refresh_lamps());
         profiler.measure(ProfilePhase::Radars, || self.advance_radars());
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();
@@ -224,7 +229,7 @@ impl Simulation {
 
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
-        "factory-sim-state-v1".hash(&mut hasher);
+        "factory-sim-state-v2".hash(&mut hasher);
         self.tick.hash(&mut hasher);
         self.day_night_cycle.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
@@ -250,6 +255,12 @@ impl Simulation {
         self.power.networks.hash(&mut hasher);
         self.power.entity_statuses.hash(&mut hasher);
         self.fluids.networks.hash(&mut hasher);
+        self.circuits.topology.network_ids.hash(&mut hasher);
+        self.circuits.topology.network_count.hash(&mut hasher);
+        for network in &self.circuits.networks {
+            network.as_slice().hash(&mut hasher);
+        }
+        self.circuits.disabled_entities.hash(&mut hasher);
         self.pollution.hash(&mut hasher);
         self.enemies.hash(&mut hasher);
         self.config.hash(&mut hasher);

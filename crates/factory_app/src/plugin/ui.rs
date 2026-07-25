@@ -15,6 +15,13 @@ use crate::ui::assembler_panel::{
     update_assembler_recipe_button_colors,
 };
 use crate::ui::build_menu::handle_build_menu_buttons;
+use crate::ui::circuit::interaction::{
+    handle_circuit_constant_step_buttons, handle_circuit_operand_mode_buttons,
+    handle_circuit_signal_buttons, handle_circuit_slot_step_buttons, handle_circuit_toggle_buttons,
+};
+use crate::ui::circuit::panel::update_circuit_panel;
+use crate::ui::circuit::picker::{handle_signal_picker_buttons, sync_signal_picker};
+use crate::ui::circuit::state::CircuitEditorState;
 use crate::ui::container_window::sync_container_window;
 use crate::ui::debug_overlay::{
     DebugOverlayVisible, apply_debug_overlay_visibility, debug_overlay_refresh_due,
@@ -94,6 +101,7 @@ impl Plugin for UiPlugin {
             .init_resource::<EnemySettingsWindowState>()
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
+            .init_resource::<CircuitEditorState>()
             .add_systems(
                 Startup,
                 (setup_debug_overlay, setup_objectives_panel, setup_threat_ui),
@@ -158,6 +166,24 @@ impl Plugin for UiPlugin {
                 Update,
                 update_module_panel
                     .after(sync_container_window)
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_circuit_signal_buttons.in_set(AppSet::UiInteraction),
+                    handle_circuit_operand_mode_buttons.in_set(AppSet::UiInteraction),
+                    handle_circuit_constant_step_buttons.in_set(AppSet::UiInteraction),
+                    handle_circuit_slot_step_buttons.in_set(AppSet::UiInteraction),
+                    handle_circuit_toggle_buttons.in_set(AppSet::UiInteraction),
+                    handle_signal_picker_buttons.in_set(AppSet::UiInteraction),
+                    // The picker reads the slot the buttons above may have
+                    // just opened or closed, so it syncs after them.
+                    sync_signal_picker
+                        .after(handle_circuit_signal_buttons)
+                        .after(handle_signal_picker_buttons),
+                    update_circuit_panel.after(sync_container_window),
+                )
                     .in_set(InGameSet),
             )
             .add_systems(

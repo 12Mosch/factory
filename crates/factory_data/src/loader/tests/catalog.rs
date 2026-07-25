@@ -73,6 +73,12 @@ const ITEM_NAMES: &[&str] = &[
     "utility_science_pack",
     "space_science_pack",
     "radar",
+    "red_wire",
+    "green_wire",
+    "constant_combinator",
+    "arithmetic_combinator",
+    "decider_combinator",
+    "lamp",
 ];
 
 const FLUID_NAMES: &[&str] = &["water", "steam", "crude_oil", "petroleum_gas"];
@@ -197,12 +203,13 @@ const TECHNOLOGY_NAMES: &[&str] = &[
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 87);
+    assert_eq!(catalog.items.len(), 93);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 87);
-    assert_eq!(catalog.entities.len(), 53);
+    assert_eq!(catalog.recipes.len(), 93);
+    assert_eq!(catalog.entities.len(), 57);
     assert_eq!(catalog.tiles.len(), 11);
-    assert_eq!(catalog.technologies.len(), 36);
+    assert_eq!(catalog.technologies.len(), 37);
+    assert_eq!(catalog.virtual_signals.len(), 38);
 }
 
 #[test]
@@ -290,5 +297,9 @@ fn explicit_ids_are_sorted_and_stable() {
 
     for (expected, technology) in catalog.technologies.iter().enumerate() {
         assert_eq!(technology.id.index(), expected);
+    }
+
+    for (expected, virtual_signal) in catalog.virtual_signals.iter().enumerate() {
+        assert_eq!(virtual_signal.id.index(), expected);
     }
 }

@@ -12,10 +12,18 @@ pub(crate) enum OpenMachineKind {
     Turret,
     Inserter,
     Beacon,
+    ConstantCombinator,
+    ArithmeticCombinator,
+    DeciderCombinator,
+    /// An entity whose only configurable surface is its circuit connector
+    /// (belts, pumps, tanks, accumulators, lamps). Without this the player
+    /// would have no way to reach their conditions.
+    Circuit,
 }
 
 pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option<OpenMachineKind> {
-    match factory_sim::entity_access::machine_kind(sim, entity_id)? {
+    let kind = factory_sim::entity_access::machine_kind(sim, entity_id)?;
+    let machine_window = match kind {
         EntityKind::Chest => Some(OpenMachineKind::Chest),
         EntityKind::MiningDrill => Some(OpenMachineKind::MiningDrill),
         EntityKind::Furnace => Some(OpenMachineKind::Furnace),
@@ -24,6 +32,9 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
         EntityKind::Lab => Some(OpenMachineKind::Lab),
         EntityKind::Beacon => Some(OpenMachineKind::Beacon),
         EntityKind::GunTurret => Some(OpenMachineKind::Turret),
+        EntityKind::ConstantCombinator => Some(OpenMachineKind::ConstantCombinator),
+        EntityKind::ArithmeticCombinator => Some(OpenMachineKind::ArithmeticCombinator),
+        EntityKind::DeciderCombinator => Some(OpenMachineKind::DeciderCombinator),
         EntityKind::Inserter => sim
             .entities()
             .placed_entity(entity_id)
@@ -31,5 +42,9 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
             .and_then(|prototype| prototype.burner.as_ref())
             .map(|_| OpenMachineKind::Inserter),
         _ => None,
-    }
+    };
+    machine_window.or_else(|| {
+        factory_sim::entity_access::circuit_connector(sim, entity_id)
+            .map(|_| OpenMachineKind::Circuit)
+    })
 }

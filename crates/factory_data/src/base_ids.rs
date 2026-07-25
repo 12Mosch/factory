@@ -68,6 +68,8 @@ pub struct BaseItemIds {
     pub sulfur: ItemId,
     pub landfill: ItemId,
     pub concrete: ItemId,
+    pub red_wire: ItemId,
+    pub green_wire: ItemId,
 }
 
 impl BaseItemIds {
@@ -122,6 +124,8 @@ impl BaseItemIds {
             sulfur: item_id_by_name(catalog, "sulfur"),
             landfill: item_id_by_name(catalog, "landfill"),
             concrete: item_id_by_name(catalog, "concrete"),
+            red_wire: item_id_by_name(catalog, "red_wire"),
+            green_wire: item_id_by_name(catalog, "green_wire"),
         }
     }
 

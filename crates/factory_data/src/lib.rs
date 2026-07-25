@@ -15,11 +15,14 @@ pub use base_ids::{
 };
 pub use catalog::PrototypeCatalog;
 pub use error::PrototypeLoadError;
-pub use ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
+pub use ids::{
+    EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId, VirtualSignalId,
+};
 pub use model::{
     AccumulatorPrototype, AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype,
     BeaconPrototype, BiomeConfig, BoilerPrototype, BuildingCategory, BurnerPrototype,
-    ClimateNoiseConfig, ClimateRange, CollisionLayer, CollisionMask, CraftingCategory,
+    CircuitConnectorPrototype, CircuitPortLayout, ClimateNoiseConfig, ClimateRange, CollisionLayer,
+    CollisionMask, CombinatorKind, CombinatorPrototype, CraftingCategory,
     DamageResistancePrototype, DamageType, DayNightCycleConfig, ElectricEnergySourcePrototype,
     ElectricPolePrototype, EnemyBaseGenerationConfig, EnemyGameplayConfig, EnemySpawnerPrototype,
     EntityKind, EntityPrototype, EquipmentEffectPrototype, EquipmentPrototype, FluidAmount,
@@ -31,6 +34,6 @@ pub use model::{
     ResourcePatchGridConfig, SolarPanelPrototype, SplitterPrototype, StartingAreaConfig,
     SteamEnginePrototype, TechnologyEffect, TechnologyPrototype, TerrainNoiseConfig,
     TilePlacementPrototype, TilePrototype, TransportBeltPrototype, UndergroundBeltPart,
-    UndergroundBeltPrototype, UndergroundPipePrototype, UnitPrototype,
-    WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
+    UndergroundBeltPrototype, UndergroundPipePrototype, UnitPrototype, VirtualSignalKind,
+    VirtualSignalPrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
 };

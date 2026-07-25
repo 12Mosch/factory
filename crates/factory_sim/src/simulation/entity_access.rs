@@ -45,6 +45,44 @@ pub fn radar_state(sim: &Simulation, entity_id: EntityId) -> Option<&RadarState>
     sim.entities.radars.get(&entity_id)
 }
 
+/// Circuit connector metadata for an entity, or `None` when its prototype
+/// declares none. Presentation uses this to decide whether wiring UI applies.
+pub fn circuit_connector(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<factory_data::CircuitConnectorPrototype> {
+    sim.entities
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.catalog().entity(placed.prototype_id))
+        .and_then(|prototype| prototype.circuit_connector)
+}
+
+pub fn constant_combinator_state(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<&ConstantCombinatorState> {
+    sim.entities.constant_combinators.get(&entity_id)
+}
+
+pub fn arithmetic_combinator_state(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<&ArithmeticCombinatorState> {
+    sim.entities.arithmetic_combinators.get(&entity_id)
+}
+
+pub fn decider_combinator_state(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<&DeciderCombinatorState> {
+    sim.entities.decider_combinators.get(&entity_id)
+}
+
+/// Whether a lamp is currently lit. `None` when the entity is not a lamp.
+pub fn lamp_is_lit(sim: &Simulation, entity_id: EntityId) -> Option<bool> {
+    sim.entities.lamps.get(&entity_id).map(|state| state.lit)
+}
+
 pub fn fluid_box_states(sim: &Simulation, entity_id: EntityId) -> Option<&[FluidBoxState]> {
     sim.entities.fluid_box_states(entity_id)
 }

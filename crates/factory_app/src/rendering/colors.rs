@@ -66,6 +66,34 @@ pub(crate) fn radar_color() -> Color {
     Color::srgb(0.16, 0.58, 0.26)
 }
 
+pub(crate) fn constant_combinator_color() -> Color {
+    Color::srgb(0.28, 0.40, 0.52)
+}
+
+pub(crate) fn arithmetic_combinator_color() -> Color {
+    Color::srgb(0.34, 0.46, 0.62)
+}
+
+pub(crate) fn decider_combinator_color() -> Color {
+    Color::srgb(0.44, 0.42, 0.62)
+}
+
+/// Lamps darken when unlit so the circuit state reads at a glance.
+pub(crate) fn lamp_color(lit: bool) -> Color {
+    if lit {
+        Color::srgb(0.96, 0.92, 0.68)
+    } else {
+        Color::srgb(0.38, 0.38, 0.36)
+    }
+}
+
+pub(crate) fn circuit_wire_color(color: factory_sim::WireColor) -> Color {
+    match color {
+        factory_sim::WireColor::Red => Color::srgb(0.86, 0.24, 0.24),
+        factory_sim::WireColor::Green => Color::srgb(0.28, 0.80, 0.34),
+    }
+}
+
 pub(crate) fn offshore_pump_color() -> Color {
     Color::srgb(0.14, 0.48, 0.68)
 }

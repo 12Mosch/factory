@@ -1,7 +1,9 @@
 use glam::IVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId};
+use crate::ids::{
+    EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId, VirtualSignalId,
+};
 
 /// Deterministic timing for a world's day/night cycle.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -139,6 +141,79 @@ pub enum EquipmentEffectPrototype {
     },
 }
 
+/// A signal that carries no item or fluid identity of its own. Concrete
+/// virtual signals are plain named channels a player can push numbers down;
+/// the wildcard kinds are only meaningful as combinator operands.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct VirtualSignalPrototype {
+    pub id: VirtualSignalId,
+    pub name: String,
+    pub kind: VirtualSignalKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum VirtualSignalKind {
+    /// An ordinary named channel that can hold a value on a network.
+    #[default]
+    Concrete,
+    /// Combinator wildcard: runs the operation once per input signal.
+    Each,
+    /// Combinator wildcard: matches when any one input signal satisfies the
+    /// comparison.
+    Anything,
+    /// Combinator wildcard: matches when every input signal satisfies the
+    /// comparison.
+    Everything,
+}
+
+impl VirtualSignalKind {
+    pub const fn is_wildcard(self) -> bool {
+        !matches!(self, Self::Concrete)
+    }
+}
+
+/// Circuit-network wire attachment. An entity without this section cannot be
+/// wired at all, which is what keeps belts and inserters free of circuit state
+/// until the player opts in.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct CircuitConnectorPrototype {
+    pub ports: CircuitPortLayout,
+    /// Maximum wire length, in half tiles, measured between footprint centers.
+    /// Half tiles let even-sized footprints keep an exact center like
+    /// [`ElectricPolePrototype::wire_reach_tiles_x2`] does for copper wire.
+    pub wire_reach_tiles_x2: u16,
+    /// Publishes the entity's own contents onto the networks it is wired to.
+    pub reads_contents: bool,
+    /// Accepts an enable/disable condition gating the entity's own work.
+    pub controllable: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum CircuitPortLayout {
+    /// One connector shared by both wire colors; the entity both reads and
+    /// writes there.
+    Single,
+    /// Separate input and output connectors, so a combinator's own output
+    /// never feeds straight back into its input.
+    InputOutput,
+}
+
+/// Signal-processing entity. The kind selects which stored configuration and
+/// evaluation rule the simulation applies.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct CombinatorPrototype {
+    pub kind: CombinatorKind,
+    /// Signal rows a constant combinator holds; zero for the other kinds.
+    pub constant_slot_count: u8,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum CombinatorKind {
+    Constant,
+    Arithmetic,
+    Decider,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RecipePrototype {
     pub id: RecipeId,
@@ -191,6 +266,10 @@ pub struct EntityPrototype {
     pub gun_turret: Option<GunTurretPrototype>,
     pub laser_turret: Option<LaserTurretPrototype>,
     pub enemy_spawner: Option<EnemySpawnerPrototype>,
+    /// Present when red and green circuit wires can be attached.
+    pub circuit_connector: Option<CircuitConnectorPrototype>,
+    /// Present on combinator entities.
+    pub combinator: Option<CombinatorPrototype>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -207,6 +286,8 @@ pub enum BuildingCategory {
     Fluids,
     Storage,
     Defense,
+    /// Wires, combinators, and lamps.
+    Circuit,
     /// Items that rewrite terrain instead of placing an entity.
     Terrain,
 }
@@ -541,6 +622,10 @@ pub enum EntityKind {
     SolarPanel,
     Accumulator,
     Radar,
+    Lamp,
+    ConstantCombinator,
+    ArithmeticCombinator,
+    DeciderCombinator,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

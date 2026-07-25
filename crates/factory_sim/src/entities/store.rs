@@ -47,6 +47,11 @@ macro_rules! for_each_entity_state_map {
             solar_panels: crate::power::SolarPanelState => SolarPanel,
             accumulators: crate::power::AccumulatorState => Accumulator,
             radars: crate::radar::RadarState => Radar,
+            circuit_entities: crate::circuits::CircuitEntityState => _,
+            constant_combinators: crate::circuits::ConstantCombinatorState => ConstantCombinator,
+            arithmetic_combinators: crate::circuits::ArithmeticCombinatorState => ArithmeticCombinator,
+            decider_combinators: crate::circuits::DeciderCombinatorState => DeciderCombinator,
+            lamps: crate::circuits::LampState => Lamp,
         }
     };
 }
@@ -197,6 +202,11 @@ pub struct PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuits::{
+        ArithmeticCombinatorState, ArithmeticOperation, CircuitEntityState, CircuitNode,
+        Comparator, ConnectorPort, ConstantCombinatorState, ConstantSignalSlot,
+        DeciderCombinatorState, DeciderOutputValue, LampState, SignalId, SignalOperand, WireColor,
+    };
     use crate::combat::{
         Damage, EnemySpawnerState, Faction, GunTurretState, HealthState, LaserTurretState,
     };
@@ -213,7 +223,7 @@ mod tests {
         SolarPanelState, SteamEngineState,
     };
     use crate::radar::RadarState;
-    use factory_data::{FluidId, ItemId, RecipeId, TechnologyId};
+    use factory_data::{FluidId, ItemId, RecipeId, TechnologyId, VirtualSignalId};
 
     #[test]
     fn entity_store_serialized_layout_is_stable() {
@@ -234,7 +244,9 @@ mod tests {
         // v25: module state joined productive machines and beacon state was appended.
         // v26: solar panel and accumulator state maps were appended.
         // v27: radar state was appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x5e75_93e5_7b28_cfba;
+        // v28: circuit connections, combinator configuration, and lamp state
+        // were appended.
+        const EXPECTED_LAYOUT_HASH: u64 = 0xcead_01a8_0da8_8818;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -272,9 +284,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(22);
+        let mut store = EntityStore::empty(26);
 
-        for raw in 1..=21 {
+        for raw in 1..=25 {
             let id = EntityId::new(raw);
             let tile = raw as i64;
             store.entities.push(SimEntity {
@@ -448,6 +460,64 @@ mod tests {
                 cooldown_remaining_ticks: 23,
             },
         );
+
+        // One wire between the chest and the constant combinator, recorded on
+        // both endpoints, so the serialized form pins the symmetric layout.
+        let chest = EntityId::new(1);
+        let constant_combinator = EntityId::new(22);
+        let mut chest_circuit = CircuitEntityState {
+            read_contents: true,
+            ..CircuitEntityState::default()
+        };
+        chest_circuit.connections.insert(
+            ConnectorPort::Single,
+            WireColor::Red,
+            CircuitNode::new(constant_combinator, ConnectorPort::Output),
+        );
+        store.circuit_entities.insert(chest, chest_circuit);
+        let mut combinator_circuit = CircuitEntityState::default();
+        combinator_circuit.connections.insert(
+            ConnectorPort::Output,
+            WireColor::Red,
+            CircuitNode::new(chest, ConnectorPort::Single),
+        );
+        store
+            .circuit_entities
+            .insert(constant_combinator, combinator_circuit);
+        store.constant_combinators.insert(
+            constant_combinator,
+            ConstantCombinatorState {
+                enabled: true,
+                slots: vec![ConstantSignalSlot {
+                    signal: Some(SignalId::Item(iron)),
+                    value: 7,
+                }],
+            },
+        );
+        store.arithmetic_combinators.insert(
+            EntityId::new(23),
+            ArithmeticCombinatorState {
+                left: SignalOperand::Signal(SignalId::Item(iron)),
+                operation: ArithmeticOperation::Multiply,
+                right: SignalOperand::Constant(3),
+                output: Some(SignalId::Item(copper)),
+                outputs: vec![(SignalId::Item(copper), 21)],
+            },
+        );
+        store.decider_combinators.insert(
+            EntityId::new(24),
+            DeciderCombinatorState {
+                left: Some(SignalId::Fluid(water)),
+                comparator: Comparator::GreaterOrEqual,
+                right: SignalOperand::Constant(100),
+                output: Some(SignalId::Virtual(VirtualSignalId::new(3))),
+                output_value: DeciderOutputValue::InputCount,
+                outputs: vec![(SignalId::Virtual(VirtualSignalId::new(3)), 1)],
+            },
+        );
+        store
+            .lamps
+            .insert(EntityId::new(25), LampState { lit: true });
 
         store
     }

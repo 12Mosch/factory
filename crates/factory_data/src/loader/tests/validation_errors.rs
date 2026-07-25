@@ -1,6 +1,74 @@
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
 
+fn combinator_catalog(
+    entity_kind: &str,
+    combinator_kind: &str,
+    virtual_signals: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    let constant_slot_count = u8::from(combinator_kind == "Constant");
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "combinator",
+                entity_kind: {entity_kind},
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["building"]),
+                circuit_connector: Some((
+                    ports: InputOutput,
+                    wire_reach_tiles_x2: 18,
+                    reads_contents: false,
+                    controllable: false,
+                )),
+                combinator: Some((
+                    kind: {combinator_kind},
+                    constant_slot_count: {constant_slot_count},
+                )),
+            )],
+            tiles: [],
+            virtual_signals: [{virtual_signals}],
+        )"#
+    ))
+}
+
+#[test]
+fn constant_combinators_do_not_require_wildcard_signals() {
+    combinator_catalog("ConstantCombinator", "Constant", "")
+        .expect("constant-only catalogs do not use wildcard operands");
+}
+
+#[test]
+fn operand_combinators_require_every_wildcard_signal() {
+    for (signals, missing) in [
+        (
+            "(id: 0, name: \"anything\", kind: Anything), (id: 1, name: \"everything\", kind: Everything)",
+            "Each",
+        ),
+        (
+            "(id: 0, name: \"each\", kind: Each), (id: 1, name: \"everything\", kind: Everything)",
+            "Anything",
+        ),
+        (
+            "(id: 0, name: \"each\", kind: Each), (id: 1, name: \"anything\", kind: Anything)",
+            "Everything",
+        ),
+    ] {
+        let error = combinator_catalog("ArithmeticCombinator", "Arithmetic", signals)
+            .expect_err("operand combinators require the complete wildcard vocabulary");
+        assert!(
+            matches!(
+                error,
+                PrototypeLoadError::InvalidCircuitMetadata { detail, .. }
+                    if detail.contains(missing)
+            ),
+            "unexpected error for missing {missing}: {error}"
+        );
+    }
+}
+
 #[test]
 fn duplicate_ids_fail() {
     let error = PrototypeCatalog::from_ron_str(

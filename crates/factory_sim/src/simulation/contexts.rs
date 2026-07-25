@@ -186,6 +186,9 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) power_demand_cache: &'a mut PowerDemandCache,
     pub(super) fluids: &'a mut FluidSubsystem,
+    /// Read-only: circuit networks resolve before machines run, so machine
+    /// systems only consult this tick's already-settled conditions.
+    pub(super) circuits: &'a CircuitSubsystem,
     pub(super) statistics: StatisticsContext<'a>,
     pub(super) onboarding_progress: &'a mut OnboardingProgress,
     pub(super) pollution_emitters: &'a mut PollutionEmitterIndex,
@@ -195,6 +198,10 @@ pub(super) struct MachineTickContext<'a> {
 impl<'a> MachineTickContext<'a> {
     pub(super) fn electric_work_allowed(&mut self, entity_id: EntityId) -> bool {
         electric_work_allowed_for(self.power, &mut self.entities.electric_consumers, entity_id)
+    }
+
+    pub(super) fn circuit_work_allowed(&self, entity_id: EntityId) -> bool {
+        !self.circuits.is_disabled(entity_id)
     }
 
     pub(super) fn record_item_produced(&mut self, item_id: ItemId, amount: u64) {

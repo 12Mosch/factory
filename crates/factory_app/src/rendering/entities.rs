@@ -9,9 +9,10 @@ use crate::constants::{
 };
 use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{
-    accumulator_color, assembler_color, beacon_color, boiler_color, chemical_plant_color,
-    chest_color, electric_pole_color, enemy_spawner_color, furnace_color, gun_turret_color,
-    inserter_color, lab_color, laser_turret_color, mining_drill_color, offshore_pump_color,
+    accumulator_color, arithmetic_combinator_color, assembler_color, beacon_color, boiler_color,
+    chemical_plant_color, chest_color, constant_combinator_color, decider_combinator_color,
+    electric_pole_color, enemy_spawner_color, furnace_color, gun_turret_color, inserter_color,
+    lab_color, lamp_color, laser_turret_color, mining_drill_color, offshore_pump_color,
     oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, solar_panel_color,
     splitter_color, steam_engine_color, storage_tank_color, transport_belt_color, wall_color,
 };
@@ -132,6 +133,11 @@ pub(crate) fn renderable_entity_visual_style(
     let mut style =
         entity_prototype_visual_style(sim.catalog(), placed.prototype_id, placed.direction)?;
     style.connections = entity_connection_mask(sim, placed, style.kind);
+    if style.kind == EntityKind::Lamp
+        && let Some(lit) = factory_sim::entity_access::lamp_is_lit(sim, entity_id)
+    {
+        style.base_color = lamp_color(lit);
+    }
     Some(style)
 }
 
@@ -388,6 +394,33 @@ pub(crate) fn entity_prototype_visual_style(
         )),
         EntityKind::Radar => Some(entity_visual_style(
             radar_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::ConstantCombinator => Some(entity_visual_style(
+            constant_combinator_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::ArithmeticCombinator => Some(entity_visual_style(
+            arithmetic_combinator_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::DeciderCombinator => Some(entity_visual_style(
+            decider_combinator_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        // Placeholders and previews have no simulated lamp to read, so the
+        // prototype-only style shows the unlit body;
+        // `renderable_entity_visual_style` swaps in the live state.
+        EntityKind::Lamp => Some(entity_visual_style(
+            lamp_color(false),
             machine_size(),
             prototype.entity_kind,
             direction,

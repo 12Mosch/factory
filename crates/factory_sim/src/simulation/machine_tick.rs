@@ -19,6 +19,7 @@ impl Simulation {
             power: &mut self.power,
             power_demand_cache: &mut self.power_demand_cache,
             fluids: &mut self.fluids,
+            circuits: &self.circuits,
             statistics: StatisticsContext::new(self.tick, &mut self.statistics),
             onboarding_progress: &mut self.onboarding_progress,
             pollution_emitters: &mut self.pollution_emitters,

@@ -36,3 +36,4 @@ id_type!(RecipeId);
 id_type!(EntityPrototypeId);
 id_type!(TileId);
 id_type!(TechnologyId);
+id_type!(VirtualSignalId);

@@ -32,6 +32,9 @@ impl Simulation {
             .collect::<Vec<_>>();
 
         for entity_id in pump_ids {
+            if !self.circuit_work_allowed(entity_id) {
+                continue;
+            }
             let Some(transfer) = pump_fluid_transfer(
                 &self.world.prototypes,
                 &self.entities,

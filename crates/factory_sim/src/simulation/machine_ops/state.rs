@@ -43,7 +43,49 @@ pub(in crate::simulation) fn reservation_for_prototype(
         laser_turrets: laser_turret_state_for_prototype(prototype),
         beacons: beacon_state_for_prototype(prototype),
         radars: radar_state_for_prototype(prototype),
+        // Deliberately `None`: circuit state is created lazily when the first
+        // wire or condition is configured, so an unwired belt or inserter
+        // carries no per-entity circuit entry at all.
+        circuit_entities: None,
+        constant_combinators: constant_combinator_state_for_prototype(prototype),
+        arithmetic_combinators: arithmetic_combinator_state_for_prototype(prototype),
+        decider_combinators: decider_combinator_state_for_prototype(prototype),
+        lamps: lamp_state_for_prototype(prototype),
     }
+}
+
+fn constant_combinator_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<ConstantCombinatorState> {
+    let combinator = prototype.combinator?;
+    (prototype.entity_kind == EntityKind::ConstantCombinator
+        && combinator.kind == factory_data::CombinatorKind::Constant)
+        .then(|| {
+            ConstantCombinatorState::with_slot_count(usize::from(combinator.constant_slot_count))
+        })
+}
+
+fn arithmetic_combinator_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<ArithmeticCombinatorState> {
+    let combinator = prototype.combinator?;
+    (prototype.entity_kind == EntityKind::ArithmeticCombinator
+        && combinator.kind == factory_data::CombinatorKind::Arithmetic)
+        .then(ArithmeticCombinatorState::default)
+}
+
+fn decider_combinator_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<DeciderCombinatorState> {
+    let combinator = prototype.combinator?;
+    (prototype.entity_kind == EntityKind::DeciderCombinator
+        && combinator.kind == factory_data::CombinatorKind::Decider)
+        .then(DeciderCombinatorState::default)
+}
+
+fn lamp_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<LampState> {
+    (prototype.entity_kind == EntityKind::Lamp && prototype.circuit_connector.is_some())
+        .then_some(LampState::default())
 }
 
 fn chest_inventory_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<Inventory> {

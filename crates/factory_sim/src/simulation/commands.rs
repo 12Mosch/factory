@@ -119,6 +119,62 @@ pub enum SimCommand {
         index: usize,
         name: String,
     },
+    /// Joins two circuit connectors with a wire, consuming one wire item.
+    ConnectCircuitWire {
+        first: CircuitNode,
+        second: CircuitNode,
+        color: WireColor,
+    },
+    /// Cuts one wire, returning its item to the player.
+    DisconnectCircuitWire {
+        first: CircuitNode,
+        second: CircuitNode,
+        color: WireColor,
+    },
+    /// Cuts every wire of one color attached to an entity.
+    DisconnectAllCircuitWires {
+        entity_id: EntityId,
+        color: WireColor,
+    },
+    /// Sets (or clears) an entity's enable/disable condition.
+    SetCircuitCondition {
+        entity_id: EntityId,
+        condition: Option<CircuitCondition>,
+    },
+    /// Toggles whether an entity publishes its contents onto its networks.
+    SetCircuitReadContents {
+        entity_id: EntityId,
+        read_contents: bool,
+    },
+    /// Picks the signal an accumulator reports its charge percentage on.
+    SetAccumulatorChargeSignal {
+        entity_id: EntityId,
+        signal: Option<SignalId>,
+    },
+    SetConstantCombinatorSlot {
+        entity_id: EntityId,
+        slot_index: usize,
+        slot: ConstantSignalSlot,
+    },
+    SetConstantCombinatorEnabled {
+        entity_id: EntityId,
+        enabled: bool,
+    },
+    ConfigureArithmeticCombinator {
+        entity_id: EntityId,
+        left: SignalOperand,
+        operation: ArithmeticOperation,
+        right: SignalOperand,
+        output: Option<SignalId>,
+    },
+    ConfigureDeciderCombinator {
+        entity_id: EntityId,
+        left: Option<SignalId>,
+        comparator: Comparator,
+        right: SignalOperand,
+        output: Option<SignalId>,
+        output_value: DeciderOutputValue,
+    },
     BuildRedScienceResearchFixture,
     BuildChemicalScienceFactoryFixture,
     /// Applies the chemical science fixture's pending recipe selections as
@@ -167,6 +223,7 @@ pub enum SimCommandError {
     Repair(RepairError),
     Equipment(PlayerEquipmentError),
     TilePlacement(TilePlacementError),
+    Circuit(CircuitError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -199,6 +256,9 @@ pub enum SimCommandEffect {
     },
     BlueprintSaved {
         index: usize,
+    },
+    CircuitWiresRemoved {
+        removed: usize,
     },
 }
 
@@ -430,6 +490,95 @@ impl Simulation {
             SimCommand::RenameBlueprint { index, ref name } => {
                 construction_ops::rename_blueprint(self, index, name.clone())
                     .map_err(SimCommandError::Construction)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::ConnectCircuitWire {
+                first,
+                second,
+                color,
+            } => {
+                self.connect_circuit_wire(first, second, color)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::DisconnectCircuitWire {
+                first,
+                second,
+                color,
+            } => {
+                self.disconnect_circuit_wire(first, second, color)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::DisconnectAllCircuitWires { entity_id, color } => {
+                let removed = self
+                    .disconnect_all_circuit_wires(entity_id, color)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::CircuitWiresRemoved { removed })
+            }
+            SimCommand::SetCircuitCondition {
+                entity_id,
+                condition,
+            } => {
+                self.set_circuit_condition(entity_id, condition)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetCircuitReadContents {
+                entity_id,
+                read_contents,
+            } => {
+                self.set_circuit_read_contents(entity_id, read_contents)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetAccumulatorChargeSignal { entity_id, signal } => {
+                self.set_accumulator_charge_signal(entity_id, signal)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetConstantCombinatorSlot {
+                entity_id,
+                slot_index,
+                slot,
+            } => {
+                self.set_constant_combinator_slot(entity_id, slot_index, slot)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetConstantCombinatorEnabled { entity_id, enabled } => {
+                self.set_constant_combinator_enabled(entity_id, enabled)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::ConfigureArithmeticCombinator {
+                entity_id,
+                left,
+                operation,
+                right,
+                output,
+            } => {
+                self.configure_arithmetic_combinator(entity_id, left, operation, right, output)
+                    .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::ConfigureDeciderCombinator {
+                entity_id,
+                left,
+                comparator,
+                right,
+                output,
+                output_value,
+            } => {
+                self.configure_decider_combinator(
+                    entity_id,
+                    left,
+                    comparator,
+                    right,
+                    output,
+                    output_value,
+                )
+                .map_err(SimCommandError::Circuit)?;
                 Ok(SimCommandEffect::None)
             }
             SimCommand::BuildRedScienceResearchFixture => {

@@ -3,8 +3,13 @@ use factory_data::CraftingCategory;
 use factory_sim::EntityId;
 
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
+use crate::placement::build::entity_display_name as prototype_display_name;
 use crate::resources::SimResource;
 use crate::ui::assembler_panel::spawn_assembler_panel;
+use crate::ui::circuit::panel::{
+    spawn_arithmetic_combinator_panel, spawn_circuit_control_panel,
+    spawn_constant_combinator_panel, spawn_decider_combinator_panel,
+};
 use crate::ui::formatting::format_recipe_display_name;
 use crate::ui::inventory_panel::{
     InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,
@@ -118,6 +123,27 @@ fn spawn_container_window_contents(
                     TextColor(Color::WHITE),
                 ));
             }
+            OpenMachineKind::ConstantCombinator => {
+                let slot_count =
+                    factory_sim::entity_access::constant_combinator_state(sim, entity_id)
+                        .map_or(0, |state| state.slots.len());
+                spawn_constant_combinator_panel(machine_panel, slot_count);
+            }
+            OpenMachineKind::ArithmeticCombinator => {
+                spawn_arithmetic_combinator_panel(machine_panel);
+            }
+            OpenMachineKind::DeciderCombinator => spawn_decider_combinator_panel(machine_panel),
+            // Circuit-only entities get no other panel, so the heading below
+            // carries the entity name.
+            OpenMachineKind::Circuit => {
+                if let Some(name) = entity_display_name(sim, entity_id) {
+                    machine_panel.spawn((
+                        Text::new(name),
+                        TextFont::from_font_size(14.0),
+                        TextColor(Color::WHITE),
+                    ));
+                }
+            }
             OpenMachineKind::Assembler => {
                 let prototype = sim
                     .entities()
@@ -156,6 +182,23 @@ fn spawn_container_window_contents(
                 snapshot.kind != OpenMachineKind::Beacon,
             );
         }
+        // Combinators carry their own editor above; every other connectable
+        // entity gets the shared contents/condition controls.
+        if let Some(connector) = factory_sim::entity_access::circuit_connector(sim, entity_id)
+            && !matches!(
+                snapshot.kind,
+                OpenMachineKind::ConstantCombinator
+                    | OpenMachineKind::ArithmeticCombinator
+                    | OpenMachineKind::DeciderCombinator
+            )
+        {
+            spawn_circuit_control_panel(
+                machine_panel,
+                connector,
+                factory_sim::entity_access::machine_kind(sim, entity_id)
+                    == Some(factory_data::EntityKind::Accumulator),
+            );
+        }
         if let Some(status) = sim.machine_status_for_entity(entity_id) {
             spawn_machine_guidance(machine_panel, status);
         }
@@ -166,15 +209,26 @@ fn spawn_container_window_contents(
 fn machine_panel_width(kind: OpenMachineKind) -> f32 {
     match kind {
         OpenMachineKind::Assembler => 420.0,
+        // The combinator editors lay their operands out in one row, so they
+        // need more width than an inventory grid.
+        OpenMachineKind::ConstantCombinator
+        | OpenMachineKind::ArithmeticCombinator
+        | OpenMachineKind::DeciderCombinator => 340.0,
         OpenMachineKind::Chest
         | OpenMachineKind::Lab
         | OpenMachineKind::Turret
-        | OpenMachineKind::Beacon => 244.0,
+        | OpenMachineKind::Beacon => 260.0,
         OpenMachineKind::MiningDrill
         | OpenMachineKind::Furnace
         | OpenMachineKind::Boiler
-        | OpenMachineKind::Inserter => 220.0,
+        | OpenMachineKind::Inserter
+        | OpenMachineKind::Circuit => 260.0,
     }
+}
+
+fn entity_display_name(sim: &factory_sim::Simulation, entity_id: EntityId) -> Option<String> {
+    let placed = sim.entities().placed_entity(entity_id)?;
+    prototype_display_name(sim.catalog(), placed.prototype_id)
 }
 
 fn container_slot_count(sim: &factory_sim::Simulation, entity_id: EntityId) -> usize {
