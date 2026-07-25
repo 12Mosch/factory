@@ -148,8 +148,8 @@ pub(crate) fn handle_wire_click(
     if anchor == node {
         return;
     }
-    // Re-clicking the same entity through its other port is a no-op rather
-    // than an error: the simulation rejects self-connections anyway.
+    // Re-clicking the same entity through its other port is a self-connection
+    // error, so surface it as a failed placement without sending a command.
     if anchor.entity_id == node.entity_id {
         let sim = state.sim.read();
         state.build_state.last_status = BuildPlacementStatus::CannotPlace(format!(

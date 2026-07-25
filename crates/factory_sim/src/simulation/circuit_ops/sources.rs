@@ -100,7 +100,16 @@ impl Simulation {
                 let percent = state.stored_energy_joules.saturating_mul(100) / capacity;
                 self.publish(networks, node, signal, signal_value_from_count(percent));
             }
-            _ => {
+            EntityKind::Furnace
+            | EntityKind::MiningDrill
+            | EntityKind::AssemblingMachine
+            | EntityKind::SteamEngine
+            | EntityKind::Boiler
+            | EntityKind::OffshorePump
+            | EntityKind::Pump
+            | EntityKind::Pumpjack
+            | EntityKind::Pipe
+            | EntityKind::StorageTank => {
                 let Some(boxes) = self.entities.fluid_boxes.get(&entity_id) else {
                     return;
                 };
@@ -117,6 +126,25 @@ impl Simulation {
                     );
                 }
             }
+            // These entity kinds have no implemented circuit-readable source.
+            // Keeping this match exhaustive makes a newly added kind require
+            // an explicit decision here.
+            EntityKind::ResourcePatch
+            | EntityKind::Inserter
+            | EntityKind::Splitter
+            | EntityKind::Lab
+            | EntityKind::Beacon
+            | EntityKind::ElectricPole
+            | EntityKind::Wall
+            | EntityKind::GunTurret
+            | EntityKind::LaserTurret
+            | EntityKind::EnemySpawner
+            | EntityKind::SolarPanel
+            | EntityKind::Radar
+            | EntityKind::Lamp
+            | EntityKind::ConstantCombinator
+            | EntityKind::ArithmeticCombinator
+            | EntityKind::DeciderCombinator => {}
         }
     }
 

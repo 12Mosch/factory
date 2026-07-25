@@ -467,8 +467,6 @@ mod tests {
         let constant_combinator = EntityId::new(22);
         let mut chest_circuit = CircuitEntityState {
             read_contents: true,
-            enable_condition: None,
-            charge_output_signal: None,
             ..CircuitEntityState::default()
         };
         chest_circuit.connections.insert(

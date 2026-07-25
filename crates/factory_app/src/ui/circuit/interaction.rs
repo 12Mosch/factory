@@ -87,8 +87,8 @@ pub(crate) fn handle_circuit_operand_mode_buttons(
         let Some(current) = operand_for_slot(&sim, entity_id, slot) else {
             return;
         };
-        // Switching to a signal needs some signal to switch to; reuse the
-        // slot's own left-hand signal so the flip is never a dead end.
+        // Switching to a signal needs some signal to switch to; use the first
+        // catalog signal as the default so the flip is never a dead end.
         let fallback = default_signal(&sim);
         command_for_operand(
             &sim,

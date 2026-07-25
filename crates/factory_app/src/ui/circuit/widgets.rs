@@ -145,7 +145,7 @@ pub(crate) fn spawn_button(
 }
 
 /// The `-10 -1 +1 +10` stepper shared by operand constants and constant
-/// combinator rows. `make_button` adapts it to whichever marker the caller
+/// combinator rows. `make_marker` adapts it to whichever marker the caller
 /// needs, so both uses get the same steps and layout.
 pub(crate) fn spawn_stepper<M: Bundle>(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,

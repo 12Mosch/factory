@@ -24,6 +24,8 @@ pub enum CircuitError {
     NotControllable(EntityId),
     /// The entity does not publish its contents onto a network.
     DoesNotReadContents(EntityId),
+    /// The entity is not an accumulator.
+    NotAnAccumulator(EntityId),
     UnknownSignal(SignalId),
     /// The referenced slot index is outside the combinator's configured rows.
     InvalidSlotIndex {
@@ -43,11 +45,11 @@ struct ResolvedEndpoints {
 impl Simulation {
     /// Item consumed and refunded by one wire of `color`.
     pub fn circuit_wire_item(&self, color: WireColor) -> ItemId {
-        let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
-        match color {
-            WireColor::Red => base.items.red_wire,
-            WireColor::Green => base.items.green_wire,
-        }
+        let name = match color {
+            WireColor::Red => "red_wire",
+            WireColor::Green => "green_wire",
+        };
+        factory_data::item_id_by_name(&self.world.prototypes, name)
     }
 
     /// Joins two connectors with a wire, consuming one wire item.
@@ -100,7 +102,30 @@ impl Simulation {
         color: WireColor,
     ) -> Result<(), CircuitError> {
         let endpoints = self.resolve_endpoints(first, second)?;
-        let removed = self
+        let forward_link_exists = self
+            .entities
+            .circuit_entities
+            .get(&endpoints.first.entity_id)
+            .is_some_and(|state| {
+                state
+                    .connections
+                    .neighbors(endpoints.first.port, color)
+                    .contains(&endpoints.second)
+            });
+        let back_link_exists = self
+            .entities
+            .circuit_entities
+            .get(&endpoints.second.entity_id)
+            .is_some_and(|state| {
+                state
+                    .connections
+                    .neighbors(endpoints.second.port, color)
+                    .contains(&endpoints.first)
+            });
+        if !forward_link_exists || !back_link_exists {
+            return Err(CircuitError::NotConnected);
+        }
+        let removed_forward_link = self
             .entities
             .circuit_entities
             .get_mut(&endpoints.first.entity_id)
@@ -109,18 +134,20 @@ impl Simulation {
                     .connections
                     .remove(endpoints.first.port, color, endpoints.second)
             });
-        if !removed {
-            return Err(CircuitError::NotConnected);
-        }
-        if let Some(state) = self
+        let removed_back_link = self
             .entities
             .circuit_entities
             .get_mut(&endpoints.second.entity_id)
-        {
-            state
-                .connections
-                .remove(endpoints.second.port, color, endpoints.first);
-        }
+            .is_some_and(|state| {
+                state
+                    .connections
+                    .remove(endpoints.second.port, color, endpoints.first)
+            });
+        debug_assert!(
+            removed_forward_link,
+            "validated circuit forward link disappeared"
+        );
+        debug_assert!(removed_back_link, "validated circuit back-link disappeared");
         self.refund_wires(std::iter::once(color));
         self.prune_inert_circuit_state(endpoints.first.entity_id);
         self.prune_inert_circuit_state(endpoints.second.entity_id);
@@ -262,7 +289,7 @@ impl Simulation {
     ) -> Result<(), CircuitError> {
         self.circuit_connector(entity_id)?;
         if !self.entities.accumulators.contains_key(&entity_id) {
-            return Err(CircuitError::DoesNotReadContents(entity_id));
+            return Err(CircuitError::NotAnAccumulator(entity_id));
         }
         if let Some(signal) = signal {
             self.require_known_signal(signal)?;

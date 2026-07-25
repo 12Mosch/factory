@@ -35,6 +35,10 @@ pub(in crate::simulation) struct CircuitSubsystem {
     pub(in crate::simulation) pending_outputs: Vec<(EntityId, Vec<(SignalId, i32)>)>,
     /// Reused between combinators so evaluation does not allocate per entity.
     pub(in crate::simulation) evaluation_scratch: SignalSet,
+    /// Reused for combinator output construction.
+    pub(in crate::simulation) output_scratch: SignalSet,
+    /// Reused while resolving lamp states after the power phase.
+    pub(in crate::simulation) lamp_refresh_scratch: Vec<(EntityId, bool)>,
     /// Entities whose enable condition failed this tick, sorted by id.
     ///
     /// Resolved once per tick so consumers spread across the tick agree on one
@@ -64,8 +68,8 @@ impl CircuitSubsystem {
             })
     }
 
-    /// Every signal reaching `node`, with red and green merged. Returns an
-    /// owned set because the merge has no single backing network.
+    /// Clears `out`, then writes every signal reaching `node` with the red and
+    /// green networks merged.
     pub(in crate::simulation) fn merged_at(&self, node: CircuitNode, out: &mut SignalSet) {
         out.clear();
         for color in WireColor::ALL {
@@ -76,8 +80,7 @@ impl CircuitSubsystem {
     }
 
     pub(in crate::simulation) fn is_disabled(&self, entity_id: EntityId) -> bool {
-        !self.disabled_entities.is_empty()
-            && self.disabled_entities.binary_search(&entity_id).is_ok()
+        self.disabled_entities.binary_search(&entity_id).is_ok()
     }
 
     pub(in crate::simulation) fn is_wired(&self, node: CircuitNode) -> bool {

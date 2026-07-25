@@ -183,7 +183,7 @@ Machines: {}
 Inserters: {}
 Machines active/idle: {}/{}
 Power: production {}, consumption {}, satisfaction {:.1}%
-Phases: belts {}, fluids {}, power {}, radars {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync total {} (player {}, world {}, resources {}, entities {}, belt dirs {}, belt items {})",
+Phases: belts {}, fluids {}, circuits {}, lamps {}, power {}, radars {}, machines {}, inserters {}, inventory transfers {}, chunk lookup {}, render sync total {} (player {}, world {}, resources {}, entities {}, belt dirs {}, belt items {})",
         snapshot.tick,
         snapshot.ups,
         format_optional(snapshot.fps, "", 1),
@@ -202,6 +202,8 @@ Phases: belts {}, fluids {}, power {}, radars {}, machines {}, inserters {}, inv
         f64::from(snapshot.power.satisfaction_permyriad) / 100.0,
         format_duration_ms(snapshot.sim_profile.last_tick.belts),
         format_duration_ms(snapshot.sim_profile.last_tick.fluids),
+        format_duration_ms(snapshot.sim_profile.last_tick.circuits),
+        format_duration_ms(snapshot.sim_profile.last_tick.lamps),
         format_duration_ms(snapshot.sim_profile.last_tick.power),
         format_duration_ms(snapshot.sim_profile.last_tick.radars),
         format_duration_ms(snapshot.sim_profile.last_tick.machines),

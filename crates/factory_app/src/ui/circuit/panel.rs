@@ -312,10 +312,10 @@ pub(crate) fn update_circuit_panel(
     open_container: Res<OpenContainer>,
     mut labels: Query<(&CircuitLabel, &mut Text)>,
 ) {
-    let sim = sim.read();
     let Some(entity_id) = open_container.entity_id else {
         return;
     };
+    let sim = sim.read();
     let catalog = sim.catalog();
     // Built once per frame because every status label shows the same summary.
     let mut status: Option<String> = None;

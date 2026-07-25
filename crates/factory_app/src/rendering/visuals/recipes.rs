@@ -746,19 +746,19 @@ fn combinator_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle)
             tinted(style.base_color, 0.24),
             0.18,
         )
-        .scaled_rounded(
-            Vec2::new(0.34, 0.10),
-            forward * 0.36,
+        .oriented(
+            (Vec2::new(0.34, 0.10), Vec2::new(0.10, 0.34)),
+            (forward * 0.36, forward * 0.36),
+            style.direction,
             0.0,
             Color::srgba(0.82, 0.78, 0.44, 0.94),
-            0.30,
         )
-        .scaled_rounded(
-            Vec2::new(0.34, 0.10),
-            forward * -0.36,
+        .oriented(
+            (Vec2::new(0.34, 0.10), Vec2::new(0.10, 0.34)),
+            (forward * -0.36, forward * -0.36),
+            style.direction,
             0.0,
             Color::srgba(0.52, 0.56, 0.62, 0.94),
-            0.30,
         );
 }
 

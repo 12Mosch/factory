@@ -479,6 +479,31 @@ fn cutting_a_wire_returns_the_item_and_splits_the_network() {
 }
 
 #[test]
+fn cutting_a_wire_rejects_a_missing_back_link_without_mutation() {
+    let mut sim = Simulation::new_test_world(123);
+    let (ox, oy) = clear_area(&sim);
+    stock_wires(&mut sim);
+    let red_wire = item_id(&sim.world.prototypes, "red_wire");
+
+    let first = place_named(&mut sim, "chest", ox, oy);
+    let second = place_named(&mut sim, "chest", ox + 2, oy);
+    connect(&mut sim, first, second, WireColor::Red);
+    let wire_count = sim.player_inventory.count(red_wire);
+    sim.entities.circuit_entities.remove(&second);
+
+    let result = sim.disconnect_circuit_wire(single(first), single(second), WireColor::Red);
+
+    assert_eq!(result, Err(CircuitError::NotConnected));
+    assert_eq!(sim.player_inventory.count(red_wire), wire_count);
+    assert!(sim.circuit_entity_state(first).is_some_and(|state| {
+        state
+            .connections
+            .neighbors(ConnectorPort::Single, WireColor::Red)
+            == [single(second)]
+    }));
+}
+
+#[test]
 fn wires_beyond_reach_are_rejected() {
     let mut sim = Simulation::new_test_world(123);
     let (ox, oy) = clear_area(&sim);
@@ -695,6 +720,52 @@ fn accumulator_reports_its_charge_percentage() {
     sim.tick();
 
     assert_eq!(signal_value(&sim, reader, signal), 25);
+}
+
+#[test]
+fn charge_signal_rejects_non_accumulators_with_specific_error() {
+    let mut sim = Simulation::new_test_world(123);
+    let (ox, oy) = clear_area(&sim);
+    let chest = place_named(&mut sim, "chest", ox, oy);
+
+    assert_eq!(
+        sim.set_accumulator_charge_signal(chest, None),
+        Err(CircuitError::NotAnAccumulator(chest))
+    );
+}
+
+#[test]
+fn runtime_circuit_state_participates_in_state_hash() {
+    let baseline = Simulation::new_test_world(123);
+    let node = CircuitNode::new(EntityId::new(1), ConnectorPort::Single);
+    let signal = virtual_signal(&baseline, "signal_a");
+
+    let mut different_topology = baseline.clone();
+    different_topology
+        .circuits
+        .topology
+        .network_ids
+        .insert((node, WireColor::Red), 0);
+    different_topology.circuits.topology.network_count = 1;
+
+    let mut different_signals = baseline.clone();
+    let mut network = SignalSet::default();
+    network.add(signal, 1);
+    different_signals.circuits.networks.push(network);
+
+    let mut different_disabled_entities = baseline.clone();
+    different_disabled_entities
+        .circuits
+        .disabled_entities
+        .push(EntityId::new(1));
+
+    for different in [
+        different_topology,
+        different_signals,
+        different_disabled_entities,
+    ] {
+        assert_ne!(baseline.state_hash(), different.state_hash());
+    }
 }
 
 #[test]

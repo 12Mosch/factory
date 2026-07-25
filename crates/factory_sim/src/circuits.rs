@@ -328,9 +328,12 @@ impl ArithmeticOperation {
                 }
             }
             Self::Power => wrapping_pow_i32(left, right),
-            // Shift distances are masked to 0..=31 so a large or negative
-            // operand cannot produce an undefined shift.
+            // Nonnegative shift distances wrap modulo 32. The reference game
+            // treats a negative left shift as zero and a negative right shift
+            // as leaving the left operand unchanged.
+            Self::LeftShift if right < 0 => 0,
             Self::LeftShift => left.wrapping_shl(right as u32),
+            Self::RightShift if right < 0 => left,
             Self::RightShift => left.wrapping_shr(right as u32),
             Self::And => left & right,
             Self::Or => left | right,
@@ -480,6 +483,10 @@ impl SignalSet {
         &self.signals
     }
 
+    pub(crate) fn swap_signals(&mut self, signals: &mut Vec<(SignalId, i32)>) {
+        std::mem::swap(&mut self.signals, signals);
+    }
+
     /// Merges `amount` into `signal` with wrapping addition, so the result is
     /// independent of the order contributions arrive in.
     pub fn add(&mut self, signal: SignalId, amount: i32) {
@@ -511,4 +518,21 @@ impl SignalSet {
 /// than wrapping into a negative count.
 pub fn signal_value_from_count(count: u64) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArithmeticOperation;
+
+    #[test]
+    fn negative_shift_operands_follow_reference_semantics() {
+        assert_eq!(ArithmeticOperation::LeftShift.apply(0x1234, -1), 0);
+        assert_eq!(ArithmeticOperation::RightShift.apply(0x1234, -1), 0x1234);
+    }
+
+    #[test]
+    fn nonnegative_shift_operands_keep_wrapping_distances() {
+        assert_eq!(ArithmeticOperation::LeftShift.apply(1, 33), 2);
+        assert_eq!(ArithmeticOperation::RightShift.apply(8, 33), 4);
+    }
 }

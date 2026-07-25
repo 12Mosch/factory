@@ -69,17 +69,20 @@ impl Simulation {
         if self.entities.lamps.is_empty() {
             return;
         }
-        let lit_by_entity = self
-            .entities
-            .lamps
-            .keys()
-            .map(|&entity_id| (entity_id, self.lamp_should_be_lit(entity_id)))
-            .collect::<Vec<_>>();
-        for (entity_id, lit) in lit_by_entity {
+        let mut lit_by_entity = std::mem::take(&mut self.circuits.lamp_refresh_scratch);
+        lit_by_entity.clear();
+        lit_by_entity.extend(
+            self.entities
+                .lamps
+                .keys()
+                .map(|&entity_id| (entity_id, self.lamp_should_be_lit(entity_id))),
+        );
+        for &(entity_id, lit) in &lit_by_entity {
             if let Some(state) = self.entities.lamps.get_mut(&entity_id) {
                 state.lit = lit;
             }
         }
+        self.circuits.lamp_refresh_scratch = lit_by_entity;
     }
 
     /// A lamp lights when it is powered and its condition passes. Without a

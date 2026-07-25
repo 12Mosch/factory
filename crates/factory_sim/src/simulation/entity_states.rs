@@ -563,7 +563,9 @@ impl EntityStateBehavior for LampState {
         sim.entities
             .placed_entity(entity_id)
             .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
-            .filter(|prototype| prototype.circuit_connector.is_some())
+            .filter(|prototype| {
+                prototype.entity_kind == EntityKind::Lamp && prototype.circuit_connector.is_some()
+            })
             .map(|_| ())
             .ok_or(SimValidationError::InvalidEntityState { entity_id })
     }

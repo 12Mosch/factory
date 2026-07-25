@@ -38,15 +38,18 @@ pub(crate) fn sync_signal_picker(
     mut roots: WindowRootQuery<SignalPickerSnapshot>,
 ) {
     // The picker always edits the open entity, so it closes with the window.
-    let slot = open_container.entity_id.and(editor.picker);
+    let Some(slot) = open_container.entity_id.and(editor.picker) else {
+        for (entity, _, _) in roots.iter() {
+            commands.entity(entity).despawn();
+        }
+        return;
+    };
     sync_window(
         &mut commands,
         &mut roots,
-        slot.is_some(),
+        true,
         editor.is_changed() || open_container.is_changed(),
-        || SignalPickerSnapshot {
-            slot: slot.expect("snapshot is only built while the picker is open"),
-        },
+        || SignalPickerSnapshot { slot },
         picker_root,
         |root, snapshot| spawn_picker_contents(root, &sim.read(), snapshot.slot),
     );

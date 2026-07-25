@@ -298,4 +298,8 @@ fn explicit_ids_are_sorted_and_stable() {
     for (expected, technology) in catalog.technologies.iter().enumerate() {
         assert_eq!(technology.id.index(), expected);
     }
+
+    for (expected, virtual_signal) in catalog.virtual_signals.iter().enumerate() {
+        assert_eq!(virtual_signal.id.index(), expected);
+    }
 }

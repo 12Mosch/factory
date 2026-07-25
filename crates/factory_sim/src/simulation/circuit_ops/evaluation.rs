@@ -39,33 +39,38 @@ impl Simulation {
     /// [`Simulation::collect_circuit_sources`] republishes them next tick.
     pub(in crate::simulation) fn advance_combinators(&mut self) {
         let mut pending = std::mem::take(&mut self.circuits.pending_outputs);
-        pending.clear();
         let mut inputs = std::mem::take(&mut self.circuits.evaluation_scratch);
+        let mut outputs = std::mem::take(&mut self.circuits.output_scratch);
+        let mut pending_index = 0;
 
         for (&entity_id, state) in &self.entities.arithmetic_combinators {
             let node = CircuitNode::new(entity_id, ConnectorPort::Input);
             self.circuits.merged_at(node, &mut inputs);
-            let mut outputs = SignalSet::default();
+            prepare_pending_output(&mut pending, pending_index, entity_id, &mut outputs);
             self.evaluate_arithmetic(state, &inputs, &mut outputs);
-            pending.push((entity_id, outputs.as_slice().to_vec()));
+            outputs.swap_signals(&mut pending[pending_index].1);
+            pending_index += 1;
         }
         for (&entity_id, state) in &self.entities.decider_combinators {
             let node = CircuitNode::new(entity_id, ConnectorPort::Input);
             self.circuits.merged_at(node, &mut inputs);
-            let mut outputs = SignalSet::default();
+            prepare_pending_output(&mut pending, pending_index, entity_id, &mut outputs);
             self.evaluate_decider(state, &inputs, &mut outputs);
-            pending.push((entity_id, outputs.as_slice().to_vec()));
+            outputs.swap_signals(&mut pending[pending_index].1);
+            pending_index += 1;
         }
+        pending.truncate(pending_index);
 
-        for (entity_id, outputs) in pending.drain(..) {
-            if let Some(state) = self.entities.arithmetic_combinators.get_mut(&entity_id) {
-                state.outputs = outputs;
-            } else if let Some(state) = self.entities.decider_combinators.get_mut(&entity_id) {
-                state.outputs = outputs;
+        for (entity_id, outputs) in &mut pending {
+            if let Some(state) = self.entities.arithmetic_combinators.get_mut(entity_id) {
+                std::mem::swap(&mut state.outputs, outputs);
+            } else if let Some(state) = self.entities.decider_combinators.get_mut(entity_id) {
+                std::mem::swap(&mut state.outputs, outputs);
             }
         }
 
         self.circuits.evaluation_scratch = inputs;
+        self.circuits.output_scratch = outputs;
         self.circuits.pending_outputs = pending;
     }
 
@@ -227,4 +232,19 @@ impl Simulation {
             SignalRole::Each => false,
         }
     }
+}
+
+fn prepare_pending_output(
+    pending: &mut Vec<(EntityId, Vec<(SignalId, i32)>)>,
+    index: usize,
+    entity_id: EntityId,
+    outputs: &mut SignalSet,
+) {
+    if index == pending.len() {
+        pending.push((entity_id, Vec::new()));
+    } else {
+        pending[index].0 = entity_id;
+    }
+    outputs.swap_signals(&mut pending[index].1);
+    outputs.clear();
 }
