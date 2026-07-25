@@ -209,6 +209,7 @@ pub(crate) fn tile_placement_preview(
         TilePlacementError::RequiresWater { .. }
         | TilePlacementError::RequiresSolidGround { .. }
         | TilePlacementError::AlreadyPlaced { .. }
+        | TilePlacementError::SupportsOffshorePump { .. }
         | TilePlacementError::UnknownItem(_)
         | TilePlacementError::ItemDoesNotPlaceTile { .. } => {
             BuildPlacementIssueKind::TerrainBlocked
@@ -243,6 +244,9 @@ pub(crate) fn tile_status_from_error(
         }
         TilePlacementError::AlreadyPlaced { .. } => {
             BuildPlacementStatus::CannotPlace("Tile already placed".to_string())
+        }
+        TilePlacementError::SupportsOffshorePump { .. } => {
+            BuildPlacementStatus::CannotPlace("An offshore pump needs this water".to_string())
         }
         TilePlacementError::OutsideGeneratedChunks { .. } => {
             BuildPlacementStatus::CannotPlace("Outside generated area".to_string())

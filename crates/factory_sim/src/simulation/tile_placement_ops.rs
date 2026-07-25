@@ -39,6 +39,11 @@ pub enum TilePlacementError {
         x: WorldTileCoord,
         y: WorldTileCoord,
     },
+    /// Filling would leave an adjacent offshore pump with no water.
+    SupportsOffshorePump {
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    },
 }
 
 /// Tile-paving metadata for an item, if it has any.
@@ -69,9 +74,10 @@ pub fn validate_tile_placement(
         .ok_or(TilePlacementError::OutsideGeneratedChunks { x, y })?;
 
     // Fill and paving items cover disjoint terrain: landfill is only useful on
-    // water, and paving must not bridge it.
+    // water, and paving must not bridge it. Both sides reuse the shared
+    // water predicate so this rule cannot drift from offshore pump placement.
     if placement.fills_water {
-        if tile.collision.walkable {
+        if !is_water_like_tile(tile) {
             return Err(TilePlacementError::RequiresWater { x, y });
         }
     } else if !tile.collision.walkable {
@@ -82,7 +88,47 @@ pub fn validate_tile_placement(
         return Err(TilePlacementError::AlreadyPlaced { x, y });
     }
 
+    if placement.fills_water && strands_an_offshore_pump(sim, x, y) {
+        return Err(TilePlacementError::SupportsOffshorePump { x, y });
+    }
+
     Ok(placement)
+}
+
+/// Whether filling `(x, y)` would leave an adjacent offshore pump with no
+/// water to draw from, which the placed-entity world invariant rejects.
+///
+/// A pump always occupies a tile orthogonally adjacent to every tile it draws
+/// from, so only those four neighbors can host an affected pump.
+fn strands_an_offshore_pump(sim: &Simulation, x: WorldTileCoord, y: WorldTileCoord) -> bool {
+    const NEIGHBORS: [(WorldTileCoord, WorldTileCoord); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+
+    NEIGHBORS.into_iter().any(|(dx, dy)| {
+        let Some(entity_id) = sim.entities.occupancy.entity_at(x + dx, y + dy) else {
+            return false;
+        };
+        let Some(placed) = sim.entities.placed_entity(entity_id) else {
+            return false;
+        };
+        if sim
+            .world
+            .prototypes
+            .entity(placed.prototype_id)
+            .is_none_or(|prototype| prototype.entity_kind != EntityKind::OffshorePump)
+        {
+            return false;
+        }
+
+        let water_tiles = offshore_pump_water_tiles(&placed.footprint, placed.direction);
+        water_tiles.contains(&(x, y))
+            && !water_tiles.iter().any(|&(water_x, water_y)| {
+                (water_x, water_y) != (x, y)
+                    && sim
+                        .world
+                        .tile_at(water_x, water_y)
+                        .is_some_and(is_water_like_tile)
+            })
+    })
 }
 
 pub fn place_tile_from_player_inventory(

@@ -233,6 +233,54 @@ fn terrain_history_reports_falling_behind() {
 }
 
 #[test]
+fn landfill_cannot_strand_an_offshore_pump_without_water() {
+    let mut sim = Simulation::new_test_world(4256);
+    let ids = base_ids(&sim);
+    let pump = entity_id_by_name(&sim.world.prototypes, "offshore_pump");
+    let (pump_x, pump_y) = first_placeable_offshore_pump(&sim, pump);
+    let pump_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pump,
+            x: pump_x,
+            y: pump_y,
+            direction: Direction::North,
+        },
+    )
+    .expect("shoreline pump should be placeable");
+    let footprint = sim
+        .entities
+        .placed_entity(pump_id)
+        .expect("placed pump should exist")
+        .footprint;
+    let water_tiles = offshore_pump_water_tiles(&footprint, Direction::North)
+        .into_iter()
+        .filter(|&(x, y)| sim.world.tile_at(x, y).is_some_and(is_water_like_tile))
+        .collect::<Vec<_>>();
+    assert!(!water_tiles.is_empty(), "pump should border water");
+    give_player(&mut sim, ids.items.landfill, water_tiles.len() as u16);
+
+    // Filling every water tile the pump draws from would leave it on invalid
+    // terrain, which the world invariant check rejects outright.
+    let mut filled = 0;
+    for (x, y) in &water_tiles {
+        if place_tile(&mut sim, ids.items.landfill, *x, *y).is_ok() {
+            filled += 1;
+        }
+    }
+
+    assert!(
+        filled < water_tiles.len(),
+        "the pump's last water tile must not be fillable"
+    );
+    // Debug builds validate placed entities every tick, so a stranded pump
+    // would panic here rather than merely misbehave.
+    sim.tick();
+    sim.validate()
+        .expect("a pump that still borders water keeps the world valid");
+}
+
+#[test]
 fn saved_worlds_round_trip_mutated_terrain() {
     let mut sim = Simulation::new_test_world(4255);
     let ids = base_ids(&sim);

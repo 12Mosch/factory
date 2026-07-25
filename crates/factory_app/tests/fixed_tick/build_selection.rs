@@ -291,6 +291,91 @@ fn place_selected_building_consumes_inventory() {
     assert_eq!(sim.entities().placed_len(), before_entities + 1);
 }
 
+/// A generated, resource-free, unoccupied ground tile, and the same tile
+/// rewritten to water so landfill has something to fill.
+fn plain_ground_tile(sim: &Simulation) -> (i64, i64) {
+    let (player_x, player_y) = sim.player().tile_position();
+    sim.world()
+        .chunks
+        .values()
+        .flat_map(|chunk| {
+            chunk.tiles.iter().enumerate().filter_map(|(index, tile)| {
+                let local_x = (index as i32).rem_euclid(factory_sim::CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(factory_sim::CHUNK_SIZE);
+                let (x, y) = chunk.coord.tile_at(local_x, local_y);
+                (tile.resource.is_none()
+                    && tile.collision.walkable
+                    && tile.collision.buildable
+                    && (x, y) != (player_x, player_y)
+                    && sim.entities().occupancy().entity_at(x, y).is_none())
+                .then_some((x, y))
+            })
+        })
+        .next()
+        .expect("test world should contain a plain ground tile")
+}
+
+#[test]
+fn place_selected_tile_fills_water_and_consumes_inventory() {
+    let mut sim = Simulation::new_test_world(123);
+    let ids = factory_data::BasePrototypeIds::from_catalog(sim.catalog());
+    let (x, y) = plain_ground_tile(&sim);
+    sim.set_tile(x, y, ids.tiles.water)
+        .expect("ground tile should accept water");
+    *sim.player_inventory_mut() = Inventory::player();
+    let catalog = sim.catalog().clone();
+    sim.player_inventory_mut()
+        .insert(&catalog, ids.items.landfill, 1)
+        .expect("test inventory should accept landfill");
+
+    let status = place_selection_at_tile(
+        &mut sim,
+        BuildSelection::tile(ids.tiles.landfill, ids.items.landfill),
+        Direction::North,
+        x,
+        y,
+    );
+
+    assert!(matches!(status, BuildPlacementStatus::Placed(_)));
+    assert_eq!(
+        sim.world().tile_at(x, y).expect("filled tile").tile_id,
+        ids.tiles.landfill
+    );
+    assert_eq!(sim.player_inventory().count(ids.items.landfill), 0);
+}
+
+#[test]
+fn failed_selected_tile_placement_keeps_inventory() {
+    let mut sim = Simulation::new_test_world(123);
+    let ids = factory_data::BasePrototypeIds::from_catalog(sim.catalog());
+    let (x, y) = plain_ground_tile(&sim);
+    *sim.player_inventory_mut() = Inventory::player();
+    let catalog = sim.catalog().clone();
+    sim.player_inventory_mut()
+        .insert(&catalog, ids.items.landfill, 1)
+        .expect("test inventory should accept landfill");
+    let before = sim.world().tile_at(x, y).expect("ground tile").tile_id;
+
+    // Landfill on dry land is rejected, so nothing is spent.
+    let status = place_selection_at_tile(
+        &mut sim,
+        BuildSelection::tile(ids.tiles.landfill, ids.items.landfill),
+        Direction::North,
+        x,
+        y,
+    );
+
+    assert_eq!(
+        status,
+        BuildPlacementStatus::CannotPlace("Landfill needs water".to_string())
+    );
+    assert_eq!(
+        sim.world().tile_at(x, y).expect("ground tile").tile_id,
+        before
+    );
+    assert_eq!(sim.player_inventory().count(ids.items.landfill), 1);
+}
+
 #[test]
 fn failed_selected_building_placement_keeps_inventory() {
     let mut sim = Simulation::new_test_world(123);

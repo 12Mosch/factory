@@ -21,6 +21,7 @@ impl WorldSim {
             resource_dirty_tiles: VecDeque::new(),
             terrain_revision: 0,
             terrain_dirty_tiles: VecDeque::new(),
+            walkability_revision: 0,
         }
     }
 
@@ -58,6 +59,7 @@ impl WorldSim {
             resource_dirty_tiles: VecDeque::new(),
             terrain_revision: 0,
             terrain_dirty_tiles: VecDeque::new(),
+            walkability_revision: 0,
         }
     }
 
@@ -205,6 +207,13 @@ impl WorldSim {
         self.terrain_revision
     }
 
+    /// Revision of tile collision alone. Unlike [`Self::terrain_revision`],
+    /// this is unchanged by rewrites that only alter a tile's appearance or
+    /// walking speed.
+    pub fn walkability_revision(&self) -> u64 {
+        self.walkability_revision
+    }
+
     /// Terrain tiles rewritten after `revision`.
     ///
     /// `None` means the caller fell behind the bounded runtime history and
@@ -283,7 +292,9 @@ impl WorldSim {
         }
 
         tile.tile_id = tile_id;
+        let previous_collision = tile.collision;
         tile.collision = apply_resource_collision(&self.generator, terrain, tile.resource);
+        let walkability_changed = tile.collision != previous_collision;
 
         // The chunk absorption cache is a running sum, so swap the old tile's
         // contribution for the new one rather than rescanning the chunk.
@@ -293,11 +304,21 @@ impl WorldSim {
         let absorption = self
             .generator
             .pollution_absorption_per_minute_milli(tile_id);
+        // One tile's contribution can never exceed the chunk's running sum;
+        // the saturating arithmetic below would hide a desynced cache.
+        debug_assert!(
+            chunk.pollution_absorption_per_minute_milli >= previous_absorption,
+            "chunk {coord:?} absorption cache {} is below tile {previous_tile_id:?} contribution {previous_absorption}",
+            chunk.pollution_absorption_per_minute_milli,
+        );
         chunk.pollution_absorption_per_minute_milli = chunk
             .pollution_absorption_per_minute_milli
             .saturating_sub(previous_absorption)
             .saturating_add(absorption);
 
+        if walkability_changed {
+            self.walkability_revision = self.walkability_revision.wrapping_add(1);
+        }
         self.record_terrain_tile_change(x, y, tile_id);
         Ok(())
     }

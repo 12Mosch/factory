@@ -17,7 +17,7 @@ impl Simulation {
         self.enemy_navigation.begin_tick(
             self.entity_topology_revision,
             self.world.chunk_revision(),
-            self.world.terrain_revision(),
+            self.world.walkability_revision(),
         );
         let targets_invalidated = self.attack_targets.refresh(
             self.entity_topology_revision,

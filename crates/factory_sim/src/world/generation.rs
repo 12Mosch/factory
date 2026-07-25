@@ -112,6 +112,11 @@ pub struct WorldSim {
     pub(crate) terrain_revision: u64,
     #[serde(skip, default)]
     pub(crate) terrain_dirty_tiles: VecDeque<TerrainTileChange>,
+    /// Bumped only by terrain writes that change a tile's collision. Consumers
+    /// that care about traversability rather than appearance (enemy
+    /// navigation) key off this, so paving a large area does not churn their
+    /// caches when nothing about movement changed.
+    pub(crate) walkability_revision: u64,
 }
 
 #[derive(Deserialize)]
