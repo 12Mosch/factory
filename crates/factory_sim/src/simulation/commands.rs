@@ -175,6 +175,13 @@ pub enum SimCommand {
         output: Option<SignalId>,
         output_value: DeciderOutputValue,
     },
+    /// Rewrites one configured row of a logistic chest: what a requester or
+    /// buffer asks for, or what a storage chest is filtered to.
+    SetLogisticRequest {
+        entity_id: EntityId,
+        slot_index: usize,
+        request: LogisticRequest,
+    },
     /// Debug errand: sends one stationed robot to a tile and back. Robots have
     /// no jobs yet, so this is how the flight layer is exercised from outside
     /// the simulation.
@@ -239,6 +246,7 @@ pub enum SimCommandError {
     TilePlacement(TilePlacementError),
     Circuit(CircuitError),
     RobotDispatch(RobotDispatchError),
+    LogisticChest(LogisticChestError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -595,6 +603,15 @@ impl Simulation {
                     output_value,
                 )
                 .map_err(SimCommandError::Circuit)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetLogisticRequest {
+                entity_id,
+                slot_index,
+                request,
+            } => {
+                self.set_logistic_request(entity_id, slot_index, request)
+                    .map_err(SimCommandError::LogisticChest)?;
                 Ok(SimCommandEffect::None)
             }
             SimCommand::DispatchRobot { roboport, x, y } => {

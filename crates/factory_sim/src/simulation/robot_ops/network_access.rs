@@ -50,6 +50,73 @@ impl Simulation {
             .map(|network| network.network_id)
     }
 
+    /// The network whose *logistic* coverage contains `(x, y)`, or `None` when
+    /// no roboport reaches the tile.
+    ///
+    /// The logistic twin of [`Simulation::construction_network_covering_tile`],
+    /// and separate from it on purpose: the two radii differ, so a chest can sit
+    /// inside a network's construction reach and still be outside the logistic
+    /// reach that would let robots service it.
+    pub fn logistic_network_covering_tile(
+        &self,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) -> Option<u32> {
+        self.robots
+            .topology_networks
+            .iter()
+            .find(|network| {
+                network.logistic_bounds.contains(x, y)
+                    && network
+                        .roboports
+                        .iter()
+                        .any(|roboport| roboport.logistic_bounds.contains(x, y))
+            })
+            .map(|network| network.network_id)
+    }
+
+    /// The logistic network covering an entity, measured from its footprint
+    /// center — the same reference point construction jobs use, so a wide
+    /// entity is never half in and half out.
+    pub fn logistic_network_covering_entity(&self, entity_id: EntityId) -> Option<u32> {
+        let footprint = self.entities.placed_entity(entity_id)?.footprint;
+        self.logistic_network_covering_tile(
+            footprint.x + i64::from(footprint.width.saturating_sub(1)) / 2,
+            footprint.y + i64::from(footprint.height.saturating_sub(1)) / 2,
+        )
+    }
+
+    /// Logistic contents of one network, keyed by item.
+    ///
+    /// Answered from the incrementally maintained index, so this is a map
+    /// lookup rather than a walk over the network's chests.
+    pub fn logistic_network_contents(
+        &self,
+        network_id: u32,
+    ) -> Option<&std::collections::BTreeMap<ItemId, crate::robots::LogisticItemTotals>> {
+        self.robots.logistic.contents(network_id)
+    }
+
+    /// What one network holds and wants of a single item.
+    pub fn logistic_network_item_totals(
+        &self,
+        network_id: u32,
+        item_id: ItemId,
+    ) -> crate::robots::LogisticItemTotals {
+        self.logistic_network_contents(network_id)
+            .and_then(|contents| contents.get(&item_id).copied())
+            .unwrap_or_default()
+    }
+
+    /// Network a logistic chest is currently counted into.
+    ///
+    /// Read from the index rather than recomputed, so it reports what the
+    /// totals were actually built from — including `None` for a chest that has
+    /// been placed but not yet indexed.
+    pub fn logistic_network_id_for_chest(&self, entity_id: EntityId) -> Option<u32> {
+        self.robots.logistic.network_of(entity_id)
+    }
+
     /// Construction and logistic squares of one roboport, in world tiles.
     ///
     /// Answered straight from the prototype rather than from the topology cache

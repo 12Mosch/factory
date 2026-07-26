@@ -3,7 +3,7 @@ use crate::entities::{Direction, EntityFootprint, OccupancyGrid};
 use crate::ids::EntityId;
 use factory_data::{EntityKind, EntityPrototypeId};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Single source of truth for the per-kind entity state maps in [`EntityStore`].
 ///
@@ -57,6 +57,7 @@ macro_rules! for_each_entity_state_map {
             heat_pipes: crate::heat::HeatPipeState => HeatPipe,
             heat_exchangers: crate::heat::HeatExchangerState => HeatExchanger,
             roboports: crate::robots::RoboportState => Roboport,
+            logistic_chests: crate::logistics::LogisticChestState => _,
         }
     };
 }
@@ -73,13 +74,44 @@ macro_rules! machine_kind_check {
 
 macro_rules! define_entity_store {
     ($($field:ident : $ty:ty => $kind:tt),* $(,)?) => {
-        #[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
+        #[derive(Clone, Debug, Deserialize, Serialize)]
         pub struct EntityStore {
             pub(crate) entities: Vec<SimEntity>,
             pub(crate) placed_entities: BTreeMap<EntityId, PlacedEntity>,
             $(pub(crate) $field: entity_state_map_type!($field, $ty),)*
             pub(crate) occupancy: OccupancyGrid,
             pub(crate) next_entity_id: u64,
+            /// Logistic chests whose inventory or configuration changed since
+            /// the index last drained this set. Derived bookkeeping, not
+            /// simulation state: it is left out of the save, the hash, and
+            /// equality, and a loaded world rebuilds its index from scratch.
+            /// Chests with no logistic role never enter it, so ordinary
+            /// inserter traffic costs nothing to record.
+            #[serde(skip, default)]
+            pub(crate) changed_logistic_chests: BTreeSet<EntityId>,
+        }
+
+        // Hand-written rather than derived so `changed_logistic_chests` cannot
+        // leak into simulation identity: two worlds that differ only in what
+        // has been observed are the same world.
+        impl std::hash::Hash for EntityStore {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                self.entities.hash(state);
+                self.placed_entities.hash(state);
+                $(self.$field.hash(state);)*
+                self.occupancy.hash(state);
+                self.next_entity_id.hash(state);
+            }
+        }
+
+        impl PartialEq for EntityStore {
+            fn eq(&self, other: &Self) -> bool {
+                self.entities == other.entities
+                    && self.placed_entities == other.placed_entities
+                    $(&& self.$field == other.$field)*
+                    && self.occupancy == other.occupancy
+                    && self.next_entity_id == other.next_entity_id
+            }
         }
 
         impl EntityStore {
@@ -91,6 +123,7 @@ macro_rules! define_entity_store {
                     $($field: Default::default(),)*
                     occupancy: OccupancyGrid::default(),
                     next_entity_id,
+                    changed_logistic_chests: BTreeSet::new(),
                 }
             }
 
@@ -218,7 +251,9 @@ mod tests {
     use crate::fluids::FluidBoxState;
     use crate::heat::{HeatBufferState, HeatExchangerState, HeatPipeState, NuclearReactorState};
     use crate::inventory::{test_inventory, test_slot, test_stack};
-    use crate::logistics::{BeltItem, BeltSegment, InserterState, SplitterState};
+    use crate::logistics::{
+        BeltItem, BeltSegment, InserterState, LogisticChestState, LogisticRequest, SplitterState,
+    };
     use crate::machines::{
         AssemblingMachineState, BurnerEnergy, FurnaceState, LabState, MachineEnergy,
         MachineModuleState, MiningDrillState, PumpjackState,
@@ -256,7 +291,8 @@ mod tests {
         // v29: heat buffer, nuclear reactor, heat pipe, and heat exchanger state
         // were appended for heat networks.
         // v30: roboport state was appended for robot networks.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xb3cb_9547_a04f_4e73;
+        // v33: logistic chest configuration was appended.
+        const EXPECTED_LAYOUT_HASH: u64 = 0xc2d4_9fe8_4a0b_54d7;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -528,6 +564,21 @@ mod tests {
         store
             .lamps
             .insert(EntityId::new(25), LampState { lit: true });
+
+        // The chest doubles as a requester so the layout pins both a set and an
+        // unset request row.
+        store.logistic_chests.insert(
+            chest,
+            LogisticChestState {
+                requests: vec![
+                    LogisticRequest {
+                        item: Some(iron),
+                        count: 200,
+                    },
+                    LogisticRequest::default(),
+                ],
+            },
+        );
 
         // Heat network state: a reactor with fuel and residue, the pipe carrying
         // its heat, and the exchanger drawing from it.

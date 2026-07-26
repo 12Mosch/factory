@@ -71,8 +71,9 @@ pub use crate::inventory::{Inventory, InventoryError, ItemSlot, ItemStack};
 pub(crate) use crate::inventory::{test_inventory, test_slot, test_stack};
 pub use crate::logistics::{
     BeltError, BeltItem, BeltItemId, BeltLane, BeltLaneItems, BeltSegment, ContainerError,
-    InserterError, InserterState, InserterTransferPreview, SplitterError, SplitterState,
-    UndergroundBeltLinkPreview, UndergroundBeltSegment,
+    InserterError, InserterState, InserterTransferPreview, LogisticChestError, LogisticChestState,
+    LogisticRequest, SplitterError, SplitterState, UndergroundBeltLinkPreview,
+    UndergroundBeltSegment,
 };
 pub use crate::machines::{
     AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BeaconState, BurnerEnergy,
@@ -679,6 +680,10 @@ pub enum SimValidationError {
     InvalidRobotNetwork {
         network_id: u32,
     },
+    /// A chest's logistic rows disagree with the role its prototype declares.
+    InvalidLogisticChestState {
+        entity_id: EntityId,
+    },
     InvalidRobotState {
         robot_id: RobotId,
     },
@@ -831,6 +836,7 @@ mod generation;
 mod heat_ops;
 mod heat_state;
 mod inventory_ops;
+mod logistic_chest_ops;
 mod machine_ops;
 mod module_ops;
 pub(in crate::simulation) use module_ops::required_ticks_with_modules;

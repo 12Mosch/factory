@@ -43,6 +43,56 @@ pub(in crate::simulation) fn validate_roboport(
     Ok(())
 }
 
+/// Checks one chest's logistic rows against the role its prototype declares.
+///
+/// The row count is fixed at placement from the prototype, so a mismatch means
+/// the save and the catalog disagree about the chest's shape. The per-row rules
+/// mirror what [`crate::Simulation::set_logistic_request`] enforces, which is
+/// what stops a hand-edited save from parking an amount on a filter row or
+/// asking for more than the chest could ever hold.
+pub(in crate::simulation) fn validate_logistic_chest(
+    sim: &Simulation,
+    entity_id: EntityId,
+    state: &LogisticChestState,
+) -> Result<(), SimValidationError> {
+    let invalid = SimValidationError::InvalidLogisticChestState { entity_id };
+    let prototype = sim
+        .entities
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+        .filter(|prototype| prototype.entity_kind == EntityKind::Chest)
+        .ok_or(invalid)?;
+    let logistic_chest = prototype.logistic_chest.ok_or(invalid)?;
+
+    if state.requests.len() != usize::from(logistic_chest.request_slot_count) {
+        return Err(invalid);
+    }
+    for request in &state.requests {
+        let Some(item_id) = request.item else {
+            // An unset row asks for nothing, so an amount on it would be a
+            // request no code could ever act on.
+            if request.count != 0 {
+                return Err(invalid);
+            }
+            continue;
+        };
+        let capacity = sim
+            .logistic_request_capacity(prototype, item_id)
+            .ok_or(SimValidationError::InvalidMachineItem { entity_id, item_id })?;
+        let allowed = if logistic_chest.mode.requests_items() {
+            capacity
+        } else {
+            // A storage chest's row is a filter; an amount on it would mean
+            // nothing.
+            0
+        };
+        if request.count > allowed {
+            return Err(invalid);
+        }
+    }
+    Ok(())
+}
+
 /// Rejects contents no insertion path could have produced.
 ///
 /// The two roboport inventories accept disjoint item sets, and every way in

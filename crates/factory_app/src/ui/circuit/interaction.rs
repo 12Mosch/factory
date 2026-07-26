@@ -382,6 +382,28 @@ pub(crate) fn command_for_picked_signal(
                 output_value: current.output_value,
             })
         }
+        SignalSlot::LogisticRequest(slot_index) => {
+            // Only an item can sit in a chest row, and clearing the item clears
+            // the amount with it so no orphaned number survives the change.
+            let item = match signal {
+                Some(SignalId::Item(item_id)) => Some(item_id),
+                Some(_) => return None,
+                None => None,
+            };
+            let count = item
+                .and_then(|_| {
+                    sim.logistic_chest_state(entity_id)?
+                        .requests
+                        .get(slot_index)
+                        .map(|request| request.count)
+                })
+                .unwrap_or_default();
+            Some(SimCommand::SetLogisticRequest {
+                entity_id,
+                slot_index,
+                request: factory_sim::LogisticRequest { item, count },
+            })
+        }
         SignalSlot::ConditionRight
         | SignalSlot::ArithmeticLeft
         | SignalSlot::ArithmeticRight

@@ -1,5 +1,6 @@
 use crate::catalog::PrototypeCatalog;
 use crate::error::PrototypeLoadError;
+use crate::model::LogisticChestMode;
 
 fn combinator_catalog(
     entity_kind: &str,
@@ -1361,4 +1362,100 @@ fn assert_invalid_radar_fields(
         matches!(&error, PrototypeLoadError::InvalidRadarMetadata { entity, .. } if entity == "radar"),
         "unexpected radar validation error: {error}"
     );
+}
+
+/// Builds a chest catalog whose kind and logistic section can be overridden, so
+/// each check below differs only in the field it is about.
+fn logistic_chest_catalog(
+    entity_kind: &str,
+    inventory_slot_count: &str,
+    logistic_chest: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "requester_chest", stack_size: 50)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "requester_chest",
+                entity_kind: {entity_kind},
+                build_item: Some("requester_chest"),
+                building_category: Some(Storage),
+                building_menu_order: Some(17),
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["building"]),
+                inventory_slot_count: {inventory_slot_count},
+                logistic_chest: {logistic_chest},
+                max_health: Some(350),
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+#[test]
+fn valid_logistic_chest_loads() {
+    let catalog = logistic_chest_catalog(
+        "Chest",
+        "Some(48)",
+        "Some((mode: Requester, request_slot_count: 12))",
+    )
+    .expect("a requester chest should load");
+    let logistic_chest = catalog.entities[0]
+        .logistic_chest
+        .expect("logistic chest metadata should survive loading");
+
+    assert_eq!(logistic_chest.mode, LogisticChestMode::Requester);
+    assert_eq!(logistic_chest.request_slot_count, 12);
+}
+
+#[test]
+fn logistic_chest_metadata_on_a_non_chest_fails() {
+    let error = logistic_chest_catalog(
+        "Wall",
+        "Some(48)",
+        "Some((mode: Requester, request_slot_count: 12))",
+    )
+    .expect_err("only chests can carry a logistic role");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidLogisticChestMetadata { entity, .. } if entity == "requester_chest")
+    );
+}
+
+#[test]
+fn logistic_chest_without_inventory_fails() {
+    let error = logistic_chest_catalog(
+        "Chest",
+        "None",
+        "Some((mode: Requester, request_slot_count: 12))",
+    )
+    .expect_err("a logistic chest with nowhere to put items is not a chest");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidLogisticChestMetadata { entity, .. } if entity == "requester_chest")
+    );
+}
+
+/// The row count has to match what the mode does with rows, because the
+/// simulation reads them positionally without re-asking what the mode is.
+#[test]
+fn logistic_chest_row_counts_must_match_the_mode() {
+    for (mode, rows) in [
+        ("PassiveProvider", 1),
+        ("ActiveProvider", 2),
+        ("Storage", 0),
+        ("Storage", 3),
+        ("Buffer", 0),
+        ("Requester", 0),
+    ] {
+        let error = logistic_chest_catalog(
+            "Chest",
+            "Some(48)",
+            &format!("Some((mode: {mode}, request_slot_count: {rows}))"),
+        )
+        .expect_err("mismatched row counts should fail");
+        assert!(
+            matches!(&error, PrototypeLoadError::InvalidLogisticChestMetadata { entity, .. } if entity == "requester_chest"),
+            "unexpected error for {mode} with {rows} rows: {error}"
+        );
+    }
 }

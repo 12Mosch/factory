@@ -146,6 +146,38 @@ impl RobotNetworkJobCounts {
     }
 }
 
+/// What one robot network holds and wants of a single item.
+///
+/// The three counters answer three different questions and are deliberately
+/// kept apart: `available` is what a robot could be sent to fetch, `requested`
+/// is unmet demand a dispatcher would work through, and `stored` is everything
+/// the network's logistic chests hold — the figure a circuit network reads,
+/// because a requester's delivered stock is still stock.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct LogisticItemTotals {
+    pub available: u32,
+    pub requested: u32,
+    pub stored: u32,
+}
+
+impl LogisticItemTotals {
+    pub(crate) fn add(&mut self, other: Self) {
+        self.available = self.available.saturating_add(other.available);
+        self.requested = self.requested.saturating_add(other.requested);
+        self.stored = self.stored.saturating_add(other.stored);
+    }
+
+    pub(crate) fn subtract(&mut self, other: Self) {
+        self.available = self.available.saturating_sub(other.available);
+        self.requested = self.requested.saturating_sub(other.requested);
+        self.stored = self.stored.saturating_sub(other.stored);
+    }
+
+    pub(crate) fn is_zero(self) -> bool {
+        self == Self::default()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RobotNetworkRoboportSnapshot {
     pub entity_id: EntityId,

@@ -273,6 +273,9 @@ pub struct EntityPrototype {
     /// Present on entities that anchor a robot network; see
     /// [`RoboportPrototype`].
     pub roboport: Option<RoboportPrototype>,
+    /// Present on chests that take part in the logistic network covering them;
+    /// see [`LogisticChestPrototype`].
+    pub logistic_chest: Option<LogisticChestPrototype>,
     /// Present when the entity can take damage and be destroyed.
     pub max_health: Option<u32>,
     /// Pollution emitted into the entity's chunk while it is actively
@@ -511,6 +514,70 @@ pub struct RoboportPrototype {
     /// `charging_energy_buffer_joules`, never from the electric network
     /// directly.
     pub charging_pad_watts: u64,
+}
+
+/// Logistic role a chest plays inside the robot network that covers it.
+///
+/// This is prototype metadata rather than a distinct [`EntityKind`] on purpose:
+/// every variant is still a chest with an inventory, a container window, and a
+/// circuit connector, and the only thing that differs is what the network is
+/// allowed to do with the contents. Keeping one kind means the save format, the
+/// transfer paths, and the container UI never learn about logistics at all.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct LogisticChestPrototype {
+    pub mode: LogisticChestMode,
+    /// Configurable rows the chest exposes. Providers have none, a storage
+    /// chest has exactly one (its filter), and requester and buffer chests have
+    /// one row per item they ask for.
+    pub request_slot_count: u8,
+}
+
+/// What a logistic chest offers to, and asks of, its network.
+///
+/// The two provider modes differ only in urgency: a passive provider waits to
+/// be asked, while an active provider wants its contents moved out even when
+/// nothing has requested them. Both are pure supply, which is why neither
+/// carries request rows.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum LogisticChestMode {
+    /// Supplies on demand.
+    PassiveProvider,
+    /// Supplies on demand and pushes its surplus into storage unasked.
+    ActiveProvider,
+    /// Accepts what the network has nowhere else to put, and supplies from it.
+    /// Its single row is a filter: when set, only that item may be stored here.
+    Storage,
+    /// Keeps a stock on hand: requests up to its configured amounts and
+    /// supplies from what it holds.
+    Buffer,
+    /// Pure demand: requests up to its configured amounts and supplies nothing.
+    Requester,
+}
+
+impl LogisticChestMode {
+    /// Whether robots may take items out of a chest in this mode.
+    pub const fn supplies_network(self) -> bool {
+        matches!(
+            self,
+            Self::PassiveProvider | Self::ActiveProvider | Self::Storage | Self::Buffer
+        )
+    }
+
+    /// Whether the configured rows are amounts to keep stocked, as opposed to
+    /// the storage chest's single filter row.
+    pub const fn requests_items(self) -> bool {
+        matches!(self, Self::Buffer | Self::Requester)
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::PassiveProvider => "Passive Provider",
+            Self::ActiveProvider => "Active Provider",
+            Self::Storage => "Storage",
+            Self::Buffer => "Buffer",
+            Self::Requester => "Requester",
+        }
+    }
 }
 
 /// Flight profile of a robot a roboport stations, dispatches, and charges.

@@ -172,8 +172,7 @@ fn insert_drill_output_from_state(
         }
         DrillOutputTarget::Inventory(entity_id) => {
             entities
-                .entity_inventories
-                .get_mut(&entity_id)
+                .chest_inventory_mut(entity_id)
                 .expect("validated output inventory should still exist")
                 .insert(catalog, item_id, count)
                 .expect("validated output inventory should accept drill product");

@@ -12,6 +12,7 @@ mod furnaces;
 mod heat;
 mod inserters;
 mod inventory;
+mod logistic_chests;
 mod manual_crafting;
 mod manual_mining;
 mod mining_drills;
