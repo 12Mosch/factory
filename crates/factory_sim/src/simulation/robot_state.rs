@@ -23,6 +23,11 @@ pub(super) struct RobotSubsystem {
     /// Networks whose durable snapshots no longer match their roboports.
     #[serde(skip, default)]
     pub(super) networks_needing_snapshot: Vec<bool>,
+    /// Reused by the per-tick charging pass to iterate roboport ids while the
+    /// loop body holds a mutable borrow of the entity store. Retaining the
+    /// allocation keeps the pass allocation-free once the world is warm.
+    #[serde(skip, default)]
+    pub(super) charging_scratch: Vec<EntityId>,
     #[cfg(test)]
     #[serde(skip, default)]
     pub(super) topology_rebuilds: u64,
@@ -36,6 +41,7 @@ impl Default for RobotSubsystem {
             topology_networks: Vec::new(),
             network_ids_by_entity: HashMap::new(),
             networks_needing_snapshot: Vec::new(),
+            charging_scratch: Vec::new(),
             #[cfg(test)]
             topology_rebuilds: 0,
         }

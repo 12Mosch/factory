@@ -662,9 +662,9 @@ pub(crate) fn update_machine_indicators(
     for mut text in &mut charge_texts {
         text.0 = match roboport_status {
             Some(status) if status.charge_capacity_joules > 0 => format!(
-                "Charge: {:.0}% ({} MJ)",
+                "Charge: {:.0}% ({:.1} MJ)",
                 status.charge_energy_joules as f64 * 100.0 / status.charge_capacity_joules as f64,
-                status.charge_energy_joules / 1_000_000,
+                status.charge_energy_joules as f64 / 1_000_000.0,
             ),
             _ => "Charge: -".to_string(),
         };

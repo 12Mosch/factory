@@ -31,6 +31,43 @@ pub(in crate::simulation) fn validate_roboport(
 
     super::inventory::validate_inventory(&sim.world.prototypes, &state.robots)?;
     super::inventory::validate_inventory(&sim.world.prototypes, &state.materials)?;
+    validate_inventory_policy(sim, entity_id, &state.robots, ItemSlotPolicy::Robot)?;
+    validate_inventory_policy(
+        sim,
+        entity_id,
+        &state.materials,
+        ItemSlotPolicy::RepairMaterial,
+    )?;
+    Ok(())
+}
+
+/// Rejects contents no insertion path could have produced.
+///
+/// The two roboport inventories accept disjoint item sets, and every way in
+/// (player transfer, inserter drop) enforces that. Checking it again here is
+/// what stops a corrupt or hand-edited save from parking repair packs in the
+/// robot slots — catalog-valid stacks that the policies would never admit.
+fn validate_inventory_policy(
+    sim: &Simulation,
+    entity_id: EntityId,
+    inventory: &Inventory,
+    policy: ItemSlotPolicy,
+) -> Result<(), SimValidationError> {
+    for slot in inventory.slots() {
+        let Some(stack) = slot.stack() else {
+            continue;
+        };
+        if !item_slot_policy_accepts(
+            &sim.world.prototypes,
+            &sim.research,
+            &sim.entities,
+            policy,
+            ItemSlotOperation::PlayerInsert,
+            stack.item_id(),
+        ) {
+            return Err(SimValidationError::InvalidRoboportState { entity_id });
+        }
+    }
     Ok(())
 }
 

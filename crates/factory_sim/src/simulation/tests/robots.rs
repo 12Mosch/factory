@@ -324,6 +324,58 @@ fn repair_packs_go_to_the_material_slots_and_robot_slots_reject_them() {
         .expect("stocked repair material should stay valid");
 }
 
+/// Roboports join the aggregated diagnostics alongside every other powered
+/// machine, so a network stalled for want of power is visible in the status
+/// panel rather than only on the roboport itself.
+#[test]
+fn roboports_appear_in_the_aggregated_machine_statuses() {
+    let mut sim = Simulation::new_test_world(123);
+    place_roboport_row(&mut sim, &[0]);
+    sim.tick();
+
+    let snapshot = sim.machine_statuses();
+    let group = snapshot
+        .groups
+        .iter()
+        .find(|group| group.kind == EntityKind::Roboport)
+        .expect("an unpowered roboport should report a status group");
+
+    assert_eq!(
+        group
+            .counts
+            .iter()
+            .find(|count| count.status == MachineStatus::NoPower)
+            .map(|count| count.count),
+        Some(1)
+    );
+}
+
+/// Validation re-checks the slot policies, so contents no insertion path could
+/// have produced — a catalog-valid stack in the wrong half — are still caught.
+#[test]
+fn roboport_slots_holding_the_wrong_item_fail_validation() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboports = place_roboport_row(&mut sim, &[0]);
+    let repair_pack = item_id(&sim.world.prototypes, "repair_pack");
+    let catalog = sim.world.prototypes.clone();
+    sim.tick();
+    sim.validate().expect("an empty roboport should be valid");
+
+    sim.entities
+        .roboport_state_mut(roboports[0])
+        .expect("roboport state exists")
+        .robots
+        .insert(&catalog, repair_pack, 1)
+        .expect("the robot slots have room for a stack");
+
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidRoboportState {
+            entity_id: roboports[0]
+        })
+    );
+}
+
 #[test]
 fn destroying_a_roboport_recovers_its_stocked_material() {
     let mut sim = Simulation::new_test_world(123);

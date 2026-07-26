@@ -68,6 +68,9 @@ impl Simulation {
                 self.heat_exchanger_status(*entity_id, fluids.water, fluids.steam),
             );
         }
+        for entity_id in self.entities.roboports.keys() {
+            push_production_map_status(&mut next, *entity_id, self.roboport_status(*entity_id));
+        }
 
         if next != self.production_map_statuses {
             self.production_status_revision = self.production_status_revision.wrapping_add(1);
@@ -168,6 +171,15 @@ impl Simulation {
             self.entities.heat_exchangers.keys().map(|entity_id| {
                 self.heat_exchanger_status(*entity_id, fluids.water, fluids.steam)
             }),
+        );
+        self.push_status_group(
+            &mut groups,
+            &mut total_by_status,
+            EntityKind::Roboport,
+            self.entities
+                .roboports
+                .keys()
+                .map(|entity_id| self.roboport_status(*entity_id)),
         );
 
         MachineStatusSnapshot {

@@ -16,7 +16,8 @@
 //!   that point the question is what the network as a whole covers.
 
 use bevy::prelude::*;
-use factory_sim::{Simulation, TileBounds};
+use factory_data::EntityPrototypeId;
+use factory_sim::{EntityFootprint, EntityId, Simulation, TileBounds};
 
 use crate::build::resources::{BuildPlacementPreviewState, BuildPlacementState};
 use crate::constants::TILE_SIZE;
@@ -36,6 +37,25 @@ const BORDER_THICKNESS: f32 = 2.0;
 #[derive(Component)]
 pub(crate) struct RoboportCoverageSprite;
 
+/// Everything the drawn squares are a function of.
+///
+/// Coverage geometry only moves when the held preview moves, the open roboport
+/// changes, or entities are placed or destroyed (which bumps the topology
+/// revision and can add, remove, or re-network a roboport). Nothing else in a
+/// frame can change a square, so an unchanged key means the existing sprites are
+/// still correct.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CoverageKey {
+    held: Option<(EntityPrototypeId, EntityFootprint)>,
+    open: Option<EntityId>,
+    entity_topology_revision: u64,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct RoboportCoverageRenderState {
+    synced: Option<CoverageKey>,
+}
+
 /// One coverage square to draw, in world tiles.
 struct CoverageSquare {
     bounds: TileBounds,
@@ -49,16 +69,32 @@ pub(crate) fn sync_roboport_coverage_rendering(
     build_state: Res<BuildPlacementState>,
     preview_state: Res<BuildPlacementPreviewState>,
     open_container: Res<OpenContainer>,
+    mut state: ResMut<RoboportCoverageRenderState>,
     existing: Query<Entity, With<RoboportCoverageSprite>>,
 ) {
-    // Coverage is only ever a handful of squares and only while a roboport is
-    // held or open, so a full respawn per frame is cheaper than tracking
-    // per-square sprite identity.
+    let sim = sim.read();
+    let key = CoverageKey {
+        held: build_state.selected.and_then(|selection| {
+            Some((
+                selection.entity_prototype_id()?,
+                preview_state.preview.as_ref()?.footprint?,
+            ))
+        }),
+        open: open_container.entity_id,
+        entity_topology_revision: sim.entity_topology_revision(),
+    };
+    if state.synced == Some(key) {
+        return;
+    }
+    state.synced = Some(key);
+
+    // Coverage is at most a handful of squares and only changes on the events
+    // above, so respawning the whole set on a change costs less than tracking
+    // per-square sprite identity would.
     for entity in &existing {
         commands.entity(entity).despawn();
     }
 
-    let sim = sim.read();
     let squares = held_roboport_squares(&sim, &build_state, &preview_state)
         .unwrap_or_else(|| open_roboport_network_squares(&sim, &open_container));
 

@@ -58,8 +58,14 @@ impl Simulation {
     /// buffer stops asking, which is what drops a settled roboport back to its
     /// idle drain.
     fn charge_roboport_buffers(&mut self) {
-        let roboport_ids = self.entities.roboports.keys().copied().collect::<Vec<_>>();
-        for entity_id in roboport_ids {
+        // Moved out of `self` so the loop body can mutably borrow the entity
+        // store and the subsystem; handed back at the end so the next tick
+        // reuses the allocation.
+        let mut roboport_ids = std::mem::take(&mut self.robots.charging_scratch);
+        roboport_ids.clear();
+        roboport_ids.extend(self.entities.roboports.keys().copied());
+
+        for &entity_id in &roboport_ids {
             let capacity = self.roboport_charge_capacity_joules(entity_id);
             let Some(charge_watts) = self.roboport_charge_watts(entity_id) else {
                 continue;
@@ -93,6 +99,8 @@ impl Simulation {
             }
             self.robots.mark_roboport_dirty(entity_id);
         }
+
+        self.robots.charging_scratch = roboport_ids;
     }
 
     /// Rate a roboport refills its buffer at, taken from the electric energy
