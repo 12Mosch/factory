@@ -41,8 +41,8 @@ pub struct GhostEntity {
 }
 
 /// A pending construction job. Jobs are queued in plan order; manual
-/// construction may complete them in any order, while future construction
-/// robots will consume the queue front-to-back.
+/// construction may complete them in any order, while construction robots
+/// consume the queue front-to-back.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConstructionJob {
     BuildGhost(GhostId),

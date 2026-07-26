@@ -207,6 +207,40 @@ fn a_filtered_storage_chest_only_accepts_its_item() {
     assert_eq!(chest_count(&sim, active, iron), 100);
 }
 
+/// A bounded storage search must rotate rather than permanently treating the
+/// first budget-sized prefix as the whole network.
+#[test]
+fn storage_search_reaches_a_usable_chest_after_an_incompatible_prefix() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron = item_id(&sim.world.prototypes, "iron_plate");
+    let copper = item_id(&sim.world.prototypes, "copper_plate");
+    let (_, origin) = logistic_roboport(&mut sim, 1);
+
+    for _ in 0..16 {
+        let storage = place_covered_chest(&mut sim, "storage_chest", origin);
+        sim.set_logistic_request(
+            storage,
+            0,
+            LogisticRequest {
+                item: Some(copper),
+                count: 0,
+            },
+        )
+        .expect("a storage chest takes a filter");
+    }
+    let usable_storage = place_covered_chest(&mut sim, "storage_chest", origin);
+    let active = place_covered_chest(&mut sim, "active_provider_chest", origin);
+    insert_into_chest(&mut sim, active, iron, 100);
+
+    tick_until(&mut sim, DELIVERY_TICKS, |sim| {
+        chest_count(sim, usable_storage, iron) == 100
+    });
+
+    assert_eq!(chest_count(&sim, active, iron), 0);
+    sim.validate()
+        .expect("rotating the bounded storage search leaves valid state");
+}
+
 /// One trip carries one stack, so a request larger than a stack takes several.
 #[test]
 fn a_delivery_carries_at_most_one_stack() {

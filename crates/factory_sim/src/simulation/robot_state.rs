@@ -56,6 +56,8 @@ pub(super) struct RobotSubsystem {
     pub(super) delivery_demand_scratch: Vec<(DemandPriority, ItemId, EntityId)>,
     #[serde(skip, default)]
     pub(super) delivery_surplus_scratch: Vec<(ItemId, EntityId)>,
+    #[serde(skip, default)]
+    pub(super) delivery_storage_scratch: Vec<EntityId>,
     #[cfg(test)]
     #[serde(skip, default)]
     pub(super) topology_rebuilds: u64,
@@ -77,6 +79,7 @@ impl Default for RobotSubsystem {
             delivery_member_scratch: Vec::new(),
             delivery_demand_scratch: Vec::new(),
             delivery_surplus_scratch: Vec::new(),
+            delivery_storage_scratch: Vec::new(),
             #[cfg(test)]
             topology_rebuilds: 0,
         }
