@@ -22,7 +22,7 @@ fn roboport_inventory_accepting(
         ),
         (
             RoboportInventory::Materials,
-            ItemSlotPolicy::RepairMaterial,
+            ItemSlotPolicy::ConstructionMaterial,
             &roboport.materials,
         ),
     ];

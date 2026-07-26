@@ -17,8 +17,9 @@ pub(in crate::simulation) enum ItemSlotPolicy {
     /// slots accept nothing; the robot issue turns this into a real predicate
     /// rather than adding a new policy.
     Robot,
-    /// A roboport's material slots, which hold repair packs.
-    RepairMaterial,
+    /// A roboport's construction-material slots. Every non-robot item is
+    /// accepted; robot items are routed to the dedicated robot slots.
+    ConstructionMaterial,
     OutputOnly,
 }
 
@@ -65,7 +66,7 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
             ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
             ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),
-            ItemSlotPolicy::RepairMaterial => item_is_repair_material(catalog, item_id),
+            ItemSlotPolicy::ConstructionMaterial => item_is_construction_material(catalog, item_id),
             ItemSlotPolicy::OutputOnly => false,
         },
         ItemSlotOperation::MachineInsert => match policy {
@@ -97,7 +98,7 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
             ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
             ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),
-            ItemSlotPolicy::RepairMaterial => item_is_repair_material(catalog, item_id),
+            ItemSlotPolicy::ConstructionMaterial => item_is_construction_material(catalog, item_id),
         },
     }
 }
@@ -113,12 +114,12 @@ fn item_is_robot(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
         .is_some_and(|item| item.robot.is_some())
 }
 
-/// Whether an item is construction material a roboport stocks, which today
-/// means anything that can repair.
-fn item_is_repair_material(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
+/// Whether an item is construction material a roboport stocks. Robot items are
+/// kept out so every insertion route agrees which inventory owns them.
+fn item_is_construction_material(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
     catalog
         .item(item_id)
-        .is_some_and(|item| item.repair.is_some())
+        .is_some_and(|item| item.robot.is_none())
 }
 
 pub(in crate::simulation) fn item_slot_policy_allows_operation(

@@ -279,6 +279,7 @@
             name: "construction_robot",
             stack_size: 50,
             robot: Some((
+                kind: Construction,
                 speed_fixed_per_tick: 60,
                 energy_capacity_joules: 1500000,
                 flight_energy_usage_watts: 21000,

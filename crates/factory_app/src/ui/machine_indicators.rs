@@ -29,6 +29,12 @@ pub(crate) struct HeatTemperatureText;
 pub(crate) struct RoboportChargeText;
 
 #[derive(Component)]
+pub(crate) struct RoboportConstructionRobotsText;
+
+#[derive(Component)]
+pub(crate) struct RoboportJobsText;
+
+#[derive(Component)]
 pub(crate) struct MachineGuidanceText;
 
 pub(crate) fn spawn_machine_guidance(
@@ -450,6 +456,18 @@ pub(crate) fn spawn_roboport_panel(
             TextColor(Color::srgb(0.86, 0.88, 0.82)),
             RoboportChargeText,
         ));
+        panel.spawn((
+            Text::new("Construction robots: 0 / 0"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            RoboportConstructionRobotsText,
+        ));
+        panel.spawn((
+            Text::new("Jobs: Build 0 · Deconstruct 0 · Repair 0"),
+            TextFont::from_font_size(11.0),
+            TextColor(Color::srgb(0.70, 0.76, 0.72)),
+            RoboportJobsText,
+        ));
         if let Some(coverage) = coverage {
             panel.spawn((
                 Text::new(format!(
@@ -542,14 +560,21 @@ pub(crate) fn spawn_inserter_panel(root: &mut bevy::ecs::hierarchy::ChildSpawner
     });
 }
 
-/// The three readout texts live in one panel, so each query has to exclude the
-/// others to satisfy Bevy's disjoint-access rules.
-type RoboportChargeTextQuery<'w, 's> = Query<
+type RoboportTextQuery<'w, 's> = Query<
     'w,
     's,
-    &'static mut Text,
     (
-        With<RoboportChargeText>,
+        &'static mut Text,
+        Option<&'static RoboportChargeText>,
+        Option<&'static RoboportConstructionRobotsText>,
+        Option<&'static RoboportJobsText>,
+    ),
+    (
+        Or<(
+            With<RoboportChargeText>,
+            With<RoboportConstructionRobotsText>,
+            With<RoboportJobsText>,
+        )>,
         Without<BurnerEnergyText>,
         Without<HeatTemperatureText>,
     ),
@@ -560,7 +585,7 @@ pub(crate) fn update_machine_indicators(
     open_container: Res<OpenContainer>,
     mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
     mut temperature_texts: Query<&mut Text, (With<HeatTemperatureText>, Without<BurnerEnergyText>)>,
-    mut charge_texts: RoboportChargeTextQuery,
+    mut roboport_texts: RoboportTextQuery,
     mut progress_fills: Query<&mut Node, With<MachineProgressFill>>,
 ) {
     let sim = sim.read();
@@ -659,14 +684,38 @@ pub(crate) fn update_machine_indicators(
     let roboport_status = open_container
         .entity_id
         .and_then(|entity_id| sim.entity_roboport_status(entity_id));
-    for mut text in &mut charge_texts {
-        text.0 = match roboport_status {
-            Some(status) if status.charge_capacity_joules > 0 => format!(
-                "Charge: {:.0}% ({:.1} MJ)",
-                status.charge_energy_joules as f64 * 100.0 / status.charge_capacity_joules as f64,
-                status.charge_energy_joules as f64 / 1_000_000.0,
-            ),
-            _ => "Charge: -".to_string(),
+    for (mut text, charge, robots, jobs) in &mut roboport_texts {
+        text.0 = if charge.is_some() {
+            match roboport_status {
+                Some(status) if status.charge_capacity_joules > 0 => format!(
+                    "Charge: {:.0}% ({:.1} MJ)",
+                    status.charge_energy_joules as f64 * 100.0
+                        / status.charge_capacity_joules as f64,
+                    status.charge_energy_joules as f64 / 1_000_000.0,
+                ),
+                _ => "Charge: -".to_string(),
+            }
+        } else if robots.is_some() {
+            roboport_status.map_or_else(
+                || "Construction robots: 0 / 0".to_string(),
+                |status| {
+                    format!(
+                        "Construction robots: {} / {}",
+                        status.available_construction_robots, status.total_construction_robots
+                    )
+                },
+            )
+        } else {
+            debug_assert!(jobs.is_some());
+            roboport_status.map_or_else(
+                || "Jobs: Build 0 · Deconstruct 0 · Repair 0".to_string(),
+                |status| {
+                    format!(
+                        "Jobs: Build {} · Deconstruct {} · Repair {}",
+                        status.jobs.build, status.jobs.deconstruction, status.jobs.repair
+                    )
+                },
+            )
         };
     }
 

@@ -102,6 +102,33 @@ fn tick_until(
     panic!("condition did not hold within {limit} ticks");
 }
 
+fn place_covered_ghost(
+    sim: &mut Simulation,
+    roboport: EntityId,
+    prototype_id: EntityPrototypeId,
+) -> crate::construction::GhostId {
+    let bounds = sim
+        .entity_roboport_status(roboport)
+        .expect("roboport status")
+        .construction_bounds;
+    for y in bounds.min_y..=bounds.max_y {
+        for x in bounds.min_x..=bounds.max_x {
+            let request = construction_ops::GhostPlacementRequest {
+                prototype_id,
+                x,
+                y,
+                direction: Direction::East,
+                recipe: None,
+            };
+            if construction_ops::validate_ghost_placement(sim, request).is_ok() {
+                return construction_ops::place_ghost(sim, request)
+                    .expect("validated covered ghost should place");
+            }
+        }
+    }
+    panic!("expected a covered buildable ghost position");
+}
+
 fn network_ids(sim: &Simulation, roboports: &[EntityId]) -> Vec<Option<u32>> {
     roboports
         .iter()
@@ -830,4 +857,488 @@ fn robot_networks_survive_a_save_load_round_trip() {
 
     assert_eq!(loaded.state_hash(), before);
     assert_eq!(loaded.robot_networks(), sim.robot_networks());
+}
+
+#[test]
+fn construction_robot_builds_a_ghost_from_pooled_material() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let build_item = sim
+        .world
+        .prototypes
+        .entity(furnace)
+        .and_then(|prototype| prototype.build_item)
+        .expect("furnace build item");
+    let ghost_id = place_covered_ghost(&mut sim, roboport, furnace);
+    let ghost = sim.construction.ghost(ghost_id).cloned().unwrap();
+    sim.entities
+        .roboport_state_mut(roboport)
+        .unwrap()
+        .materials
+        .insert(&sim.world.prototypes.clone(), build_item, 1)
+        .unwrap();
+
+    sim.tick();
+
+    assert_eq!(sim.construction.queue_len(), 0);
+    assert_eq!(sim.construction.reservations().count(), 1);
+    assert_eq!(sim.robot_count(), 1);
+    let status = sim.entity_roboport_status(roboport).unwrap();
+    assert_eq!(status.available_construction_robots, 0);
+    assert_eq!(status.total_construction_robots, 1);
+    assert_eq!(status.jobs.build, 1);
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboport)
+            .unwrap()
+            .materials
+            .count(build_item),
+        0
+    );
+
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.construction.ghost(ghost_id).is_none()
+    });
+    let built = sim
+        .entities
+        .occupancy
+        .entity_at(ghost.x, ghost.y)
+        .expect("robot should place the ghost prototype");
+    let placed = sim.entities.placed_entity(built).unwrap();
+    assert_eq!(placed.prototype_id, furnace);
+    assert_eq!(placed.direction, Direction::East);
+    sim.validate().expect("robot build should remain valid");
+}
+
+#[test]
+fn blocked_build_job_stays_pending_without_launching() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let ghost_id = place_covered_ghost(&mut sim, roboport, furnace);
+
+    sim.tick();
+
+    assert_eq!(
+        sim.construction.queue().collect::<Vec<_>>(),
+        vec![ConstructionJob::BuildGhost(ghost_id)]
+    );
+    assert_eq!(sim.robot_count(), 0);
+    assert_eq!(sim.construction.reservations().count(), 0);
+    let status = sim.entity_roboport_status(roboport).unwrap();
+    assert_eq!(status.available_construction_robots, 1);
+    assert_eq!(status.total_construction_robots, 1);
+    assert_eq!(status.jobs.build, 1);
+}
+
+#[test]
+fn dispatch_examines_only_thirty_two_blocked_jobs_per_tick() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let bounds = sim
+        .entity_roboport_status(roboport)
+        .unwrap()
+        .construction_bounds;
+    let mut ghost_ids = Vec::new();
+    'tiles: for y in bounds.min_y..=bounds.max_y {
+        for x in bounds.min_x..=bounds.max_x {
+            let request = construction_ops::GhostPlacementRequest {
+                prototype_id: furnace,
+                x,
+                y,
+                direction: Direction::North,
+                recipe: None,
+            };
+            if construction_ops::validate_ghost_placement(&sim, request).is_ok() {
+                ghost_ids.push(construction_ops::place_ghost(&mut sim, request).unwrap());
+                if ghost_ids.len() == 33 {
+                    break 'tiles;
+                }
+            }
+        }
+    }
+    assert_eq!(ghost_ids.len(), 33);
+
+    sim.tick();
+
+    let queue = sim.construction.queue().collect::<Vec<_>>();
+    assert_eq!(queue[0], ConstructionJob::BuildGhost(ghost_ids[32]));
+    assert_eq!(queue[1], ConstructionJob::BuildGhost(ghost_ids[0]));
+    assert_eq!(queue.len(), 33);
+}
+
+#[test]
+fn dispatch_uses_nearest_charged_roboport_and_ascending_pooled_storage() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboports = place_roboport_row(&mut sim, &[0, CONNECTING_GAP]);
+    sim.tick();
+    let catalog = sim.world.prototypes.clone();
+    let robot_item = item_id(&catalog, "construction_robot");
+    let capacity = sim
+        .entity_roboport_status(roboports[0])
+        .unwrap()
+        .charge_capacity_joules;
+    for roboport in &roboports {
+        let state = sim.entities.roboport_state_mut(*roboport).unwrap();
+        state.robots.insert(&catalog, robot_item, 1).unwrap();
+        state.charge_energy_joules = capacity;
+        sim.robots.mark_roboport_dirty(*roboport);
+    }
+    let furnace = entity_id_by_name(&catalog, "stone_furnace");
+    let build_item = catalog.entity(furnace).unwrap().build_item.unwrap();
+    sim.entities
+        .roboport_state_mut(roboports[0])
+        .unwrap()
+        .materials
+        .insert(&catalog, build_item, 1)
+        .unwrap();
+    sim.entities
+        .roboport_state_mut(roboports[1])
+        .unwrap()
+        .materials
+        .insert(&catalog, build_item, 1)
+        .unwrap();
+    let second = sim.entities.placed_entity(roboports[1]).unwrap().footprint;
+    let mut ghost_id = None;
+    'position: for y in second.y - 5..=second.y + 8 {
+        for x in second.x + 5..=second.x + 12 {
+            let request = construction_ops::GhostPlacementRequest {
+                prototype_id: furnace,
+                x,
+                y,
+                direction: Direction::North,
+                recipe: None,
+            };
+            if construction_ops::validate_ghost_placement(&sim, request).is_ok() {
+                ghost_id = Some(construction_ops::place_ghost(&mut sim, request).unwrap());
+                break 'position;
+            }
+        }
+    }
+    let ghost_id = ghost_id.expect("expected covered terrain near the second roboport");
+
+    sim.tick();
+
+    let (_, robot_id) = sim
+        .construction
+        .reservations()
+        .find(|(job, _)| *job == ConstructionJob::BuildGhost(ghost_id))
+        .expect("build should dispatch");
+    assert_eq!(
+        sim.robot(robot_id).unwrap().home_roboport,
+        Some(roboports[1])
+    );
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboports[0])
+            .unwrap()
+            .materials
+            .count(build_item),
+        0,
+        "pooled material withdrawal starts at the lowest entity id"
+    );
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboports[1])
+            .unwrap()
+            .materials
+            .count(build_item),
+        1,
+        "higher entity-id storage remains untouched"
+    );
+}
+
+#[test]
+fn construction_robot_repairs_damage_with_one_shot_pack_metadata() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let furnace_ghost = place_covered_ghost(&mut sim, roboport, furnace);
+    let ghost = sim.construction.ghost(furnace_ghost).cloned().unwrap();
+    construction_ops::cancel_ghost(&mut sim, furnace_ghost).unwrap();
+    let entity_id = place_at(&mut sim, furnace, ghost.x, ghost.y, Direction::North);
+    let maximum = sim.entity_health(entity_id).unwrap().1;
+    assert!(!sim.damage_entity(entity_id, maximum / 2));
+    let repair_pack = item_id(&sim.world.prototypes, "repair_pack");
+    sim.entities
+        .roboport_state_mut(roboport)
+        .unwrap()
+        .materials
+        .insert(&sim.world.prototypes.clone(), repair_pack, 1)
+        .unwrap();
+
+    sim.tick();
+    assert!(
+        sim.construction
+            .reservations()
+            .any(|(job, _)| job == ConstructionJob::Repair(entity_id))
+    );
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entity_health(entity_id)
+            .is_some_and(|(current, maximum)| current == maximum)
+    });
+
+    assert_eq!(sim.entity_health(entity_id), Some((maximum, maximum)));
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboport)
+            .unwrap()
+            .materials
+            .count(repair_pack),
+        0
+    );
+    sim.validate().expect("robot repair should remain valid");
+}
+
+#[test]
+fn deconstruction_cancels_pending_repair_for_the_same_target() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let ghost_id = place_covered_ghost(&mut sim, roboport, furnace);
+    let ghost = sim.construction.ghost(ghost_id).cloned().unwrap();
+    construction_ops::cancel_ghost(&mut sim, ghost_id).unwrap();
+    let entity_id = place_at(&mut sim, furnace, ghost.x, ghost.y, Direction::North);
+    assert!(!sim.damage_entity(entity_id, 1));
+    sim.tick();
+    assert!(
+        sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::Repair(entity_id))
+    );
+
+    construction_ops::mark_area_for_deconstruction(&mut sim, ghost.x, ghost.y, ghost.x, ghost.y);
+
+    assert!(
+        !sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::Repair(entity_id))
+    );
+    assert!(
+        sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::Deconstruct(entity_id))
+    );
+    sim.validate()
+        .expect("deconstruction precedence should preserve unique valid work");
+}
+
+#[test]
+fn construction_robot_deconstructs_and_deposits_recovery() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let ghost_id = place_covered_ghost(&mut sim, roboport, furnace);
+    let ghost = sim.construction.ghost(ghost_id).cloned().unwrap();
+    construction_ops::cancel_ghost(&mut sim, ghost_id).unwrap();
+    let entity_id = place_at(&mut sim, furnace, ghost.x, ghost.y, Direction::North);
+    let build_item = sim
+        .world
+        .prototypes
+        .entity(furnace)
+        .and_then(|prototype| prototype.build_item)
+        .unwrap();
+    construction_ops::mark_area_for_deconstruction(&mut sim, ghost.x, ghost.y, ghost.x, ghost.y);
+
+    sim.tick();
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entities.placed_entity(entity_id).is_none()
+    });
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entities
+            .roboport_state(roboport)
+            .is_ok_and(|state| state.materials.count(build_item) == 1)
+    });
+
+    assert!(!sim.construction.is_marked_for_deconstruction(entity_id));
+    sim.validate()
+        .expect("robot deconstruction and deposit should remain valid");
+}
+
+#[test]
+fn deconstruction_robot_hovers_with_cargo_until_storage_frees() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let ghost_id = place_covered_ghost(&mut sim, roboport, furnace);
+    let ghost = sim.construction.ghost(ghost_id).cloned().unwrap();
+    construction_ops::cancel_ghost(&mut sim, ghost_id).unwrap();
+    let entity_id = place_at(&mut sim, furnace, ghost.x, ghost.y, Direction::North);
+    let build_item = sim
+        .world
+        .prototypes
+        .entity(furnace)
+        .and_then(|prototype| prototype.build_item)
+        .unwrap();
+    let filler = item_id(&sim.world.prototypes, "iron_plate");
+    let filler_stack_size = sim.world.prototypes.item(filler).unwrap().stack_size;
+    let material_slots = sim
+        .entities
+        .roboport_state(roboport)
+        .unwrap()
+        .materials
+        .slots()
+        .len();
+    sim.entities
+        .roboport_state_mut(roboport)
+        .unwrap()
+        .materials
+        .insert(
+            &sim.world.prototypes.clone(),
+            filler,
+            filler_stack_size * material_slots as u16,
+        )
+        .unwrap();
+    construction_ops::mark_area_for_deconstruction(&mut sim, ghost.x, ghost.y, ghost.x, ghost.y);
+
+    sim.tick();
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entities.placed_entity(entity_id).is_none()
+    });
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.robots().any(|robot| !robot.cargo.is_empty())
+    });
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboport)
+            .unwrap()
+            .materials
+            .count(build_item),
+        0
+    );
+
+    sim.entities
+        .roboport_state_mut(roboport)
+        .unwrap()
+        .materials
+        .remove(filler, filler_stack_size)
+        .unwrap();
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entities
+            .roboport_state(roboport)
+            .is_ok_and(|state| state.materials.count(build_item) == 1)
+    });
+    sim.validate()
+        .expect("cargo waiting and retry must not lose or duplicate items");
+}
+
+#[test]
+fn deconstruction_cargo_routes_recovered_robots_to_robot_slots() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboports = place_roboport_row(&mut sim, &[0, CONNECTING_GAP]);
+    sim.tick();
+    let catalog = sim.world.prototypes.clone();
+    let robot_item = item_id(&catalog, "construction_robot");
+    let capacity = sim
+        .entity_roboport_status(roboports[0])
+        .unwrap()
+        .charge_capacity_joules;
+    {
+        let source = sim.entities.roboport_state_mut(roboports[0]).unwrap();
+        source.robots.insert(&catalog, robot_item, 1).unwrap();
+        source.charge_energy_joules = capacity;
+    }
+    sim.entities
+        .roboport_state_mut(roboports[1])
+        .unwrap()
+        .robots
+        .insert(&catalog, robot_item, 2)
+        .unwrap();
+    sim.robots.mark_roboport_dirty(roboports[0]);
+    sim.robots.mark_roboport_dirty(roboports[1]);
+    let target = sim.entities.placed_entity(roboports[1]).unwrap().footprint;
+    construction_ops::mark_area_for_deconstruction(
+        &mut sim, target.x, target.y, target.x, target.y,
+    );
+
+    sim.tick();
+    tick_until(&mut sim, 3_000, |sim| {
+        sim.entities.placed_entity(roboports[1]).is_none()
+    });
+    tick_until(&mut sim, 3_000, |sim| {
+        sim.entities
+            .roboport_state(roboports[0])
+            .is_ok_and(|state| state.robots.count(robot_item) >= 2)
+    });
+
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboports[0])
+            .unwrap()
+            .materials
+            .count(robot_item),
+        0
+    );
+    sim.validate()
+        .expect("recovered robot items must use only robot slots");
+}
+
+#[test]
+fn cancelling_a_reserved_build_returns_its_payload_and_clears_the_reservation() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let build_item = sim
+        .world
+        .prototypes
+        .entity(furnace)
+        .and_then(|prototype| prototype.build_item)
+        .unwrap();
+    let ghost_id = place_covered_ghost(&mut sim, roboport, furnace);
+    sim.entities
+        .roboport_state_mut(roboport)
+        .unwrap()
+        .materials
+        .insert(&sim.world.prototypes.clone(), build_item, 1)
+        .unwrap();
+    sim.tick();
+    let robot_id = sim.construction.reservations().next().unwrap().1;
+
+    construction_ops::cancel_ghost(&mut sim, ghost_id).unwrap();
+
+    assert_eq!(sim.construction.reservations().count(), 0);
+    let robot = sim.robot(robot_id).unwrap();
+    assert_eq!(robot.construction_job, None);
+    assert_eq!(robot.payload, None);
+    assert_eq!(robot.cargo.len(), 1);
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entities
+            .roboport_state(roboport)
+            .is_ok_and(|state| state.materials.count(build_item) == 1)
+    });
+    sim.validate()
+        .expect("cancelled reserved work should return to valid idle state");
+}
+
+#[test]
+fn reserved_construction_work_round_trips_mid_flight_deterministically() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");
+    let build_item = sim
+        .world
+        .prototypes
+        .entity(furnace)
+        .and_then(|prototype| prototype.build_item)
+        .unwrap();
+    place_covered_ghost(&mut sim, roboport, furnace);
+    sim.entities
+        .roboport_state_mut(roboport)
+        .unwrap()
+        .materials
+        .insert(&sim.world.prototypes.clone(), build_item, 1)
+        .unwrap();
+    sim.tick();
+    assert_eq!(sim.construction.reservations().count(), 1);
+    let bytes = crate::save_to_bytes(&sim).expect("reserved construction should save");
+    let mut loaded = crate::load_from_bytes(&bytes).expect("reserved construction should load");
+    assert_eq!(loaded.state_hash(), sim.state_hash());
+
+    for _ in 0..100 {
+        sim.tick();
+        loaded.tick();
+        assert_eq!(loaded.state_hash(), sim.state_hash());
+    }
 }

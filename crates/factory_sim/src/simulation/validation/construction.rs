@@ -66,11 +66,23 @@ pub(super) fn validate_construction_state(sim: &Simulation) -> Result<(), SimVal
         }
     }
 
-    // The queue must hold exactly one job per ghost and per deconstruction
-    // mark, in any order.
+    // Pending and reserved work together must hold exactly one job per ghost
+    // and deconstruction mark. Repair jobs are demand-driven, but must be
+    // unique and point at a damaged friendly entity.
+    let expected_queued_jobs = construction.queue.iter().copied().collect();
+    if construction.queue.len() != construction.queued_jobs.len()
+        || construction.queued_jobs != expected_queued_jobs
+    {
+        return Err(SimValidationError::InvalidConstructionQueue);
+    }
     let mut queued_ghosts = std::collections::BTreeSet::new();
     let mut queued_deconstructions = std::collections::BTreeSet::new();
-    for job in &construction.queue {
+    let mut queued_repairs = std::collections::BTreeSet::new();
+    let jobs = construction
+        .queue
+        .iter()
+        .chain(construction.reservations.keys());
+    for job in jobs {
         let unique = match job {
             ConstructionJob::BuildGhost(ghost_id) => {
                 construction.ghosts.contains_key(ghost_id) && queued_ghosts.insert(*ghost_id)
@@ -78,6 +90,18 @@ pub(super) fn validate_construction_state(sim: &Simulation) -> Result<(), SimVal
             ConstructionJob::Deconstruct(entity_id) => {
                 construction.deconstruction_marks.contains(entity_id)
                     && queued_deconstructions.insert(*entity_id)
+            }
+            ConstructionJob::Repair(entity_id) => {
+                !construction.deconstruction_marks.contains(entity_id)
+                    && sim.entities.placed_entity(*entity_id).is_some()
+                    && sim
+                        .entities
+                        .entity_health
+                        .get(entity_id)
+                        .is_some_and(|health| {
+                            health.faction == Faction::Player && health.current < health.maximum
+                        })
+                    && queued_repairs.insert(*entity_id)
             }
         };
         if !unique {
@@ -88,6 +112,17 @@ pub(super) fn validate_construction_state(sim: &Simulation) -> Result<(), SimVal
         || queued_deconstructions.len() != construction.deconstruction_marks.len()
     {
         return Err(SimValidationError::InvalidConstructionQueue);
+    }
+
+    for (job, robot_id) in &construction.reservations {
+        if sim
+            .robot_flights
+            .robots
+            .get(robot_id)
+            .is_none_or(|robot| robot.construction_job != Some(*job))
+        {
+            return Err(SimValidationError::InvalidConstructionQueue);
+        }
     }
 
     for (blueprint_index, blueprint) in construction.blueprints.iter().enumerate() {

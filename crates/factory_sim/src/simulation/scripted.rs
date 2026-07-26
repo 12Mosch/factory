@@ -138,7 +138,9 @@ impl Simulation {
     }
 
     /// Fills the world with roboports and sends `robot_count` robots out on
-    /// errands, for presentation and performance work.
+    /// errands, for presentation and performance work. A bounded construction
+    /// backlog and some returning cargo keep the robot-heavy benchmark
+    /// exercising job matching and deposits as well as bare flight.
     ///
     /// Buffers are refilled between dispatches rather than powered from a grid:
     /// the point of the fixture is a sky full of robots, and building enough
@@ -220,6 +222,40 @@ impl Simulation {
                     break;
                 }
                 dispatched += 1;
+            }
+        }
+
+        // Some errands return construction material. Keeping this sparse
+        // avoids turning the rendering fixture into an inventory-capacity
+        // fixture while still making the benchmark pay for cargo routing.
+        let cargo_item = factory_data::item_id_by_name(&catalog, "iron_plate");
+        for (index, robot) in self.robot_flights.robots.values_mut().enumerate() {
+            if index % 16 == 0 {
+                robot.cargo.push(
+                    ItemStack::new(&catalog, cargo_item, 1)
+                        .expect("fixture cargo should form a valid stack"),
+                );
+            }
+        }
+
+        // No build material is stocked, so these jobs rotate through the
+        // bounded matcher without consuming the flight population.
+        let furnace =
+            factory_data::entity_prototype_id_by_name(&self.world.prototypes, "stone_furnace");
+        let mut planned = 0;
+        for (x, y) in self.all_tile_coords() {
+            if planned == 128 {
+                break;
+            }
+            let request = construction_ops::GhostPlacementRequest {
+                prototype_id: furnace,
+                x,
+                y,
+                direction: Direction::North,
+                recipe: None,
+            };
+            if construction_ops::place_ghost(self, request).is_ok() {
+                planned += 1;
             }
         }
     }

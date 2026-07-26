@@ -103,9 +103,10 @@ pub(crate) fn place_ghost(
         },
     );
     sim.construction
-        .queue
-        .push_back(ConstructionJob::BuildGhost(ghost_id));
+        .enqueue_job(ConstructionJob::BuildGhost(ghost_id));
+    sim.track_construction_job(ConstructionJob::BuildGhost(ghost_id));
     sim.bump_entity_topology_revision();
+    sim.refresh_robot_network_work_counts();
 
     Ok(ghost_id)
 }
@@ -114,9 +115,11 @@ pub(crate) fn cancel_ghost(
     sim: &mut Simulation,
     ghost_id: GhostId,
 ) -> Result<GhostEntity, ConstructionError> {
+    robot_ops::cancel_construction_job(sim, ConstructionJob::BuildGhost(ghost_id));
     let ghost = remove_ghost(&mut sim.construction, ghost_id)
         .ok_or(ConstructionError::MissingGhost(ghost_id))?;
     sim.bump_entity_topology_revision();
+    sim.refresh_robot_network_work_counts();
     Ok(ghost)
 }
 
@@ -127,9 +130,6 @@ fn remove_ghost(construction: &mut ConstructionState, ghost_id: GhostId) -> Opti
             construction.ghost_occupancy.remove(&tile);
         }
     }
-    construction
-        .queue
-        .retain(|job| *job != ConstructionJob::BuildGhost(ghost_id));
     Some(ghost)
 }
 
@@ -162,8 +162,10 @@ pub(crate) fn build_ghost_from_player_inventory(
     )
     .map_err(ConstructionError::PlayerBuild)?;
     if sim.construction.ghosts.contains_key(&ghost_id) {
+        robot_ops::cancel_construction_job(sim, ConstructionJob::BuildGhost(ghost_id));
         remove_ghost(&mut sim.construction, ghost_id);
         sim.bump_entity_topology_revision();
+        sim.refresh_robot_network_work_counts();
     }
 
     // Best-effort: blueprints may carry recipes that are locked or that the
@@ -187,11 +189,13 @@ pub(crate) fn clear_ghosts_overlapping_footprint(
         let Some(&ghost_id) = sim.construction.ghost_occupancy.get(&tile) else {
             continue;
         };
+        robot_ops::cancel_construction_job(sim, ConstructionJob::BuildGhost(ghost_id));
         remove_ghost(&mut sim.construction, ghost_id);
         cleared = true;
     }
     if cleared {
         sim.bump_entity_topology_revision();
+        sim.refresh_robot_network_work_counts();
     }
 }
 
@@ -201,11 +205,10 @@ pub(crate) fn clear_construction_state_for_removed_entity(
     sim: &mut Simulation,
     entity_id: EntityId,
 ) {
-    if sim.construction.deconstruction_marks.remove(&entity_id) {
-        sim.construction
-            .queue
-            .retain(|job| *job != ConstructionJob::Deconstruct(entity_id));
-    }
+    robot_ops::cancel_construction_job(sim, ConstructionJob::Repair(entity_id));
+    robot_ops::cancel_construction_job(sim, ConstructionJob::Deconstruct(entity_id));
+    sim.construction.deconstruction_marks.remove(&entity_id);
+    sim.refresh_robot_network_work_counts();
 }
 
 /// Marks every placed entity intersecting the rectangle for deconstruction
@@ -224,10 +227,11 @@ pub(crate) fn mark_area_for_deconstruction(
         .entity_ids_in_tile_rect(min_x, max_x, min_y, max_y);
     let mut marked = 0;
     for entity_id in entity_ids {
+        robot_ops::cancel_construction_job(sim, ConstructionJob::Repair(entity_id));
         if sim.construction.deconstruction_marks.insert(entity_id) {
             sim.construction
-                .queue
-                .push_back(ConstructionJob::Deconstruct(entity_id));
+                .enqueue_job(ConstructionJob::Deconstruct(entity_id));
+            sim.track_construction_job(ConstructionJob::Deconstruct(entity_id));
             marked += 1;
         }
     }
@@ -237,11 +241,13 @@ pub(crate) fn mark_area_for_deconstruction(
         .ghost_ids_in_tile_rect(min_x, max_x, min_y, max_y);
     let ghosts_removed = ghost_ids.len();
     for ghost_id in ghost_ids {
+        robot_ops::cancel_construction_job(sim, ConstructionJob::BuildGhost(ghost_id));
         remove_ghost(&mut sim.construction, ghost_id);
     }
 
     if marked > 0 || ghosts_removed > 0 {
         sim.bump_entity_topology_revision();
+        sim.refresh_robot_network_work_counts();
     }
 
     (marked, ghosts_removed)
@@ -263,15 +269,14 @@ pub(crate) fn cancel_deconstruction_in_area(
     let mut cancelled = 0;
     for entity_id in entity_ids {
         if sim.construction.deconstruction_marks.remove(&entity_id) {
-            sim.construction
-                .queue
-                .retain(|job| *job != ConstructionJob::Deconstruct(entity_id));
+            robot_ops::cancel_construction_job(sim, ConstructionJob::Deconstruct(entity_id));
             cancelled += 1;
         }
     }
 
     if cancelled > 0 {
         sim.bump_entity_topology_revision();
+        sim.refresh_robot_network_work_counts();
     }
 
     cancelled

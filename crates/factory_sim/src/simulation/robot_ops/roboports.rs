@@ -24,6 +24,7 @@ impl Simulation {
 
         let topology_networks = self.build_robot_network_topology();
         self.robots.replace_topology(topology_networks);
+        self.rebuild_construction_job_routing();
         #[cfg(test)]
         {
             self.robots.topology_rebuilds += 1;
@@ -47,6 +48,7 @@ impl Simulation {
                 &mut self.robots.networks[network_index],
             );
         }
+        self.refresh_robot_network_work_counts();
     }
 
     /// Fills each roboport's charging buffer from its electric network.

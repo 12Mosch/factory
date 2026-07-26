@@ -38,9 +38,14 @@ impl Simulation {
     /// the queue.
     pub(in crate::simulation) fn advance_robots(&mut self) {
         self.assign_charging_pads();
-        self.step_robots();
-        // Charging and docking both changed roboport state the network
-        // snapshots summarize, so they settle again before anything reads them.
+        self.ensure_robot_network_topology();
+        self.reconcile_construction_jobs();
+        let arrivals = self.step_robots();
+        for robot_id in arrivals {
+            self.resolve_construction_arrival(robot_id);
+        }
+        self.ensure_robot_network_topology();
+        self.dispatch_construction_jobs();
         self.refresh_robot_network_snapshots();
     }
 
@@ -125,6 +130,9 @@ impl Simulation {
                 home_roboport: Some(roboport),
                 errand: Some((tile_center_fixed(x), tile_center_fixed(y))),
                 activity: RobotActivity::Flying,
+                construction_job: None,
+                payload: None,
+                cargo: Vec::new(),
             },
         );
         Ok(id)
@@ -161,6 +169,22 @@ impl Simulation {
                 .is_some_and(|entity_id| !entities.roboports.contains_key(&entity_id))
             {
                 robot.activity = RobotActivity::Flying;
+            }
+        }
+        let orphaned_jobs = robot_flights
+            .robots
+            .values()
+            .filter_map(|robot| {
+                (robot.home_roboport.is_none())
+                    .then_some(robot.construction_job)
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        for job in orphaned_jobs {
+            let remains_valid = self.construction_job_is_valid(job);
+            super::cancel_construction_job(self, job);
+            if remains_valid && self.construction.enqueue_job(job) {
+                self.track_construction_job(job);
             }
         }
     }
@@ -213,9 +237,9 @@ impl Simulation {
         });
     }
 
-    fn step_robots(&mut self) {
+    fn step_robots(&mut self) -> Vec<RobotId> {
         if self.robot_flights.robots.is_empty() {
-            return;
+            return Vec::new();
         }
         let Simulation {
             robot_flights,
@@ -232,8 +256,10 @@ impl Simulation {
             entities,
             networks,
             charging,
+            arrived_construction_jobs: Vec::new(),
         };
         robots.retain(|_, robot| step_robot(&mut context, robot));
+        context.arrived_construction_jobs
     }
 }
 
@@ -242,6 +268,7 @@ struct RobotStepContext<'a> {
     entities: &'a mut EntityStore,
     networks: &'a mut RobotSubsystem,
     charging: &'a mut BTreeMap<EntityId, RoboportChargingState>,
+    arrived_construction_jobs: Vec<RobotId>,
 }
 
 /// Advances one robot. Returns `false` when the robot docked and should leave
@@ -321,8 +348,9 @@ fn fly(
             true
         }
         RobotActivity::Flying if robot.errand.is_some() => {
-            // The errand target is reached; this issue has no work to do there,
-            // so the robot turns around. Jobs will hook in here.
+            if robot.construction_job.is_some() {
+                context.arrived_construction_jobs.push(robot.id);
+            }
             robot.errand = None;
             true
         }
@@ -336,6 +364,12 @@ fn arrive_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
     let Some(roboport) = robot.home_roboport else {
         return true;
     };
+    if !robot.cargo.is_empty() {
+        deposit_robot_cargo(context, robot, roboport);
+        if !robot.cargo.is_empty() {
+            return true;
+        }
+    }
     let capacity = context
         .catalog
         .item(robot.item_id)
@@ -360,6 +394,59 @@ fn arrive_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
     }
     context.networks.mark_roboport_dirty(roboport);
     false
+}
+
+/// Deposits as much cargo as the robot's current network can accept. Members
+/// are visited in entity-id order and robot items use robot slots; all other
+/// items use construction-material slots.
+fn deposit_robot_cargo(context: &mut RobotStepContext<'_>, robot: &mut Robot, home: EntityId) {
+    let Some(network_id) = context.networks.network_ids_by_entity.get(&home).copied() else {
+        return;
+    };
+    let Some(network) = context.networks.topology_networks.get(network_id as usize) else {
+        return;
+    };
+    let members = network_member_ids(network).collect::<Vec<_>>();
+    let mut remaining_cargo = Vec::new();
+    for stack in robot.cargo.drain(..) {
+        let item_id = stack.item_id();
+        let Some(item) = context.catalog.item(item_id) else {
+            remaining_cargo.push(stack);
+            continue;
+        };
+        let mut remaining = stack.count();
+        for member in &members {
+            let Some(state) = context.entities.roboports.get_mut(member) else {
+                continue;
+            };
+            let inventory = if item.robot.is_some() {
+                &mut state.robots
+            } else {
+                &mut state.materials
+            };
+            let inserted = inventory
+                .insert_capacity(item_id, item.stack_size)
+                .min(u32::from(remaining)) as u16;
+            if inserted == 0 {
+                continue;
+            }
+            inventory
+                .insert(context.catalog, item_id, inserted)
+                .expect("cargo insertion was bounded by inventory capacity");
+            remaining -= inserted;
+            context.networks.mark_roboport_dirty(*member);
+            if remaining == 0 {
+                break;
+            }
+        }
+        if remaining > 0 {
+            remaining_cargo.push(
+                ItemStack::new(context.catalog, item_id, remaining)
+                    .expect("remaining cargo preserves a validated stack"),
+            );
+        }
+    }
+    robot.cargo = remaining_cargo;
 }
 
 /// Joins the charging queue of `roboport`, or takes a pad directly when one is
@@ -528,7 +615,10 @@ fn roboport_prototype(
 
 /// Fixed-point center of a roboport's footprint: where robots leave from, dock,
 /// and charge.
-fn roboport_dock_position(entities: &EntityStore, roboport: EntityId) -> Option<(i64, i64)> {
+pub(super) fn roboport_dock_position(
+    entities: &EntityStore,
+    roboport: EntityId,
+) -> Option<(i64, i64)> {
     let footprint = entities.placed_entity(roboport)?.footprint;
     Some((
         footprint.x * POSITION_SCALE + i64::from(footprint.width) * POSITION_SCALE / 2,
@@ -565,7 +655,7 @@ fn step_toward(x: i64, y: i64, target: (i64, i64), budget: i64) -> (i64, i64) {
     (x + step_x, y + step_y)
 }
 
-fn squared_distance(dx: i64, dy: i64) -> i128 {
+pub(super) fn squared_distance(dx: i64, dy: i64) -> i128 {
     i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy)
 }
 

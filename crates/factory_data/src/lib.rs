@@ -33,7 +33,7 @@ pub use model::{
     MiningDrillPrototype, ModuleEffectPrototype, NuclearReactorPrototype, OffshorePumpPrototype,
     PumpPrototype, PumpjackPrototype, RadarPrototype, RecipePrototype, RepairToolPrototype,
     ResourceDistanceScalingConfig, ResourceExtraction, ResourceGenerationConfig,
-    ResourcePatchGridConfig, RoboportPrototype, RobotPrototype, SolarPanelPrototype,
+    ResourcePatchGridConfig, RoboportPrototype, RobotKind, RobotPrototype, SolarPanelPrototype,
     SplitterPrototype, StartingAreaConfig, SteamEnginePrototype, TechnologyEffect,
     TechnologyPrototype, TerrainNoiseConfig, TilePlacementPrototype, TilePrototype,
     TransportBeltPrototype, UndergroundBeltPart, UndergroundBeltPrototype,

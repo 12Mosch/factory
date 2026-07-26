@@ -96,8 +96,8 @@ pub use crate::research::{
 };
 pub use crate::robots::{
     EntityRoboportStatus, RoboportChargingState, RoboportError, RoboportState, Robot,
-    RobotActivity, RobotDispatchError, RobotFlightSubsystem, RobotId, RobotNetworkSnapshot,
-    TileBounds,
+    RobotActivity, RobotDispatchError, RobotFlightSubsystem, RobotId, RobotNetworkJobCounts,
+    RobotNetworkSnapshot, TileBounds,
 };
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,

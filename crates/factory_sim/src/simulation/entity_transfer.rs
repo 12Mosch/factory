@@ -1103,7 +1103,7 @@ impl RoboportInventory {
     fn policy(self) -> ItemSlotPolicy {
         match self {
             Self::Robots => ItemSlotPolicy::Robot,
-            Self::Materials => ItemSlotPolicy::RepairMaterial,
+            Self::Materials => ItemSlotPolicy::ConstructionMaterial,
         }
     }
 

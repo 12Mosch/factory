@@ -521,6 +521,10 @@ pub struct RoboportPrototype {
 /// unit with this profile, and docking turns it back into the same item.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RobotPrototype {
+    /// Role this robot can perform. Construction dispatch only considers
+    /// construction robots, leaving room for logistic robots to share the
+    /// stationing and flight machinery without claiming construction work.
+    pub kind: RobotKind,
     /// Flight speed in fixed-point position units per tick (1024 = one tile per
     /// tick), the same convention [`UnitPrototype::speed_fixed_per_tick`] uses.
     pub speed_fixed_per_tick: u32,
@@ -529,6 +533,11 @@ pub struct RobotPrototype {
     /// Draw while flying, in watts. A robot only spends energy while it moves,
     /// so one hovering in a charging queue cannot strand itself.
     pub flight_energy_usage_watts: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum RobotKind {
+    Construction,
 }
 
 /// Inclusive tile bounds of the square a roboport radius covers, centered on
