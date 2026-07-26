@@ -139,6 +139,10 @@ const RECIPE_NAMES: &[&str] = &[
     "utility_science_pack",
     "space_science_pack",
     "radar",
+    "passive_provider_chest",
+    "active_provider_chest",
+    "storage_chest",
+    "buffer_chest",
     "requester_chest",
 ];
 

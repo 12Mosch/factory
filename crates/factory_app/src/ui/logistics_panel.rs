@@ -198,12 +198,11 @@ pub(crate) fn handle_logistic_request_step_buttons(
     let Some(entity_id) = open_container.entity_id else {
         return;
     };
-    sounds.write(SoundEvent::UiClick);
-
     let command = {
         let sim = sim.read();
         // Stepping an empty row would ask for nothing at all, so it is a no-op
-        // until the player picks an item for it.
+        // until the player picks an item for it — and a no-op gets no click,
+        // which is what tells the player the row needs an item first.
         let Some(current) = request(&sim, entity_id, slot_index).filter(|row| row.item.is_some())
         else {
             return;
@@ -220,5 +219,6 @@ pub(crate) fn handle_logistic_request_step_buttons(
             request: LogisticRequest { count, ..current },
         })
     };
+    sounds.write(SoundEvent::UiClick);
     commands.write(command);
 }

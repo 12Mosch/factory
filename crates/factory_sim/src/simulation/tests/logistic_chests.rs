@@ -143,6 +143,33 @@ fn a_request_reports_only_the_shortfall_it_still_needs() {
     assert_eq!(totals(&sim, chest, iron).requested, 70);
 }
 
+/// Nothing stops a player from naming the same item on two rows, and the two
+/// together are one request for their total. Netting the held stock off each
+/// row separately would subtract it twice and understate the shortfall.
+#[test]
+fn two_rows_naming_one_item_share_a_single_shortfall() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron = item_id(&sim.world.prototypes, "iron_plate");
+    let (_, chest) = roboport_with_chest(&mut sim, "requester_chest");
+
+    for (slot_index, count) in [(0, 100), (1, 50)] {
+        sim.set_logistic_request(
+            chest,
+            slot_index,
+            LogisticRequest {
+                item: Some(iron),
+                count,
+            },
+        )
+        .expect("a requester chest takes an amount");
+    }
+    insert_into_chest(&mut sim, chest, iron, 30);
+    sim.tick();
+
+    // 150 asked for, 30 already here.
+    assert_eq!(totals(&sim, chest, iron).requested, 120);
+}
+
 /// A buffer both asks and supplies, which is what distinguishes it from the
 /// other four modes and the one combination the index has to get right.
 #[test]

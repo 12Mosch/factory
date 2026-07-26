@@ -161,11 +161,16 @@ impl Simulation {
         if mode.requests_items() {
             for (item_id, wanted) in state.requests.iter().filter_map(|request| request.demand()) {
                 let index = totals_index(&mut contribution, item_id);
-                let totals = &mut contribution[index].1;
-                // Only the shortfall is demand: the part of a request the chest
-                // already holds is not work for the network.
-                let held = totals.stored;
-                totals.requested = totals.requested.saturating_add(wanted.saturating_sub(held));
+                contribution[index].1.requested =
+                    contribution[index].1.requested.saturating_add(wanted);
+            }
+            // Only the shortfall is demand: the part of a request the chest
+            // already holds is not work for the network. Held stock is netted
+            // off the *summed* target rather than off each row, because two
+            // rows naming the same item are one request for their total —
+            // subtracting the same stock twice would understate the shortfall.
+            for (_, totals) in &mut contribution {
+                totals.requested = totals.requested.saturating_sub(totals.stored);
             }
         }
 
