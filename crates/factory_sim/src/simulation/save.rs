@@ -38,7 +38,9 @@ use bincode::Options;
 // robots gained construction payload and cargo state.
 // v33: logistic chest configuration (request and filter rows) joined the entity
 // registry.
-pub const SAVE_VERSION: u32 = 33;
+// v34: flying robots gained the logistic delivery they own, and robot network
+// snapshots gained logistic robot and active delivery counts.
+pub const SAVE_VERSION: u32 = 34;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

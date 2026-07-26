@@ -13,12 +13,13 @@
 //! actually produce, so a robot never overshoots its roboport and snaps back.
 
 use bevy::prelude::*;
+use factory_data::RobotKind;
 use factory_sim::{ChunkCoord, Robot, RobotId};
 use std::collections::HashSet;
 
 use crate::constants::TILE_SIZE;
 use crate::map::resources::VisibleChunks;
-use crate::rendering::colors::robot_color;
+use crate::rendering::colors::{logistic_robot_color, robot_color};
 use crate::resources::SimResource;
 
 const ROBOT_SPRITE_SIZE: f32 = TILE_SIZE * 0.34;
@@ -90,7 +91,10 @@ pub(crate) fn sync_robot_rendering(
         }
         let position = robot_position(robot);
         commands.spawn((
-            Sprite::from_color(robot_color(), Vec2::splat(ROBOT_SPRITE_SIZE)),
+            Sprite::from_color(
+                robot_sprite_color(sim.catalog(), robot),
+                Vec2::splat(ROBOT_SPRITE_SIZE),
+            ),
             Transform::from_translation(position.extend(ROBOT_SPRITE_Z)),
             RobotSprite {
                 robot_id: robot.id,
@@ -99,6 +103,20 @@ pub(crate) fn sync_robot_rendering(
                 synced_tick: tick,
             },
         ));
+    }
+}
+
+/// Tint one robot is drawn in, taken from the role its item declares.
+fn robot_sprite_color(catalog: &factory_data::PrototypeCatalog, robot: &Robot) -> Color {
+    let kind = catalog
+        .item(robot.item_id)
+        .and_then(|item| item.robot)
+        .map(|profile| profile.kind);
+    match kind {
+        Some(RobotKind::Logistic) => logistic_robot_color(),
+        // A robot with no flight profile cannot happen in a validated world,
+        // and drawing it as a construction robot is the harmless answer.
+        Some(RobotKind::Construction) | None => robot_color(),
     }
 }
 

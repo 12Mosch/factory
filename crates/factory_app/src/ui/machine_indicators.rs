@@ -23,16 +23,37 @@ pub(crate) struct MachineProgressFill;
 #[derive(Component)]
 pub(crate) struct HeatTemperatureText;
 
-/// Roboport charging-buffer readout. A roboport's only dynamic state today is
-/// how full its buffer is, which is what tells a player whether it is powered.
-#[derive(Component)]
-pub(crate) struct RoboportChargeText;
+/// What one live line of the roboport panel reports.
+///
+/// Keyed like [`crate::ui::logistics_panel::LogisticLabel`] and for the same
+/// reason: every line writes `Text`, so one component with a discriminant keeps
+/// the refresh to a single query however many readouts the panel grows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoboportReadout {
+    /// How full the charging buffer is, which is what tells a player whether
+    /// the roboport is powered.
+    Charge,
+    ConstructionRobots,
+    LogisticRobots,
+    Jobs,
+    /// Everything the network's logistic chests hold.
+    NetworkContents,
+    /// Requests the network has not been able to fill, which is the first thing
+    /// to look at when a requester chest stays empty.
+    UnsatisfiedRequests,
+}
 
 #[derive(Component)]
-pub(crate) struct RoboportConstructionRobotsText;
+pub(crate) struct RoboportReadoutText(pub(crate) RoboportReadout);
 
-#[derive(Component)]
-pub(crate) struct RoboportJobsText;
+/// Item lines one network list shows before summarizing the rest.
+const NETWORK_ITEM_LINE_LIMIT: usize = 8;
+
+const PRIMARY_READOUT_COLOR: Color = Color::srgb(0.86, 0.88, 0.82);
+const SECONDARY_READOUT_COLOR: Color = Color::srgb(0.70, 0.76, 0.72);
+/// Unfilled requests are the network failing at its job, so they read as a
+/// warning rather than as another grey line.
+const SHORTFALL_READOUT_COLOR: Color = Color::srgb(1.0, 0.72, 0.30);
 
 #[derive(Component)]
 pub(crate) struct MachineGuidanceText;
@@ -450,24 +471,20 @@ pub(crate) fn spawn_roboport_panel(
             TextFont::from_font_size(14.0),
             TextColor(Color::WHITE),
         ));
-        panel.spawn((
-            Text::new("Charge: -"),
-            TextFont::from_font_size(12.0),
-            TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            RoboportChargeText,
-        ));
-        panel.spawn((
-            Text::new("Construction robots: 0 / 0"),
-            TextFont::from_font_size(12.0),
-            TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            RoboportConstructionRobotsText,
-        ));
-        panel.spawn((
-            Text::new("Jobs: Build 0 · Deconstruct 0 · Repair 0"),
-            TextFont::from_font_size(11.0),
-            TextColor(Color::srgb(0.70, 0.76, 0.72)),
-            RoboportJobsText,
-        ));
+        spawn_roboport_readout(panel, RoboportReadout::Charge, 12.0, PRIMARY_READOUT_COLOR);
+        spawn_roboport_readout(
+            panel,
+            RoboportReadout::ConstructionRobots,
+            12.0,
+            PRIMARY_READOUT_COLOR,
+        );
+        spawn_roboport_readout(
+            panel,
+            RoboportReadout::LogisticRobots,
+            12.0,
+            PRIMARY_READOUT_COLOR,
+        );
+        spawn_roboport_readout(panel, RoboportReadout::Jobs, 11.0, SECONDARY_READOUT_COLOR);
         if let Some(coverage) = coverage {
             panel.spawn((
                 Text::new(format!(
@@ -475,9 +492,25 @@ pub(crate) fn spawn_roboport_panel(
                     coverage.construction_radius_tiles, coverage.logistic_radius_tiles
                 )),
                 TextFont::from_font_size(11.0),
-                TextColor(Color::srgb(0.70, 0.76, 0.72)),
+                TextColor(SECONDARY_READOUT_COLOR),
             ));
         }
+        // The network's own state, below the roboport's. Contents answer "does
+        // the network have this at all" and unsatisfied requests answer "why is
+        // that chest still empty" — the two questions a player opens a roboport
+        // to ask once robots are flying.
+        spawn_roboport_readout(
+            panel,
+            RoboportReadout::NetworkContents,
+            11.0,
+            SECONDARY_READOUT_COLOR,
+        );
+        spawn_roboport_readout(
+            panel,
+            RoboportReadout::UnsatisfiedRequests,
+            11.0,
+            SHORTFALL_READOUT_COLOR,
+        );
         spawn_roboport_slot_row(panel, "Robots", InventoryPanel::RoboportRobots, robot_slots);
         spawn_roboport_slot_row(
             panel,
@@ -486,6 +519,133 @@ pub(crate) fn spawn_roboport_panel(
             material_slots,
         );
     });
+}
+
+fn spawn_roboport_readout(
+    panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    readout: RoboportReadout,
+    font_size: f32,
+    color: Color,
+) {
+    panel.spawn((
+        Text::new(roboport_readout_text(readout, None, None)),
+        TextFont::from_font_size(font_size),
+        TextColor(color),
+        Node {
+            width: Val::Percent(100.0),
+            ..default()
+        },
+        RoboportReadoutText(readout),
+    ));
+}
+
+/// Text of one roboport readout.
+///
+/// Shared by the spawn and the refresh so a panel that has never been updated
+/// shows the same shape it will show a frame later, rather than a placeholder
+/// that has to be kept in step with the real formatting by hand.
+fn roboport_readout_text(
+    readout: RoboportReadout,
+    status: Option<factory_sim::EntityRoboportStatus>,
+    sim: Option<&factory_sim::Simulation>,
+) -> String {
+    match readout {
+        RoboportReadout::Charge => match status {
+            Some(status) if status.charge_capacity_joules > 0 => format!(
+                "Charge: {:.0}% ({:.1} MJ)",
+                status.charge_energy_joules as f64 * 100.0 / status.charge_capacity_joules as f64,
+                status.charge_energy_joules as f64 / 1_000_000.0,
+            ),
+            _ => "Charge: -".to_string(),
+        },
+        RoboportReadout::ConstructionRobots => format!(
+            "Construction robots: {} / {}",
+            status.map_or(0, |status| status.available_construction_robots),
+            status.map_or(0, |status| status.total_construction_robots),
+        ),
+        RoboportReadout::LogisticRobots => format!(
+            "Logistic robots: {} / {} · {} delivering",
+            status.map_or(0, |status| status.available_logistic_robots),
+            status.map_or(0, |status| status.total_logistic_robots),
+            status.map_or(0, |status| status.active_deliveries),
+        ),
+        RoboportReadout::Jobs => {
+            let jobs = status.map(|status| status.jobs).unwrap_or_default();
+            format!(
+                "Jobs: Build {} · Deconstruct {} · Repair {}",
+                jobs.build, jobs.deconstruction, jobs.repair
+            )
+        }
+        RoboportReadout::NetworkContents => {
+            format_network_items(sim, status, NetworkItemReport::Contents)
+        }
+        RoboportReadout::UnsatisfiedRequests => {
+            format_network_items(sim, status, NetworkItemReport::UnsatisfiedRequests)
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NetworkItemReport {
+    Contents,
+    UnsatisfiedRequests,
+}
+
+/// Items a network holds, or the requests it has not filled.
+///
+/// Both lists are cut off at [`NETWORK_ITEM_LINE_LIMIT`] entries, ordered by
+/// amount so the cut always drops the least interesting ones: a network with
+/// four hundred distinct items would otherwise turn the panel into a wall of
+/// text nobody reads.
+fn format_network_items(
+    sim: Option<&factory_sim::Simulation>,
+    status: Option<factory_sim::EntityRoboportStatus>,
+    report: NetworkItemReport,
+) -> String {
+    let heading = match report {
+        NetworkItemReport::Contents => "Network contents",
+        NetworkItemReport::UnsatisfiedRequests => "Unsatisfied requests",
+    };
+    let Some((sim, network_id)) = sim.zip(status.and_then(|status| status.network_id)) else {
+        return format!("{heading}: -");
+    };
+    let Some(contents) = sim.logistic_network_contents(network_id) else {
+        return format!("{heading}: -");
+    };
+
+    let mut entries = contents
+        .iter()
+        .filter_map(|(item_id, totals)| {
+            let amount = match report {
+                NetworkItemReport::Contents => totals.stored,
+                NetworkItemReport::UnsatisfiedRequests => totals.requested,
+            };
+            (amount > 0).then_some((amount, *item_id))
+        })
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return match report {
+            NetworkItemReport::Contents => format!("{heading}: empty"),
+            NetworkItemReport::UnsatisfiedRequests => format!("{heading}: none"),
+        };
+    }
+    // Largest first, ties by item id so the list never reshuffles under a
+    // player reading it.
+    entries.sort_unstable_by(|left, right| right.cmp(left));
+
+    let shown = entries.len().min(NETWORK_ITEM_LINE_LIMIT);
+    let mut text = format!("{heading}:");
+    for (amount, item_id) in &entries[..shown] {
+        let name = sim
+            .catalog()
+            .item(*item_id)
+            .map_or("unknown", |item| item.name.as_str());
+        text.push_str(&format!("\n  {name} × {amount}"));
+    }
+    if let Some(hidden) = entries.len().checked_sub(shown).filter(|count| *count > 0) {
+        text.push_str(&format!("\n  … {hidden} more"));
+    }
+    text
 }
 
 fn spawn_roboport_slot_row(
@@ -563,21 +723,8 @@ pub(crate) fn spawn_inserter_panel(root: &mut bevy::ecs::hierarchy::ChildSpawner
 type RoboportTextQuery<'w, 's> = Query<
     'w,
     's,
-    (
-        &'static mut Text,
-        Option<&'static RoboportChargeText>,
-        Option<&'static RoboportConstructionRobotsText>,
-        Option<&'static RoboportJobsText>,
-    ),
-    (
-        Or<(
-            With<RoboportChargeText>,
-            With<RoboportConstructionRobotsText>,
-            With<RoboportJobsText>,
-        )>,
-        Without<BurnerEnergyText>,
-        Without<HeatTemperatureText>,
-    ),
+    (&'static mut Text, &'static RoboportReadoutText),
+    (Without<BurnerEnergyText>, Without<HeatTemperatureText>),
 >;
 
 pub(crate) fn update_machine_indicators(
@@ -684,39 +831,8 @@ pub(crate) fn update_machine_indicators(
     let roboport_status = open_container
         .entity_id
         .and_then(|entity_id| sim.entity_roboport_status(entity_id));
-    for (mut text, charge, robots, jobs) in &mut roboport_texts {
-        text.0 = if charge.is_some() {
-            match roboport_status {
-                Some(status) if status.charge_capacity_joules > 0 => format!(
-                    "Charge: {:.0}% ({:.1} MJ)",
-                    status.charge_energy_joules as f64 * 100.0
-                        / status.charge_capacity_joules as f64,
-                    status.charge_energy_joules as f64 / 1_000_000.0,
-                ),
-                _ => "Charge: -".to_string(),
-            }
-        } else if robots.is_some() {
-            roboport_status.map_or_else(
-                || "Construction robots: 0 / 0".to_string(),
-                |status| {
-                    format!(
-                        "Construction robots: {} / {}",
-                        status.available_construction_robots, status.total_construction_robots
-                    )
-                },
-            )
-        } else {
-            debug_assert!(jobs.is_some());
-            roboport_status.map_or_else(
-                || "Jobs: Build 0 · Deconstruct 0 · Repair 0".to_string(),
-                |status| {
-                    format!(
-                        "Jobs: Build {} · Deconstruct {} · Repair {}",
-                        status.jobs.build, status.jobs.deconstruction, status.jobs.repair
-                    )
-                },
-            )
-        };
+    for (mut text, readout) in &mut roboport_texts {
+        text.0 = roboport_readout_text(readout.0, roboport_status, Some(&sim));
     }
 
     for mut node in &mut progress_fills {

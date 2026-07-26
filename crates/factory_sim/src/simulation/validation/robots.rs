@@ -151,13 +151,14 @@ pub(super) fn validate_robot_network_snapshots(sim: &Simulation) -> Result<(), S
         if network.network_id != expected_network_id as u32
             || network.roboports.is_empty()
             || network.charge_energy_joules > network.charge_capacity_joules
-            || work_counts
-                .get(expected_network_id)
-                .is_none_or(|(available, total, jobs)| {
-                    network.available_construction_robots != *available
-                        || network.total_construction_robots != *total
-                        || network.jobs != *jobs
-                })
+            || work_counts.get(expected_network_id).is_none_or(|counts| {
+                network.available_construction_robots != counts.available_construction_robots
+                    || network.total_construction_robots != counts.total_construction_robots
+                    || network.available_logistic_robots != counts.available_logistic_robots
+                    || network.total_logistic_robots != counts.total_logistic_robots
+                    || network.jobs != counts.jobs
+                    || network.active_deliveries != counts.active_deliveries
+            })
         {
             return Err(invalid());
         }
@@ -263,6 +264,37 @@ pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidati
                 return Err(invalid());
             }
         }
+        // A delivery and a construction job are two claims on the same robot,
+        // and the two dispatchers draw from disjoint robot kinds, so holding
+        // both is a state neither of them could have produced.
+        if let Some(delivery) = robot.delivery {
+            if profile.kind != RobotKind::Logistic
+                || robot.construction_job.is_some()
+                || delivery.count == 0
+                || sim.world.prototypes.item(delivery.item_id).is_none()
+            {
+                return Err(invalid());
+            }
+            // The drop-off leg is carrying what it collected, so the cargo has
+            // to actually hold it; the pickup leg has not collected anything of
+            // it yet.
+            let carried = robot
+                .cargo
+                .iter()
+                .filter(|stack| stack.item_id() == delivery.item_id)
+                .map(|stack| u32::from(stack.count()))
+                .sum::<u32>();
+            let carried_is_valid = match delivery.stage {
+                crate::robots::LogisticDeliveryStage::Pickup => carried == 0,
+                crate::robots::LogisticDeliveryStage::Dropoff => {
+                    carried >= u32::from(delivery.count)
+                }
+            };
+            if !carried_is_valid {
+                return Err(invalid());
+            }
+        }
+
         match robot.construction_job {
             None if robot.payload.is_some() => return Err(invalid()),
             None => {}

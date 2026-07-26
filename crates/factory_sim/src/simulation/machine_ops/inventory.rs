@@ -13,9 +13,9 @@ pub(in crate::simulation) enum ItemSlotPolicy {
     AssemblerIngredient(EntityId),
     SciencePack,
     Ammunition,
-    /// A roboport's robot slots. No item declares robot metadata yet, so these
-    /// slots accept nothing; the robot issue turns this into a real predicate
-    /// rather than adding a new policy.
+    /// A roboport's robot slots, which take any item declaring a flight
+    /// profile — construction and logistic robots alike, since a roboport
+    /// stations and charges both the same way.
     Robot,
     /// A roboport's construction-material slots. Every non-robot item is
     /// accepted; robot items are routed to the dedicated robot slots.

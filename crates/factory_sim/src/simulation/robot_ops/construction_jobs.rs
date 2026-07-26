@@ -1,12 +1,12 @@
 //! Deterministic construction-job reconciliation, dispatch, and arrival work.
 
 use crate::construction::ConstructionJob;
-use crate::robots::{Robot, RobotActivity, RobotId};
+use crate::robots::{Robot, RobotId};
 use crate::simulation::combat_ops::repair_restore_health;
 use crate::simulation::*;
 use factory_data::RobotKind;
 
-use super::flight::{roboport_dock_position, squared_distance};
+use super::dispatch::{commit_robot_dispatch, dispatching_roboport};
 
 pub(super) const CONSTRUCTION_JOB_EXAMINATION_BUDGET: usize = 32;
 
@@ -271,12 +271,9 @@ impl Simulation {
         }
 
         let target_fixed = (tile_center_fixed(target_x), tile_center_fixed(target_y));
-        let Some((roboport_id, robot_item, energy_capacity)) =
-            dispatching_roboport(self, member_ids, target_fixed)
+        let Some(dispatch) =
+            dispatching_roboport(self, member_ids, target_fixed, RobotKind::Construction)
         else {
-            return false;
-        };
-        let Some(dock) = roboport_dock_position(&self.entities, roboport_id) else {
             return false;
         };
 
@@ -295,35 +292,10 @@ impl Simulation {
 
         // All fallible checks are complete. The commit below removes exactly
         // one robot before creating the matching reservation.
-        let state = self
-            .entities
-            .roboports
-            .get_mut(&roboport_id)
-            .expect("the selected roboport still exists");
-        state
-            .robots
-            .remove(robot_item, 1)
-            .expect("the selected construction robot is still stationed");
-        state.charge_energy_joules -= energy_capacity;
-        self.robots.mark_roboport_dirty(roboport_id);
-
-        let id = self.robot_flights.allocate_id();
-        self.robot_flights.robots.insert(
-            id,
-            Robot {
-                id,
-                item_id: robot_item,
-                x: dock.0,
-                y: dock.1,
-                energy_joules: energy_capacity,
-                home_roboport: Some(roboport_id),
-                errand: Some(target_fixed),
-                activity: RobotActivity::Flying,
-                construction_job: Some(job),
-                payload,
-                cargo: Vec::new(),
-            },
-        );
+        let id = commit_robot_dispatch(self, dispatch, target_fixed, |robot| {
+            robot.construction_job = Some(job);
+            robot.payload = payload;
+        });
         self.construction.reservations.insert(job, id);
         true
     }
@@ -503,57 +475,4 @@ fn withdraw_network_material(
         }
     }
     false
-}
-
-fn dispatching_roboport(
-    sim: &Simulation,
-    member_ids: &[EntityId],
-    target: (i64, i64),
-) -> Option<(EntityId, ItemId, u64)> {
-    let mut best: Option<(i128, EntityId, ItemId, u64)> = None;
-    for entity_id in member_ids {
-        let Some(state) = sim.entities.roboports.get(entity_id) else {
-            continue;
-        };
-        let Some(robot_item) = state
-            .robots
-            .slots()
-            .iter()
-            .filter_map(|slot| slot.stack())
-            .map(|stack| stack.item_id())
-            .find(|item_id| {
-                sim.world
-                    .prototypes
-                    .item(*item_id)
-                    .and_then(|item| item.robot)
-                    .is_some_and(|robot| robot.kind == RobotKind::Construction)
-            })
-        else {
-            continue;
-        };
-        let profile = sim
-            .world
-            .prototypes
-            .item(robot_item)
-            .and_then(|item| item.robot)
-            .expect("selected robot has a flight profile");
-        if state.charge_energy_joules < profile.energy_capacity_joules {
-            continue;
-        }
-        let Some(dock) = roboport_dock_position(&sim.entities, *entity_id) else {
-            continue;
-        };
-        let distance = squared_distance(dock.0 - target.0, dock.1 - target.1);
-        if best.is_none_or(|(best_distance, best_id, ..)| {
-            distance < best_distance || (distance == best_distance && *entity_id < best_id)
-        }) {
-            best = Some((
-                distance,
-                *entity_id,
-                robot_item,
-                profile.energy_capacity_joules,
-            ));
-        }
-    }
-    best.map(|(_, entity_id, item_id, energy)| (entity_id, item_id, energy))
 }

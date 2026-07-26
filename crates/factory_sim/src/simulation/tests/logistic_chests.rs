@@ -8,46 +8,10 @@ use super::support::*;
 /// chest is searched for among the tiles the roboport actually covers, which
 /// is also what makes the "covered" precondition of these tests explicit.
 fn roboport_with_chest(sim: &mut Simulation, chest_name: &str) -> (EntityId, EntityId) {
-    let roboport_prototype = entity_id_by_name(&sim.world.prototypes, "roboport");
-    let (rx, ry) = first_placeable_entity_tile(sim, roboport_prototype, Direction::North);
-    let roboport = place_at(sim, roboport_prototype, rx, ry, Direction::North);
-    // Settles the topology, so logistic coverage can be asked about.
-    sim.tick();
-
-    let chest = place_covered_chest(sim, chest_name, (rx, ry));
+    let (roboport, origin) = place_roboport(sim);
+    let chest = place_covered_chest(sim, chest_name, origin);
     sim.tick();
     (roboport, chest)
-}
-
-/// Places a chest on the covered, buildable tile nearest `near`.
-///
-/// Nearest rather than first, so the chest also lands inside circuit wire reach
-/// of the roboport; a chest 25 tiles away is still covered but could not be
-/// wired to it.
-fn place_covered_chest(
-    sim: &mut Simulation,
-    chest_name: &str,
-    near: (WorldTileCoord, WorldTileCoord),
-) -> EntityId {
-    let prototype_id = entity_id_by_name(&sim.world.prototypes, chest_name);
-    let (x, y) = all_tile_coords(&sim.world)
-        .into_iter()
-        .filter(|(x, y)| {
-            sim.logistic_network_covering_tile(*x, *y).is_some()
-                && crate::placement::validate(
-                    sim,
-                    crate::placement::EntityPlacementRequest {
-                        prototype_id,
-                        x: *x,
-                        y: *y,
-                        direction: Direction::North,
-                    },
-                )
-                .is_ok()
-        })
-        .min_by_key(|(x, y)| (x - near.0).pow(2) + (y - near.1).pow(2))
-        .expect("a roboport's logistic square should contain a buildable tile");
-    place_at(sim, prototype_id, x, y, Direction::North)
 }
 
 /// Places a chest on the first buildable tile no roboport reaches.
@@ -70,14 +34,6 @@ fn place_uncovered_chest(sim: &mut Simulation, chest_name: &str) -> EntityId {
         })
         .expect("the generated world is larger than one roboport's reach");
     place_at(sim, prototype_id, x, y, Direction::North)
-}
-
-fn insert_into_chest(sim: &mut Simulation, chest: EntityId, item_id: ItemId, count: u16) {
-    let catalog = sim.world.prototypes.clone();
-    crate::entity_access::inventory_mut(sim, chest)
-        .expect("a chest has an inventory")
-        .insert(&catalog, item_id, count)
-        .expect("the chest should accept the item");
 }
 
 fn totals(sim: &Simulation, chest: EntityId, item_id: ItemId) -> crate::robots::LogisticItemTotals {

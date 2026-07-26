@@ -40,12 +40,21 @@ impl Simulation {
         self.assign_charging_pads();
         self.ensure_robot_network_topology();
         self.reconcile_construction_jobs();
+        self.reconcile_logistic_deliveries();
         let arrivals = self.step_robots();
         for robot_id in arrivals {
             self.resolve_construction_arrival(robot_id);
+            self.resolve_delivery_arrival(robot_id);
         }
         self.ensure_robot_network_topology();
         self.dispatch_construction_jobs();
+        // Arrivals just moved items in and out of chests, and matching a
+        // delivery against contents that are one tick stale sends robots to
+        // fetch what is no longer there. The refresh is a delta over exactly
+        // those chests, so paying for it twice a tick costs the chests that
+        // moved rather than the world's chest count.
+        self.refresh_logistic_index();
+        self.dispatch_logistic_deliveries();
         self.refresh_robot_network_snapshots();
     }
 
@@ -103,7 +112,7 @@ impl Simulation {
                 available_joules: state.charge_energy_joules,
             });
         }
-        let dock = roboport_dock_position(&self.entities, roboport)
+        let dock = footprint_center_fixed(&self.entities, roboport)
             .ok_or(RobotDispatchError::MissingEntity(roboport))?;
 
         let state = self
@@ -131,6 +140,7 @@ impl Simulation {
                 errand: Some((tile_center_fixed(x), tile_center_fixed(y))),
                 activity: RobotActivity::Flying,
                 construction_job: None,
+                delivery: None,
                 payload: None,
                 cargo: Vec::new(),
             },
@@ -256,10 +266,10 @@ impl Simulation {
             entities,
             networks,
             charging,
-            arrived_construction_jobs: Vec::new(),
+            arrivals: Vec::new(),
         };
         robots.retain(|_, robot| step_robot(&mut context, robot));
-        context.arrived_construction_jobs
+        context.arrivals
     }
 }
 
@@ -268,7 +278,7 @@ struct RobotStepContext<'a> {
     entities: &'a mut EntityStore,
     networks: &'a mut RobotSubsystem,
     charging: &'a mut BTreeMap<EntityId, RoboportChargingState>,
-    arrived_construction_jobs: Vec<RobotId>,
+    arrivals: Vec<RobotId>,
 }
 
 /// Advances one robot. Returns `false` when the robot docked and should leave
@@ -348,8 +358,8 @@ fn fly(
             true
         }
         RobotActivity::Flying if robot.errand.is_some() => {
-            if robot.construction_job.is_some() {
-                context.arrived_construction_jobs.push(robot.id);
+            if robot.construction_job.is_some() || robot.delivery.is_some() {
+                context.arrivals.push(robot.id);
             }
             robot.errand = None;
             true
@@ -522,12 +532,12 @@ fn adopt_home_roboport(context: &RobotStepContext<'_>, robot: &mut Robot) {
 fn flight_target(context: &RobotStepContext<'_>, robot: &Robot) -> Option<(i64, i64)> {
     match robot.activity {
         RobotActivity::SeekingCharge(roboport) => {
-            roboport_dock_position(context.entities, roboport)
+            footprint_center_fixed(context.entities, roboport)
         }
         _ => robot.errand.or_else(|| {
             robot
                 .home_roboport
-                .and_then(|roboport| roboport_dock_position(context.entities, roboport))
+                .and_then(|roboport| footprint_center_fixed(context.entities, roboport))
         }),
     }
 }
@@ -573,7 +583,7 @@ fn nearest_roboport(
 ) -> Option<EntityId> {
     let mut best: Option<(i128, EntityId)> = None;
     for entity_id in candidates {
-        let Some((dock_x, dock_y)) = roboport_dock_position(entities, entity_id) else {
+        let Some((dock_x, dock_y)) = footprint_center_fixed(entities, entity_id) else {
             continue;
         };
         let distance = squared_distance(dock_x - x, dock_y - y);
@@ -613,13 +623,16 @@ fn roboport_prototype(
         .and_then(|prototype| prototype.roboport)
 }
 
-/// Fixed-point center of a roboport's footprint: where robots leave from, dock,
-/// and charge.
-pub(super) fn roboport_dock_position(
+/// Fixed-point center of an entity's footprint.
+///
+/// For a roboport it is where robots leave from, dock, and charge; for a chest
+/// it is where a delivery lands. One helper for both so a robot always aims at
+/// the same point of an entity, whatever it was sent there for.
+pub(super) fn footprint_center_fixed(
     entities: &EntityStore,
-    roboport: EntityId,
+    entity_id: EntityId,
 ) -> Option<(i64, i64)> {
-    let footprint = entities.placed_entity(roboport)?.footprint;
+    let footprint = entities.placed_entity(entity_id)?.footprint;
     Some((
         footprint.x * POSITION_SCALE + i64::from(footprint.width) * POSITION_SCALE / 2,
         footprint.y * POSITION_SCALE + i64::from(footprint.height) * POSITION_SCALE / 2,
