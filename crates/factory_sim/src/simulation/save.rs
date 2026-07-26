@@ -32,7 +32,9 @@ use bincode::Options;
 // reactor, heat pipe, and heat exchanger state in the entity registry.
 // v30: robot networks joined the snapshot, along with roboport state (robot
 // slots, material slots, and the charging buffer) in the entity registry.
-pub const SAVE_VERSION: u32 = 30;
+// v31: robots in flight joined the snapshot: their positions, energy, errands,
+// and the charging pads and queues they occupy at their roboports.
+pub const SAVE_VERSION: u32 = 31;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -50,7 +52,8 @@ pub const SAVE_VERSION: u32 = 30;
 // nuclear reactor metadata.
 // v21: entity prototypes gained roboport coverage, storage, and charging
 // metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 21;
+// v22: robot flight profiles on item prototypes, and roboport charging pads.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 22;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -114,6 +117,7 @@ struct SimulationSnapshotOwned {
     fluid_networks: Vec<FluidNetworkSnapshot>,
     heat_networks: Vec<HeatNetworkSnapshot>,
     robot_networks: Vec<RobotNetworkSnapshot>,
+    robot_flights: RobotFlightSubsystem,
     pollution: PollutionState,
     enemies: EnemySubsystem,
     config: SimulationConfig,
@@ -262,6 +266,7 @@ struct SimulationSnapshotRef<'a> {
     fluid_networks: &'a Vec<FluidNetworkSnapshot>,
     heat_networks: &'a Vec<HeatNetworkSnapshot>,
     robot_networks: &'a Vec<RobotNetworkSnapshot>,
+    robot_flights: &'a RobotFlightSubsystem,
     pollution: &'a PollutionState,
     enemies: &'a EnemySubsystem,
     config: SimulationConfig,
@@ -295,6 +300,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             fluid_networks: &sim.fluids.networks,
             heat_networks: &sim.heat.networks,
             robot_networks: &sim.robots.networks,
+            robot_flights: &sim.robot_flights,
             pollution: &sim.pollution,
             enemies: &sim.enemies,
             config: sim.config,
@@ -342,6 +348,7 @@ impl SimulationSnapshotOwned {
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
             heat: HeatSubsystem::from_networks(self.heat_networks),
             robots: RobotSubsystem::from_networks(self.robot_networks),
+            robot_flights: self.robot_flights,
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,

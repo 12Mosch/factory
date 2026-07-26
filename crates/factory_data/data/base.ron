@@ -268,6 +268,22 @@
         (id: 101, name: "heat_exchanger", stack_size: 50),
         (id: 102, name: "steam_turbine", stack_size: 20),
         (id: 103, name: "roboport", stack_size: 5),
+        // A construction robot is an item in a roboport's robot slots and a
+        // flying unit once dispatched. At 60 units per tick it crosses a tile
+        // in about 17 ticks, and its 1.5 MJ buffer drains at 350 J per flying
+        // tick, so a full charge is worth roughly 250 tiles of travel — far
+        // enough to cross a construction square and come home, close enough
+        // that a long errand needs a charging stop on the way.
+        (
+            id: 104,
+            name: "construction_robot",
+            stack_size: 50,
+            robot: Some((
+                speed_fixed_per_tick: 60,
+                energy_capacity_joules: 1500000,
+                flight_energy_usage_watts: 21000,
+            )),
+        ),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1423,6 +1439,17 @@
                 (item: "advanced_circuit", amount: 45),
             ],
             products: [(item: "roboport", amount: 1)],
+        ),
+        (
+            id: 102,
+            name: "construction_robot",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "flying_robot_frame", amount: 1),
+                (item: "electronic_circuit", amount: 2),
+            ],
+            products: [(item: "construction_robot", amount: 1)],
         ),
     ],
     entities: [
@@ -2671,6 +2698,11 @@
                 robot_slot_count: 6,
                 material_slot_count: 4,
                 charging_energy_buffer_joules: 100000000,
+                // Four pads at 1.2 MW refill a 1.5 MJ robot in 75 ticks, so a
+                // roboport turns around at most four robots per ~1.25 seconds
+                // and the rest wait in line rather than all charging at once.
+                charging_pad_count: 4,
+                charging_pad_watts: 1200000,
             )),
         ),
     ],
@@ -3324,7 +3356,10 @@
             ],
             required_units: 250,
             research_time_ticks: 900,
-            effects: [UnlockRecipe("roboport")],
+            effects: [
+                UnlockRecipe("roboport"),
+                UnlockRecipe("construction_robot"),
+            ],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

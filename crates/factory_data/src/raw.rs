@@ -7,9 +7,9 @@ use crate::model::{
     EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo, FurnacePrototype,
     GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, ModuleEffectPrototype,
     NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype, RadarPrototype,
-    RepairToolPrototype, ResourceExtraction, RoboportPrototype, SolarPanelPrototype,
-    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype,
-    UnitPrototype, VirtualSignalKind,
+    RepairToolPrototype, ResourceExtraction, RoboportPrototype, RobotPrototype,
+    SolarPanelPrototype, SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
+    UndergroundPipePrototype, UnitPrototype, VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -138,6 +138,8 @@ pub(crate) struct RawItemPrototype {
     pub(crate) module_effect: Option<ModuleEffectPrototype>,
     #[serde(default)]
     pub(crate) place_as_tile: Option<RawTilePlacement>,
+    #[serde(default)]
+    pub(crate) robot: Option<RobotPrototype>,
 }
 
 #[derive(Debug, Deserialize)]

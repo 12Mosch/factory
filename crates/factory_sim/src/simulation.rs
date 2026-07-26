@@ -95,7 +95,9 @@ pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
 pub use crate::robots::{
-    EntityRoboportStatus, RoboportError, RoboportState, RobotNetworkSnapshot, TileBounds,
+    EntityRoboportStatus, RoboportChargingState, RoboportError, RoboportState, Robot,
+    RobotActivity, RobotDispatchError, RobotFlightSubsystem, RobotId, RobotNetworkSnapshot,
+    TileBounds,
 };
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
@@ -207,6 +209,10 @@ pub struct Simulation {
     fluids: FluidSubsystem,
     heat: HeatSubsystem,
     robots: RobotSubsystem,
+    /// Robots in flight. Kept beside the network subsystem rather than inside
+    /// it because the two have different lifetimes: networks are a cache of
+    /// placed roboports, while a robot outlives the roboport it came from.
+    robot_flights: RobotFlightSubsystem,
     #[serde(skip)]
     circuits: CircuitSubsystem,
     statistics: StatisticsSubsystem,
@@ -672,6 +678,14 @@ pub enum SimValidationError {
     },
     InvalidRobotNetwork {
         network_id: u32,
+    },
+    InvalidRobotState {
+        robot_id: RobotId,
+    },
+    /// A roboport's charging pads or queue disagree with the robots that claim
+    /// to be on them.
+    InvalidRoboportChargingState {
+        entity_id: EntityId,
     },
     /// A stored signal does not exist in the catalog.
     InvalidCircuitSignal {

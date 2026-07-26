@@ -70,6 +70,8 @@ pub struct ItemPrototype {
     pub equipment: Option<EquipmentPrototype>,
     /// Present when the item can be installed in a machine or beacon module slot.
     pub module_effect: Option<ModuleEffectPrototype>,
+    /// Present when the item is a robot a roboport can station and dispatch.
+    pub robot: Option<RobotPrototype>,
     /// Present when placing the item rewrites the targeted terrain tile
     /// instead of building an entity (landfill, stone path, concrete).
     pub place_as_tile: Option<TilePlacementPrototype>,
@@ -502,6 +504,31 @@ pub struct RoboportPrototype {
     /// Slots holding repair packs and other construction material.
     pub material_slot_count: usize,
     pub charging_energy_buffer_joules: u64,
+    /// Robots that can charge here at once. Further arrivals queue, which is
+    /// what makes a roboport a throughput limit rather than an infinite one.
+    pub charging_pad_count: u8,
+    /// Rate one pad delivers to the robot on it, in watts. Drawn from
+    /// `charging_energy_buffer_joules`, never from the electric network
+    /// directly.
+    pub charging_pad_watts: u64,
+}
+
+/// Flight profile of a robot a roboport stations, dispatches, and charges.
+///
+/// A robot is an item while it sits in a roboport's robot slots and a
+/// free-moving unit while it flies, so the numbers that govern the flight live
+/// on the item prototype: taking one out of the robot slots is what creates a
+/// unit with this profile, and docking turns it back into the same item.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RobotPrototype {
+    /// Flight speed in fixed-point position units per tick (1024 = one tile per
+    /// tick), the same convention [`UnitPrototype::speed_fixed_per_tick`] uses.
+    pub speed_fixed_per_tick: u32,
+    /// Energy a fully charged robot carries, in joules.
+    pub energy_capacity_joules: u64,
+    /// Draw while flying, in watts. A robot only spends energy while it moves,
+    /// so one hovering in a charging queue cannot strand itself.
+    pub flight_energy_usage_watts: u64,
 }
 
 /// Inclusive tile bounds of the square a roboport radius covers, centered on

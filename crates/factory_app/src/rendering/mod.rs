@@ -13,6 +13,7 @@ pub(crate) mod player;
 pub mod resource_cells;
 pub mod resources;
 pub(crate) mod robot_coverage;
+pub(crate) mod robots;
 pub(crate) mod transforms;
 pub(crate) mod visuals;
 pub(crate) mod world;

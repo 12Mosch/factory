@@ -1,3 +1,4 @@
+mod flight;
 mod network_access;
 mod network_builder;
 mod roboports;
@@ -12,6 +13,9 @@ use super::*;
 impl Simulation {
     pub(super) fn invalidate_robot_state(&mut self) {
         self.robots.clear_networks();
+        // Robots outlive the roboport they came from, so the moment the set of
+        // roboports changes is the moment their references can dangle.
+        self.prune_robot_flight_state();
     }
 
     /// Whether placing or destroying this prototype can change robot-network

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 pub struct SimulationCounts {
     pub entity_count: usize,
     pub enemy_count: usize,
+    pub robot_count: usize,
     pub chunk_count: usize,
     pub belt_count: usize,
     pub belt_item_count: usize,
@@ -153,6 +154,7 @@ impl Simulation {
         SimulationCounts {
             entity_count: self.entities.len() + self.entities.placed_len(),
             enemy_count: self.enemies.len(),
+            robot_count: self.robot_flights.len(),
             chunk_count: self.world.chunks.len(),
             belt_count: self.entities.transport_belts.len() + self.entities.splitters.len(),
             belt_item_count: self

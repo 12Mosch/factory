@@ -150,3 +150,19 @@ fn save_load_then_continue_matches_original() {
 
     assert_eq!(a.state_hash(), b.state_hash());
 }
+
+/// The robot flight fixture has to actually produce the robots it promises, or
+/// the performance suites that use it would measure an empty sky.
+#[test]
+fn robot_flight_fixture_fills_the_sky_and_stays_valid() {
+    let mut sim = Simulation::new_robot_flight_fixture(2_000);
+    assert_eq!(sim.robot_count(), 2_000);
+
+    for _ in 0..120 {
+        sim.tick();
+    }
+
+    assert!(sim.robot_count() > 0, "robots should still be flying");
+    sim.validate_state()
+        .expect("a sky full of robots should stay valid");
+}

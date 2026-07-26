@@ -5,6 +5,16 @@ pub fn scripted_inputs_for_red_science_factory() -> Vec<SimCommand> {
 }
 
 impl Simulation {
+    /// World with `robot_count` robots in flight around stocked roboports.
+    ///
+    /// Used by the presentation and performance suites, which need a sky full
+    /// of robots without also needing the factory that would produce them.
+    pub fn new_robot_flight_fixture(robot_count: usize) -> Self {
+        let mut sim = Self::new_seeded(123);
+        sim.build_robot_flight_fixture(robot_count);
+        sim
+    }
+
     pub fn new_scripted_red_science_factory() -> Self {
         let mut sim = Self::new_seeded(123);
         for command in scripted_inputs_for_red_science_factory() {
@@ -125,6 +135,93 @@ impl Simulation {
         }
 
         None
+    }
+
+    /// Fills the world with roboports and sends `robot_count` robots out on
+    /// errands, for presentation and performance work.
+    ///
+    /// Buffers are refilled between dispatches rather than powered from a grid:
+    /// the point of the fixture is a sky full of robots, and building enough
+    /// steam engines to pay for them would only make the fixture slower to
+    /// construct without changing what is measured. They are left full, so
+    /// returning robots can charge and dock the way a powered network's would.
+    fn build_robot_flight_fixture(&mut self, robot_count: usize) {
+        let roboport =
+            factory_data::entity_prototype_id_by_name(&self.world.prototypes, "roboport");
+        let robot_item =
+            factory_data::item_id_by_name(&self.world.prototypes, "construction_robot");
+        let catalog = self.world.prototypes.clone();
+        let Some(buffer_joules) = catalog
+            .entity(roboport)
+            .and_then(|prototype| prototype.roboport)
+            .map(|roboport| roboport.charging_energy_buffer_joules)
+        else {
+            return;
+        };
+
+        // Nearest tiles first, so the roboports (and therefore the robots) land
+        // around the player rather than in the corner of the generated area:
+        // presentation work needs them on screen, not merely in the world.
+        let (player_x, player_y) = self.player.tile_position();
+        let mut candidates = self.all_tile_coords();
+        candidates.sort_by_key(|(x, y)| {
+            let (dx, dy) = (x - player_x, y - player_y);
+            (dx * dx + dy * dy, *x, *y)
+        });
+
+        let mut dispatched = 0;
+        for (x, y) in candidates {
+            if dispatched >= robot_count {
+                break;
+            }
+            let request = scripted_placement_request(roboport, x, y);
+            if crate::placement::validate(self, request).is_err() {
+                continue;
+            }
+            let Ok(entity_id) = crate::placement::place(self, request) else {
+                continue;
+            };
+
+            let Some(state) = self.entities.roboports.get_mut(&entity_id) else {
+                continue;
+            };
+            let stationed = state
+                .robots
+                .slots()
+                .len()
+                .saturating_mul(usize::from(
+                    catalog.item(robot_item).map_or(1, |item| item.stack_size),
+                ))
+                .min(robot_count - dispatched)
+                // One insertion is a `u16` count; clamping here rather than
+                // casting keeps the stationed total and the dispatch loop below
+                // agreeing on how many robots this roboport actually holds.
+                .min(usize::from(u16::MAX));
+            if state
+                .robots
+                .insert(&catalog, robot_item, stationed as u16)
+                .is_err()
+            {
+                continue;
+            }
+
+            // Errand targets fan out over a 41x41 tile square around the
+            // roboport, so the fixture exercises long and short legs, arrivals,
+            // and returns at the same time rather than one uniform flight.
+            for index in 0..stationed {
+                let target_x = x + (index as WorldTileCoord % 41) - 20;
+                let target_y = y + (index as WorldTileCoord / 41 % 41) - 20;
+                self.entities
+                    .roboports
+                    .get_mut(&entity_id)
+                    .expect("the fixture roboport was just placed")
+                    .charge_energy_joules = buffer_joules;
+                if self.dispatch_robot(entity_id, target_x, target_y).is_err() {
+                    break;
+                }
+                dispatched += 1;
+            }
+        }
     }
 
     fn all_tile_coords(&self) -> Vec<(WorldTileCoord, WorldTileCoord)> {

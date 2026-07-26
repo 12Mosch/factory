@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::robots::TileBounds;
+use crate::robots::{RobotActivity, TileBounds};
 use crate::simulation::robot_ops::coverage_bounds;
 
 /// Checks one roboport's durable state against its prototype: the two
@@ -170,6 +170,103 @@ pub(super) fn validate_robot_network_snapshots(sim: &Simulation) -> Result<(), S
         return Err(SimValidationError::InvalidRoboportState {
             entity_id: *entity_id,
         });
+    }
+
+    Ok(())
+}
+
+/// Checks the robots in flight and the charging state they are registered in.
+///
+/// The two halves reference each other — a robot names the roboport it charges
+/// at, and that roboport's pads name the robot — so both directions are checked
+/// here. A one-sided reference is exactly what a mishandled roboport
+/// destruction would leave behind, and nothing later in the tick would notice.
+pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidationError> {
+    for (robot_id, robot) in &sim.robot_flights.robots {
+        let invalid = || SimValidationError::InvalidRobotState {
+            robot_id: *robot_id,
+        };
+        if robot.id != *robot_id || robot_id.raw() > sim.robot_flights.next_robot_id {
+            return Err(invalid());
+        }
+        let profile = sim
+            .world
+            .prototypes
+            .item(robot.item_id)
+            .and_then(|item| item.robot)
+            .ok_or_else(invalid)?;
+        if robot.energy_joules > profile.energy_capacity_joules {
+            return Err(invalid());
+        }
+        if robot
+            .home_roboport
+            .is_some_and(|entity_id| !sim.entities.roboports.contains_key(&entity_id))
+        {
+            return Err(invalid());
+        }
+
+        let registered = match robot.activity {
+            RobotActivity::Flying => true,
+            RobotActivity::SeekingCharge(roboport) => {
+                sim.entities.roboports.contains_key(&roboport)
+            }
+            RobotActivity::Queued(roboport) => sim
+                .robot_flights
+                .charging
+                .get(&roboport)
+                .is_some_and(|state| state.queue.contains(robot_id)),
+            RobotActivity::Charging(roboport) => sim
+                .robot_flights
+                .charging
+                .get(&roboport)
+                .is_some_and(|state| state.charging.contains(robot_id)),
+        };
+        if !registered {
+            return Err(invalid());
+        }
+    }
+
+    for (entity_id, state) in &sim.robot_flights.charging {
+        let invalid = || SimValidationError::InvalidRoboportChargingState {
+            entity_id: *entity_id,
+        };
+        let roboport = sim
+            .entities
+            .placed_entity(*entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.roboport)
+            .filter(|_| sim.entities.roboports.contains_key(entity_id))
+            .ok_or_else(invalid)?;
+        if state.charging.len() > usize::from(roboport.charging_pad_count) {
+            return Err(invalid());
+        }
+        for robot_id in &state.charging {
+            if sim
+                .robot_flights
+                .robots
+                .get(robot_id)
+                .is_none_or(|robot| robot.activity != RobotActivity::Charging(*entity_id))
+            {
+                return Err(invalid());
+            }
+        }
+        for robot_id in &state.queue {
+            if state.charging.contains(robot_id)
+                || sim
+                    .robot_flights
+                    .robots
+                    .get(robot_id)
+                    .is_none_or(|robot| robot.activity != RobotActivity::Queued(*entity_id))
+            {
+                return Err(invalid());
+            }
+        }
+        // A queue that lists the same robot twice would serve it twice and
+        // leave a pad claimed by a robot that already left.
+        let mut seen = BTreeSet::new();
+        if state.queue.iter().any(|robot_id| !seen.insert(*robot_id)) {
+            return Err(invalid());
+        }
     }
 
     Ok(())
