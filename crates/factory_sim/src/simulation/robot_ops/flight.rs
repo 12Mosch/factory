@@ -38,6 +38,7 @@ impl Simulation {
     /// the queue.
     pub(in crate::simulation) fn advance_robots(&mut self) {
         self.assign_charging_pads();
+        self.ensure_robot_network_topology();
         self.reconcile_construction_jobs();
         let arrivals = self.step_robots();
         for robot_id in arrivals {
@@ -45,10 +46,6 @@ impl Simulation {
         }
         self.ensure_robot_network_topology();
         self.dispatch_construction_jobs();
-        self.robots
-            .networks_needing_snapshot
-            .iter_mut()
-            .for_each(|dirty| *dirty = true);
         self.refresh_robot_network_snapshots();
     }
 
@@ -183,13 +180,12 @@ impl Simulation {
                     .flatten()
             })
             .collect::<Vec<_>>();
-        let _ = robot_flights;
-        let _ = entities;
         for job in orphaned_jobs {
             let remains_valid = self.construction_job_is_valid(job);
             super::cancel_construction_job(self, job);
             if remains_valid && !self.construction.queue.contains(&job) {
                 self.construction.queue.push_back(job);
+                self.track_construction_job(job);
             }
         }
     }

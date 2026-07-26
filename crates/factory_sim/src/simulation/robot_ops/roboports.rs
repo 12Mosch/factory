@@ -24,6 +24,7 @@ impl Simulation {
 
         let topology_networks = self.build_robot_network_topology();
         self.robots.replace_topology(topology_networks);
+        self.rebuild_construction_job_routing();
         #[cfg(test)]
         {
             self.robots.topology_rebuilds += 1;

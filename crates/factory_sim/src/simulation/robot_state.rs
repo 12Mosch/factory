@@ -1,6 +1,7 @@
 use super::*;
+use crate::construction::ConstructionJob;
 use crate::simulation::robot_ops::RobotNetworkTopology;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
 /// Cached robot-network topology plus the durable network snapshots.
@@ -23,6 +24,12 @@ pub(super) struct RobotSubsystem {
     /// Networks whose durable snapshots no longer match their roboports.
     #[serde(skip, default)]
     pub(super) networks_needing_snapshot: Vec<bool>,
+    /// Runtime routing cache for unfinished construction work. Rebuilt only
+    /// when topology changes and updated at job mutation points.
+    #[serde(skip, default)]
+    pub(super) job_counts_by_network: Vec<RobotNetworkJobCounts>,
+    #[serde(skip, default)]
+    pub(super) job_networks: BTreeMap<ConstructionJob, u32>,
     /// Reused by the per-tick charging pass to iterate roboport ids while the
     /// loop body holds a mutable borrow of the entity store. Retaining the
     /// allocation keeps the pass allocation-free once the world is warm.
@@ -41,6 +48,8 @@ impl Default for RobotSubsystem {
             topology_networks: Vec::new(),
             network_ids_by_entity: HashMap::new(),
             networks_needing_snapshot: Vec::new(),
+            job_counts_by_network: Vec::new(),
+            job_networks: BTreeMap::new(),
             charging_scratch: Vec::new(),
             #[cfg(test)]
             topology_rebuilds: 0,
@@ -62,6 +71,8 @@ impl RobotSubsystem {
         self.topology_networks.clear();
         self.network_ids_by_entity.clear();
         self.networks_needing_snapshot.clear();
+        self.job_counts_by_network.clear();
+        self.job_networks.clear();
     }
 
     pub(super) fn replace_topology(&mut self, topology_networks: Vec<RobotNetworkTopology>) {
@@ -70,6 +81,12 @@ impl RobotSubsystem {
         self.networks_needing_snapshot.clear();
         self.networks_needing_snapshot
             .resize(self.topology_networks.len(), true);
+        self.job_counts_by_network.clear();
+        self.job_counts_by_network.resize(
+            self.topology_networks.len(),
+            RobotNetworkJobCounts::default(),
+        );
+        self.job_networks.clear();
         self.topology_dirty = false;
     }
 

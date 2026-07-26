@@ -15,12 +15,6 @@ impl Simulation {
     /// one repair job for each damaged friendly entity that has no unfinished
     /// repair work.
     pub(in crate::simulation) fn reconcile_construction_jobs(&mut self) {
-        let pending = std::mem::take(&mut self.construction.queue);
-        self.construction.queue = pending
-            .into_iter()
-            .filter(|job| self.construction_job_is_valid(*job))
-            .collect();
-
         let reservations = self
             .construction
             .reservations
@@ -45,10 +39,19 @@ impl Simulation {
             }
 
             self.construction.reservations.remove(&job);
+            if !valid {
+                self.untrack_construction_job(job);
+            }
             if let Some(robot) = self.robot_flights.robots.get_mut(&robot_id)
                 && robot.construction_job == Some(job)
             {
                 abort_robot_job(robot);
+                if robot
+                    .home_roboport
+                    .is_some_and(|home| !self.entities.roboports.contains_key(&home))
+                {
+                    robot.home_roboport = None;
+                }
             }
             if valid {
                 self.enqueue_job_once(job);
@@ -84,6 +87,7 @@ impl Simulation {
                 break;
             };
             if !self.construction_job_is_valid(job) {
+                self.untrack_construction_job(job);
                 continue;
             }
             if !self.try_dispatch_construction_job(job) {
@@ -106,20 +110,24 @@ impl Simulation {
             return;
         }
 
-        let _completed = match job {
+        match job {
             ConstructionJob::BuildGhost(ghost_id) => {
-                self.complete_robot_build(&mut robot, ghost_id)
+                self.complete_robot_build(&mut robot, ghost_id);
             }
             ConstructionJob::Deconstruct(entity_id) => {
-                self.complete_robot_deconstruction(&mut robot, entity_id)
+                self.complete_robot_deconstruction(&mut robot, entity_id);
             }
-            ConstructionJob::Repair(entity_id) => self.complete_robot_repair(&mut robot, entity_id),
-        };
+            ConstructionJob::Repair(entity_id) => {
+                self.complete_robot_repair(&mut robot, entity_id);
+            }
+        }
         self.construction.reservations.remove(&job);
         robot.construction_job = None;
         robot.errand = None;
         if self.construction_job_is_valid(job) {
             self.enqueue_job_once(job);
+        } else {
+            self.untrack_construction_job(job);
         }
         if robot
             .home_roboport
@@ -130,26 +138,22 @@ impl Simulation {
         self.robot_flights.robots.insert(robot_id, robot);
     }
 
-    fn complete_robot_build(
-        &mut self,
-        robot: &mut Robot,
-        ghost_id: crate::construction::GhostId,
-    ) -> bool {
+    fn complete_robot_build(&mut self, robot: &mut Robot, ghost_id: crate::construction::GhostId) {
         let Some(ghost) = self.construction.ghosts.get(&ghost_id).cloned() else {
             move_payload_to_cargo(robot);
-            return true;
+            return;
         };
         let Some(payload) = robot.payload else {
-            return false;
+            return;
         };
         let Ok(build_item) = entity_recovery_ops::build_item_for_entity(self, ghost.prototype_id)
         else {
             move_payload_to_cargo(robot);
-            return false;
+            return;
         };
         if payload.item_id() != build_item || payload.count() != 1 {
             move_payload_to_cargo(robot);
-            return false;
+            return;
         }
 
         let request = placement::EntityPlacementRequest {
@@ -160,49 +164,46 @@ impl Simulation {
         };
         let Ok(entity_id) = placement_mutation_ops::place_entity(self, request) else {
             move_payload_to_cargo(robot);
-            return false;
+            return;
         };
         robot.payload = None;
         if let Some(recipe) = ghost.recipe {
             let _ = self.select_assembler_recipe(entity_id, recipe);
         }
-        true
     }
 
-    fn complete_robot_deconstruction(&mut self, robot: &mut Robot, entity_id: EntityId) -> bool {
+    fn complete_robot_deconstruction(&mut self, robot: &mut Robot, entity_id: EntityId) {
         if !self.construction.deconstruction_marks.contains(&entity_id) {
-            return true;
+            return;
         }
         let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
-            return true;
+            return;
         };
         let Ok(stacks) = entity_recovery_ops::entity_recovery_stacks(self, &placed) else {
-            return false;
+            return;
         };
         if entity_mutation::remove(self, entity_id).is_none() {
-            return false;
+            return;
         }
         robot.cargo.extend(stacks);
-        true
     }
 
-    fn complete_robot_repair(&mut self, robot: &mut Robot, entity_id: EntityId) -> bool {
+    fn complete_robot_repair(&mut self, robot: &mut Robot, entity_id: EntityId) {
         let Some(payload) = robot.payload else {
-            return false;
+            return;
         };
         let Some(restore_health) = repair_restore_health(&self.world.prototypes, payload.item_id())
         else {
             move_payload_to_cargo(robot);
-            return false;
+            return;
         };
         if !self.repair_target_is_valid(entity_id) {
             move_payload_to_cargo(robot);
-            return true;
+            return;
         }
 
         self.restore_entity_health(entity_id, restore_health);
         robot.payload = None;
-        true
     }
 
     fn try_dispatch_construction_job(&mut self, job: ConstructionJob) -> bool {
@@ -212,15 +213,26 @@ impl Simulation {
         let Some(network_id) = self.construction_network_covering_tile(target_x, target_y) else {
             return false;
         };
-        let Some(network) = self
-            .robots
-            .topology_networks
-            .get(network_id as usize)
-            .cloned()
-        else {
+        let mut member_ids = std::mem::take(&mut self.robots.charging_scratch);
+        member_ids.clear();
+        let Some(network) = self.robots.topology_networks.get(network_id as usize) else {
+            self.robots.charging_scratch = member_ids;
             return false;
         };
+        member_ids.extend(network.roboports.iter().map(|node| node.entity_id));
+        let dispatched =
+            self.try_dispatch_construction_job_in_network(job, target_x, target_y, &member_ids);
+        self.robots.charging_scratch = member_ids;
+        dispatched
+    }
 
+    fn try_dispatch_construction_job_in_network(
+        &mut self,
+        job: ConstructionJob,
+        target_x: WorldTileCoord,
+        target_y: WorldTileCoord,
+        member_ids: &[EntityId],
+    ) -> bool {
         if let ConstructionJob::BuildGhost(ghost_id) = job {
             let Some(ghost) = self.construction.ghosts.get(&ghost_id) else {
                 return false;
@@ -246,20 +258,21 @@ impl Simulation {
                     entity_recovery_ops::build_item_for_entity(self, ghost.prototype_id).ok()
                 })
             }
-            ConstructionJob::Repair(_) => first_network_repair_item(self, &network),
+            ConstructionJob::Repair(_) => first_network_repair_item(self, member_ids),
             ConstructionJob::Deconstruct(_) => None,
         };
         if !matches!(job, ConstructionJob::Deconstruct(_)) && payload_item.is_none() {
             return false;
         }
-        if payload_item.is_some_and(|item_id| network_material_count(self, &network, item_id) == 0)
+        if payload_item
+            .is_some_and(|item_id| network_material_count(self, member_ids, item_id) == 0)
         {
             return false;
         }
 
         let target_fixed = (tile_center_fixed(target_x), tile_center_fixed(target_y));
         let Some((roboport_id, robot_item, energy_capacity)) =
-            dispatching_roboport(self, &network, target_fixed)
+            dispatching_roboport(self, member_ids, target_fixed)
         else {
             return false;
         };
@@ -282,7 +295,7 @@ impl Simulation {
         self.robots.mark_roboport_dirty(roboport_id);
 
         if let Some(item_id) = payload_item {
-            withdraw_network_material(self, &network, item_id);
+            withdraw_network_material(self, member_ids, item_id);
         }
         let payload = payload_item.map(|item_id| {
             ItemStack::new(&self.world.prototypes, item_id, 1)
@@ -370,11 +383,62 @@ impl Simulation {
             && !self.construction.reservations.contains_key(&job)
         {
             self.construction.queue.push_back(job);
+            self.track_construction_job(job);
+        }
+    }
+
+    pub(in crate::simulation) fn rebuild_construction_job_routing(&mut self) {
+        self.robots.job_counts_by_network.fill(Default::default());
+        self.robots.job_networks.clear();
+        let jobs = self
+            .construction
+            .queue
+            .iter()
+            .chain(self.construction.reservations.keys())
+            .copied()
+            .collect::<Vec<_>>();
+        for job in jobs {
+            self.track_construction_job(job);
+        }
+    }
+
+    pub(in crate::simulation) fn track_construction_job(&mut self, job: ConstructionJob) {
+        if self.robots.topology_dirty || self.robots.job_networks.contains_key(&job) {
+            return;
+        }
+        let Some((x, y)) = self.construction_job_target_tile(job) else {
+            return;
+        };
+        let Some(network_id) = self.construction_network_covering_tile(x, y) else {
+            return;
+        };
+        let Some(counts) = self
+            .robots
+            .job_counts_by_network
+            .get_mut(network_id as usize)
+        else {
+            return;
+        };
+        counts.add(job);
+        self.robots.job_networks.insert(job, network_id);
+    }
+
+    pub(in crate::simulation) fn untrack_construction_job(&mut self, job: ConstructionJob) {
+        let Some(network_id) = self.robots.job_networks.remove(&job) else {
+            return;
+        };
+        if let Some(counts) = self
+            .robots
+            .job_counts_by_network
+            .get_mut(network_id as usize)
+        {
+            counts.remove(job);
         }
     }
 }
 
 pub(in crate::simulation) fn cancel_construction_job(sim: &mut Simulation, job: ConstructionJob) {
+    sim.untrack_construction_job(job);
     sim.construction.queue.retain(|queued| *queued != job);
     let Some(robot_id) = sim.construction.reservations.remove(&job) else {
         return;
@@ -398,14 +462,11 @@ fn move_payload_to_cargo(robot: &mut Robot) {
     }
 }
 
-fn first_network_repair_item(
-    sim: &Simulation,
-    network: &super::types::RobotNetworkTopology,
-) -> Option<ItemId> {
-    network.roboports.iter().find_map(|node| {
+fn first_network_repair_item(sim: &Simulation, member_ids: &[EntityId]) -> Option<ItemId> {
+    member_ids.iter().find_map(|entity_id| {
         sim.entities
             .roboports
-            .get(&node.entity_id)?
+            .get(entity_id)?
             .materials
             .slots()
             .iter()
@@ -415,44 +476,38 @@ fn first_network_repair_item(
     })
 }
 
-fn network_material_count(
-    sim: &Simulation,
-    network: &super::types::RobotNetworkTopology,
-    item_id: ItemId,
-) -> u32 {
-    network
-        .roboports
+fn network_material_count(sim: &Simulation, member_ids: &[EntityId], item_id: ItemId) -> u32 {
+    member_ids
         .iter()
-        .filter_map(|node| sim.entities.roboports.get(&node.entity_id))
+        .filter_map(|entity_id| sim.entities.roboports.get(entity_id))
         .map(|state| state.materials.count(item_id))
         .sum()
 }
 
-fn withdraw_network_material(
-    sim: &mut Simulation,
-    network: &super::types::RobotNetworkTopology,
-    item_id: ItemId,
-) {
-    for node in &network.roboports {
-        let Some(state) = sim.entities.roboports.get_mut(&node.entity_id) else {
+fn withdraw_network_material(sim: &mut Simulation, member_ids: &[EntityId], item_id: ItemId) {
+    for entity_id in member_ids {
+        let Some(state) = sim.entities.roboports.get_mut(entity_id) else {
             continue;
         };
         if state.materials.remove(item_id, 1).is_ok() {
-            sim.robots.mark_roboport_dirty(node.entity_id);
+            sim.robots.mark_roboport_dirty(*entity_id);
             return;
         }
     }
-    unreachable!("network material availability was checked before dispatch");
+    debug_assert!(
+        false,
+        "network material availability changed during dispatch commit"
+    );
 }
 
 fn dispatching_roboport(
     sim: &Simulation,
-    network: &super::types::RobotNetworkTopology,
+    member_ids: &[EntityId],
     target: (i64, i64),
 ) -> Option<(EntityId, ItemId, u64)> {
     let mut best: Option<(i128, EntityId, ItemId, u64)> = None;
-    for node in &network.roboports {
-        let Some(state) = sim.entities.roboports.get(&node.entity_id) else {
+    for entity_id in member_ids {
+        let Some(state) = sim.entities.roboports.get(entity_id) else {
             continue;
         };
         let Some(robot_item) = state
@@ -480,16 +535,16 @@ fn dispatching_roboport(
         if state.charge_energy_joules < profile.energy_capacity_joules {
             continue;
         }
-        let Some(dock) = roboport_dock_position(&sim.entities, node.entity_id) else {
+        let Some(dock) = roboport_dock_position(&sim.entities, *entity_id) else {
             continue;
         };
         let distance = squared_distance(dock.0 - target.0, dock.1 - target.1);
         if best.is_none_or(|(best_distance, best_id, ..)| {
-            distance < best_distance || (distance == best_distance && node.entity_id < best_id)
+            distance < best_distance || (distance == best_distance && *entity_id < best_id)
         }) {
             best = Some((
                 distance,
-                node.entity_id,
+                *entity_id,
                 robot_item,
                 profile.energy_capacity_joules,
             ));

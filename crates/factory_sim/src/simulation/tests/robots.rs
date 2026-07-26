@@ -994,6 +994,12 @@ fn dispatch_uses_nearest_charged_roboport_and_ascending_pooled_storage() {
         .materials
         .insert(&catalog, build_item, 1)
         .unwrap();
+    sim.entities
+        .roboport_state_mut(roboports[1])
+        .unwrap()
+        .materials
+        .insert(&catalog, build_item, 1)
+        .unwrap();
     let second = sim.entities.placed_entity(roboports[1]).unwrap().footprint;
     let mut ghost_id = None;
     'position: for y in second.y - 5..=second.y + 8 {
@@ -1032,6 +1038,15 @@ fn dispatch_uses_nearest_charged_roboport_and_ascending_pooled_storage() {
             .count(build_item),
         0,
         "pooled material withdrawal starts at the lowest entity id"
+    );
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboports[1])
+            .unwrap()
+            .materials
+            .count(build_item),
+        1,
+        "higher entity-id storage remains untouched"
     );
 }
 
@@ -1316,6 +1331,7 @@ fn reserved_construction_work_round_trips_mid_flight_deterministically() {
         .insert(&sim.world.prototypes.clone(), build_item, 1)
         .unwrap();
     sim.tick();
+    assert_eq!(sim.construction.reservations().count(), 1);
     let bytes = crate::save_to_bytes(&sim).expect("reserved construction should save");
     let mut loaded = crate::load_from_bytes(&bytes).expect("reserved construction should load");
     assert_eq!(loaded.state_hash(), sim.state_hash());

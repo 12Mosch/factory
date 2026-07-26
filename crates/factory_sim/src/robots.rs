@@ -134,6 +134,16 @@ impl RobotNetworkJobCounts {
         };
         *count = count.saturating_add(1);
     }
+
+    pub(crate) fn remove(&mut self, job: ConstructionJob) {
+        let count = match job {
+            ConstructionJob::BuildGhost(_) => &mut self.build,
+            ConstructionJob::Deconstruct(_) => &mut self.deconstruction,
+            ConstructionJob::Repair(_) => &mut self.repair,
+        };
+        debug_assert!(*count > 0);
+        *count = count.saturating_sub(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

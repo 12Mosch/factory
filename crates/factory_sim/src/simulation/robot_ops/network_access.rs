@@ -112,12 +112,12 @@ impl Simulation {
     }
 
     pub(in crate::simulation) fn refresh_robot_network_work_counts(&mut self) {
-        let counts = robot_network_work_counts(self);
+        let counts = robot_network_cached_work_counts(self);
 
-        for (index, snapshot) in self.robots.networks.iter_mut().enumerate() {
-            snapshot.available_construction_robots = counts[index].0;
-            snapshot.total_construction_robots = counts[index].1;
-            snapshot.jobs = counts[index].2;
+        for (snapshot, (available, total, jobs)) in self.robots.networks.iter_mut().zip(counts) {
+            snapshot.available_construction_robots = available;
+            snapshot.total_construction_robots = total;
+            snapshot.jobs = jobs;
         }
     }
 }
@@ -125,10 +125,42 @@ impl Simulation {
 pub(in crate::simulation) fn robot_network_work_counts(
     sim: &Simulation,
 ) -> Vec<(u32, u32, crate::robots::RobotNetworkJobCounts)> {
-    let mut available = vec![0_u32; sim.robots.topology_networks.len()];
-    let mut total = vec![0_u32; sim.robots.topology_networks.len()];
     let mut jobs =
         vec![crate::robots::RobotNetworkJobCounts::default(); sim.robots.topology_networks.len()];
+    for job in sim
+        .construction
+        .queue
+        .iter()
+        .chain(sim.construction.reservations.keys())
+    {
+        let Some((x, y)) = sim.construction_job_target_tile(*job) else {
+            continue;
+        };
+        let Some(network_id) = sim.construction_network_covering_tile(x, y) else {
+            continue;
+        };
+        jobs[network_id as usize].add(*job);
+    }
+    robot_network_work_counts_with_jobs(sim, jobs)
+}
+
+fn robot_network_cached_work_counts(
+    sim: &Simulation,
+) -> Vec<(u32, u32, crate::robots::RobotNetworkJobCounts)> {
+    let jobs = if sim.robots.job_counts_by_network.len() == sim.robots.topology_networks.len() {
+        sim.robots.job_counts_by_network.clone()
+    } else {
+        vec![crate::robots::RobotNetworkJobCounts::default(); sim.robots.topology_networks.len()]
+    };
+    robot_network_work_counts_with_jobs(sim, jobs)
+}
+
+fn robot_network_work_counts_with_jobs(
+    sim: &Simulation,
+    jobs: Vec<crate::robots::RobotNetworkJobCounts>,
+) -> Vec<(u32, u32, crate::robots::RobotNetworkJobCounts)> {
+    let mut available = vec![0_u32; sim.robots.topology_networks.len()];
+    let mut total = vec![0_u32; sim.robots.topology_networks.len()];
 
     for (network_index, network) in sim.robots.topology_networks.iter().enumerate() {
         for node in &network.roboports {
@@ -173,21 +205,6 @@ pub(in crate::simulation) fn robot_network_work_counts(
         if is_construction {
             total[network_id as usize] = total[network_id as usize].saturating_add(1);
         }
-    }
-
-    for job in sim
-        .construction
-        .queue
-        .iter()
-        .chain(sim.construction.reservations.keys())
-    {
-        let Some((x, y)) = sim.construction_job_target_tile(*job) else {
-            continue;
-        };
-        let Some(network_id) = sim.construction_network_covering_tile(x, y) else {
-            continue;
-        };
-        jobs[network_id as usize].add(*job);
     }
 
     available

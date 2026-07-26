@@ -87,6 +87,7 @@ pub(super) fn validate_construction_state(sim: &Simulation) -> Result<(), SimVal
             }
             ConstructionJob::Repair(entity_id) => {
                 !construction.deconstruction_marks.contains(entity_id)
+                    && sim.entities.placed_entity(*entity_id).is_some()
                     && sim
                         .entities
                         .entity_health
