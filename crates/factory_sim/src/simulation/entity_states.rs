@@ -318,6 +318,23 @@ impl EntityStateBehavior for HeatExchangerState {
     }
 }
 
+impl EntityStateBehavior for RoboportState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
+        // Both inventories come back with the roboport; the charging buffer is
+        // energy, not goods, and is simply lost.
+        push_inventory_stacks(stacks, &self.robots);
+        push_inventory_stacks(stacks, &self.materials);
+    }
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        super::validation::robots::validate_roboport(sim, entity_id, self)
+    }
+}
+
 /// Confirms a heat state entry sits on an entity of the expected kind that
 /// actually declares a heat buffer, so a stale entry can never look valid.
 fn require_heat_kind(

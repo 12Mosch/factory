@@ -494,7 +494,38 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
+            EntityKind::Roboport => {
+                let Some(roboport) = prototype.roboport else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                if roboport.construction_radius_tiles == 0
+                    || roboport.logistic_radius_tiles == 0
+                    || roboport.robot_slot_count == 0
+                    || roboport.material_slot_count == 0
+                    || roboport.charging_energy_buffer_joules == 0
+                    || prototype.max_health.is_none_or(|health| health == 0)
+                    || prototype.burner.is_some()
+                    || prototype.heat_buffer.is_some()
+                    || !prototype.fluid_boxes.is_empty()
+                    || prototype
+                        .electric_energy_source
+                        .as_ref()
+                        .is_none_or(|source| source.drain_watts == 0)
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
             _ => {}
+        }
+
+        if prototype.entity_kind != EntityKind::Roboport && prototype.roboport.is_some() {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
         }
 
         // Heat metadata belongs only to the heat network kinds handled above.

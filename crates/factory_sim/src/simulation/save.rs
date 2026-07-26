@@ -30,7 +30,9 @@ use bincode::Options;
 // state, and lamp state joined the entity registry.
 // v29: heat networks joined the snapshot, along with heat buffer, nuclear
 // reactor, heat pipe, and heat exchanger state in the entity registry.
-pub const SAVE_VERSION: u32 = 29;
+// v30: robot networks joined the snapshot, along with roboport state (robot
+// slots, material slots, and the charging buffer) in the entity registry.
+pub const SAVE_VERSION: u32 = 30;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -46,7 +48,9 @@ pub const SAVE_VERSION: u32 = 29;
 // v19: virtual signals, circuit connectors, and combinator metadata.
 // v20: item burnt results and entity heat buffer, heat energy source, and
 // nuclear reactor metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 20;
+// v21: entity prototypes gained roboport coverage, storage, and charging
+// metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 21;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -109,6 +113,7 @@ struct SimulationSnapshotOwned {
     entity_power_statuses: DenseEntityMap<EntityPowerStatus>,
     fluid_networks: Vec<FluidNetworkSnapshot>,
     heat_networks: Vec<HeatNetworkSnapshot>,
+    robot_networks: Vec<RobotNetworkSnapshot>,
     pollution: PollutionState,
     enemies: EnemySubsystem,
     config: SimulationConfig,
@@ -256,6 +261,7 @@ struct SimulationSnapshotRef<'a> {
     entity_power_statuses: &'a DenseEntityMap<EntityPowerStatus>,
     fluid_networks: &'a Vec<FluidNetworkSnapshot>,
     heat_networks: &'a Vec<HeatNetworkSnapshot>,
+    robot_networks: &'a Vec<RobotNetworkSnapshot>,
     pollution: &'a PollutionState,
     enemies: &'a EnemySubsystem,
     config: SimulationConfig,
@@ -288,6 +294,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             entity_power_statuses: &sim.power.entity_statuses,
             fluid_networks: &sim.fluids.networks,
             heat_networks: &sim.heat.networks,
+            robot_networks: &sim.robots.networks,
             pollution: &sim.pollution,
             enemies: &sim.enemies,
             config: sim.config,
@@ -334,6 +341,7 @@ impl SimulationSnapshotOwned {
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
             heat: HeatSubsystem::from_networks(self.heat_networks),
+            robots: RobotSubsystem::from_networks(self.robot_networks),
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,
@@ -354,6 +362,9 @@ impl SimulationSnapshotOwned {
         };
         sim.transport.initialize_item_tracking(&sim.entities);
         sim.ensure_fluid_network_topology();
+        // Robot coverage queries read the topology cache, so rebuild it before
+        // anything can ask a loaded world which network covers a tile.
+        sim.ensure_robot_network_topology();
         sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();

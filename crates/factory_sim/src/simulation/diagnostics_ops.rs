@@ -212,6 +212,9 @@ impl Simulation {
         if self.entities.heat_exchangers.contains_key(&entity_id) {
             return Some(self.heat_exchanger_status(entity_id, fluids.water, fluids.steam));
         }
+        if self.entities.roboports.contains_key(&entity_id) {
+            return Some(self.roboport_status(entity_id));
+        }
 
         None
     }
@@ -660,6 +663,28 @@ impl Simulation {
             return MachineStatus::NoHeat;
         }
         MachineStatus::Working
+    }
+
+    /// A roboport's status is about power, because power is the only thing it
+    /// can be short of: unpowered it cannot charge, still filling it is
+    /// working, and once its buffer is full it is idle and waiting for robots.
+    fn roboport_status(&self, entity_id: EntityId) -> MachineStatus {
+        if self
+            .power
+            .entity_statuses
+            .get(&entity_id)
+            .is_none_or(|status| status.satisfaction_permyriad == 0)
+        {
+            return MachineStatus::NoPower;
+        }
+        if crate::simulation::robot_ops::roboport_is_charging(
+            &self.world.prototypes,
+            &self.entities,
+            entity_id,
+        ) {
+            return MachineStatus::Working;
+        }
+        MachineStatus::Idle
     }
 
     fn steam_engine_status(&self, entity_id: EntityId, steam: FluidId) -> MachineStatus {

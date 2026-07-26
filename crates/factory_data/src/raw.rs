@@ -7,9 +7,9 @@ use crate::model::{
     EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo, FurnacePrototype,
     GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, ModuleEffectPrototype,
     NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype, RadarPrototype,
-    RepairToolPrototype, ResourceExtraction, SolarPanelPrototype, SplitterPrototype,
-    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
-    VirtualSignalKind,
+    RepairToolPrototype, ResourceExtraction, RoboportPrototype, SolarPanelPrototype,
+    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype,
+    UnitPrototype, VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -219,6 +219,8 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) heat_energy_source: Option<HeatEnergySourcePrototype>,
     #[serde(default)]
     pub(crate) nuclear_reactor: Option<NuclearReactorPrototype>,
+    #[serde(default)]
+    pub(crate) roboport: Option<RoboportPrototype>,
     pub(crate) max_health: Option<u32>,
     pub(crate) pollution_per_minute_milli: Option<u32>,
     pub(crate) gun_turret: Option<GunTurretPrototype>,

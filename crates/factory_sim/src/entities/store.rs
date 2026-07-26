@@ -56,6 +56,7 @@ macro_rules! for_each_entity_state_map {
             nuclear_reactors: crate::heat::NuclearReactorState => NuclearReactor,
             heat_pipes: crate::heat::HeatPipeState => HeatPipe,
             heat_exchangers: crate::heat::HeatExchangerState => HeatExchanger,
+            roboports: crate::robots::RoboportState => Roboport,
         }
     };
 }
@@ -228,6 +229,7 @@ mod tests {
         SolarPanelState, SteamEngineState,
     };
     use crate::radar::RadarState;
+    use crate::robots::RoboportState;
     use factory_data::{FluidId, ItemId, RecipeId, TechnologyId, VirtualSignalId};
 
     #[test]
@@ -253,7 +255,8 @@ mod tests {
         // were appended.
         // v29: heat buffer, nuclear reactor, heat pipe, and heat exchanger state
         // were appended for heat networks.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x5bae_c6bf_8be4_db56;
+        // v30: roboport state was appended for robot networks.
+        const EXPECTED_LAYOUT_HASH: u64 = 0xb3cb_9547_a04f_4e73;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -557,6 +560,17 @@ mod tests {
         store
             .heat_exchangers
             .insert(EntityId::new(28), HeatExchangerState);
+
+        // A roboport with both inventories populated and a partly filled
+        // charging buffer, so the layout pins all three fields.
+        store.roboports.insert(
+            EntityId::new(29),
+            RoboportState {
+                robots: test_inventory(vec![Some(test_stack(iron, 3)), None]),
+                materials: test_inventory(vec![Some(test_stack(copper, 2))]),
+                charge_energy_joules: 7_654_321,
+            },
+        );
 
         store
     }

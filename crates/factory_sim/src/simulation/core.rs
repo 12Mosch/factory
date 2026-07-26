@@ -62,6 +62,7 @@ impl Simulation {
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::default(),
             heat: HeatSubsystem::default(),
+            robots: RobotSubsystem::default(),
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
@@ -127,6 +128,10 @@ impl Simulation {
         profiler.measure(ProfilePhase::Fluids, || self.equalize_fluid_networks());
         profiler.measure(ProfilePhase::Power, || self.refresh_power_state());
         profiler.measure(ProfilePhase::Lamps, || self.refresh_lamps());
+        // Roboports fill their charging buffers out of the power the pass above
+        // just allocated, so robot networks settle after power and before the
+        // machines that share the same electric budget.
+        profiler.measure(ProfilePhase::Robots, || self.advance_robot_networks());
         profiler.measure(ProfilePhase::Radars, || self.advance_radars());
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();
@@ -262,6 +267,7 @@ impl Simulation {
         self.power.entity_statuses.hash(&mut hasher);
         self.fluids.networks.hash(&mut hasher);
         self.heat.networks.hash(&mut hasher);
+        self.robots.networks.hash(&mut hasher);
         self.circuits.topology.network_ids.hash(&mut hasher);
         self.circuits.topology.network_count.hash(&mut hasher);
         for network in &self.circuits.networks {

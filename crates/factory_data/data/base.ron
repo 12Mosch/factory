@@ -267,6 +267,7 @@
         (id: 100, name: "heat_pipe", stack_size: 100),
         (id: 101, name: "heat_exchanger", stack_size: 50),
         (id: 102, name: "steam_turbine", stack_size: 20),
+        (id: 103, name: "roboport", stack_size: 5),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1410,6 +1411,18 @@
                 (item: "pipe", amount: 20),
             ],
             products: [(item: "steam_turbine", amount: 1)],
+        ),
+        (
+            id: 101,
+            name: "roboport",
+            category: Crafting,
+            crafting_time_ticks: 300,
+            ingredients: [
+                (item: "steel_plate", amount: 45),
+                (item: "iron_gear_wheel", amount: 45),
+                (item: "advanced_circuit", amount: 45),
+            ],
+            products: [(item: "roboport", amount: 1)],
         ),
     ],
     entities: [
@@ -2633,6 +2646,33 @@
                 ),
             ],
         ),
+        // Covers a 51x51 logistic square and a 111x111 construction square,
+        // measured from its center tile. Two roboports share a network when
+        // their logistic squares overlap, so placing them within 50 tiles of
+        // each other grows one network; construction coverage is the union of
+        // the much larger construction squares, which is what makes a sparse
+        // chain of roboports still reach everything between them.
+        (
+            id: 63,
+            name: "roboport",
+            building_category: Some(Logistics),
+            building_menu_order: Some(130),
+            entity_kind: Roboport,
+            size: (x: 4, y: 4),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(500),
+            // 1 MW of charging draw fills the 100 MJ buffer in about a hundred
+            // seconds; once full the roboport falls back to its 50 kW idle
+            // drain, so a settled robot network is cheap and a fresh one is not.
+            electric_energy_source: Some((energy_usage_watts: 1000000, drain_watts: 50000)),
+            roboport: Some((
+                construction_radius_tiles: 55,
+                logistic_radius_tiles: 25,
+                robot_slot_count: 6,
+                material_slot_count: 4,
+                charging_energy_buffer_joules: 100000000,
+            )),
+        ),
     ],
     tiles: [
         (
@@ -3269,6 +3309,22 @@
             required_units: 50,
             research_time_ticks: 900,
             effects: [UnlockRecipe("nuclear_fuel_reprocessing")],
+        ),
+        // Gated on utility science, which is where flying robot frames are
+        // already unlocked: the roboport is the first thing built out of them.
+        (
+            id: 40,
+            name: "robotics",
+            prerequisites: ["utility_science_pack"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+                (item: "utility_science_pack", amount: 1),
+            ],
+            required_units: 250,
+            research_time_ticks: 900,
+            effects: [UnlockRecipe("roboport")],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

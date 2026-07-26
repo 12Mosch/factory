@@ -9,7 +9,7 @@ use factory_sim::{
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
-use crate::ui::inventory_panel::{InventoryPanel, spawn_labeled_slot};
+use crate::ui::inventory_panel::{InventoryPanel, spawn_labeled_slot, spawn_slot_button};
 use crate::ui::resources::OpenContainer;
 
 #[derive(Component)]
@@ -22,6 +22,11 @@ pub(crate) struct MachineProgressFill;
 /// temperature, so reactors, pipes, and exchangers all show theirs.
 #[derive(Component)]
 pub(crate) struct HeatTemperatureText;
+
+/// Roboport charging-buffer readout. A roboport's only dynamic state today is
+/// how full its buffer is, which is what tells a player whether it is powered.
+#[derive(Component)]
+pub(crate) struct RoboportChargeText;
 
 #[derive(Component)]
 pub(crate) struct MachineGuidanceText;
@@ -397,6 +402,106 @@ pub(crate) fn spawn_heat_buffer_panel(
     });
 }
 
+/// Roboport panel: charging buffer, coverage radii, and the two inventories.
+///
+/// The radii are shown as numbers here and drawn as squares in the world
+/// overlay; the panel is where a player checks them against a plan, the overlay
+/// is where they check them against the terrain.
+pub(crate) fn spawn_roboport_panel(
+    root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
+) {
+    let title = machine_panel_title(sim, entity_id, "Roboport");
+    let coverage = sim
+        .entities()
+        .placed_entity(entity_id)
+        .and_then(|placed| sim.catalog().entity(placed.prototype_id))
+        .and_then(|prototype| prototype.roboport);
+    let robot_slots = factory_sim::entity_access::inventory_panel_slot_count(
+        sim,
+        Some(entity_id),
+        InventoryPanel::RoboportRobots,
+    );
+    let material_slots = factory_sim::entity_access::inventory_panel_slot_count(
+        sim,
+        Some(entity_id),
+        InventoryPanel::RoboportMaterial,
+    );
+
+    root.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            width: Val::Px(240.0),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    ))
+    .with_children(|panel| {
+        panel.spawn((
+            Text::new(title),
+            TextFont::from_font_size(14.0),
+            TextColor(Color::WHITE),
+        ));
+        panel.spawn((
+            Text::new("Charge: -"),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.86, 0.88, 0.82)),
+            RoboportChargeText,
+        ));
+        if let Some(coverage) = coverage {
+            panel.spawn((
+                Text::new(format!(
+                    "Construction {} tiles · Logistic {} tiles",
+                    coverage.construction_radius_tiles, coverage.logistic_radius_tiles
+                )),
+                TextFont::from_font_size(11.0),
+                TextColor(Color::srgb(0.70, 0.76, 0.72)),
+            ));
+        }
+        spawn_roboport_slot_row(panel, "Robots", InventoryPanel::RoboportRobots, robot_slots);
+        spawn_roboport_slot_row(
+            panel,
+            "Material",
+            InventoryPanel::RoboportMaterial,
+            material_slots,
+        );
+    });
+}
+
+fn spawn_roboport_slot_row(
+    panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    inventory_panel: InventoryPanel,
+    slot_count: usize,
+) {
+    if slot_count == 0 {
+        return;
+    }
+    panel.spawn((
+        Text::new(label.to_string()),
+        TextFont::from_font_size(11.0),
+        TextColor(Color::srgb(0.70, 0.76, 0.72)),
+    ));
+    panel
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                flex_wrap: FlexWrap::Wrap,
+                row_gap: Val::Px(4.0),
+                column_gap: Val::Px(4.0),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ))
+        .with_children(|grid| {
+            for slot_index in 0..slot_count {
+                spawn_slot_button(grid, inventory_panel, slot_index);
+            }
+        });
+}
+
 fn spawn_heat_temperature_text(panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
     panel.spawn((
         Text::new("Temperature: -"),
@@ -437,11 +542,25 @@ pub(crate) fn spawn_inserter_panel(root: &mut bevy::ecs::hierarchy::ChildSpawner
     });
 }
 
+/// The three readout texts live in one panel, so each query has to exclude the
+/// others to satisfy Bevy's disjoint-access rules.
+type RoboportChargeTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        With<RoboportChargeText>,
+        Without<BurnerEnergyText>,
+        Without<HeatTemperatureText>,
+    ),
+>;
+
 pub(crate) fn update_machine_indicators(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut energy_texts: Query<&mut Text, With<BurnerEnergyText>>,
     mut temperature_texts: Query<&mut Text, (With<HeatTemperatureText>, Without<BurnerEnergyText>)>,
+    mut charge_texts: RoboportChargeTextQuery,
     mut progress_fills: Query<&mut Node, With<MachineProgressFill>>,
 ) {
     let sim = sim.read();
@@ -500,7 +619,8 @@ pub(crate) fn update_machine_indicators(
                     Some((Some(state.energy.energy_remaining_joules), 0, 1))
                 }
                 // No burner energy and no crafting progress to report.
-                OpenMachineKind::HeatBuffer
+                OpenMachineKind::Roboport
+                | OpenMachineKind::HeatBuffer
                 | OpenMachineKind::Chest
                 | OpenMachineKind::Lab
                 | OpenMachineKind::Turret
@@ -533,6 +653,20 @@ pub(crate) fn update_machine_indicators(
                 status.temperature_millidegrees as f64 / 1_000.0
             ),
             None => "Temperature: -".to_string(),
+        };
+    }
+
+    let roboport_status = open_container
+        .entity_id
+        .and_then(|entity_id| sim.entity_roboport_status(entity_id));
+    for mut text in &mut charge_texts {
+        text.0 = match roboport_status {
+            Some(status) if status.charge_capacity_joules > 0 => format!(
+                "Charge: {:.0}% ({} MJ)",
+                status.charge_energy_joules as f64 * 100.0 / status.charge_capacity_joules as f64,
+                status.charge_energy_joules / 1_000_000,
+            ),
+            _ => "Charge: -".to_string(),
         };
     }
 

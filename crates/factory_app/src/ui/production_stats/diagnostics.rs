@@ -101,5 +101,6 @@ fn entity_kind_name(kind: EntityKind) -> &'static str {
         EntityKind::NuclearReactor => "Nuclear reactors",
         EntityKind::HeatPipe => "Heat pipes",
         EntityKind::HeatExchanger => "Heat exchangers",
+        EntityKind::Roboport => "Roboports",
     }
 }

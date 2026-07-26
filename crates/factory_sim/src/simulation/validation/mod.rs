@@ -10,6 +10,7 @@ mod ids;
 pub(in crate::simulation) mod inventory;
 pub(in crate::simulation) mod machines;
 mod research;
+pub(in crate::simulation) mod robots;
 mod world;
 
 use self::catalog::validate_catalog;
@@ -22,6 +23,7 @@ use self::fluids::{validate_fluid_box_states, validate_fluid_network_snapshots};
 use self::heat::{validate_heat_buffer_states, validate_heat_network_snapshots};
 use self::inventory::validate_inventory;
 use self::research::validate_research_state;
+use self::robots::validate_robot_network_snapshots;
 use self::world::{
     validate_chart_state, validate_fluid_statistics, validate_item_statistics,
     validate_placed_entities, validate_power_statistics, validate_world_resources,
@@ -44,6 +46,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_fluid_network_snapshots(sim)?;
     validate_heat_buffer_states(sim)?;
     validate_heat_network_snapshots(sim)?;
+    validate_robot_network_snapshots(sim)?;
 
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
     if !sim.player.health.is_valid()

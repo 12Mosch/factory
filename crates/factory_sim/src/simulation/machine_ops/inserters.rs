@@ -1,4 +1,45 @@
+use crate::simulation::entity_transfer::RoboportInventory;
 use crate::simulation::*;
+
+/// Which of a roboport's two inventories would take `item` from an inserter, or
+/// `None` when neither will.
+///
+/// The two inventories accept disjoint item sets, so this both answers "can the
+/// inserter drop here?" and picks the destination — one function rather than a
+/// predicate and a separate router that could disagree.
+fn roboport_inventory_accepting(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    entities: &EntityStore,
+    roboport: &RoboportState,
+    item: ItemStack,
+) -> Option<RoboportInventory> {
+    let candidates = [
+        (
+            RoboportInventory::Robots,
+            ItemSlotPolicy::Robot,
+            &roboport.robots,
+        ),
+        (
+            RoboportInventory::Materials,
+            ItemSlotPolicy::RepairMaterial,
+            &roboport.materials,
+        ),
+    ];
+    candidates
+        .into_iter()
+        .find(|(_, policy, inventory)| {
+            item_slot_policy_accepts(
+                catalog,
+                research,
+                entities,
+                *policy,
+                ItemSlotOperation::InserterInsert,
+                item.item_id(),
+            ) && inventory.can_insert(catalog, item.item_id(), item.count())
+        })
+        .map(|(target, _, _)| target)
+}
 
 pub(in crate::simulation) fn inserter_transfer_tiles(
     catalog: &PrototypeCatalog,
@@ -199,6 +240,10 @@ pub(in crate::simulation) fn inserter_target_can_accept(
             reactor.energy.fuel_slot,
             item,
         );
+    }
+
+    if let Some(roboport) = entities.roboports.get(&entity_id) {
+        return roboport_inventory_accepting(catalog, research, entities, roboport, item).is_some();
     }
 
     if let Some(fuel_slot) = entities
@@ -526,6 +571,26 @@ pub(in crate::simulation) fn try_drop_inserter_item(
             .fuel_slot
             .insert_stack(catalog, item)
             .expect("the checked reactor fuel slot should accept the item");
+        return true;
+    }
+
+    if let Some(roboport) = entities.roboports.get(&entity_id) {
+        let Some(target) =
+            roboport_inventory_accepting(catalog, research, entities, roboport, item)
+        else {
+            return false;
+        };
+        let roboport = entities
+            .roboports
+            .get_mut(&entity_id)
+            .expect("roboport presence was checked above");
+        let inventory = match target {
+            RoboportInventory::Robots => &mut roboport.robots,
+            RoboportInventory::Materials => &mut roboport.materials,
+        };
+        inventory
+            .insert_stack(catalog, item)
+            .expect("the checked roboport inventory should accept the item");
         return true;
     }
 

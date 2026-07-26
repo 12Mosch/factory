@@ -150,7 +150,11 @@ impl Simulation {
             // Reactors and heat pipes carry temperature rather than a signal
             // the circuit network can express as an item or fluid count.
             | EntityKind::NuclearReactor
-            | EntityKind::HeatPipe => {}
+            | EntityKind::HeatPipe
+            // A roboport's readable contents are its robot and material counts,
+            // which belong with the robots that consume them rather than with
+            // an empty pair of inventories.
+            | EntityKind::Roboport => {}
         }
     }
 

@@ -98,6 +98,13 @@ pub fn heat_connection_directions(sim: &Simulation, entity_id: EntityId) -> [boo
     sim.heat_connection_directions(entity_id)
 }
 
+pub fn roboport_state(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<&RoboportState, RoboportError> {
+    sim.entities.roboport_state(entity_id)
+}
+
 pub fn nuclear_reactor_state(
     sim: &Simulation,
     entity_id: EntityId,
@@ -243,6 +250,12 @@ pub fn inventory_panel_slot(
             .and_then(|id| sim.entities.nuclear_reactor_state(id).ok())
             .filter(|_| slot_index == NUCLEAR_REACTOR_OUTPUT_SLOT_INDEX)
             .and_then(|state| state.output_slot.stack()),
+        InventoryPanel::RoboportRobots => entity_id
+            .and_then(|id| sim.entities.roboport_state(id).ok())
+            .and_then(|state| state.robots.slot(slot_index)),
+        InventoryPanel::RoboportMaterial => entity_id
+            .and_then(|id| sim.entities.roboport_state(id).ok())
+            .and_then(|state| state.materials.slot(slot_index)),
         InventoryPanel::InserterFuel => entity_id
             .and_then(|id| sim.entities.inserter_energy(id).ok())
             .filter(|_| slot_index == INSERTER_FUEL_SLOT_INDEX)
@@ -289,6 +302,12 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::NuclearReactorFuel | InventoryPanel::NuclearReactorOutput => entity_id
             .and_then(|id| sim.entities.nuclear_reactor_state(id).ok())
             .map_or(0, |_| 1),
+        InventoryPanel::RoboportRobots => entity_id
+            .and_then(|id| sim.entities.roboport_state(id).ok())
+            .map_or(0, |state| state.robots.slots().len()),
+        InventoryPanel::RoboportMaterial => entity_id
+            .and_then(|id| sim.entities.roboport_state(id).ok())
+            .map_or(0, |state| state.materials.slots().len()),
         InventoryPanel::InserterFuel => entity_id
             .and_then(|id| sim.entities.inserter_energy(id).ok())
             .map_or(0, |energy| usize::from(energy.fuel_slot().is_some())),

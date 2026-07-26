@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
     AssemblerError, BoilerError, ContainerError, FurnaceError, InserterError, MiningDrillError,
-    ModuleError, NuclearReactorError, SimCommand, SlotTransferError,
+    ModuleError, NuclearReactorError, RoboportError, SimCommand, SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -201,6 +201,7 @@ pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransf
         SlotTransferError::Furnace(error) => furnace_error_message(catalog, error),
         SlotTransferError::Boiler(error) => boiler_error_message(catalog, error),
         SlotTransferError::NuclearReactor(error) => nuclear_reactor_error_message(catalog, error),
+        SlotTransferError::Roboport(error) => roboport_error_message(catalog, error),
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
         SlotTransferError::Inserter(error) => inserter_error_message(catalog, error),
         SlotTransferError::Module(error) => module_error_message(catalog, error),
@@ -304,6 +305,23 @@ fn nuclear_reactor_error_message(catalog: &PrototypeCatalog, error: NuclearReact
         NuclearReactorError::EmptySlot { .. } => "Empty slot".to_string(),
         NuclearReactorError::InsufficientSpace => "No space".to_string(),
         NuclearReactorError::UnknownItem => "Unknown item".to_string(),
+    }
+}
+
+fn roboport_error_message(catalog: &PrototypeCatalog, error: RoboportError) -> String {
+    match error {
+        RoboportError::MissingEntity(_) | RoboportError::NotRoboport(_) => {
+            "Machine unavailable".to_string()
+        }
+        // Robots do not exist yet, so a rejected robot slot is always the
+        // player trying to store something that is not a robot.
+        RoboportError::InvalidRobot(item_id) | RoboportError::InvalidMaterial(item_id) => {
+            wrong_item_message(catalog, item_id)
+        }
+        RoboportError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        RoboportError::EmptySlot { .. } => "Empty slot".to_string(),
+        RoboportError::InsufficientSpace => "No space".to_string(),
+        RoboportError::UnknownItem => "Unknown item".to_string(),
     }
 }
 
