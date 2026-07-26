@@ -192,7 +192,11 @@ impl Simulation {
                 .saturating_mul(usize::from(
                     catalog.item(robot_item).map_or(1, |item| item.stack_size),
                 ))
-                .min(robot_count - dispatched);
+                .min(robot_count - dispatched)
+                // One insertion is a `u16` count; clamping here rather than
+                // casting keeps the stationed total and the dispatch loop below
+                // agreeing on how many robots this roboport actually holds.
+                .min(usize::from(u16::MAX));
             if state
                 .robots
                 .insert(&catalog, robot_item, stationed as u16)

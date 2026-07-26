@@ -569,10 +569,11 @@ fn squared_distance(dx: i64, dy: i64) -> i128 {
     i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy)
 }
 
-/// Energy one tick of a continuous draw costs. Rounds up to a joule so a draw
-/// below one joule per tick still costs something instead of being free.
+/// Energy one tick of a continuous draw costs, rounded up: a draw that does not
+/// divide evenly into ticks costs the next whole joule rather than silently
+/// losing the remainder, and a draw below one joule per tick still costs one.
 fn joules_per_tick(watts: u64) -> u64 {
-    (watts / SIMULATION_TICKS_PER_SECOND).max(1)
+    watts.div_ceil(SIMULATION_TICKS_PER_SECOND).max(1)
 }
 
 fn crawl_speed(speed_fixed_per_tick: u32) -> i64 {
