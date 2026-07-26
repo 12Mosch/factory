@@ -28,6 +28,7 @@ use crate::rendering::resources::{
 use crate::rendering::robot_coverage::{
     RoboportCoverageRenderState, sync_roboport_coverage_rendering,
 };
+use crate::rendering::robots::sync_robot_rendering;
 use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
 
@@ -86,6 +87,7 @@ impl Plugin for RenderingPlugin {
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
                     sync_enemy_rendering,
+                    sync_robot_rendering,
                     measured_sync_belt_direction_rendering,
                     measured_sync_belt_item_rendering,
                     sync_circuit_wire_rendering,

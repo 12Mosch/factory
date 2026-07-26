@@ -49,6 +49,10 @@ pub enum PrototypeLoadError {
         item: String,
         detail: &'static str,
     },
+    InvalidRobotMetadata {
+        item: String,
+        detail: &'static str,
+    },
     InvalidTileMetadata {
         tile: String,
         detail: &'static str,
@@ -246,6 +250,10 @@ impl fmt::Display for PrototypeLoadError {
             Self::InvalidModuleMetadata { item, detail } => write!(
                 formatter,
                 "item {item:?} has invalid module metadata: {detail}"
+            ),
+            Self::InvalidRobotMetadata { item, detail } => write!(
+                formatter,
+                "item {item:?} has invalid robot metadata: {detail}"
             ),
             Self::InvalidTileMetadata { tile, detail } => {
                 write!(formatter, "tile {tile:?} has invalid metadata: {detail}")

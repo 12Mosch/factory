@@ -58,6 +58,7 @@ pub(super) fn load_items(
                 equipment: item.equipment,
                 module_effect: item.module_effect,
                 place_as_tile,
+                robot: item.robot,
             })
         })
         .collect::<Result<Vec<ItemPrototype>, PrototypeLoadError>>()?;
@@ -166,6 +167,34 @@ fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadEr
             return Err(PrototypeLoadError::InvalidEquipmentMetadata {
                 item: item.name.clone(),
                 detail: "dimensions and effect power/capacity values must be positive",
+            });
+        }
+    }
+    if let Some(robot) = item.robot {
+        if robot.speed_fixed_per_tick == 0
+            || robot.energy_capacity_joules == 0
+            || robot.flight_energy_usage_watts == 0
+        {
+            return Err(PrototypeLoadError::InvalidRobotMetadata {
+                item: item.name.clone(),
+                detail: "speed, energy capacity, and flight draw must be positive",
+            });
+        }
+        // A roboport's two inventories accept disjoint item sets, and both
+        // answers are derived from the item prototype: robots go in the robot
+        // slots, repair material in the material slots. An item that claimed
+        // both would be accepted by whichever half was tried first.
+        if item.repair.is_some()
+            || item.fuel_value_joules.is_some()
+            || item.ammo.is_some()
+            || item.armor.is_some()
+            || item.equipment.is_some()
+            || item.module_effect.is_some()
+            || item.place_as_tile.is_some()
+        {
+            return Err(PrototypeLoadError::InvalidRobotMetadata {
+                item: item.name.clone(),
+                detail: "robots cannot also be fuel, ammunition, repair tools, armor, equipment, modules, or tiles",
             });
         }
     }

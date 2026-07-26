@@ -11,6 +11,7 @@ use crate::audio::{
     SoundEvent, play_sound_events, sync_machine_audio_loops,
 };
 use crate::rendering::resources::VisibleEntityIds;
+use crate::rendering::robots::RobotSprite;
 use crate::resources::SimResource;
 use crate::test_performance::{
     BENCHMARK_LOCK, PerformanceBudget, assert_performance_budget, collect_performance_stats,
@@ -28,6 +29,10 @@ use crate::ui::technology_panel::sync_technology_panel;
 use crate::ui::threat::sync_threat_ui;
 
 const WARMUP_FRAMES: usize = 30;
+/// Robots dispatched for the robot-heavy frame benchmark. Well past what a
+/// single roboport network holds, so the measured frame covers robots flying,
+/// arriving, queueing for pads, charging, and docking at the same time.
+const BENCHMARK_ROBOTS: usize = 4_000;
 const MEASUREMENT_FRAMES: usize = 300;
 const AUDIO_EVENTS_PER_FRAME: usize = 128;
 
@@ -143,6 +148,62 @@ fn full_app_frame_p99_hitch_and_allocation_budget() {
         .read()
         .validate_state()
         .expect("full-frame budget should retain a valid simulation");
+}
+
+/// Same complete frame as above, with a sky full of robots on top: the flight
+/// step, the interpolated sprite sync, and the roboport charging all run inside
+/// the one 60 fps frame budget rather than getting a budget of their own.
+#[test]
+#[ignore]
+fn robot_heavy_frame_p99_hitch_and_allocation_budget() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut app = robot_benchmark_app();
+    app.update();
+
+    for _ in 0..WARMUP_FRAMES {
+        app.update();
+    }
+    let stats = collect_performance_stats(MEASUREMENT_FRAMES, || app.update());
+    print_performance_stats("robot_heavy_frame_budget", stats);
+    assert_performance_budget("robot-heavy app frame", stats, FULL_FRAME_BUDGET);
+
+    let drawn = {
+        let world = app.world_mut();
+        let mut sprites = world.query::<&RobotSprite>();
+        sprites.iter(world).count()
+    };
+    let sim = app.world().resource::<SimResource>().read();
+    assert!(
+        sim.robot_count() >= BENCHMARK_ROBOTS / 2,
+        "the benchmark should still be flying robots at the end, found {}",
+        sim.robot_count()
+    );
+    // The frame is only worth measuring if the presentation half ran too: a
+    // budget met by drawing nothing would say nothing about robot rendering.
+    assert!(
+        drawn > 0,
+        "the benchmark frame should be drawing robots, not only simulating them"
+    );
+    sim.validate_state()
+        .expect("robot-heavy budget run should retain a valid simulation");
+}
+
+fn robot_benchmark_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(FactoryAppPlugin)
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    let mut sim = Simulation::new_robot_flight_fixture(BENCHMARK_ROBOTS);
+    sim.tick();
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(sim)
+        .expect("benchmark simulation should replace before frame execution");
+    app
 }
 
 fn audio_benchmark_app() -> App {

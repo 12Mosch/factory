@@ -63,6 +63,7 @@ impl Simulation {
             fluids: FluidSubsystem::default(),
             heat: HeatSubsystem::default(),
             robots: RobotSubsystem::default(),
+            robot_flights: RobotFlightSubsystem::default(),
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
@@ -131,7 +132,12 @@ impl Simulation {
         // Roboports fill their charging buffers out of the power the pass above
         // just allocated, so robot networks settle after power and before the
         // machines that share the same electric budget.
-        profiler.measure(ProfilePhase::Robots, || self.advance_robot_networks());
+        profiler.measure(ProfilePhase::Robots, || {
+            self.advance_robot_networks();
+            // Robots charge out of the buffers the pass above just filled, so
+            // flight runs after the networks settle and never inside them.
+            self.advance_robots();
+        });
         profiler.measure(ProfilePhase::Radars, || self.advance_radars());
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();
@@ -268,6 +274,7 @@ impl Simulation {
         self.fluids.networks.hash(&mut hasher);
         self.heat.networks.hash(&mut hasher);
         self.robots.networks.hash(&mut hasher);
+        self.robot_flights.hash(&mut hasher);
         self.circuits.topology.network_ids.hash(&mut hasher);
         self.circuits.topology.network_count.hash(&mut hasher);
         for network in &self.circuits.networks {

@@ -44,6 +44,64 @@ fn place_roboport_row(sim: &mut Simulation, offsets: &[WorldTileCoord]) -> Vec<E
     panic!("expected a placeable roboport row");
 }
 
+/// Places one roboport, stocks it with robots, and fills its charging buffer.
+///
+/// Dispatch pays for a robot's full charge out of the buffer, so a fixture that
+/// only placed a roboport could never send anything; filling the buffer
+/// directly stands in for the power fixture the flight rules do not need.
+fn stocked_roboport(sim: &mut Simulation, robot_count: u16) -> EntityId {
+    let roboport = place_roboport_row(sim, &[0])[0];
+    sim.tick();
+    let catalog = sim.world.prototypes.clone();
+    let robot_item = item_id(&catalog, "construction_robot");
+    let capacity = sim
+        .entity_roboport_status(roboport)
+        .expect("a placed roboport reports status")
+        .charge_capacity_joules;
+
+    let state = sim
+        .entities
+        .roboport_state_mut(roboport)
+        .expect("roboport state exists");
+    state
+        .robots
+        .insert(&catalog, robot_item, robot_count)
+        .expect("the robot slots should hold the fixture's robots");
+    state.charge_energy_joules = capacity;
+    sim.robots.mark_roboport_dirty(roboport);
+    sim.tick();
+    roboport
+}
+
+fn roboport_tile(sim: &Simulation, roboport: EntityId) -> (WorldTileCoord, WorldTileCoord) {
+    let placed = sim
+        .entities
+        .placed_entity(roboport)
+        .expect("a placed roboport has a footprint");
+    (placed.footprint.x, placed.footprint.y)
+}
+
+fn robot_energy(sim: &Simulation, robot_id: RobotId) -> u64 {
+    sim.robot(robot_id)
+        .expect("the robot should still be in flight")
+        .energy_joules
+}
+
+/// Ticks until `predicate` holds, or panics after `limit` ticks.
+fn tick_until(
+    sim: &mut Simulation,
+    limit: usize,
+    predicate: impl Fn(&Simulation) -> bool,
+) -> usize {
+    for ticks in 0..limit {
+        if predicate(sim) {
+            return ticks;
+        }
+        sim.tick();
+    }
+    panic!("condition did not hold within {limit} ticks");
+}
+
 fn network_ids(sim: &Simulation, roboports: &[EntityId]) -> Vec<Option<u32>> {
     roboports
         .iter()
@@ -301,27 +359,391 @@ fn a_full_roboport_drops_to_its_idle_drain() {
     );
 }
 
-/// Repair packs belong in the material slots; the robot slots hold robots,
-/// which do not exist yet, so nothing may be inserted there.
+/// The two roboport inventories accept disjoint item sets: repair packs land in
+/// the material slots and robots in the robot slots, whichever half a single
+/// click tries first.
 #[test]
-fn repair_packs_go_to_the_material_slots_and_robot_slots_reject_them() {
+fn stocking_a_roboport_routes_robots_and_repair_packs_to_their_own_slots() {
     let mut sim = Simulation::new_test_world(123);
     let roboports = place_roboport_row(&mut sim, &[0]);
     let repair_pack = item_id(&sim.world.prototypes, "repair_pack");
+    let robot = item_id(&sim.world.prototypes, "construction_robot");
     sim.player_inventory = Inventory::player();
     set_inventory_slot(&mut sim.player_inventory, 0, repair_pack, 4);
+    set_inventory_slot(&mut sim.player_inventory, 1, robot, 10);
 
     crate::entity_transfer::player_slot_to_roboport(&mut sim, roboports[0], 0)
         .expect("a roboport should accept repair packs");
+    crate::entity_transfer::player_slot_to_roboport(&mut sim, roboports[0], 1)
+        .expect("a roboport should accept robots");
 
     let state = sim
         .entities
         .roboport_state(roboports[0])
         .expect("roboport state exists");
     assert_eq!(state.materials.count(repair_pack), 4);
+    assert_eq!(state.robots.count(robot), 10);
     assert_eq!(state.robots.count(repair_pack), 0);
+    assert_eq!(state.materials.count(robot), 0);
     sim.validate()
-        .expect("stocked repair material should stay valid");
+        .expect("a stocked roboport should stay valid");
+}
+
+/// The whole errand in one test: leave the roboport, reach the target, come
+/// back, and become an item in the robot slots again.
+#[test]
+fn a_dispatched_robot_flies_to_its_target_and_docks_again() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let robot_item = item_id(&sim.world.prototypes, "construction_robot");
+    let (x, y) = roboport_tile(&sim, roboport);
+    let target = (x + 5, y + 3);
+
+    let robot_id = sim
+        .dispatch_robot(roboport, target.0, target.1)
+        .expect("a stocked, charged roboport should dispatch");
+    assert_eq!(sim.robot_count(), 1);
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboport)
+            .expect("roboport state exists")
+            .robots
+            .count(robot_item),
+        0,
+        "a dispatched robot leaves the robot slots"
+    );
+
+    tick_until(&mut sim, 600, |sim| {
+        sim.robot(robot_id)
+            .is_none_or(|robot| robot.errand.is_none())
+    });
+    let robot = sim
+        .robot(robot_id)
+        .expect("the robot should still be flying home");
+    assert_eq!(
+        (robot.x, robot.y),
+        (
+            crate::simulation::POSITION_SCALE * target.0 + crate::simulation::POSITION_SCALE / 2,
+            crate::simulation::POSITION_SCALE * target.1 + crate::simulation::POSITION_SCALE / 2
+        ),
+        "the robot should stand exactly on its errand target before turning around"
+    );
+
+    tick_until(&mut sim, 600, |sim| sim.robot_count() == 0);
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboport)
+            .expect("roboport state exists")
+            .robots
+            .count(robot_item),
+        1,
+        "a docked robot is an item in the robot slots again"
+    );
+    sim.validate()
+        .expect("a completed errand should leave valid state");
+}
+
+#[test]
+fn dispatch_needs_a_stationed_robot() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 0);
+    let (x, y) = roboport_tile(&sim, roboport);
+
+    assert_eq!(
+        sim.dispatch_robot(roboport, x + 2, y),
+        Err(RobotDispatchError::NoRobotAvailable)
+    );
+    assert_eq!(sim.robot_count(), 0);
+}
+
+/// Robots leave fully charged, so an unpowered roboport that never filled its
+/// buffer refuses to send one rather than stranding it a few tiles out.
+#[test]
+fn dispatch_needs_a_full_charge_in_the_buffer() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 2);
+    let robot_item = item_id(&sim.world.prototypes, "construction_robot");
+    let (x, y) = roboport_tile(&sim, roboport);
+    sim.entities
+        .roboport_state_mut(roboport)
+        .expect("roboport state exists")
+        .charge_energy_joules = 0;
+    sim.robots.mark_roboport_dirty(roboport);
+
+    let error = sim
+        .dispatch_robot(roboport, x + 2, y)
+        .expect_err("an empty buffer cannot pay for a robot's charge");
+
+    assert!(matches!(
+        error,
+        RobotDispatchError::InsufficientCharge {
+            available_joules: 0,
+            ..
+        }
+    ));
+    assert_eq!(sim.robot_count(), 0);
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboport)
+            .expect("roboport state exists")
+            .robots
+            .count(robot_item),
+        2,
+        "a refused dispatch consumes nothing"
+    );
+}
+
+/// Flying costs energy; hovering in a charging queue does not. Otherwise a
+/// robot waiting behind a full set of pads could drain itself into a state it
+/// can never leave.
+#[test]
+fn flying_spends_energy_and_queuing_does_not() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let (x, y) = roboport_tile(&sim, roboport);
+    let robot_id = sim
+        .dispatch_robot(roboport, x + 40, y)
+        .expect("a stocked, charged roboport should dispatch");
+    let full = robot_energy(&sim, robot_id);
+
+    sim.tick();
+    let after_one_tick = robot_energy(&sim, robot_id);
+    sim.tick();
+    let after_two_ticks = robot_energy(&sim, robot_id);
+
+    assert!(after_one_tick < full);
+    assert_eq!(
+        full - after_one_tick,
+        after_one_tick - after_two_ticks,
+        "flight drain is a flat per-tick cost"
+    );
+
+    sim.robot_flights
+        .robots
+        .get_mut(&robot_id)
+        .expect("the robot is in flight")
+        .activity = RobotActivity::Queued(roboport);
+    sim.robot_flights
+        .charging
+        .entry(roboport)
+        .or_default()
+        .queue
+        .push_back(robot_id);
+    let queued_energy = robot_energy(&sim, robot_id);
+    sim.tick();
+
+    assert!(robot_energy(&sim, robot_id) >= queued_energy);
+}
+
+/// Running dry is survivable: the robot crawls to the nearest roboport in its
+/// own network, charges, and carries on with the errand it was on.
+#[test]
+fn a_robot_that_runs_dry_diverts_to_a_roboport_and_resumes() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let (x, y) = roboport_tile(&sim, roboport);
+    let robot_id = sim
+        .dispatch_robot(roboport, x + 10, y)
+        .expect("a stocked, charged roboport should dispatch");
+    for _ in 0..20 {
+        sim.tick();
+    }
+    let errand = sim.robot(robot_id).expect("the robot is in flight").errand;
+    sim.robot_flights
+        .robots
+        .get_mut(&robot_id)
+        .expect("the robot is in flight")
+        .energy_joules = 0;
+
+    sim.tick();
+    assert!(
+        matches!(
+            sim.robot(robot_id).expect("the robot is in flight").activity,
+            RobotActivity::SeekingCharge(diverted) if diverted == roboport
+        ),
+        "an empty robot heads for a roboport instead of stalling"
+    );
+
+    tick_until(&mut sim, 600, |sim| {
+        matches!(
+            sim.robot(robot_id).map(|robot| robot.activity),
+            Some(RobotActivity::Charging(_))
+        )
+    });
+    tick_until(&mut sim, 600, |sim| {
+        matches!(
+            sim.robot(robot_id).map(|robot| robot.activity),
+            Some(RobotActivity::Flying)
+        )
+    });
+
+    let robot = sim.robot(robot_id).expect("the robot is in flight");
+    assert_eq!(robot.errand, errand, "a charging stop keeps the errand");
+    assert!(robot.energy_joules > 0);
+    sim.validate().expect("a charging detour should stay valid");
+}
+
+/// Charging is a throughput limit, not a free service: a roboport charges as
+/// many robots as it has pads and the rest wait in arrival order.
+#[test]
+fn arrivals_beyond_the_pad_count_queue_in_arrival_order() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 6);
+    let (x, y) = roboport_tile(&sim, roboport);
+    let pad_count = usize::from(
+        sim.world
+            .prototypes
+            .entity(
+                sim.entities
+                    .placed_entity(roboport)
+                    .expect("a placed roboport")
+                    .prototype_id,
+            )
+            .and_then(|prototype| prototype.roboport)
+            .expect("roboport metadata")
+            .charging_pad_count,
+    );
+
+    let robot_ids = (0..6)
+        .map(|index| {
+            let robot_id = sim
+                .dispatch_robot(roboport, x + 1 + index, y)
+                .expect("a stocked, charged roboport should dispatch");
+            sim.robot_flights
+                .robots
+                .get_mut(&robot_id)
+                .expect("the robot is in flight")
+                .energy_joules = 0;
+            robot_id
+        })
+        .collect::<Vec<_>>();
+
+    tick_until(&mut sim, 600, |sim| {
+        sim.roboport_charging_state(roboport)
+            .is_some_and(|state| state.charging.len() + state.queue.len() == robot_ids.len())
+    });
+
+    let state = sim
+        .roboport_charging_state(roboport)
+        .expect("robots should be charging here");
+    assert_eq!(state.charging.len(), pad_count);
+    assert_eq!(state.queue.len(), robot_ids.len() - pad_count);
+    assert_eq!(
+        state.charging.iter().copied().collect::<Vec<_>>(),
+        robot_ids[..pad_count],
+        "the first arrivals take the pads"
+    );
+    assert_eq!(
+        state.queue.iter().copied().collect::<Vec<_>>(),
+        robot_ids[pad_count..],
+        "the rest wait in arrival order"
+    );
+    sim.validate()
+        .expect("a full charging queue should be valid");
+
+    // The queue drains: every robot eventually charges and docks.
+    tick_until(&mut sim, 4_000, |sim| sim.robot_count() == 0);
+}
+
+/// A robot outlives the roboport it came from, so destroying one must not leave
+/// robots pointing at it — they adopt another roboport instead.
+#[test]
+fn destroying_a_roboport_rehomes_the_robots_it_was_charging() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboports = place_roboport_row(&mut sim, &[0, CONNECTING_GAP]);
+    sim.tick();
+    let catalog = sim.world.prototypes.clone();
+    let robot_item = item_id(&catalog, "construction_robot");
+    let capacity = sim
+        .entity_roboport_status(roboports[0])
+        .expect("a placed roboport reports status")
+        .charge_capacity_joules;
+    let state = sim
+        .entities
+        .roboport_state_mut(roboports[0])
+        .expect("roboport state exists");
+    state
+        .robots
+        .insert(&catalog, robot_item, 1)
+        .expect("the robot slots should hold one robot");
+    state.charge_energy_joules = capacity;
+    sim.robots.mark_roboport_dirty(roboports[0]);
+    sim.tick();
+
+    let (x, y) = roboport_tile(&sim, roboports[0]);
+    let robot_id = sim
+        .dispatch_robot(roboports[0], x + 3, y)
+        .expect("a stocked, charged roboport should dispatch");
+    sim.robot_flights
+        .robots
+        .get_mut(&robot_id)
+        .expect("the robot is in flight")
+        .energy_joules = 0;
+    tick_until(&mut sim, 600, |sim| {
+        matches!(
+            sim.robot(robot_id).map(|robot| robot.activity),
+            Some(RobotActivity::Charging(_))
+        )
+    });
+
+    crate::entity_mutation::destroy_to_player_inventory(&mut sim, roboports[0])
+        .expect("a placed roboport should be removable");
+
+    let robot = sim
+        .robot(robot_id)
+        .expect("the robot survives its roboport");
+    assert_eq!(robot.activity, RobotActivity::Flying);
+    assert_eq!(robot.home_roboport, None);
+    assert!(sim.roboport_charging_state(roboports[0]).is_none());
+    sim.validate()
+        .expect("destroying a roboport should leave valid state");
+
+    sim.tick();
+    assert_eq!(
+        sim.robot(robot_id)
+            .expect("the robot is in flight")
+            .home_roboport,
+        Some(roboports[1]),
+        "the surviving roboport adopts the orphaned robot"
+    );
+}
+
+#[test]
+fn robots_in_flight_survive_a_save_load_round_trip() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 3);
+    let (x, y) = roboport_tile(&sim, roboport);
+    for index in 0..3 {
+        sim.dispatch_robot(roboport, x + 8 + index, y + index)
+            .expect("a stocked, charged roboport should dispatch");
+    }
+    for _ in 0..40 {
+        sim.tick();
+    }
+    let before = sim.state_hash();
+    let positions = sim
+        .robots()
+        .map(|robot| (robot.id, robot.x, robot.y, robot.energy_joules))
+        .collect::<Vec<_>>();
+
+    let bytes = crate::save_to_bytes(&sim).expect("a world with robots in flight should save");
+    let mut loaded = crate::load_from_bytes(&bytes).expect("a saved robot world should load");
+
+    assert_eq!(loaded.state_hash(), before);
+    assert_eq!(
+        loaded
+            .robots()
+            .map(|robot| (robot.id, robot.x, robot.y, robot.energy_joules))
+            .collect::<Vec<_>>(),
+        positions
+    );
+
+    // Loading must also reproduce what happens next, not just what was stored.
+    for _ in 0..40 {
+        sim.tick();
+        loaded.tick();
+    }
+    assert_eq!(loaded.state_hash(), sim.state_hash());
 }
 
 /// Roboports join the aggregated diagnostics alongside every other powered

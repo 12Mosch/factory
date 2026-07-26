@@ -203,9 +203,9 @@ const TECHNOLOGY_NAMES: &[&str] = &[
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 104);
+    assert_eq!(catalog.items.len(), 105);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 102);
+    assert_eq!(catalog.recipes.len(), 103);
     assert_eq!(catalog.entities.len(), 64);
     assert_eq!(catalog.tiles.len(), 11);
     assert_eq!(catalog.technologies.len(), 41);

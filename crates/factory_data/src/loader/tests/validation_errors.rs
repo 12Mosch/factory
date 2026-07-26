@@ -1049,6 +1049,8 @@ const VALID_ROBOPORT: &str = r#"Some((
     robot_slot_count: 6,
     material_slot_count: 4,
     charging_energy_buffer_joules: 100000000,
+    charging_pad_count: 4,
+    charging_pad_watts: 1200000,
 ))"#;
 
 #[test]
@@ -1079,6 +1081,8 @@ fn roboport_with_zero_radius_fails() {
             robot_slot_count: 6,
             material_slot_count: 4,
             charging_energy_buffer_joules: 100000000,
+            charging_pad_count: 4,
+            charging_pad_watts: 1200000,
         ))"#,
         "",
     )
@@ -1097,6 +1101,8 @@ fn roboport_without_slots_fails() {
             robot_slot_count: 0,
             material_slot_count: 4,
             charging_energy_buffer_joules: 100000000,
+            charging_pad_count: 4,
+            charging_pad_watts: 1200000,
         ))"#,
         "",
     )
@@ -1141,6 +1147,87 @@ fn roboport_metadata_on_other_kinds_fails() {
     .expect_err("roboport metadata only valid on roboports");
     assert!(
         matches!(error, PrototypeLoadError::InvalidRoboportMetadata { entity, .. } if entity == "chest")
+    );
+}
+
+/// A roboport with no pad accepts robots it can never finish charging, which
+/// would leave a queue that only ever grows.
+#[test]
+fn roboport_without_charging_pads_fails() {
+    let error = roboport_catalog(
+        r#"Some((
+            construction_radius_tiles: 55,
+            logistic_radius_tiles: 25,
+            robot_slot_count: 6,
+            material_slot_count: 4,
+            charging_energy_buffer_joules: 100000000,
+            charging_pad_count: 0,
+            charging_pad_watts: 1200000,
+        ))"#,
+        "",
+    )
+    .expect_err("roboports require a charging pad");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRoboportMetadata { entity, .. } if entity == "roboport")
+    );
+}
+
+/// Builds an item-only catalog whose single item carries the given robot
+/// section, so each robot check differs only in the field it is about.
+fn robot_item_catalog(fields: &str) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "construction_robot", stack_size: 50, {fields})],
+            recipes: [],
+            entities: [],
+            tiles: [],
+        )"#
+    ))
+}
+
+const VALID_ROBOT: &str = r#"robot: Some((
+    speed_fixed_per_tick: 60,
+    energy_capacity_joules: 1500000,
+    flight_energy_usage_watts: 21000,
+))"#;
+
+#[test]
+fn valid_robot_item_loads() {
+    let catalog = robot_item_catalog(VALID_ROBOT).expect("robot item should load");
+    let robot = catalog.items[0]
+        .robot
+        .expect("robot metadata should survive loading");
+
+    assert_eq!(robot.speed_fixed_per_tick, 60);
+    assert_eq!(robot.energy_capacity_joules, 1_500_000);
+}
+
+#[test]
+fn robot_without_flight_energy_fails() {
+    let error = robot_item_catalog(
+        r#"robot: Some((
+            speed_fixed_per_tick: 60,
+            energy_capacity_joules: 1500000,
+            flight_energy_usage_watts: 0,
+        ))"#,
+    )
+    .expect_err("a robot that spends nothing to fly would never need a roboport");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRobotMetadata { item, .. } if item == "construction_robot")
+    );
+}
+
+/// The roboport's two inventories accept disjoint item sets derived from the
+/// item prototype, so an item claiming to be both a robot and repair material
+/// would be accepted by whichever half was tried first.
+#[test]
+fn robot_that_is_also_repair_material_fails() {
+    let error = robot_item_catalog(&format!(
+        "{VALID_ROBOT}, repair: Some((restore_health: 200))"
+    ))
+    .expect_err("a robot cannot double as repair material");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRobotMetadata { item, .. } if item == "construction_robot")
     );
 }
 

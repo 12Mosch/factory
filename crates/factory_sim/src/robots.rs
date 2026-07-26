@@ -19,13 +19,19 @@
 //!   [`RobotNetworkSnapshot`] is a summary for presentation, never the
 //!   authority on whether a tile is covered.
 //!
-//! Robots themselves are not modelled here yet. What exists is the static half:
-//! the roboports, their storage, their charging buffers, and the networks they
-//! form.
+//! The moving half lives here too. A robot is an item while it sits in a
+//! roboport's robot slots and a free-flying unit once dispatched, so
+//! [`RobotFlightSubsystem`] holds units that are deliberately outside
+//! `EntityStore`, `OccupancyGrid`, and `DenseEntityMap` — all three are
+//! tile-locked, and a robot is not. This mirrors how enemy units are stored:
+//! an ordered map keyed by a monotonic id, fixed-point positions at
+//! [`crate::simulation::POSITION_SCALE`], and no collision between units.
 
 use crate::ids::EntityId;
 use crate::inventory::Inventory;
+use crate::prototypes::ItemId;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Durable state of one roboport.
 ///
@@ -127,6 +133,149 @@ pub struct EntityRoboportStatus {
     pub logistic_bounds: TileBounds,
 }
 
+/// Identity of one flying robot, monotonic per world.
+///
+/// Separate from [`EntityId`] because robots are not placed entities: nothing
+/// occupies a tile, nothing is in the occupancy grid, and the id space must not
+/// be confused with the one entity states are keyed by.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct RobotId(u64);
+
+impl RobotId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+/// What a robot is doing this tick.
+///
+/// Charging is split into three states rather than one because a roboport has a
+/// fixed number of pads: arriving, waiting, and charging are distinguishable so
+/// a robot in a queue can be told apart from one actually drawing energy, and
+/// so the queue can be replayed deterministically after a save.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum RobotActivity {
+    /// Flying its errand, or flying home once the errand is done.
+    Flying,
+    /// Out of energy: flying to `roboport` to recharge before resuming.
+    SeekingCharge(EntityId),
+    /// Hovering over `roboport`, waiting for a charging pad to free up.
+    Queued(EntityId),
+    /// Occupying one of `roboport`'s charging pads.
+    Charging(EntityId),
+}
+
+impl RobotActivity {
+    /// Roboport this activity is bound to, if any.
+    pub const fn roboport(self) -> Option<EntityId> {
+        match self {
+            Self::Flying => None,
+            Self::SeekingCharge(entity_id)
+            | Self::Queued(entity_id)
+            | Self::Charging(entity_id) => Some(entity_id),
+        }
+    }
+}
+
+/// One robot in flight.
+///
+/// `item_id` is both the flight profile (speed, energy capacity, draw) and what
+/// the robot becomes again when it docks, so a robot never has stats of its own
+/// that could drift from the catalog.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct Robot {
+    pub id: RobotId,
+    pub item_id: ItemId,
+    /// Fixed-point position, 1024 units per tile.
+    pub x: i64,
+    pub y: i64,
+    pub energy_joules: u64,
+    /// Roboport this robot docks into when it is done. `None` only while the
+    /// world has no roboport left to adopt it.
+    pub home_roboport: Option<EntityId>,
+    /// Fixed-point errand target; `None` once the robot is on its way home.
+    pub errand: Option<(i64, i64)>,
+    pub activity: RobotActivity,
+}
+
+impl Robot {
+    pub fn position_tiles(&self) -> (f32, f32) {
+        (
+            self.x as f32 / crate::simulation::POSITION_SCALE as f32,
+            self.y as f32 / crate::simulation::POSITION_SCALE as f32,
+        )
+    }
+
+    pub fn tile(&self) -> (i64, i64) {
+        (
+            self.x.div_euclid(crate::simulation::POSITION_SCALE),
+            self.y.div_euclid(crate::simulation::POSITION_SCALE),
+        )
+    }
+}
+
+/// Charging occupancy of one roboport.
+///
+/// The pads are a set rather than a `Vec<Option<RobotId>>` because which pad a
+/// robot sits on carries no meaning; how many are taken does. `queue` is the
+/// order arrivals will be served in, and being a `VecDeque` is what makes that
+/// order survive a save rather than depending on iteration order.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RoboportChargingState {
+    pub charging: BTreeSet<RobotId>,
+    pub queue: VecDeque<RobotId>,
+}
+
+impl RoboportChargingState {
+    pub fn is_empty(&self) -> bool {
+        self.charging.is_empty() && self.queue.is_empty()
+    }
+}
+
+/// Every robot in flight, plus the charging occupancy of the roboports they use.
+///
+/// Iteration is over a `BTreeMap` keyed by [`RobotId`], so the per-tick pass
+/// visits robots in creation order on every machine and every replay.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RobotFlightSubsystem {
+    pub(crate) robots: BTreeMap<RobotId, Robot>,
+    pub(crate) next_robot_id: u64,
+    /// Keyed by roboport; entries exist only while a roboport has robots
+    /// charging or queued.
+    pub(crate) charging: BTreeMap<EntityId, RoboportChargingState>,
+}
+
+impl RobotFlightSubsystem {
+    pub fn len(&self) -> usize {
+        self.robots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.robots.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Robot> {
+        self.robots.values()
+    }
+
+    pub fn get(&self, id: RobotId) -> Option<&Robot> {
+        self.robots.get(&id)
+    }
+
+    pub fn charging_state(&self, roboport: EntityId) -> Option<&RoboportChargingState> {
+        self.charging.get(&roboport)
+    }
+
+    pub(crate) fn allocate_id(&mut self) -> RobotId {
+        self.next_robot_id += 1;
+        RobotId::new(self.next_robot_id)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoboportError {
     MissingEntity(EntityId),
@@ -144,6 +293,24 @@ pub enum RoboportError {
     },
     InsufficientSpace,
     UnknownItem,
+}
+
+/// Why a roboport could not send a robot out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RobotDispatchError {
+    MissingEntity(EntityId),
+    NotRoboport(EntityId),
+    /// The robot slots hold no robot to send.
+    NoRobotAvailable,
+    /// A robot is sent out fully charged, and the roboport's buffer does not
+    /// hold that much. Filling the buffer is the electric network's job, so
+    /// this is what an under-powered network looks like from the dispatch side.
+    InsufficientCharge {
+        required_joules: u64,
+        available_joules: u64,
+    },
+    /// The stored robot has no flight profile in the catalog.
+    InvalidRobot(ItemId),
 }
 
 #[cfg(test)]

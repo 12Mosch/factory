@@ -104,11 +104,13 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
 
 /// Whether an item is a robot a roboport can station.
 ///
-/// Robots do not exist yet, so this is always false and the robot slots stay
-/// empty. It is a named predicate rather than a bare `false` so the robot issue
-/// has exactly one place to fill in.
-fn item_is_robot(_catalog: &PrototypeCatalog, _item_id: ItemId) -> bool {
-    false
+/// The flight profile is what makes an item a robot, so this and the dispatch
+/// path read the same field: nothing can sit in the robot slots that could not
+/// be sent out.
+fn item_is_robot(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
+    catalog
+        .item(item_id)
+        .is_some_and(|item| item.robot.is_some())
 }
 
 /// Whether an item is construction material a roboport stocks, which today

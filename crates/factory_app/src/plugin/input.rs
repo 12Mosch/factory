@@ -11,6 +11,7 @@ use crate::input::panels::{
 };
 use crate::input::repair::update_repair_from_input;
 use crate::input::resources::AppInputState;
+use crate::input::robot_debug::dispatch_debug_robot_from_input;
 
 /// Input resources, panel-state collection, and the fixed-step systems that
 /// feed frame-collected input into the simulation.
@@ -40,6 +41,7 @@ impl Plugin for InputPlugin {
                     move_player_from_input,
                     update_manual_mining_from_input,
                     update_repair_from_input,
+                    dispatch_debug_robot_from_input,
                 )
                     .chain()
                     .in_set(AppSet::SimInput),

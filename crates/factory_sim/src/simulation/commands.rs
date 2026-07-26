@@ -175,6 +175,14 @@ pub enum SimCommand {
         output: Option<SignalId>,
         output_value: DeciderOutputValue,
     },
+    /// Debug errand: sends one stationed robot to a tile and back. Robots have
+    /// no jobs yet, so this is how the flight layer is exercised from outside
+    /// the simulation.
+    DispatchRobot {
+        roboport: EntityId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    },
     BuildRedScienceResearchFixture,
     BuildChemicalScienceFactoryFixture,
     /// Applies the chemical science fixture's pending recipe selections as
@@ -230,6 +238,7 @@ pub enum SimCommandError {
     Equipment(PlayerEquipmentError),
     TilePlacement(TilePlacementError),
     Circuit(CircuitError),
+    RobotDispatch(RobotDispatchError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -266,6 +275,7 @@ pub enum SimCommandEffect {
     CircuitWiresRemoved {
         removed: usize,
     },
+    RobotDispatched(RobotId),
 }
 
 impl Simulation {
@@ -586,6 +596,12 @@ impl Simulation {
                 )
                 .map_err(SimCommandError::Circuit)?;
                 Ok(SimCommandEffect::None)
+            }
+            SimCommand::DispatchRobot { roboport, x, y } => {
+                let robot_id = self
+                    .dispatch_robot(roboport, x, y)
+                    .map_err(SimCommandError::RobotDispatch)?;
+                Ok(SimCommandEffect::RobotDispatched(robot_id))
             }
             SimCommand::BuildRedScienceResearchFixture => {
                 self.build_red_science_research_fixture();

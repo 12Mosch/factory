@@ -92,6 +92,13 @@ pub(crate) fn roboport_color() -> Color {
     Color::srgb(0.46, 0.56, 0.44)
 }
 
+/// Robots in flight, drawn above everything else on the map. A bright, cool
+/// tint keeps a swarm legible against the warm roboport body and the terrain it
+/// flies over, and separates robots from the red of enemy units.
+pub(crate) fn robot_color() -> Color {
+    Color::srgb(0.62, 0.86, 1.0)
+}
+
 /// Coverage overlay fills. Construction and logistic areas are drawn together,
 /// so they are separated by hue rather than only by size: the construction
 /// square is the cool one a player scans for reach, the logistic square the warm

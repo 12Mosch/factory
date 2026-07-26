@@ -270,6 +270,11 @@ fn validate_roboport_metadata(
             if roboport.charging_energy_buffer_joules == 0 {
                 return invalid("roboport charging buffer must be positive");
             }
+            // Without a pad no robot could ever finish charging, and a pad that
+            // delivers nothing is the same stall by another route.
+            if roboport.charging_pad_count == 0 || roboport.charging_pad_watts == 0 {
+                return invalid("roboports require at least one charging pad with positive power");
+            }
             if entity
                 .electric_energy_source
                 .as_ref()
