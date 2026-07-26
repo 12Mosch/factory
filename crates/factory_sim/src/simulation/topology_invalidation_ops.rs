@@ -4,6 +4,10 @@ use super::*;
 pub(crate) struct EntityTopologyImpact {
     pub(crate) affects_power_topology: bool,
     pub(crate) affects_transport_lane_graph: bool,
+    /// Fluid and heat connectivity is edge-local and cheap to rebuild, so it is
+    /// invalidated unconditionally; robot networks are not, because only
+    /// roboports take part and a rebuild walks every one of them.
+    pub(crate) affects_robot_network: bool,
     pub(crate) refresh_module_machine: bool,
     pub(crate) beacon_effect_radius_tiles: Option<u16>,
 }
@@ -19,6 +23,7 @@ pub(crate) fn impact_for_prototype(
     EntityTopologyImpact {
         affects_power_topology: sim.prototype_affects_power_topology(prototype),
         affects_transport_lane_graph: sim.prototype_affects_transport_lane_graph(prototype),
+        affects_robot_network: sim.prototype_affects_robot_network(prototype),
         refresh_module_machine: prototype.module_slot_count > 0
             && prototype.entity_kind != EntityKind::Beacon,
         beacon_effect_radius_tiles: prototype.beacon.map(|beacon| beacon.effect_radius_tiles),
@@ -39,6 +44,9 @@ pub(crate) fn apply_entity_topology_change(
     }
     sim.invalidate_fluid_state();
     sim.invalidate_heat_state();
+    if impact.affects_robot_network {
+        sim.invalidate_robot_state();
+    }
     if impact.refresh_module_machine {
         sim.refresh_module_effects(entity_id);
     }

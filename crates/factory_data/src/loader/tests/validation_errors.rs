@@ -1014,6 +1014,136 @@ fn reactor_metadata_on_heat_exchanger_fails() {
     );
 }
 
+/// Builds a roboport catalog whose roboport section and energy source can be
+/// overridden, so each check below differs only in the field it is about.
+fn roboport_catalog(
+    roboport: &str,
+    extra_fields: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "roboport", stack_size: 5)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "roboport",
+                entity_kind: Roboport,
+                build_item: Some("roboport"),
+                building_category: Some(Logistics),
+                building_menu_order: Some(130),
+                size: (x: 4, y: 4),
+                collision_mask: (layers: ["building"]),
+                max_health: Some(500),
+                electric_energy_source: Some((energy_usage_watts: 50000, drain_watts: 3000)),
+                roboport: {roboport},
+                {extra_fields}
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+const VALID_ROBOPORT: &str = r#"Some((
+    construction_radius_tiles: 55,
+    logistic_radius_tiles: 25,
+    robot_slot_count: 6,
+    material_slot_count: 4,
+    charging_energy_buffer_joules: 100000000,
+))"#;
+
+#[test]
+fn valid_roboport_loads() {
+    let catalog = roboport_catalog(VALID_ROBOPORT, "").expect("roboport should load");
+    let roboport = catalog.entities[0]
+        .roboport
+        .expect("roboport metadata should survive loading");
+
+    assert_eq!(roboport.construction_radius_tiles, 55);
+    assert_eq!(roboport.logistic_radius_tiles, 25);
+}
+
+#[test]
+fn roboport_without_metadata_fails() {
+    let error = roboport_catalog("None", "").expect_err("roboports require roboport metadata");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRoboportMetadata { entity, .. } if entity == "roboport")
+    );
+}
+
+#[test]
+fn roboport_with_zero_radius_fails() {
+    let error = roboport_catalog(
+        r#"Some((
+            construction_radius_tiles: 55,
+            logistic_radius_tiles: 0,
+            robot_slot_count: 6,
+            material_slot_count: 4,
+            charging_energy_buffer_joules: 100000000,
+        ))"#,
+        "",
+    )
+    .expect_err("a roboport with no logistic radius could never join a network");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRoboportMetadata { entity, .. } if entity == "roboport")
+    );
+}
+
+#[test]
+fn roboport_without_slots_fails() {
+    let error = roboport_catalog(
+        r#"Some((
+            construction_radius_tiles: 55,
+            logistic_radius_tiles: 25,
+            robot_slot_count: 0,
+            material_slot_count: 4,
+            charging_energy_buffer_joules: 100000000,
+        ))"#,
+        "",
+    )
+    .expect_err("roboports require robot slots");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRoboportMetadata { entity, .. } if entity == "roboport")
+    );
+}
+
+/// A roboport that also declared a burner would have two answers for what
+/// powers robot charging.
+#[test]
+fn roboport_with_second_energy_source_fails() {
+    let error = roboport_catalog(VALID_ROBOPORT, "burner: Some((energy_usage_watts: 90000)),")
+        .expect_err("roboports run on electricity alone");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRoboportMetadata { entity, .. } if entity == "roboport")
+    );
+}
+
+#[test]
+fn roboport_metadata_on_other_kinds_fails() {
+    let error = PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "chest", stack_size: 50)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "chest",
+                entity_kind: Chest,
+                build_item: Some("chest"),
+                building_category: Some(Storage),
+                building_menu_order: Some(1),
+                size: (x: 1, y: 1),
+                collision_mask: (layers: ["building"]),
+                inventory_slot_count: Some(16),
+                roboport: {VALID_ROBOPORT},
+            )],
+            tiles: [],
+        )"#
+    ))
+    .expect_err("roboport metadata only valid on roboports");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRoboportMetadata { entity, .. } if entity == "chest")
+    );
+}
+
 #[test]
 fn radar_without_metadata_fails() {
     let error = PrototypeCatalog::from_ron_str(r#"(

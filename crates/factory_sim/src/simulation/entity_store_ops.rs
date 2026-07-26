@@ -185,6 +185,32 @@ impl EntityStore {
             .ok_or(NuclearReactorError::NotNuclearReactor(entity_id))
     }
 
+    pub(super) fn roboport_state(
+        &self,
+        entity_id: EntityId,
+    ) -> Result<&RoboportState, RoboportError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(RoboportError::MissingEntity(entity_id));
+        }
+
+        self.roboports
+            .get(&entity_id)
+            .ok_or(RoboportError::NotRoboport(entity_id))
+    }
+
+    pub(super) fn roboport_state_mut(
+        &mut self,
+        entity_id: EntityId,
+    ) -> Result<&mut RoboportState, RoboportError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(RoboportError::MissingEntity(entity_id));
+        }
+
+        self.roboports
+            .get_mut(&entity_id)
+            .ok_or(RoboportError::NotRoboport(entity_id))
+    }
+
     pub(super) fn fluid_box_states(&self, entity_id: EntityId) -> Option<&[FluidBoxState]> {
         self.fluid_boxes.get(&entity_id).map(Vec::as_slice)
     }

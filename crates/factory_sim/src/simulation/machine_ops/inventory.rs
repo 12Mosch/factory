@@ -13,6 +13,12 @@ pub(in crate::simulation) enum ItemSlotPolicy {
     AssemblerIngredient(EntityId),
     SciencePack,
     Ammunition,
+    /// A roboport's robot slots. No item declares robot metadata yet, so these
+    /// slots accept nothing; the robot issue turns this into a real predicate
+    /// rather than adding a new policy.
+    Robot,
+    /// A roboport's material slots, which hold repair packs.
+    RepairMaterial,
     OutputOnly,
 }
 
@@ -58,6 +64,8 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
             }
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
             ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
+            ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),
+            ItemSlotPolicy::RepairMaterial => item_is_repair_material(catalog, item_id),
             ItemSlotPolicy::OutputOnly => false,
         },
         ItemSlotOperation::MachineInsert => match policy {
@@ -88,8 +96,27 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
             }
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
             ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
+            ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),
+            ItemSlotPolicy::RepairMaterial => item_is_repair_material(catalog, item_id),
         },
     }
+}
+
+/// Whether an item is a robot a roboport can station.
+///
+/// Robots do not exist yet, so this is always false and the robot slots stay
+/// empty. It is a named predicate rather than a bare `false` so the robot issue
+/// has exactly one place to fill in.
+fn item_is_robot(_catalog: &PrototypeCatalog, _item_id: ItemId) -> bool {
+    false
+}
+
+/// Whether an item is construction material a roboport stocks, which today
+/// means anything that can repair.
+fn item_is_repair_material(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
+    catalog
+        .item(item_id)
+        .is_some_and(|item| item.repair.is_some())
 }
 
 pub(in crate::simulation) fn item_slot_policy_allows_operation(
@@ -98,6 +125,8 @@ pub(in crate::simulation) fn item_slot_policy_allows_operation(
 ) -> bool {
     match operation {
         ItemSlotOperation::PlayerExtract => true,
+        // Roboport contents are stocked, never harvested: an inserter that
+        // could pull robots back out would fight the network for them.
         ItemSlotOperation::InserterExtract => matches!(
             policy,
             ItemSlotPolicy::Unrestricted | ItemSlotPolicy::SciencePack | ItemSlotPolicy::OutputOnly

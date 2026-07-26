@@ -55,7 +55,24 @@ pub(in crate::simulation) fn reservation_for_prototype(
         nuclear_reactors: nuclear_reactor_state_for_prototype(prototype),
         heat_pipes: heat_pipe_state_for_prototype(prototype),
         heat_exchangers: heat_exchanger_state_for_prototype(prototype),
+        roboports: roboport_state_for_prototype(prototype),
     }
+}
+
+/// A fresh roboport starts empty and cold: no robots, no repair material, and
+/// an empty charging buffer it fills from the network over its first seconds.
+fn roboport_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<crate::robots::RoboportState> {
+    if prototype.entity_kind != EntityKind::Roboport {
+        return None;
+    }
+
+    let roboport = prototype.roboport?;
+    Some(crate::robots::RoboportState::new(
+        roboport.robot_slot_count,
+        roboport.material_slot_count,
+    ))
 }
 
 /// Every heat network participant starts at ambient temperature, which is zero

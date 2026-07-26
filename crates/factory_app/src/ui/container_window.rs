@@ -18,6 +18,7 @@ use crate::ui::inventory_panel::{
 use crate::ui::machine_indicators::{
     spawn_boiler_panel, spawn_furnace_panel, spawn_heat_buffer_panel, spawn_inserter_panel,
     spawn_machine_guidance, spawn_mining_drill_panel, spawn_nuclear_reactor_panel,
+    spawn_roboport_panel,
 };
 use crate::ui::module_panel::{module_slot_count, spawn_module_panel};
 use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
@@ -119,6 +120,7 @@ fn spawn_container_window_contents(
                 spawn_nuclear_reactor_panel(machine_panel, sim, entity_id);
             }
             OpenMachineKind::HeatBuffer => spawn_heat_buffer_panel(machine_panel, sim, entity_id),
+            OpenMachineKind::Roboport => spawn_roboport_panel(machine_panel, sim, entity_id),
             OpenMachineKind::Inserter => spawn_inserter_panel(machine_panel),
             OpenMachineKind::Beacon => {
                 machine_panel.spawn((
@@ -222,6 +224,8 @@ fn machine_panel_width(kind: OpenMachineKind) -> f32 {
         | OpenMachineKind::Lab
         | OpenMachineKind::Turret
         | OpenMachineKind::Beacon => 260.0,
+        // The roboport shows two slot grids side by side under its readouts.
+        OpenMachineKind::Roboport => 280.0,
         OpenMachineKind::MiningDrill
         | OpenMachineKind::Furnace
         | OpenMachineKind::Boiler

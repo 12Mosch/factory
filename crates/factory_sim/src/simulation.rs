@@ -94,6 +94,9 @@ pub use crate::radar::RadarState;
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
+pub use crate::robots::{
+    EntityRoboportStatus, RoboportError, RoboportState, RobotNetworkSnapshot, TileBounds,
+};
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
     TerrainMutationError, TerrainTileChange, TileCell, TileCollision, WorldSim, WorldTileCoord,
@@ -203,6 +206,7 @@ pub struct Simulation {
     power_tick_scratch: power_ops::PowerTickScratch,
     fluids: FluidSubsystem,
     heat: HeatSubsystem,
+    robots: RobotSubsystem,
     #[serde(skip)]
     circuits: CircuitSubsystem,
     statistics: StatisticsSubsystem,
@@ -663,6 +667,12 @@ pub enum SimValidationError {
     InvalidHeatNetwork {
         network_id: u32,
     },
+    InvalidRoboportState {
+        entity_id: EntityId,
+    },
+    InvalidRobotNetwork {
+        network_id: u32,
+    },
     /// A stored signal does not exist in the catalog.
     InvalidCircuitSignal {
         entity_id: EntityId,
@@ -823,6 +833,8 @@ mod power_state;
 mod profiling;
 mod radar_ops;
 mod research_ops;
+mod robot_ops;
+mod robot_state;
 mod save;
 mod scripted;
 mod statistics_ops;
@@ -854,6 +866,7 @@ use self::machine_ops::*;
 use self::power_state::{PowerDemandCache, PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
 pub use self::profiling::{SimulationCounts, SimulationTickProfile};
+use self::robot_state::RobotSubsystem;
 pub use self::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo, SaveLoadError,
     inspect_save_header, load_from_bytes, prototype_hash, save_to_bytes,

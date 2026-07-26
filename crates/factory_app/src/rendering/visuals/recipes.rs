@@ -69,6 +69,7 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::SolarPanel => solar_panel_layers(&mut builder, style),
         EntityKind::Accumulator => accumulator_layers(&mut builder, style),
         EntityKind::Radar => radar_layers(&mut builder, style),
+        EntityKind::Roboport => roboport_layers(&mut builder, style),
         EntityKind::ConstantCombinator
         | EntityKind::ArithmeticCombinator
         | EntityKind::DeciderCombinator => combinator_layers(&mut builder, style),
@@ -317,6 +318,46 @@ fn beacon_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
             0.15,
             Color::srgba(0.88, 0.98, 1.0, 0.98),
         );
+}
+
+/// A landing pad ringed by four robot docks: the shape reads as somewhere
+/// robots leave from, which is what distinguishes a roboport from the other
+/// large square buildings at a glance.
+fn roboport_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
+    builder
+        .scaled_rounded(
+            Vec2::splat(0.86),
+            Vec2::ZERO,
+            0.09,
+            tinted(style.base_color, -0.12),
+            0.16,
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.50),
+            Vec2::ZERO,
+            0.12,
+            Color::srgba(0.16, 0.20, 0.18, 0.92),
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.30),
+            Vec2::ZERO,
+            0.15,
+            Color::srgba(0.86, 0.92, 0.84, 0.90),
+        );
+    for corner in [
+        Vec2::new(-0.30, -0.30),
+        Vec2::new(0.30, -0.30),
+        Vec2::new(-0.30, 0.30),
+        Vec2::new(0.30, 0.30),
+    ] {
+        builder.scaled_rounded(
+            Vec2::splat(0.20),
+            corner,
+            0.14,
+            Color::srgba(0.94, 0.78, 0.32, 0.92),
+            0.35,
+        );
+    }
 }
 
 fn inserter_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {

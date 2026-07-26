@@ -86,6 +86,32 @@ pub(crate) fn radar_color() -> Color {
     Color::srgb(0.16, 0.58, 0.26)
 }
 
+/// Roboports take the logistics family's warm grey-green, distinct from the
+/// belt yellows so a roboport reads as infrastructure rather than throughput.
+pub(crate) fn roboport_color() -> Color {
+    Color::srgb(0.46, 0.56, 0.44)
+}
+
+/// Coverage overlay fills. Construction and logistic areas are drawn together,
+/// so they are separated by hue rather than only by size: the construction
+/// square is the cool one a player scans for reach, the logistic square the warm
+/// one that shows where the next roboport must land to join the network.
+pub(crate) fn construction_coverage_color() -> Color {
+    Color::srgba(0.42, 0.68, 0.96, 0.10)
+}
+
+pub(crate) fn construction_coverage_border_color() -> Color {
+    Color::srgba(0.55, 0.78, 1.0, 0.55)
+}
+
+pub(crate) fn logistic_coverage_color() -> Color {
+    Color::srgba(0.96, 0.74, 0.32, 0.12)
+}
+
+pub(crate) fn logistic_coverage_border_color() -> Color {
+    Color::srgba(1.0, 0.82, 0.40, 0.62)
+}
+
 pub(crate) fn constant_combinator_color() -> Color {
     Color::srgb(0.28, 0.40, 0.52)
 }

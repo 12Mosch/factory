@@ -28,6 +28,7 @@ pub(super) fn load_entities(
             validate_solar_and_storage_metadata(&entity.name, &entity)?;
             validate_radar_metadata(&entity.name, &entity)?;
             validate_circuit_metadata(&entity.name, &entity)?;
+            validate_roboport_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
                     entity: entity.name,
@@ -142,6 +143,7 @@ pub(super) fn load_entities(
                 heat_buffer,
                 heat_energy_source: entity.heat_energy_source,
                 nuclear_reactor: entity.nuclear_reactor,
+                roboport: entity.roboport,
                 max_health: entity.max_health,
                 pollution_per_minute_milli: entity.pollution_per_minute_milli,
                 gun_turret: entity.gun_turret,
@@ -235,6 +237,69 @@ fn validate_circuit_metadata(
     }
     if entity.entity_kind == EntityKind::Lamp && !connector.controllable {
         return invalid("lamps require a controllable circuit connector");
+    }
+
+    Ok(())
+}
+
+/// A roboport is a powered building whose whole purpose is its two coverage
+/// radii and its robot storage, so every one of those has to be present and
+/// positive. It also runs on electricity alone: any other energy source would
+/// leave two competing answers for what powers robot charging.
+fn validate_roboport_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRoboportMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    match (entity.entity_kind, entity.roboport) {
+        (EntityKind::Roboport, Some(roboport)) => {
+            if roboport.construction_radius_tiles == 0 || roboport.logistic_radius_tiles == 0 {
+                return invalid("construction and logistic radii must be positive");
+            }
+            if roboport.robot_slot_count == 0 || roboport.material_slot_count == 0 {
+                return invalid("roboports require robot and material slots");
+            }
+            if roboport.charging_energy_buffer_joules == 0 {
+                return invalid("roboport charging buffer must be positive");
+            }
+            if entity
+                .electric_energy_source
+                .as_ref()
+                .is_none_or(|source| source.energy_usage_watts == 0 || source.drain_watts == 0)
+            {
+                return invalid(
+                    "roboports require an electric energy source with positive charging power and idle drain",
+                );
+            }
+            if entity.burner.is_some()
+                || entity.heat_energy_source.is_some()
+                || entity.heat_buffer.is_some()
+                || !entity.fluid_boxes.is_empty()
+            {
+                return invalid("roboports run on electricity alone");
+            }
+            // The robot and material slots are the roboport's inventory; a
+            // second, unfiltered one would let it double as a chest.
+            if entity.inventory_slot_count.is_some() {
+                return invalid("roboports use their robot and material slots, not an inventory");
+            }
+            if entity.max_health.is_none_or(|health| health == 0) {
+                return invalid("roboports require positive maximum health");
+            }
+        }
+        (EntityKind::Roboport, None) => {
+            return invalid("roboport entities require roboport metadata");
+        }
+        (_, Some(_)) => return invalid("roboport metadata is only valid on roboport entities"),
+        (_, None) => {}
     }
 
     Ok(())

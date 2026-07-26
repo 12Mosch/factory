@@ -268,6 +268,9 @@ pub struct EntityPrototype {
     /// Present when the entity works off heat drawn from its own heat buffer.
     pub heat_energy_source: Option<HeatEnergySourcePrototype>,
     pub nuclear_reactor: Option<NuclearReactorPrototype>,
+    /// Present on entities that anchor a robot network; see
+    /// [`RoboportPrototype`].
+    pub roboport: Option<RoboportPrototype>,
     /// Present when the entity can take damage and be destroyed.
     pub max_health: Option<u32>,
     /// Pollution emitted into the entity's chunk while it is actively
@@ -468,6 +471,62 @@ pub struct HeatEnergySourcePrototype {
 pub struct NuclearReactorPrototype {
     pub heat_output_watts: u64,
     pub neighbour_bonus_permyriad: u32,
+}
+
+/// Anchor of a robot network: a powered building that covers a square of the
+/// world and merges with its neighbours into one network.
+///
+/// The two radii are half-widths measured from the roboport's footprint center,
+/// so a radius of `r` covers a `(2r + 1)`-tile square (see
+/// [`roboport_coverage_bounds`]). They serve different purposes and are
+/// deliberately independent:
+///
+/// * `logistic_radius_tiles` is the **connection** rule. Two roboports whose
+///   logistic squares overlap belong to the same network, which is what lets a
+///   player grow one network by placing roboports within reach of each other.
+/// * `construction_radius_tiles` is the **coverage** rule. Construction
+///   coverage is the union of the member squares, not one network-wide
+///   rectangle, so an L-shaped chain of roboports covers an L, not its bounding
+///   box.
+///
+/// `charging_energy_buffer_joules` is the internal buffer a roboport fills from
+/// its electric network. Robots charge from that buffer rather than from the
+/// network directly, so a roboport draws a steady refill instead of spiking the
+/// network every time a robot docks.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RoboportPrototype {
+    pub construction_radius_tiles: u16,
+    pub logistic_radius_tiles: u16,
+    /// Slots holding the network's robots.
+    pub robot_slot_count: usize,
+    /// Slots holding repair packs and other construction material.
+    pub material_slot_count: usize,
+    pub charging_energy_buffer_joules: u64,
+}
+
+/// Inclusive tile bounds of the square a roboport radius covers, centered on
+/// `footprint`.
+///
+/// Shared by the network builder, the coverage queries, and the presentation
+/// overlay so all three agree on exactly which tiles a roboport reaches. The
+/// center is the footprint's lower-left-of-center tile for even sizes, matching
+/// [`ElectricPolePrototype::supply_area_tiles`] placement.
+pub fn roboport_coverage_bounds(
+    footprint_x: i64,
+    footprint_y: i64,
+    footprint_width: i32,
+    footprint_height: i32,
+    radius_tiles: u16,
+) -> (i64, i64, i64, i64) {
+    let radius = i64::from(radius_tiles);
+    let center_x = footprint_x + i64::from((footprint_width.max(1) - 1) / 2);
+    let center_y = footprint_y + i64::from((footprint_height.max(1) - 1) / 2);
+    (
+        center_x - radius,
+        center_y - radius,
+        center_x + radius,
+        center_y + radius,
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -708,6 +767,9 @@ pub enum EntityKind {
     /// Boils water into steam using heat instead of burnt fuel, so it reuses
     /// [`BoilerPrototype`] with a [`HeatEnergySourcePrototype`].
     HeatExchanger,
+    /// Anchors a robot network and covers a square of the world; see
+    /// [`RoboportPrototype`].
+    Roboport,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

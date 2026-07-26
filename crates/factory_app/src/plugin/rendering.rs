@@ -25,6 +25,9 @@ use crate::rendering::resource_cells::{
 use crate::rendering::resources::{
     BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds, WorldRenderCache,
 };
+use crate::rendering::robot_coverage::{
+    RoboportCoverageRenderState, sync_roboport_coverage_rendering,
+};
 use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
 
@@ -46,6 +49,7 @@ impl Plugin for RenderingPlugin {
             .init_resource::<WorldRenderCache>()
             .init_resource::<BeltItemRenderPool>()
             .init_resource::<CircuitWireRenderState>()
+            .init_resource::<RoboportCoverageRenderState>()
             .add_systems(
                 Startup,
                 (
@@ -85,6 +89,7 @@ impl Plugin for RenderingPlugin {
                     measured_sync_belt_direction_rendering,
                     measured_sync_belt_item_rendering,
                     sync_circuit_wire_rendering,
+                    sync_roboport_coverage_rendering,
                 )
                     .chain()
                     .in_set(AppSet::RenderSync),

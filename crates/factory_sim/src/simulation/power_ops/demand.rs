@@ -128,10 +128,14 @@ fn consumer_demand_is_active(
     world: &WorldSim,
     entity_id: EntityId,
 ) -> bool {
+    // Roboports are re-evaluated every tick because their demand tracks a
+    // charging buffer that the robot pass fills without touching the consumer,
+    // so nothing else would ever mark them dirty.
     if entities.radars.contains_key(&entity_id)
         || entities.inserters.contains_key(&entity_id)
         || entities.mining_drills.contains_key(&entity_id)
         || entities.pumpjacks.contains_key(&entity_id)
+        || entities.roboports.contains_key(&entity_id)
     {
         return true;
     }
@@ -216,6 +220,9 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
     }
     if entities.pumpjacks.contains_key(&entity_id) {
         return pumpjack_can_work(catalog, entities, entity_id);
+    }
+    if entities.roboports.contains_key(&entity_id) {
+        return crate::simulation::robot_ops::roboport_is_charging(catalog, entities, entity_id);
     }
     if entities
         .placed_entity(entity_id)

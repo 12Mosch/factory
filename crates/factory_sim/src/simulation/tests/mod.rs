@@ -23,6 +23,7 @@ mod player;
 mod power;
 mod radar;
 mod research;
+mod robots;
 mod solar;
 mod statistics;
 mod terrain;
