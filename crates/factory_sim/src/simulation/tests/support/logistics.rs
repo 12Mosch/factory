@@ -76,6 +76,31 @@ pub(in crate::simulation::tests) fn place_covered_chest(
     place_at(sim, prototype_id, x, y, Direction::North)
 }
 
+/// Places a chest on the first buildable tile no roboport reaches.
+pub(in crate::simulation::tests) fn place_uncovered_chest(
+    sim: &mut Simulation,
+    chest_name: &str,
+) -> EntityId {
+    let prototype_id = entity_id_by_name(&sim.world.prototypes, chest_name);
+    let (x, y) = all_tile_coords(&sim.world)
+        .into_iter()
+        .find(|(x, y)| {
+            sim.logistic_network_covering_tile(*x, *y).is_none()
+                && crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id,
+                        x: *x,
+                        y: *y,
+                        direction: Direction::North,
+                    },
+                )
+                .is_ok()
+        })
+        .expect("the generated world is larger than one roboport's reach");
+    place_at(sim, prototype_id, x, y, Direction::North)
+}
+
 pub(in crate::simulation::tests) fn insert_into_chest(
     sim: &mut Simulation,
     chest: EntityId,

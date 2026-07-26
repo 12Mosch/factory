@@ -9,7 +9,7 @@
 
 use crate::robots::{Robot, RobotActivity, RobotId};
 use crate::simulation::*;
-use factory_data::RobotKind;
+use factory_data::{RobotKind, RobotPrototype};
 
 use super::flight::{footprint_center_fixed, squared_distance};
 
@@ -40,15 +40,9 @@ pub(super) fn dispatching_roboport(
         let Some(state) = sim.entities.roboports.get(entity_id) else {
             continue;
         };
-        let Some(item_id) = stationed_robot_of_kind(sim, state, kind) else {
+        let Some((item_id, profile)) = stationed_robot_of_kind(sim, state, kind) else {
             continue;
         };
-        let profile = sim
-            .world
-            .prototypes
-            .item(item_id)
-            .and_then(|item| item.robot)
-            .expect("a stationed robot item has a flight profile");
         if state.charge_energy_joules < profile.energy_capacity_joules {
             continue;
         }
@@ -85,35 +79,35 @@ pub(super) fn network_can_dispatch(
     kind: RobotKind,
 ) -> bool {
     member_ids.iter().any(|entity_id| {
-        sim.entities
-            .roboports
-            .get(entity_id)
-            .and_then(|state| {
-                let item_id = stationed_robot_of_kind(sim, state, kind)?;
-                let profile = sim.world.prototypes.item(item_id)?.robot?;
-                Some(state.charge_energy_joules >= profile.energy_capacity_joules)
-            })
-            .unwrap_or(false)
+        let Some(state) = sim.entities.roboports.get(entity_id) else {
+            return false;
+        };
+        stationed_robot_of_kind(sim, state, kind).is_some_and(|(_, profile)| {
+            state.charge_energy_joules >= profile.energy_capacity_joules
+        })
     })
 }
 
+/// First robot of `kind` in the roboport's slots, with the flight profile that
+/// made it one.
+///
+/// The profile travels back with the item because finding the robot already
+/// resolved it: looking it up a second time at the call site would be the same
+/// work done twice, and would need an `expect` to restate what this function
+/// just proved.
 fn stationed_robot_of_kind(
     sim: &Simulation,
     state: &RoboportState,
     kind: RobotKind,
-) -> Option<ItemId> {
+) -> Option<(ItemId, RobotPrototype)> {
     state
         .robots
         .slots()
         .iter()
         .filter_map(|slot| slot.stack())
-        .map(|stack| stack.item_id())
-        .find(|item_id| {
-            sim.world
-                .prototypes
-                .item(*item_id)
-                .and_then(|item| item.robot)
-                .is_some_and(|robot| robot.kind == kind)
+        .find_map(|stack| {
+            let profile = sim.world.prototypes.item(stack.item_id())?.robot?;
+            (profile.kind == kind).then_some((stack.item_id(), profile))
         })
 }
 

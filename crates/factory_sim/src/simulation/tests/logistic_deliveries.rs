@@ -339,24 +339,7 @@ fn an_uncovered_requester_is_never_served() {
     let provider = place_covered_chest(&mut sim, "passive_provider_chest", origin);
     insert_into_chest(&mut sim, provider, iron, 100);
 
-    let requester_prototype = entity_id_by_name(&sim.world.prototypes, "requester_chest");
-    let (x, y) = all_tile_coords(&sim.world)
-        .into_iter()
-        .find(|(x, y)| {
-            sim.logistic_network_covering_tile(*x, *y).is_none()
-                && crate::placement::validate(
-                    &sim,
-                    crate::placement::EntityPlacementRequest {
-                        prototype_id: requester_prototype,
-                        x: *x,
-                        y: *y,
-                        direction: Direction::North,
-                    },
-                )
-                .is_ok()
-        })
-        .expect("the generated world is larger than one roboport's reach");
-    let requester = place_at(&mut sim, requester_prototype, x, y, Direction::North);
+    let requester = place_uncovered_chest(&mut sim, "requester_chest");
     request_items(&mut sim, requester, iron, 100);
 
     tick_validated(&mut sim, 200);

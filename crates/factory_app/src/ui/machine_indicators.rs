@@ -38,8 +38,8 @@ pub(crate) enum RoboportReadout {
     Jobs,
     /// Everything the network's logistic chests hold.
     NetworkContents,
-    /// Requests the network has not been able to fill, which is the first thing
-    /// to look at when a requester chest stays empty.
+    /// Requests still short of their target, which is the first thing to look
+    /// at when a requester chest stays empty.
     UnsatisfiedRequests,
 }
 
@@ -591,12 +591,18 @@ enum NetworkItemReport {
     UnsatisfiedRequests,
 }
 
-/// Items a network holds, or the requests it has not filled.
+/// Items a network holds, or the requests it has not filled yet.
+///
+/// A request stays listed until the items are actually in the chest, whether or
+/// not a robot is already carrying them there — which is why the heading is
+/// "open" rather than "unsatisfied": the shortfall is what the chest still
+/// lacks, not a claim that nothing is being done about it. The delivering count
+/// on the logistic robot line above is where work in progress shows.
 ///
 /// Both lists are cut off at [`NETWORK_ITEM_LINE_LIMIT`] entries, ordered by
 /// amount so the cut always drops the least interesting ones: a network with
-/// four hundred distinct items would otherwise turn the panel into a wall of
-/// text nobody reads.
+/// a hundred distinct items would otherwise turn the panel into a wall of text
+/// nobody reads.
 fn format_network_items(
     sim: Option<&factory_sim::Simulation>,
     status: Option<factory_sim::EntityRoboportStatus>,
@@ -604,7 +610,7 @@ fn format_network_items(
 ) -> String {
     let heading = match report {
         NetworkItemReport::Contents => "Network contents",
-        NetworkItemReport::UnsatisfiedRequests => "Unsatisfied requests",
+        NetworkItemReport::UnsatisfiedRequests => "Open requests",
     };
     let Some((sim, network_id)) = sim.zip(status.and_then(|status| status.network_id)) else {
         return format!("{heading}: -");
