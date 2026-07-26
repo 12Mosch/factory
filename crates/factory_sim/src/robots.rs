@@ -115,7 +115,11 @@ pub struct RobotNetworkSnapshot {
     pub charge_capacity_joules: u64,
     pub available_construction_robots: u32,
     pub total_construction_robots: u32,
+    pub available_logistic_robots: u32,
+    pub total_logistic_robots: u32,
     pub jobs: RobotNetworkJobCounts,
+    /// Deliveries robots of this network are currently flying.
+    pub active_deliveries: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -197,7 +201,10 @@ pub struct EntityRoboportStatus {
     pub logistic_bounds: TileBounds,
     pub available_construction_robots: u32,
     pub total_construction_robots: u32,
+    pub available_logistic_robots: u32,
+    pub total_logistic_robots: u32,
     pub jobs: RobotNetworkJobCounts,
+    pub active_deliveries: u32,
 }
 
 /// Identity of one flying robot, monotonic per world.
@@ -248,6 +255,41 @@ impl RobotActivity {
     }
 }
 
+/// Which half of a delivery a robot is flying.
+///
+/// The two legs are distinguishable rather than derived from an empty cargo
+/// hold because a robot that picked up less than it was promised is still on
+/// the drop-off leg, and one that arrived at a source which had been emptied is
+/// not.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum LogisticDeliveryStage {
+    /// Flying to `source` to collect the items.
+    Pickup,
+    /// Carrying the items to `destination`.
+    Dropoff,
+}
+
+/// One item movement a logistic robot exclusively owns.
+///
+/// A delivery is created at dispatch rather than queued: unlike construction
+/// work, which exists because a player marked something and waits for a robot,
+/// a delivery only means anything while a robot is flying it. That is what lets
+/// the reservations the matcher needs — items promised out of one chest and
+/// into another — be read straight off the robots in flight instead of being a
+/// second ledger that could drift from them.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct LogisticDelivery {
+    pub item_id: ItemId,
+    /// Chest the items are collected from. Meaningless once the robot is on the
+    /// drop-off leg, and kept only so diagnostics can name it.
+    pub source: EntityId,
+    pub destination: EntityId,
+    /// Items still promised: the amount to collect on the pickup leg, and the
+    /// amount actually collected on the drop-off leg.
+    pub count: u16,
+    pub stage: LogisticDeliveryStage,
+}
+
 /// One robot in flight.
 ///
 /// `item_id` is both the flight profile (speed, energy capacity, draw) and what
@@ -270,6 +312,10 @@ pub struct Robot {
     /// Construction work this robot exclusively owns. Jobless robots retain
     /// the public debug errand behavior.
     pub construction_job: Option<ConstructionJob>,
+    /// Item movement this robot exclusively owns. Mutually exclusive with
+    /// `construction_job`: the two dispatchers draw from disjoint robot kinds,
+    /// so no robot can ever hold both.
+    pub delivery: Option<LogisticDelivery>,
     /// Reserved build item or repair pack. It remains separate from recovered
     /// cargo so validation can enforce the job-specific payload contract.
     pub payload: Option<ItemStack>,

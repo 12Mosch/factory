@@ -588,9 +588,10 @@ impl LogisticChestMode {
 /// unit with this profile, and docking turns it back into the same item.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RobotPrototype {
-    /// Role this robot can perform. Construction dispatch only considers
-    /// construction robots, leaving room for logistic robots to share the
-    /// stationing and flight machinery without claiming construction work.
+    /// Role this robot can perform. The two kinds share the stationing,
+    /// flight, energy, and charging machinery and differ only in which
+    /// dispatcher may claim them: construction jobs never take a logistic
+    /// robot, and deliveries never take a construction one.
     pub kind: RobotKind,
     /// Flight speed in fixed-point position units per tick (1024 = one tile per
     /// tick), the same convention [`UnitPrototype::speed_fixed_per_tick`] uses.
@@ -604,7 +605,13 @@ pub struct RobotPrototype {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum RobotKind {
+    /// Builds ghosts, deconstructs marked entities, and repairs damage. Draws
+    /// its payload from the roboport material slots.
     Construction,
+    /// Moves items between the logistic chests its network covers. Carries at
+    /// most one stack per trip, which is what makes stack size the throughput
+    /// knob rather than a separate cargo number on this prototype.
+    Logistic,
 }
 
 /// Inclusive tile bounds of the square a roboport radius covers, centered on

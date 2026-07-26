@@ -107,6 +107,14 @@ pub(crate) fn robot_color() -> Color {
     Color::srgb(0.62, 0.86, 1.0)
 }
 
+/// Logistic robots, which fly the same sky as construction robots and do
+/// something entirely different in it. They take the warm hue of the logistic
+/// coverage square rather than a third arbitrary color, so "warm means
+/// logistics" holds for the overlay and the swarm alike.
+pub(crate) fn logistic_robot_color() -> Color {
+    Color::srgb(1.0, 0.80, 0.42)
+}
+
 /// Coverage overlay fills. Construction and logistic areas are drawn together,
 /// so they are separated by hue rather than only by size: the construction
 /// square is the cool one a player scans for reach, the logistic square the warm

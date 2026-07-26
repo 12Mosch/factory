@@ -290,6 +290,23 @@
         (id: 107, name: "storage_chest", stack_size: 50),
         (id: 108, name: "buffer_chest", stack_size: 50),
         (id: 109, name: "requester_chest", stack_size: 50),
+        // A logistic robot flies the same profile as a construction robot but
+        // carries a stack of items instead of a build payload. It is faster and
+        // thirstier: a delivery is a round trip between two chests, so the
+        // interesting number is trips per minute rather than range, and the
+        // larger draw is what makes a busy logistic network a real load on the
+        // roboports charging it.
+        (
+            id: 110,
+            name: "logistic_robot",
+            stack_size: 50,
+            robot: Some((
+                kind: Logistic,
+                speed_fixed_per_tick: 80,
+                energy_capacity_joules: 1500000,
+                flight_energy_usage_watts: 30000,
+            )),
+        ),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1520,6 +1537,19 @@
                 (item: "advanced_circuit", amount: 2),
             ],
             products: [(item: "requester_chest", amount: 1)],
+        ),
+        // Same frame as a construction robot, with the circuitry that lets it
+        // reason about a network's item index rather than about one job.
+        (
+            id: 108,
+            name: "logistic_robot",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "flying_robot_frame", amount: 1),
+                (item: "advanced_circuit", amount: 2),
+            ],
+            products: [(item: "logistic_robot", amount: 1)],
         ),
     ],
     entities: [
@@ -3537,7 +3567,9 @@
             ],
         ),
         // The chests are useless without a network to put them in, so this
-        // follows robotics rather than standing beside it.
+        // follows robotics rather than standing beside it. The logistic robot
+        // unlocks here rather than with robotics for the same reason from the
+        // other side: it has nothing to carry until the chests exist.
         (
             id: 41,
             name: "logistic_system",
@@ -3557,6 +3589,7 @@
                 UnlockRecipe("storage_chest"),
                 UnlockRecipe("buffer_chest"),
                 UnlockRecipe("requester_chest"),
+                UnlockRecipe("logistic_robot"),
             ],
         ),
     ],

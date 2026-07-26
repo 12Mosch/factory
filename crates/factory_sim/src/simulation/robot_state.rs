@@ -1,6 +1,8 @@
 use super::*;
 use crate::construction::ConstructionJob;
-use crate::simulation::robot_ops::{LogisticIndex, RobotNetworkTopology};
+use crate::simulation::robot_ops::{
+    DemandPriority, LogisticIndex, LogisticReservations, RobotNetworkTopology,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
@@ -35,11 +37,25 @@ pub(super) struct RobotSubsystem {
     /// [`crate::simulation::robot_ops::LogisticIndex`].
     #[serde(skip, default)]
     pub(super) logistic: LogisticIndex,
+    /// Items the robots in flight have promised to move, rebuilt from those
+    /// robots at the start of every delivery pass. See
+    /// [`crate::simulation::robot_ops::LogisticReservations`].
+    #[serde(skip, default)]
+    pub(super) delivery_reservations: LogisticReservations,
     /// Reused by the per-tick charging pass to iterate roboport ids while the
     /// loop body holds a mutable borrow of the entity store. Retaining the
     /// allocation keeps the pass allocation-free once the world is warm.
     #[serde(skip, default)]
     pub(super) charging_scratch: Vec<EntityId>,
+    /// Scratch for the delivery pass, kept here for the same reason: matching
+    /// reads the index while dispatch mutates the store, so the candidates have
+    /// to be copied out first, and a warm world should not allocate to do it.
+    #[serde(skip, default)]
+    pub(super) delivery_member_scratch: Vec<EntityId>,
+    #[serde(skip, default)]
+    pub(super) delivery_demand_scratch: Vec<(DemandPriority, ItemId, EntityId)>,
+    #[serde(skip, default)]
+    pub(super) delivery_surplus_scratch: Vec<(ItemId, EntityId)>,
     #[cfg(test)]
     #[serde(skip, default)]
     pub(super) topology_rebuilds: u64,
@@ -56,7 +72,11 @@ impl Default for RobotSubsystem {
             job_counts_by_network: Vec::new(),
             job_networks: BTreeMap::new(),
             logistic: LogisticIndex::default(),
+            delivery_reservations: LogisticReservations::default(),
             charging_scratch: Vec::new(),
+            delivery_member_scratch: Vec::new(),
+            delivery_demand_scratch: Vec::new(),
+            delivery_surplus_scratch: Vec::new(),
             #[cfg(test)]
             topology_rebuilds: 0,
         }

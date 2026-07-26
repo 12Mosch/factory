@@ -153,7 +153,11 @@ impl Simulation {
                 .map_or(0, |network| network.available_construction_robots),
             total_construction_robots: network
                 .map_or(0, |network| network.total_construction_robots),
+            available_logistic_robots: network
+                .map_or(0, |network| network.available_logistic_robots),
+            total_logistic_robots: network.map_or(0, |network| network.total_logistic_robots),
             jobs: network.map_or_else(Default::default, |network| network.jobs),
+            active_deliveries: network.map_or(0, |network| network.active_deliveries),
         })
     }
 
@@ -181,17 +185,35 @@ impl Simulation {
     pub(in crate::simulation) fn refresh_robot_network_work_counts(&mut self) {
         let counts = robot_network_cached_work_counts(self);
 
-        for (snapshot, (available, total, jobs)) in self.robots.networks.iter_mut().zip(counts) {
-            snapshot.available_construction_robots = available;
-            snapshot.total_construction_robots = total;
-            snapshot.jobs = jobs;
+        for (snapshot, counts) in self.robots.networks.iter_mut().zip(counts) {
+            snapshot.available_construction_robots = counts.available_construction_robots;
+            snapshot.total_construction_robots = counts.total_construction_robots;
+            snapshot.available_logistic_robots = counts.available_logistic_robots;
+            snapshot.total_logistic_robots = counts.total_logistic_robots;
+            snapshot.jobs = counts.jobs;
+            snapshot.active_deliveries = counts.active_deliveries;
         }
     }
 }
 
+/// What one network's robots are doing, as the durable snapshot reports it.
+///
+/// "Available" counts robots stationed in the network's roboports and "total"
+/// adds the ones it currently has in the air, so the pair reads as "idle of
+/// owned" rather than as two unrelated numbers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::simulation) struct RobotNetworkWorkCounts {
+    pub(in crate::simulation) available_construction_robots: u32,
+    pub(in crate::simulation) total_construction_robots: u32,
+    pub(in crate::simulation) available_logistic_robots: u32,
+    pub(in crate::simulation) total_logistic_robots: u32,
+    pub(in crate::simulation) jobs: crate::robots::RobotNetworkJobCounts,
+    pub(in crate::simulation) active_deliveries: u32,
+}
+
 pub(in crate::simulation) fn robot_network_work_counts(
     sim: &Simulation,
-) -> Vec<(u32, u32, crate::robots::RobotNetworkJobCounts)> {
+) -> Vec<RobotNetworkWorkCounts> {
     let mut jobs =
         vec![crate::robots::RobotNetworkJobCounts::default(); sim.robots.topology_networks.len()];
     for job in sim
@@ -211,9 +233,7 @@ pub(in crate::simulation) fn robot_network_work_counts(
     robot_network_work_counts_with_jobs(sim, jobs)
 }
 
-fn robot_network_cached_work_counts(
-    sim: &Simulation,
-) -> Vec<(u32, u32, crate::robots::RobotNetworkJobCounts)> {
+fn robot_network_cached_work_counts(sim: &Simulation) -> Vec<RobotNetworkWorkCounts> {
     let jobs = if sim.robots.job_counts_by_network.len() == sim.robots.topology_networks.len() {
         sim.robots.job_counts_by_network.clone()
     } else {
@@ -225,61 +245,65 @@ fn robot_network_cached_work_counts(
 fn robot_network_work_counts_with_jobs(
     sim: &Simulation,
     jobs: Vec<crate::robots::RobotNetworkJobCounts>,
-) -> Vec<(u32, u32, crate::robots::RobotNetworkJobCounts)> {
-    let mut available = vec![0_u32; sim.robots.topology_networks.len()];
-    let mut total = vec![0_u32; sim.robots.topology_networks.len()];
+) -> Vec<RobotNetworkWorkCounts> {
+    let mut counts = jobs
+        .into_iter()
+        .map(|jobs| RobotNetworkWorkCounts {
+            jobs,
+            ..RobotNetworkWorkCounts::default()
+        })
+        .collect::<Vec<_>>();
 
     for (network_index, network) in sim.robots.topology_networks.iter().enumerate() {
         for node in &network.roboports {
-            let count = sim
-                .entities
-                .roboports
-                .get(&node.entity_id)
-                .map_or(0, |state| {
-                    state
-                        .robots
-                        .slots()
-                        .iter()
-                        .filter_map(|slot| slot.stack())
-                        .filter(|stack| {
-                            sim.world
-                                .prototypes
-                                .item(stack.item_id())
-                                .and_then(|item| item.robot)
-                                .is_some_and(|robot| robot.kind == RobotKind::Construction)
-                        })
-                        .map(|stack| u32::from(stack.count()))
-                        .sum()
-                });
-            available[network_index] = available[network_index].saturating_add(count);
+            let Some(state) = sim.entities.roboports.get(&node.entity_id) else {
+                continue;
+            };
+            for stack in state.robots.slots().iter().filter_map(|slot| slot.stack()) {
+                let Some(kind) = robot_kind(sim, stack.item_id()) else {
+                    continue;
+                };
+                let entry = &mut counts[network_index];
+                let available = match kind {
+                    RobotKind::Construction => &mut entry.available_construction_robots,
+                    RobotKind::Logistic => &mut entry.available_logistic_robots,
+                };
+                *available = available.saturating_add(u32::from(stack.count()));
+            }
         }
-        total[network_index] = available[network_index];
+        counts[network_index].total_construction_robots =
+            counts[network_index].available_construction_robots;
+        counts[network_index].total_logistic_robots =
+            counts[network_index].available_logistic_robots;
     }
 
     for robot in sim.robot_flights.robots.values() {
-        let is_construction = sim
-            .world
-            .prototypes
-            .item(robot.item_id)
-            .and_then(|item| item.robot)
-            .is_some_and(|profile| profile.kind == RobotKind::Construction);
         let Some(network_id) = robot
             .home_roboport
             .and_then(|home| sim.robots.network_ids_by_entity.get(&home).copied())
         else {
             continue;
         };
-        if is_construction {
-            total[network_id as usize] = total[network_id as usize].saturating_add(1);
+        let entry = &mut counts[network_id as usize];
+        match robot_kind(sim, robot.item_id) {
+            Some(RobotKind::Construction) => {
+                entry.total_construction_robots = entry.total_construction_robots.saturating_add(1);
+            }
+            Some(RobotKind::Logistic) => {
+                entry.total_logistic_robots = entry.total_logistic_robots.saturating_add(1);
+                if robot.delivery.is_some() {
+                    entry.active_deliveries = entry.active_deliveries.saturating_add(1);
+                }
+            }
+            None => {}
         }
     }
 
-    available
-        .into_iter()
-        .zip(total)
-        .zip(jobs)
-        .map(|((available, total), jobs)| (available, total, jobs))
-        .collect()
+    counts
+}
+
+fn robot_kind(sim: &Simulation, item_id: ItemId) -> Option<RobotKind> {
+    Some(sim.world.prototypes.item(item_id)?.robot?.kind)
 }
 
 /// Square a roboport radius covers around `footprint`, as inclusive tile
