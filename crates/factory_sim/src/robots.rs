@@ -27,8 +27,9 @@
 //! an ordered map keyed by a monotonic id, fixed-point positions at
 //! [`crate::simulation::POSITION_SCALE`], and no collision between units.
 
+use crate::construction::ConstructionJob;
 use crate::ids::EntityId;
-use crate::inventory::Inventory;
+use crate::inventory::{Inventory, ItemStack};
 use crate::prototypes::ItemId;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -112,6 +113,27 @@ pub struct RobotNetworkSnapshot {
     /// filling toward.
     pub charge_energy_joules: u64,
     pub charge_capacity_joules: u64,
+    pub available_construction_robots: u32,
+    pub total_construction_robots: u32,
+    pub jobs: RobotNetworkJobCounts,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RobotNetworkJobCounts {
+    pub build: u32,
+    pub deconstruction: u32,
+    pub repair: u32,
+}
+
+impl RobotNetworkJobCounts {
+    pub(crate) fn add(&mut self, job: ConstructionJob) {
+        let count = match job {
+            ConstructionJob::BuildGhost(_) => &mut self.build,
+            ConstructionJob::Deconstruct(_) => &mut self.deconstruction,
+            ConstructionJob::Repair(_) => &mut self.repair,
+        };
+        *count = count.saturating_add(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -131,6 +153,9 @@ pub struct EntityRoboportStatus {
     pub charge_capacity_joules: u64,
     pub construction_bounds: TileBounds,
     pub logistic_bounds: TileBounds,
+    pub available_construction_robots: u32,
+    pub total_construction_robots: u32,
+    pub jobs: RobotNetworkJobCounts,
 }
 
 /// Identity of one flying robot, monotonic per world.
@@ -186,7 +211,7 @@ impl RobotActivity {
 /// `item_id` is both the flight profile (speed, energy capacity, draw) and what
 /// the robot becomes again when it docks, so a robot never has stats of its own
 /// that could drift from the catalog.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct Robot {
     pub id: RobotId,
     pub item_id: ItemId,
@@ -200,6 +225,15 @@ pub struct Robot {
     /// Fixed-point errand target; `None` once the robot is on its way home.
     pub errand: Option<(i64, i64)>,
     pub activity: RobotActivity,
+    /// Construction work this robot exclusively owns. Jobless robots retain
+    /// the public debug errand behavior.
+    pub construction_job: Option<ConstructionJob>,
+    /// Reserved build item or repair pack. It remains separate from recovered
+    /// cargo so validation can enforce the job-specific payload contract.
+    pub payload: Option<ItemStack>,
+    /// Items recovered by deconstruction, or unused payload returning after an
+    /// abort. Cargo may be deposited partially when network storage is tight.
+    pub cargo: Vec<ItemStack>,
 }
 
 impl Robot {

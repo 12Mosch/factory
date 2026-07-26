@@ -1,6 +1,8 @@
 use super::super::*;
+use crate::construction::ConstructionJob;
 use crate::robots::{RobotActivity, TileBounds};
 use crate::simulation::robot_ops::coverage_bounds;
+use factory_data::RobotKind;
 
 /// Checks one roboport's durable state against its prototype: the two
 /// inventories must have the declared slot counts and valid contents, and the
@@ -36,7 +38,7 @@ pub(in crate::simulation) fn validate_roboport(
         sim,
         entity_id,
         &state.materials,
-        ItemSlotPolicy::RepairMaterial,
+        ItemSlotPolicy::ConstructionMaterial,
     )?;
     Ok(())
 }
@@ -90,6 +92,7 @@ pub(super) fn validate_robot_network_snapshots(sim: &Simulation) -> Result<(), S
         .copied()
         .collect::<BTreeSet<_>>();
     let mut networked_roboports = BTreeSet::new();
+    let work_counts = crate::simulation::robot_ops::robot_network_work_counts(sim);
 
     for (expected_network_id, network) in sim.robots.networks.iter().enumerate() {
         let invalid = || SimValidationError::InvalidRobotNetwork {
@@ -98,6 +101,13 @@ pub(super) fn validate_robot_network_snapshots(sim: &Simulation) -> Result<(), S
         if network.network_id != expected_network_id as u32
             || network.roboports.is_empty()
             || network.charge_energy_joules > network.charge_capacity_joules
+            || work_counts
+                .get(expected_network_id)
+                .is_none_or(|(available, total, jobs)| {
+                    network.available_construction_robots != *available
+                        || network.total_construction_robots != *total
+                        || network.jobs != *jobs
+                })
         {
             return Err(invalid());
         }
@@ -197,6 +207,48 @@ pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidati
             .ok_or_else(invalid)?;
         if robot.energy_joules > profile.energy_capacity_joules {
             return Err(invalid());
+        }
+        for stack in robot.cargo.iter().chain(robot.payload.iter()) {
+            if ItemStack::new(&sim.world.prototypes, stack.item_id(), stack.count()).is_err() {
+                return Err(invalid());
+            }
+        }
+        match robot.construction_job {
+            None if robot.payload.is_some() => return Err(invalid()),
+            None => {}
+            Some(job) => {
+                if profile.kind != RobotKind::Construction
+                    || sim.construction.reservations.get(&job) != Some(robot_id)
+                {
+                    return Err(invalid());
+                }
+                let payload_valid = match job {
+                    ConstructionJob::BuildGhost(ghost_id) => {
+                        let expected = sim.construction.ghosts.get(&ghost_id).and_then(|ghost| {
+                            crate::simulation::entity_recovery_ops::build_item_for_entity(
+                                sim,
+                                ghost.prototype_id,
+                            )
+                            .ok()
+                        });
+                        robot.payload.is_some_and(|payload| {
+                            Some(payload.item_id()) == expected && payload.count() == 1
+                        })
+                    }
+                    ConstructionJob::Deconstruct(_) => robot.payload.is_none(),
+                    ConstructionJob::Repair(_) => robot.payload.is_some_and(|payload| {
+                        payload.count() == 1
+                            && sim
+                                .world
+                                .prototypes
+                                .item(payload.item_id())
+                                .is_some_and(|item| item.repair.is_some())
+                    }),
+                };
+                if !payload_valid {
+                    return Err(invalid());
+                }
+            }
         }
         if robot
             .home_roboport

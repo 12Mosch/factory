@@ -2,6 +2,7 @@ use crate::entities::{
     BuildError, Direction, EntityDestroyError, EntityFootprint, PlayerBuildError,
 };
 use crate::ids::EntityId;
+use crate::robots::{RobotId, RobotNetworkJobCounts};
 use factory_data::{EntityPrototypeId, RecipeId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -42,10 +43,11 @@ pub struct GhostEntity {
 /// A pending construction job. Jobs are queued in plan order; manual
 /// construction may complete them in any order, while future construction
 /// robots will consume the queue front-to-back.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ConstructionJob {
     BuildGhost(GhostId),
     Deconstruct(EntityId),
+    Repair(EntityId),
 }
 
 /// One entity entry of a [`Blueprint`], positioned relative to the blueprint
@@ -272,6 +274,9 @@ pub struct ConstructionState {
         BTreeMap<(crate::world::WorldTileCoord, crate::world::WorldTileCoord), GhostId>,
     pub(crate) deconstruction_marks: BTreeSet<EntityId>,
     pub(crate) queue: VecDeque<ConstructionJob>,
+    /// Jobs removed from `queue` for a flying robot. The ordered map makes
+    /// reservation reconciliation and save replay deterministic.
+    pub(crate) reservations: BTreeMap<ConstructionJob, RobotId>,
     pub(crate) blueprints: Vec<Blueprint>,
     pub(crate) next_ghost_id: u64,
 }
@@ -283,6 +288,7 @@ impl Default for ConstructionState {
             ghost_occupancy: BTreeMap::new(),
             deconstruction_marks: BTreeSet::new(),
             queue: VecDeque::new(),
+            reservations: BTreeMap::new(),
             blueprints: Vec::new(),
             next_ghost_id: 1,
         }
@@ -349,6 +355,22 @@ impl ConstructionState {
 
     pub fn queue_len(&self) -> usize {
         self.queue.len()
+    }
+
+    pub fn reservations(&self) -> impl Iterator<Item = (ConstructionJob, RobotId)> + '_ {
+        self.reservations
+            .iter()
+            .map(|(job, robot_id)| (*job, *robot_id))
+    }
+
+    pub fn job_counts(&self) -> RobotNetworkJobCounts {
+        self.queue.iter().chain(self.reservations.keys()).fold(
+            RobotNetworkJobCounts::default(),
+            |mut counts, job| {
+                counts.add(*job);
+                counts
+            },
+        )
     }
 
     pub fn blueprints(&self) -> &[Blueprint] {

@@ -47,6 +47,7 @@ impl Simulation {
                 &mut self.robots.networks[network_index],
             );
         }
+        self.refresh_robot_network_work_counts();
     }
 
     /// Fills each roboport's charging buffer from its electric network.

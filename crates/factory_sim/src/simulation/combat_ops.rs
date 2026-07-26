@@ -370,12 +370,7 @@ impl Simulation {
                         .is_some_and(|item| item.repair.is_some())
                 })
                 .ok_or(RepairError::NoRepairPacks)?;
-            let restore_health = self
-                .world
-                .prototypes
-                .item(repair_item)
-                .and_then(|item| item.repair)
-                .map(|repair| repair.restore_health)
+            let restore_health = repair_restore_health(&self.world.prototypes, repair_item)
                 .expect("repair item was selected for its repair prototype");
             self.player_inventory
                 .remove(repair_item, 1)
@@ -383,15 +378,36 @@ impl Simulation {
             self.player.repair_remaining_health = restore_health;
         }
 
-        let heal = REPAIR_HEALTH_PER_ACTION
-            .min(max_health - current)
-            .min(self.player.repair_remaining_health);
-        self.player.repair_remaining_health -= heal;
-        if let Some(health) = self.entities.entity_health.get_mut(&entity_id) {
-            health.current = current + heal;
+        let heal = REPAIR_HEALTH_PER_ACTION.min(self.player.repair_remaining_health);
+        let restored = self.restore_entity_health(entity_id, heal);
+        self.player.repair_remaining_health -= restored;
+        if self
+            .entities
+            .entity_health
+            .get(&entity_id)
+            .is_some_and(|health| health.current == health.maximum)
+        {
+            robot_ops::cancel_construction_job(self, ConstructionJob::Repair(entity_id));
+            self.refresh_robot_network_work_counts();
         }
 
         Ok(())
+    }
+
+    /// Restores at most `amount` health without exceeding the entity maximum.
+    /// Player repair and construction robots share this clamp so neither path
+    /// can create over-health when damage changes between validation and use.
+    pub(in crate::simulation) fn restore_entity_health(
+        &mut self,
+        entity_id: EntityId,
+        amount: u32,
+    ) -> u32 {
+        let Some(health) = self.entities.entity_health.get_mut(&entity_id) else {
+            return 0;
+        };
+        let restored = amount.min(health.maximum.saturating_sub(health.current));
+        health.current += restored;
+        restored
     }
 
     /// Current and maximum health of an entity, when it is damageable.
@@ -403,6 +419,16 @@ impl Simulation {
     pub fn player_health(&self) -> (u32, u32) {
         (self.player.health.current, self.player.health.maximum)
     }
+}
+
+pub(in crate::simulation) fn repair_restore_health(
+    catalog: &PrototypeCatalog,
+    item_id: ItemId,
+) -> Option<u32> {
+    catalog
+        .item(item_id)
+        .and_then(|item| item.repair)
+        .map(|repair| repair.restore_health)
 }
 
 fn defensive_target_from_parts(

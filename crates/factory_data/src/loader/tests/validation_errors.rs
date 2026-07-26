@@ -1186,6 +1186,7 @@ fn robot_item_catalog(fields: &str) -> Result<PrototypeCatalog, PrototypeLoadErr
 }
 
 const VALID_ROBOT: &str = r#"robot: Some((
+    kind: Construction,
     speed_fixed_per_tick: 60,
     energy_capacity_joules: 1500000,
     flight_energy_usage_watts: 21000,
@@ -1206,6 +1207,7 @@ fn valid_robot_item_loads() {
 fn robot_without_flight_energy_fails() {
     let error = robot_item_catalog(
         r#"robot: Some((
+            kind: Construction,
             speed_fixed_per_tick: 60,
             energy_capacity_joules: 1500000,
             flight_energy_usage_watts: 0,

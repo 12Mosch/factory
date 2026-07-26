@@ -34,7 +34,9 @@ use bincode::Options;
 // slots, material slots, and the charging buffer) in the entity registry.
 // v31: robots in flight joined the snapshot: their positions, energy, errands,
 // and the charging pads and queues they occupy at their roboports.
-pub const SAVE_VERSION: u32 = 31;
+// v32: construction jobs gained repair work and robot reservations; flying
+// robots gained construction payload and cargo state.
+pub const SAVE_VERSION: u32 = 32;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -53,7 +55,8 @@ pub const SAVE_VERSION: u32 = 31;
 // v21: entity prototypes gained roboport coverage, storage, and charging
 // metadata.
 // v22: robot flight profiles on item prototypes, and roboport charging pads.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 22;
+// v23: robot flight profiles gained an explicit construction/logistic kind.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 23;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

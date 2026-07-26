@@ -1,5 +1,6 @@
 use crate::robots::{EntityRoboportStatus, RobotNetworkRoboportSnapshot, TileBounds};
 use crate::simulation::*;
+use factory_data::RobotKind;
 
 use super::types::RobotNetworkTopology;
 
@@ -72,12 +73,20 @@ impl Simulation {
         let placed = self.entities.placed_entity(entity_id)?;
         let (construction_bounds, logistic_bounds) =
             self.roboport_coverage_bounds_for_footprint(placed.prototype_id, placed.footprint)?;
+        let network = self
+            .robot_network_id_for_entity(entity_id)
+            .and_then(|network_id| self.robots.networks.get(network_id as usize));
         Some(EntityRoboportStatus {
             network_id: self.robot_network_id_for_entity(entity_id),
             charge_energy_joules: state.charge_energy_joules,
             charge_capacity_joules: self.roboport_charge_capacity_joules(entity_id),
             construction_bounds,
             logistic_bounds,
+            available_construction_robots: network
+                .map_or(0, |network| network.available_construction_robots),
+            total_construction_robots: network
+                .map_or(0, |network| network.total_construction_robots),
+            jobs: network.map_or_else(Default::default, |network| network.jobs),
         })
     }
 
@@ -101,6 +110,92 @@ impl Simulation {
     pub(in crate::simulation) fn robot_topology_rebuild_count(&self) -> u64 {
         self.robots.topology_rebuilds
     }
+
+    pub(in crate::simulation) fn refresh_robot_network_work_counts(&mut self) {
+        let counts = robot_network_work_counts(self);
+
+        for (index, snapshot) in self.robots.networks.iter_mut().enumerate() {
+            snapshot.available_construction_robots = counts[index].0;
+            snapshot.total_construction_robots = counts[index].1;
+            snapshot.jobs = counts[index].2;
+        }
+    }
+}
+
+pub(in crate::simulation) fn robot_network_work_counts(
+    sim: &Simulation,
+) -> Vec<(u32, u32, crate::robots::RobotNetworkJobCounts)> {
+    let mut available = vec![0_u32; sim.robots.topology_networks.len()];
+    let mut total = vec![0_u32; sim.robots.topology_networks.len()];
+    let mut jobs =
+        vec![crate::robots::RobotNetworkJobCounts::default(); sim.robots.topology_networks.len()];
+
+    for (network_index, network) in sim.robots.topology_networks.iter().enumerate() {
+        for node in &network.roboports {
+            let count = sim
+                .entities
+                .roboports
+                .get(&node.entity_id)
+                .map_or(0, |state| {
+                    state
+                        .robots
+                        .slots()
+                        .iter()
+                        .filter_map(|slot| slot.stack())
+                        .filter(|stack| {
+                            sim.world
+                                .prototypes
+                                .item(stack.item_id())
+                                .and_then(|item| item.robot)
+                                .is_some_and(|robot| robot.kind == RobotKind::Construction)
+                        })
+                        .map(|stack| u32::from(stack.count()))
+                        .sum()
+                });
+            available[network_index] = available[network_index].saturating_add(count);
+        }
+        total[network_index] = available[network_index];
+    }
+
+    for robot in sim.robot_flights.robots.values() {
+        let is_construction = sim
+            .world
+            .prototypes
+            .item(robot.item_id)
+            .and_then(|item| item.robot)
+            .is_some_and(|profile| profile.kind == RobotKind::Construction);
+        let Some(network_id) = robot
+            .home_roboport
+            .and_then(|home| sim.robots.network_ids_by_entity.get(&home).copied())
+        else {
+            continue;
+        };
+        if is_construction {
+            total[network_id as usize] = total[network_id as usize].saturating_add(1);
+        }
+    }
+
+    for job in sim
+        .construction
+        .queue
+        .iter()
+        .chain(sim.construction.reservations.keys())
+    {
+        let Some((x, y)) = sim.construction_job_target_tile(*job) else {
+            continue;
+        };
+        let Some(network_id) = sim.construction_network_covering_tile(x, y) else {
+            continue;
+        };
+        jobs[network_id as usize].add(*job);
+    }
+
+    available
+        .into_iter()
+        .zip(total)
+        .zip(jobs)
+        .map(|((available, total), jobs)| (available, total, jobs))
+        .collect()
 }
 
 /// Square a roboport radius covers around `footprint`, as inclusive tile
