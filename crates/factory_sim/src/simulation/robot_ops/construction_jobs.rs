@@ -83,7 +83,7 @@ impl Simulation {
             .len()
             .min(CONSTRUCTION_JOB_EXAMINATION_BUDGET);
         for _ in 0..examinations {
-            let Some(job) = self.construction.queue.pop_front() else {
+            let Some(job) = self.construction.pop_job() else {
                 break;
             };
             if !self.construction_job_is_valid(job) {
@@ -91,7 +91,7 @@ impl Simulation {
                 continue;
             }
             if !self.try_dispatch_construction_job(job) {
-                self.construction.queue.push_back(job);
+                self.construction.enqueue_job(job);
             }
         }
     }
@@ -280,8 +280,21 @@ impl Simulation {
             return false;
         };
 
+        let payload = match payload_item {
+            Some(item_id) => {
+                if !withdraw_network_material(self, member_ids, item_id) {
+                    return false;
+                }
+                Some(
+                    ItemStack::new(&self.world.prototypes, item_id, 1)
+                        .expect("catalog material forms a one-item payload"),
+                )
+            }
+            None => None,
+        };
+
         // All fallible checks are complete. The commit below removes exactly
-        // one robot and payload item before creating the matching reservation.
+        // one robot before creating the matching reservation.
         let state = self
             .entities
             .roboports
@@ -294,13 +307,6 @@ impl Simulation {
         state.charge_energy_joules -= energy_capacity;
         self.robots.mark_roboport_dirty(roboport_id);
 
-        if let Some(item_id) = payload_item {
-            withdraw_network_material(self, member_ids, item_id);
-        }
-        let payload = payload_item.map(|item_id| {
-            ItemStack::new(&self.world.prototypes, item_id, 1)
-                .expect("catalog material forms a one-item payload")
-        });
         let id = self.robot_flights.allocate_id();
         self.robot_flights.robots.insert(
             id,
@@ -379,10 +385,8 @@ impl Simulation {
     }
 
     fn enqueue_job_once(&mut self, job: ConstructionJob) {
-        if !self.construction.queue.contains(&job)
-            && !self.construction.reservations.contains_key(&job)
+        if !self.construction.reservations.contains_key(&job) && self.construction.enqueue_job(job)
         {
-            self.construction.queue.push_back(job);
             self.track_construction_job(job);
         }
     }
@@ -439,7 +443,7 @@ impl Simulation {
 
 pub(in crate::simulation) fn cancel_construction_job(sim: &mut Simulation, job: ConstructionJob) {
     sim.untrack_construction_job(job);
-    sim.construction.queue.retain(|queued| *queued != job);
+    sim.construction.remove_queued_job(job);
     let Some(robot_id) = sim.construction.reservations.remove(&job) else {
         return;
     };
@@ -484,20 +488,21 @@ fn network_material_count(sim: &Simulation, member_ids: &[EntityId], item_id: It
         .sum()
 }
 
-fn withdraw_network_material(sim: &mut Simulation, member_ids: &[EntityId], item_id: ItemId) {
+fn withdraw_network_material(
+    sim: &mut Simulation,
+    member_ids: &[EntityId],
+    item_id: ItemId,
+) -> bool {
     for entity_id in member_ids {
         let Some(state) = sim.entities.roboports.get_mut(entity_id) else {
             continue;
         };
         if state.materials.remove(item_id, 1).is_ok() {
             sim.robots.mark_roboport_dirty(*entity_id);
-            return;
+            return true;
         }
     }
-    debug_assert!(
-        false,
-        "network material availability changed during dispatch commit"
-    );
+    false
 }
 
 fn dispatching_roboport(

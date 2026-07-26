@@ -183,8 +183,7 @@ impl Simulation {
         for job in orphaned_jobs {
             let remains_valid = self.construction_job_is_valid(job);
             super::cancel_construction_job(self, job);
-            if remains_valid && !self.construction.queue.contains(&job) {
-                self.construction.queue.push_back(job);
+            if remains_valid && self.construction.enqueue_job(job) {
                 self.track_construction_job(job);
             }
         }

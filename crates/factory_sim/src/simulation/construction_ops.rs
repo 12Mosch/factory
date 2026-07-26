@@ -103,8 +103,7 @@ pub(crate) fn place_ghost(
         },
     );
     sim.construction
-        .queue
-        .push_back(ConstructionJob::BuildGhost(ghost_id));
+        .enqueue_job(ConstructionJob::BuildGhost(ghost_id));
     sim.track_construction_job(ConstructionJob::BuildGhost(ghost_id));
     sim.bump_entity_topology_revision();
     sim.refresh_robot_network_work_counts();
@@ -231,8 +230,7 @@ pub(crate) fn mark_area_for_deconstruction(
         robot_ops::cancel_construction_job(sim, ConstructionJob::Repair(entity_id));
         if sim.construction.deconstruction_marks.insert(entity_id) {
             sim.construction
-                .queue
-                .push_back(ConstructionJob::Deconstruct(entity_id));
+                .enqueue_job(ConstructionJob::Deconstruct(entity_id));
             sim.track_construction_job(ConstructionJob::Deconstruct(entity_id));
             marked += 1;
         }

@@ -69,6 +69,12 @@ pub(super) fn validate_construction_state(sim: &Simulation) -> Result<(), SimVal
     // Pending and reserved work together must hold exactly one job per ghost
     // and deconstruction mark. Repair jobs are demand-driven, but must be
     // unique and point at a damaged friendly entity.
+    let expected_queued_jobs = construction.queue.iter().copied().collect();
+    if construction.queue.len() != construction.queued_jobs.len()
+        || construction.queued_jobs != expected_queued_jobs
+    {
+        return Err(SimValidationError::InvalidConstructionQueue);
+    }
     let mut queued_ghosts = std::collections::BTreeSet::new();
     let mut queued_deconstructions = std::collections::BTreeSet::new();
     let mut queued_repairs = std::collections::BTreeSet::new();

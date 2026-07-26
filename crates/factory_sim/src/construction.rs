@@ -274,6 +274,9 @@ pub struct ConstructionState {
         BTreeMap<(crate::world::WorldTileCoord, crate::world::WorldTileCoord), GhostId>,
     pub(crate) deconstruction_marks: BTreeSet<EntityId>,
     pub(crate) queue: VecDeque<ConstructionJob>,
+    /// Membership index for `queue`, used to deduplicate jobs without scanning
+    /// the ordered dispatch queue.
+    pub(crate) queued_jobs: BTreeSet<ConstructionJob>,
     /// Jobs removed from `queue` for a flying robot. The ordered map makes
     /// reservation reconciliation and save replay deterministic.
     pub(crate) reservations: BTreeMap<ConstructionJob, RobotId>,
@@ -288,6 +291,7 @@ impl Default for ConstructionState {
             ghost_occupancy: BTreeMap::new(),
             deconstruction_marks: BTreeSet::new(),
             queue: VecDeque::new(),
+            queued_jobs: BTreeSet::new(),
             reservations: BTreeMap::new(),
             blueprints: Vec::new(),
             next_ghost_id: 1,
@@ -355,6 +359,29 @@ impl ConstructionState {
 
     pub fn queue_len(&self) -> usize {
         self.queue.len()
+    }
+
+    pub(crate) fn enqueue_job(&mut self, job: ConstructionJob) -> bool {
+        if !self.queued_jobs.insert(job) {
+            return false;
+        }
+        self.queue.push_back(job);
+        true
+    }
+
+    pub(crate) fn pop_job(&mut self) -> Option<ConstructionJob> {
+        let job = self.queue.pop_front()?;
+        let removed = self.queued_jobs.remove(&job);
+        debug_assert!(removed, "construction queue index is missing a queued job");
+        Some(job)
+    }
+
+    pub(crate) fn remove_queued_job(&mut self, job: ConstructionJob) -> bool {
+        if !self.queued_jobs.remove(&job) {
+            return false;
+        }
+        self.queue.retain(|queued| *queued != job);
+        true
     }
 
     pub fn reservations(&self) -> impl Iterator<Item = (ConstructionJob, RobotId)> + '_ {
