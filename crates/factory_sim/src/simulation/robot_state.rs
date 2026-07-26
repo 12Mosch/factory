@@ -1,6 +1,6 @@
 use super::*;
 use crate::construction::ConstructionJob;
-use crate::simulation::robot_ops::RobotNetworkTopology;
+use crate::simulation::robot_ops::{LogisticIndex, RobotNetworkTopology};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
@@ -30,6 +30,11 @@ pub(super) struct RobotSubsystem {
     pub(super) job_counts_by_network: Vec<RobotNetworkJobCounts>,
     #[serde(skip, default)]
     pub(super) job_networks: BTreeMap<ConstructionJob, u32>,
+    /// Per-network logistic contents, maintained by delta off chest inventory
+    /// changes rather than rescanned. See
+    /// [`crate::simulation::robot_ops::LogisticIndex`].
+    #[serde(skip, default)]
+    pub(super) logistic: LogisticIndex,
     /// Reused by the per-tick charging pass to iterate roboport ids while the
     /// loop body holds a mutable borrow of the entity store. Retaining the
     /// allocation keeps the pass allocation-free once the world is warm.
@@ -50,6 +55,7 @@ impl Default for RobotSubsystem {
             networks_needing_snapshot: Vec::new(),
             job_counts_by_network: Vec::new(),
             job_networks: BTreeMap::new(),
+            logistic: LogisticIndex::default(),
             charging_scratch: Vec::new(),
             #[cfg(test)]
             topology_rebuilds: 0,
@@ -73,6 +79,7 @@ impl RobotSubsystem {
         self.networks_needing_snapshot.clear();
         self.job_counts_by_network.clear();
         self.job_networks.clear();
+        self.logistic.reset(0);
     }
 
     pub(super) fn replace_topology(&mut self, topology_networks: Vec<RobotNetworkTopology>) {
@@ -87,6 +94,7 @@ impl RobotSubsystem {
             RobotNetworkJobCounts::default(),
         );
         self.job_networks.clear();
+        self.logistic.reset(self.topology_networks.len());
         self.topology_dirty = false;
     }
 

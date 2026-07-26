@@ -433,6 +433,12 @@ fn slot_value(sim: &Simulation, entity_id: EntityId, slot: SignalSlot) -> SlotVa
             factory_sim::entity_access::decider_combinator_state(sim, entity_id)
                 .and_then(|state| state.output),
         ),
+        SignalSlot::LogisticRequest(index) => SlotValue::Signal(
+            sim.logistic_chest_state(entity_id)
+                .and_then(|state| state.requests.get(index))
+                .and_then(|request| request.item)
+                .map(factory_sim::SignalId::Item),
+        ),
     }
 }
 

@@ -78,8 +78,16 @@ fn spawn_picker_contents(
     sim: &factory_sim::Simulation,
     slot: SignalSlot,
 ) {
+    let item_only = slot.is_item_only();
     root.spawn((
-        Text::new("Pick a signal"),
+        Text::new(
+            if item_only {
+                "Pick an item"
+            } else {
+                "Pick a signal"
+            }
+            .to_string(),
+        ),
         TextFont::from_font_size(12.0),
         TextColor(Color::WHITE),
     ));
@@ -127,7 +135,7 @@ fn spawn_picker_contents(
             ("Fluids", &catalog.fluids),
             ("Signals", &catalog.virtuals),
         ] {
-            if signals.is_empty() {
+            if signals.is_empty() || (item_only && heading != "Items") {
                 continue;
             }
             viewport.spawn((

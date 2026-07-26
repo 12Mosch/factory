@@ -301,7 +301,7 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
 ) -> Option<ItemStack> {
     let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
 
-    if let Some(inventory) = entities.entity_inventories.get_mut(&entity_id) {
+    if let Some(inventory) = entities.chest_inventory_mut(entity_id) {
         if !item_slot_policy_allows_operation(
             ItemSlotPolicy::Unrestricted,
             ItemSlotOperation::InserterExtract,
@@ -427,8 +427,7 @@ pub(in crate::simulation) fn try_drop_inserter_item(
             return false;
         }
         let inventory = entities
-            .entity_inventories
-            .get_mut(&entity_id)
+            .chest_inventory_mut(entity_id)
             .expect("inventory presence was checked above");
         return inventory
             .insert(catalog, item.item_id(), item.count())

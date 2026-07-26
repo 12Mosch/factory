@@ -1,11 +1,13 @@
 mod construction_jobs;
 mod flight;
+mod logistic_index;
 mod network_access;
 mod network_builder;
 mod roboports;
 mod types;
 
 pub(in crate::simulation) use construction_jobs::cancel_construction_job;
+pub(in crate::simulation) use logistic_index::LogisticIndex;
 pub(in crate::simulation) use network_access::{coverage_bounds, robot_network_work_counts};
 pub(in crate::simulation) use roboports::roboport_is_charging;
 pub(in crate::simulation) use types::RobotNetworkTopology;

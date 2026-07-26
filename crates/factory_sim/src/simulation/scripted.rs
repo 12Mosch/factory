@@ -668,8 +668,7 @@ impl Simulation {
 
     fn stuff_entity_inventory(&mut self, entity_id: EntityId, item_id: ItemId, count: u16) {
         self.entities
-            .entity_inventories
-            .get_mut(&entity_id)
+            .chest_inventory_mut(entity_id)
             .expect("scripted fixture chest should have an inventory")
             .insert(&self.world.prototypes, item_id, count)
             .expect("scripted fixture chest should accept items");

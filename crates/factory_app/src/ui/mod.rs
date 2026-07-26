@@ -11,6 +11,7 @@ pub mod equipment_window;
 pub mod formatting;
 pub mod inventory_panel;
 pub(crate) mod layout;
+pub(crate) mod logistics_panel;
 pub(crate) mod machine_indicators;
 pub(crate) mod manual_crafting;
 pub mod map_view;

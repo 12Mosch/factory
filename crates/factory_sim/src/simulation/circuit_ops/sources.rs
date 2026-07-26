@@ -128,6 +128,29 @@ impl Simulation {
                     );
                 }
             }
+            // A roboport reports the logistic contents of the network it
+            // anchors rather than its own two inventories: the network is the
+            // interesting quantity, and the roboport is the one entity that
+            // already knows which network it belongs to. The figures come from
+            // the logistic index, which the robot pass refreshes later in the
+            // tick, so a connector reads the network as it stood at the end of
+            // the previous tick — the same one-tick delay every combinator has.
+            EntityKind::Roboport => {
+                let Some(contents) = self
+                    .robot_network_id_for_entity(entity_id)
+                    .and_then(|network_id| self.logistic_network_contents(network_id))
+                else {
+                    return;
+                };
+                for (&item_id, totals) in contents {
+                    self.publish(
+                        networks,
+                        node,
+                        SignalId::Item(item_id),
+                        signal_value_from_count(u64::from(totals.stored)),
+                    );
+                }
+            }
             // These entity kinds have no implemented circuit-readable source.
             // Keeping this match exhaustive makes a newly added kind require
             // an explicit decision here.
@@ -150,11 +173,7 @@ impl Simulation {
             // Reactors and heat pipes carry temperature rather than a signal
             // the circuit network can express as an item or fluid count.
             | EntityKind::NuclearReactor
-            | EntityKind::HeatPipe
-            // A roboport's readable contents are its robot and material counts,
-            // which belong with the robots that consume them rather than with
-            // an empty pair of inventories.
-            | EntityKind::Roboport => {}
+            | EntityKind::HeatPipe => {}
         }
     }
 

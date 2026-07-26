@@ -36,7 +36,9 @@ use bincode::Options;
 // and the charging pads and queues they occupy at their roboports.
 // v32: construction jobs gained repair work and robot reservations; flying
 // robots gained construction payload and cargo state.
-pub const SAVE_VERSION: u32 = 32;
+// v33: logistic chest configuration (request and filter rows) joined the entity
+// registry.
+pub const SAVE_VERSION: u32 = 33;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -56,7 +58,9 @@ pub const SAVE_VERSION: u32 = 32;
 // metadata.
 // v22: robot flight profiles on item prototypes, and roboport charging pads.
 // v23: robot flight profiles gained an explicit construction/logistic kind.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 23;
+// v24: chest prototypes gained logistic chest metadata (network role and
+// request rows), and the roboport gained a circuit connector.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 24;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

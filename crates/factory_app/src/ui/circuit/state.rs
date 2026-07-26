@@ -19,6 +19,10 @@ pub(crate) enum SignalSlot {
     DeciderLeft,
     DeciderRight,
     DeciderOutput,
+    /// One configured row of a logistic chest. The picker is shared with the
+    /// circuit editors because picking "which item" is the same interaction; a
+    /// chest row is item-only, so it hides the fluid and virtual channels.
+    LogisticRequest(usize),
 }
 
 impl SignalSlot {
@@ -32,6 +36,13 @@ impl SignalSlot {
                 | Self::ArithmeticRight
                 | Self::DeciderRight
         )
+    }
+
+    /// Whether the slot names a concrete item rather than any signal channel.
+    /// A chest can only hold items, so offering it a fluid would be an offer it
+    /// could never accept.
+    pub(crate) const fn is_item_only(self) -> bool {
+        matches!(self, Self::LogisticRequest(_))
     }
 }
 

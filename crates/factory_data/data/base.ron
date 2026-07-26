@@ -285,6 +285,11 @@
                 flight_energy_usage_watts: 21000,
             )),
         ),
+        (id: 105, name: "passive_provider_chest", stack_size: 50),
+        (id: 106, name: "active_provider_chest", stack_size: 50),
+        (id: 107, name: "storage_chest", stack_size: 50),
+        (id: 108, name: "buffer_chest", stack_size: 50),
+        (id: 109, name: "requester_chest", stack_size: 50),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1451,6 +1456,70 @@
                 (item: "electronic_circuit", amount: 2),
             ],
             products: [(item: "construction_robot", amount: 1)],
+        ),
+        // The five logistic chests are steel chests with network wiring, so
+        // they all cost one steel chest plus the circuitry that gives them a
+        // role. Requester and buffer chests reason about amounts rather than
+        // just offering contents, which is what makes them the expensive pair.
+        (
+            id: 103,
+            name: "passive_provider_chest",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "steel_chest", amount: 1),
+                (item: "electronic_circuit", amount: 3),
+                (item: "advanced_circuit", amount: 1),
+            ],
+            products: [(item: "passive_provider_chest", amount: 1)],
+        ),
+        (
+            id: 104,
+            name: "active_provider_chest",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "steel_chest", amount: 1),
+                (item: "electronic_circuit", amount: 3),
+                (item: "advanced_circuit", amount: 1),
+            ],
+            products: [(item: "active_provider_chest", amount: 1)],
+        ),
+        (
+            id: 105,
+            name: "storage_chest",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "steel_chest", amount: 1),
+                (item: "electronic_circuit", amount: 3),
+                (item: "advanced_circuit", amount: 1),
+            ],
+            products: [(item: "storage_chest", amount: 1)],
+        ),
+        (
+            id: 106,
+            name: "buffer_chest",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "steel_chest", amount: 1),
+                (item: "electronic_circuit", amount: 5),
+                (item: "advanced_circuit", amount: 2),
+            ],
+            products: [(item: "buffer_chest", amount: 1)],
+        ),
+        (
+            id: 107,
+            name: "requester_chest",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "steel_chest", amount: 1),
+                (item: "electronic_circuit", amount: 5),
+                (item: "advanced_circuit", amount: 2),
+            ],
+            products: [(item: "requester_chest", amount: 1)],
         ),
     ],
     entities: [
@@ -2689,6 +2758,15 @@
             size: (x: 4, y: 4),
             collision_mask: (layers: ["ground", "building"]),
             max_health: Some(500),
+            // A roboport reads out the logistic contents of the network it
+            // anchors, which is the one vantage point that already knows every
+            // chest in that network.
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
             // 1 MW of charging draw fills the 100 MJ buffer in about a hundred
             // seconds; once full the roboport falls back to its 50 kW idle
             // drain, so a settled robot network is cheap and a fresh one is not.
@@ -2705,6 +2783,102 @@
                 charging_pad_count: 4,
                 charging_pad_watts: 1200000,
             )),
+        ),
+        // The five logistic chests are steel chests that also declare a role in
+        // the robot network covering them. They keep the steel chest's 48 slots
+        // and health so swapping one in never costs storage; only the
+        // `logistic_chest` section differs between them.
+        (
+            id: 64,
+            name: "passive_provider_chest",
+            building_category: Some(Storage),
+            building_menu_order: Some(13),
+            entity_kind: Chest,
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            inventory_slot_count: Some(48),
+            logistic_chest: Some((mode: PassiveProvider, request_slot_count: 0)),
+            max_health: Some(350),
+        ),
+        (
+            id: 65,
+            name: "active_provider_chest",
+            building_category: Some(Storage),
+            building_menu_order: Some(14),
+            entity_kind: Chest,
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            inventory_slot_count: Some(48),
+            logistic_chest: Some((mode: ActiveProvider, request_slot_count: 0)),
+            max_health: Some(350),
+        ),
+        (
+            id: 66,
+            name: "storage_chest",
+            building_category: Some(Storage),
+            building_menu_order: Some(15),
+            entity_kind: Chest,
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            inventory_slot_count: Some(48),
+            // The single row is a filter, not an amount: an unset filter takes
+            // whatever the network has nowhere else to put.
+            logistic_chest: Some((mode: Storage, request_slot_count: 1)),
+            max_health: Some(350),
+        ),
+        (
+            id: 67,
+            name: "buffer_chest",
+            building_category: Some(Storage),
+            building_menu_order: Some(16),
+            entity_kind: Chest,
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            inventory_slot_count: Some(48),
+            logistic_chest: Some((mode: Buffer, request_slot_count: 6)),
+            max_health: Some(350),
+        ),
+        (
+            id: 68,
+            name: "requester_chest",
+            building_category: Some(Storage),
+            building_menu_order: Some(17),
+            entity_kind: Chest,
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            inventory_slot_count: Some(48),
+            logistic_chest: Some((mode: Requester, request_slot_count: 12)),
+            max_health: Some(350),
         ),
     ],
     tiles: [
@@ -3360,6 +3534,29 @@
             effects: [
                 UnlockRecipe("roboport"),
                 UnlockRecipe("construction_robot"),
+            ],
+        ),
+        // The chests are useless without a network to put them in, so this
+        // follows robotics rather than standing beside it.
+        (
+            id: 41,
+            name: "logistic_system",
+            prerequisites: ["robotics"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+                (item: "production_science_pack", amount: 1),
+                (item: "utility_science_pack", amount: 1),
+            ],
+            required_units: 500,
+            research_time_ticks: 900,
+            effects: [
+                UnlockRecipe("passive_provider_chest"),
+                UnlockRecipe("active_provider_chest"),
+                UnlockRecipe("storage_chest"),
+                UnlockRecipe("buffer_chest"),
+                UnlockRecipe("requester_chest"),
             ],
         ),
     ],

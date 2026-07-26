@@ -174,6 +174,10 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidLogisticChestMetadata {
+        entity: String,
+        detail: &'static str,
+    },
     InvalidHeatConnection {
         entity: String,
         connection_index: usize,
@@ -416,6 +420,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has invalid roboport metadata: {detail}"
+                )
+            }
+            Self::InvalidLogisticChestMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid logistic chest metadata: {detail}"
                 )
             }
             Self::InvalidHeatConnection {

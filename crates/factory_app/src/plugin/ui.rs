@@ -38,6 +38,7 @@ use crate::ui::inventory_panel::{
     handle_container_slot_clicks, update_container_slot_text,
     update_inventory_transfer_feedback_text,
 };
+use crate::ui::logistics_panel::{handle_logistic_request_step_buttons, update_logistic_panel};
 use crate::ui::machine_indicators::{update_machine_guidance, update_machine_indicators};
 use crate::ui::manual_crafting::{
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
@@ -183,6 +184,8 @@ impl Plugin for UiPlugin {
                         .after(handle_circuit_signal_buttons)
                         .after(handle_signal_picker_buttons),
                     update_circuit_panel.after(sync_container_window),
+                    handle_logistic_request_step_buttons.in_set(AppSet::UiInteraction),
+                    update_logistic_panel.after(sync_container_window),
                 )
                     .in_set(InGameSet),
             )

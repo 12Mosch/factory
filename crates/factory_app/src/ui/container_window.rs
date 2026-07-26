@@ -15,6 +15,7 @@ use crate::ui::inventory_panel::{
     InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,
     spawn_slot_button,
 };
+use crate::ui::logistics_panel::spawn_logistic_chest_panel;
 use crate::ui::machine_indicators::{
     spawn_boiler_panel, spawn_furnace_panel, spawn_heat_buffer_panel, spawn_inserter_panel,
     spawn_machine_guidance, spawn_mining_drill_panel, spawn_nuclear_reactor_panel,
@@ -100,7 +101,9 @@ fn spawn_container_window_contents(
         match snapshot.kind {
             OpenMachineKind::Chest => spawn_container_inventory_panel(
                 machine_panel,
-                "Chest",
+                // Logistic chests share the chest window, so the prototype name
+                // is what tells a requester apart from a passive provider.
+                &entity_display_name(sim, entity_id).unwrap_or_else(|| "Chest".to_string()),
                 container_slot_count(sim, entity_id),
             ),
             OpenMachineKind::Lab => spawn_container_inventory_panel(
@@ -180,6 +183,9 @@ fn spawn_container_window_contents(
                 );
             }
         }
+        if let Some(logistic_chest) = sim.logistic_chest_prototype(entity_id) {
+            spawn_logistic_chest_panel(machine_panel, logistic_chest);
+        }
         let module_slots = module_slot_count(sim, entity_id);
         if module_slots > 0 {
             spawn_module_panel(
@@ -220,10 +226,10 @@ fn machine_panel_width(kind: OpenMachineKind) -> f32 {
         OpenMachineKind::ConstantCombinator
         | OpenMachineKind::ArithmeticCombinator
         | OpenMachineKind::DeciderCombinator => 340.0,
-        OpenMachineKind::Chest
-        | OpenMachineKind::Lab
-        | OpenMachineKind::Turret
-        | OpenMachineKind::Beacon => 260.0,
+        // A logistic chest's request rows carry an item button, an amount, and
+        // a stepper, which is wider than a bare inventory grid.
+        OpenMachineKind::Chest => 300.0,
+        OpenMachineKind::Lab | OpenMachineKind::Turret | OpenMachineKind::Beacon => 260.0,
         // The roboport shows two slot grids side by side under its readouts.
         OpenMachineKind::Roboport => 280.0,
         OpenMachineKind::MiningDrill

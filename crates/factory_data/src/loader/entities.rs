@@ -29,6 +29,7 @@ pub(super) fn load_entities(
             validate_radar_metadata(&entity.name, &entity)?;
             validate_circuit_metadata(&entity.name, &entity)?;
             validate_roboport_metadata(&entity.name, &entity)?;
+            validate_logistic_chest_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
                     entity: entity.name,
@@ -144,6 +145,7 @@ pub(super) fn load_entities(
                 heat_energy_source: entity.heat_energy_source,
                 nuclear_reactor: entity.nuclear_reactor,
                 roboport: entity.roboport,
+                logistic_chest: entity.logistic_chest,
                 max_health: entity.max_health,
                 pollution_per_minute_milli: entity.pollution_per_minute_milli,
                 gun_turret: entity.gun_turret,
@@ -308,6 +310,48 @@ fn validate_roboport_metadata(
     }
 
     Ok(())
+}
+
+/// A logistic chest is an ordinary chest with a network role, so it has to keep
+/// the chest half intact (kind and inventory) and declare a row count its mode
+/// can actually use. Rejecting a mismatch here is what lets the simulation read
+/// `requests[i]` positionally without ever asking whether the mode has rows.
+fn validate_logistic_chest_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::{EntityKind, LogisticChestMode};
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidLogisticChestMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    let Some(logistic_chest) = entity.logistic_chest else {
+        return Ok(());
+    };
+    if entity.entity_kind != EntityKind::Chest {
+        return invalid("logistic chest metadata is only valid on chest entities");
+    }
+    if entity.inventory_slot_count.is_none_or(|count| count == 0) {
+        return invalid("logistic chests require inventory slots");
+    }
+
+    let rows = logistic_chest.request_slot_count;
+    match logistic_chest.mode {
+        LogisticChestMode::PassiveProvider | LogisticChestMode::ActiveProvider if rows != 0 => {
+            invalid("provider chests supply what they hold and declare no request rows")
+        }
+        LogisticChestMode::Storage if rows != 1 => {
+            invalid("storage chests declare exactly one row, their filter")
+        }
+        LogisticChestMode::Buffer | LogisticChestMode::Requester if rows == 0 => {
+            invalid("buffer and requester chests require at least one request row")
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_module_and_beacon_metadata(

@@ -335,6 +335,20 @@ impl EntityStateBehavior for RoboportState {
     }
 }
 
+// A logistic chest's items live in the chest inventory the entity already has,
+// so the configuration itself contributes nothing to recover.
+impl EntityStateBehavior for LogisticChestState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        super::validation::robots::validate_logistic_chest(sim, entity_id, self)
+    }
+}
+
 /// Confirms a heat state entry sits on an entity of the expected kind that
 /// actually declares a heat buffer, so a stale entry can never look valid.
 fn require_heat_kind(

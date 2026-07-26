@@ -56,7 +56,24 @@ pub(in crate::simulation) fn reservation_for_prototype(
         heat_pipes: heat_pipe_state_for_prototype(prototype),
         heat_exchangers: heat_exchanger_state_for_prototype(prototype),
         roboports: roboport_state_for_prototype(prototype),
+        logistic_chests: logistic_chest_state_for_prototype(prototype),
     }
+}
+
+/// A freshly placed logistic chest has its rows laid out but none of them set,
+/// so it joins the network asking for nothing and filtering nothing. Provider
+/// chests get an empty row list, which still marks them as network members.
+fn logistic_chest_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<crate::logistics::LogisticChestState> {
+    if prototype.entity_kind != EntityKind::Chest {
+        return None;
+    }
+
+    let logistic_chest = prototype.logistic_chest?;
+    Some(crate::logistics::LogisticChestState::with_slot_count(
+        usize::from(logistic_chest.request_slot_count),
+    ))
 }
 
 /// A fresh roboport starts empty and cold: no robots, no repair material, and

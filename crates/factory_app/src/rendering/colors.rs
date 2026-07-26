@@ -2,10 +2,18 @@ use bevy::prelude::*;
 use factory_data::{BasePrototypeIds, InserterPrototype, ItemId, PrototypeCatalog, TileId};
 use factory_sim::ResourceCell;
 
+/// The logistic chests are colour-coded by role rather than by material,
+/// because that is what a player has to tell apart at a glance in a bus: the
+/// five share one steel-chest shape and only the tint distinguishes them.
 pub(crate) fn chest_color(prototype_name: &str) -> Color {
     match prototype_name {
         "iron_chest" => Color::srgb(0.46, 0.50, 0.52),
         "steel_chest" => Color::srgb(0.64, 0.69, 0.72),
+        "passive_provider_chest" => Color::srgb(0.78, 0.36, 0.32),
+        "active_provider_chest" => Color::srgb(0.76, 0.44, 0.78),
+        "storage_chest" => Color::srgb(0.85, 0.66, 0.30),
+        "buffer_chest" => Color::srgb(0.36, 0.68, 0.44),
+        "requester_chest" => Color::srgb(0.32, 0.52, 0.82),
         _ => Color::srgb(0.64, 0.43, 0.22),
     }
 }

@@ -5,9 +5,9 @@ use crate::model::{
     BeaconPrototype, BoilerPrototype, BuildingCategory, BurnerPrototype, CircuitConnectorPrototype,
     CombinatorPrototype, ConnectionSide, CraftingCategory, ElectricEnergySourcePrototype,
     EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo, FurnacePrototype,
-    GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, ModuleEffectPrototype,
-    NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype, RadarPrototype,
-    RepairToolPrototype, ResourceExtraction, RoboportPrototype, RobotPrototype,
+    GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, LogisticChestPrototype,
+    ModuleEffectPrototype, NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype,
+    RadarPrototype, RepairToolPrototype, ResourceExtraction, RoboportPrototype, RobotPrototype,
     SolarPanelPrototype, SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
     UndergroundPipePrototype, UnitPrototype, VirtualSignalKind,
 };
@@ -223,6 +223,8 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) nuclear_reactor: Option<NuclearReactorPrototype>,
     #[serde(default)]
     pub(crate) roboport: Option<RoboportPrototype>,
+    #[serde(default)]
+    pub(crate) logistic_chest: Option<LogisticChestPrototype>,
     pub(crate) max_health: Option<u32>,
     pub(crate) pollution_per_minute_milli: Option<u32>,
     pub(crate) gun_turret: Option<GunTurretPrototype>,
