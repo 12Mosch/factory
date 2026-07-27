@@ -479,7 +479,7 @@ impl Simulation {
                 .storage_from(network_id, cursor)
                 .take(STORAGE_EXAMINATION_BUDGET),
         );
-        if candidates.len() < STORAGE_EXAMINATION_BUDGET {
+        if cursor.is_some() && candidates.len() < STORAGE_EXAMINATION_BUDGET {
             let seen = candidates.len();
             candidates.extend(
                 self.robots

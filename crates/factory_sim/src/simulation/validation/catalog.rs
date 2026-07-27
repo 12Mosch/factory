@@ -348,13 +348,12 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
-            EntityKind::Wall => {
-                if prototype.max_health.is_none() {
-                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
-                        prototype_id: prototype.id,
-                    });
-                }
+            EntityKind::Wall if prototype.max_health.is_none() => {
+                return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                    prototype_id: prototype.id,
+                });
             }
+            EntityKind::Wall => {}
             EntityKind::GunTurret => {
                 let Some(gun_turret) = prototype.gun_turret.as_ref() else {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
@@ -450,19 +449,19 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
-            EntityKind::HeatPipe => {
+            EntityKind::HeatPipe
                 if prototype.heat_buffer.is_none()
                     || prototype.heat_energy_source.is_some()
                     || prototype.nuclear_reactor.is_some()
                     || prototype.burner.is_some()
                     || prototype.electric_energy_source.is_some()
-                    || !prototype.fluid_boxes.is_empty()
-                {
-                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
-                        prototype_id: prototype.id,
-                    });
-                }
+                    || !prototype.fluid_boxes.is_empty() =>
+            {
+                return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                    prototype_id: prototype.id,
+                });
             }
+            EntityKind::HeatPipe => {}
             EntityKind::HeatExchanger => {
                 let Some(boiler) = prototype.boiler.as_ref() else {
                     return Err(SimValidationError::InvalidCatalogEntityPrototype {
