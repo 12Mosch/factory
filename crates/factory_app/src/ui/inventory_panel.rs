@@ -313,8 +313,8 @@ fn roboport_error_message(catalog: &PrototypeCatalog, error: RoboportError) -> S
         RoboportError::MissingEntity(_) | RoboportError::NotRoboport(_) => {
             "Machine unavailable".to_string()
         }
-        // Robots do not exist yet, so a rejected robot slot is always the
-        // player trying to store something that is not a robot.
+        // Both robot kinds share this error path when the player tries to
+        // store an item that the selected roboport slot does not accept.
         RoboportError::InvalidRobot(item_id) | RoboportError::InvalidMaterial(item_id) => {
             wrong_item_message(catalog, item_id)
         }

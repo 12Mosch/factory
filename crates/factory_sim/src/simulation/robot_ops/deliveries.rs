@@ -455,26 +455,47 @@ impl Simulation {
         best.map(|(_, _, source, available)| (source, available))
     }
 
-    /// Storage chest of `network_id` best able to take `item_id`, nearest to
-    /// `near` first.
+    /// Storage chest of `network_id` best able to take `item_id` in this
+    /// bounded, rotating examination window.
     ///
     /// A chest filtered to the item beats an unfiltered one: the filter is the
     /// player saying where this item belongs, and honoring it is what keeps a
-    /// sorted storage area sorted.
+    /// sorted storage area sorted. Within either tier the nearest candidate to
+    /// `near` wins. Rotating the window ensures a large network eventually
+    /// considers every storage chest without making one match scan them all.
     fn pick_storage_target(
-        &self,
+        &mut self,
         network_id: u32,
         item_id: ItemId,
         near: EntityId,
     ) -> Option<EntityId> {
         let target = footprint_center_fixed(&self.entities, near)?;
-        let mut best: Option<(bool, i128, EntityId)> = None;
-        for chest in self
-            .robots
+        let cursor = self.robots.logistic.storage_cursor(network_id);
+        let mut candidates = std::mem::take(&mut self.robots.delivery_storage_scratch);
+        candidates.clear();
+        candidates.extend(
+            self.robots
+                .logistic
+                .storage_from(network_id, cursor)
+                .take(STORAGE_EXAMINATION_BUDGET),
+        );
+        if cursor.is_some() && candidates.len() < STORAGE_EXAMINATION_BUDGET {
+            let seen = candidates.len();
+            candidates.extend(
+                self.robots
+                    .logistic
+                    .storage_from(network_id, None)
+                    .filter(|entity_id| cursor.is_none_or(|cursor| *entity_id < cursor))
+                    .take(STORAGE_EXAMINATION_BUDGET - seen),
+            );
+        }
+        let next_cursor = candidates.last().copied().map(next_entity_id);
+        self.robots
             .logistic
-            .storage_chests(network_id)
-            .take(STORAGE_EXAMINATION_BUDGET)
-        {
+            .set_storage_cursor(network_id, next_cursor);
+
+        let mut best: Option<(bool, i128, EntityId)> = None;
+        for chest in candidates.iter().copied() {
             if chest == near {
                 continue;
             }
@@ -503,6 +524,7 @@ impl Simulation {
                 best = Some((unfiltered, distance, chest));
             }
         }
+        self.robots.delivery_storage_scratch = candidates;
         best.map(|(_, _, chest)| chest)
     }
 

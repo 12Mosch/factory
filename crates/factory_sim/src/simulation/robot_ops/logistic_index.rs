@@ -74,7 +74,7 @@ struct PublishedChest {
 
 /// Candidate sets and totals of one network.
 ///
-/// The three ordered collections are flat rather than nested maps because the
+/// The ordered collections are flat rather than nested maps because the
 /// matcher reads them as resumable cursors: it works a bounded prefix per pass
 /// and picks up where it left off, which a `range(cursor..)` over one ordered
 /// set expresses directly.
@@ -96,6 +96,10 @@ struct NetworkIndex {
     /// budget still works through all of its demand.
     demand_cursor: Option<(DemandPriority, ItemId, EntityId)>,
     surplus_cursor: Option<(ItemId, EntityId)>,
+    /// Storage selection is bounded too. Without a cursor, a full or
+    /// incompatible prefix of storage chests would permanently hide every
+    /// usable chest after the examination budget.
+    storage_cursor: Option<EntityId>,
 }
 
 /// Cached logistic contents of every robot network.
@@ -219,14 +223,19 @@ impl LogisticIndex {
             .copied()
     }
 
-    pub(in crate::simulation) fn storage_chests(
+    /// Storage chests of one network, from `cursor` onward.
+    pub(in crate::simulation) fn storage_from(
         &self,
         network_id: u32,
+        cursor: Option<EntityId>,
     ) -> impl Iterator<Item = EntityId> + '_ {
-        self.networks
-            .get(network_id as usize)
+        let network = self.networks.get(network_id as usize);
+        network
             .into_iter()
-            .flat_map(|network| network.storage_chests.iter())
+            .flat_map(move |network| match cursor {
+                Some(cursor) => network.storage_chests.range(cursor..),
+                None => network.storage_chests.range(..),
+            })
             .copied()
     }
 
@@ -265,6 +274,22 @@ impl LogisticIndex {
     ) {
         if let Some(network) = self.networks.get_mut(network_id as usize) {
             network.surplus_cursor = cursor;
+        }
+    }
+
+    pub(in crate::simulation) fn storage_cursor(&self, network_id: u32) -> Option<EntityId> {
+        self.networks
+            .get(network_id as usize)
+            .and_then(|network| network.storage_cursor)
+    }
+
+    pub(in crate::simulation) fn set_storage_cursor(
+        &mut self,
+        network_id: u32,
+        cursor: Option<EntityId>,
+    ) {
+        if let Some(network) = self.networks.get_mut(network_id as usize) {
+            network.storage_cursor = cursor;
         }
     }
 
