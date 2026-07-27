@@ -70,7 +70,9 @@ fn generated_chunks_cache_terrain_pollution_absorption() {
 
     for prototype in &world.prototypes.tiles {
         assert_eq!(
-            world.generator.tile_pollution_absorption_per_minute_milli[prototype.id.index()],
+            world
+                .generator
+                .pollution_absorption_per_minute_milli(prototype.id),
             u64::from(prototype.pollution_absorption_per_minute_milli),
         );
     }
@@ -185,24 +187,16 @@ fn chunk_generation_history_returns_exact_coordinates_since_revision() {
 #[test]
 fn deserialization_rebuilds_the_runtime_world_generator() {
     let mut world = WorldSim::new_seeded(123);
-    world
-        .generator
-        .tile_pollution_absorption_per_minute_milli
-        .clear();
+    world.generator.clear_pollution_absorption_cache();
     let bytes = bincode::serialize(&world).expect("world should serialize");
 
     let loaded: WorldSim = bincode::deserialize(&bytes).expect("world should deserialize");
 
-    assert_eq!(
-        loaded
-            .generator
-            .tile_pollution_absorption_per_minute_milli
-            .len(),
-        loaded.prototypes.tiles.len()
-    );
     for tile in &loaded.prototypes.tiles {
         assert_eq!(
-            loaded.generator.tile_pollution_absorption_per_minute_milli[tile.id.index()],
+            loaded
+                .generator
+                .pollution_absorption_per_minute_milli(tile.id),
             u64::from(tile.pollution_absorption_per_minute_milli)
         );
     }
