@@ -1,5 +1,26 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::simulation) struct GenerationBounds {
+    pub(in crate::simulation) min_x: WorldTileCoord,
+    pub(in crate::simulation) max_x: WorldTileCoord,
+    pub(in crate::simulation) min_y: WorldTileCoord,
+    pub(in crate::simulation) max_y: WorldTileCoord,
+}
+
+impl GenerationBounds {
+    pub(in crate::simulation) fn for_chunk(coord: ChunkCoord) -> Self {
+        let (min_x, min_y) = coord.min_tile();
+        let max_offset = i64::from(CHUNK_SIZE - 1);
+        Self {
+            min_x,
+            max_x: min_x + max_offset,
+            min_y,
+            max_y: min_y + max_offset,
+        }
+    }
+}
+
 pub(in crate::simulation) fn generate_world_chunks(
     seed: u64,
     prototypes: &PrototypeCatalog,

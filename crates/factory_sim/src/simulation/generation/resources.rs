@@ -135,27 +135,6 @@ fn scale_patch_with_distance(
     )
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::simulation) struct GenerationBounds {
-    pub(in crate::simulation) min_x: WorldTileCoord,
-    pub(in crate::simulation) max_x: WorldTileCoord,
-    pub(in crate::simulation) min_y: WorldTileCoord,
-    pub(in crate::simulation) max_y: WorldTileCoord,
-}
-
-impl GenerationBounds {
-    pub(in crate::simulation) fn for_chunk(coord: ChunkCoord) -> Self {
-        let (min_x, min_y) = coord.min_tile();
-        let max_offset = i64::from(CHUNK_SIZE - 1);
-        Self {
-            min_x,
-            max_x: min_x + max_offset,
-            min_y,
-            max_y: min_y + max_offset,
-        }
-    }
-}
-
 pub(super) fn resource_patch_can_affect_bounds(
     center: ResourcePatchCenter,
     bounds: GenerationBounds,
@@ -191,6 +170,9 @@ pub(in crate::simulation) fn resource_at_patch_tile(
                 center.resource_item,
                 edge_noise,
             ));
+        if radius <= 0 {
+            continue;
+        }
         let radius_sq = i128::from(radius) * i128::from(radius);
 
         if distance_sq > radius_sq {
@@ -283,7 +265,7 @@ pub(in crate::simulation) struct ResourcePatchCenter {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::simulation) struct ResourceCandidate {
+struct ResourceCandidate {
     center: ResourcePatchCenter,
     distance_sq: i128,
     radius_sq: i128,

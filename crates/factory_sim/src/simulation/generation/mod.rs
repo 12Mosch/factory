@@ -43,7 +43,7 @@ pub(crate) struct WorldGenerator {
     /// Derived from the biome table and starting patches; `None` when every
     /// biome is buildable so no elevation bias is needed.
     spawn_bias: Option<SpawnTerrainBias>,
-    pub(super) tile_pollution_absorption_per_minute_milli: Vec<u64>,
+    tile_pollution_absorption_per_minute_milli: Vec<u64>,
     /// Per-`TileId` walking speed percentages, indexed like the absorption
     /// table so the player movement step is a table lookup.
     tile_walking_speed_percent: Vec<u16>,
@@ -170,6 +170,11 @@ impl WorldGenerator {
             .get(tile_id.index())
             .copied()
             .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_pollution_absorption_cache(&mut self) {
+        self.tile_pollution_absorption_per_minute_milli.clear();
     }
 
     fn resource_is_minable(&self, resource_item: ItemId) -> bool {

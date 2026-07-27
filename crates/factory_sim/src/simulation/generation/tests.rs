@@ -12,10 +12,19 @@ fn natural_water_stats(seed: u64, catalog: &PrototypeCatalog) -> (f64, f64) {
     // Comfortably beyond the spawn elevation bias's outer radius.
     const SPAWN_EXCLUSION: i64 = 160;
     let half_extent = 256;
-
+    let mask_extent = half_extent + 1;
+    let mask_width = (mask_extent * 2 + 1) as usize;
+    let mut water_mask = Vec::with_capacity(mask_width * mask_width);
+    for y in -mask_extent..=mask_extent {
+        for x in -mask_extent..=mask_extent {
+            let (_, collision) = generate_terrain(seed, x, y, &rules);
+            water_mask.push(!collision.walkable && !collision.buildable);
+        }
+    }
     let is_water = |x: i64, y: i64| {
-        let (_, collision) = generate_terrain(seed, x, y, &rules);
-        !collision.walkable && !collision.buildable
+        let row = (y + mask_extent) as usize;
+        let column = (x + mask_extent) as usize;
+        water_mask[row * mask_width + column]
     };
 
     let mut total = 0u64;
@@ -301,6 +310,21 @@ fn resource_richness_falls_smoothly_from_patch_center() {
 }
 
 #[test]
+fn non_positive_effective_resource_radius_is_excluded() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let resource_item = catalog.world_generation.resources[0].resource_item;
+    let centers = [ResourcePatchCenter {
+        resource_item,
+        x: 0,
+        y: 0,
+        radius: 0,
+        richness: 300,
+    }];
+
+    assert_eq!(resource_at_patch_tile(123, 0, 0, &centers, 0), None);
+}
+
+#[test]
 fn warp_offsets_are_coherent_and_span_their_range() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let rules = WorldGenerator::from_catalog(&catalog);
@@ -392,7 +416,7 @@ fn domain_warp_displaces_the_terrain_field() {
 }
 
 #[test]
-fn terrain_field_is_deterministic_and_seed_dependent() {
+fn chunk_generation_is_deterministic_and_seed_dependent() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let rules = WorldGenerator::from_catalog(&catalog);
     let coord = ChunkCoord { x: 0, y: 0 };
