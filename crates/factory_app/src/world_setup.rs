@@ -449,11 +449,12 @@ pub(crate) fn handle_world_setup_load_buttons(
             continue;
         }
         match action {
-            WorldSetupAction::LoadSave(id) => {
-                if !load_save(id, &catalog, &pending, &mut status, &mut load_state) {
-                    setup.validation_error = status.message.clone();
-                }
+            WorldSetupAction::LoadSave(id)
+                if !load_save(id, &catalog, &pending, &mut status, &mut load_state) =>
+            {
+                setup.validation_error = status.message.clone();
             }
+            WorldSetupAction::LoadSave(_) => {}
             WorldSetupAction::DeleteSave(id) => {
                 *confirmation = PendingSaveConfirmation::Delete(id.clone())
             }
