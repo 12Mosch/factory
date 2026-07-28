@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"${CLAUDE_CODE_REMOTE:-}\" = \"true\" ]; then if [ -f Cargo.lock ]; then cargo fetch --locked; else cargo fetch; fi; fi",
+            "timeout": 1200
+          }
+        ]
+      }
+    ]
+  }
+}
