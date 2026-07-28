@@ -97,12 +97,46 @@ pub(crate) fn entity_is_unlocked(sim: &Simulation, prototype_id: EntityPrototype
         .is_entity_unlocked(prototype_id)
 }
 
+/// Rejects a rail whose end would land on an existing rail end facing the same
+/// way — two pieces of track laid over each other rather than a join. See
+/// [`rail_ops::conflicting_rail_end`] for why this rule belongs to the rail
+/// graph rather than to the occupancy grid.
+pub(crate) fn validate_rail_placement(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+    footprint: &EntityFootprint,
+    direction: Direction,
+    ignored_entity_id: Option<EntityId>,
+) -> Result<(), BuildError> {
+    let Some(ends) =
+        rail_ops::rail_ends_for_placement(&sim.world, prototype_id, footprint, direction)
+    else {
+        return Ok(());
+    };
+    let Some((end, entity_id)) = rail_ops::conflicting_rail_end(sim, ends, ignored_entity_id)
+    else {
+        return Ok(());
+    };
+
+    let (x, y) = end.position.tile();
+    Err(BuildError::EntityOccupied { x, y, entity_id })
+}
+
 pub(crate) fn validate_entity_placement(
     sim: &Simulation,
     request: EntityPlacementRequest,
 ) -> Result<EntityFootprint, BuildError> {
-    PlacementValidator::new(&sim.world, &sim.entities, &sim.player, &sim.research)
-        .validate_entity_placement(request)
+    let footprint = PlacementValidator::new(&sim.world, &sim.entities, &sim.player, &sim.research)
+        .validate_entity_placement(request)?;
+    validate_rail_placement(
+        sim,
+        request.prototype_id,
+        &footprint,
+        request.direction,
+        None,
+    )?;
+
+    Ok(footprint)
 }
 
 pub(crate) fn validate_player_inventory_placement(
@@ -186,6 +220,15 @@ pub(crate) fn validate_rotation(
     sim.entities
         .occupancy
         .validate_available(&footprint, Some(entity_id))?;
+    // A rotating rail may not turn into a duplicate of a neighbour's track, but
+    // its own current ends are not in its way.
+    validate_rail_placement(
+        sim,
+        entity.prototype_id,
+        &footprint,
+        direction,
+        Some(entity_id),
+    )?;
 
     Ok(Some(ValidatedRotation {
         footprint,

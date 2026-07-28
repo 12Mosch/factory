@@ -7,9 +7,9 @@ use crate::model::{
     EnemyGameplayConfig, EntityKind, EquipmentPrototype, FluidBoxIo, FurnacePrototype,
     GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, LogisticChestPrototype,
     ModuleEffectPrototype, NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype,
-    RadarPrototype, RepairToolPrototype, ResourceExtraction, RoboportPrototype, RobotPrototype,
-    SolarPanelPrototype, SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype,
-    UndergroundPipePrototype, UnitPrototype, VirtualSignalKind,
+    RadarPrototype, RailPiecePrototype, RepairToolPrototype, ResourceExtraction, RoboportPrototype,
+    RobotPrototype, SolarPanelPrototype, SplitterPrototype, SteamEnginePrototype,
+    TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype, VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -234,6 +234,10 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) circuit_connector: Option<CircuitConnectorPrototype>,
     #[serde(default)]
     pub(crate) combinator: Option<CombinatorPrototype>,
+    /// Sub-tile rail geometry. Every field is a plain scalar or enum, so the
+    /// declared form is already the resolved one and needs no raw counterpart.
+    #[serde(default)]
+    pub(crate) rail_piece: Option<RailPiecePrototype>,
 }
 
 #[derive(Debug, Deserialize)]

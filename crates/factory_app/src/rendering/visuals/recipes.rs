@@ -7,6 +7,7 @@ mod items;
 mod logistics;
 mod power;
 mod production;
+mod rails;
 
 use super::layers::VisualLayer;
 use super::templates::VisualTemplate;
@@ -23,12 +24,14 @@ pub(super) fn visual_layers(
             kind,
             direction,
             connections,
+            rail,
         } => entities::entity_layers(super::EntityVisualStyle {
             base_color: color,
             size,
             kind,
             direction,
             connections,
+            rail,
         }),
         VisualTemplate::BeltItem => belt_item_layers(color, size),
         VisualTemplate::Resource => resource_layers(color, size),
@@ -48,6 +51,7 @@ mod tests {
             kind,
             direction: Direction::North,
             connections,
+            rail: None,
         }
     }
 

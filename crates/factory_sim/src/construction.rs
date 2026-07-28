@@ -142,20 +142,11 @@ fn rotate_blueprint_entities_once(
                 prototype_id: entity.prototype_id,
                 dx: entity.dy,
                 dy: width - entity.dx - entity_width,
-                direction: rotate_direction_clockwise(entity.direction),
+                direction: entity.direction.rotate_clockwise(),
                 recipe: entity.recipe,
             }
         })
         .collect()
-}
-
-fn rotate_direction_clockwise(direction: Direction) -> Direction {
-    match direction {
-        Direction::North => Direction::East,
-        Direction::East => Direction::South,
-        Direction::South => Direction::West,
-        Direction::West => Direction::North,
-    }
 }
 
 #[cfg(test)]

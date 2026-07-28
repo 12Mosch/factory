@@ -1,5 +1,5 @@
 use factory_data::EntityKind;
-use factory_sim::Direction;
+use factory_sim::{Direction, RailPieceGeometry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum VisualTemplate {
@@ -7,6 +7,13 @@ pub(super) enum VisualTemplate {
         kind: EntityKind,
         direction: Direction,
         connections: ConnectionMask,
+        /// Present only for track, in the **prototype-local** frame — measured
+        /// from the piece's own footprint corner, never world space. Two rail
+        /// prototypes of the same kind and direction can still describe
+        /// different curves, so the shape belongs in the cache key; keeping it
+        /// placement-independent is what lets every rail of one kind share a
+        /// single rasterized texture.
+        rail: Option<RailPieceGeometry>,
     },
     BeltItem,
     Resource,

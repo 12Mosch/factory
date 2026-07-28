@@ -4,6 +4,7 @@ pub(crate) mod mining;
 pub(crate) mod movement;
 pub mod panels;
 pub(crate) mod planner;
+pub(crate) mod rail_debug;
 pub(crate) mod repair;
 pub mod resources;
 pub(crate) mod robot_debug;

@@ -182,6 +182,10 @@ pub enum PrototypeLoadError {
         entity: String,
         connection_index: usize,
     },
+    InvalidRailMetadata {
+        entity: String,
+        detail: &'static str,
+    },
     MissingBurntResultItem {
         item: String,
         burnt_result: String,
@@ -435,6 +439,12 @@ impl fmt::Display for PrototypeLoadError {
                 formatter,
                 "entity {entity:?} has invalid heat connection {connection_index}"
             ),
+            Self::InvalidRailMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid rail metadata: {detail}"
+                )
+            }
             Self::MissingBurntResultItem { item, burnt_result } => write!(
                 formatter,
                 "item {item:?} references unknown burnt result item {burnt_result:?}"

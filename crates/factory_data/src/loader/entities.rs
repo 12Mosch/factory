@@ -6,8 +6,9 @@ use crate::error::PrototypeLoadError;
 use crate::ids::{EntityPrototypeId, FluidId, ItemId};
 use crate::model::{
     ConnectionSide, EdgeConnectionPrototype, ElectricPolePrototype, EnemySpawnerPrototype,
-    EntityPrototype, FluidBoxPrototype, HeatBufferPrototype, InserterPrototype,
-    MiningDrillPrototype, PumpjackPrototype,
+    EntityKind, EntityPrototype, FluidBoxPrototype, HeatBufferPrototype, InserterPrototype,
+    MiningDrillPrototype, POSITION_SCALE, PumpjackPrototype, RailCurvePrototype, RailHeading,
+    RailPiecePrototype, RailPointPrototype,
 };
 use crate::raw::{
     RawEdgeConnectionPrototype, RawEntityPrototype, RawFluidBoxPrototype, RawHeatBufferPrototype,
@@ -38,6 +39,7 @@ pub(super) fn load_entities(
             }
             let name = entity.name;
             let size = IVec2::new(entity.size.x, entity.size.y);
+            validate_rail_metadata(&name, entity.entity_kind, size, entity.rail_piece.as_ref())?;
             let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
             match (
                 build_item.is_some(),
@@ -161,6 +163,7 @@ pub(super) fn load_entities(
                 }),
                 circuit_connector: entity.circuit_connector,
                 combinator: entity.combinator,
+                rail_piece: entity.rail_piece,
             })
         })
         .collect()
@@ -858,6 +861,130 @@ fn validate_heat_metadata(
     }
 
     Ok(())
+}
+
+/// Checks that a rail piece's declared geometry describes track a train can
+/// actually run on, and that no other entity kind claims to be track.
+///
+/// Everything here is a property the rail graph, the placement rules, and the
+/// renderer all assume without re-checking: ends sit on the footprint edge they
+/// face, the path between them matches the headings, and the whole piece stays
+/// inside its own footprint so tile-locked occupancy really does reserve every
+/// tile the track crosses.
+fn validate_rail_metadata(
+    name: &str,
+    entity_kind: EntityKind,
+    size: IVec2,
+    rail_piece: Option<&RailPiecePrototype>,
+) -> Result<(), PrototypeLoadError> {
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRailMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    let Some(rail_piece) = rail_piece else {
+        if entity_kind.is_rail() {
+            return invalid("rail entities require rail_piece geometry");
+        }
+        return Ok(());
+    };
+    if !entity_kind.is_rail() {
+        return invalid("rail_piece geometry is only valid on rail entities");
+    }
+
+    let width = i64::from(size.x) * i64::from(POSITION_SCALE);
+    let height = i64::from(size.y) * i64::from(POSITION_SCALE);
+    // Ends inside the footprint is what keeps the whole piece inside it, and so
+    // what makes tile-locked occupancy honest. A straight is the segment between
+    // its ends and the footprint is convex, so it cannot escape. An arc's center
+    // shares one coordinate with each end (each radius is axis-aligned, checked
+    // below), so the center is inside too, and every point of a quarter arc lies
+    // between the center and the ends on both axes.
+    for end in rail_piece.ends() {
+        if !point_is_inside(end.position, width, height) {
+            return invalid("rail ends must lie inside the footprint");
+        }
+        let (x, y) = (i64::from(end.position.x), i64::from(end.position.y));
+        let on_edge = match end.heading {
+            RailHeading::North => y == height,
+            RailHeading::East => x == width,
+            RailHeading::South => y == 0,
+            RailHeading::West => x == 0,
+        };
+        if !on_edge {
+            return invalid("a rail end must sit on the footprint edge its heading leaves through");
+        }
+    }
+    if rail_piece.start.position == rail_piece.end.position {
+        return invalid("a rail piece needs two distinct ends");
+    }
+
+    match rail_piece.curve {
+        RailCurvePrototype::Straight => {
+            if rail_piece.start.heading != rail_piece.end.heading.opposite() {
+                return invalid("a straight rail's ends must face opposite headings");
+            }
+            let (step_x, step_y) = rail_piece.end.heading.step();
+            let (dx, dy) = offset(rail_piece.start.position, rail_piece.end.position);
+            if dx * i64::from(step_y) - dy * i64::from(step_x) != 0
+                || dx * i64::from(step_x) + dy * i64::from(step_y) <= 0
+            {
+                return invalid(
+                    "a straight rail must run from one end to the other along its own heading",
+                );
+            }
+        }
+        RailCurvePrototype::QuarterArc { center } => {
+            if !rail_piece
+                .start
+                .heading
+                .is_perpendicular_to(rail_piece.end.heading)
+            {
+                return invalid("a curved rail's ends must face perpendicular headings");
+            }
+            let radius = rail_piece.radius();
+            if radius == 0 {
+                return invalid("a curved rail needs a positive turning radius");
+            }
+            // The arc's length is derived from the radius as a whole number of
+            // fixed-point units, so a radius that is not one would make the
+            // declared curve and its measured length disagree.
+            let squared_radius = i128::from(radius) * i128::from(radius);
+            if squared_radius != center.squared_distance_to(rail_piece.start.position) {
+                return invalid("a curved rail's radius must be a whole number of units");
+            }
+            for end in rail_piece.ends() {
+                if center.squared_distance_to(end.position) != squared_radius {
+                    return invalid("both ends of a curved rail must sit on one circle");
+                }
+                let (dx, dy) = offset(center, end.position);
+                let (step_x, step_y) = end.heading.step();
+                if dx * i64::from(step_x) + dy * i64::from(step_y) != 0 {
+                    return invalid("a curved rail must leave each end along the tangent");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn point_is_inside(point: RailPointPrototype, width: i64, height: i64) -> bool {
+    let (x, y) = (i64::from(point.x), i64::from(point.y));
+    x >= 0 && y >= 0 && x <= width && y <= height
+}
+
+/// Vector between two sub-tile points. Each coordinate is widened before the
+/// subtraction, so a difference wider than an `i32` cannot wrap; the result is
+/// only ever used for the dot and cross products that check an axis, both of
+/// which stay well inside an `i64`.
+fn offset(from: RailPointPrototype, to: RailPointPrototype) -> (i64, i64) {
+    (
+        i64::from(to.x) - i64::from(from.x),
+        i64::from(to.y) - i64::from(from.y),
+    )
 }
 
 fn resolve_pumpjack(

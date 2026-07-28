@@ -3,7 +3,8 @@ use glam::IVec2;
 use crate::catalog::PrototypeCatalog;
 use crate::model::{
     AssemblingMachinePrototype, BuildingCategory, CraftingCategory, ElectricEnergySourcePrototype,
-    EntityKind, UndergroundBeltPart,
+    EntityKind, POSITION_SCALE, RailCurvePrototype, RailEndPrototype, RailHeading,
+    RailPointPrototype, UndergroundBeltPart,
 };
 
 #[test]
@@ -563,4 +564,106 @@ fn radar_entity_loads_scan_and_power_metadata() {
     assert_eq!(metadata.far_scan_radius_chunks, 14);
     assert_eq!(metadata.far_scan_interval_ticks, 2_000);
     assert!(radar.burner.is_none());
+}
+
+#[test]
+fn rail_entities_load_shared_build_item_and_sub_tile_geometry() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    let rail_item = crate::item_id_by_name(&catalog, "rail");
+
+    let straight = entity_by_name(&catalog, "rail_straight");
+    assert_eq!(straight.entity_kind, EntityKind::RailStraight);
+    assert_eq!(straight.build_item, Some(rail_item));
+    assert_eq!(straight.size, IVec2::new(1, 2));
+    let straight_piece = straight
+        .rail_piece
+        .expect("rail_straight should declare rail geometry");
+    assert_eq!(
+        straight_piece.start,
+        RailEndPrototype {
+            position: RailPointPrototype { x: 512, y: 0 },
+            heading: RailHeading::South,
+        }
+    );
+    assert_eq!(
+        straight_piece.end,
+        RailEndPrototype {
+            position: RailPointPrototype { x: 512, y: 2_048 },
+            heading: RailHeading::North,
+        }
+    );
+    assert_eq!(straight_piece.curve, RailCurvePrototype::Straight);
+    // A two-tile straight is exactly two tiles of travel.
+    assert_eq!(straight_piece.length(), 2 * i64::from(POSITION_SCALE));
+
+    let curved = entity_by_name(&catalog, "rail_curved");
+    assert_eq!(curved.entity_kind, EntityKind::RailCurved);
+    assert_eq!(curved.build_item, Some(rail_item));
+    assert_eq!(curved.size, IVec2::new(2, 2));
+    let curved_piece = curved
+        .rail_piece
+        .expect("rail_curved should declare rail geometry");
+    assert_eq!(
+        curved_piece.curve,
+        RailCurvePrototype::QuarterArc {
+            center: RailPointPrototype { x: 2_048, y: 0 },
+        }
+    );
+    assert_eq!(curved_piece.radius(), 1_536);
+    // A quarter turn of radius 1.5 tiles: 1536 * pi / 2, rounded down.
+    assert_eq!(curved_piece.length(), 2_412);
+}
+
+/// A curve's ends have to line up with the ends a straight offers, or no corner
+/// could ever be built. Straights run up the middle of a column, so their ends
+/// sit at a tile-center x on a tile-boundary y; the curve's ends must be
+/// reachable from that same lattice.
+#[test]
+fn rail_curve_ends_line_up_with_straight_ends() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    let scale = POSITION_SCALE;
+    let curved = entity_by_name(&catalog, "rail_curved")
+        .rail_piece
+        .expect("rail_curved should declare rail geometry");
+
+    for end in curved.ends() {
+        let (x, y) = (end.position.x, end.position.y);
+        match end.heading {
+            RailHeading::North | RailHeading::South => {
+                assert_eq!(
+                    x.rem_euclid(scale),
+                    scale / 2,
+                    "vertical ends run up a column"
+                );
+                assert_eq!(
+                    y.rem_euclid(scale),
+                    0,
+                    "vertical ends sit on a row boundary"
+                );
+            }
+            RailHeading::East | RailHeading::West => {
+                assert_eq!(
+                    x.rem_euclid(scale),
+                    0,
+                    "horizontal ends sit on a column boundary"
+                );
+                assert_eq!(
+                    y.rem_euclid(scale),
+                    scale / 2,
+                    "horizontal ends run along a row"
+                );
+            }
+        }
+    }
+}
+
+fn entity_by_name<'a>(
+    catalog: &'a PrototypeCatalog,
+    name: &str,
+) -> &'a crate::model::EntityPrototype {
+    catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == name)
+        .unwrap_or_else(|| panic!("base catalog should contain {name}"))
 }

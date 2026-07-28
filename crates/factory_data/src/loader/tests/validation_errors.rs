@@ -1459,3 +1459,189 @@ fn logistic_chest_row_counts_must_match_the_mode() {
         );
     }
 }
+
+/// Builds a one-piece rail catalog whose kind, footprint, and geometry can be
+/// overridden, so each check below differs only in the field it is about.
+fn rail_catalog(
+    entity_kind: &str,
+    size: &str,
+    rail_piece: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "rail", stack_size: 100)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "rail",
+                entity_kind: {entity_kind},
+                build_item: Some("rail"),
+                building_category: Some(Logistics),
+                building_menu_order: Some(140),
+                size: {size},
+                collision_mask: (layers: ["transport"]),
+                max_health: Some(100),
+                rail_piece: {rail_piece},
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+const VALID_STRAIGHT_PIECE: &str = r#"Some((
+    start: (position: (x: 512, y: 0), heading: South),
+    end: (position: (x: 512, y: 2048), heading: North),
+    curve: Straight,
+))"#;
+
+#[test]
+fn valid_rail_geometry_loads() {
+    let catalog = rail_catalog("RailStraight", "(x: 1, y: 2)", VALID_STRAIGHT_PIECE)
+        .expect("a well-formed rail piece should load");
+
+    assert_eq!(
+        catalog.entities[0]
+            .rail_piece
+            .expect("rail geometry should be present")
+            .length(),
+        2_048
+    );
+}
+
+#[test]
+fn rail_entities_require_geometry() {
+    let error = rail_catalog("RailStraight", "(x: 1, y: 2)", "None")
+        .expect_err("a rail without geometry has no path to run on");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRailMetadata { entity, .. } if entity == "rail"
+    ));
+}
+
+#[test]
+fn rail_geometry_on_other_kinds_fails() {
+    let error = rail_catalog("Wall", "(x: 1, y: 2)", VALID_STRAIGHT_PIECE)
+        .expect_err("only rails declare rail geometry");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRailMetadata { entity, .. } if entity == "rail"
+    ));
+}
+
+/// Each of these breaks one geometric rule the rail graph and the renderer rely
+/// on, and every one of them would otherwise produce track that connects to
+/// nothing, leaves its own footprint, or has no well-defined length.
+#[test]
+fn malformed_rail_geometry_is_rejected() {
+    let cases = [
+        (
+            "end off the footprint edge it faces",
+            "RailStraight",
+            "(x: 1, y: 2)",
+            r#"Some((
+                start: (position: (x: 512, y: 256), heading: South),
+                end: (position: (x: 512, y: 2048), heading: North),
+                curve: Straight,
+            ))"#,
+        ),
+        (
+            "end outside the footprint",
+            "RailStraight",
+            "(x: 1, y: 2)",
+            r#"Some((
+                start: (position: (x: 512, y: 0), heading: South),
+                end: (position: (x: 512, y: 4096), heading: North),
+                curve: Straight,
+            ))"#,
+        ),
+        (
+            "straight whose ends do not face opposite ways",
+            "RailStraight",
+            "(x: 2, y: 2)",
+            r#"Some((
+                start: (position: (x: 512, y: 0), heading: South),
+                end: (position: (x: 2048, y: 512), heading: East),
+                curve: Straight,
+            ))"#,
+        ),
+        (
+            "curve whose ends are not on one circle",
+            "RailCurved",
+            "(x: 2, y: 2)",
+            r#"Some((
+                start: (position: (x: 512, y: 0), heading: South),
+                end: (position: (x: 2048, y: 1536), heading: East),
+                curve: QuarterArc(center: (x: 2048, y: 512)),
+            ))"#,
+        ),
+        (
+            "curve that does not leave its end along the tangent",
+            "RailCurved",
+            "(x: 2, y: 2)",
+            r#"Some((
+                start: (position: (x: 512, y: 0), heading: South),
+                end: (position: (x: 1536, y: 2048), heading: North),
+                curve: QuarterArc(center: (x: 2048, y: 0)),
+            ))"#,
+        ),
+        (
+            "curve whose ends face the same way",
+            "RailCurved",
+            "(x: 2, y: 2)",
+            r#"Some((
+                start: (position: (x: 512, y: 0), heading: South),
+                end: (position: (x: 1536, y: 0), heading: South),
+                curve: QuarterArc(center: (x: 2048, y: 0)),
+            ))"#,
+        ),
+    ];
+
+    for (reason, entity_kind, size, rail_piece) in cases {
+        let error = rail_catalog(entity_kind, size, rail_piece)
+            .err()
+            .unwrap_or_else(|| panic!("{reason} should be rejected"));
+        assert!(
+            matches!(error, PrototypeLoadError::InvalidRailMetadata { entity, .. } if entity == "rail"),
+            "{reason} should be reported as invalid rail metadata"
+        );
+    }
+}
+
+/// The arc's length is computed from a whole-unit radius, so a curve whose ends
+/// sit at an irrational distance from its center would have a length that does
+/// not match the curve it declares.
+#[test]
+fn a_curve_with_a_fractional_radius_is_rejected() {
+    let error = rail_catalog(
+        "RailCurved",
+        "(x: 2, y: 2)",
+        r#"Some((
+            start: (position: (x: 0, y: 1000), heading: West),
+            end: (position: (x: 1000, y: 0), heading: South),
+            curve: QuarterArc(center: (x: 0, y: 0)),
+        ))"#,
+    )
+    .err();
+
+    // Radius 1000 is whole here, so this case must load; the guard is exercised
+    // by the mismatched pair below.
+    assert!(error.is_none(), "a whole-unit radius is fine");
+
+    let error = rail_catalog(
+        "RailCurved",
+        "(x: 2, y: 2)",
+        r#"Some((
+            start: (position: (x: 0, y: 1001), heading: West),
+            end: (position: (x: 1001, y: 0), heading: South),
+            curve: QuarterArc(center: (x: 3, y: 4)),
+        ))"#,
+    )
+    .expect_err("a curve whose ends are not a whole radius from its center is not a circle");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRailMetadata { entity, .. } if entity == "rail"
+    ));
+}

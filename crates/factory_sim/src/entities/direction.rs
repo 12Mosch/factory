@@ -35,4 +35,27 @@ impl Direction {
             Direction::West => Direction::East,
         }
     }
+
+    /// The next direction a quarter turn clockwise. Rotating a placed entity,
+    /// rotating a blueprint, and rotating prototype-local geometry all step
+    /// through the compass this way, so they share one definition of it.
+    pub fn rotate_clockwise(self) -> Direction {
+        match self {
+            Direction::North => Direction::East,
+            Direction::East => Direction::South,
+            Direction::South => Direction::West,
+            Direction::West => Direction::North,
+        }
+    }
+
+    /// Unit step along this direction in tiles, with north at `+y` — the
+    /// convention belts, drills, and inserters already use.
+    pub fn tile_step(self) -> (i64, i64) {
+        match self {
+            Direction::North => (0, 1),
+            Direction::East => (1, 0),
+            Direction::South => (0, -1),
+            Direction::West => (-1, 0),
+        }
+    }
 }

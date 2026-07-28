@@ -62,6 +62,7 @@ impl Simulation {
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::default(),
             heat: HeatSubsystem::default(),
+            rails: RailSubsystem::default(),
             robots: RobotSubsystem::default(),
             robot_flights: RobotFlightSubsystem::default(),
             circuits: CircuitSubsystem::default(),
@@ -139,6 +140,10 @@ impl Simulation {
             self.advance_robots();
         });
         profiler.measure(ProfilePhase::Radars, || self.advance_radars());
+        // Rails have no per-tick work of their own yet; rebuilding the graph
+        // here is what keeps every query against it answering for the world as
+        // it is now rather than as it was before the last placement.
+        profiler.measure(ProfilePhase::Rails, || self.ensure_rail_graph());
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();
         });

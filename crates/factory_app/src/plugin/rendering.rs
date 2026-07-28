@@ -1,10 +1,12 @@
 use bevy::prelude::*;
 
 use super::{AppSet, InGameSet};
+use crate::input::rail_debug::toggle_rail_overlay_from_input;
 use crate::map::resources::VisibleChunks;
 use crate::rendering::belts::{
     measured_sync_belt_direction_rendering, measured_sync_belt_item_rendering,
 };
+use crate::rendering::build_preview::update_build_placement_preview_state;
 use crate::rendering::camera::{
     follow_player_camera, setup_camera, update_render_detail, update_visible_chunks,
 };
@@ -19,6 +21,9 @@ use crate::rendering::manual_mining::{
     update_manual_mining_progress_bar,
 };
 use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
+use crate::rendering::rails::{
+    RailOverlayRenderState, sync_rail_connection_preview, sync_rail_graph_overlay,
+};
 use crate::rendering::resource_cells::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
@@ -51,6 +56,7 @@ impl Plugin for RenderingPlugin {
             .init_resource::<BeltItemRenderPool>()
             .init_resource::<CircuitWireRenderState>()
             .init_resource::<RoboportCoverageRenderState>()
+            .init_resource::<RailOverlayRenderState>()
             .add_systems(
                 Startup,
                 (
@@ -92,9 +98,23 @@ impl Plugin for RenderingPlugin {
                     measured_sync_belt_item_rendering,
                     sync_circuit_wire_rendering,
                     sync_roboport_coverage_rendering,
+                    // Reads the overlay toggle written in `WorldInput`, which
+                    // this set has no ordering against, so it says so itself
+                    // rather than showing last frame's answer when the
+                    // scheduler happens to run it first.
+                    sync_rail_graph_overlay.after(toggle_rail_overlay_from_input),
                 )
                     .chain()
                     .in_set(AppSet::RenderSync),
+            )
+            // The rail connection markers follow the build cursor, so they
+            // belong beside the build preview they annotate: same set, same
+            // ordering against the state both of them read.
+            .add_systems(
+                Update,
+                sync_rail_connection_preview
+                    .after(update_build_placement_preview_state)
+                    .in_set(AppSet::WorldInput),
             );
     }
 }

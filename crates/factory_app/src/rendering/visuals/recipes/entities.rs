@@ -13,6 +13,7 @@ use super::power::{
 use super::production::{
     assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers,
 };
+use super::rails::rail_layers;
 use crate::rendering::visuals::EntityVisualStyle;
 use crate::rendering::visuals::layers::{VisualLayer, VisualLayerBuilder};
 
@@ -23,6 +24,13 @@ pub(super) fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
     // connected neighbors.
     if matches!(style.kind, EntityKind::Pipe | EntityKind::HeatPipe) {
         pipe_layers(&mut builder, style);
+        return builder.finish();
+    }
+
+    // Track is drawn along its own path rather than as a building block, so it
+    // skips the shared body, shadow, and relief entirely.
+    if let Some(rail) = style.rail {
+        rail_layers(&mut builder, style, rail);
         return builder.finish();
     }
 
@@ -60,6 +68,10 @@ pub(super) fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         | EntityKind::ArithmeticCombinator
         | EntityKind::DeciderCombinator => combinator_layers(&mut builder, style),
         EntityKind::Lamp => lamp_layers(&mut builder, style),
+        // Track without geometry cannot be drawn as track; it falls through to
+        // the shared body below so a malformed prototype is visible rather than
+        // invisible.
+        EntityKind::RailStraight | EntityKind::RailCurved => {}
         EntityKind::ResourcePatch => {}
     }
 

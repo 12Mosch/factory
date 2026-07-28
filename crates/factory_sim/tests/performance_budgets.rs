@@ -926,6 +926,7 @@ fn average_profile(samples: &[TickSample]) -> SimulationTickProfile {
         power: average_duration(samples, len, |profile| profile.power),
         robots: average_duration(samples, len, |profile| profile.robots),
         radars: average_duration(samples, len, |profile| profile.radars),
+        rails: average_duration(samples, len, |profile| profile.rails),
         machines: average_duration(samples, len, |profile| profile.machines),
         inserters: average_duration(samples, len, |profile| profile.inserters),
         inventory_transfers: average_duration(samples, len, |profile| profile.inventory_transfers),
@@ -949,6 +950,7 @@ fn percentile_profile(samples: &[TickSample], index: usize) -> SimulationTickPro
         power: percentile_duration(samples, index, |profile| profile.power),
         robots: percentile_duration(samples, index, |profile| profile.robots),
         radars: percentile_duration(samples, index, |profile| profile.radars),
+        rails: percentile_duration(samples, index, |profile| profile.rails),
         machines: percentile_duration(samples, index, |profile| profile.machines),
         inserters: percentile_duration(samples, index, |profile| profile.inserters),
         inventory_transfers: percentile_duration(samples, index, |profile| {
@@ -974,6 +976,7 @@ fn max_profile(samples: &[TickSample]) -> SimulationTickProfile {
         power: max_duration(samples, |profile| profile.power),
         robots: max_duration(samples, |profile| profile.robots),
         radars: max_duration(samples, |profile| profile.radars),
+        rails: max_duration(samples, |profile| profile.rails),
         machines: max_duration(samples, |profile| profile.machines),
         inserters: max_duration(samples, |profile| profile.inserters),
         inventory_transfers: max_duration(samples, |profile| profile.inventory_transfers),
