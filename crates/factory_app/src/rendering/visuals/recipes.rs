@@ -13,13 +13,16 @@ use super::EntityVisualStyle;
 use super::layers::{VisualLayer, VisualLayerBuilder};
 use super::templates::VisualTemplate;
 use crate::constants::TILE_SIZE;
-use defense::*;
-use fluids::*;
-use infrastructure::*;
-use items::*;
-use logistics::*;
-use power::*;
-use production::*;
+use defense::{enemy_spawner_layers, gun_turret_layers, laser_turret_layers, wall_layers};
+use fluids::{offshore_pump_layers, pipe_layers, pumpjack_layers, storage_tank_layers};
+use infrastructure::{combinator_layers, lamp_layers, radar_layers, roboport_layers};
+use items::{belt_item_layers, resource_layers};
+use logistics::{chest_layers, inserter_layers, splitter_layers, transport_belt_layers};
+use power::{
+    accumulator_layers, boiler_layers, electric_pole_layers, heat_exchanger_layers,
+    nuclear_reactor_layers, solar_panel_layers, steam_engine_layers,
+};
+use production::{assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers};
 
 pub(super) fn visual_layers(
     template: VisualTemplate,
