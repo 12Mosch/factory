@@ -435,6 +435,13 @@ impl Simulation {
         if travel_fixed == 0 {
             return 0;
         }
+        // Nothing to run into. Worth checking because the walk below is the one
+        // piece of per-tick work that is proportional to the world's stock
+        // rather than to the train, and a world with a single train — which is
+        // most of them, for most of a game — should not pay for it at all.
+        if self.rolling_stock.train_count() < 2 {
+            return travel_fixed;
+        }
         let Some(origin) = stock_ids
             .first()
             .and_then(|stock_id| self.rolling_stock.get(*stock_id))
