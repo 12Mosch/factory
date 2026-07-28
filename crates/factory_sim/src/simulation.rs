@@ -92,6 +92,10 @@ pub use crate::power::{
     PowerMapSnapshot, PowerNetworkSnapshot, PowerSummary, SolarPanelState, SteamEngineState,
 };
 pub use crate::radar::RadarState;
+pub use crate::rails::{
+    RailCurveGeometry, RailEndpoint, RailEndpointConnections, RailNetworkSnapshot,
+    RailPieceGeometry, RailPlacementPreview, RailPoint,
+};
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
@@ -115,9 +119,10 @@ pub const MANUAL_MINING_TICKS_PER_ITEM: u32 =
 pub const PLAYER_INVENTORY_SLOT_COUNT: usize = 80;
 const FIXED_SIM_TICKS_PER_SECOND: f32 = 60.0;
 pub const ITEM_STATISTICS_WINDOW_TICKS: u64 = 60 * FIXED_SIM_TICKS_PER_SECOND as u64;
-/// Fixed-point scale for free-moving positions (player, enemy units):
-/// 1024 units per tile.
-pub const POSITION_SCALE: i64 = 1024;
+/// Fixed-point scale for free-moving positions (player, enemy units, robots)
+/// and for rail travel geometry: 1024 units per tile. Widened from the
+/// catalog's own declaration so prototypes and the simulation cannot disagree.
+pub const POSITION_SCALE: i64 = factory_data::POSITION_SCALE as i64;
 const PLAYER_POSITION_SCALE: i64 = POSITION_SCALE;
 pub const MINING_DRILL_FUEL_SLOT_INDEX: usize = 0;
 pub const MINING_DRILL_OUTPUT_SLOT_INDEX: usize = 0;
@@ -214,6 +219,10 @@ pub struct Simulation {
     /// it because the two have different lifetimes: networks are a cache of
     /// placed roboports, while a robot outlives the roboport it came from.
     robot_flights: RobotFlightSubsystem,
+    /// Rail connectivity. Wholly derived from the placed track, so it is a
+    /// cache like `circuits` rather than saved state.
+    #[serde(skip)]
+    rails: RailSubsystem,
     #[serde(skip)]
     circuits: CircuitSubsystem,
     statistics: StatisticsSubsystem,
@@ -852,6 +861,8 @@ mod power_ops;
 mod power_state;
 mod profiling;
 mod radar_ops;
+mod rail_ops;
+mod rail_state;
 mod research_ops;
 mod robot_ops;
 mod robot_state;
@@ -886,6 +897,8 @@ use self::machine_ops::*;
 use self::power_state::{PowerDemandCache, PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
 pub use self::profiling::{SimulationCounts, SimulationTickProfile};
+pub use self::rail_ops::rail_geometry_in_footprint;
+use self::rail_state::RailSubsystem;
 use self::robot_state::RobotSubsystem;
 pub use self::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo, SaveLoadError,

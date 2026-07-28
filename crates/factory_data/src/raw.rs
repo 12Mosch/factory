@@ -234,6 +234,22 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) circuit_connector: Option<CircuitConnectorPrototype>,
     #[serde(default)]
     pub(crate) combinator: Option<CombinatorPrototype>,
+    #[serde(default)]
+    pub(crate) rail: Option<RawRailPrototype>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawRailPrototype {
+    pub(crate) entry: RawIVec2,
+    pub(crate) exit: RawIVec2,
+    pub(crate) curve: RawRailCurve,
+    pub(crate) length_fixed: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) enum RawRailCurve {
+    Straight,
+    Arc { center: RawIVec2, radius_fixed: u32 },
 }
 
 #[derive(Debug, Deserialize)]

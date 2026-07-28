@@ -5,6 +5,7 @@ mod items;
 mod logistics;
 mod power;
 mod production;
+mod rails;
 
 use bevy::prelude::*;
 use factory_data::EntityKind;
@@ -23,6 +24,7 @@ use power::{
     nuclear_reactor_layers, solar_panel_layers, steam_engine_layers,
 };
 use production::{assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers};
+use rails::rail_layers;
 
 pub(super) fn visual_layers(
     template: VisualTemplate,
@@ -34,12 +36,14 @@ pub(super) fn visual_layers(
             kind,
             direction,
             connections,
+            rail,
         } => entity_layers(EntityVisualStyle {
             base_color: color,
             size,
             kind,
             direction,
             connections,
+            rail,
         }),
         VisualTemplate::BeltItem => belt_item_layers(color, size),
         VisualTemplate::Resource => resource_layers(color, size),
@@ -53,6 +57,14 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
     // connected neighbors.
     if matches!(style.kind, EntityKind::Pipe | EntityKind::HeatPipe) {
         pipe_layers(&mut builder, style);
+        return builder.finish();
+    }
+
+    // Track is a path across its footprint rather than a building standing on
+    // it, so it skips the shared shadow, relief, and body plate that would
+    // otherwise draw a box around the rails.
+    if style.kind.is_rail() {
+        rail_layers(&mut builder, style);
         return builder.finish();
     }
 
@@ -91,7 +103,7 @@ fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         | EntityKind::ArithmeticCombinator
         | EntityKind::DeciderCombinator => combinator_layers(&mut builder, style),
         EntityKind::Lamp => lamp_layers(&mut builder, style),
-        EntityKind::ResourcePatch => {}
+        EntityKind::RailStraight | EntityKind::RailCurved | EntityKind::ResourcePatch => {}
     }
 
     builder.rounded_rect(
@@ -171,6 +183,7 @@ mod tests {
             kind,
             direction: Direction::North,
             connections,
+            rail: None,
         }
     }
 

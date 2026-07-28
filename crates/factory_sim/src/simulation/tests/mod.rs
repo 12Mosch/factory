@@ -24,6 +24,7 @@ mod placement;
 mod player;
 mod power;
 mod radar;
+mod rails;
 mod research;
 mod robots;
 mod solar;

@@ -173,7 +173,11 @@ impl Simulation {
             // Reactors and heat pipes carry temperature rather than a signal
             // the circuit network can express as an item or fluid count.
             | EntityKind::NuclearReactor
-            | EntityKind::HeatPipe => {}
+            | EntityKind::HeatPipe
+            // Track holds nothing and does nothing; what a circuit would want to
+            // read is the trains on it, and there are none yet.
+            | EntityKind::RailStraight
+            | EntityKind::RailCurved => {}
         }
     }
 

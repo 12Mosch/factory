@@ -64,6 +64,7 @@ impl Simulation {
             heat: HeatSubsystem::default(),
             robots: RobotSubsystem::default(),
             robot_flights: RobotFlightSubsystem::default(),
+            rails: RailSubsystem::default(),
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem::default(),
             pollution: PollutionState::default(),
@@ -117,6 +118,9 @@ impl Simulation {
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
         });
+        // Rails have no per-tick work; settling the graph here is what gives
+        // presentation and placement previews a rebuilt answer to read.
+        self.ensure_rail_graph();
         // Circuits resolve first so every gated consumer later in the tick
         // sees the same, already-settled network state.
         profiler.measure(ProfilePhase::Circuits, || self.advance_circuit_networks());

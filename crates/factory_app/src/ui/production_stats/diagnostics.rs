@@ -102,5 +102,7 @@ fn entity_kind_name(kind: EntityKind) -> &'static str {
         EntityKind::HeatPipe => "Heat pipes",
         EntityKind::HeatExchanger => "Heat exchangers",
         EntityKind::Roboport => "Roboports",
+        EntityKind::RailStraight => "Straight rails",
+        EntityKind::RailCurved => "Curved rails",
     }
 }

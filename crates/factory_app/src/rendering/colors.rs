@@ -179,6 +179,39 @@ pub(crate) fn storage_tank_color() -> Color {
     Color::srgb(0.53, 0.62, 0.64)
 }
 
+/// Weathered steel: the rails themselves read against the dark ballast the
+/// track recipe lays under them.
+pub(crate) fn rail_color() -> Color {
+    Color::srgb(0.70, 0.71, 0.74)
+}
+
+/// Colour a rail connectivity marker by the network its piece belongs to.
+///
+/// The palette is small and cycled: a player reading the overlay is comparing
+/// neighbours, so what matters is that two runs meeting at a point differ, not
+/// that every network in the world has a unique hue. `None` is the prospective
+/// piece on the build cursor, which belongs to no network yet.
+pub(crate) fn rail_network_color(network_id: Option<u32>) -> Color {
+    const NETWORK_COLORS: [Color; 6] = [
+        Color::srgba(0.36, 0.78, 0.98, 0.92),
+        Color::srgba(0.98, 0.72, 0.30, 0.92),
+        Color::srgba(0.52, 0.90, 0.48, 0.92),
+        Color::srgba(0.92, 0.46, 0.72, 0.92),
+        Color::srgba(0.72, 0.60, 0.98, 0.92),
+        Color::srgba(0.96, 0.94, 0.44, 0.92),
+    ];
+
+    match network_id {
+        Some(network_id) => NETWORK_COLORS[network_id as usize % NETWORK_COLORS.len()],
+        None => Color::srgba(0.94, 0.96, 1.0, 0.92),
+    }
+}
+
+/// Hollows out the marker on an endpoint that joins nothing.
+pub(crate) fn rail_endpoint_dead_end_color() -> Color {
+    Color::srgba(0.06, 0.06, 0.08, 0.95)
+}
+
 pub(crate) fn wall_color() -> Color {
     Color::srgb(0.76, 0.78, 0.74)
 }

@@ -7,11 +7,11 @@ use crate::ids::{EntityPrototypeId, FluidId, ItemId};
 use crate::model::{
     ConnectionSide, EdgeConnectionPrototype, ElectricPolePrototype, EnemySpawnerPrototype,
     EntityPrototype, FluidBoxPrototype, HeatBufferPrototype, InserterPrototype,
-    MiningDrillPrototype, PumpjackPrototype,
+    MiningDrillPrototype, PumpjackPrototype, RailCurve, RailPrototype,
 };
 use crate::raw::{
     RawEdgeConnectionPrototype, RawEntityPrototype, RawFluidBoxPrototype, RawHeatBufferPrototype,
-    RawPumpjackPrototype,
+    RawPumpjackPrototype, RawRailCurve, RawRailPrototype,
 };
 use crate::validation::resolve_collision_mask;
 
@@ -72,6 +72,7 @@ pub(super) fn load_entities(
                 entity.electric_energy_source.is_some(),
                 entity.inventory_slot_count,
             )?;
+            let rail = resolve_rail(&name, entity.entity_kind, size, entity.rail)?;
             let pumpjack =
                 resolve_pumpjack(&name, entity.pumpjack, item_ids_by_name, fluid_ids_by_name)?;
             validate_machine_energy_source(
@@ -161,6 +162,7 @@ pub(super) fn load_entities(
                 }),
                 circuit_connector: entity.circuit_connector,
                 combinator: entity.combinator,
+                rail,
             })
         })
         .collect()
@@ -352,6 +354,67 @@ fn validate_logistic_chest_metadata(
         }
         _ => Ok(()),
     }
+}
+
+/// Resolves and checks a rail piece's travel geometry.
+///
+/// The section and the kind are tied together in both directions: a rail kind
+/// without geometry would be a piece the graph cannot see, and geometry on a
+/// non-rail kind would be geometry nothing reads.
+fn resolve_rail(
+    name: &str,
+    entity_kind: crate::model::EntityKind,
+    size: IVec2,
+    rail: Option<RawRailPrototype>,
+) -> Result<Option<RailPrototype>, PrototypeLoadError> {
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRailMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    let Some(rail) = rail else {
+        if entity_kind.is_rail() {
+            return invalid("rail entities require rail travel geometry");
+        }
+        return Ok(None);
+    };
+    if !entity_kind.is_rail() {
+        return invalid("rail travel geometry is only valid on rail entities");
+    }
+
+    let rail = RailPrototype {
+        entry: IVec2::new(rail.entry.x, rail.entry.y),
+        exit: IVec2::new(rail.exit.x, rail.exit.y),
+        curve: match rail.curve {
+            RawRailCurve::Straight => RailCurve::Straight,
+            RawRailCurve::Arc {
+                center,
+                radius_fixed,
+            } => RailCurve::Arc {
+                center: IVec2::new(center.x, center.y),
+                radius_fixed,
+            },
+        },
+        length_fixed: rail.length_fixed,
+    };
+    match (entity_kind, rail.curve) {
+        (crate::model::EntityKind::RailStraight, RailCurve::Arc { .. }) => {
+            return invalid("straight rail pieces declare a straight curve");
+        }
+        (crate::model::EntityKind::RailCurved, RailCurve::Straight) => {
+            return invalid("curved rail pieces declare an arc");
+        }
+        _ => {}
+    }
+    rail.validate(size)
+        .map_err(|error| PrototypeLoadError::InvalidRailGeometry {
+            entity: name.to_string(),
+            error,
+        })?;
+
+    Ok(Some(rail))
 }
 
 fn validate_module_and_beacon_metadata(

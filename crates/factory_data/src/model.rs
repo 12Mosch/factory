@@ -26,6 +26,14 @@ impl DayNightCycleConfig {
     }
 }
 
+/// Fixed-point scale for sub-tile positions: units per tile.
+///
+/// Every position finer than a tile — player and unit movement, robot flight,
+/// and rail travel geometry — is expressed in these units, so the number lives
+/// here rather than being restated per subsystem. `factory_sim` re-exports it
+/// widened to `i64` as `simulation::POSITION_SCALE`.
+pub const POSITION_SCALE: i32 = 1024;
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum DamageType {
     Physical,
@@ -288,6 +296,147 @@ pub struct EntityPrototype {
     pub circuit_connector: Option<CircuitConnectorPrototype>,
     /// Present on combinator entities.
     pub combinator: Option<CombinatorPrototype>,
+    /// Present on rail pieces; see [`RailPrototype`].
+    pub rail: Option<RailPrototype>,
+}
+
+/// Travel geometry of one rail piece.
+///
+/// Rails are the one entity whose useful geometry is finer than a tile: a train
+/// runs along a centre line that crosses tile interiors and, on a curve, is not
+/// axis-aligned at all. That path is declared here, in the same fixed-point
+/// units movement uses ([`POSITION_SCALE`], 1024 per tile), measured from the
+/// lower-left corner of the prototype's unrotated footprint. Deriving it from
+/// sprites instead would make the drawn track and the simulated track two
+/// independent authorings that silently drift apart.
+///
+/// Occupancy stays tile-locked: a piece reserves its whole rectangular
+/// footprint in the occupancy grid, so collision, mining, blueprints, and the
+/// map keep working unchanged and sub-tile geometry stays confined to this
+/// section. The cost is that two pieces can never share a tile, so rails only
+/// join end to end.
+///
+/// `entry` and `exit` are the two ends of the path. Which one is which carries
+/// no meaning — a rail is bidirectional — but keeping them ordered gives every
+/// endpoint a stable index. The outward direction of travel at each end is
+/// derived from the curve rather than declared, so the two can never disagree.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RailPrototype {
+    pub entry: IVec2,
+    pub exit: IVec2,
+    pub curve: RailCurve,
+    /// Path length between the endpoints, in fixed-point units. Declared
+    /// rather than recomputed per query because it is the weight every rail
+    /// graph edge carries; [`RailPrototype::validate`] pins it to the curve.
+    pub length_fixed: u32,
+}
+
+/// The path a rail piece takes between its endpoints.
+///
+/// The set is deliberately closed. An open-ended curve family would make the
+/// graph, the pathfinder, and the renderer all harder, and the choice is
+/// expensive to change once saves exist.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum RailCurve {
+    /// A straight segment from `entry` to `exit`.
+    Straight,
+    /// A quarter circle centred on `center`. Both endpoints sit exactly
+    /// `radius_fixed` from it along opposite axes, which is what makes the
+    /// piece meet a straight rail tangentially at each end.
+    Arc { center: IVec2, radius_fixed: u32 },
+}
+
+/// Why a rail prototype's declared geometry is not self-consistent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RailGeometryError {
+    /// An endpoint lies outside the prototype's footprint.
+    EndpointOutsideFootprint,
+    /// A straight piece's endpoints are equal or not axis-aligned.
+    StraightNotAxisAligned,
+    /// An endpoint is not `radius_fixed` from the arc centre along an axis.
+    EndpointOffArc,
+    /// The two arc radii are not perpendicular, so the piece is not a quarter
+    /// turn.
+    ArcIsNotAQuarterTurn,
+    /// `length_fixed` disagrees with the declared curve.
+    LengthDoesNotMatchCurve,
+}
+
+/// Numerator and denominator of a fixed-point approximation of pi/2, used to
+/// derive a quarter-arc's length from its radius without floating point.
+const QUARTER_TURN_NUMERATOR: u64 = 3_141_592_653;
+const QUARTER_TURN_DENOMINATOR: u64 = 2_000_000_000;
+
+impl RailPrototype {
+    /// Checks that the declared endpoints, curve, and length describe one
+    /// coherent piece inside a `size` footprint.
+    ///
+    /// Rail geometry is the one prototype section the simulation, the graph,
+    /// and the renderer all read as truth, so an incoherent piece is rejected
+    /// at load time rather than producing a track that connects in the graph
+    /// but not on screen.
+    pub fn validate(&self, size: IVec2) -> Result<(), RailGeometryError> {
+        let width = size.x.saturating_mul(POSITION_SCALE);
+        let height = size.y.saturating_mul(POSITION_SCALE);
+        for endpoint in [self.entry, self.exit] {
+            if endpoint.x < 0 || endpoint.x > width || endpoint.y < 0 || endpoint.y > height {
+                return Err(RailGeometryError::EndpointOutsideFootprint);
+            }
+        }
+
+        match self.curve {
+            RailCurve::Straight => self.validate_straight(),
+            RailCurve::Arc {
+                center,
+                radius_fixed,
+            } => self.validate_arc(center, radius_fixed),
+        }
+    }
+
+    fn validate_straight(&self) -> Result<(), RailGeometryError> {
+        let delta = self.exit - self.entry;
+        let length = match (delta.x, delta.y) {
+            (0, 0) => return Err(RailGeometryError::StraightNotAxisAligned),
+            (0, along) | (along, 0) => along.unsigned_abs(),
+            _ => return Err(RailGeometryError::StraightNotAxisAligned),
+        };
+        if length != self.length_fixed {
+            return Err(RailGeometryError::LengthDoesNotMatchCurve);
+        }
+
+        Ok(())
+    }
+
+    fn validate_arc(&self, center: IVec2, radius_fixed: u32) -> Result<(), RailGeometryError> {
+        let entry_radius = self.entry - center;
+        let exit_radius = self.exit - center;
+        for radius in [entry_radius, exit_radius] {
+            let on_axis = match (radius.x, radius.y) {
+                (0, 0) => false,
+                (0, offset) | (offset, 0) => offset.unsigned_abs() == radius_fixed,
+                _ => false,
+            };
+            if !on_axis {
+                return Err(RailGeometryError::EndpointOffArc);
+            }
+        }
+        // Two axis-aligned radii of equal length are perpendicular exactly when
+        // their dot product vanishes without them being equal or opposite.
+        if entry_radius.x * exit_radius.x + entry_radius.y * exit_radius.y != 0 {
+            return Err(RailGeometryError::ArcIsNotAQuarterTurn);
+        }
+        if quarter_turn_length(radius_fixed).abs_diff(self.length_fixed) > 1 {
+            return Err(RailGeometryError::LengthDoesNotMatchCurve);
+        }
+
+        Ok(())
+    }
+}
+
+/// Length of a quarter circle of `radius_fixed`, in the same fixed-point units.
+pub fn quarter_turn_length(radius_fixed: u32) -> u32 {
+    let length = u64::from(radius_fixed) * QUARTER_TURN_NUMERATOR / QUARTER_TURN_DENOMINATOR;
+    u32::try_from(length).unwrap_or(u32::MAX)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -880,6 +1029,19 @@ pub enum EntityKind {
     /// Anchors a robot network and covers a square of the world; see
     /// [`RoboportPrototype`].
     Roboport,
+    /// Two tiles of straight track; see [`RailPrototype`].
+    RailStraight,
+    /// A quarter turn of track joining a horizontal run to a vertical one; see
+    /// [`RailPrototype`].
+    RailCurved,
+}
+
+impl EntityKind {
+    /// Whether this kind is a piece of rail track, and therefore takes part in
+    /// the rail graph and must declare [`RailPrototype`] geometry.
+    pub const fn is_rail(self) -> bool {
+        matches!(self, Self::RailStraight | Self::RailCurved)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

@@ -14,14 +14,14 @@ use crate::rendering::colors::{
     decider_combinator_color, electric_pole_color, enemy_spawner_color, furnace_color,
     gun_turret_color, heat_exchanger_color, heat_pipe_color, inserter_color, lab_color, lamp_color,
     laser_turret_color, mining_drill_color, nuclear_reactor_color, offshore_pump_color,
-    oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, roboport_color,
-    solar_panel_color, splitter_color, steam_engine_color, storage_tank_color,
+    oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, rail_color,
+    roboport_color, solar_panel_color, splitter_color, steam_engine_color, storage_tank_color,
     transport_belt_color, wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
 use crate::rendering::visuals::{
-    ConnectionMask, EntityVisualStyle, VisualAssets, spawn_entity_visual,
+    ConnectionMask, EntityVisualStyle, RailVisual, VisualAssets, spawn_entity_visual,
 };
 use crate::resources::SimResource;
 
@@ -455,6 +455,25 @@ pub(crate) fn entity_prototype_visual_style(
             prototype.entity_kind,
             direction,
         )),
+        // Track fills its whole footprint rather than standing padded inside it:
+        // the drawn path has to line up tile-for-tile with the geometry the
+        // simulation connects, so the sprite gets the exact footprint extents.
+        EntityKind::RailStraight | EntityKind::RailCurved => {
+            let mut style = entity_visual_style(
+                rail_color(),
+                Vec2::new(
+                    footprint.width as f32 * TILE_SIZE,
+                    footprint.height as f32 * TILE_SIZE,
+                ),
+                prototype.entity_kind,
+                direction,
+            );
+            style.rail =
+                factory_sim::rail_geometry_in_footprint(prototype, direction).map(|geometry| {
+                    RailVisual::from_geometry(geometry, footprint.width, footprint.height)
+                });
+            Some(style)
+        }
         EntityKind::ResourcePatch => None,
     }
 }
@@ -471,6 +490,7 @@ fn entity_visual_style(
         kind,
         direction,
         connections: ConnectionMask::EMPTY,
+        rail: None,
     }
 }
 

@@ -40,7 +40,11 @@ use bincode::Options;
 // registry.
 // v34: flying robots gained the logistic delivery they own, and robot network
 // snapshots gained logistic robot and active delivery counts.
-pub const SAVE_VERSION: u32 = 34;
+// v35: rail track entities. The pieces themselves round-trip as ordinary placed
+// entities and add no state map; the rail graph is a derived cache rebuilt on
+// load, so nothing new is written. The bump is for the catalog: entity kinds and
+// the rail geometry section changed what a prototype encodes.
+pub const SAVE_VERSION: u32 = 35;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -62,7 +66,8 @@ pub const SAVE_VERSION: u32 = 34;
 // v23: robot flight profiles gained an explicit construction/logistic kind.
 // v24: chest prototypes gained logistic chest metadata (network role and
 // request rows), and the roboport gained a circuit connector.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 24;
+// v25: rail entity kinds and the fixed-point rail travel geometry section.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 25;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -358,6 +363,7 @@ impl SimulationSnapshotOwned {
             heat: HeatSubsystem::from_networks(self.heat_networks),
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
+            rails: RailSubsystem::default(),
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,
@@ -381,6 +387,9 @@ impl SimulationSnapshotOwned {
         // Robot coverage queries read the topology cache, so rebuild it before
         // anything can ask a loaded world which network covers a tile.
         sim.ensure_robot_network_topology();
+        // The rail graph is derived from the placed track, so a loaded world
+        // rebuilds it rather than reading it back.
+        sim.ensure_rail_graph();
         sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();

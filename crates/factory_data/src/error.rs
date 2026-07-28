@@ -178,6 +178,16 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidRailMetadata {
+        entity: String,
+        detail: &'static str,
+    },
+    /// A rail piece's declared endpoints, curve, and length do not describe one
+    /// coherent path.
+    InvalidRailGeometry {
+        entity: String,
+        error: crate::model::RailGeometryError,
+    },
     InvalidHeatConnection {
         entity: String,
         connection_index: usize,
@@ -426,6 +436,18 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has invalid logistic chest metadata: {detail}"
+                )
+            }
+            Self::InvalidRailMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid rail metadata: {detail}"
+                )
+            }
+            Self::InvalidRailGeometry { entity, error } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has incoherent rail geometry: {error:?}"
                 )
             }
             Self::InvalidHeatConnection {

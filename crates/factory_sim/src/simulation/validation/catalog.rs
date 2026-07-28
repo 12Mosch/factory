@@ -518,9 +518,38 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
+            EntityKind::RailStraight | EntityKind::RailCurved => {
+                let Some(rail) = prototype.rail.as_ref() else {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                };
+                // Track is placed and mined like any other building, so it needs
+                // the health and build item that makes both work, and it must
+                // hold no machinery of any other network.
+                if rail.validate(prototype.size).is_err()
+                    || prototype.build_item.is_none()
+                    || prototype.max_health.is_none_or(|health| health == 0)
+                    || prototype.burner.is_some()
+                    || prototype.electric_energy_source.is_some()
+                    || prototype.heat_buffer.is_some()
+                    || !prototype.fluid_boxes.is_empty()
+                    || prototype.circuit_connector.is_some()
+                    || prototype.inventory_slot_count.is_some()
+                {
+                    return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                        prototype_id: prototype.id,
+                    });
+                }
+            }
             _ => {}
         }
 
+        if !prototype.entity_kind.is_rail() && prototype.rail.is_some() {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
+        }
         if prototype.entity_kind != EntityKind::Roboport && prototype.roboport.is_some() {
             return Err(SimValidationError::InvalidCatalogEntityPrototype {
                 prototype_id: prototype.id,

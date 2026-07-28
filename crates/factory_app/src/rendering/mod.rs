@@ -10,6 +10,7 @@ pub(crate) mod entities;
 pub(crate) mod manual_mining;
 pub mod map_texture;
 pub(crate) mod player;
+pub(crate) mod rail_graph;
 pub mod resource_cells;
 pub mod resources;
 pub(crate) mod robot_coverage;

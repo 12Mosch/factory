@@ -53,6 +53,29 @@ pub(in crate::simulation::tests) fn complete_research_by_name(
         .unwrap_or_else(|_| panic!("{technology_name} should complete"));
 }
 
+/// Completes a technology together with everything it depends on.
+///
+/// Deep unlocks sit behind long prerequisite chains, and spelling one out in a
+/// test says nothing about what the test is checking.
+pub(in crate::simulation::tests) fn complete_research_with_prerequisites(
+    sim: &mut Simulation,
+    technology_name: &str,
+) {
+    let technology_id = technology_id(&sim.world.prototypes, technology_name);
+    for prerequisite_id in sim.world.prototypes.technologies[technology_id.index()]
+        .prerequisites
+        .clone()
+    {
+        let prerequisite = sim.world.prototypes.technologies[prerequisite_id.index()]
+            .name
+            .clone();
+        complete_research_with_prerequisites(sim, &prerequisite);
+    }
+    if !sim.is_technology_unlocked(technology_id) {
+        complete_research_by_name(sim, technology_name);
+    }
+}
+
 pub(in crate::simulation::tests) fn add_furnace_input_and_fuel(
     sim: &mut Simulation,
     entity_id: EntityId,

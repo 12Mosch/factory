@@ -307,6 +307,9 @@
                 flight_energy_usage_watts: 30000,
             )),
         ),
+        // One item places both track pieces: which one goes down is a build
+        // selection, not a different thing to carry.
+        (id: 111, name: "rail", stack_size: 100),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1550,6 +1553,19 @@
                 (item: "advanced_circuit", amount: 2),
             ],
             products: [(item: "logistic_robot", amount: 1)],
+        ),
+        // Track is laid by the length rather than the building, so one craft
+        // yields two pieces: four tiles of straight run, or two turns.
+        (
+            id: 109,
+            name: "rail",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "stone", amount: 1),
+                (item: "steel_plate", amount: 1),
+            ],
+            products: [(item: "rail", amount: 2)],
         ),
     ],
     entities: [
@@ -2910,6 +2926,55 @@
             logistic_chest: Some((mode: Requester, request_slot_count: 12)),
             max_health: Some(350),
         ),
+        // Rail travel geometry is in fixed-point position units (1024 per tile)
+        // measured from the lower-left corner of the unrotated footprint, the
+        // same units movement uses. It is the single authority for the track:
+        // the rail graph, placement previews, and the renderer all read these
+        // numbers rather than each deriving a path of their own.
+        //
+        // Vertical track runs down the middle of its column (x = 0.5 tiles);
+        // horizontal track runs down the middle of its row (y = 0.5 tiles).
+        // Every endpoint therefore lands on a half-tile centre line and a whole
+        // tile boundary, which is what lets a straight meet a curve exactly.
+        (
+            id: 69,
+            name: "rail_straight",
+            build_item: Some("rail"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(140),
+            entity_kind: RailStraight,
+            size: (x: 1, y: 2),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(100),
+            rail: Some((
+                entry: (x: 512, y: 0),
+                exit: (x: 512, y: 2048),
+                curve: Straight,
+                length_fixed: 2048,
+            )),
+        ),
+        // A quarter turn of radius 1.5 tiles centred on the footprint's
+        // lower-right corner: it enters heading north at the bottom of the left
+        // column and leaves heading east at the right of the top row, so a
+        // vertical straight below it and a horizontal straight to its right
+        // both meet it exactly at a shared endpoint.
+        (
+            id: 70,
+            name: "rail_curved",
+            build_item: Some("rail"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(150),
+            entity_kind: RailCurved,
+            size: (x: 2, y: 2),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(100),
+            rail: Some((
+                entry: (x: 512, y: 0),
+                exit: (x: 2048, y: 1536),
+                curve: Arc(center: (x: 2048, y: 0), radius_fixed: 1536),
+                length_fixed: 2412,
+            )),
+        ),
     ],
     tiles: [
         (
@@ -3591,6 +3656,21 @@
                 UnlockRecipe("requester_chest"),
                 UnlockRecipe("logistic_robot"),
             ],
+        ),
+        // Track needs steel in quantity and the belt tier that comes with
+        // `logistics_2`; the engine sits in the prerequisites because rolling
+        // stock is what the track exists for.
+        (
+            id: 42,
+            name: "railway",
+            prerequisites: ["logistics_2", "engine"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 75,
+            research_time_ticks: 1800,
+            effects: [UnlockRecipe("rail")],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

@@ -1,6 +1,13 @@
 use super::placement::PlayerPlacementRequest;
 use super::*;
 
+// Rail connectivity is previewed separately, by
+// [`Simulation::rail_placement_preview`]. What this module collects are reasons
+// a placement would be *rejected*, and a rail that joins nothing is a perfectly
+// valid placement — a player laying the first piece of a new line is not making
+// a mistake. Reporting it here would turn the issue list into a mix of errors
+// and advice.
+
 pub(crate) fn preview_from_player_inventory(
     sim: &Simulation,
     request: PlayerPlacementRequest,

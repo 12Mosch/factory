@@ -1,9 +1,10 @@
 use glam::IVec2;
 
 use crate::catalog::PrototypeCatalog;
+use crate::error::PrototypeLoadError;
 use crate::model::{
     AssemblingMachinePrototype, BuildingCategory, CraftingCategory, ElectricEnergySourcePrototype,
-    EntityKind, UndergroundBeltPart,
+    EntityKind, RailCurve, RailGeometryError, UndergroundBeltPart, quarter_turn_length,
 };
 
 #[test]
@@ -563,4 +564,144 @@ fn radar_entity_loads_scan_and_power_metadata() {
     assert_eq!(metadata.far_scan_radius_chunks, 14);
     assert_eq!(metadata.far_scan_interval_ticks, 2_000);
     assert!(radar.burner.is_none());
+}
+
+#[test]
+fn rail_entities_load_their_declared_travel_geometry() {
+    let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
+    let rail_item = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "rail")
+        .map(|item| item.id);
+
+    let straight = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "rail_straight")
+        .expect("base catalog should contain the straight rail");
+    assert_eq!(straight.entity_kind, EntityKind::RailStraight);
+    assert_eq!(straight.build_item, rail_item);
+    assert_eq!(straight.size, IVec2::new(1, 2));
+    let geometry = straight.rail.expect("straight rail declares geometry");
+    assert_eq!(geometry.entry, IVec2::new(512, 0));
+    assert_eq!(geometry.exit, IVec2::new(512, 2048));
+    assert_eq!(geometry.curve, RailCurve::Straight);
+    assert_eq!(geometry.length_fixed, 2048);
+
+    let curved = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "rail_curved")
+        .expect("base catalog should contain the curved rail");
+    assert_eq!(curved.entity_kind, EntityKind::RailCurved);
+    assert_eq!(curved.build_item, rail_item);
+    assert_eq!(curved.size, IVec2::new(2, 2));
+    let geometry = curved.rail.expect("curved rail declares geometry");
+    assert_eq!(
+        geometry.curve,
+        RailCurve::Arc {
+            center: IVec2::new(2048, 0),
+            radius_fixed: 1536,
+        }
+    );
+    // A quarter turn of radius 1.5 tiles, so the piece is longer than the two
+    // tiles it spans.
+    assert_eq!(geometry.length_fixed, quarter_turn_length(1536));
+    assert!(geometry.length_fixed > 2048);
+}
+
+/// Rail geometry is the one prototype section the simulation, the graph, and the
+/// renderer all read as truth, so an incoherent piece must not load at all.
+#[test]
+fn incoherent_rail_geometry_is_rejected() {
+    let cases = [
+        // An endpoint outside the two-tile footprint.
+        (
+            "entry: (x: 512, y: 0), exit: (x: 512, y: 4096), curve: Straight, length_fixed: 4096",
+            RailGeometryError::EndpointOutsideFootprint,
+        ),
+        // A diagonal "straight".
+        (
+            "entry: (x: 0, y: 0), exit: (x: 1024, y: 2048), curve: Straight, length_fixed: 2048",
+            RailGeometryError::StraightNotAxisAligned,
+        ),
+        // A length that disagrees with the endpoints.
+        (
+            "entry: (x: 512, y: 0), exit: (x: 512, y: 2048), curve: Straight, length_fixed: 1024",
+            RailGeometryError::LengthDoesNotMatchCurve,
+        ),
+    ];
+
+    for (rail, expected) in cases {
+        let result = rail_catalog("RailStraight", rail);
+        assert!(
+            matches!(
+                result,
+                Err(PrototypeLoadError::InvalidRailGeometry { ref error, .. }) if *error == expected
+            ),
+            "expected {expected:?}, got {result:?}"
+        );
+    }
+}
+
+#[test]
+fn rail_geometry_and_rail_kinds_require_each_other() {
+    assert!(matches!(
+        rail_catalog_without_geometry("RailStraight"),
+        Err(PrototypeLoadError::InvalidRailMetadata { .. })
+    ));
+    assert!(matches!(
+        rail_catalog(
+            "Wall",
+            "entry: (x: 512, y: 0), exit: (x: 512, y: 2048), curve: Straight, length_fixed: 2048",
+        ),
+        Err(PrototypeLoadError::InvalidRailMetadata { .. })
+    ));
+    // A straight kind declaring an arc is the same kind of mismatch.
+    assert!(matches!(
+        rail_catalog(
+            "RailStraight",
+            "entry: (x: 512, y: 0), exit: (x: 2048, y: 1536), \
+             curve: Arc(center: (x: 2048, y: 0), radius_fixed: 1536), length_fixed: 2412",
+        ),
+        Err(PrototypeLoadError::InvalidRailMetadata { .. })
+    ));
+}
+
+fn rail_catalog(entity_kind: &str, rail: &str) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "track",
+                entity_kind: {entity_kind},
+                size: (x: 1, y: 2),
+                collision_mask: (layers: ["building"]),
+                rail: Some(({rail})),
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+fn rail_catalog_without_geometry(
+    entity_kind: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "track",
+                entity_kind: {entity_kind},
+                size: (x: 1, y: 2),
+                collision_mask: (layers: ["building"]),
+            )],
+            tiles: [],
+        )"#
+    ))
 }

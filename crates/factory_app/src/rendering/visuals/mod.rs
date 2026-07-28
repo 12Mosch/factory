@@ -12,8 +12,8 @@ use factory_sim::Direction;
 pub(crate) use cache::VisualAssetCache;
 use cache::VisualCacheKey;
 use rasterizer::rasterize_visual;
-pub(crate) use templates::ConnectionMask;
 use templates::VisualTemplate;
+pub(crate) use templates::{ConnectionMask, RailVisual};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EntityVisualStyle {
@@ -22,6 +22,8 @@ pub(crate) struct EntityVisualStyle {
     pub(crate) kind: EntityKind,
     pub(crate) direction: Direction,
     pub(crate) connections: ConnectionMask,
+    /// Travel geometry, for the two rail kinds; see [`RailVisual`].
+    pub(crate) rail: Option<RailVisual>,
 }
 
 #[derive(SystemParam)]
@@ -37,6 +39,7 @@ impl VisualAssets<'_> {
                 kind: style.kind,
                 direction: style.direction,
                 connections: style.connections,
+                rail: style.rail,
             },
             style.base_color,
             style.size,

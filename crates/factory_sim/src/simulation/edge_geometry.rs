@@ -1,9 +1,18 @@
-//! Tile-edge connection geometry shared by fluid boxes and heat buffers.
+//! Placement geometry: turning what a prototype declares in its own frame into
+//! what a placed entity occupies in the world.
 //!
-//! Both networks join neighbours the same way: a prototype declares openings on
-//! footprint edges, and two entities are connected when their openings meet on
-//! the same edge of the tile grid. Rotating a declared opening into world space
-//! and naming the shared edge is therefore one problem, solved once here.
+//! Fluid boxes and heat buffers join neighbours the same way: a prototype
+//! declares openings on footprint edges, and two entities are connected when
+//! their openings meet on the same edge of the tile grid. Rotating a declared
+//! opening into world space and naming the shared edge is therefore one problem,
+//! solved once here.
+//!
+//! Rails need the same rotation at a finer resolution — their travel path is
+//! declared as sub-tile points rather than tile edges — so the underlying
+//! rotation lives here too, in [`rotate_local_point`] and
+//! [`rotate_local_direction`], and the tile-edge rotation is expressed in terms
+//! of the same convention. One rotation means a rail and a pipe on the same
+//! entity could never turn opposite ways.
 
 use crate::simulation::{Direction, PlacedEntity, WorldTileCoord};
 use factory_data::{ConnectionSide, EdgeConnectionPrototype, EntityPrototype};
@@ -76,6 +85,65 @@ pub(in crate::simulation) fn tile_step_direction(
         (-1, 0) => Some(Direction::West),
         _ => None,
     }
+}
+
+/// Carries a point declared in a prototype's own frame into the footprint the
+/// placed entity occupies.
+///
+/// `width` and `height` are the prototype's unrotated extents in the same units
+/// as the point, and the result is measured from the footprint's minimum corner
+/// — the corner [`EntityFootprint::from_size`] anchors every rotation at. A
+/// quarter turn re-anchored that way is what keeps a rotated entity's declared
+/// geometry inside the tiles it actually reserves.
+///
+/// [`Direction::East`] turns the declared frame a quarter turn counter-clockwise
+/// in world space (clockwise on screen, where +y points down). That is the
+/// convention [`rotate_edge_connection`] has always used for fluid and heat
+/// openings, and rails follow it so both turn together.
+///
+/// [`EntityFootprint::from_size`]: crate::simulation::EntityFootprint::from_size
+pub(in crate::simulation) fn rotate_local_point(
+    x: i64,
+    y: i64,
+    width: i64,
+    height: i64,
+    direction: Direction,
+) -> (i64, i64) {
+    match direction {
+        Direction::North => (x, y),
+        Direction::East => (height - y, x),
+        Direction::South => (width - x, height - y),
+        Direction::West => (y, width - x),
+    }
+}
+
+/// The world direction a prototype-local direction points to after the same
+/// rotation [`rotate_local_point`] applies.
+pub(in crate::simulation) fn rotate_local_direction(
+    local: Direction,
+    entity_direction: Direction,
+) -> Direction {
+    match entity_direction {
+        Direction::North => local,
+        Direction::East => rotate_direction_counter_clockwise(local),
+        Direction::South => local.opposite(),
+        Direction::West => rotate_direction_clockwise(local),
+    }
+}
+
+pub(in crate::simulation) fn rotate_direction_clockwise(direction: Direction) -> Direction {
+    match direction {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+    }
+}
+
+pub(in crate::simulation) fn rotate_direction_counter_clockwise(direction: Direction) -> Direction {
+    rotate_direction_clockwise(rotate_direction_clockwise(rotate_direction_clockwise(
+        direction,
+    )))
 }
 
 fn rotate_edge_connection(
@@ -238,6 +306,83 @@ mod tests {
             endpoint_for_side(10, 20, ConnectionSide::West).axis,
             EdgeEndpointAxis::Vertical
         );
+    }
+
+    /// The tile-edge rotation and the sub-tile rotation must be the same turn,
+    /// or a rail and a pipe on one entity would face opposite ways after the
+    /// player pressed R. Tile `(lx, ly)` covers `[lx, lx+1] x [ly, ly+1]`, so
+    /// its centre in half-tile units is `(2*lx + 1, 2*ly + 1)`; rotating that
+    /// centre must land on the centre of the rotated tile.
+    #[test]
+    fn tile_and_sub_tile_rotations_are_the_same_turn() {
+        const WIDTH: i32 = 3;
+        const HEIGHT: i32 = 4;
+
+        for direction in Direction::ALL {
+            for local_y in 0..HEIGHT {
+                for local_x in 0..WIDTH {
+                    let (rotated_x, rotated_y, _) = rotate_edge_connection(
+                        local_x,
+                        local_y,
+                        ConnectionSide::North,
+                        WIDTH,
+                        HEIGHT,
+                        direction,
+                    )
+                    .expect("in-bounds tile should rotate");
+                    let rotated_center = rotate_local_point(
+                        i64::from(2 * local_x + 1),
+                        i64::from(2 * local_y + 1),
+                        i64::from(2 * WIDTH),
+                        i64::from(2 * HEIGHT),
+                        direction,
+                    );
+
+                    assert_eq!(
+                        rotated_center,
+                        (i64::from(2 * rotated_x + 1), i64::from(2 * rotated_y + 1)),
+                        "tile ({local_x}, {local_y}) rotated {direction:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Rotating a point and rotating a direction have to agree, otherwise a
+    /// piece of geometry would arrive somewhere its own heading no longer points
+    /// away from.
+    #[test]
+    fn point_and_direction_rotations_agree() {
+        // A unit step north from the origin of a 2x2 frame, in tenths.
+        const SPAN: i64 = 20;
+        for direction in Direction::ALL {
+            let from = rotate_local_point(10, 10, SPAN, SPAN, direction);
+            let to = rotate_local_point(10, 20, SPAN, SPAN, direction);
+            let rotated = rotate_local_direction(Direction::North, direction);
+
+            assert_eq!(
+                tile_step_direction(
+                    from,
+                    (from.0 + (to.0 - from.0) / 10, from.1 + (to.1 - from.1) / 10)
+                ),
+                Some(rotated),
+                "north step rotated {direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn direction_rotations_are_inverses() {
+        for direction in Direction::ALL {
+            assert_eq!(
+                rotate_direction_counter_clockwise(rotate_direction_clockwise(direction)),
+                direction
+            );
+            assert_eq!(
+                rotate_direction_clockwise(rotate_direction_clockwise(direction)),
+                direction.opposite()
+            );
+        }
     }
 
     /// Two entities are on the same network exactly when their openings resolve
