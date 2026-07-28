@@ -134,7 +134,10 @@ impl Simulation {
             .build_item
             .ok_or(RollingStockPlacementError::MissingBuildItem(prototype_id))?;
         if build_item != item_id {
-            return Err(RollingStockPlacementError::MissingBuildItem(prototype_id));
+            return Err(RollingStockPlacementError::ItemDoesNotBuildStock {
+                item_id,
+                prototype_id,
+            });
         }
         if !placement_validation_ops::entity_is_unlocked(self, prototype_id) {
             return Err(RollingStockPlacementError::Locked(prototype_id));
@@ -335,7 +338,8 @@ impl Simulation {
     /// Stock of one train must agree about which way is forwards, or a shared
     /// velocity would drive the pieces apart on the first tick.
     fn aligned_with_train(&self, position: RailPosition, train_id: TrainId) -> RailPosition {
-        let Some(front_sign) = self.train_front_sign(position, train_id) else {
+        let Some(front_sign) = self.train_front_sign(position, train_id, COUPLING_SEARCH_FIXED)
+        else {
             return position;
         };
         let reach = self.stock_offsets_reach(position, COUPLING_SEARCH_FIXED);
@@ -351,8 +355,18 @@ impl Simulation {
 
     /// Which way along the offset axis the train's front points, measured from
     /// `origin`.
-    fn train_front_sign(&self, origin: RailPosition, train_id: TrainId) -> Option<i64> {
-        let reach = self.stock_offsets_reach(origin, COUPLING_SEARCH_FIXED);
+    ///
+    /// The radius is the caller's: a placement asks about the piece it is
+    /// snapping to and needs only the pairwise reach, while ordering a whole
+    /// train has to walk the train's own extent or the answer comes from
+    /// whichever member happened to fall inside a shorter walk.
+    fn train_front_sign(
+        &self,
+        origin: RailPosition,
+        train_id: TrainId,
+        max_distance: i64,
+    ) -> Option<i64> {
+        let reach = self.stock_offsets_reach(origin, max_distance);
         let train = self.rolling_stock.train(train_id)?;
         train.stock.iter().find_map(|stock_id| {
             let stock = self.rolling_stock.get(*stock_id)?;
@@ -374,11 +388,111 @@ impl Simulation {
         offset.abs() * 2 < other_length + length
     }
 
+    /// An upper bound on the along-track span of a train.
+    ///
+    /// Anything that measures a *whole train* — ordering it front to back,
+    /// regrouping it after an uncoupling, asking how far it may move — has to
+    /// walk at least this far, or the pieces past the end of the walk go
+    /// unpriced. The pairwise [`COUPLING_SEARCH_FIXED`] is the wrong radius for
+    /// those: it is about one piece and its neighbour, and a train of six
+    /// wagons is already longer than it.
+    pub(super) fn train_extent_fixed(&self, stock_ids: &[RollingStockId]) -> i64 {
+        stock_ids
+            .iter()
+            .filter_map(|stock_id| {
+                let stock = self.rolling_stock.get(*stock_id)?;
+                self.stock_length(stock.prototype_id)
+            })
+            .map(|length| length + crate::rolling_stock::TRAIN_COUPLING_GAP_FIXED * 2)
+            .sum()
+    }
+
+    /// How far a whole-train measurement has to walk: the train's own extent,
+    /// plus the pairwise radius so the stock just past either end is priced too.
+    fn train_walk_radius(&self, stock_ids: &[RollingStockId]) -> i64 {
+        self.train_extent_fixed(stock_ids) + COUPLING_SEARCH_FIXED
+    }
+
+    /// How far this train may travel before it would run into stock that is not
+    /// part of it.
+    ///
+    /// Placement refuses to put two pieces in the same place, and the tick has
+    /// to keep that true: without this, two trains sharing a run pass straight
+    /// through each other — a fast one through a slow one it caught, or two
+    /// head-on. The measurement is the same along-track one placement uses, so
+    /// the moving case and the placing case cannot disagree about what counts
+    /// as touching.
+    ///
+    /// One walk and one pass over the world's stock per train, not per piece:
+    /// every piece of the train is priced in the same frame by that single
+    /// walk.
+    pub(super) fn train_clearance_fixed(
+        &self,
+        train_id: TrainId,
+        stock_ids: &[RollingStockId],
+        travel_fixed: i64,
+    ) -> i64 {
+        if travel_fixed == 0 {
+            return 0;
+        }
+        let Some(origin) = stock_ids
+            .first()
+            .and_then(|stock_id| self.rolling_stock.get(*stock_id))
+            .map(|stock| stock.position)
+        else {
+            return travel_fixed;
+        };
+
+        let radius = self.train_walk_radius(stock_ids) + travel_fixed.abs();
+        let priced = self.stock_offsets_within(origin, radius);
+        let mine = priced
+            .iter()
+            .filter(|(stock_id, _)| {
+                self.rolling_stock
+                    .get(*stock_id)
+                    .is_some_and(|stock| stock.train == train_id)
+            })
+            .filter_map(|(stock_id, offset)| {
+                let stock = self.rolling_stock.get(*stock_id)?;
+                Some((self.stock_length(stock.prototype_id)?, *offset))
+            })
+            .collect::<Vec<_>>();
+
+        let sign = travel_fixed.signum();
+        let mut allowed = travel_fixed;
+        for (stock_id, offset) in &priced {
+            let Some(stock) = self.rolling_stock.get(*stock_id) else {
+                continue;
+            };
+            if stock.train == train_id {
+                continue;
+            }
+            let Some(other_length) = self.stock_length(stock.prototype_id) else {
+                continue;
+            };
+            for (length, own_offset) in &mine {
+                let separation = offset - own_offset;
+                // Only what lies ahead can be run into; anything behind is
+                // opening up, and a piece level with ours cannot exist.
+                if separation.signum() != sign {
+                    continue;
+                }
+                let gap = separation.abs() - (length + other_length) / 2;
+                let reachable =
+                    sign * (gap - crate::rolling_stock::TRAIN_COUPLING_GAP_FIXED).max(0);
+                if reachable.abs() < allowed.abs() {
+                    allowed = reachable;
+                }
+            }
+        }
+        allowed
+    }
+
     /// Signed along-track offsets from `origin` to every piece of stock within
     /// `max_distance` of it.
     ///
     /// One walk of the reachable track prices every piece on it, so the cost is
-    /// the track around the click rather than the world's stock count.
+    /// the track around the origin rather than the world's stock count.
     fn stock_offsets_within(
         &self,
         origin: RailPosition,
@@ -535,11 +649,12 @@ impl Simulation {
         else {
             return;
         };
-        let Some(front_sign) = self.train_front_sign(origin, train_id) else {
+        let radius = self.train_walk_radius(&train.stock);
+        let Some(front_sign) = self.train_front_sign(origin, train_id, radius) else {
             return;
         };
         let offsets = self
-            .stock_offsets_within(origin, COUPLING_SEARCH_FIXED)
+            .stock_offsets_within(origin, radius)
             .into_iter()
             .collect::<BTreeMap<_, _>>();
 
@@ -548,12 +663,16 @@ impl Simulation {
             .trains
             .get_mut(&train_id)
             .expect("the train was just read");
-        train.stock.sort_by_key(|stock_id| {
-            (
-                -front_sign * offsets.get(stock_id).copied().unwrap_or(0),
-                *stock_id,
-            )
-        });
+        // A member the walk could not price is not on this stretch of track at
+        // all, so it has no place in a front-to-back order; it sorts to the back
+        // rather than being given a fabricated offset of zero, which would drop
+        // it into the middle of the train.
+        train
+            .stock
+            .sort_by_key(|stock_id| match offsets.get(stock_id) {
+                Some(offset) => (0, -front_sign * offset, *stock_id),
+                None => (1, 0, *stock_id),
+            });
     }
 
     /// Re-derives the trains a run of stock forms after a piece left it.
@@ -578,8 +697,12 @@ impl Simulation {
         let throttle = train.throttle;
         let members = train.stock.clone();
 
+        // The walk has to cover the whole train, not a pairwise radius: a train
+        // longer than that would leave its far pieces unpriced, and grouping
+        // them as though they all stood on the origin would either hold a
+        // severed tail in the train or cut an intact one out of it.
         let offsets = self
-            .stock_offsets_within(origin, COUPLING_SEARCH_FIXED)
+            .stock_offsets_within(origin, self.train_walk_radius(&members))
             .into_iter()
             .collect::<BTreeMap<_, _>>();
         let mut ordered = members
@@ -587,11 +710,7 @@ impl Simulation {
             .filter_map(|stock_id| {
                 let stock = self.rolling_stock.get(*stock_id)?;
                 let length = self.stock_length(stock.prototype_id)?;
-                Some((
-                    offsets.get(stock_id).copied().unwrap_or(0),
-                    *stock_id,
-                    length,
-                ))
+                Some((offsets.get(stock_id).copied()?, *stock_id, length))
             })
             .collect::<Vec<_>>();
         ordered.sort_by_key(|(offset, stock_id, _)| (*offset, *stock_id));
@@ -612,6 +731,14 @@ impl Simulation {
                 groups.push(vec![stock_id]);
             }
             previous = Some((offset, length));
+        }
+        // A member the walk could not reach at all is no longer connected to the
+        // rest by track — the rail between them went — so it is its own train
+        // rather than a coupling that happens to be unmeasurable.
+        for stock_id in &members {
+            if !offsets.contains_key(stock_id) {
+                groups.push(vec![*stock_id]);
+            }
         }
 
         for (index, group) in groups.into_iter().enumerate() {

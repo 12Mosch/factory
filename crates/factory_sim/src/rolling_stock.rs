@@ -303,8 +303,17 @@ pub enum RollingStockPlacementError {
     InsufficientInventory { item_id: factory_data::ItemId },
     /// The recipe producing the build item has not been researched.
     Locked(EntityPrototypeId),
-    /// The prototype declares no build item, so nothing could place it.
+    /// The prototype declares no build item, so nothing could place it. A
+    /// catalog problem, not something a player did.
     MissingBuildItem(EntityPrototypeId),
+    /// The item offered is not the one that builds this stock. Kept apart from
+    /// [`RollingStockPlacementError::MissingBuildItem`] because the two are
+    /// different failures: one says the prototype can never be placed, the
+    /// other that this particular call passed the wrong item.
+    ItemDoesNotBuildStock {
+        item_id: factory_data::ItemId,
+        prototype_id: EntityPrototypeId,
+    },
 }
 
 /// Why a piece of rolling stock could not be taken off the track.

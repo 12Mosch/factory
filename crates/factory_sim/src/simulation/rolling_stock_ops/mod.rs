@@ -8,10 +8,12 @@
 //!   couplings rigid without a per-coupling constraint to solve. When any piece
 //!   would run past a free rail end, the whole train is clipped to the distance
 //!   that piece could make and stops — a train never stretches.
-//! * **O(1) per piece per tick.** A step is a force sum over the train's stock
-//!   and one walk per piece along at most a couple of rail edges. The searches
-//!   that are not constant time (finding what a new piece couples to) run on
-//!   placement, not every tick.
+//! * **Bounded per tick.** A step is a force sum over the train's stock and one
+//!   walk per piece along at most a couple of rail edges, plus a single walk
+//!   per *train* to find what is on the track ahead of it. Nothing here scans
+//!   the world per piece, and the searches that are proportional to the track
+//!   around a click — finding what a new piece couples to — run on placement
+//!   rather than every tick.
 //! * **Integers all the way.** Forces, velocity, and travel are integer; the
 //!   sub-unit part of a tick's travel is carried in a remainder rather than
 //!   rounded away. The only float in sight is the fuel a locomotive burns,
@@ -88,6 +90,57 @@ impl Simulation {
     /// The tile a piece of stock stands on, for visibility and cursor queries.
     pub fn rolling_stock_tile(&self, id: RollingStockId) -> Option<(i64, i64)> {
         self.rolling_stock_world_point(id).map(|point| point.tile())
+    }
+
+    /// Whether a piece of stock lies over `(x, y)`.
+    ///
+    /// Walked along the body rather than tested against the rectangle its two
+    /// ends span: a piece taking a quarter turn spans a square whose far
+    /// corners its arc never crosses, and a cursor in one of those corners
+    /// would otherwise pick up — and drive, or mine — a wagon that is visibly
+    /// somewhere else. Samples are half a tile apart, short enough that
+    /// consecutive ones cannot skip a tile at any curvature a rail can declare,
+    /// and this lives here rather than in the caller because the track geometry
+    /// the answer follows from does.
+    ///
+    /// A cursor query, never a per-tick one.
+    pub fn rolling_stock_covers_tile(&self, id: RollingStockId, x: i64, y: i64) -> bool {
+        let Some(stock) = self.rolling_stock.get(id) else {
+            return false;
+        };
+        let Some(half) = self.rolling_stock_half_length(stock) else {
+            return false;
+        };
+        let length = half * 2;
+        // Cheap reject first. Every point of the body is within the piece's own
+        // length of its centre along the track, so it is within that distance
+        // in a straight line too — a tile further out cannot be covered, and
+        // this is what keeps a held right-click from walking every wagon in the
+        // world. Deliberately a distance from the centre rather than the box
+        // the two ends span: a body across an S-bend leaves that box, and a
+        // pre-filter that is merely usually right would hide stock instead of
+        // over-reporting it.
+        let Some(center) = self.rolling_stock_world_point(id) else {
+            return false;
+        };
+        let margin = length.div_euclid(crate::POSITION_SCALE) + 1;
+        let (center_x, center_y) = center.tile();
+        if (x - center_x).abs() > margin || (y - center_y).abs() > margin {
+            return false;
+        }
+
+        let back = travel(&self.rails.graph, stock.position, -half).position;
+        let mut travelled = 0;
+        loop {
+            let sampled = travel(&self.rails.graph, back, travelled).position;
+            if world_point(self, sampled).is_some_and(|point| point.tile() == (x, y)) {
+                return true;
+            }
+            if travelled >= length {
+                return false;
+            }
+            travelled = (travelled + crate::POSITION_SCALE / 2).min(length);
+        }
     }
 
     /// Sets what a train is doing. This is the drive command: with no
@@ -221,7 +274,7 @@ impl Simulation {
         let travel_fixed = owed.div_euclid(TRAIN_VELOCITY_SCALE);
         let remainder = owed - travel_fixed * TRAIN_VELOCITY_SCALE;
 
-        let (travelled, blocked) = self.clipped_train_travel(&stock_ids, travel_fixed);
+        let (travelled, blocked) = self.clipped_train_travel(train_id, &stock_ids, travel_fixed);
         if travelled != 0 {
             for stock_id in &stock_ids {
                 let Some(stock) = self.rolling_stock.stock.get(stock_id) else {
@@ -241,15 +294,17 @@ impl Simulation {
             .trains
             .get_mut(&train_id)
             .expect("the train was just read");
-        if blocked {
-            // The line ran out. Keeping the remainder would have the train
-            // creep past the buffer one unit at a time on later ticks.
-            train.velocity = 0;
-            train.travel_remainder = 0;
+        train.velocity = if blocked { 0 } else { velocity };
+        // A stopped train owes nothing. Keeping a remainder past a standstill
+        // would leave sub-unit travel that no later tick can ever spend —
+        // velocity is zero, so nothing is added to it and nothing is taken out
+        // — and `is_stationary` would stay false forever, which is exactly the
+        // question a station or a stop-and-wait will ask.
+        train.travel_remainder = if blocked || train.velocity == 0 {
+            0
         } else {
-            train.velocity = velocity;
-            train.travel_remainder = remainder;
-        }
+            remainder
+        };
     }
 
     /// The distance the whole train may travel this tick, and whether that is
@@ -259,16 +314,26 @@ impl Simulation {
     /// pieces could make: letting the blocked piece stop while the rest carried
     /// on would stretch the couplings.
     ///
-    /// The measurement is taken from each piece's *leading end* rather than its
-    /// centre, so a train comes to rest with its nose at the buffer instead of
-    /// hanging half a locomotive past the last rail. Which end leads follows
-    /// from the sign of the step, which is why the trailing end never needs
-    /// checking: it cannot run out of track before the end in front of it.
-    fn clipped_train_travel(&self, stock_ids: &[RollingStockId], travel_fixed: i64) -> (i64, bool) {
+    /// Two things can cut the step short: the end of the line, and other stock
+    /// on it. Both are clipped here rather than only the first, or two trains
+    /// sharing a run would drive through one another — the very overlap
+    /// placement refuses to create.
+    ///
+    /// The track measurement is taken from each piece's *leading end* rather
+    /// than its centre, so a train comes to rest with its nose at the buffer
+    /// instead of hanging half a locomotive past the last rail. Which end leads
+    /// follows from the sign of the step, which is why the trailing end never
+    /// needs checking: it cannot run out of track before the end in front of it.
+    fn clipped_train_travel(
+        &self,
+        train_id: TrainId,
+        stock_ids: &[RollingStockId],
+        travel_fixed: i64,
+    ) -> (i64, bool) {
         if travel_fixed == 0 {
             return (0, false);
         }
-        let mut allowed = travel_fixed;
+        let mut allowed = self.train_clearance_fixed(train_id, stock_ids, travel_fixed);
         for stock_id in stock_ids {
             let Some(stock) = self.rolling_stock.get(*stock_id) else {
                 continue;

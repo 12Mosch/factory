@@ -352,7 +352,8 @@ pub(crate) fn rolling_stock_status_from_error(
             BuildPlacementStatus::CannotPlace("Rolling stock already there".to_string())
         }
         RollingStockPlacementError::NotRollingStock(_)
-        | RollingStockPlacementError::MissingBuildItem(_) => {
+        | RollingStockPlacementError::MissingBuildItem(_)
+        | RollingStockPlacementError::ItemDoesNotBuildStock { .. } => {
             BuildPlacementStatus::CannotPlace("Cannot build this item".to_string())
         }
     }

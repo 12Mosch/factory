@@ -21,10 +21,12 @@ use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
+use crate::ui::resources::TechnologyWindowState;
 
 pub(crate) fn drive_train_from_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     input_state: Option<Res<AppInputState>>,
+    technology_window: Option<Res<TechnologyWindowState>>,
     sim: Res<SimResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
@@ -35,7 +37,14 @@ pub(crate) fn drive_train_from_input(
     };
     let drive = keyboard.just_pressed(KeyCode::F8);
     let brake = keyboard.just_pressed(KeyCode::F9);
-    if (!drive && !brake) || world_input_blocked(input_state.as_deref()) {
+    // The technology window is checked alongside the general world-input block
+    // because it does not set it, which is why the mining input checks both
+    // too. Without it a train could be driven from behind an open full-screen
+    // panel, with the cursor pointing at something the player cannot see.
+    if (!drive && !brake)
+        || world_input_blocked(input_state.as_deref())
+        || technology_window.as_deref().is_some_and(|state| state.open)
+    {
         return;
     }
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
@@ -89,27 +98,9 @@ pub(crate) fn stock_at_tile(
     y: WorldTileCoord,
 ) -> Option<RollingStockId> {
     sim.rolling_stock()
-        .filter(|stock| covers_tile(sim, stock.id, x, y))
+        .filter(|stock| sim.rolling_stock_covers_tile(stock.id, x, y))
         .map(|stock| stock.id)
         .min()
-}
-
-/// Whether a piece of stock lies over a tile, judged from the tiles its body
-/// runs between rather than from a footprint it does not have.
-fn covers_tile(
-    sim: &Simulation,
-    stock_id: RollingStockId,
-    x: WorldTileCoord,
-    y: WorldTileCoord,
-) -> bool {
-    let Some((back, front)) = sim.rolling_stock_body(stock_id) else {
-        return false;
-    };
-    let (back_tile, front_tile) = (back.tile(), front.tile());
-    let within = |value: i64, first: i64, second: i64| {
-        value >= first.min(second) && value <= first.max(second)
-    };
-    within(x, back_tile.0, front_tile.0) && within(y, back_tile.1, front_tile.1)
 }
 
 #[cfg(test)]

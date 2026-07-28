@@ -673,6 +673,180 @@ fn validation_rejects_a_train_above_its_own_top_speed() {
     );
 }
 
+/// Placement refuses to put two pieces in the same place, and the tick has to
+/// keep that true: a train that caught up with a parked one has to stop behind
+/// it rather than drive through it.
+#[test]
+fn a_train_stops_behind_the_stock_in_front_of_it() {
+    let (mut sim, rails) = world_with_rail_run(24);
+    let parked = place_stock(&mut sim, &rails, 20, "cargo_wagon").expect("the wagon fits");
+    let driver = place_stock(&mut sim, &rails, 4, "locomotive").expect("the locomotive fits");
+    let train_id = sim
+        .rolling_stock_piece(driver)
+        .expect("the locomotive is placed")
+        .train;
+    assert_ne!(
+        sim.rolling_stock_piece(parked)
+            .expect("the wagon is placed")
+            .train,
+        train_id,
+        "the two are far enough apart to be separate trains"
+    );
+    fuel_train(&mut sim, train_id, 50);
+
+    sim.set_train_throttle(train_id, TrainThrottle::Forward)
+        .expect("the train takes a throttle command");
+    for _ in 0..2_000 {
+        sim.tick();
+    }
+
+    let closed_up = |sim: &Simulation| {
+        let front = sim
+            .rolling_stock_world_point(driver)
+            .expect("the locomotive has a world point");
+        let back = sim
+            .rolling_stock_world_point(parked)
+            .expect("the wagon has a world point");
+        (front.x - back.x).abs() + (front.y - back.y).abs()
+    };
+    // Half a locomotive plus half a wagon is 6656 units; anything less means
+    // the two have driven into each other.
+    assert!(
+        closed_up(&sim) >= 6_656,
+        "the locomotive should have stopped behind the wagon, not through it"
+    );
+    assert!(
+        sim.train(train_id)
+            .expect("the train exists")
+            .is_stationary(),
+        "a train stopped by the stock ahead should come to rest"
+    );
+    assert_eq!(sim.train_count(), 2, "stopping is not coupling");
+    sim.validate()
+        .expect("a train parked behind another is a valid world");
+}
+
+/// A train that ran itself down to a stand on open track has to *read* as
+/// stopped. Sub-unit travel left owing at zero velocity can never be spent, so
+/// keeping it would leave `is_stationary` false forever — and that is the
+/// question a station or a stop-and-wait will be asking.
+#[test]
+fn a_train_that_slows_to_a_stand_reports_itself_stationary() {
+    let (mut sim, _, _, train_id) = world_with_a_driveable_locomotive();
+    sim.set_train_throttle(train_id, TrainThrottle::Forward)
+        .expect("the train takes a throttle command");
+    for _ in 0..40 {
+        sim.tick();
+    }
+    assert!(sim.train(train_id).expect("the train exists").velocity > 0);
+
+    sim.set_train_throttle(train_id, TrainThrottle::Brake)
+        .expect("the train takes a throttle command");
+    for _ in 0..600 {
+        sim.tick();
+    }
+
+    let train = sim.train(train_id).expect("the train exists");
+    assert_eq!(train.velocity, 0);
+    assert_eq!(train.travel_remainder, 0, "a stopped train owes nothing");
+    assert!(train.is_stationary());
+}
+
+/// Ordering and regrouping walk the train's own extent, so a train longer than
+/// the pairwise coupling radius still splits where the piece was taken out
+/// rather than where the walk ran out.
+#[test]
+fn a_train_longer_than_the_coupling_radius_still_splits_correctly() {
+    let (mut sim, rails) = world_with_rail_run(48);
+    // Seven wagons at six tiles each run to well over the 32-tile pairwise
+    // radius, which is the case the bounded walk used to mis-group.
+    let mut wagons = Vec::new();
+    for index in 0..7 {
+        wagons.push(
+            place_stock(&mut sim, &rails, 40 - index * 3, "cargo_wagon")
+                .expect("each wagon couples onto the last"),
+        );
+    }
+    assert_eq!(sim.train_count(), 1, "the wagons form one long train");
+    let extent = {
+        let train = sim.trains().next().expect("the train exists");
+        sim.rolling_stock_piece(train.stock[0])
+            .and_then(|front| {
+                let back = sim.rolling_stock_piece(*train.stock.last()?)?;
+                let front = sim.rolling_stock_world_point(front.id)?;
+                let back = sim.rolling_stock_world_point(back.id)?;
+                Some((front.x - back.x).abs() + (front.y - back.y).abs())
+            })
+            .expect("the train has an extent")
+    };
+    assert!(
+        extent > 32 * POSITION_SCALE,
+        "the fixture train should be longer than the pairwise radius, was {extent}"
+    );
+
+    sim.mine_rolling_stock(wagons[3])
+        .expect("the middle wagon comes off");
+
+    assert_eq!(sim.train_count(), 2, "the run is broken into two trains");
+    let head = sim
+        .rolling_stock_piece(wagons[0])
+        .expect("the head is placed")
+        .train;
+    let tail = sim
+        .rolling_stock_piece(wagons[6])
+        .expect("the tail is placed")
+        .train;
+    assert_ne!(head, tail);
+    for index in [1, 2] {
+        assert_eq!(
+            sim.rolling_stock_piece(wagons[index])
+                .expect("the wagon is placed")
+                .train,
+            head,
+            "wagon {index} is on the head's side of the gap"
+        );
+    }
+    for index in [4, 5] {
+        assert_eq!(
+            sim.rolling_stock_piece(wagons[index])
+                .expect("the wagon is placed")
+                .train,
+            tail,
+            "wagon {index} is on the tail's side of the gap"
+        );
+    }
+    sim.validate().expect("a split long train is a valid world");
+}
+
+/// The cursor test follows the body along the track rather than the rectangle
+/// its ends span, so the far corners of a curve's bounding box are not claimed
+/// by stock whose arc never crosses them.
+#[test]
+fn tile_coverage_follows_the_body_rather_than_its_bounding_box() {
+    let (mut sim, rails) = world_with_rail_run(12);
+    let stock_id = place_stock(&mut sim, &rails, 4, "locomotive").expect("the locomotive fits");
+    let (back, front) = sim
+        .rolling_stock_body(stock_id)
+        .expect("a placed locomotive has a body");
+    let (back_tile, front_tile) = (back.tile(), front.tile());
+
+    // Every tile the body actually runs through is claimed.
+    for y in back_tile.1.min(front_tile.1)..=back_tile.1.max(front_tile.1) {
+        assert!(
+            sim.rolling_stock_covers_tile(stock_id, back_tile.0, y),
+            "the body runs through ({}, {y})",
+            back_tile.0
+        );
+    }
+    // The column beside it is not, even though a wider test might claim it.
+    assert!(!sim.rolling_stock_covers_tile(stock_id, back_tile.0 + 1, back_tile.1));
+    assert!(!sim.rolling_stock_covers_tile(
+        stock_id,
+        back_tile.0,
+        back_tile.1.min(front_tile.1) - 1
+    ));
+}
+
 /// The fixture the performance suite runs on has to actually produce moving
 /// trains, or the budget it measures would be a budget for an empty world.
 #[test]

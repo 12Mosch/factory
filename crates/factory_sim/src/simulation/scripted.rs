@@ -132,6 +132,12 @@ impl Simulation {
                 .ok()
             })
             .collect::<Vec<_>>();
+        // Every piece or none. The locomotive goes down last, so a partial
+        // placement would leave `placed.last()` naming a wagon and the fixture
+        // counting a train with no traction as one it can drive.
+        if placed.len() != stock.len() {
+            return false;
+        }
         let Some(train_id) = placed
             .last()
             .and_then(|stock_id| self.rolling_stock_piece(*stock_id))

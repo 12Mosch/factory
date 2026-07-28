@@ -53,6 +53,13 @@ fn rolling_stock_preview(
         RollingStockPlacementError::Locked(prototype_id) => {
             BuildPlacementIssueKind::EntityLocked { prototype_id }
         }
+        RollingStockPlacementError::ItemDoesNotBuildStock {
+            item_id,
+            prototype_id,
+        } => BuildPlacementIssueKind::ItemDoesNotBuildEntity {
+            item_id,
+            prototype_id,
+        },
         RollingStockPlacementError::MissingBuildItem(prototype_id)
         | RollingStockPlacementError::NotRollingStock(prototype_id) => {
             BuildPlacementIssueKind::MissingBuildItem { prototype_id }
