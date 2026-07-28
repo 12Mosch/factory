@@ -486,6 +486,21 @@ pub struct RailPointPrototype {
     pub y: i32,
 }
 
+impl RailPointPrototype {
+    /// Squared distance to another point.
+    ///
+    /// Computed in 128 bits because two coordinates at opposite `i32` extremes
+    /// square to more than an `i64` holds: a hand-written catalog must be
+    /// *rejected* by validation, not overflow inside it. Every comparison of
+    /// rail distances goes through this so none of them can drift into a
+    /// narrower intermediate.
+    pub fn squared_distance_to(self, other: Self) -> i128 {
+        let dx = i128::from(other.x) - i128::from(self.x);
+        let dy = i128::from(other.y) - i128::from(self.y);
+        dx * dx + dy * dy
+    }
+}
+
 /// One end of a rail piece: where a train enters or leaves, and which way it is
 /// travelling when it does.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -567,10 +582,11 @@ impl RailPiecePrototype {
 /// Euclidean distance between two sub-tile points, rounded down to whole
 /// fixed-point units. Integer arithmetic throughout keeps the length of a piece
 /// a pure function of its declaration on every platform.
+///
+/// Saturates rather than wrapping, so a catalog declaring absurd coordinates is
+/// still rejected by validation instead of producing wrapped geometry.
 fn distance(from: RailPointPrototype, to: RailPointPrototype) -> i64 {
-    let dx = i64::from(to.x) - i64::from(from.x);
-    let dy = i64::from(to.y) - i64::from(from.y);
-    (dx * dx + dy * dy).isqrt()
+    i64::try_from(from.squared_distance_to(to).isqrt()).unwrap_or(i64::MAX)
 }
 
 /// Ambient temperature every heat buffer starts and settles at, in degrees.

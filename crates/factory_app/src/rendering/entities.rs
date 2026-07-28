@@ -512,4 +512,41 @@ mod tests {
         let prototype_id = factory_data::entity_prototype_id_by_name(&catalog, "radar");
         assert!(entity_prototype_render_style(&catalog, prototype_id, Direction::North).is_some());
     }
+
+    /// The style is hashed into the sprite cache key, so a rail's geometry in it
+    /// has to be the prototype-local one. World coordinates would give every
+    /// placement of the same piece its own cached texture, which is why this
+    /// pins the frame rather than trusting the call site to keep picking it.
+    #[test]
+    fn rail_visual_geometry_stays_in_the_prototype_local_frame() {
+        let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+        for entity_name in ["rail_straight", "rail_curved"] {
+            let prototype_id = factory_data::entity_prototype_id_by_name(&catalog, entity_name);
+            let prototype = catalog
+                .entity(prototype_id)
+                .expect("the base catalog defines both rail pieces");
+
+            for direction in Direction::ALL {
+                let style = entity_prototype_visual_style(&catalog, prototype_id, direction)
+                    .unwrap_or_else(|| panic!("{entity_name} should have a visual style"));
+                let geometry = style
+                    .rail
+                    .unwrap_or_else(|| panic!("{entity_name} should carry its travel geometry"));
+                let footprint =
+                    EntityFootprint::from_size(0, 0, prototype.size.x, prototype.size.y, direction);
+                let width = i64::from(footprint.width) * factory_sim::POSITION_SCALE;
+                let height = i64::from(footprint.height) * factory_sim::POSITION_SCALE;
+
+                for end in geometry.ends() {
+                    assert!(
+                        (0..=width).contains(&end.position.x)
+                            && (0..=height).contains(&end.position.y),
+                        "{entity_name} facing {direction:?} left its own footprint: {:?}",
+                        end.position
+                    );
+                }
+            }
+        }
+    }
 }

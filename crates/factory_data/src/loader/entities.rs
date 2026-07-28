@@ -927,8 +927,7 @@ fn validate_rail_metadata(
                 return invalid("a straight rail's ends must face opposite headings");
             }
             let (step_x, step_y) = rail_piece.end.heading.step();
-            let dx = i64::from(rail_piece.end.position.x - rail_piece.start.position.x);
-            let dy = i64::from(rail_piece.end.position.y - rail_piece.start.position.y);
+            let (dx, dy) = offset(rail_piece.start.position, rail_piece.end.position);
             if dx * i64::from(step_y) - dy * i64::from(step_x) != 0
                 || dx * i64::from(step_x) + dy * i64::from(step_y) <= 0
             {
@@ -952,15 +951,15 @@ fn validate_rail_metadata(
             // The arc's length is derived from the radius as a whole number of
             // fixed-point units, so a radius that is not one would make the
             // declared curve and its measured length disagree.
-            if radius * radius != squared_distance(center, rail_piece.start.position) {
+            let squared_radius = i128::from(radius) * i128::from(radius);
+            if squared_radius != center.squared_distance_to(rail_piece.start.position) {
                 return invalid("a curved rail's radius must be a whole number of units");
             }
             for end in rail_piece.ends() {
-                let dx = i64::from(end.position.x - center.x);
-                let dy = i64::from(end.position.y - center.y);
-                if dx * dx + dy * dy != radius * radius {
+                if center.squared_distance_to(end.position) != squared_radius {
                     return invalid("both ends of a curved rail must sit on one circle");
                 }
+                let (dx, dy) = offset(center, end.position);
                 let (step_x, step_y) = end.heading.step();
                 if dx * i64::from(step_x) + dy * i64::from(step_y) != 0 {
                     return invalid("a curved rail must leave each end along the tangent");
@@ -977,10 +976,15 @@ fn point_is_inside(point: RailPointPrototype, width: i64, height: i64) -> bool {
     x >= 0 && y >= 0 && x <= width && y <= height
 }
 
-fn squared_distance(from: RailPointPrototype, to: RailPointPrototype) -> i64 {
-    let dx = i64::from(to.x - from.x);
-    let dy = i64::from(to.y - from.y);
-    dx * dx + dy * dy
+/// Vector between two sub-tile points. Each coordinate is widened before the
+/// subtraction, so a difference wider than an `i32` cannot wrap; the result is
+/// only ever used for the dot and cross products that check an axis, both of
+/// which stay well inside an `i64`.
+fn offset(from: RailPointPrototype, to: RailPointPrototype) -> (i64, i64) {
+    (
+        i64::from(to.x) - i64::from(from.x),
+        i64::from(to.y) - i64::from(from.y),
+    )
 }
 
 fn resolve_pumpjack(

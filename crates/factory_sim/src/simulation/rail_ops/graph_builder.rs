@@ -65,8 +65,10 @@ pub(super) fn build_rail_graph_from_pieces(pieces: &[RailPieceInput]) -> RailGra
 fn assign_networks(graph: &mut RailGraph) {
     let mut disjoint_set = DisjointSet::new(graph.edges.len());
     for node in &graph.nodes {
-        for (position, end) in node.ends.iter().enumerate() {
-            for other in node.ends.iter().skip(position + 1) {
+        // Each unordered pair of ends at this node, once: `end_index` is an
+        // index into the node's own list, not a rail coordinate.
+        for (end_index, end) in node.ends.iter().enumerate() {
+            for other in node.ends.iter().skip(end_index + 1) {
                 let heading = graph.edges[end.edge_index].headings[end.end_index];
                 let other_heading = graph.edges[other.edge_index].headings[other.end_index];
                 if heading == other_heading.opposite() {

@@ -8,10 +8,10 @@
 use bevy::prelude::*;
 use factory_sim::{POSITION_SCALE, RailCurve, RailPieceGeometry, RailPoint};
 
-use super::super::EntityVisualStyle;
-use super::super::layers::VisualLayerBuilder;
 use crate::constants::TILE_SIZE;
 use crate::rendering::colors::{rail_ballast_color, rail_metal_color, rail_sleeper_color};
+use crate::rendering::visuals::EntityVisualStyle;
+use crate::rendering::visuals::layers::VisualLayerBuilder;
 
 /// Samples along the path. A quarter turn is about two and a third tiles long,
 /// so this spaces the stamps closer than their own width and the curve reads as
