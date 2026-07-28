@@ -19,6 +19,9 @@ use crate::rendering::manual_mining::{
     update_manual_mining_progress_bar,
 };
 use crate::rendering::player::{measured_sync_player_sprite, spawn_player};
+use crate::rendering::rails::{
+    RailOverlayRenderState, sync_rail_connection_preview, sync_rail_graph_overlay,
+};
 use crate::rendering::resource_cells::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
@@ -51,6 +54,7 @@ impl Plugin for RenderingPlugin {
             .init_resource::<BeltItemRenderPool>()
             .init_resource::<CircuitWireRenderState>()
             .init_resource::<RoboportCoverageRenderState>()
+            .init_resource::<RailOverlayRenderState>()
             .add_systems(
                 Startup,
                 (
@@ -92,6 +96,8 @@ impl Plugin for RenderingPlugin {
                     measured_sync_belt_item_rendering,
                     sync_circuit_wire_rendering,
                     sync_roboport_coverage_rendering,
+                    sync_rail_graph_overlay,
+                    sync_rail_connection_preview,
                 )
                     .chain()
                     .in_set(AppSet::RenderSync),

@@ -14,8 +14,8 @@ use crate::rendering::colors::{
     decider_combinator_color, electric_pole_color, enemy_spawner_color, furnace_color,
     gun_turret_color, heat_exchanger_color, heat_pipe_color, inserter_color, lab_color, lamp_color,
     laser_turret_color, mining_drill_color, nuclear_reactor_color, offshore_pump_color,
-    oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, roboport_color,
-    solar_panel_color, splitter_color, steam_engine_color, storage_tank_color,
+    oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, rail_ballast_color,
+    roboport_color, solar_panel_color, splitter_color, steam_engine_color, storage_tank_color,
     transport_belt_color, wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
@@ -455,6 +455,20 @@ pub(crate) fn entity_prototype_visual_style(
             prototype.entity_kind,
             direction,
         )),
+        // Track fills its footprint exactly — no sprite padding — because the
+        // curve is drawn in the same sub-tile coordinates the simulation uses,
+        // and a shrunken sprite would move the rails off their own path.
+        EntityKind::RailStraight | EntityKind::RailCurved => Some(EntityVisualStyle {
+            base_color: rail_ballast_color(),
+            size: Vec2::new(
+                footprint.width as f32 * TILE_SIZE,
+                footprint.height as f32 * TILE_SIZE,
+            ),
+            kind: prototype.entity_kind,
+            direction,
+            connections: ConnectionMask::EMPTY,
+            rail: factory_sim::rail_ops::piece_geometry(prototype, direction),
+        }),
         EntityKind::ResourcePatch => None,
     }
 }
@@ -471,6 +485,7 @@ fn entity_visual_style(
         kind,
         direction,
         connections: ConnectionMask::EMPTY,
+        rail: None,
     }
 }
 

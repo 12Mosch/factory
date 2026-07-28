@@ -307,6 +307,10 @@
                 flight_energy_usage_watts: 30000,
             )),
         ),
+        // One item builds both track pieces: which piece goes down is a
+        // question of what the player selected in the build menu, not of what
+        // they are carrying.
+        (id: 111, name: "rail", stack_size: 100),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1550,6 +1554,20 @@
                 (item: "advanced_circuit", amount: 2),
             ],
             products: [(item: "logistic_robot", amount: 1)],
+        ),
+        // Two pieces of track per craft, the way sleepers and rail come in
+        // pairs: a two-tile straight is the shortest thing worth laying.
+        (
+            id: 109,
+            name: "rail",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "stone", amount: 1),
+                (item: "steel_plate", amount: 1),
+                (item: "iron_gear_wheel", amount: 1),
+            ],
+            products: [(item: "rail", amount: 2)],
         ),
     ],
     entities: [
@@ -2910,6 +2928,59 @@
             logistic_chest: Some((mode: Requester, request_slot_count: 12)),
             max_health: Some(350),
         ),
+        // The rail piece set, fixed here on purpose: one two-tile straight and
+        // one quarter turn. Four rotations of the quarter turn cover all four
+        // perpendicular joins (the arc is symmetric about its 45-degree
+        // diagonal, so its mirror image is one of its own rotations), which is
+        // what lets a single curved piece build any corner. An open-ended curve
+        // set would make the graph, the pathfinder, and the renderer all
+        // harder, and saves make the choice expensive to revisit.
+        //
+        // Geometry is fixed point at 1024 units per tile, measured from the
+        // unrotated footprint's south-west corner with +y north. A straight
+        // runs up the middle of its column; both of its ends therefore sit at a
+        // tile-center x on a tile-boundary y, and a rotated straight's ends sit
+        // at a boundary x on a center y. Curve ends are placed to match, so
+        // every join lands on whole tiles.
+        (
+            id: 69,
+            name: "rail_straight",
+            build_item: Some("rail"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(140),
+            entity_kind: RailStraight,
+            size: (x: 1, y: 2),
+            // Track sits on the ground like a belt does, so it shares the
+            // transport collision layer rather than the building one.
+            collision_mask: (layers: ["ground", "transport"]),
+            max_health: Some(100),
+            rail_piece: Some((
+                start: (position: (x: 512, y: 0), heading: South),
+                end: (position: (x: 512, y: 2048), heading: North),
+                curve: Straight,
+            )),
+        ),
+        // A quarter circle of radius 1.5 tiles inside a 2x2 block, entering at
+        // the bottom of the west column heading north and leaving at the east
+        // edge of the north row heading east. The arc apex sits at (962, 1086),
+        // well inside the block, so reserving all four tiles really does cover
+        // every tile the track crosses.
+        (
+            id: 70,
+            name: "rail_curved",
+            build_item: Some("rail"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(141),
+            entity_kind: RailCurved,
+            size: (x: 2, y: 2),
+            collision_mask: (layers: ["ground", "transport"]),
+            max_health: Some(100),
+            rail_piece: Some((
+                start: (position: (x: 512, y: 0), heading: South),
+                end: (position: (x: 2048, y: 1536), heading: East),
+                curve: QuarterArc(center: (x: 2048, y: 0)),
+            )),
+        ),
     ],
     tiles: [
         (
@@ -3591,6 +3662,21 @@
                 UnlockRecipe("requester_chest"),
                 UnlockRecipe("logistic_robot"),
             ],
+        ),
+        // Track needs the steel and the engineering that logistics 2 and the
+        // engine already establish; the rolling stock that runs on it follows
+        // in its own technologies.
+        (
+            id: 42,
+            name: "railway",
+            prerequisites: ["logistics_2", "engine"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 75,
+            research_time_ticks: 900,
+            effects: [UnlockRecipe("rail")],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

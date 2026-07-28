@@ -1,0 +1,64 @@
+pub mod geometry;
+mod graph_builder;
+mod network_access;
+mod types;
+
+pub use geometry::{piece_geometry, placed_piece_geometry};
+pub(in crate::simulation) use network_access::{
+    conflicting_rail_end, placement_connections, rail_ends_for_placement,
+};
+pub(in crate::simulation) use types::RailGraph;
+
+use self::graph_builder::build_rail_graph_from_pieces;
+use self::types::RailPieceInput;
+use super::*;
+
+impl Simulation {
+    pub(super) fn invalidate_rail_graph(&mut self) {
+        self.rails.invalidate();
+    }
+
+    /// Whether placing or destroying this prototype can change rail
+    /// connectivity. Only pieces that declare track geometry do, so nothing
+    /// else pays for a rebuild.
+    pub(super) fn prototype_affects_rail_graph(
+        &self,
+        prototype: &factory_data::EntityPrototype,
+    ) -> bool {
+        prototype.rail_piece.is_some()
+    }
+
+    /// Rebuilds the rail graph if placement changed since the last build.
+    ///
+    /// Rails carry no per-tick simulation of their own yet, so this is the
+    /// whole of their tick: the graph exists for the queries placement previews,
+    /// the debug overlay, and later rolling stock make of it.
+    pub(in crate::simulation) fn ensure_rail_graph(&mut self) {
+        if !self.rails.graph_dirty {
+            return;
+        }
+
+        let graph = build_rail_graph_from_pieces(&self.rail_piece_inputs());
+        self.rails.replace_graph(graph);
+        #[cfg(test)]
+        {
+            self.rails.graph_rebuilds += 1;
+        }
+    }
+
+    /// Every placed rail with its geometry resolved into world space, in entity
+    /// id order so the graph is a function of the world and not of iteration.
+    fn rail_piece_inputs(&self) -> Vec<RailPieceInput> {
+        self.entities
+            .placed_entities
+            .values()
+            .filter_map(|placed| {
+                let prototype = self.world.prototypes.entity(placed.prototype_id)?;
+                Some(RailPieceInput {
+                    entity_id: placed.id,
+                    geometry: placed_piece_geometry(placed, prototype)?,
+                })
+            })
+            .collect()
+    }
+}

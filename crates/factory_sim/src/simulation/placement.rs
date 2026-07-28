@@ -24,6 +24,22 @@ pub fn preview_from_player_inventory(
     placement_preview_ops::preview_from_player_inventory(sim, request)
 }
 
+/// The connection each end of a prospective rail placement would form, so the
+/// build cursor can show a player the join before they commit to it. Empty for
+/// anything that is not a rail.
+pub fn rail_connection_preview(
+    sim: &Simulation,
+    request: EntityPlacementRequest,
+) -> Vec<crate::rail::RailConnectionPreview> {
+    placement_preview_ops::rail_connection_preview(
+        sim,
+        request.prototype_id,
+        request.x,
+        request.y,
+        request.direction,
+    )
+}
+
 pub fn validate(
     sim: &Simulation,
     request: EntityPlacementRequest,

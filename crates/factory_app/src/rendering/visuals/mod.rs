@@ -7,7 +7,7 @@ mod templates;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use factory_data::EntityKind;
-use factory_sim::Direction;
+use factory_sim::{Direction, RailPieceGeometry};
 
 pub(crate) use cache::VisualAssetCache;
 use cache::VisualCacheKey;
@@ -22,6 +22,10 @@ pub(crate) struct EntityVisualStyle {
     pub(crate) kind: EntityKind,
     pub(crate) direction: Direction,
     pub(crate) connections: ConnectionMask,
+    /// Travel geometry for track, taken from the simulation and already rotated
+    /// into this placement's frame. The drawn curve is this curve; the renderer
+    /// authors no offsets of its own.
+    pub(crate) rail: Option<RailPieceGeometry>,
 }
 
 #[derive(SystemParam)]
@@ -37,6 +41,7 @@ impl VisualAssets<'_> {
                 kind: style.kind,
                 direction: style.direction,
                 connections: style.connections,
+                rail: style.rail,
             },
             style.base_color,
             style.size,

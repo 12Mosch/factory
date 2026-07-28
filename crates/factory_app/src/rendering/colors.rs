@@ -183,6 +183,47 @@ pub(crate) fn wall_color() -> Color {
     Color::srgb(0.76, 0.78, 0.74)
 }
 
+/// Ballast: the gravel bed a rail piece is drawn on, dark enough that the two
+/// bright rails on top of it read as metal.
+pub(crate) fn rail_ballast_color() -> Color {
+    Color::srgb(0.30, 0.28, 0.26)
+}
+
+pub(crate) fn rail_sleeper_color() -> Color {
+    Color::srgb(0.38, 0.29, 0.20)
+}
+
+pub(crate) fn rail_metal_color() -> Color {
+    Color::srgb(0.78, 0.80, 0.83)
+}
+
+/// Rail network colours for the connectivity overlay. Networks are numbered
+/// from zero and there is no bound on how many a world has, so the palette
+/// repeats rather than pretending to be exhaustive: what the overlay has to
+/// show is that two runs differ, not which number each one is.
+pub(crate) fn rail_network_color(network_id: u32) -> Color {
+    const PALETTE: [Color; 6] = [
+        Color::srgb(0.35, 0.78, 0.98),
+        Color::srgb(0.98, 0.72, 0.28),
+        Color::srgb(0.52, 0.90, 0.48),
+        Color::srgb(0.94, 0.46, 0.72),
+        Color::srgb(0.72, 0.60, 0.98),
+        Color::srgb(0.98, 0.54, 0.34),
+    ];
+
+    PALETTE[network_id as usize % PALETTE.len()]
+}
+
+/// A rail end in the build preview: green where the held piece would join
+/// existing track, amber where it would be left open.
+pub(crate) fn rail_connection_preview_color(joins: bool) -> Color {
+    if joins {
+        Color::srgba(0.42, 0.96, 0.48, 0.95)
+    } else {
+        Color::srgba(0.98, 0.78, 0.30, 0.85)
+    }
+}
+
 pub(crate) fn gun_turret_color() -> Color {
     Color::srgb(0.62, 0.54, 0.30)
 }

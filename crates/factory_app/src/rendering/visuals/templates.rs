@@ -1,5 +1,5 @@
 use factory_data::EntityKind;
-use factory_sim::Direction;
+use factory_sim::{Direction, RailPieceGeometry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum VisualTemplate {
@@ -7,6 +7,11 @@ pub(super) enum VisualTemplate {
         kind: EntityKind,
         direction: Direction,
         connections: ConnectionMask,
+        /// Present only for track. Two rail prototypes of the same kind and
+        /// direction can still describe different curves, so the geometry is
+        /// part of the cache key rather than something the drawn sprite is
+        /// assumed to follow from.
+        rail: Option<RailPieceGeometry>,
     },
     BeltItem,
     Resource,

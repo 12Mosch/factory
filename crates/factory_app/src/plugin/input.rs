@@ -9,8 +9,9 @@ use crate::input::movement::move_player_from_input;
 use crate::input::panels::{
     handle_build_menu_search_input, handle_panel_input, reset_app_input_state,
 };
+use crate::input::rail_debug::toggle_rail_overlay_from_input;
 use crate::input::repair::update_repair_from_input;
-use crate::input::resources::AppInputState;
+use crate::input::resources::{AppInputState, RailGraphOverlay};
 use crate::input::robot_debug::dispatch_debug_robot_from_input;
 
 /// Input resources, panel-state collection, and the fixed-step systems that
@@ -25,6 +26,7 @@ impl Plugin for InputPlugin {
             .init_resource::<AccumulatedMouseMotion>()
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<AppInputState>()
+            .init_resource::<RailGraphOverlay>()
             .add_systems(
                 PreUpdate,
                 (
@@ -46,6 +48,9 @@ impl Plugin for InputPlugin {
                     .chain()
                     .in_set(AppSet::SimInput),
             )
-            .add_systems(Update, zoom_camera.in_set(AppSet::WorldInput));
+            .add_systems(
+                Update,
+                (zoom_camera, toggle_rail_overlay_from_input).in_set(AppSet::WorldInput),
+            );
     }
 }

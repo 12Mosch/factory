@@ -40,7 +40,10 @@ use bincode::Options;
 // registry.
 // v34: flying robots gained the logistic delivery they own, and robot network
 // snapshots gained logistic robot and active delivery counts.
-pub const SAVE_VERSION: u32 = 34;
+// v35: rail pieces joined the catalog. They save as ordinary placed entities,
+// but the catalog they are validated against changed, and the rail graph they
+// form is a derived cache rebuilt on load.
+pub const SAVE_VERSION: u32 = 35;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -62,7 +65,9 @@ pub const SAVE_VERSION: u32 = 34;
 // v23: robot flight profiles gained an explicit construction/logistic kind.
 // v24: chest prototypes gained logistic chest metadata (network role and
 // request rows), and the roboport gained a circuit connector.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 24;
+// v25: entity prototypes gained rail piece geometry (sub-tile ends, headings,
+// and the curve between them).
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 25;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -356,6 +361,7 @@ impl SimulationSnapshotOwned {
             power_tick_scratch: power_ops::PowerTickScratch::default(),
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
             heat: HeatSubsystem::from_networks(self.heat_networks),
+            rails: RailSubsystem::default(),
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
             circuits: CircuitSubsystem::default(),
@@ -381,6 +387,9 @@ impl SimulationSnapshotOwned {
         // Robot coverage queries read the topology cache, so rebuild it before
         // anything can ask a loaded world which network covers a tile.
         sim.ensure_robot_network_topology();
+        // The rail graph is a derived cache like the circuit topology, so a
+        // loaded world rebuilds it before anything can ask what connects.
+        sim.ensure_rail_graph();
         sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();

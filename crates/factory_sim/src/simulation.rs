@@ -92,6 +92,9 @@ pub use crate::power::{
     PowerMapSnapshot, PowerNetworkSnapshot, PowerSummary, SolarPanelState, SteamEngineState,
 };
 pub use crate::radar::RadarState;
+pub use crate::rail::{
+    RailConnectionPreview, RailCurve, RailEnd, RailNetworkSnapshot, RailPieceGeometry, RailPoint,
+};
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
@@ -209,6 +212,10 @@ pub struct Simulation {
     power_tick_scratch: power_ops::PowerTickScratch,
     fluids: FluidSubsystem,
     heat: HeatSubsystem,
+    /// Rail connectivity. Entirely derived from the placed rails, so it is
+    /// rebuilt on load rather than saved, the way `circuits` is.
+    #[serde(skip)]
+    rails: RailSubsystem,
     robots: RobotSubsystem,
     /// Robots in flight. Kept beside the network subsystem rather than inside
     /// it because the two have different lifetimes: networks are a cache of
@@ -852,6 +859,8 @@ mod power_ops;
 mod power_state;
 mod profiling;
 mod radar_ops;
+pub mod rail_ops;
+mod rail_state;
 mod research_ops;
 mod robot_ops;
 mod robot_state;
@@ -886,6 +895,7 @@ use self::machine_ops::*;
 use self::power_state::{PowerDemandCache, PowerSubsystem, PowerTopologyCache};
 pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
 pub use self::profiling::{SimulationCounts, SimulationTickProfile};
+use self::rail_state::RailSubsystem;
 use self::robot_state::RobotSubsystem;
 pub use self::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo, SaveLoadError,

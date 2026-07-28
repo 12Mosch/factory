@@ -1,5 +1,26 @@
 use super::placement::PlayerPlacementRequest;
 use super::*;
+use crate::rail::RailConnectionPreview;
+
+/// The connection each end of a prospective rail placement would form.
+///
+/// Separate from [`BuildPlacementPreview`] because it is not a problem with the
+/// placement: it is what the placement would *do*, which is the thing a player
+/// laying track needs to see. Empty for anything that is not a rail.
+pub(crate) fn rail_connection_preview(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+    direction: Direction,
+) -> Vec<RailConnectionPreview> {
+    let Some(prototype) = sim.world.prototypes.entity(prototype_id) else {
+        return Vec::new();
+    };
+    let footprint = EntityFootprint::from_size(x, y, prototype.size.x, prototype.size.y, direction);
+
+    rail_ops::placement_connections(sim, prototype_id, &footprint, direction)
+}
 
 pub(crate) fn preview_from_player_inventory(
     sim: &Simulation,
@@ -145,6 +166,23 @@ fn collect_placement_preview_issues_for_footprint(
         issues.push(BuildPlacementIssue {
             tile: Some(player_tile),
             kind: BuildPlacementIssueKind::PlayerOccupied,
+        });
+    }
+
+    // Track laid over track: the same rule placement validation applies, so a
+    // preview never shows a rail as placeable that the placement would refuse.
+    if let Err(BuildError::EntityOccupied { x, y, entity_id }) =
+        placement_validation_ops::validate_rail_placement(
+            sim,
+            prototype.id,
+            footprint,
+            direction,
+            None,
+        )
+    {
+        issues.push(BuildPlacementIssue {
+            tile: Some((x, y)),
+            kind: BuildPlacementIssueKind::EntityOccupied { entity_id },
         });
     }
 

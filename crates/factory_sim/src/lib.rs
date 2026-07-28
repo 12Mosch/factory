@@ -23,6 +23,7 @@ pub mod power;
 pub mod prelude;
 pub mod prototypes;
 pub mod radar;
+pub mod rail;
 pub mod research;
 pub mod robots;
 pub mod tick;

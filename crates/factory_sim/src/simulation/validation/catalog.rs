@@ -518,9 +518,23 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     });
                 }
             }
+            // Rail geometry is checked in full when the catalog is loaded; what
+            // matters here is that a piece of track is still a piece of track:
+            // it declares geometry, and nothing else does.
+            EntityKind::RailStraight | EntityKind::RailCurved if prototype.rail_piece.is_none() => {
+                return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                    prototype_id: prototype.id,
+                });
+            }
+            EntityKind::RailStraight | EntityKind::RailCurved => {}
             _ => {}
         }
 
+        if !prototype.entity_kind.is_rail() && prototype.rail_piece.is_some() {
+            return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                prototype_id: prototype.id,
+            });
+        }
         if prototype.entity_kind != EntityKind::Roboport && prototype.roboport.is_some() {
             return Err(SimValidationError::InvalidCatalogEntityPrototype {
                 prototype_id: prototype.id,

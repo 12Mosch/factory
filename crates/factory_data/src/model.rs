@@ -288,6 +288,8 @@ pub struct EntityPrototype {
     pub circuit_connector: Option<CircuitConnectorPrototype>,
     /// Present on combinator entities.
     pub combinator: Option<CombinatorPrototype>,
+    /// Present on rail pieces; see [`RailPiecePrototype`].
+    pub rail_piece: Option<RailPiecePrototype>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -423,6 +425,153 @@ pub enum ConnectionSide {
 /// call sites unchanged now that heat networks share the geometry.
 pub type FluidConnectionPrototype = EdgeConnectionPrototype;
 pub type FluidConnectionSide = ConnectionSide;
+
+/// Fixed-point units per tile for sub-tile geometry declared in prototypes.
+///
+/// Deliberately the same scale free-moving positions use in the simulation
+/// (`factory_sim::POSITION_SCALE`), so a declared travel path and a moving
+/// entity are measured in one unit and neither side ever converts.
+pub const POSITION_SCALE: i32 = 1024;
+
+/// Cardinal heading used by rail geometry: the direction a train travels when
+/// it leaves a rail piece through one of its ends.
+///
+/// Deliberately *not* [`ConnectionSide`]. That enum names the tile edge a fluid
+/// or heat opening sits on, and its world mapping puts `North` at `-y`; rail
+/// geometry follows the placement convention the rest of the simulation uses for
+/// belts, drills, and inserters, where `North` is `+y`. Keeping the two apart is
+/// what stops a rail path from being drawn upside down against its own
+/// connections.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum RailHeading {
+    North,
+    East,
+    South,
+    West,
+}
+
+impl RailHeading {
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::North => Self::South,
+            Self::East => Self::West,
+            Self::South => Self::North,
+            Self::West => Self::East,
+        }
+    }
+
+    /// Unit step along this heading, in whole units of the caller's choosing.
+    pub const fn step(self) -> (i32, i32) {
+        match self {
+            Self::North => (0, 1),
+            Self::East => (1, 0),
+            Self::South => (0, -1),
+            Self::West => (-1, 0),
+        }
+    }
+
+    pub const fn is_perpendicular_to(self, other: Self) -> bool {
+        let (x, y) = self.step();
+        let (other_x, other_y) = other.step();
+        x * other_x + y * other_y == 0
+    }
+}
+
+/// A point in prototype-local sub-tile space: [`POSITION_SCALE`] units per tile,
+/// measured from the unrotated footprint's minimum corner with `+x` east and
+/// `+y` north.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RailPointPrototype {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// One end of a rail piece: where a train enters or leaves, and which way it is
+/// travelling when it does.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RailEndPrototype {
+    pub position: RailPointPrototype,
+    /// Direction of travel *leaving* the piece here. Two rails connect where one
+    /// piece's end meets another's at the same point with the opposite heading,
+    /// which is what makes the join a statement about travel rather than about
+    /// two footprints happening to touch.
+    pub heading: RailHeading,
+}
+
+/// The path between a rail piece's two ends.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum RailCurvePrototype {
+    /// A straight run. The ends face opposite headings and the segment between
+    /// them runs along that axis.
+    Straight,
+    /// A quarter-circle arc around `center`, taken the short way round: both
+    /// ends sit the same distance from the center, each end's radius is
+    /// perpendicular to its heading, and the two headings are perpendicular to
+    /// each other, so exactly one 90-degree arc joins them.
+    QuarterArc { center: RailPointPrototype },
+}
+
+/// Sub-tile travel geometry of one rail piece.
+///
+/// This is the single description of where a train runs on a piece: the
+/// simulation rotates it into world space to build the rail graph and to measure
+/// edge lengths, and the renderer draws that same curve. Nothing re-derives the
+/// shape from a sprite.
+///
+/// Occupancy stays tile-locked — a piece reserves every tile of its footprint,
+/// including the ones its curve only clips — so collision, mining, blueprints,
+/// and the map keep working without knowing about sub-tile geometry at all.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RailPiecePrototype {
+    /// The two ends, in the order the geometry is written. They are otherwise
+    /// interchangeable: a train may run a piece either way, and the rail graph
+    /// treats the edge as undirected while remembering the heading at each end.
+    pub start: RailEndPrototype,
+    pub end: RailEndPrototype,
+    pub curve: RailCurvePrototype,
+}
+
+/// Numerator and shift of a fixed-point quarter turn (`π / 2`), used to measure
+/// arc lengths without floating point. `1_686_629_713 / 2^30` is `π / 2` to
+/// nine decimal places, which is exact to the unit for any radius a rail piece
+/// can declare.
+const QUARTER_TURN_NUMERATOR: i128 = 1_686_629_713;
+const QUARTER_TURN_SHIFT: u32 = 30;
+
+impl RailPiecePrototype {
+    /// Both ends, for the code that treats them symmetrically.
+    pub const fn ends(&self) -> [RailEndPrototype; 2] {
+        [self.start, self.end]
+    }
+
+    /// Distance from the arc center to either end, or zero for a straight.
+    pub fn radius(&self) -> i64 {
+        match self.curve {
+            RailCurvePrototype::Straight => 0,
+            RailCurvePrototype::QuarterArc { center } => distance(center, self.start.position),
+        }
+    }
+
+    /// Travel length of the piece in fixed-point units. This is the weight the
+    /// rail graph carries on the edge for this piece.
+    pub fn length(&self) -> i64 {
+        match self.curve {
+            RailCurvePrototype::Straight => distance(self.start.position, self.end.position),
+            RailCurvePrototype::QuarterArc { .. } => {
+                ((i128::from(self.radius()) * QUARTER_TURN_NUMERATOR) >> QUARTER_TURN_SHIFT) as i64
+            }
+        }
+    }
+}
+
+/// Euclidean distance between two sub-tile points, rounded down to whole
+/// fixed-point units. Integer arithmetic throughout keeps the length of a piece
+/// a pure function of its declaration on every platform.
+fn distance(from: RailPointPrototype, to: RailPointPrototype) -> i64 {
+    let dx = i64::from(to.x) - i64::from(from.x);
+    let dy = i64::from(to.y) - i64::from(from.y);
+    (dx * dx + dy * dy).isqrt()
+}
 
 /// Ambient temperature every heat buffer starts and settles at, in degrees.
 /// Heat buffer energy is stored relative to this floor, so an idle network holds
@@ -880,6 +1029,18 @@ pub enum EntityKind {
     /// Anchors a robot network and covers a square of the world; see
     /// [`RoboportPrototype`].
     Roboport,
+    /// A straight run of track; see [`RailPiecePrototype`].
+    RailStraight,
+    /// A quarter-turn of track; see [`RailPiecePrototype`].
+    RailCurved,
+}
+
+impl EntityKind {
+    /// Whether this kind is a piece of track, and therefore declares
+    /// [`RailPiecePrototype`] geometry and takes part in the rail graph.
+    pub const fn is_rail(self) -> bool {
+        matches!(self, Self::RailStraight | Self::RailCurved)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
