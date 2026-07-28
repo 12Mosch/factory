@@ -5,7 +5,7 @@ use factory_data::{
 use factory_sim::{
     BuildError, BuildPlacementIssue, BuildPlacementIssueKind, BuildPlacementPreview,
     ConstructionError, Direction, EntityDestroyError, EntityFootprint, PlayerBuildError,
-    Simulation, TilePlacementError, TilePlacementRequest,
+    RollingStockPlacementError, Simulation, TilePlacementError, TilePlacementRequest,
 };
 
 use crate::build::resources::{
@@ -146,6 +146,30 @@ pub fn place_selection_at_tile(
             };
         }
     };
+
+    // Rolling stock goes on rails rather than on tiles, so it takes the
+    // rolling-stock path instead of the footprint one. Routing here rather than
+    // inside the simulation keeps both paths honest about what they place: one
+    // returns an entity that occupies tiles, the other a train that does not.
+    if sim
+        .catalog()
+        .entity(prototype_id)
+        .is_some_and(|prototype| prototype.rolling_stock.is_some())
+    {
+        return match sim.place_rolling_stock_from_player_inventory(
+            prototype_id,
+            selection.item_id,
+            x,
+            y,
+        ) {
+            Ok(_) => BuildPlacementStatus::Placed(format!(
+                "Placed {}",
+                entity_display_name(sim.catalog(), prototype_id)
+                    .unwrap_or_else(|| "Rolling stock".to_string())
+            )),
+            Err(error) => rolling_stock_status_from_error(sim.catalog(), error),
+        };
+    }
 
     match factory_sim::placement::place_from_player_inventory(
         sim,
@@ -288,11 +312,47 @@ pub(crate) fn build_status_from_error(
         PlayerBuildError::Build(BuildError::InvalidFootprint { .. }) => {
             BuildPlacementStatus::CannotPlace("Invalid building footprint".to_string())
         }
+        // Rolling stock reaches the simulation through its own command, so a
+        // tile placement carrying one is a routing mistake rather than
+        // something the player did wrong. Saying what it needs is more use than
+        // saying it cannot be built.
+        PlayerBuildError::Build(BuildError::RunsOnRails { .. }) => {
+            BuildPlacementStatus::CannotPlace("Needs a clear run of rail".to_string())
+        }
         PlayerBuildError::MissingPrototype(_)
         | PlayerBuildError::MissingBuildItem { .. }
         | PlayerBuildError::ItemDoesNotBuildEntity { .. }
         | PlayerBuildError::Build(BuildError::MissingPrototype(_))
         | PlayerBuildError::Build(BuildError::MissingEntity(_)) => {
+            BuildPlacementStatus::CannotPlace("Cannot build this item".to_string())
+        }
+    }
+}
+
+pub(crate) fn rolling_stock_status_from_error(
+    catalog: &PrototypeCatalog,
+    error: RollingStockPlacementError,
+) -> BuildPlacementStatus {
+    match error {
+        RollingStockPlacementError::InsufficientInventory { item_id } => {
+            BuildPlacementStatus::MissingInventory(short_inventory_need(catalog, item_id))
+        }
+        RollingStockPlacementError::Locked(prototype_id) => BuildPlacementStatus::Locked(format!(
+            "{} locked",
+            entity_display_name(catalog, prototype_id)
+                .unwrap_or_else(|| "Rolling stock".to_string())
+        )),
+        RollingStockPlacementError::NoRail => {
+            BuildPlacementStatus::CannotPlace("Needs a rail here".to_string())
+        }
+        RollingStockPlacementError::TrackTooShort => {
+            BuildPlacementStatus::CannotPlace("Track is too short for this".to_string())
+        }
+        RollingStockPlacementError::Occupied(_) => {
+            BuildPlacementStatus::CannotPlace("Rolling stock already there".to_string())
+        }
+        RollingStockPlacementError::NotRollingStock(_)
+        | RollingStockPlacementError::MissingBuildItem(_) => {
             BuildPlacementStatus::CannotPlace("Cannot build this item".to_string())
         }
     }
@@ -413,6 +473,9 @@ pub(crate) fn build_status_from_preview_issue(
         BuildPlacementIssueKind::InvalidFootprint { .. } => {
             BuildPlacementStatus::CannotPlace("Invalid building footprint".to_string())
         }
+        BuildPlacementIssueKind::NeedsClearRail { .. } => {
+            BuildPlacementStatus::CannotPlace("Needs a clear run of rail".to_string())
+        }
     }
 }
 
@@ -431,6 +494,7 @@ fn preview_issue_priority(issue: &BuildPlacementIssue) -> usize {
         BuildPlacementIssueKind::MissingRequiredResource => 10,
         BuildPlacementIssueKind::MissingAdjacentWater => 11,
         BuildPlacementIssueKind::InvalidFootprint { .. } => 12,
+        BuildPlacementIssueKind::NeedsClearRail { .. } => 13,
     }
 }
 

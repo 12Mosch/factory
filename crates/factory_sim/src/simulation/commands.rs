@@ -190,6 +190,29 @@ pub enum SimCommand {
         x: WorldTileCoord,
         y: WorldTileCoord,
     },
+    /// Puts a locomotive or wagon on the rail under `(x, y)`. Separate from
+    /// [`SimCommand::PlaceEntityFromPlayerInventory`] because rolling stock is
+    /// not tile-locked: there is no footprint to reserve, and what comes back
+    /// is a [`RollingStockId`] rather than an [`EntityId`].
+    PlaceRollingStockFromPlayerInventory {
+        prototype_id: EntityPrototypeId,
+        item_id: ItemId,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    },
+    /// Takes one piece of rolling stock off the rails and back into the player
+    /// inventory, with its fuel and cargo.
+    MineRollingStock {
+        stock_id: RollingStockId,
+    },
+    /// Debug drive command: sets what a train is doing. With no pathfinding,
+    /// signals, or schedules yet, this is the only thing that makes a train
+    /// move, and it goes through the command queue so it lands on a tick
+    /// boundary like every other input.
+    SetTrainThrottle {
+        train_id: TrainId,
+        throttle: TrainThrottle,
+    },
     BuildRedScienceResearchFixture,
     BuildChemicalScienceFactoryFixture,
     /// Applies the chemical science fixture's pending recipe selections as
@@ -247,6 +270,9 @@ pub enum SimCommandError {
     Circuit(CircuitError),
     RobotDispatch(RobotDispatchError),
     LogisticChest(LogisticChestError),
+    RollingStockPlacement(RollingStockPlacementError),
+    RollingStockMining(RollingStockMiningError),
+    TrainControl(TrainControlError),
 }
 
 /// State a command produced beyond the mutation itself, for consumers that
@@ -284,6 +310,8 @@ pub enum SimCommandEffect {
         removed: usize,
     },
     RobotDispatched(RobotId),
+    RollingStockPlaced(RollingStockId),
+    RollingStockMined,
 }
 
 impl Simulation {
@@ -619,6 +647,27 @@ impl Simulation {
                     .dispatch_robot(roboport, x, y)
                     .map_err(SimCommandError::RobotDispatch)?;
                 Ok(SimCommandEffect::RobotDispatched(robot_id))
+            }
+            SimCommand::PlaceRollingStockFromPlayerInventory {
+                prototype_id,
+                item_id,
+                x,
+                y,
+            } => {
+                let stock_id = self
+                    .place_rolling_stock_from_player_inventory(prototype_id, item_id, x, y)
+                    .map_err(SimCommandError::RollingStockPlacement)?;
+                Ok(SimCommandEffect::RollingStockPlaced(stock_id))
+            }
+            SimCommand::MineRollingStock { stock_id } => {
+                self.mine_rolling_stock(stock_id)
+                    .map_err(SimCommandError::RollingStockMining)?;
+                Ok(SimCommandEffect::RollingStockMined)
+            }
+            SimCommand::SetTrainThrottle { train_id, throttle } => {
+                self.set_train_throttle(train_id, throttle)
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
             }
             SimCommand::BuildRedScienceResearchFixture => {
                 self.build_red_science_research_fixture();

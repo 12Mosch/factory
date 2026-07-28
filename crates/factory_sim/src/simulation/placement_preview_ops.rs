@@ -22,6 +22,56 @@ pub(crate) fn rail_connection_preview(
     rail_ops::placement_connections(sim, prototype_id, &footprint, direction)
 }
 
+/// Cursor preview for rolling stock.
+///
+/// Rolling stock has no footprint to paint, so the preview covers the cursor
+/// tile — the tile whose rail the piece would be put on — and the issues it
+/// reports are the ones the rolling-stock placement path itself would raise.
+/// Asking that path rather than re-deriving the answer is what keeps the cursor
+/// from promising a placement the click would then refuse.
+fn rolling_stock_preview(
+    sim: &Simulation,
+    request: PlayerPlacementRequest,
+) -> BuildPlacementPreview {
+    let mut preview = BuildPlacementPreview {
+        footprint: Some(EntityFootprint::single_tile(request.x, request.y)),
+        issues: Vec::new(),
+    };
+    let Err(error) = sim.validate_rolling_stock_placement(
+        request.prototype_id,
+        request.item_id,
+        request.x,
+        request.y,
+    ) else {
+        return preview;
+    };
+
+    let kind = match error {
+        RollingStockPlacementError::InsufficientInventory { item_id } => {
+            BuildPlacementIssueKind::InsufficientInventory { item_id }
+        }
+        RollingStockPlacementError::Locked(prototype_id) => {
+            BuildPlacementIssueKind::EntityLocked { prototype_id }
+        }
+        RollingStockPlacementError::MissingBuildItem(prototype_id)
+        | RollingStockPlacementError::NotRollingStock(prototype_id) => {
+            BuildPlacementIssueKind::MissingBuildItem { prototype_id }
+        }
+        // No rail, too short a run, or another wagon already there: three ways
+        // of saying the cursor is not over track this piece could stand on.
+        RollingStockPlacementError::NoRail
+        | RollingStockPlacementError::TrackTooShort
+        | RollingStockPlacementError::Occupied(_) => BuildPlacementIssueKind::NeedsClearRail {
+            prototype_id: request.prototype_id,
+        },
+    };
+    preview.issues.push(BuildPlacementIssue {
+        tile: Some((request.x, request.y)),
+        kind,
+    });
+    preview
+}
+
 pub(crate) fn preview_from_player_inventory(
     sim: &Simulation,
     request: PlayerPlacementRequest,
@@ -37,6 +87,10 @@ pub(crate) fn preview_from_player_inventory(
         });
         return preview;
     };
+
+    if prototype.rolling_stock.is_some() {
+        return rolling_stock_preview(sim, request);
+    }
 
     let footprint = EntityFootprint::from_size(
         request.x,

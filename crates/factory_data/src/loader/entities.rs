@@ -31,6 +31,7 @@ pub(super) fn load_entities(
             validate_circuit_metadata(&entity.name, &entity)?;
             validate_roboport_metadata(&entity.name, &entity)?;
             validate_logistic_chest_metadata(&entity.name, &entity)?;
+            validate_rolling_stock_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
                     entity: entity.name,
@@ -60,8 +61,13 @@ pub(super) fn load_entities(
                     });
                 }
             }
-            let fluid_boxes =
-                resolve_fluid_boxes(&name, size, entity.fluid_boxes, fluid_ids_by_name)?;
+            let fluid_boxes = resolve_fluid_boxes(
+                &name,
+                entity.entity_kind,
+                size,
+                entity.fluid_boxes,
+                fluid_ids_by_name,
+            )?;
             let heat_buffer = resolve_heat_buffer(&name, size, entity.heat_buffer)?;
             validate_heat_metadata(
                 &name,
@@ -164,6 +170,7 @@ pub(super) fn load_entities(
                 circuit_connector: entity.circuit_connector,
                 combinator: entity.combinator,
                 rail_piece: entity.rail_piece,
+                rolling_stock: entity.rolling_stock,
             })
         })
         .collect()
@@ -656,17 +663,30 @@ fn validate_machine_energy_source(
     Ok(())
 }
 
+/// Resolves an entity's declared fluid boxes into world-relative openings.
+///
+/// A placed entity's box must declare at least one opening: a box no pipe can
+/// ever reach is a box nothing could fill, and that is a catalog mistake rather
+/// than a design. Rolling stock is the one exception, and it is an exception
+/// about placement rather than about fluids — a wagon is never in the occupancy
+/// grid the pipe networks are built from, so its tank is filled at a station
+/// and an opening on its footprint would be a promise the simulation could not
+/// keep.
 fn resolve_fluid_boxes(
     entity_name: &str,
+    entity_kind: EntityKind,
     entity_size: IVec2,
     fluid_boxes: Vec<RawFluidBoxPrototype>,
     fluid_ids_by_name: &HashMap<String, FluidId>,
 ) -> Result<Vec<FluidBoxPrototype>, PrototypeLoadError> {
+    let connections_required = !entity_kind.is_rolling_stock();
     fluid_boxes
         .into_iter()
         .enumerate()
         .map(|(box_index, fluid_box)| {
-            if fluid_box.capacity_milliunits == 0 || fluid_box.connections.is_empty() {
+            if fluid_box.capacity_milliunits == 0
+                || (connections_required && fluid_box.connections.is_empty())
+            {
                 return Err(PrototypeLoadError::InvalidFluidBox {
                     entity: entity_name.to_string(),
                     box_index,
@@ -969,6 +989,79 @@ fn validate_rail_metadata(
     }
 
     Ok(())
+}
+
+/// Checks that rolling stock declares a body a train can be built from, and
+/// that no other entity kind claims to run on rails.
+///
+/// The motion model divides by the train's mass and compares against its top
+/// speed every tick, and coupling spaces stock by its length, so a zero in any
+/// of the three is a division by zero or a train of zero-length pieces stacked
+/// on one point. Rejecting them here is what lets the simulation treat those
+/// numbers as facts.
+///
+/// The cargo declarations are checked against the kind for the same reason the
+/// rail geometry is: a cargo wagon with no inventory and a fluid wagon with no
+/// fluid box are entities whose whole purpose is missing, and nothing later
+/// would report it.
+fn validate_rolling_stock_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRollingStockMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    let Some(rolling_stock) = entity.rolling_stock else {
+        if entity.entity_kind.is_rolling_stock() {
+            return invalid("rolling stock requires rolling_stock metadata");
+        }
+        return Ok(());
+    };
+    if !entity.entity_kind.is_rolling_stock() {
+        return invalid("rolling_stock metadata is only valid on rolling stock");
+    }
+
+    if rolling_stock.length_fixed <= 0 {
+        return invalid("rolling stock needs a positive length");
+    }
+    if rolling_stock.weight_kilograms == 0 {
+        return invalid("rolling stock needs a positive weight");
+    }
+    if rolling_stock.max_speed_fixed_per_tick == 0 {
+        return invalid("rolling stock needs a positive top speed");
+    }
+
+    match (entity.entity_kind, rolling_stock.locomotive) {
+        (EntityKind::Locomotive, Some(locomotive)) => {
+            if locomotive.tractive_force_newtons == 0 {
+                return invalid("a locomotive needs a positive tractive force");
+            }
+            // Tractive force is what the burnt fuel buys; without a burner the
+            // locomotive would pull for free.
+            if entity.burner.is_none() {
+                return invalid("a locomotive needs a burner to fuel its tractive force");
+            }
+        }
+        (EntityKind::Locomotive, None) => {
+            return invalid("a locomotive needs locomotive metadata");
+        }
+        (_, Some(_)) => return invalid("locomotive metadata is only valid on locomotives"),
+        (_, None) => {}
+    }
+
+    match entity.entity_kind {
+        EntityKind::CargoWagon if entity.inventory_slot_count.unwrap_or(0) == 0 => {
+            invalid("a cargo wagon needs inventory slots")
+        }
+        EntityKind::FluidWagon if entity.fluid_boxes.is_empty() => {
+            invalid("a fluid wagon needs a fluid box")
+        }
+        _ => Ok(()),
+    }
 }
 
 fn point_is_inside(point: RailPointPrototype, width: i64, height: i64) -> bool {

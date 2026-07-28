@@ -186,6 +186,10 @@ pub enum PrototypeLoadError {
         entity: String,
         detail: &'static str,
     },
+    InvalidRollingStockMetadata {
+        entity: String,
+        detail: &'static str,
+    },
     MissingBurntResultItem {
         item: String,
         burnt_result: String,
@@ -443,6 +447,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has invalid rail metadata: {detail}"
+                )
+            }
+            Self::InvalidRollingStockMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid rolling stock metadata: {detail}"
                 )
             }
             Self::MissingBurntResultItem { item, burnt_result } => write!(

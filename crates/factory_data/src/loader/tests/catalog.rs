@@ -192,6 +192,9 @@ const ENTITY_NAMES: &[&str] = &[
     "radar",
     "rail_straight",
     "rail_curved",
+    "locomotive",
+    "cargo_wagon",
+    "fluid_wagon",
 ];
 
 const TILE_NAMES: &[&str] = &[
@@ -213,18 +216,20 @@ const TECHNOLOGY_NAMES: &[&str] = &[
     "space_science_pack",
     "logistic_system",
     "railway",
+    "rolling_stock",
+    "fluid_wagon",
 ];
 
 #[test]
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 112);
+    assert_eq!(catalog.items.len(), 115);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 110);
-    assert_eq!(catalog.entities.len(), 71);
+    assert_eq!(catalog.recipes.len(), 113);
+    assert_eq!(catalog.entities.len(), 74);
     assert_eq!(catalog.tiles.len(), 11);
-    assert_eq!(catalog.technologies.len(), 43);
+    assert_eq!(catalog.technologies.len(), 45);
     assert_eq!(catalog.virtual_signals.len(), 38);
 }
 

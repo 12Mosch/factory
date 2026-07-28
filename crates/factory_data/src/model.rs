@@ -290,6 +290,8 @@ pub struct EntityPrototype {
     pub combinator: Option<CombinatorPrototype>,
     /// Present on rail pieces; see [`RailPiecePrototype`].
     pub rail_piece: Option<RailPiecePrototype>,
+    /// Present on locomotives and wagons; see [`RollingStockPrototype`].
+    pub rolling_stock: Option<RollingStockPrototype>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -587,6 +589,45 @@ impl RailPiecePrototype {
 /// still rejected by validation instead of producing wrapped geometry.
 fn distance(from: RailPointPrototype, to: RailPointPrototype) -> i64 {
     i64::try_from(from.squared_distance_to(to).isqrt()).unwrap_or(i64::MAX)
+}
+
+/// One piece of rolling stock: what it weighs, how long it is, and how hard it
+/// can brake.
+///
+/// A train's motion is a function of these totals and nothing else: mass,
+/// tractive force, and braking force are summed over the coupled stock and the
+/// result drives one shared velocity. Keeping the declaration in force and mass
+/// rather than in "acceleration per tick" is what lets a long train be sluggish
+/// for the same reason a real one is, and what lets the stopping-distance
+/// arithmetic a station needs come out of the same numbers.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RollingStockPrototype {
+    /// Distance between the piece's two couplers, in fixed-point units
+    /// ([`POSITION_SCALE`] per tile). This is the length of track the piece
+    /// occupies and the spacing coupled stock keeps.
+    pub length_fixed: i32,
+    /// Mass in kilograms. Acceleration is force over the train's total mass, so
+    /// this is what a wagon costs the locomotive pulling it.
+    pub weight_kilograms: u32,
+    /// Braking force this piece contributes to its train, in newtons. Wagons
+    /// brake too, which is why a longer train is not simply slower to stop.
+    pub braking_force_newtons: u32,
+    /// Top speed this piece allows, in fixed-point units per tick. A train runs
+    /// at the lowest top speed among its stock.
+    pub max_speed_fixed_per_tick: u32,
+    /// Present on locomotives; see [`LocomotivePrototype`].
+    pub locomotive: Option<LocomotivePrototype>,
+}
+
+/// The powered half of a locomotive.
+///
+/// Fuel is burnt through the ordinary [`BurnerPrototype`] path the entity also
+/// declares; what belongs here is the force that fuel buys. A locomotive out of
+/// fuel still weighs and still brakes — it simply stops pulling.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct LocomotivePrototype {
+    /// Force at the wheels while the throttle is open, in newtons.
+    pub tractive_force_newtons: u32,
 }
 
 /// Ambient temperature every heat buffer starts and settles at, in degrees.
@@ -1049,6 +1090,13 @@ pub enum EntityKind {
     RailStraight,
     /// A quarter-turn of track; see [`RailPiecePrototype`].
     RailCurved,
+    /// Powered rolling stock: burns fuel into tractive force; see
+    /// [`RollingStockPrototype`].
+    Locomotive,
+    /// Rolling stock carrying an item inventory.
+    CargoWagon,
+    /// Rolling stock carrying a fluid box.
+    FluidWagon,
 }
 
 impl EntityKind {
@@ -1056,6 +1104,16 @@ impl EntityKind {
     /// [`RailPiecePrototype`] geometry and takes part in the rail graph.
     pub const fn is_rail(self) -> bool {
         matches!(self, Self::RailStraight | Self::RailCurved)
+    }
+
+    /// Whether this kind runs *on* track rather than being track, and therefore
+    /// declares [`RollingStockPrototype`] motion metadata.
+    ///
+    /// Rolling stock is deliberately not tile-locked: it sits between tiles, so
+    /// it never enters the occupancy grid and its footprint size is only what
+    /// the renderer draws.
+    pub const fn is_rolling_stock(self) -> bool {
+        matches!(self, Self::Locomotive | Self::CargoWagon | Self::FluidWagon)
     }
 }
 

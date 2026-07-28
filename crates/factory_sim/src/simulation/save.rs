@@ -43,7 +43,10 @@ use bincode::Options;
 // v35: rail pieces joined the catalog. They save as ordinary placed entities,
 // but the catalog they are validated against changed, and the rail graph they
 // form is a derived cache rebuilt on load.
-pub const SAVE_VERSION: u32 = 35;
+// v36: rolling stock joined the snapshot: locomotives and wagons with their
+// position along a rail edge, their cargo and fuel, and the trains they are
+// coupled into with a velocity mid-run.
+pub const SAVE_VERSION: u32 = 36;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -67,7 +70,9 @@ pub const SAVE_VERSION: u32 = 35;
 // request rows), and the roboport gained a circuit connector.
 // v25: entity prototypes gained rail piece geometry (sub-tile ends, headings,
 // and the curve between them).
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 25;
+// v26: entity prototypes gained rolling stock metadata (length, weight,
+// braking force, top speed, and locomotive tractive force).
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 26;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -132,6 +137,7 @@ struct SimulationSnapshotOwned {
     heat_networks: Vec<HeatNetworkSnapshot>,
     robot_networks: Vec<RobotNetworkSnapshot>,
     robot_flights: RobotFlightSubsystem,
+    rolling_stock: RollingStockSubsystem,
     pollution: PollutionState,
     enemies: EnemySubsystem,
     config: SimulationConfig,
@@ -281,6 +287,7 @@ struct SimulationSnapshotRef<'a> {
     heat_networks: &'a Vec<HeatNetworkSnapshot>,
     robot_networks: &'a Vec<RobotNetworkSnapshot>,
     robot_flights: &'a RobotFlightSubsystem,
+    rolling_stock: &'a RollingStockSubsystem,
     pollution: &'a PollutionState,
     enemies: &'a EnemySubsystem,
     config: SimulationConfig,
@@ -315,6 +322,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             heat_networks: &sim.heat.networks,
             robot_networks: &sim.robots.networks,
             robot_flights: &sim.robot_flights,
+            rolling_stock: &sim.rolling_stock,
             pollution: &sim.pollution,
             enemies: &sim.enemies,
             config: sim.config,
@@ -364,6 +372,7 @@ impl SimulationSnapshotOwned {
             rails: RailSubsystem::default(),
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
+            rolling_stock: self.rolling_stock,
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,

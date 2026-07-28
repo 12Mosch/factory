@@ -26,6 +26,7 @@ pub mod radar;
 pub mod rail;
 pub mod research;
 pub mod robots;
+pub mod rolling_stock;
 pub mod tick;
 pub mod world;
 

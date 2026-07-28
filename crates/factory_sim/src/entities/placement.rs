@@ -23,6 +23,13 @@ pub enum BuildError {
         entity_id: EntityId,
     },
     MissingEntity(EntityId),
+    /// The prototype is rolling stock, which runs on rails rather than sitting
+    /// on tiles. It has no footprint to reserve, so the tile placement path
+    /// refuses it outright instead of quietly creating a locomotive that
+    /// occupies a square of grass.
+    RunsOnRails {
+        prototype_id: EntityPrototypeId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +102,11 @@ pub enum BuildPlacementIssueKind {
     },
     MissingRequiredResource,
     MissingAdjacentWater,
+    /// The held item builds rolling stock, and the cursor is not over a clear
+    /// run of rail long enough to hold it.
+    NeedsClearRail {
+        prototype_id: EntityPrototypeId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

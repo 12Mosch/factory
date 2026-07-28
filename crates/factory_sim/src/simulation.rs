@@ -103,6 +103,11 @@ pub use crate::robots::{
     RobotActivity, RobotDispatchError, RobotFlightSubsystem, RobotId, RobotNetworkJobCounts,
     RobotNetworkSnapshot, TileBounds,
 };
+pub use crate::rolling_stock::{
+    RailPosition, RollingStock, RollingStockId, RollingStockMiningError,
+    RollingStockPlacementError, RollingStockSubsystem, TRAIN_COUPLING_GAP_FIXED,
+    TRAIN_VELOCITY_SCALE, Train, TrainControlError, TrainForces, TrainId, TrainThrottle,
+};
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
     TerrainMutationError, TerrainTileChange, TileCell, TileCollision, WorldSim, WorldTileCoord,
@@ -216,6 +221,10 @@ pub struct Simulation {
     /// rebuilt on load rather than saved, the way `circuits` is.
     #[serde(skip)]
     rails: RailSubsystem,
+    /// Locomotives and wagons, and the trains they are coupled into. Durable
+    /// like the robots in flight and for the same reason: a train is a unit
+    /// that exists in its own right, not a cache of something placed.
+    rolling_stock: RollingStockSubsystem,
     robots: RobotSubsystem,
     /// Robots in flight. Kept beside the network subsystem rather than inside
     /// it because the two have different lifetimes: networks are a cache of
@@ -694,6 +703,17 @@ pub enum SimValidationError {
     InvalidRobotState {
         robot_id: RobotId,
     },
+    /// A piece of rolling stock is off the rails: no live edge under it, a
+    /// distance past the end of the one it names, a prototype that is not
+    /// rolling stock, or cargo its prototype never declared.
+    InvalidRollingStock {
+        stock_id: RollingStockId,
+    },
+    /// A train and its stock disagree about who belongs to whom, or the train
+    /// holds a velocity the model could not have produced.
+    InvalidTrain {
+        train_id: TrainId,
+    },
     /// A roboport's charging pads or queue disagree with the robots that claim
     /// to be on them.
     InvalidRoboportChargingState {
@@ -864,6 +884,7 @@ mod rail_state;
 mod research_ops;
 mod robot_ops;
 mod robot_state;
+pub mod rolling_stock_ops;
 mod save;
 mod scripted;
 mod statistics_ops;
@@ -897,6 +918,7 @@ pub(crate) use self::profiling::{NoopTickProfiler, ProfilePhase, TickProfiler};
 pub use self::profiling::{SimulationCounts, SimulationTickProfile};
 use self::rail_state::RailSubsystem;
 use self::robot_state::RobotSubsystem;
+pub use self::rolling_stock_ops::braking_distance_fixed;
 pub use self::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo, SaveLoadError,
     inspect_save_header, load_from_bytes, prototype_hash, save_to_bytes,
