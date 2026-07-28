@@ -121,21 +121,90 @@ pub(in crate::simulation) fn conflicting_rail_end(
 
 /// The placed rail with an end exactly at `position` facing `heading`.
 ///
-/// A piece with such an end has its body on the side opposite its heading, so
-/// the point one unit back along the heading is inside that piece's footprint.
-/// One occupancy lookup therefore finds the only candidate there can be, and its
-/// geometry confirms it — no scan over the placed rails, and no dependence on
+/// Looks only at the tiles such a piece must occupy and confirms the candidate
+/// against its geometry — no scan over the placed rails, and no dependence on
 /// the rail graph, which is what lets a placement preview answer this before the
 /// graph has been rebuilt.
 fn rail_end_at(sim: &Simulation, position: RailPoint, heading: Direction) -> Option<EntityId> {
-    let (step_x, step_y) = heading.tile_step();
-    let (tile_x, tile_y) = RailPoint::new(position.x - step_x, position.y - step_y).tile();
-    let entity_id = sim.entities.occupancy.entity_at(tile_x, tile_y)?;
-    let geometry = sim.rail_piece_geometry(entity_id)?;
+    candidate_tiles(position, heading)
+        .into_iter()
+        .flatten()
+        .find_map(|(tile_x, tile_y)| {
+            let entity_id = sim.entities.occupancy.entity_at(tile_x, tile_y)?;
+            let geometry = sim.rail_piece_geometry(entity_id)?;
+            geometry
+                .ends()
+                .iter()
+                .any(|end| end.position == position && end.heading == heading)
+                .then_some(entity_id)
+        })
+}
 
-    geometry
-        .ends()
-        .iter()
-        .any(|end| end.position == position && end.heading == heading)
-        .then_some(entity_id)
+/// The tiles a piece with an end at `position` facing `heading` can occupy at
+/// that end.
+///
+/// Its body lies on the side opposite the heading, so stepping one unit back
+/// along the heading lands inside the footprint on *that* axis. On the other
+/// axis the end keeps `position`'s own coordinate, and when that falls exactly
+/// on a tile boundary — an end at a footprint corner — the body may sit on
+/// either side of the boundary. Both tiles are then candidates; assuming the
+/// first would let a corner end hide from the connection preview and from the
+/// duplicate-track check.
+fn candidate_tiles(position: RailPoint, heading: Direction) -> [Option<(i64, i64)>; 2] {
+    let (step_x, step_y) = heading.tile_step();
+    let inside = RailPoint::new(position.x - step_x, position.y - step_y);
+    let on_boundary = |coordinate: i64| coordinate.rem_euclid(crate::POSITION_SCALE) == 0;
+
+    let across = if step_x == 0 && on_boundary(position.x) {
+        Some(RailPoint::new(inside.x - 1, inside.y).tile())
+    } else if step_y == 0 && on_boundary(position.y) {
+        Some(RailPoint::new(inside.x, inside.y - 1).tile())
+    } else {
+        None
+    };
+
+    [Some(inside.tile()), across]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiles(position: RailPoint, heading: Direction) -> Vec<(i64, i64)> {
+        candidate_tiles(position, heading)
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    /// The base pieces put their ends mid-tile across the direction of travel,
+    /// so the body can only be on one side and one tile answers the question.
+    #[test]
+    fn an_end_between_tile_boundaries_has_a_single_candidate() {
+        // A straight's north end: mid-tile in x, on a row boundary in y. The
+        // piece reaching it from the north has its body in the row above.
+        assert_eq!(
+            tiles(RailPoint::new(512, 2_048), Direction::South),
+            vec![(0, 2)]
+        );
+        assert_eq!(
+            tiles(RailPoint::new(512, 2_048), Direction::North),
+            vec![(0, 1)]
+        );
+    }
+
+    /// An end at a footprint corner is on a boundary in both axes, so the body
+    /// may lie on either side of the one it does not travel along. Missing the
+    /// second tile would report such an end as unconnected.
+    #[test]
+    fn an_end_on_a_corner_has_a_candidate_either_side_of_it() {
+        assert_eq!(
+            tiles(RailPoint::new(0, 2_048), Direction::West),
+            vec![(0, 2), (0, 1)]
+        );
+        assert_eq!(
+            tiles(RailPoint::new(1_024, 1_024), Direction::North),
+            vec![(1, 0), (0, 0)]
+        );
+    }
 }

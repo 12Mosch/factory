@@ -88,17 +88,27 @@ fn assign_networks(graph: &mut RailGraph) {
         components_by_min_entity.insert(min_entity_id, edge_indices);
     }
 
+    // Which network last counted each node. Counting distinct nodes by
+    // remembering that here rather than by searching a per-network list keeps
+    // the whole pass linear in the number of pieces: a rebuild runs inside the
+    // fixed tick every time track changes, so a long railway must not make
+    // extending it quadratic. A node is stamped rather than assigned outright
+    // because two pieces laid over each other put one node in two networks, and
+    // each of them still counts it exactly once.
+    let mut counting_network = vec![u32::MAX; graph.nodes.len()];
+
     for (network_id, edge_indices) in components_by_min_entity.into_values().enumerate() {
         let network_id = network_id as u32;
         let mut total_length_fixed = 0_i64;
-        let mut nodes = SmallVec::<[usize; 8]>::new();
+        let mut node_count = 0;
         for edge_index in &edge_indices {
             let edge = &mut graph.edges[*edge_index];
             edge.network_id = network_id;
             total_length_fixed = total_length_fixed.saturating_add(edge.length_fixed);
             for node_index in edge.nodes {
-                if !nodes.contains(&node_index) {
-                    nodes.push(node_index);
+                if counting_network[node_index] != network_id {
+                    counting_network[node_index] = network_id;
+                    node_count += 1;
                 }
             }
         }
@@ -106,7 +116,7 @@ fn assign_networks(graph: &mut RailGraph) {
         graph.networks.push(RailNetworkSnapshot {
             network_id,
             piece_count: edge_indices.len(),
-            node_count: nodes.len(),
+            node_count,
             total_length_fixed,
         });
     }
