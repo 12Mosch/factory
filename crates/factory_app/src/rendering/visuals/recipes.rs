@@ -1,28 +1,17 @@
 mod defense;
+mod entities;
 mod fluids;
+mod foundations;
 mod infrastructure;
 mod items;
 mod logistics;
 mod power;
 mod production;
 
-use bevy::prelude::*;
-use factory_data::EntityKind;
-
-use super::EntityVisualStyle;
-use super::layers::{VisualLayer, VisualLayerBuilder};
+use super::layers::VisualLayer;
 use super::templates::VisualTemplate;
-use crate::constants::TILE_SIZE;
-use defense::{enemy_spawner_layers, gun_turret_layers, laser_turret_layers, wall_layers};
-use fluids::{offshore_pump_layers, pipe_layers, pumpjack_layers, storage_tank_layers};
-use infrastructure::{combinator_layers, lamp_layers, radar_layers, roboport_layers};
+use bevy::prelude::*;
 use items::{belt_item_layers, resource_layers};
-use logistics::{chest_layers, inserter_layers, splitter_layers, transport_belt_layers};
-use power::{
-    accumulator_layers, boiler_layers, electric_pole_layers, heat_exchanger_layers,
-    nuclear_reactor_layers, solar_panel_layers, steam_engine_layers,
-};
-use production::{assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers};
 
 pub(super) fn visual_layers(
     template: VisualTemplate,
@@ -34,7 +23,7 @@ pub(super) fn visual_layers(
             kind,
             direction,
             connections,
-        } => entity_layers(EntityVisualStyle {
+        } => entities::entity_layers(super::EntityVisualStyle {
             base_color: color,
             size,
             kind,
@@ -46,124 +35,12 @@ pub(super) fn visual_layers(
     }
 }
 
-fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
-    let mut builder = VisualLayerBuilder::new(style.size);
-
-    // Pipes and heat pipes paint their own silhouette so arms only appear toward
-    // connected neighbors.
-    if matches!(style.kind, EntityKind::Pipe | EntityKind::HeatPipe) {
-        pipe_layers(&mut builder, style);
-        return builder.finish();
-    }
-
-    shadow(&mut builder, style);
-    entity_relief(&mut builder);
-
-    match style.kind {
-        EntityKind::TransportBelt => transport_belt_layers(&mut builder, style),
-        EntityKind::Splitter => splitter_layers(&mut builder, style),
-        EntityKind::Chest => chest_layers(&mut builder, style),
-        EntityKind::MiningDrill => drill_layers(&mut builder, style),
-        EntityKind::Furnace => furnace_layers(&mut builder, style),
-        EntityKind::AssemblingMachine => assembler_layers(&mut builder, style),
-        EntityKind::Lab => lab_layers(&mut builder, style),
-        EntityKind::Beacon => beacon_layers(&mut builder, style),
-        EntityKind::Inserter => inserter_layers(&mut builder, style),
-        EntityKind::ElectricPole => electric_pole_layers(&mut builder, style),
-        EntityKind::SteamEngine => steam_engine_layers(&mut builder, style),
-        EntityKind::Boiler => boiler_layers(&mut builder, style),
-        EntityKind::OffshorePump => offshore_pump_layers(&mut builder, style),
-        EntityKind::Pump => offshore_pump_layers(&mut builder, style),
-        EntityKind::Pumpjack => pumpjack_layers(&mut builder, style),
-        EntityKind::Pipe | EntityKind::HeatPipe => {}
-        EntityKind::NuclearReactor => nuclear_reactor_layers(&mut builder, style),
-        EntityKind::HeatExchanger => heat_exchanger_layers(&mut builder, style),
-        EntityKind::StorageTank => storage_tank_layers(&mut builder, style),
-        EntityKind::Wall => wall_layers(&mut builder, style),
-        EntityKind::GunTurret => gun_turret_layers(&mut builder, style),
-        EntityKind::LaserTurret => laser_turret_layers(&mut builder, style),
-        EntityKind::EnemySpawner => enemy_spawner_layers(&mut builder, style),
-        EntityKind::SolarPanel => solar_panel_layers(&mut builder, style),
-        EntityKind::Accumulator => accumulator_layers(&mut builder, style),
-        EntityKind::Radar => radar_layers(&mut builder, style),
-        EntityKind::Roboport => roboport_layers(&mut builder, style),
-        EntityKind::ConstantCombinator
-        | EntityKind::ArithmeticCombinator
-        | EntityKind::DeciderCombinator => combinator_layers(&mut builder, style),
-        EntityKind::Lamp => lamp_layers(&mut builder, style),
-        EntityKind::ResourcePatch => {}
-    }
-
-    builder.rounded_rect(
-        style.size,
-        Vec2::ZERO,
-        0.0,
-        style.base_color,
-        style.size.min_element() * 0.14,
-    );
-    builder.finish()
-}
-
-/// All entities share one key light from the top-left: a soft drop shadow cast toward the
-/// bottom-right plus a tight contact shadow hugging the base so buildings sit on the ground.
-fn shadow(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
-    builder
-        .ellipse(
-            style.size * Vec2::new(1.08, 1.08),
-            Vec2::new(TILE_SIZE * 0.11, -TILE_SIZE * 0.11),
-            -0.16,
-            Color::srgba(0.015, 0.012, 0.010, 0.30),
-        )
-        .rounded_rect(
-            style.size * Vec2::new(1.05, 1.05),
-            Vec2::new(TILE_SIZE * 0.025, -TILE_SIZE * 0.04),
-            -0.15,
-            Color::srgba(0.02, 0.016, 0.012, 0.52),
-            style.size.min_element() * 0.16,
-        );
-}
-
-/// Outline plus edge relief matching the top-left key light: lit top and left edges,
-/// shaded bottom and right edges.
-fn entity_relief(builder: &mut VisualLayerBuilder) {
-    builder
-        .scaled_rounded(
-            Vec2::new(1.02, 1.02),
-            Vec2::ZERO,
-            -0.08,
-            Color::srgba(0.035, 0.030, 0.026, 0.56),
-            0.16,
-        )
-        .scaled_ellipse(
-            Vec2::new(0.80, 0.12),
-            Vec2::new(-0.02, 0.36),
-            0.08,
-            Color::srgba(1.0, 0.95, 0.72, 0.26),
-        )
-        .scaled_ellipse(
-            Vec2::new(0.10, 0.62),
-            Vec2::new(-0.38, 0.05),
-            0.08,
-            Color::srgba(1.0, 0.95, 0.72, 0.12),
-        )
-        .scaled_ellipse(
-            Vec2::new(0.82, 0.12),
-            Vec2::new(0.02, -0.37),
-            0.08,
-            Color::srgba(0.02, 0.02, 0.03, 0.24),
-        )
-        .scaled_ellipse(
-            Vec2::new(0.10, 0.60),
-            Vec2::new(0.38, -0.04),
-            0.08,
-            Color::srgba(0.02, 0.02, 0.03, 0.13),
-        );
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::templates::ConnectionMask;
     use super::*;
+    use crate::constants::TILE_SIZE;
+    use factory_data::EntityKind;
     use factory_sim::Direction;
 
     fn entity_template(kind: EntityKind, connections: ConnectionMask) -> VisualTemplate {
