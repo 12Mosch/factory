@@ -180,24 +180,31 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             {
                 return Err(invalid());
             }
-            // What is left to run fits on the track the route names. Each listed
-            // rail is crossed once, so the plan can never ask for more distance
-            // than those rails hold — and a leg that did would drive a train
-            // somewhere the route does not go.
+            // What is left to run is bracketed at both ends by things that need
+            // no search to check. It fits on the track the route names, because
+            // each listed rail is crossed once; and it is at least the straight
+            // line from the train to the mark, because track between two points
+            // is never shorter than the line between them. The lower bound is
+            // what rejects a plan claiming a train standing somewhere else is
+            // already there — a single zero-distance leg, which the first tick
+            // would retire as an arrival without the train having moved at all.
+            let remaining = route.legs.iter().map(|leg| leg.distance_fixed).sum::<i64>();
             let listed_length = route
                 .edges
                 .iter()
                 .filter_map(|edge| sim.rail_piece_geometry(*edge))
                 .map(|geometry| geometry.length_fixed)
                 .sum::<i64>();
-            if route.legs.iter().map(|leg| leg.distance_fixed).sum::<i64>() > listed_length {
+            if remaining > listed_length || remaining < straight_line_to_mark(sim, train)? {
                 return Err(invalid());
             }
         }
         // A train that has stopped asking is a train with somewhere to be and no
-        // plan for getting there. Either half missing would leave a flag nothing
+        // plan for getting there. Either half missing would leave a mark nothing
         // ever clears, on a train nothing is waiting to plan for.
-        if train.route_search_exhausted && (train.destination.is_none() || train.route.is_some()) {
+        if train.route_search_exhausted_at.is_some()
+            && (train.destination.is_none() || train.route.is_some())
+        {
             return Err(invalid());
         }
 
@@ -224,4 +231,35 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
     }
 
     Ok(())
+}
+
+/// The straight line between a train's leading piece and the mark it was sent
+/// to, in fixed-point units, rounded down.
+///
+/// A lower bound on the track still to run, in the same sense the route search's
+/// own estimate is one: rails run between their ends rather than through the
+/// ground, so no route can be shorter than the line it spans. Rounded down, so
+/// the bound stays a bound.
+fn straight_line_to_mark(
+    sim: &Simulation,
+    train: &crate::rolling_stock::Train,
+) -> Result<i64, SimValidationError> {
+    let invalid = || SimValidationError::InvalidTrain { train_id: train.id };
+    let destination = train.destination.ok_or_else(invalid)?;
+    let standing_on = train
+        .stock
+        .first()
+        .and_then(|stock_id| sim.rolling_stock.get(*stock_id))
+        .map(|stock| stock.position)
+        .ok_or_else(invalid)?;
+    let from = rolling_stock_ops::world_point(sim, standing_on).ok_or_else(invalid)?;
+    let to = rolling_stock_ops::world_point(
+        sim,
+        RailPosition::new(destination.edge, destination.distance_fixed, true),
+    )
+    .ok_or_else(invalid)?;
+
+    let dx = i128::from(from.x) - i128::from(to.x);
+    let dy = i128::from(from.y) - i128::from(to.y);
+    Ok((dx * dx + dy * dy).isqrt() as i64)
 }

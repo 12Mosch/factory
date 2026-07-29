@@ -219,7 +219,14 @@ fn planning_order(
 /// reachable, on the very railways big enough to need the cap. It needs no
 /// brake of its own: a routed train without a plan is braked by
 /// [`Simulation::steer_train`], which is the one place that rule lives.
-fn record_route_outcome(train: &mut crate::rolling_stock::Train, outcome: RailRouteOutcome) {
+fn record_route_outcome(
+    train: &mut crate::rolling_stock::Train,
+    outcome: RailRouteOutcome,
+    searched_from: RailPosition,
+) {
+    // Whatever the answer, it is an answer to the question the last one could
+    // not finish, so what was remembered about that one goes.
+    train.route_search_exhausted_at = None;
     match outcome {
         RailRouteOutcome::Found(route) => train.route = Some(route),
         RailRouteOutcome::Unreachable => {
@@ -229,11 +236,12 @@ fn record_route_outcome(train: &mut crate::rolling_stock::Train, outcome: RailRo
         }
         RailRouteOutcome::Exhausted => {
             train.route = None;
-            // Asking again straight away would ask the same question of the same
-            // railway from the same place and reach the same cutoff, tick after
-            // tick, for a large part of every tick's budget. The train waits for
-            // something that could change the answer instead.
-            train.route_search_exhausted = true;
+            // Asking again from here would ask the same question of the same
+            // railway and reach the same cutoff, tick after tick, for a large
+            // part of every tick's budget. Where it asked from is remembered
+            // along with the fact that it asked, because that is the half of the
+            // question which can change.
+            train.route_search_exhausted_at = Some(searched_from);
         }
     }
 }
@@ -283,7 +291,7 @@ impl Simulation {
             .ok_or(TrainControlError::MissingTrain(train_id))?;
         train.destination = Some(RailTarget::new(rail, geometry.length_fixed / 2));
         train.route = None;
-        train.route_search_exhausted = false;
+        train.route_search_exhausted_at = None;
         Ok(())
     }
 
@@ -298,7 +306,7 @@ impl Simulation {
             .ok_or(TrainControlError::MissingTrain(train_id))?;
         train.destination = None;
         train.route = None;
-        train.route_search_exhausted = false;
+        train.route_search_exhausted_at = None;
         train.throttle = TrainThrottle::Brake;
         Ok(())
     }
@@ -322,11 +330,11 @@ impl Simulation {
         waiting.extend(
             self.rolling_stock
                 .trains()
-                .filter(|train| {
-                    train.is_routed() && train.route.is_none() && !train.route_search_exhausted
-                })
-                .map(|train| train.id),
+                .filter(|train| train.is_routed() && train.route.is_none())
+                .map(|train| train.id)
+                .collect::<Vec<_>>(),
         );
+        waiting.retain(|train_id| !self.search_would_repeat_itself(*train_id));
         if waiting.is_empty() || !self.train_routing.can_search() {
             self.train_routing.waiting = waiting;
             return;
@@ -393,6 +401,40 @@ impl Simulation {
         }
     }
 
+    /// Whether searching for this train again would ask the question its last
+    /// search already failed to answer.
+    ///
+    /// A search that ran out of expansions ran out from a particular place on a
+    /// particular railway, and both are recorded — the railway by the fact that
+    /// track changing clears this, the place by the position kept with it. Two
+    /// things follow. A train still moving is not asked again, because a train
+    /// told to brake passes through a great many places on the way down and
+    /// asking from each of them would spend the whole cap over and over for the
+    /// length of the stop. A train at rest somewhere else *is* asked again,
+    /// because that is a different question and it costs one search to find out.
+    ///
+    /// What deliberately does not count as a change is other trains moving:
+    /// occupancy shifts what a route costs rather than whether one can be found
+    /// inside the cap, and treating it as a change would mean re-searching every
+    /// tick — the very thing this exists to prevent.
+    fn search_would_repeat_itself(&self, train_id: TrainId) -> bool {
+        let Some(train) = self.rolling_stock.train(train_id) else {
+            return false;
+        };
+        let Some(exhausted_at) = train.route_search_exhausted_at else {
+            return false;
+        };
+        !train.is_stationary() || self.train_search_position(train_id) == Some(exhausted_at)
+    }
+
+    /// Where a search for this train would start: its leading piece's position.
+    fn train_search_position(&self, train_id: TrainId) -> Option<RailPosition> {
+        let train = self.rolling_stock.train(train_id)?;
+        self.rolling_stock
+            .get(*train.stock.first()?)
+            .map(|stock| stock.position)
+    }
+
     /// Searches for a route from where the train stands to where it was sent.
     ///
     /// The route is measured from the train's leading piece. Every piece of a
@@ -400,13 +442,12 @@ impl Simulation {
     /// from only fixes where "arrived" leaves the train standing, and the front
     /// is the piece a destination is naturally about.
     fn plan_train_route(&mut self, train_id: TrainId) {
-        let Some((start, target)) = self.rolling_stock.train(train_id).and_then(|train| {
-            let start = self
-                .rolling_stock
-                .get(*train.stock.first()?)
-                .map(|stock| stock.position)?;
-            Some((start, train.destination?))
-        }) else {
+        let (Some(start), Some(target)) = (
+            self.train_search_position(train_id),
+            self.rolling_stock
+                .train(train_id)
+                .and_then(|train| train.destination),
+        ) else {
             return;
         };
 
@@ -421,7 +462,7 @@ impl Simulation {
             return;
         };
         if let Some(train) = rolling_stock.trains.get_mut(&train_id) {
-            record_route_outcome(train, outcome);
+            record_route_outcome(train, outcome, start);
         }
     }
 
@@ -454,18 +495,6 @@ impl Simulation {
         let Some(train) = self.rolling_stock.trains.get_mut(&train_id) else {
             return;
         };
-        // A search that ran out of expansions ran out *from where the train was
-        // standing*, and a train told to brake takes a while to come to rest. So
-        // long as it is still moving the question it would ask next is not the
-        // one that already failed, and it is worth asking again; once it stops,
-        // it stops asking. What is deliberately not treated as a change of
-        // question is other trains moving: occupancy shifts what a route costs
-        // rather than whether one can be found within the cap, and re-searching
-        // every time anything anywhere moved would be the every-tick search this
-        // flag exists to prevent.
-        if travelled_fixed != 0 {
-            train.route_search_exhausted = false;
-        }
         let stationary = train.is_stationary();
         let Some(route) = train.route.as_mut() else {
             return;
@@ -541,7 +570,7 @@ impl Simulation {
             // A train of a different shape searches from a different place, so
             // whatever its last search could not finish says nothing about what
             // this one would find.
-            train.route_search_exhausted = false;
+            train.route_search_exhausted_at = None;
         }
     }
 
@@ -571,7 +600,7 @@ impl Simulation {
             // out of expansions into one that does not, so every train waiting
             // on that answer asks again.
             if let Some(train) = self.rolling_stock.trains.get_mut(&train_id) {
-                train.route_search_exhausted = false;
+                train.route_search_exhausted_at = None;
             }
             let Some(train) = self.rolling_stock.trains.get(&train_id) else {
                 continue;
@@ -645,7 +674,7 @@ mod tests {
             throttle: TrainThrottle::Forward,
             destination: Some(RailTarget::new(EntityId::new(raw), 0)),
             route: None,
-            route_search_exhausted: false,
+            route_search_exhausted_at: None,
         }
     }
 
@@ -657,17 +686,23 @@ mod tests {
     /// train without a plan is braked by the steering pass.
     #[test]
     fn an_exhausted_search_keeps_the_destination_and_an_unreachable_one_does_not() {
+        let searched_from = RailPosition::new(EntityId::new(7), 512, true);
         let mut exhausted = train(1);
-        record_route_outcome(&mut exhausted, RailRouteOutcome::Exhausted);
+        record_route_outcome(&mut exhausted, RailRouteOutcome::Exhausted, searched_from);
         assert!(exhausted.destination.is_some());
         assert_eq!(exhausted.route, None);
-        assert!(
-            exhausted.route_search_exhausted,
-            "the train remembers, so it does not ask the same question every tick"
+        assert_eq!(
+            exhausted.route_search_exhausted_at,
+            Some(searched_from),
+            "where it asked from is half of what makes it the same question"
         );
 
         let mut unreachable = train(2);
-        record_route_outcome(&mut unreachable, RailRouteOutcome::Unreachable);
+        record_route_outcome(
+            &mut unreachable,
+            RailRouteOutcome::Unreachable,
+            searched_from,
+        );
         assert_eq!(unreachable.destination, None);
         assert_eq!(unreachable.route, None);
         assert_eq!(unreachable.throttle, TrainThrottle::Brake);

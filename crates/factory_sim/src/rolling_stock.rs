@@ -311,18 +311,22 @@ pub struct Train {
     /// destination is waiting for a search that the tick's expansion budget has
     /// not paid for yet.
     pub route: Option<TrainRoute>,
-    /// Whether the last search for [`Train::destination`] ran out of expansions
-    /// without an answer.
+    /// Where the train was standing when its last search for
+    /// [`Train::destination`] ran out of expansions without an answer.
     ///
     /// A search is deterministic, so repeating it against the same railway from
     /// the same place reaches the same cutoff every time: retrying would spend a
     /// large part of every tick's budget for ever and answer no differently. The
     /// train keeps its destination and stops asking until something that could
     /// change the answer does — track laid or pulled up, the train itself given
-    /// new orders, or the train coming to rest somewhere else than it asked
-    /// from, since a braking train takes a while to stop — which is exactly when
-    /// this is cleared.
-    pub route_search_exhausted: bool,
+    /// new orders, or the train coming to rest somewhere other than here.
+    ///
+    /// The position is kept rather than a bare flag because *where* is half of
+    /// what makes it the same question. A train told to brake takes a while to
+    /// stop, and asking again from each place it passes through on the way would
+    /// spend the cap over and over for the whole of it; asking again once it has
+    /// come to rest somewhere else costs one search.
+    pub route_search_exhausted_at: Option<RailPosition>,
 }
 
 impl Train {
