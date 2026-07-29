@@ -454,6 +454,18 @@ impl Simulation {
         let Some(train) = self.rolling_stock.trains.get_mut(&train_id) else {
             return;
         };
+        // A search that ran out of expansions ran out *from where the train was
+        // standing*, and a train told to brake takes a while to come to rest. So
+        // long as it is still moving the question it would ask next is not the
+        // one that already failed, and it is worth asking again; once it stops,
+        // it stops asking. What is deliberately not treated as a change of
+        // question is other trains moving: occupancy shifts what a route costs
+        // rather than whether one can be found within the cap, and re-searching
+        // every time anything anywhere moved would be the every-tick search this
+        // flag exists to prevent.
+        if travelled_fixed != 0 {
+            train.route_search_exhausted = false;
+        }
         let stationary = train.is_stationary();
         let Some(route) = train.route.as_mut() else {
             return;

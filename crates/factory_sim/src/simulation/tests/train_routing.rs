@@ -480,6 +480,26 @@ fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
     assert!(train.destination.is_some(), "it still has somewhere to be");
     assert_eq!(train.throttle, TrainThrottle::Brake);
 
+    // Standing still is part of what it stopped asking about, so it asks again
+    // for as long as braking is still carrying it somewhere else. Run it down to
+    // a stand before the rest of the test, or the flag it is meant to be holding
+    // would have cleared itself.
+    run_until(&mut sim, |sim| {
+        sim.train(train_id)
+            .is_some_and(|train| train.is_stationary())
+    });
+    sim.rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists")
+        .route_search_exhausted = true;
+    sim.tick();
+    assert_eq!(
+        sim.train(train_id).expect("the train exists").route,
+        None,
+        "a train standing where its search failed is still not asking"
+    );
+
     // Track changing is the one thing that can turn that search into one which
     // finishes, so the train asks again.
     crate::entity_mutation::remove(&mut sim, rails[23]);
@@ -535,6 +555,48 @@ fn a_train_sent_past_where_it_fits_stops_at_the_buffer_and_ends_its_journey() {
     assert_eq!(front, buffer);
     sim.validate()
         .expect("a train stopped at the buffer is a valid world");
+}
+
+/// A search that ran out did so from where the train was standing, and a train
+/// told to brake takes a while to stop. While it is still moving the question is
+/// a different one, so it is asked again rather than held back until unrelated
+/// track changes.
+#[test]
+fn a_train_still_rolling_asks_again_after_its_search_ran_out() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    // Fast enough that braking takes more than the single tick a train barely
+    // moving is stopped in: the point of the test is a train that is somewhere
+    // else by the time the next pass looks at it.
+    run_until(&mut sim, |sim| {
+        sim.train(train_id)
+            .is_some_and(|train| train.velocity > 10 * TRAIN_VELOCITY_SCALE)
+    });
+
+    let train = sim
+        .rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists");
+    train.route = None;
+    train.route_search_exhausted = true;
+
+    sim.tick();
+    assert!(
+        !sim.train(train_id)
+            .expect("the train exists")
+            .route_search_exhausted,
+        "a train that has moved since is asking a different question"
+    );
+    sim.tick();
+    assert!(
+        sim.train(train_id)
+            .expect("the train exists")
+            .route
+            .is_some(),
+        "and the next pass answers it"
+    );
 }
 
 /// A plan has to run over the rail its train is standing on. A route lists every

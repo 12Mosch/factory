@@ -318,8 +318,10 @@ pub struct Train {
     /// the same place reaches the same cutoff every time: retrying would spend a
     /// large part of every tick's budget for ever and answer no differently. The
     /// train keeps its destination and stops asking until something that could
-    /// change the answer does — track laid or pulled up, or the train itself
-    /// given new orders — which is exactly when this is cleared.
+    /// change the answer does — track laid or pulled up, the train itself given
+    /// new orders, or the train coming to rest somewhere else than it asked
+    /// from, since a braking train takes a while to stop — which is exactly when
+    /// this is cleared.
     pub route_search_exhausted: bool,
 }
 
