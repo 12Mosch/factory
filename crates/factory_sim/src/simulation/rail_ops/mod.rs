@@ -1,12 +1,16 @@
 pub mod geometry;
 mod graph_builder;
 mod network_access;
+mod pathfinding;
+#[cfg(test)]
+mod test_graphs;
 mod types;
 
 pub use geometry::{piece_geometry, placed_piece_geometry};
 pub(in crate::simulation) use network_access::{
     conflicting_rail_end, placement_connections, rail_ends_for_placement,
 };
+pub(in crate::simulation) use pathfinding::{RailRouteOutcome, RailRouteRequest, RailRouteScratch};
 pub(in crate::simulation) use types::RailGraph;
 
 use self::graph_builder::build_rail_graph_from_pieces;
@@ -21,6 +25,11 @@ impl Simulation {
         // keeps the state valid *between* ticks too, so a world saved right
         // after a train's track was blown up still loads.
         self.prune_rolling_stock();
+        // The same moment and the same reason, one step further on: a plan that
+        // ran over the rail which just went is a plan a train would otherwise
+        // keep driving, so it is dropped here rather than discovered later by a
+        // train already committed to a dead edge.
+        self.invalidate_train_routes();
     }
 
     /// Whether placing or destroying this prototype can change rail

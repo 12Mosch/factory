@@ -58,6 +58,7 @@ impl Simulation {
             onboarding_progress: OnboardingProgress::default(),
             research,
             rolling_stock: RollingStockSubsystem::default(),
+            train_routing: rolling_stock_ops::TrainRouting::default(),
             power: PowerSubsystem::default(),
             power_demand_cache: PowerDemandCache::default(),
             power_tick_scratch: power_ops::PowerTickScratch::default(),

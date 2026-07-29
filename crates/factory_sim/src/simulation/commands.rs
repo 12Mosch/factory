@@ -213,6 +213,17 @@ pub enum SimCommand {
         train_id: TrainId,
         throttle: TrainThrottle,
     },
+    /// Debug routing command: sends a train to a rail. The route is searched
+    /// inside the tick against the rail graph as it then is, so this only
+    /// records where the train is going.
+    SetTrainDestination {
+        train_id: TrainId,
+        rail: EntityId,
+    },
+    /// Cancels wherever a train was going and brakes it.
+    ClearTrainDestination {
+        train_id: TrainId,
+    },
     BuildRedScienceResearchFixture,
     BuildChemicalScienceFactoryFixture,
     /// Applies the chemical science fixture's pending recipe selections as
@@ -666,6 +677,16 @@ impl Simulation {
             }
             SimCommand::SetTrainThrottle { train_id, throttle } => {
                 self.set_train_throttle(train_id, throttle)
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetTrainDestination { train_id, rail } => {
+                self.set_train_destination(train_id, rail)
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::ClearTrainDestination { train_id } => {
+                self.clear_train_destination(train_id)
                     .map_err(SimCommandError::TrainControl)?;
                 Ok(SimCommandEffect::None)
             }

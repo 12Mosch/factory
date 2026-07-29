@@ -46,7 +46,10 @@ use bincode::Options;
 // v36: rolling stock joined the snapshot: locomotives and wagons with their
 // position along a rail edge, their cargo and fuel, and the trains they are
 // coupled into with a velocity mid-run.
-pub const SAVE_VERSION: u32 = 36;
+// v37: trains gained somewhere to be: a destination on the rail graph and the
+// route they are driving toward it, both durable so a train mid-plan through a
+// save is still mid-plan when it loads.
+pub const SAVE_VERSION: u32 = 37;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -370,6 +373,7 @@ impl SimulationSnapshotOwned {
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
             heat: HeatSubsystem::from_networks(self.heat_networks),
             rails: RailSubsystem::default(),
+            train_routing: rolling_stock_ops::TrainRouting::default(),
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
             rolling_stock: self.rolling_stock,

@@ -37,7 +37,7 @@ use crate::inventory::Inventory;
 use crate::machines::BurnerEnergy;
 use factory_data::EntityPrototypeId;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 /// Velocity is stored as an integer in millionths of a fixed-point position
 /// unit per tick.
@@ -55,6 +55,28 @@ pub const TRAIN_VELOCITY_SCALE: i64 = 1_000_000;
 /// same for a light train and a heavy one, so coasting behaves the way a player
 /// expects rather than turning train length into a second, hidden speed stat.
 pub const ROLLING_RESISTANCE_NEWTONS_PER_TONNE: i64 = 500;
+
+/// What a train pays, in fixed-point units of track, for turning around once on
+/// a route.
+///
+/// A reversal is not free the way a bend is: the train has to brake to a
+/// standstill and accelerate again, which costs far more time than the distance
+/// it saves usually earns back. A hundred tiles is the exchange rate — a loop
+/// under a hundred tiles longer than a there-and-back is preferred to reversing
+/// — and it is stated as a distance rather than as ticks because everything else
+/// the search adds up is a distance.
+pub const TRAIN_REVERSAL_PENALTY_FIXED: i64 = 100 * crate::POSITION_SCALE;
+
+/// What a route pays for each rail it plans to run over that something else is
+/// standing on, in fixed-point units of track.
+///
+/// A penalty rather than a prohibition: track someone is parked on is track a
+/// train can still be routed over once whatever is there has moved, and a route
+/// that refused it outright would strand a train that has no other way round.
+/// Occupancy is read from the rolling stock in the world today; signals will
+/// replace that source with reserved blocks without changing what a route does
+/// with the answer.
+pub const TRAIN_OCCUPIED_RAIL_PENALTY_FIXED: i64 = 25 * crate::POSITION_SCALE;
 
 /// Gap left between coupled stock, in fixed-point units.
 ///
@@ -134,6 +156,73 @@ impl RailPosition {
     }
 }
 
+/// A point on the track a train can be sent to.
+///
+/// Deliberately not a [`RailPosition`]: a destination is a place to stop, not a
+/// facing. Which way round a train ends up is decided by the route that reaches
+/// it, and a target that carried a `forward` flag would be quietly asking for
+/// something the search does not promise.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct RailTarget {
+    pub edge: EntityId,
+    pub distance_fixed: i64,
+}
+
+impl RailTarget {
+    pub const fn new(edge: EntityId, distance_fixed: i64) -> Self {
+        Self {
+            edge,
+            distance_fixed,
+        }
+    }
+}
+
+/// One run of a planned route: a distance to cover without changing direction.
+///
+/// `forward` is which way the *train* drives, not which way the track runs, so
+/// a leg maps straight onto a throttle. Two consecutive legs always disagree
+/// about it — a leg boundary is a reversal — and the last one ends at the
+/// destination.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainRouteLeg {
+    /// Distance still to run on this leg, in fixed-point units. Spent down as
+    /// the train travels rather than compared against a distance already
+    /// covered, so following a route is O(1) per tick instead of a walk back up
+    /// the track.
+    pub distance_fixed: i64,
+    pub forward: bool,
+}
+
+/// The route a train is following: what it will drive, in order.
+///
+/// Durable state rather than a cache. A train mid-route through a save has a
+/// plan it is part way through, and rediscovering that plan on load would be a
+/// second search whose answer could differ from the one being followed.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainRoute {
+    /// Legs still to run, the one being driven first.
+    pub legs: VecDeque<TrainRouteLeg>,
+    /// Every rail the route runs over, in travel order, including the one the
+    /// train started on and the one it stops on. A rail that appears twice is a
+    /// stretch the route runs down and then back up.
+    ///
+    /// Kept so that track removed under a plan invalidates exactly the plans it
+    /// was part of, rather than every plan in the world.
+    pub edges: Vec<EntityId>,
+}
+
+impl TrainRoute {
+    /// The leg being driven, or `None` for a route that has been run out.
+    pub fn current_leg(&self) -> Option<TrainRouteLeg> {
+        self.legs.front().copied()
+    }
+
+    /// Whether the route runs over `edge` at any point.
+    pub fn uses_edge(&self, edge: EntityId) -> bool {
+        self.edges.contains(&edge)
+    }
+}
+
 /// What a train is being asked to do this tick.
 ///
 /// Coasting and braking are distinct: a coasting train keeps rolling against
@@ -210,12 +299,30 @@ pub struct Train {
     /// was owed.
     pub travel_remainder: i64,
     pub throttle: TrainThrottle,
+    /// Where the train has been told to go, if anywhere.
+    ///
+    /// Kept separately from the route because the two answer different
+    /// questions: this is what the train was asked for and outlives any single
+    /// plan, while the route is the plan currently being driven. Track pulled up
+    /// under a plan clears the route and leaves this, which is precisely what
+    /// makes the re-search happen.
+    pub destination: Option<RailTarget>,
+    /// The route being driven toward [`Train::destination`]. Absent while a
+    /// destination is waiting for a search that the tick's expansion budget has
+    /// not paid for yet.
+    pub route: Option<TrainRoute>,
 }
 
 impl Train {
     /// Whether the train is stopped: no speed and nothing owed.
     pub const fn is_stationary(&self) -> bool {
         self.velocity == 0 && self.travel_remainder == 0
+    }
+
+    /// A train given somewhere to be. Its throttle belongs to the routing pass
+    /// until it arrives or the plan is cancelled.
+    pub const fn is_routed(&self) -> bool {
+        self.destination.is_some()
     }
 }
 
@@ -334,6 +441,8 @@ pub enum RollingStockMiningError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrainControlError {
     MissingTrain(TrainId),
+    /// The entity a train was told to drive to is not a rail.
+    NotRail(EntityId),
 }
 
 #[cfg(test)]

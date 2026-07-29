@@ -4,7 +4,7 @@ use factory_sim::{
     Simulation, SimulationCounts, SimulationTickProfile, load_from_bytes, save_to_bytes,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -23,6 +23,18 @@ const ENEMY_HEAVY_ALLOC_P99_BYTES_BUDGET: u64 = 1024 * 1024;
 const ENEMY_HEAVY_ALLOC_P99_COUNT_BUDGET: u64 = 2_000;
 const ENEMY_HEAVY_ALLOC_HITCH_BYTES_BUDGET: u64 = 4 * 1024 * 1024;
 const ENEMY_HEAVY_ALLOC_HITCH_COUNT_BUDGET: u64 = 8_000;
+/// Trains re-planning every tick in the route search allocation budget. More
+/// than a real railway re-paths at once, which is the point.
+const ROUTED_BENCHMARK_TRAINS: usize = 16;
+/// Whole-tick budgets, not the search's own: sixteen trains being stepped,
+/// fuelled, and cleared against one another allocate for reasons that have
+/// nothing to do with planning. What this catches is a search whose cost scales
+/// with the railway — a scratch buffer built per call, or an occupancy set
+/// rebuilt as a tree — which lands an order of magnitude above this rather than
+/// a few allocations above it. That the scratch itself is reused is asserted
+/// where it can be asserted exactly, beside the search.
+const ROUTE_SEARCH_ALLOC_P95_BYTES_BUDGET: u64 = 160 * 1024;
+const ROUTE_SEARCH_ALLOC_P95_COUNT_BUDGET: u64 = 1_600;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -1076,4 +1088,91 @@ fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
 
 fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+/// A tick in which every train re-plans stays inside its allocation budget.
+///
+/// The scratch a search works in lives on the routing subsystem and is reused,
+/// so what a tick full of searches allocates is the routes themselves and
+/// little else. A search that built its working set per call would show up here
+/// rather than as a slow frame somewhere no benchmark is looking, which is the
+/// failure mode a pathfinder invites.
+///
+/// Every train is re-sent to its destination every tick, so this measures the
+/// worst case the simulation can be in: every train re-planning at once, every
+/// tick, which real trains do on a signal change and otherwise almost never.
+#[test]
+fn train_route_search_allocation_budget() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut sim = Simulation::new_rolling_stock_fixture(ROUTED_BENCHMARK_TRAINS);
+    // Warmed up, so the graph is built and the scratch has already grown to it.
+    run_warmup_ticks(&mut sim, 30);
+    let journeys = benchmark_train_journeys(&sim);
+    assert_eq!(
+        journeys.len(),
+        ROUTED_BENCHMARK_TRAINS,
+        "every benchmark train should have somewhere to be sent"
+    );
+
+    let mut samples = Vec::new();
+    for _ in 0..120 {
+        for (train_id, rail) in &journeys {
+            sim.set_train_destination(*train_id, *rail)
+                .expect("a benchmark train takes a destination");
+        }
+        reset_allocation_counters();
+        sim.tick();
+        samples.push(allocation_sample());
+    }
+    samples.sort_by_key(|sample| sample.count);
+    let p95 = samples[((samples.len() * 95).div_ceil(100)).saturating_sub(1)];
+    println!(
+        "train_route_search_allocation_budget: p95 {} bytes / {} allocs over {} trains",
+        p95.bytes,
+        p95.count,
+        journeys.len()
+    );
+
+    sim.validate_state()
+        .expect("a world of re-planning trains stays valid");
+    assert!(
+        p95.count <= ROUTE_SEARCH_ALLOC_P95_COUNT_BUDGET,
+        "allocation p95 {} allocs exceeded route search budget {} allocs",
+        p95.count,
+        ROUTE_SEARCH_ALLOC_P95_COUNT_BUDGET
+    );
+    assert!(
+        p95.bytes <= ROUTE_SEARCH_ALLOC_P95_BYTES_BUDGET,
+        "allocation p95 {} bytes exceeded route search budget {} bytes",
+        p95.bytes,
+        ROUTE_SEARCH_ALLOC_P95_BYTES_BUDGET
+    );
+}
+
+/// One journey per train: the rail furthest along the run it stands on.
+///
+/// Chosen by network so every journey is one the search can actually answer,
+/// and by highest entity id within it so the route is the length of the run
+/// rather than the length of a shunt.
+fn benchmark_train_journeys(sim: &Simulation) -> Vec<(factory_sim::TrainId, EntityId)> {
+    let mut targets: HashMap<u32, EntityId> = HashMap::new();
+    for placed in sim.entities().placed_entities() {
+        let Some(network_id) = sim.rail_network_id_for_entity(placed.id) else {
+            continue;
+        };
+        targets
+            .entry(network_id)
+            .and_modify(|rail| *rail = (*rail).max(placed.id))
+            .or_insert(placed.id);
+    }
+
+    sim.trains()
+        .filter_map(|train| {
+            let stock = sim.rolling_stock_piece(*train.stock.first()?)?;
+            let network_id = sim.rail_network_id_for_entity(stock.position.edge)?;
+            Some((train.id, *targets.get(&network_id)?))
+        })
+        .collect()
 }

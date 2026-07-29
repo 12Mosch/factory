@@ -31,5 +31,6 @@ pub(in crate::simulation) mod rolling_stock;
 mod solar;
 mod statistics;
 mod terrain;
+mod train_routing;
 mod transfers;
 mod world_generation;

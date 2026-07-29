@@ -51,6 +51,7 @@ pub(super) fn build_rail_graph_from_pieces(pieces: &[RailPieceInput]) -> RailGra
             entity_id: piece.entity_id,
             nodes,
             headings: [ends[0].heading, ends[1].heading],
+            end_positions: [ends[0].position, ends[1].position],
             length_fixed: piece.geometry.length_fixed,
             // Filled in once the components are known.
             network_id: 0,
@@ -126,25 +127,16 @@ fn assign_networks(graph: &mut RailGraph) {
 mod tests {
     use super::*;
     use crate::entities::Direction;
-    use crate::rail::{RailCurve, RailEnd, RailPieceGeometry};
+    use crate::simulation::rail_ops::test_graphs::{STRAIGHT_FIXED, piece};
 
     /// A two-tile straight piece running north from `(x, y)` in fixed point.
     fn straight(entity_id: u64, x: i64, y: i64) -> RailPieceInput {
-        RailPieceInput {
-            entity_id: EntityId::new(entity_id),
-            geometry: RailPieceGeometry {
-                start: RailEnd {
-                    position: RailPoint::new(x, y),
-                    heading: Direction::South,
-                },
-                end: RailEnd {
-                    position: RailPoint::new(x, y + 2_048),
-                    heading: Direction::North,
-                },
-                curve: RailCurve::Straight,
-                length_fixed: 2_048,
-            },
-        }
+        crate::simulation::rail_ops::test_graphs::straight(
+            entity_id,
+            RailPoint::new(x, y),
+            Direction::North,
+            STRAIGHT_FIXED,
+        )
     }
 
     /// Members of each network, sorted so a test states membership rather than
@@ -229,21 +221,14 @@ mod tests {
             straight(1, 512, 0),
             straight(2, 512, 2_048),
             straight(3, 512, 4_096),
-            RailPieceInput {
-                entity_id: EntityId::new(4),
-                geometry: RailPieceGeometry {
-                    start: RailEnd {
-                        position: RailPoint::new(512, 6_144),
-                        heading: Direction::South,
-                    },
-                    end: RailEnd {
-                        position: RailPoint::new(512, 0),
-                        heading: Direction::North,
-                    },
-                    curve: RailCurve::Straight,
-                    length_fixed: 2_048,
-                },
-            },
+            piece(
+                4,
+                RailPoint::new(512, 6_144),
+                Direction::North,
+                RailPoint::new(512, 0),
+                Direction::North,
+                STRAIGHT_FIXED,
+            ),
         ]);
 
         assert_eq!(graph.networks.len(), 1);

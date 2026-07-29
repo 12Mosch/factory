@@ -115,6 +115,44 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             }
         }
 
+        // Where a train is going and the plan it is driving both name rails, and
+        // both are followed without being re-checked: the step spends the leg's
+        // distance and the routing pass re-plans against the destination. A save
+        // naming track that is not there would drive a train toward nothing.
+        if train
+            .destination
+            .is_some_and(|destination| sim.rail_piece_geometry(destination.edge).is_none())
+        {
+            return Err(invalid());
+        }
+        if let Some(route) = &train.route {
+            // A route with no destination is a plan nobody asked for, and a route
+            // with no legs is one that should have been retired the tick it ran
+            // out. Neither can be produced by the routing pass.
+            if train.destination.is_none() || route.legs.is_empty() || route.edges.is_empty() {
+                return Err(invalid());
+            }
+            if route
+                .edges
+                .iter()
+                .any(|edge| sim.rail_piece_geometry(*edge).is_none())
+            {
+                return Err(invalid());
+            }
+            // Legs are distances still to run, and consecutive legs always
+            // disagree about direction — a leg boundary is a reversal, so two in
+            // a row driving the same way would be one leg written twice.
+            if route.legs.iter().any(|leg| leg.distance_fixed < 0)
+                || route
+                    .legs
+                    .iter()
+                    .zip(route.legs.iter().skip(1))
+                    .any(|(leg, next)| leg.forward == next.forward)
+            {
+                return Err(invalid());
+            }
+        }
+
         // A train may not exceed the top speed of its slowest piece; the step
         // clamps to it every tick, so a value above it could only come from a
         // hand-edited save or a catalog the world no longer matches.
