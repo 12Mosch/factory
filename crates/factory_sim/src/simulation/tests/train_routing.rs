@@ -452,6 +452,81 @@ fn validation_rejects_a_destination_past_the_end_of_its_rail() {
     }
 }
 
+/// A search that ran out of expansions is not asked again until something that
+/// could change its answer changes. Repeating a deterministic search against the
+/// same railway from the same place would reach the same cutoff every tick, for
+/// a large part of every tick's budget, and answer no differently.
+#[test]
+fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+
+    // The state an exhausted search leaves behind, which a railway small enough
+    // to test on cannot reach on its own.
+    let train = sim
+        .rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists");
+    train.route = None;
+    train.route_search_exhausted = true;
+    sim.validate()
+        .expect("a train waiting on a railway it cannot search is valid");
+
+    sim.tick();
+    let train = sim.train(train_id).expect("the train exists");
+    assert_eq!(train.route, None, "the pass leaves it alone");
+    assert!(train.destination.is_some(), "it still has somewhere to be");
+    assert_eq!(train.throttle, TrainThrottle::Brake);
+
+    // Track changing is the one thing that can turn that search into one which
+    // finishes, so the train asks again.
+    crate::entity_mutation::remove(&mut sim, rails[23]);
+    assert!(
+        !sim.train(train_id)
+            .expect("the train exists")
+            .route_search_exhausted
+    );
+    sim.tick();
+    assert!(
+        sim.train(train_id)
+            .expect("the train exists")
+            .route
+            .is_some(),
+        "with the railway changed the train plans again"
+    );
+}
+
+/// A plan has to run over the rail its train is standing on. A route lists every
+/// rail it crosses and a train only moves along the one it is driving, so a save
+/// whose plan is nowhere near its train is a plan that train never made.
+#[test]
+fn validation_rejects_a_route_that_does_not_run_over_the_train() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    sim.tick();
+    sim.validate().expect("a planned train is valid");
+
+    sim.rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists")
+        .route = Some(crate::rolling_stock::TrainRoute {
+        legs: std::collections::VecDeque::from([crate::rolling_stock::TrainRouteLeg {
+            distance_fixed: 0,
+            forward: true,
+        }]),
+        edges: vec![rails[20]],
+    });
+
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidTrain { train_id })
+    );
+}
+
 /// A plan ends on the rail the train was sent to. A save whose route ends
 /// somewhere else — a single leg on the rail underneath, say — would be retired
 /// as an arrival by the first tick, clearing a destination the train never went

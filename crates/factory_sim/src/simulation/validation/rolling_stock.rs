@@ -154,6 +154,20 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             if route.edges.last() != train.destination.map(|target| target.edge).as_ref() {
                 return Err(invalid());
             }
+            // …and it runs over the rail the train is standing on. A route lists
+            // every rail it crosses, and a train only ever moves along the one
+            // it is driving, so its own rail is somewhere in that list from the
+            // tick the plan was made to the tick it arrives. Without this a
+            // plan could name a stretch of track nowhere near the train and
+            // still pass every check above.
+            let standing_on = train
+                .stock
+                .first()
+                .and_then(|stock_id| sim.rolling_stock.get(*stock_id))
+                .map(|stock| stock.position.edge);
+            if standing_on.is_none_or(|edge| !route.uses_edge(edge)) {
+                return Err(invalid());
+            }
             // Legs are distances still to run, and consecutive legs always
             // disagree about direction — a leg boundary is a reversal, so two in
             // a row driving the same way would be one leg written twice.
@@ -166,6 +180,25 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             {
                 return Err(invalid());
             }
+            // What is left to run fits on the track the route names. Each listed
+            // rail is crossed once, so the plan can never ask for more distance
+            // than those rails hold — and a leg that did would drive a train
+            // somewhere the route does not go.
+            let listed_length = route
+                .edges
+                .iter()
+                .filter_map(|edge| sim.rail_piece_geometry(*edge))
+                .map(|geometry| geometry.length_fixed)
+                .sum::<i64>();
+            if route.legs.iter().map(|leg| leg.distance_fixed).sum::<i64>() > listed_length {
+                return Err(invalid());
+            }
+        }
+        // A train that has stopped asking is a train with somewhere to be and no
+        // plan for getting there. Either half missing would leave a flag nothing
+        // ever clears, on a train nothing is waiting to plan for.
+        if train.route_search_exhausted && (train.destination.is_none() || train.route.is_some()) {
+            return Err(invalid());
         }
 
         // A train may not exceed the top speed of its slowest piece; the step

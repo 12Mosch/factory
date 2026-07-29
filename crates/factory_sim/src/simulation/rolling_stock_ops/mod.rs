@@ -181,6 +181,7 @@ impl Simulation {
         train.throttle = throttle;
         train.destination = None;
         train.route = None;
+        train.route_search_exhausted = false;
         Ok(())
     }
 

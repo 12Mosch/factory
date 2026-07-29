@@ -107,12 +107,13 @@ pub(crate) fn apply_train_debug_input(
         return;
     }
     let sim = sim.read();
-    // What the last drive press asked of the train it was aimed at. Commands
-    // land on a tick boundary, so the simulation still reads the old throttle
-    // while this drains; without carrying the answer forward, two presses in one
-    // step would both read the same throttle and turn the train round once
-    // instead of twice.
-    let mut driving: Option<(TrainId, TrainThrottle)> = None;
+    // What each train the presses touched was last asked for. Commands land on a
+    // tick boundary, so the simulation still reads the old throttle while this
+    // drains; without carrying the answers forward, two presses in one step
+    // would both read the same throttle and turn the train round once instead
+    // of twice. Kept per train because a drain can hold presses aimed at several
+    // of them, in any order.
+    let mut driving: Vec<(TrainId, TrainThrottle)> = Vec::new();
     for press in pending.drain() {
         let (x, y) = press.tile;
         match press.key {
@@ -123,13 +124,11 @@ pub(crate) fn apply_train_debug_input(
                 let throttle = match press.key {
                     TrainDebugKey::Brake => TrainThrottle::Brake,
                     _ => next_drive_throttle(
-                        driving
-                            .filter(|(driven, _)| *driven == train_id)
-                            .map(|(_, throttle)| throttle)
+                        driven_throttle(&driving, train_id)
                             .or_else(|| sim.train(train_id).map(|train| train.throttle)),
                     ),
                 };
-                driving = Some((train_id, throttle));
+                remember_driven(&mut driving, train_id, throttle);
                 commands.write(SimCommandRequest(SimCommand::SetTrainThrottle {
                     train_id,
                     throttle,
@@ -187,6 +186,31 @@ fn routing_action(
         .entity_at(x, y)
         .filter(|entity_id| sim.rail_piece_geometry(*entity_id).is_some())?;
     Some(TrainRoutingAction::SendTo { train_id, rail })
+}
+
+/// What a train has already been asked for during this drain, if anything.
+///
+/// A list rather than a map: a drain holds a handful of presses at most, so a
+/// walk over what they touched is shorter than hashing one of them.
+fn driven_throttle(
+    driving: &[(TrainId, TrainThrottle)],
+    train_id: TrainId,
+) -> Option<TrainThrottle> {
+    driving
+        .iter()
+        .find(|(driven, _)| *driven == train_id)
+        .map(|(_, throttle)| *throttle)
+}
+
+fn remember_driven(
+    driving: &mut Vec<(TrainId, TrainThrottle)>,
+    train_id: TrainId,
+    throttle: TrainThrottle,
+) {
+    match driving.iter_mut().find(|(driven, _)| *driven == train_id) {
+        Some((_, driven)) => *driven = throttle,
+        None => driving.push((train_id, throttle)),
+    }
 }
 
 /// What the drive key should ask for next, given what the train is doing now:
@@ -313,6 +337,39 @@ mod tests {
                     && stock_at_tile(sim, *x, *y).is_none()
             })
             .expect("the fixture lays a run longer than the train standing on it")
+    }
+
+    /// A drain can hold presses aimed at several trains in any order, so what
+    /// each was last asked for is remembered per train. Carrying only the most
+    /// recent answer would make the second press on the first train read the
+    /// simulation's stale throttle and pull away again instead of turning round.
+    #[test]
+    fn each_train_remembers_what_the_last_press_asked_of_it() {
+        let (first, second) = (TrainId::new(1), TrainId::new(2));
+        let mut driving = Vec::new();
+        assert_eq!(driven_throttle(&driving, first), None);
+
+        remember_driven(&mut driving, first, TrainThrottle::Forward);
+        remember_driven(&mut driving, second, TrainThrottle::Brake);
+        assert_eq!(
+            driven_throttle(&driving, first),
+            Some(TrainThrottle::Forward)
+        );
+        assert_eq!(
+            driven_throttle(&driving, second),
+            Some(TrainThrottle::Brake)
+        );
+
+        remember_driven(&mut driving, first, TrainThrottle::Reverse);
+        assert_eq!(
+            driven_throttle(&driving, first),
+            Some(TrainThrottle::Reverse)
+        );
+        assert_eq!(
+            driving.len(),
+            2,
+            "a train already asked for is updated rather than listed twice"
+        );
     }
 
     /// The drive key pulls away, and pressing it again on a driving train turns

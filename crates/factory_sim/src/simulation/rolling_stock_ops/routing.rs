@@ -227,7 +227,14 @@ fn record_route_outcome(train: &mut crate::rolling_stock::Train, outcome: RailRo
             train.route = None;
             train.throttle = TrainThrottle::Brake;
         }
-        RailRouteOutcome::Exhausted => train.route = None,
+        RailRouteOutcome::Exhausted => {
+            train.route = None;
+            // Asking again straight away would ask the same question of the same
+            // railway from the same place and reach the same cutoff, tick after
+            // tick, for a large part of every tick's budget. The train waits for
+            // something that could change the answer instead.
+            train.route_search_exhausted = true;
+        }
     }
 }
 
@@ -276,6 +283,7 @@ impl Simulation {
             .ok_or(TrainControlError::MissingTrain(train_id))?;
         train.destination = Some(RailTarget::new(rail, geometry.length_fixed / 2));
         train.route = None;
+        train.route_search_exhausted = false;
         Ok(())
     }
 
@@ -290,6 +298,7 @@ impl Simulation {
             .ok_or(TrainControlError::MissingTrain(train_id))?;
         train.destination = None;
         train.route = None;
+        train.route_search_exhausted = false;
         train.throttle = TrainThrottle::Brake;
         Ok(())
     }
@@ -313,7 +322,9 @@ impl Simulation {
         waiting.extend(
             self.rolling_stock
                 .trains()
-                .filter(|train| train.is_routed() && train.route.is_none())
+                .filter(|train| {
+                    train.is_routed() && train.route.is_none() && !train.route_search_exhausted
+                })
                 .map(|train| train.id),
         );
         if waiting.is_empty() || !self.train_routing.can_search() {
@@ -499,6 +510,10 @@ impl Simulation {
     pub(super) fn discard_train_route(&mut self, train_id: TrainId) {
         if let Some(train) = self.rolling_stock.trains.get_mut(&train_id) {
             train.route = None;
+            // A train of a different shape searches from a different place, so
+            // whatever its last search could not finish says nothing about what
+            // this one would find.
+            train.route_search_exhausted = false;
         }
     }
 
@@ -524,6 +539,12 @@ impl Simulation {
             .copied()
             .collect::<Vec<_>>();
         for train_id in train_ids {
+            // Track changing is the one thing that can turn a search which ran
+            // out of expansions into one that does not, so every train waiting
+            // on that answer asks again.
+            if let Some(train) = self.rolling_stock.trains.get_mut(&train_id) {
+                train.route_search_exhausted = false;
+            }
             let Some(train) = self.rolling_stock.trains.get(&train_id) else {
                 continue;
             };
@@ -596,6 +617,7 @@ mod tests {
             throttle: TrainThrottle::Forward,
             destination: Some(RailTarget::new(EntityId::new(raw), 0)),
             route: None,
+            route_search_exhausted: false,
         }
     }
 
@@ -611,6 +633,10 @@ mod tests {
         record_route_outcome(&mut exhausted, RailRouteOutcome::Exhausted);
         assert!(exhausted.destination.is_some());
         assert_eq!(exhausted.route, None);
+        assert!(
+            exhausted.route_search_exhausted,
+            "the train remembers, so it does not ask the same question every tick"
+        );
 
         let mut unreachable = train(2);
         record_route_outcome(&mut unreachable, RailRouteOutcome::Unreachable);

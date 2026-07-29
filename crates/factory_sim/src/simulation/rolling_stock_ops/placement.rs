@@ -578,6 +578,7 @@ impl Simulation {
                         throttle: TrainThrottle::Coast,
                         destination: None,
                         route: None,
+                        route_search_exhausted: false,
                     },
                 );
                 train_id
@@ -769,6 +770,7 @@ impl Simulation {
                         // train when it was found, and neither half is that.
                         destination: None,
                         route: None,
+                        route_search_exhausted: false,
                     },
                 );
                 group_id

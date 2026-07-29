@@ -419,7 +419,12 @@ fn route_along_one_rail(
     reversal_penalty_fixed: i64,
 ) -> DirectRoute {
     let delta = target.distance_fixed - start.distance_fixed;
-    let forward = (delta >= 0) == start.forward;
+    // A train standing on its mark has arrived, whichever way it happens to be
+    // pointing. Reading no distance at all as a reversal — which the comparison
+    // below does for a train facing backwards — would price being there at a
+    // hundred tiles, and on a shorter loop the search would answer by sending it
+    // all the way round to where it already is.
+    let forward = delta == 0 || (delta > 0) == start.forward;
     DirectRoute {
         route: TrainRoute {
             legs: VecDeque::from([TrainRouteLeg {
@@ -704,6 +709,30 @@ mod tests {
         };
         assert_eq!(legs(&route), vec![(1_000, true)]);
         assert_eq!(edges(&route), vec![1]);
+    }
+
+    /// A train standing on its mark has arrived, whichever way it is facing.
+    /// Reading no distance at all as a reversal would price being there at a
+    /// hundred tiles, and on this loop the search would answer by sending the
+    /// train all the way round to where it already is.
+    #[test]
+    fn a_train_already_on_its_mark_has_arrived_whichever_way_it_faces() {
+        let graph = loop_graph();
+
+        for forward in [true, false] {
+            let (outcome, expansions) = search(&request(
+                &graph,
+                RailPosition::new(rail(1), 1_024, forward),
+                RailTarget::new(rail(1), 1_024),
+            ));
+
+            assert_eq!(expansions, 0);
+            let RailRouteOutcome::Found(route) = outcome else {
+                panic!("a train on its mark has a route");
+            };
+            assert_eq!(legs(&route), vec![(0, true)]);
+            assert_eq!(edges(&route), vec![1]);
+        }
     }
 
     /// A mark *behind* the train is a different question, because reaching it

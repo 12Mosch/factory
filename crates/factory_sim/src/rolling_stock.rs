@@ -311,6 +311,16 @@ pub struct Train {
     /// destination is waiting for a search that the tick's expansion budget has
     /// not paid for yet.
     pub route: Option<TrainRoute>,
+    /// Whether the last search for [`Train::destination`] ran out of expansions
+    /// without an answer.
+    ///
+    /// A search is deterministic, so repeating it against the same railway from
+    /// the same place reaches the same cutoff every time: retrying would spend a
+    /// large part of every tick's budget for ever and answer no differently. The
+    /// train keeps its destination and stops asking until something that could
+    /// change the answer does — track laid or pulled up, or the train itself
+    /// given new orders — which is exactly when this is cleared.
+    pub route_search_exhausted: bool,
 }
 
 impl Train {
