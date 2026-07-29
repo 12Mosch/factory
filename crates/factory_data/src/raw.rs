@@ -8,8 +8,9 @@ use crate::model::{
     GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, LogisticChestPrototype,
     ModuleEffectPrototype, NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype,
     RadarPrototype, RailPiecePrototype, RepairToolPrototype, ResourceExtraction, RoboportPrototype,
-    RobotPrototype, SolarPanelPrototype, SplitterPrototype, SteamEnginePrototype,
-    TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype, VirtualSignalKind,
+    RobotPrototype, RollingStockPrototype, SolarPanelPrototype, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -238,6 +239,10 @@ pub(crate) struct RawEntityPrototype {
     /// declared form is already the resolved one and needs no raw counterpart.
     #[serde(default)]
     pub(crate) rail_piece: Option<RailPiecePrototype>,
+    /// Rolling-stock motion metadata. Plain scalars like `rail_piece`, so the
+    /// declared form is already the resolved one.
+    #[serde(default)]
+    pub(crate) rolling_stock: Option<RollingStockPrototype>,
 }
 
 #[derive(Debug, Deserialize)]

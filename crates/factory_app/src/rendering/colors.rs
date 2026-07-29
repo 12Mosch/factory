@@ -201,6 +201,18 @@ pub(crate) fn rail_metal_color() -> Color {
 /// from zero and there is no bound on how many a world has, so the palette
 /// repeats rather than pretending to be exhaustive: what the overlay has to
 /// show is that two runs differ, not which number each one is.
+/// Tint one piece of rolling stock is drawn in, taken from the role its
+/// prototype declares: a locomotive reads as the powered end of a train, and
+/// the two wagon kinds are told apart by what they haul.
+pub(crate) fn rolling_stock_color(kind: factory_data::EntityKind) -> Color {
+    match kind {
+        factory_data::EntityKind::Locomotive => Color::srgb(0.72, 0.20, 0.18),
+        factory_data::EntityKind::FluidWagon => Color::srgb(0.28, 0.46, 0.66),
+        // Cargo wagons and anything else that ends up on rails.
+        _ => Color::srgb(0.58, 0.52, 0.44),
+    }
+}
+
 pub(crate) fn rail_network_color(network_id: u32) -> Color {
     const PALETTE: [Color; 6] = [
         Color::srgb(0.35, 0.78, 0.98),

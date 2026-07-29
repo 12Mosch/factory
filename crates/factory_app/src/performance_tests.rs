@@ -12,6 +12,7 @@ use crate::audio::{
 };
 use crate::rendering::resources::VisibleEntityIds;
 use crate::rendering::robots::RobotSprite;
+use crate::rendering::rolling_stock::RollingStockSprite;
 use crate::resources::SimResource;
 use crate::test_performance::{
     BENCHMARK_LOCK, PerformanceBudget, assert_performance_budget, collect_performance_stats,
@@ -33,6 +34,12 @@ const WARMUP_FRAMES: usize = 30;
 /// single roboport network holds, so the measured frame covers robots flying,
 /// arriving, queueing for pads, charging, and docking at the same time.
 const BENCHMARK_ROBOTS: usize = 4_000;
+/// Trains driven for the train-heavy frame benchmark. Far more than a real
+/// factory runs — the point is a per-train step that stays cheap when the
+/// railway grows, not a plausible base — and each is a locomotive with two
+/// wagons, so the measured frame covers three times as many bodies walking the
+/// rail graph and being drawn along it.
+const BENCHMARK_TRAINS: usize = 64;
 const MEASUREMENT_FRAMES: usize = 300;
 const AUDIO_EVENTS_PER_FRAME: usize = 128;
 
@@ -188,6 +195,63 @@ fn robot_heavy_frame_p99_hitch_and_allocation_budget() {
     );
     sim.validate_state()
         .expect("robot-heavy budget run should retain a valid simulation");
+}
+
+/// The same complete frame as the full-app benchmark, with a railway full of
+/// driving trains on top: the per-tick rail walk, the fuel burn, and the
+/// interpolated body sync all run inside the one 60 fps frame budget rather
+/// than getting a budget of their own.
+#[test]
+#[ignore]
+fn train_heavy_frame_p99_hitch_and_allocation_budget() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut app = train_benchmark_app();
+    app.update();
+
+    for _ in 0..WARMUP_FRAMES {
+        app.update();
+    }
+    let stats = collect_performance_stats(MEASUREMENT_FRAMES, || app.update());
+    print_performance_stats("train_heavy_frame_budget", stats);
+    assert_performance_budget("train-heavy app frame", stats, FULL_FRAME_BUDGET);
+
+    let drawn = {
+        let world = app.world_mut();
+        let mut sprites = world.query::<&RollingStockSprite>();
+        sprites.iter(world).count()
+    };
+    let sim = app.world().resource::<SimResource>().read();
+    assert!(
+        sim.train_count() >= BENCHMARK_TRAINS / 2,
+        "the benchmark should still be running trains at the end, found {}",
+        sim.train_count()
+    );
+    // The frame is only worth measuring if the presentation half ran too: a
+    // budget met by drawing nothing would say nothing about train rendering.
+    assert!(
+        drawn > 0,
+        "the benchmark frame should be drawing trains, not only simulating them"
+    );
+    sim.validate_state()
+        .expect("train-heavy budget run should retain a valid simulation");
+}
+
+fn train_benchmark_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(FactoryAppPlugin)
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    let mut sim = Simulation::new_rolling_stock_fixture(BENCHMARK_TRAINS);
+    sim.tick();
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(sim)
+        .expect("benchmark simulation should replace before frame execution");
+    app
 }
 
 fn robot_benchmark_app() -> App {

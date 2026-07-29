@@ -1645,3 +1645,199 @@ fn a_curve_with_a_fractional_radius_is_rejected() {
         PrototypeLoadError::InvalidRailMetadata { entity, .. } if entity == "rail"
     ));
 }
+
+/// Builds a one-piece rolling-stock catalog whose kind, cargo declarations, and
+/// motion metadata can be overridden, so each check below differs only in the
+/// field it is about.
+fn rolling_stock_catalog(
+    entity_kind: &str,
+    extra_fields: &str,
+    rolling_stock: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "locomotive", stack_size: 5)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "locomotive",
+                entity_kind: {entity_kind},
+                build_item: Some("locomotive"),
+                building_category: Some(Logistics),
+                building_menu_order: Some(142),
+                size: (x: 2, y: 7),
+                collision_mask: (layers: ["transport"]),
+                max_health: Some(1000),
+                {extra_fields}
+                rolling_stock: {rolling_stock},
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+const VALID_LOCOMOTIVE_STOCK: &str = r#"Some((
+    length_fixed: 7168,
+    weight_kilograms: 2000,
+    braking_force_newtons: 24000,
+    max_speed_fixed_per_tick: 1229,
+    locomotive: Some((tractive_force_newtons: 12000)),
+))"#;
+
+#[test]
+fn rolling_stock_without_motion_metadata_fails() {
+    let error = rolling_stock_catalog(
+        "Locomotive",
+        "burner: Some((energy_usage_watts: 600000)),",
+        "None",
+    )
+    .expect_err("rolling stock with no weight or length could not be stepped");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRollingStockMetadata { entity, .. } if entity == "locomotive"
+    ));
+}
+
+#[test]
+fn rolling_stock_metadata_on_other_kinds_fails() {
+    let error = rolling_stock_catalog("Wall", "", VALID_LOCOMOTIVE_STOCK)
+        .expect_err("only rolling stock runs on rails");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRollingStockMetadata { entity, .. } if entity == "locomotive"
+    ));
+}
+
+/// Each of these breaks something the motion model treats as a fact: a zero
+/// weight is a division by zero, a zero length is a train of pieces stacked on
+/// one point, and a zero top speed is a train that can never move.
+#[test]
+fn malformed_rolling_stock_metadata_is_rejected() {
+    let cases = [
+        (
+            "zero length",
+            r#"Some((
+                length_fixed: 0,
+                weight_kilograms: 2000,
+                braking_force_newtons: 24000,
+                max_speed_fixed_per_tick: 1229,
+                locomotive: Some((tractive_force_newtons: 12000)),
+            ))"#,
+        ),
+        (
+            "zero weight",
+            r#"Some((
+                length_fixed: 7168,
+                weight_kilograms: 0,
+                braking_force_newtons: 24000,
+                max_speed_fixed_per_tick: 1229,
+                locomotive: Some((tractive_force_newtons: 12000)),
+            ))"#,
+        ),
+        (
+            "zero top speed",
+            r#"Some((
+                length_fixed: 7168,
+                weight_kilograms: 2000,
+                braking_force_newtons: 24000,
+                max_speed_fixed_per_tick: 0,
+                locomotive: Some((tractive_force_newtons: 12000)),
+            ))"#,
+        ),
+        (
+            "a locomotive that pulls with no force",
+            r#"Some((
+                length_fixed: 7168,
+                weight_kilograms: 2000,
+                braking_force_newtons: 24000,
+                max_speed_fixed_per_tick: 1229,
+                locomotive: Some((tractive_force_newtons: 0)),
+            ))"#,
+        ),
+        (
+            "a locomotive with no locomotive section",
+            r#"Some((
+                length_fixed: 7168,
+                weight_kilograms: 2000,
+                braking_force_newtons: 24000,
+                max_speed_fixed_per_tick: 1229,
+            ))"#,
+        ),
+    ];
+
+    for (reason, rolling_stock) in cases {
+        let error = rolling_stock_catalog(
+            "Locomotive",
+            "burner: Some((energy_usage_watts: 600000)),",
+            rolling_stock,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{reason} should be rejected"));
+        assert!(
+            matches!(
+                error,
+                PrototypeLoadError::InvalidRollingStockMetadata { entity, .. }
+                    if entity == "locomotive"
+            ),
+            "{reason} should be reported as invalid rolling stock metadata"
+        );
+    }
+}
+
+/// Tractive force is what burnt fuel buys, so a locomotive without a burner
+/// would pull for free.
+#[test]
+fn a_locomotive_without_a_burner_is_rejected() {
+    let error = rolling_stock_catalog("Locomotive", "", VALID_LOCOMOTIVE_STOCK)
+        .expect_err("a locomotive needs something to burn");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRollingStockMetadata { entity, .. } if entity == "locomotive"
+    ));
+}
+
+/// A wagon whose whole purpose is missing: the cargo declarations are checked
+/// against the kind for the same reason the rail geometry is.
+#[test]
+fn wagons_without_the_cargo_their_kind_implies_are_rejected() {
+    const WAGON_STOCK: &str = r#"Some((
+        length_fixed: 6144,
+        weight_kilograms: 1000,
+        braking_force_newtons: 12000,
+        max_speed_fixed_per_tick: 1536,
+    ))"#;
+
+    for entity_kind in ["CargoWagon", "FluidWagon"] {
+        let error = rolling_stock_catalog(entity_kind, "", WAGON_STOCK)
+            .err()
+            .unwrap_or_else(|| panic!("a {entity_kind} with nowhere to put cargo should fail"));
+        assert!(
+            matches!(
+                error,
+                PrototypeLoadError::InvalidRollingStockMetadata { entity, .. }
+                    if entity == "locomotive"
+            ),
+            "a {entity_kind} with nowhere to put cargo should be reported as invalid"
+        );
+    }
+
+    assert!(
+        rolling_stock_catalog("CargoWagon", "inventory_slot_count: Some(40),", WAGON_STOCK).is_ok(),
+        "a cargo wagon with inventory slots is well formed"
+    );
+    // A fluid wagon's tank has no pipe openings on purpose: it is filled at a
+    // station rather than by touching a pipe, and it is never in the occupancy
+    // grid a pipe network is built from.
+    assert!(
+        rolling_stock_catalog(
+            "FluidWagon",
+            r#"fluid_boxes: [(capacity_milliunits: 25000000, connections: [])],"#,
+            WAGON_STOCK
+        )
+        .is_ok(),
+        "a fluid wagon's unconnected tank is well formed"
+    );
+}

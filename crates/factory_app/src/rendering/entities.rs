@@ -469,6 +469,11 @@ pub(crate) fn entity_prototype_visual_style(
             connections: ConnectionMask::EMPTY,
             rail: factory_sim::rail_ops::piece_geometry(prototype, direction),
         }),
+        // Rolling stock is never a placed entity, so the placed-entity renderer
+        // never sees one: it is drawn along the track it stands on by
+        // [`crate::rendering::rolling_stock`], which is the only renderer that
+        // can put a body on a curve.
+        EntityKind::Locomotive | EntityKind::CargoWagon | EntityKind::FluidWagon => None,
         EntityKind::ResourcePatch => None,
     }
 }

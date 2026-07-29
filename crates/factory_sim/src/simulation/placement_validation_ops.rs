@@ -126,6 +126,21 @@ pub(crate) fn validate_entity_placement(
     sim: &Simulation,
     request: EntityPlacementRequest,
 ) -> Result<EntityFootprint, BuildError> {
+    // Rolling stock never reaches the tile grid: it has a position along a rail
+    // edge instead of a footprint, and goes through
+    // [`Simulation::place_rolling_stock_from_player_inventory`]. Refusing it
+    // here is what keeps every other path into placement — ghosts, blueprints,
+    // construction robots — from inventing a wagon that occupies tiles.
+    if sim
+        .world
+        .prototypes
+        .entity(request.prototype_id)
+        .is_some_and(|prototype| prototype.rolling_stock.is_some())
+    {
+        return Err(BuildError::RunsOnRails {
+            prototype_id: request.prototype_id,
+        });
+    }
     let footprint = PlacementValidator::new(&sim.world, &sim.entities, &sim.player, &sim.research)
         .validate_entity_placement(request)?;
     validate_rail_placement(

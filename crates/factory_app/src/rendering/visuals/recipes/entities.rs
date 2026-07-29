@@ -72,6 +72,8 @@ pub(super) fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         // the shared body below so a malformed prototype is visible rather than
         // invisible.
         EntityKind::RailStraight | EntityKind::RailCurved => {}
+        // Rolling stock has no placed-entity sprite to build layers for.
+        EntityKind::Locomotive | EntityKind::CargoWagon | EntityKind::FluidWagon => {}
         EntityKind::ResourcePatch => {}
     }
 

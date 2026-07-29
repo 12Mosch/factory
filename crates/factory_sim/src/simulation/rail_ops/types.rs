@@ -71,21 +71,37 @@ impl RailGraph {
     }
 
     /// The rail joined to `end_index` of `edge`, or `None` for a free end.
-    ///
-    /// Two ends at one node are joined exactly when their headings oppose, so
-    /// this is the connection rule itself rather than a cached answer to it.
     pub(in crate::simulation) fn neighbor(
         &self,
         edge: &RailEdge,
         end_index: usize,
     ) -> Option<EntityId> {
+        self.neighbor_end(edge, end_index)
+            .and_then(|(edge_index, _)| self.edges.get(edge_index))
+            .map(|edge| edge.entity_id)
+    }
+
+    /// The edge joined to `end_index` of `edge`, and which of *its* two ends
+    /// does the joining, or `None` for a free end.
+    ///
+    /// Two ends at one node are joined exactly when their headings oppose, so
+    /// this is the connection rule itself rather than a cached answer to it.
+    /// Which end is reached matters to anything travelling the graph: arriving
+    /// at the neighbour's end 0 means entering it at distance zero and running
+    /// forwards, and arriving at end 1 means entering at its far end and
+    /// running back down it.
+    pub(in crate::simulation) fn neighbor_end(
+        &self,
+        edge: &RailEdge,
+        end_index: usize,
+    ) -> Option<(usize, usize)> {
         let node = self.nodes.get(edge.nodes[end_index])?;
         let heading = edge.headings[end_index];
         node.ends.iter().find_map(|other| {
             let other_edge = self.edges.get(other.edge_index)?;
             (other_edge.entity_id != edge.entity_id
                 && other_edge.headings[other.end_index] == heading.opposite())
-            .then_some(other_edge.entity_id)
+            .then_some((other.edge_index, other.end_index))
         })
     }
 }

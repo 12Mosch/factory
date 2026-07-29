@@ -175,9 +175,16 @@ impl Simulation {
             | EntityKind::NuclearReactor
             | EntityKind::HeatPipe
             // Track holds nothing and does no work; what a rail network could
-            // report is the rolling stock on it, which does not exist yet.
+            // report is the rolling stock standing on it, and that belongs to
+            // the station a wire would actually be attached to.
             | EntityKind::RailStraight
-            | EntityKind::RailCurved => {}
+            | EntityKind::RailCurved
+            // Rolling stock is never a placed entity, so a wire could not reach
+            // one of these prototypes in the first place: a wagon's contents are
+            // read at the station it is stopped in, not off the wagon.
+            | EntityKind::Locomotive
+            | EntityKind::CargoWagon
+            | EntityKind::FluidWagon => {}
         }
     }
 

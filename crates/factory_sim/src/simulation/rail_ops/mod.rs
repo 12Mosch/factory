@@ -16,6 +16,11 @@ use super::*;
 impl Simulation {
     pub(super) fn invalidate_rail_graph(&mut self) {
         self.rails.invalidate();
+        // Track just appeared or vanished, which is the only moment a train can
+        // lose the rail under it. Pruning here rather than lazily in the tick
+        // keeps the state valid *between* ticks too, so a world saved right
+        // after a train's track was blown up still loads.
+        self.prune_rolling_stock();
     }
 
     /// Whether placing or destroying this prototype can change rail

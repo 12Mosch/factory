@@ -57,6 +57,7 @@ impl Simulation {
             crafting_queue: CraftingQueue::default(),
             onboarding_progress: OnboardingProgress::default(),
             research,
+            rolling_stock: RollingStockSubsystem::default(),
             power: PowerSubsystem::default(),
             power_demand_cache: PowerDemandCache::default(),
             power_tick_scratch: power_ops::PowerTickScratch::default(),
@@ -140,10 +141,15 @@ impl Simulation {
             self.advance_robots();
         });
         profiler.measure(ProfilePhase::Radars, || self.advance_radars());
-        // Rails have no per-tick work of their own yet; rebuilding the graph
-        // here is what keeps every query against it answering for the world as
-        // it is now rather than as it was before the last placement.
-        profiler.measure(ProfilePhase::Rails, || self.ensure_rail_graph());
+        // The rail graph is rebuilt first, so every query against it answers
+        // for the world as it is now rather than as it was before the last
+        // placement, and so the trains that walk it this tick walk the track
+        // that actually exists. Both halves share one phase because they are
+        // one subsystem: a train is only ever as current as the graph under it.
+        profiler.measure(ProfilePhase::Rails, || {
+            self.ensure_rail_graph();
+            self.advance_trains();
+        });
         profiler.measure(ProfilePhase::Fluids, || {
             self.advance_fluid_pumps_after_power();
         });
@@ -280,6 +286,7 @@ impl Simulation {
         self.heat.networks.hash(&mut hasher);
         self.robots.networks.hash(&mut hasher);
         self.robot_flights.hash(&mut hasher);
+        self.rolling_stock.hash(&mut hasher);
         self.circuits.topology.network_ids.hash(&mut hasher);
         self.circuits.topology.network_count.hash(&mut hasher);
         for network in &self.circuits.networks {

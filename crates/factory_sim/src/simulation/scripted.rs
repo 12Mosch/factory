@@ -15,6 +15,156 @@ impl Simulation {
         sim
     }
 
+    /// World with `train_count` fuelled trains running along straight track.
+    ///
+    /// Used by the performance suite, which needs trains actually moving —
+    /// walking the rail graph, burning fuel, and being drawn between fixed
+    /// ticks — without also needing the factory that would have built them.
+    /// Each train is a locomotive with two cargo wagons, coupled by the
+    /// ordinary placement path so the fixture exercises real trains rather than
+    /// hand-assembled ones.
+    pub fn new_rolling_stock_fixture(train_count: usize) -> Self {
+        let mut sim = Self::new_seeded(123);
+        sim.build_rolling_stock_fixture(train_count);
+        sim
+    }
+
+    /// Track laid, trains placed on it, fuelled, and driving.
+    ///
+    /// One train per run of track, and runs are found by scanning each column
+    /// for a stretch every straight will go down in — the generated world has
+    /// water and ore through it, so a run has to be discovered rather than
+    /// assumed. One train per run rather than several keeps the fixture free of
+    /// a spacing that has to stay clear of the placement snap radius, which is
+    /// a rule about clicking rather than anything the benchmark is measuring.
+    fn build_rolling_stock_fixture(&mut self, train_count: usize) {
+        /// Two-tile straights per run: a three-piece train is nineteen tiles,
+        /// and the rest is room to get up to speed and then run out of track.
+        const RUN_PIECES: WorldTileCoord = 24;
+        const RUN_TILES: WorldTileCoord = RUN_PIECES * 2;
+        /// Tiles between one piece of a train and the next. Longer than the
+        /// longest body so a click lands beside the last piece rather than
+        /// inside it, and short enough that the placement snap couples them.
+        const STOCK_SPACING_TILES: WorldTileCoord = 7;
+
+        let straight =
+            factory_data::entity_prototype_id_by_name(&self.world.prototypes, "rail_straight");
+        let locomotive =
+            factory_data::entity_prototype_id_by_name(&self.world.prototypes, "locomotive");
+        let cargo_wagon =
+            factory_data::entity_prototype_id_by_name(&self.world.prototypes, "cargo_wagon");
+        let catalog = self.world.prototypes.clone();
+        let coal = factory_data::item_id_by_name(&catalog, "coal");
+
+        let coords = self.all_tile_coords();
+        let mut columns = coords.iter().map(|(x, _)| *x).collect::<Vec<_>>();
+        columns.sort_unstable();
+        columns.dedup();
+        let (Some(min_row), Some(max_row)) = (
+            coords.iter().map(|(_, y)| *y).min(),
+            coords.iter().map(|(_, y)| *y).max(),
+        ) else {
+            return;
+        };
+
+        let mut placed_trains = 0;
+        for x in columns {
+            let mut row = min_row;
+            while placed_trains < train_count && row + RUN_TILES <= max_row {
+                let fits = (0..RUN_PIECES).all(|index| {
+                    crate::placement::validate(
+                        self,
+                        scripted_placement_request(straight, x, row + index * 2),
+                    )
+                    .is_ok()
+                });
+                if !fits {
+                    row += 2;
+                    continue;
+                }
+                for index in 0..RUN_PIECES {
+                    crate::placement::place(
+                        self,
+                        scripted_placement_request(straight, x, row + index * 2),
+                    )
+                    .expect("the run was validated piece by piece before it was laid");
+                }
+                self.ensure_rail_graph();
+                if self.place_fixture_train(
+                    [cargo_wagon, cargo_wagon, locomotive],
+                    x,
+                    row + 4,
+                    STOCK_SPACING_TILES,
+                    &catalog,
+                    coal,
+                ) {
+                    placed_trains += 1;
+                }
+                row += RUN_TILES + 2;
+            }
+            if placed_trains >= train_count {
+                break;
+            }
+        }
+    }
+
+    /// Places one train's stock along a laid run, fuels it, and opens its
+    /// throttle. Wagons first and the locomotive last, so each piece couples
+    /// onto the one already there and the locomotive ends up at the front.
+    fn place_fixture_train(
+        &mut self,
+        stock: [EntityPrototypeId; 3],
+        x: WorldTileCoord,
+        first_row: WorldTileCoord,
+        spacing_tiles: WorldTileCoord,
+        catalog: &PrototypeCatalog,
+        coal: ItemId,
+    ) -> bool {
+        let placed = stock
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, prototype_id)| {
+                self.place_rolling_stock(
+                    prototype_id,
+                    x,
+                    first_row + index as WorldTileCoord * spacing_tiles,
+                )
+                .ok()
+            })
+            .collect::<Vec<_>>();
+        // Every piece or none. The locomotive goes down last, so a partial
+        // placement would leave `placed.last()` naming a wagon and the fixture
+        // counting a train with no traction as one it can drive.
+        if placed.len() != stock.len() {
+            return false;
+        }
+        let Some(train_id) = placed
+            .last()
+            .and_then(|stock_id| self.rolling_stock_piece(*stock_id))
+            .map(|stock| stock.train)
+        else {
+            return false;
+        };
+
+        for stock_id in &placed {
+            let Some(energy) = self
+                .rolling_stock
+                .stock
+                .get_mut(stock_id)
+                .and_then(|stock| stock.energy.as_mut())
+            else {
+                continue;
+            };
+            energy.fuel_slot = ItemSlot::from_stack(
+                catalog,
+                ItemStack::new(catalog, coal, 50).expect("fixture coal forms a valid stack"),
+            )
+            .expect("a locomotive fuel slot accepts coal");
+        }
+        self.set_train_throttle(train_id, TrainThrottle::Forward)
+            .is_ok()
+    }
+
     pub fn new_scripted_red_science_factory() -> Self {
         let mut sim = Self::new_seeded(123);
         for command in scripted_inputs_for_red_science_factory() {

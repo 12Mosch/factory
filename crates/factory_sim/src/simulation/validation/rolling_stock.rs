@@ -1,0 +1,141 @@
+use super::super::*;
+use crate::rolling_stock::{RollingStock, TRAIN_VELOCITY_SCALE};
+
+/// Checks that every piece of rolling stock is on the rails and that the trains
+/// and their stock agree about who belongs to whom.
+///
+/// The two halves reference each other — a piece names its train, and that
+/// train's list names the piece — so both directions are checked here. The rest
+/// of the simulation treats "this stock is on a live edge at an in-range
+/// distance" as a fact: the tick walks the graph from that position without
+/// re-checking it, and the renderer derives a world point from it. A save that
+/// broke the invariant would produce a train standing on nothing, and nothing
+/// later would report it.
+pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidationError> {
+    for (stock_id, stock) in &sim.rolling_stock.stock {
+        let invalid = || SimValidationError::InvalidRollingStock {
+            stock_id: *stock_id,
+        };
+        if stock.id != *stock_id || stock_id.raw() > sim.rolling_stock.next_stock_id {
+            return Err(invalid());
+        }
+        let prototype = sim
+            .world
+            .prototypes
+            .entity(stock.prototype_id)
+            .ok_or_else(invalid)?;
+        // Rolling-stock metadata is what the motion model divides by, so a
+        // piece whose prototype does not declare it could never be stepped.
+        prototype.rolling_stock.ok_or_else(invalid)?;
+
+        // On the rails: the edge is a live rail piece, and the distance is
+        // somewhere on it rather than past either end.
+        let geometry = sim
+            .rail_piece_geometry(stock.position.edge)
+            .ok_or_else(invalid)?;
+        if !(0..=geometry.length_fixed).contains(&stock.position.distance_fixed) {
+            return Err(invalid());
+        }
+
+        // Cargo exists exactly where the prototype declares it, with the shape
+        // it declares. A mismatch means the save and the catalog disagree about
+        // what this wagon is.
+        let declared_slots = prototype.inventory_slot_count;
+        match (&stock.inventory, declared_slots) {
+            (Some(inventory), Some(slot_count)) if inventory.slots().len() == slot_count => {
+                super::inventory::validate_inventory(&sim.world.prototypes, inventory)?;
+            }
+            (None, None) => {}
+            _ => return Err(invalid()),
+        }
+        if stock.fluid_boxes.len() != prototype.fluid_boxes.len() {
+            return Err(invalid());
+        }
+        for (state, declared) in stock.fluid_boxes.iter().zip(&prototype.fluid_boxes) {
+            let holds_unknown_fluid = state
+                .fluid_id
+                .is_some_and(|fluid_id| sim.world.prototypes.fluid(fluid_id).is_none());
+            if holds_unknown_fluid
+                || state.amount_milliunits > declared.capacity_milliunits
+                || (state.fluid_id.is_none() && state.amount_milliunits != 0)
+            {
+                return Err(invalid());
+            }
+        }
+        if stock.energy.is_some() != prototype.burner.is_some() {
+            return Err(invalid());
+        }
+        if let Some(stack) = stock
+            .energy
+            .as_ref()
+            .and_then(|energy| energy.fuel_slot.stack())
+            && ItemStack::new(&sim.world.prototypes, stack.item_id(), stack.count()).is_err()
+        {
+            return Err(invalid());
+        }
+
+        if sim
+            .rolling_stock
+            .trains
+            .get(&stock.train)
+            .is_none_or(|train| !train.stock.contains(stock_id))
+        {
+            return Err(invalid());
+        }
+    }
+
+    for (train_id, train) in &sim.rolling_stock.trains {
+        let invalid = || SimValidationError::InvalidTrain {
+            train_id: *train_id,
+        };
+        if train.id != *train_id
+            || train_id.raw() > sim.rolling_stock.next_train_id
+            // A train with no stock is a train that should have been dropped
+            // when its last piece was mined; nothing could ever remove it later.
+            || train.stock.is_empty()
+        {
+            return Err(invalid());
+        }
+        // The remainder is the sub-unit part of a tick's travel, so a value at
+        // or beyond a whole unit is travel the train was owed and never paid.
+        if !(0..TRAIN_VELOCITY_SCALE).contains(&train.travel_remainder) {
+            return Err(invalid());
+        }
+
+        let mut seen = BTreeSet::new();
+        for stock_id in &train.stock {
+            if !seen.insert(*stock_id)
+                || sim
+                    .rolling_stock
+                    .stock
+                    .get(stock_id)
+                    .is_none_or(|stock: &RollingStock| stock.train != *train_id)
+            {
+                return Err(invalid());
+            }
+        }
+
+        // A train may not exceed the top speed of its slowest piece; the step
+        // clamps to it every tick, so a value above it could only come from a
+        // hand-edited save or a catalog the world no longer matches.
+        let max_speed = train
+            .stock
+            .iter()
+            .filter_map(|stock_id| {
+                let stock = sim.rolling_stock.get(*stock_id)?;
+                let rolling_stock = sim
+                    .world
+                    .prototypes
+                    .entity(stock.prototype_id)?
+                    .rolling_stock?;
+                Some(i64::from(rolling_stock.max_speed_fixed_per_tick) * TRAIN_VELOCITY_SCALE)
+            })
+            .min()
+            .unwrap_or(0);
+        if train.velocity.unsigned_abs() > max_speed.unsigned_abs() {
+            return Err(invalid());
+        }
+    }
+
+    Ok(())
+}

@@ -311,6 +311,12 @@
         // question of what the player selected in the build menu, not of what
         // they are carrying.
         (id: 111, name: "rail", stack_size: 100),
+        // Rolling stock is heavy and bulky: one piece fills a whole stack the
+        // way the machines it is built from do, so a train is carried to the
+        // track a wagon at a time.
+        (id: 112, name: "locomotive", stack_size: 5),
+        (id: 113, name: "cargo_wagon", stack_size: 5),
+        (id: 114, name: "fluid_wagon", stack_size: 5),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1568,6 +1574,46 @@
                 (item: "iron_gear_wheel", amount: 1),
             ],
             products: [(item: "rail", amount: 2)],
+        ),
+        // Rolling stock costs what its role costs: engines and control
+        // circuitry for the locomotive, a steel body for the cargo wagon, and
+        // tankage for the fluid wagon.
+        (
+            id: 110,
+            name: "locomotive",
+            category: Crafting,
+            crafting_time_ticks: 240,
+            ingredients: [
+                (item: "engine_unit", amount: 20),
+                (item: "electronic_circuit", amount: 10),
+                (item: "steel_plate", amount: 30),
+            ],
+            products: [(item: "locomotive", amount: 1)],
+        ),
+        (
+            id: 111,
+            name: "cargo_wagon",
+            category: Crafting,
+            crafting_time_ticks: 60,
+            ingredients: [
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "iron_plate", amount: 20),
+                (item: "steel_plate", amount: 20),
+            ],
+            products: [(item: "cargo_wagon", amount: 1)],
+        ),
+        (
+            id: 112,
+            name: "fluid_wagon",
+            category: Crafting,
+            crafting_time_ticks: 90,
+            ingredients: [
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "steel_plate", amount: 16),
+                (item: "pipe", amount: 8),
+                (item: "storage_tank", amount: 1),
+            ],
+            products: [(item: "fluid_wagon", amount: 1)],
         ),
     ],
     entities: [
@@ -2981,6 +3027,78 @@
                 curve: QuarterArc(center: (x: 2048, y: 0)),
             )),
         ),
+        // Rolling stock. Unlike everything else in this list these entities are
+        // never placed on tiles: they live in the rolling-stock subsystem at a
+        // position along a rail edge, so `size` is only what the renderer draws
+        // and `collision_mask` is never consulted. What the simulation reads is
+        // `rolling_stock`, whose length is the distance between the couplers
+        // and therefore the spacing a coupled train keeps.
+        //
+        // Weights are kilograms and forces are newtons, with one tile taken as
+        // one metre and one tick as a sixtieth of a second. A locomotive alone
+        // therefore pulls away at 6 m/s^2 and a locomotive with four wagons at
+        // 2 m/s^2, while braking stays near 12 m/s^2 for both because every
+        // wagon brings its own brakes.
+        (
+            id: 71,
+            name: "locomotive",
+            build_item: Some("locomotive"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(142),
+            entity_kind: Locomotive,
+            size: (x: 2, y: 7),
+            collision_mask: (layers: ["ground", "transport"]),
+            max_health: Some(1000),
+            burner: Some((energy_usage_watts: 600000)),
+            rolling_stock: Some((
+                length_fixed: 7168,
+                weight_kilograms: 2000,
+                braking_force_newtons: 24000,
+                max_speed_fixed_per_tick: 1229,
+                locomotive: Some((tractive_force_newtons: 12000)),
+            )),
+        ),
+        (
+            id: 72,
+            name: "cargo_wagon",
+            build_item: Some("cargo_wagon"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(143),
+            entity_kind: CargoWagon,
+            size: (x: 2, y: 6),
+            collision_mask: (layers: ["ground", "transport"]),
+            inventory_slot_count: Some(40),
+            max_health: Some(600),
+            rolling_stock: Some((
+                length_fixed: 6144,
+                weight_kilograms: 1000,
+                braking_force_newtons: 12000,
+                // Above the locomotive's, so the locomotive is what caps a
+                // train's speed rather than the wagons behind it.
+                max_speed_fixed_per_tick: 1536,
+            )),
+        ),
+        (
+            id: 73,
+            name: "fluid_wagon",
+            build_item: Some("fluid_wagon"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(144),
+            entity_kind: FluidWagon,
+            size: (x: 2, y: 6),
+            collision_mask: (layers: ["ground", "transport"]),
+            max_health: Some(600),
+            // No connections: a wagon's tank is filled and drained at a station
+            // rather than by touching a pipe, and it is never in the occupancy
+            // grid a pipe network is built from.
+            fluid_boxes: [(capacity_milliunits: 25000000, connections: [])],
+            rolling_stock: Some((
+                length_fixed: 6144,
+                weight_kilograms: 1000,
+                braking_force_newtons: 12000,
+                max_speed_fixed_per_tick: 1536,
+            )),
+        ),
     ],
     tiles: [
         (
@@ -3677,6 +3795,36 @@
             required_units: 75,
             research_time_ticks: 900,
             effects: [UnlockRecipe("rail")],
+        ),
+        // The stock that runs on the track, gated separately from the track
+        // itself: laying rail is worth doing before there is anything to run
+        // on it, and a locomotive costs engines the player may not have yet.
+        (
+            id: 43,
+            name: "rolling_stock",
+            prerequisites: ["railway"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 900,
+            effects: [
+                UnlockRecipe("locomotive"),
+                UnlockRecipe("cargo_wagon"),
+            ],
+        ),
+        (
+            id: 44,
+            name: "fluid_wagon",
+            prerequisites: ["rolling_stock", "fluid_handling"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 900,
+            effects: [UnlockRecipe("fluid_wagon")],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

@@ -27,6 +27,7 @@ mod radar;
 mod rails;
 mod research;
 mod robots;
+pub(in crate::simulation) mod rolling_stock;
 mod solar;
 mod statistics;
 mod terrain;
