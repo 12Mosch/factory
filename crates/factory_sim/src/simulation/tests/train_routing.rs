@@ -313,6 +313,65 @@ fn a_train_blocked_by_stock_keeps_its_plan() {
     sim.validate().expect("a train held up by another is valid");
 }
 
+/// A train with somewhere to be and no plan for getting there brakes, whatever
+/// left it in that state — a tick whose search budget was spent before it, a
+/// search that ran out of expansions, or track pulled up under its plan. The
+/// throttle it was driving on belonged to a plan that no longer exists.
+#[test]
+fn a_routed_train_with_no_plan_brakes_until_it_has_one() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    run_until(&mut sim, |sim| position(sim, train_id).edge == rails[12]);
+    assert_eq!(
+        sim.train(train_id).expect("the train exists").throttle,
+        TrainThrottle::Forward,
+        "a train driving a plan is driving"
+    );
+
+    // The state a deferred or exhausted search leaves behind: the destination
+    // stands, the plan does not.
+    sim.rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists")
+        .route = None;
+    sim.steer_train(train_id);
+
+    let train = sim.train(train_id).expect("the train exists");
+    assert_eq!(train.throttle, TrainThrottle::Brake);
+    assert!(
+        train.destination.is_some(),
+        "braking is not giving up on the journey"
+    );
+}
+
+/// Which trains a tick with more searches than budget plans for follows from
+/// where the last tick stopped, so that cursor is durable: a loaded world that
+/// forgot it would plan for different trains than the world it was saved from,
+/// and the trains would diverge a tick later.
+#[test]
+fn the_planning_cursor_survives_a_save_and_load() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    sim.tick();
+    assert_eq!(
+        sim.rolling_stock.planned_last,
+        Some(train_id),
+        "the pass planned for this train and remembers doing so"
+    );
+
+    let bytes = crate::save_to_bytes(&sim).expect("a world with a routed train saves");
+    let loaded = crate::load_from_bytes(&bytes).expect("a world with a routed train loads");
+
+    assert_eq!(
+        loaded.rolling_stock.planned_last,
+        sim.rolling_stock.planned_last
+    );
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+}
+
 /// A plan is durable state, so a train part way through one is part way through
 /// it after a save — and goes on to arrive at the same place, tick for tick.
 #[test]

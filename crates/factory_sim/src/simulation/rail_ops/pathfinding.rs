@@ -138,30 +138,51 @@ impl RailRouteScratch {
         if start_edge.network_id != target_edge.network_id {
             return (RailRouteOutcome::Unreachable, 0);
         }
-        if start_index == target_index {
-            return (
-                RailRouteOutcome::Found(route_along_one_rail(request.start, request.target)),
-                0,
-            );
-        }
+        // A train sent to the rail it is already standing on has a route without
+        // a search: the stretch of that rail between it and the mark. That is
+        // only the *cheapest* route when it needs no reversal, though — turning
+        // round costs a penalty a way round the railway might not pay — so a
+        // direct route that reverses is kept as the one to beat and priced
+        // against whatever the search comes back with.
+        let direct = match start_index == target_index {
+            false => None,
+            true => {
+                let direct = route_along_one_rail(
+                    request.start,
+                    request.target,
+                    request.reversal_penalty_fixed,
+                );
+                if !direct.reverses {
+                    return (RailRouteOutcome::Found(direct.route), 0);
+                }
+                Some(direct)
+            }
+        };
 
         self.reset(graph.edges.len());
         self.seed(request, start_index, &start_edge, &target_edge);
 
         let mut expansions = 0;
+        let mut exhausted = false;
         let mut arrival: Option<RailArrival> = None;
         while let Some(Reverse((estimate, cost, state))) = self.open.pop() {
             // Every route still open costs at least its estimate, so once that
-            // reaches what arriving already costs, nothing left can improve on
-            // it.
-            if arrival.is_some_and(|found| estimate >= found.cost) {
+            // reaches what getting there already costs — by arriving, or by
+            // turning round on the spot — nothing left can improve on it.
+            let best_known = arrival
+                .map(|found| found.cost)
+                .into_iter()
+                .chain(direct.as_ref().map(|direct| direct.cost))
+                .min();
+            if best_known.is_some_and(|limit| estimate >= limit) {
                 break;
             }
             if cost > self.best_cost[state as usize] {
                 continue;
             }
             if expansions == request.max_expansions {
-                return (RailRouteOutcome::Exhausted, expansions);
+                exhausted = true;
+                break;
             }
             expansions += 1;
 
@@ -190,13 +211,25 @@ impl RailRouteScratch {
             }
         }
 
-        let Some(arrival) = arrival else {
-            return (RailRouteOutcome::Unreachable, expansions);
-        };
-        (
-            RailRouteOutcome::Found(self.rebuild(request, &start_edge, &target_edge, arrival)),
-            expansions,
-        )
+        // The way round only wins if it really costs less than turning round on
+        // the spot; a tie goes to the direct route, which is the shorter
+        // description of the same journey.
+        let arrival = arrival.filter(|found| {
+            direct
+                .as_ref()
+                .is_none_or(|direct| found.cost < direct.cost)
+        });
+        match (arrival, direct) {
+            (Some(arrival), _) => (
+                RailRouteOutcome::Found(self.rebuild(request, &start_edge, &target_edge, arrival)),
+                expansions,
+            ),
+            // A search that ran out while a route was already in hand has still
+            // found one: it only failed to prove that nothing beats it.
+            (None, Some(direct)) => (RailRouteOutcome::Found(direct.route), expansions),
+            (None, None) if exhausted => (RailRouteOutcome::Exhausted, expansions),
+            (None, None) => (RailRouteOutcome::Unreachable, expansions),
+        }
     }
 
     fn reset(&mut self, edge_count: usize) {
@@ -366,21 +399,37 @@ impl RailRouteScratch {
     }
 }
 
-/// The route for a train already standing on the rail it was sent to: the
-/// stretch of that rail between here and the mark.
+/// The route for a train already standing on the rail it was sent to, and what
+/// it costs.
 ///
-/// Nothing that left the rail could come back to the mark having travelled less
-/// than the distance along it, so this needs no search — and answering it
-/// without one is what keeps "drive to where you already are" from costing a
-/// tick's expansion budget.
-fn route_along_one_rail(start: RailPosition, target: RailTarget) -> TrainRoute {
+/// `reverses` is what decides whether the search has to run at all. A mark ahead
+/// of the train is reached by driving to it and nothing else can be shorter —
+/// any other route runs the rest of this rail first and then more. A mark behind
+/// it is a different matter: driving to it means turning round, and turning
+/// round has a price that a way round the railway need not pay.
+struct DirectRoute {
+    route: TrainRoute,
+    cost: i64,
+    reverses: bool,
+}
+
+fn route_along_one_rail(
+    start: RailPosition,
+    target: RailTarget,
+    reversal_penalty_fixed: i64,
+) -> DirectRoute {
     let delta = target.distance_fixed - start.distance_fixed;
-    TrainRoute {
-        legs: VecDeque::from([TrainRouteLeg {
-            distance_fixed: delta.abs(),
-            forward: (delta >= 0) == start.forward,
-        }]),
-        edges: vec![start.edge],
+    let forward = (delta >= 0) == start.forward;
+    DirectRoute {
+        route: TrainRoute {
+            legs: VecDeque::from([TrainRouteLeg {
+                distance_fixed: delta.abs(),
+                forward,
+            }]),
+            edges: vec![start.edge],
+        },
+        cost: delta.abs() + if forward { 0 } else { reversal_penalty_fixed },
+        reverses: !forward,
     }
 }
 
@@ -637,22 +686,53 @@ mod tests {
         assert_eq!(edges(&route), vec![4, 3, 2, 1]);
     }
 
-    /// The train is already there, so the route is the stretch of rail between
-    /// it and the mark — and the search never runs, which is what keeps a train
-    /// sent where it stands from spending a tick's budget.
+    /// A mark ahead of the train on the rail it is standing on is reached by
+    /// driving to it, and no search is needed to know that: every other route
+    /// runs the rest of this rail first and then more. Answering it for nothing
+    /// is what keeps a train sent where it stands off the tick's budget.
     #[test]
-    fn a_destination_on_the_rail_underneath_needs_no_search() {
+    fn a_destination_ahead_on_the_rail_underneath_needs_no_search() {
         let graph = build_rail_graph_from_pieces(&straight_run(1, 2));
-        let start = RailPosition::new(rail(1), 1_500, true);
+        let start = RailPosition::new(rail(1), 500, true);
 
-        let (outcome, expansions) = search(&request(&graph, start, RailTarget::new(rail(1), 500)));
+        let (outcome, expansions) =
+            search(&request(&graph, start, RailTarget::new(rail(1), 1_500)));
 
         assert_eq!(expansions, 0);
         let RailRouteOutcome::Found(route) = outcome else {
             panic!("a train on its destination rail has a route");
         };
+        assert_eq!(legs(&route), vec![(1_000, true)]);
+        assert_eq!(edges(&route), vec![1]);
+    }
+
+    /// A mark *behind* the train is a different question, because reaching it
+    /// means turning round. On a line that goes nowhere else there is nothing
+    /// cheaper, so the answer is still the stretch of rail between the two.
+    #[test]
+    fn a_destination_behind_on_the_rail_underneath_is_driven_back_to() {
+        let graph = build_rail_graph_from_pieces(&straight_run(1, 2));
+        let start = RailPosition::new(rail(1), 1_500, true);
+
+        let route = route(&request(&graph, start, RailTarget::new(rail(1), 500)));
+
         assert_eq!(legs(&route), vec![(1_000, false)]);
         assert_eq!(edges(&route), vec![1]);
+    }
+
+    /// The same question on a loop has a different answer: going round costs
+    /// less than the reversal does, so the train drives on past the end of its
+    /// own rail and comes back to the mark from the other side.
+    #[test]
+    fn a_destination_behind_on_a_loop_is_reached_by_going_round() {
+        let graph = loop_graph();
+        let start = RailPosition::new(rail(1), 1_500, true);
+
+        let route = route(&request(&graph, start, RailTarget::new(rail(1), 500)));
+
+        assert_eq!(route.legs.len(), 1, "going round needs no reversal");
+        assert!(route.current_leg().expect("a route has a leg").forward);
+        assert_eq!(edges(&route), vec![1, 2, 3, 4, 5, 6, 7, 8, 1]);
     }
 
     /// The manoeuvre the whole direction-aware state space exists for: a train

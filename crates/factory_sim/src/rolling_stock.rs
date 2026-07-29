@@ -353,6 +353,16 @@ pub struct RollingStockSubsystem {
     pub(crate) trains: BTreeMap<TrainId, Train>,
     pub(crate) next_stock_id: u64,
     pub(crate) next_train_id: u64,
+    /// The train the routing pass planned for last, so the next tick resumes
+    /// after it rather than starting at the lowest id again.
+    ///
+    /// Durable, beside the id counters and for the same reason: it is
+    /// bookkeeping that decides what happens next. A tick where several trains
+    /// want a route and the budget covers only some of them picks *which* ones
+    /// from this, so a world that forgot it across a save would plan for
+    /// different trains than the world it was saved from — and that shows up in
+    /// the trains themselves a tick later.
+    pub(crate) planned_last: Option<TrainId>,
 }
 
 impl RollingStockSubsystem {

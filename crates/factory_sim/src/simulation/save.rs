@@ -48,7 +48,9 @@ use bincode::Options;
 // coupled into with a velocity mid-run.
 // v37: trains gained somewhere to be: a destination on the rail graph and the
 // route they are driving toward it, both durable so a train mid-plan through a
-// save is still mid-plan when it loads.
+// save is still mid-plan when it loads. The rolling-stock subsystem gained the
+// routing pass's cursor with them, because which trains a tick with more
+// searches than budget plans for follows from it.
 pub const SAVE_VERSION: u32 = 37;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.

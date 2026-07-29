@@ -15,9 +15,7 @@ use crate::input::resources::{
     AppInputState, RailGraphOverlay, TrainDebugInput, TrainRoutingSelection,
 };
 use crate::input::robot_debug::dispatch_debug_robot_from_input;
-use crate::input::train_debug::{
-    collect_train_debug_input, drive_train_from_input, route_train_from_input,
-};
+use crate::input::train_debug::{apply_train_debug_input, collect_train_debug_input};
 
 /// Input resources, panel-state collection, and the fixed-step systems that
 /// feed frame-collected input into the simulation.
@@ -51,8 +49,7 @@ impl Plugin for InputPlugin {
                     update_manual_mining_from_input,
                     update_repair_from_input,
                     dispatch_debug_robot_from_input,
-                    drive_train_from_input,
-                    route_train_from_input,
+                    apply_train_debug_input,
                 )
                     .chain()
                     .in_set(AppSet::SimInput),

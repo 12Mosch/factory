@@ -78,11 +78,12 @@ pub(in crate::simulation) struct TrainRouting {
     exempt: Vec<EntityId>,
     /// Trains that have somewhere to be and no plan for getting there, in id
     /// order. Refilled each tick the pass runs.
+    ///
+    /// The cursor the pass resumes from is *not* here: which trains a tick with
+    /// more searches than budget plans for decides what those trains do next, so
+    /// it is durable state on the rolling-stock subsystem rather than something
+    /// a save could forget.
     waiting: Vec<TrainId>,
-    /// The train planned for last. Planning resumes after it rather than at the
-    /// lowest id, so a train whose search costs the whole budget cannot keep
-    /// every train behind it from ever being planned.
-    planned_last: Option<TrainId>,
     remaining_expansions: usize,
 }
 
@@ -189,15 +190,14 @@ fn planning_order(
 ///
 /// The two failures are not the same failure, and the difference is the whole
 /// of this function. `Unreachable` is an answer: there is no way there, so the
-/// train stops asking. `Exhausted` is the absence of one — the search ran out of
-/// expansions, which says nothing about whether a route exists — so the
-/// destination is kept and tried again on a later tick. Throwing it away there
-/// would strand a train whose destination is perfectly reachable, on the very
-/// railways big enough to need the cap.
-///
-/// Both brake. A plan can be lost mid-run, which leaves a train at speed with
-/// nothing steering it, and rolling on until resistance stops it is not a train
-/// anybody is driving.
+/// train stops asking, and because it is no longer a routed train nothing else
+/// will steer it — hence the brake here. `Exhausted` is the absence of an
+/// answer — the search ran out of expansions, which says nothing about whether
+/// a route exists — so the destination is kept and tried again on a later tick.
+/// Throwing it away would strand a train whose destination is perfectly
+/// reachable, on the very railways big enough to need the cap. It needs no
+/// brake of its own: a routed train without a plan is braked by
+/// [`Simulation::steer_train`], which is the one place that rule lives.
 fn record_route_outcome(train: &mut crate::rolling_stock::Train, outcome: RailRouteOutcome) {
     match outcome {
         RailRouteOutcome::Found(route) => train.route = Some(route),
@@ -206,10 +206,7 @@ fn record_route_outcome(train: &mut crate::rolling_stock::Train, outcome: RailRo
             train.route = None;
             train.throttle = TrainThrottle::Brake;
         }
-        RailRouteOutcome::Exhausted => {
-            train.route = None;
-            train.throttle = TrainThrottle::Brake;
-        }
+        RailRouteOutcome::Exhausted => train.route = None,
     }
 }
 
@@ -312,11 +309,11 @@ impl Simulation {
         } = self;
         train_routing.collect_occupied_rails(&rails.graph, rolling_stock, &world.prototypes);
 
-        for train_id in planning_order(&waiting, self.train_routing.planned_last) {
+        for train_id in planning_order(&waiting, self.rolling_stock.planned_last) {
             if !self.train_routing.can_search() {
                 break;
             }
-            self.train_routing.planned_last = Some(*train_id);
+            self.rolling_stock.planned_last = Some(*train_id);
             self.plan_train_route(*train_id);
         }
         self.train_routing.waiting = waiting;
@@ -325,15 +322,26 @@ impl Simulation {
     /// Sets a routed train's throttle for this tick.
     ///
     /// Runs before the train is stepped, so the throttle the step reads is the
-    /// one this leg asks for. A train whose plan is still being waited on — the
-    /// tick's budget was spent, or its last search ran out of expansions — is
-    /// left alone: it has already been braked, and there is nothing to steer it
-    /// along yet.
-    pub(super) fn steer_train(&mut self, train_id: TrainId) {
+    /// one this leg asks for.
+    ///
+    /// A train that has somewhere to be and no plan for getting there brakes,
+    /// however it came to be in that state: the tick's budget was spent before
+    /// its search, its last search ran out of expansions, or the track under its
+    /// plan was pulled up. Whatever throttle it was last driving on belonged to
+    /// a plan that no longer exists, and holding it would run the train on
+    /// toward a mark nothing is measuring any more. It costs a routed train a
+    /// little speed while it waits, and that is the right trade: a train under
+    /// no plan should not be moving under one.
+    pub(in crate::simulation) fn steer_train(&mut self, train_id: TrainId) {
         let Some(train) = self.rolling_stock.train(train_id) else {
             return;
         };
         let Some(leg) = train.route.as_ref().and_then(|route| route.current_leg()) else {
+            if train.is_routed()
+                && let Some(train) = self.rolling_stock.trains.get_mut(&train_id)
+            {
+                train.throttle = TrainThrottle::Brake;
+            }
             return;
         };
         // Braking is decided against the distance left rather than against a
@@ -579,14 +587,15 @@ mod tests {
     /// A search that ran out of expansions has not answered the question, so the
     /// train keeps where it was going and is planned for again later. Giving up
     /// here would strand a train whose destination is perfectly reachable on
-    /// exactly the railways that are big enough to reach the cap.
+    /// exactly the railways that are big enough to reach the cap. Its throttle
+    /// is not touched here because it is still a routed train, and a routed
+    /// train without a plan is braked by the steering pass.
     #[test]
     fn an_exhausted_search_keeps_the_destination_and_an_unreachable_one_does_not() {
         let mut exhausted = train(1);
         record_route_outcome(&mut exhausted, RailRouteOutcome::Exhausted);
         assert!(exhausted.destination.is_some());
         assert_eq!(exhausted.route, None);
-        assert_eq!(exhausted.throttle, TrainThrottle::Brake);
 
         let mut unreachable = train(2);
         record_route_outcome(&mut unreachable, RailRouteOutcome::Unreachable);
