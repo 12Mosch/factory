@@ -427,12 +427,24 @@ impl Simulation {
 
     /// Spends a tick's travel against the route and retires legs that are done.
     ///
-    /// Runs after the step, and is told what bound it: a leg the *track* cut
-    /// short is a leg that will never be finished — a train reversing at a
-    /// buffer stops with its nose against it, short of the point the plan turned
-    /// around at — so it counts as run out rather than leaving the train pushing
-    /// at a dead end forever. A leg cut short by other stock is a leg the train
-    /// is still on: it waits.
+    /// Runs after the step, and is told what bound it. A leg the *track* cut
+    /// short is a leg that will never be finished, because a leg is measured to
+    /// the train's centre while what stops the train is its nose: it comes to
+    /// rest against the buffer with distance still on the leg, and no further
+    /// driving can bring the centre nearer. Such a leg is retired rather than
+    /// held open — the unrun part carried into the reversal that follows it, or,
+    /// on the last leg, ending the journey where the train physically stopped.
+    /// Holding it open instead would leave the train with its throttle against a
+    /// dead end for ever, burning fuel to stay exactly where it is.
+    ///
+    /// A mark within half a train of the end of the line is therefore a mark the
+    /// train stops short of. The search plans for a point rather than for a
+    /// body, which is a limitation worth naming here because this is where it
+    /// shows: it is stations, which must land a whole train against a platform,
+    /// that will have to teach the plan how long its train is.
+    ///
+    /// A leg cut short by other stock is a different matter — that is a leg the
+    /// train is still on, and it waits.
     pub(super) fn advance_train_route(
         &mut self,
         train_id: TrainId,
@@ -470,6 +482,10 @@ impl Simulation {
             // The next leg runs back down the track this one came up, so track
             // this one could not cover is track the next one no longer has to.
             Some(next) => next.distance_fixed = (next.distance_fixed - unrun).max(0),
+            // Nothing left to run: the train is either on its mark or as near it
+            // as the end of the line lets it stand. Both are the end of the
+            // journey, and it coasts — which for a train that has just come to a
+            // stand is doing nothing at all.
             None => {
                 train.route = None;
                 train.destination = None;

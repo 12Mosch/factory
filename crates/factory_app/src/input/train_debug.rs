@@ -49,13 +49,9 @@ use crate::ui::resources::TechnologyWindowState;
 /// it late would aim a press to pick a train at whatever the cursor found
 /// afterwards.
 ///
-/// The technology window is checked alongside the general world-input block
-/// because it does not set it, which is why the mining input checks both too.
-/// Without it a train could be driven from behind an open full-screen panel,
-/// with the cursor pointing at something the player cannot see. Presses already
-/// waiting are thrown away when the world becomes blocked rather than kept:
-/// what the player aimed at is behind a panel now, and the fixed step must not
-/// act on it there.
+/// Presses already waiting are thrown away when the world becomes blocked
+/// rather than kept: what the player aimed at is behind a panel now, and the
+/// fixed step must not act on it there.
 pub(crate) fn collect_train_debug_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     input_state: Option<Res<AppInputState>>,
@@ -67,9 +63,7 @@ pub(crate) fn collect_train_debug_input(
     let Some(keyboard) = keyboard.as_deref() else {
         return;
     };
-    if world_input_blocked(input_state.as_deref())
-        || technology_window.as_deref().is_some_and(|state| state.open)
-    {
+    if train_input_blocked(input_state.as_deref(), technology_window.as_deref()) {
         pending.clear();
         return;
     }
@@ -99,10 +93,21 @@ pub(crate) fn collect_train_debug_input(
 /// draining one queue could not preserve it.
 pub(crate) fn apply_train_debug_input(
     mut pending: ResMut<TrainDebugInput>,
+    input_state: Option<Res<AppInputState>>,
+    technology_window: Option<Res<TechnologyWindowState>>,
     sim: Res<SimResource>,
     mut selection: ResMut<TrainRoutingSelection>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
+    // Asked again here, not only where the presses were collected. A panel
+    // opening this frame is seen by `PreUpdate`, which runs before the fixed
+    // step — but the collector runs *after* it, so a press made a frame earlier
+    // would otherwise be acted on behind a panel that is already up before the
+    // collector ever gets to throw it away.
+    if train_input_blocked(input_state.as_deref(), technology_window.as_deref()) {
+        pending.clear();
+        return;
+    }
     if pending.is_empty() {
         return;
     }
@@ -148,6 +153,19 @@ pub(crate) fn apply_train_debug_input(
             },
         }
     }
+}
+
+/// Whether the world should hear the debug train keys at all.
+///
+/// The technology window is checked alongside the general world-input block
+/// because it does not set it, which is why the mining input checks both too.
+/// Without it a train could be driven from behind an open full-screen panel,
+/// with the cursor pointing at something the player cannot see.
+fn train_input_blocked(
+    input_state: Option<&AppInputState>,
+    technology_window: Option<&TechnologyWindowState>,
+) -> bool {
+    world_input_blocked(input_state) || technology_window.is_some_and(|state| state.open)
 }
 
 /// What pressing the routing key over `(x, y)` should do.

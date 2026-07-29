@@ -498,6 +498,45 @@ fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
     );
 }
 
+/// A mark closer to the end of the line than half the train is a mark the train
+/// cannot put its centre on: its nose reaches the buffer first. The journey ends
+/// there — it has got as near as the track allows — rather than leaving the
+/// train holding its throttle open against a dead end and burning fuel at it.
+#[test]
+fn a_train_sent_past_where_it_fits_stops_at_the_buffer_and_ends_its_journey() {
+    let (mut sim, rails, stock_id, train_id) = world_with_a_routed_locomotive();
+    let last = *rails.last().expect("the run has rails");
+
+    sim.set_train_destination(train_id, last)
+        .expect("the train takes a destination");
+    run_until_arrived(&mut sim, train_id);
+
+    let train = sim.train(train_id).expect("the train exists");
+    assert!(train.is_stationary());
+    assert_eq!(train.destination, None, "the journey is over");
+    assert_eq!(train.route, None);
+    // Short of the mark, because the mark is measured to the train's centre and
+    // half a locomotive does not fit between it and the buffer.
+    let arrived = position(&sim, train_id);
+    assert_ne!(
+        arrived,
+        RailPosition::new(last, rail_middle(&sim, last), true),
+        "the train cannot reach a mark that close to the end of the line"
+    );
+    // Its nose, though, is exactly at the end of the line.
+    let (_, front) = sim
+        .rolling_stock_body(stock_id)
+        .expect("the locomotive has a body");
+    let buffer = sim
+        .rail_piece_geometry(last)
+        .expect("the last rail is placed")
+        .end
+        .position;
+    assert_eq!(front, buffer);
+    sim.validate()
+        .expect("a train stopped at the buffer is a valid world");
+}
+
 /// A plan has to run over the rail its train is standing on. A route lists every
 /// rail it crosses and a train only moves along the one it is driving, so a save
 /// whose plan is nowhere near its train is a plan that train never made.
