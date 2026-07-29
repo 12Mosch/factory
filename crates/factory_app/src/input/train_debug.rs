@@ -20,7 +20,10 @@
 //! themselves are collected in the frame schedule and consumed by the fixed one
 //! ([`TrainDebugInput`]), because a key edge belongs to a frame: read straight
 //! from the keyboard in `FixedUpdate`, one press would fire once or twice
-//! depending on how many fixed steps a frame happened to run.
+//! depending on how many fixed steps a frame happened to run. Each press
+//! carries the tile it was aimed at, so a pick and the send that follows it
+//! mean the two places the player pointed rather than wherever the mouse
+//! finished up.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -30,27 +33,35 @@ use factory_sim::{
 
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::{
-    AppInputState, TrainDebugInput, TrainDebugPress, TrainRoutingSelection,
+    AppInputState, TrainDebugInput, TrainDebugKey, TrainRoutingSelection,
 };
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::resources::TechnologyWindowState;
 
-/// Collects the debug train keys during the frame, for the fixed step to
-/// consume.
+/// Collects the debug train keys during the frame, each with the tile it was
+/// aimed at, for the fixed step to consume.
+///
+/// The cursor is read here rather than where the presses are acted on because
+/// where the player was pointing is part of what they pressed. Several frames
+/// can pass before a fixed step runs, and by then the mouse has moved — reading
+/// it late would aim a press to pick a train at whatever the cursor found
+/// afterwards.
 ///
 /// The technology window is checked alongside the general world-input block
 /// because it does not set it, which is why the mining input checks both too.
 /// Without it a train could be driven from behind an open full-screen panel,
 /// with the cursor pointing at something the player cannot see. Presses already
 /// waiting are thrown away when the world becomes blocked rather than kept:
-/// what the player pressed at is behind a panel now, and the fixed step must
-/// not act on it there.
+/// what the player aimed at is behind a panel now, and the fixed step must not
+/// act on it there.
 pub(crate) fn collect_train_debug_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut pending: ResMut<TrainDebugInput>,
 ) {
     let Some(keyboard) = keyboard.as_deref() else {
@@ -62,18 +73,26 @@ pub(crate) fn collect_train_debug_input(
         pending.clear();
         return;
     }
-    for (key, press) in [
-        (KeyCode::F8, TrainDebugPress::Drive),
-        (KeyCode::F9, TrainDebugPress::Brake),
-        (KeyCode::F10, TrainDebugPress::Route),
-    ] {
-        if keyboard.just_pressed(key) {
-            pending.push(press);
-        }
+    let presses = [
+        (KeyCode::F8, TrainDebugKey::Drive),
+        (KeyCode::F9, TrainDebugKey::Brake),
+        (KeyCode::F10, TrainDebugKey::Route),
+    ]
+    .into_iter()
+    .filter(|(key, _)| keyboard.just_pressed(*key));
+    for (_, key) in presses {
+        // A press with nowhere to point is dropped rather than queued: it can
+        // never be resolved, and the cursor is the half of it that says what it
+        // meant.
+        let Some(tile) = cursor_tile_from_window(&windows, &cameras) else {
+            return;
+        };
+        pending.push(key, tile);
     }
 }
 
-/// Acts on the presses the frame collected, oldest first.
+/// Acts on the presses the frame collected, oldest first and each at the tile it
+/// was aimed at.
 ///
 /// One system for all three keys rather than one each, because the order they
 /// were pressed in is the whole point of collecting them and two systems
@@ -82,46 +101,41 @@ pub(crate) fn apply_train_debug_input(
     mut pending: ResMut<TrainDebugInput>,
     sim: Res<SimResource>,
     mut selection: ResMut<TrainRoutingSelection>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
     if pending.is_empty() {
         return;
     }
-    let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
-        // A press with nowhere to point is still a press that happened. Keeping
-        // it would fire it later at a cursor somewhere else entirely.
-        pending.clear();
-        return;
-    };
-
     let sim = sim.read();
-    // What the last drive press asked of the train under the cursor. Commands
+    // What the last drive press asked of the train it was aimed at. Commands
     // land on a tick boundary, so the simulation still reads the old throttle
     // while this drains; without carrying the answer forward, two presses in one
     // step would both read the same throttle and turn the train round once
     // instead of twice.
-    let mut driving: Option<TrainThrottle> = None;
+    let mut driving: Option<(TrainId, TrainThrottle)> = None;
     for press in pending.drain() {
-        match press {
-            TrainDebugPress::Drive | TrainDebugPress::Brake => {
+        let (x, y) = press.tile;
+        match press.key {
+            TrainDebugKey::Drive | TrainDebugKey::Brake => {
                 let Some(train_id) = train_at_tile(&sim, x, y) else {
                     continue;
                 };
-                let throttle = match press {
-                    TrainDebugPress::Brake => TrainThrottle::Brake,
+                let throttle = match press.key {
+                    TrainDebugKey::Brake => TrainThrottle::Brake,
                     _ => next_drive_throttle(
-                        driving.or_else(|| sim.train(train_id).map(|train| train.throttle)),
+                        driving
+                            .filter(|(driven, _)| *driven == train_id)
+                            .map(|(_, throttle)| throttle)
+                            .or_else(|| sim.train(train_id).map(|train| train.throttle)),
                     ),
                 };
-                driving = Some(throttle);
+                driving = Some((train_id, throttle));
                 commands.write(SimCommandRequest(SimCommand::SetTrainThrottle {
                     train_id,
                     throttle,
                 }));
             }
-            TrainDebugPress::Route => match routing_action(&sim, selection.train, x, y) {
+            TrainDebugKey::Route => match routing_action(&sim, selection.train, x, y) {
                 Some(TrainRoutingAction::Pick(train_id)) => selection.train = Some(train_id),
                 Some(TrainRoutingAction::Release) => selection.train = None,
                 Some(TrainRoutingAction::SendTo { train_id, rail }) => {

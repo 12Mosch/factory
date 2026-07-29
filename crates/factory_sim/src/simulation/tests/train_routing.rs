@@ -452,6 +452,37 @@ fn validation_rejects_a_destination_past_the_end_of_its_rail() {
     }
 }
 
+/// A plan ends on the rail the train was sent to. A save whose route ends
+/// somewhere else — a single leg on the rail underneath, say — would be retired
+/// as an arrival by the first tick, clearing a destination the train never went
+/// near.
+#[test]
+fn validation_rejects_a_route_that_ends_away_from_its_destination() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    sim.tick();
+    sim.validate().expect("a planned train is valid");
+
+    let standing_on = position(&sim, train_id).edge;
+    sim.rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists")
+        .route = Some(crate::rolling_stock::TrainRoute {
+        legs: std::collections::VecDeque::from([crate::rolling_stock::TrainRouteLeg {
+            distance_fixed: 0,
+            forward: true,
+        }]),
+        edges: vec![standing_on],
+    });
+
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidTrain { train_id })
+    );
+}
+
 #[test]
 fn a_destination_that_is_not_a_rail_is_refused() {
     let (mut sim, _, stock_id, train_id) = world_with_a_driveable_locomotive();

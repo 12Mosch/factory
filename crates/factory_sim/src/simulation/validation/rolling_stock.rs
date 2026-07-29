@@ -146,6 +146,14 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             {
                 return Err(invalid());
             }
+            // A route ends on the rail the train was sent to. Without this a
+            // save could hold a plan that runs somewhere else entirely — a
+            // single zero-distance leg on the rail underneath, say — which the
+            // first tick would retire as an arrival, clearing a destination the
+            // train never went anywhere near.
+            if route.edges.last() != train.destination.map(|target| target.edge).as_ref() {
+                return Err(invalid());
+            }
             // Legs are distances still to run, and consecutive legs always
             // disagree about direction — a leg boundary is a reversal, so two in
             // a row driving the same way would be one leg written twice.

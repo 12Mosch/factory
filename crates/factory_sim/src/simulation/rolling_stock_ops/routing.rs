@@ -65,12 +65,19 @@ const ROUTE_MAX_EXPANSIONS: usize = 4_096;
 #[derive(Clone, Debug, Default)]
 pub(in crate::simulation) struct TrainRouting {
     scratch: RailRouteScratch,
-    /// Every rail some piece of stock is standing on, ascending.
+    /// Every rail some piece of stock is standing on, with the train standing
+    /// there, ordered by train and then by rail.
     ///
-    /// Gathered once per tick rather than once per search: it is proportional
-    /// to the world's stock, and rebuilding it for each train that wants a
-    /// route would make a tick where many of them do quadratic in the stock.
-    /// Held here and never freed, so the gathering is not also an allocation.
+    /// Gathered once per tick rather than once per search: it is proportional to
+    /// the world's stock, and rebuilding it for each train that wants a route
+    /// would make a tick where many of them do quadratic in the stock. The
+    /// per-train order is what makes the second question — which of these rails
+    /// are a given train's own — a range in this rather than a second scan over
+    /// everything. Held here and never freed, so the gathering is not also an
+    /// allocation.
+    stock_rails: Vec<(TrainId, EntityId)>,
+    /// Every rail in `stock_rails`, ascending and deduplicated: what the search
+    /// asks its occupancy question of.
     occupied: Vec<EntityId>,
     /// Rails the train currently being planned for is itself standing on,
     /// ascending. Subtracted from the occupancy above, because a train is not
@@ -138,36 +145,50 @@ impl TrainRouting {
         Some(outcome)
     }
 
-    /// Collects every rail any stock is standing on, for the tick.
-    fn collect_occupied_rails(
+    /// Collects what is standing where, once for the tick: every rail some stock
+    /// lies on, and which train each of those belongs to.
+    fn collect_stock_rails(
         &mut self,
         graph: &RailGraph,
         rolling_stock: &RollingStockSubsystem,
         prototypes: &PrototypeCatalog,
     ) {
-        self.occupied.clear();
+        self.stock_rails.clear();
         for stock in rolling_stock.iter() {
-            push_stock_rails(graph, prototypes, stock, &mut self.occupied);
+            let train = stock.train;
+            push_stock_rails(graph, prototypes, stock, |rail| {
+                self.stock_rails.push((train, rail));
+            });
         }
+        // By train first, so one train's rails are a contiguous run, and by rail
+        // within that, which is the order the search reads them in.
+        self.stock_rails.sort_unstable();
+        self.stock_rails.dedup();
+
+        self.occupied.clear();
+        self.occupied
+            .extend(self.stock_rails.iter().map(|(_, rail)| *rail));
         self.occupied.sort_unstable();
         self.occupied.dedup();
     }
 
-    /// Collects the rails `train_id`'s own stock is standing on, which the
-    /// search then reads as track nothing is in the way on.
-    fn collect_exempt_rails(
-        &mut self,
-        graph: &RailGraph,
-        rolling_stock: &RollingStockSubsystem,
-        prototypes: &PrototypeCatalog,
-        train_id: TrainId,
-    ) {
+    /// Takes the rails `train_id`'s own stock is standing on out of what the
+    /// tick already gathered, which the search then reads as track nothing is in
+    /// the way on.
+    ///
+    /// A range of the tick's own index rather than another walk over the world's
+    /// stock: this runs once per train that wants a route, and a full scan here
+    /// would put back the quadratic the tick-wide gathering took out.
+    fn collect_exempt_rails(&mut self, train_id: TrainId) {
+        let first = self
+            .stock_rails
+            .partition_point(|(train, _)| *train < train_id);
+        let past = self
+            .stock_rails
+            .partition_point(|(train, _)| *train <= train_id);
         self.exempt.clear();
-        for stock in rolling_stock.iter().filter(|stock| stock.train == train_id) {
-            push_stock_rails(graph, prototypes, stock, &mut self.exempt);
-        }
-        self.exempt.sort_unstable();
-        self.exempt.dedup();
+        self.exempt
+            .extend(self.stock_rails[first..past].iter().map(|(_, rail)| *rail));
     }
 }
 
@@ -219,7 +240,7 @@ fn push_stock_rails(
     graph: &RailGraph,
     prototypes: &PrototypeCatalog,
     stock: &crate::rolling_stock::RollingStock,
-    rails: &mut Vec<EntityId>,
+    visit: impl FnMut(EntityId),
 ) {
     let Some(half) = prototypes
         .entity(stock.prototype_id)
@@ -229,7 +250,7 @@ fn push_stock_rails(
         return;
     };
     let back = travel(graph, stock.position, -half).position;
-    edges_along(graph, back, half * 2, |edge| rails.push(edge));
+    edges_along(graph, back, half * 2, visit);
 }
 
 impl Simulation {
@@ -307,7 +328,7 @@ impl Simulation {
             world,
             ..
         } = self;
-        train_routing.collect_occupied_rails(&rails.graph, rolling_stock, &world.prototypes);
+        train_routing.collect_stock_rails(&rails.graph, rolling_stock, &world.prototypes);
 
         for train_id in planning_order(&waiting, self.rolling_stock.planned_last) {
             if !self.train_routing.can_search() {
@@ -382,15 +403,9 @@ impl Simulation {
             train_routing,
             rails,
             rolling_stock,
-            world,
             ..
         } = self;
-        train_routing.collect_exempt_rails(
-            &rails.graph,
-            rolling_stock,
-            &world.prototypes,
-            train_id,
-        );
+        train_routing.collect_exempt_rails(train_id);
         let Some(outcome) = train_routing.plan(&rails.graph, start, target) else {
             return;
         };
@@ -602,6 +617,33 @@ mod tests {
         assert_eq!(unreachable.destination, None);
         assert_eq!(unreachable.route, None);
         assert_eq!(unreachable.throttle, TrainThrottle::Brake);
+    }
+
+    /// A train's own rails come out of the index the tick already gathered,
+    /// rather than out of a second walk over the world's stock — the walk that
+    /// would put back the quadratic the tick-wide gathering took out.
+    #[test]
+    fn exempt_rails_are_the_train_s_own_range_of_the_ticks_index() {
+        let mut routing = TrainRouting {
+            stock_rails: vec![
+                (TrainId::new(1), EntityId::new(10)),
+                (TrainId::new(1), EntityId::new(11)),
+                (TrainId::new(4), EntityId::new(20)),
+            ],
+            ..TrainRouting::default()
+        };
+
+        routing.collect_exempt_rails(TrainId::new(1));
+        assert_eq!(routing.exempt, vec![EntityId::new(10), EntityId::new(11)]);
+
+        routing.collect_exempt_rails(TrainId::new(4));
+        assert_eq!(routing.exempt, vec![EntityId::new(20)]);
+
+        // A train standing on nothing the index knows about — one whose stock
+        // has no rolling-stock metadata — exempts nothing rather than the range
+        // beside where it would have been.
+        routing.collect_exempt_rails(TrainId::new(9));
+        assert!(routing.exempt.is_empty());
     }
 
     /// Planning resumes after the train it last reached and wraps round, so a

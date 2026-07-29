@@ -1,4 +1,5 @@
 use bevy::prelude::Resource;
+use factory_sim::WorldTileCoord;
 use std::collections::VecDeque;
 
 #[derive(Resource, Default)]
@@ -28,27 +29,38 @@ pub struct TrainRoutingSelection {
     pub train: Option<factory_sim::TrainId>,
 }
 
-/// Debug train keys pressed since the fixed step last looked, in the order they
-/// were pressed.
+/// Debug train presses collected since the fixed step last looked, in the order
+/// they were made.
 ///
 /// A key press is an edge, and an edge belongs to a frame rather than to a fixed
 /// step: a dropped frame runs several fixed steps while `just_pressed` stays
 /// true for all of them, and a fast one runs several frames before any fixed
-/// step at all. So the edges are collected in the frame schedule and the fixed
+/// step at all. So the presses are collected in the frame schedule and the fixed
 /// step consumes them — a train picked up by a stutter and put straight back
 /// down is not what the player asked for.
 ///
 /// A queue rather than a flag per key, because both the order and the repeats
 /// matter: two presses of the drive key are two changes of direction, and drive
 /// followed by brake is not the same instruction as brake followed by drive.
+/// Each press carries the tile it was made over for the same reason it carries
+/// its order — where the player was pointing is part of what they pressed, and
+/// re-reading the cursor when the fixed step gets round to it would answer with
+/// wherever the mouse has since moved to.
 #[derive(Resource, Default)]
 pub struct TrainDebugInput {
     pending: VecDeque<TrainDebugPress>,
 }
 
-/// One press of a debug train key.
+/// One press of a debug train key, and where it was aimed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrainDebugPress {
+pub struct TrainDebugPress {
+    pub key: TrainDebugKey,
+    pub tile: (WorldTileCoord, WorldTileCoord),
+}
+
+/// Which debug train key was pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrainDebugKey {
     /// Pull away, or turn around if the train is already driving.
     Drive,
     Brake,
@@ -65,9 +77,9 @@ impl TrainDebugInput {
     /// of them replayed at once.
     const CAPACITY: usize = 8;
 
-    pub fn push(&mut self, press: TrainDebugPress) {
+    pub fn push(&mut self, key: TrainDebugKey, tile: (WorldTileCoord, WorldTileCoord)) {
         if self.pending.len() < Self::CAPACITY {
-            self.pending.push_back(press);
+            self.pending.push_back(TrainDebugPress { key, tile });
         }
     }
 
@@ -92,28 +104,38 @@ impl TrainDebugInput {
 mod tests {
     use super::*;
 
-    /// Presses come back in the order they went in, repeats and all — the whole
-    /// reason this is a queue.
+    /// Presses come back in the order they went in, repeats and all, each still
+    /// aimed where it was made — the whole reason this is a queue of presses
+    /// rather than a flag per key.
     #[test]
-    fn presses_are_kept_in_order_and_capped() {
+    fn presses_are_kept_in_order_with_their_tiles_and_capped() {
         let mut input = TrainDebugInput::default();
         assert!(input.is_empty());
 
-        input.push(TrainDebugPress::Drive);
-        input.push(TrainDebugPress::Drive);
-        input.push(TrainDebugPress::Brake);
+        input.push(TrainDebugKey::Route, (1, 2));
+        input.push(TrainDebugKey::Drive, (3, 4));
+        input.push(TrainDebugKey::Drive, (3, 4));
         assert_eq!(
             input.drain().collect::<Vec<_>>(),
             vec![
-                TrainDebugPress::Drive,
-                TrainDebugPress::Drive,
-                TrainDebugPress::Brake
+                TrainDebugPress {
+                    key: TrainDebugKey::Route,
+                    tile: (1, 2)
+                },
+                TrainDebugPress {
+                    key: TrainDebugKey::Drive,
+                    tile: (3, 4)
+                },
+                TrainDebugPress {
+                    key: TrainDebugKey::Drive,
+                    tile: (3, 4)
+                },
             ]
         );
         assert!(input.is_empty(), "draining leaves nothing behind");
 
         for _ in 0..64 {
-            input.push(TrainDebugPress::Route);
+            input.push(TrainDebugKey::Route, (0, 0));
         }
         assert_eq!(input.drain().count(), TrainDebugInput::CAPACITY);
     }
