@@ -125,6 +125,54 @@ pub(in crate::simulation) fn travel(
     }
 }
 
+/// Reports every rail a run of track covers, from `position` forward over
+/// `distance_fixed`, in travel order and starting with the rail `position` is
+/// on.
+///
+/// The same walk [`travel`] makes, asking the other question about it: travel
+/// answers where a stretch of track *ends*, and this answers what it *crosses*.
+/// A piece of rolling stock is longer than a rail piece, so "which rails is this
+/// wagon standing on" has more than one answer and neither end of it is
+/// necessarily one of them.
+///
+/// Stops at a free end, like every other walk here, and visits each rail once
+/// per time the run covers it.
+pub(in crate::simulation) fn edges_along(
+    graph: &RailGraph,
+    position: RailPosition,
+    distance_fixed: i64,
+    mut visit: impl FnMut(EntityId),
+) {
+    let mut current = position;
+    let mut covered = 0_i64;
+    loop {
+        visit(current.edge);
+        let Some(edge) = graph.edge_for_entity(current.edge) else {
+            return;
+        };
+        covered += if current.forward {
+            edge.length_fixed - current.distance_fixed
+        } else {
+            current.distance_fixed
+        };
+        if covered >= distance_fixed {
+            return;
+        }
+        let Some((next_index, arrival_end)) =
+            graph.neighbor_end(edge, usize::from(current.forward))
+        else {
+            return;
+        };
+        let next = &graph.edges[next_index];
+        let forward = arrival_end == 0;
+        current = RailPosition {
+            edge: next.entity_id,
+            distance_fixed: if forward { 0 } else { next.length_fixed },
+            forward,
+        };
+    }
+}
+
 /// World point of a position on the track, in fixed-point units.
 ///
 /// Derived from the rail's own geometry rather than stored on the stock: the

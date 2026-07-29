@@ -93,7 +93,7 @@ fn stock_prototype(sim: &Simulation, name: &str) -> EntityPrototypeId {
 /// Puts one piece of stock on the rail at `rail_index` of the run, stocking the
 /// player inventory and unlocking the technology first so the placement is
 /// exercised through the same path a player uses.
-fn place_stock(
+pub(super) fn place_stock(
     sim: &mut Simulation,
     rails: &[EntityId],
     rail_index: usize,
@@ -147,7 +147,7 @@ fn unlock_with_prerequisites(sim: &mut Simulation, technology_name: &str) {
 }
 
 /// Fuels every locomotive of a train so it can actually pull.
-fn fuel_train(sim: &mut Simulation, train_id: TrainId, coal_count: u16) {
+pub(super) fn fuel_train(sim: &mut Simulation, train_id: TrainId, coal_count: u16) {
     let catalog = sim.world.prototypes.clone();
     let coal = factory_data::item_id_by_name(&catalog, "coal");
     let members = sim.train(train_id).expect("the train exists").stock.clone();
@@ -168,7 +168,8 @@ fn fuel_train(sim: &mut Simulation, train_id: TrainId, coal_count: u16) {
 
 /// A run long enough for a locomotive to accelerate down, with one locomotive
 /// fuelled and standing on it.
-fn world_with_a_driveable_locomotive() -> (Simulation, Vec<EntityId>, RollingStockId, TrainId) {
+pub(super) fn world_with_a_driveable_locomotive()
+-> (Simulation, Vec<EntityId>, RollingStockId, TrainId) {
     let (mut sim, rails) = world_with_rail_run(12);
     let stock_id = place_stock(&mut sim, &rails, 4, "locomotive")
         .expect("a locomotive fits on a twelve-piece run");

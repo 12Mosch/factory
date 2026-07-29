@@ -576,6 +576,9 @@ impl Simulation {
                         velocity: 0,
                         travel_remainder: 0,
                         throttle: TrainThrottle::Coast,
+                        destination: None,
+                        route: None,
+                        route_search_exhausted_at: None,
                     },
                 );
                 train_id
@@ -601,6 +604,7 @@ impl Simulation {
             .stock
             .push(stock_id);
         self.reorder_train(train_id);
+        self.discard_train_route(train_id);
         stock_id
     }
 
@@ -761,6 +765,12 @@ impl Simulation {
                         velocity,
                         travel_remainder: 0,
                         throttle,
+                        // A train that split in two is two trains with no plan:
+                        // the route belonged to the run of stock that was one
+                        // train when it was found, and neither half is that.
+                        destination: None,
+                        route: None,
+                        route_search_exhausted_at: None,
                     },
                 );
                 group_id
@@ -776,6 +786,7 @@ impl Simulation {
                 .expect("the group's train was just created or kept")
                 .stock = group;
             self.reorder_train(group_id);
+            self.discard_train_route(group_id);
         }
     }
 }

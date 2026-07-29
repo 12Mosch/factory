@@ -27,9 +27,11 @@
 
 mod motion;
 mod placement;
+mod routing;
 mod traversal;
 
 pub use motion::braking_distance_fixed;
+pub(in crate::simulation) use routing::TrainRouting;
 pub(in crate::simulation) use traversal::{TravelOutcome, travel, world_point};
 
 use crate::rail::RailPoint;
@@ -41,6 +43,40 @@ use crate::simulation::*;
 use std::collections::BTreeSet;
 
 use self::motion::stepped_velocity;
+
+/// What stopped a train's step short of the distance its velocity asked for.
+///
+/// The three are not interchangeable, which is why the step reports which one
+/// bound it rather than a bare "blocked": a train held up by the route in front
+/// of it has arrived somewhere, a train held up by the end of the line will
+/// never get further, and a train held up by other stock is waiting for
+/// something that can move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::simulation) enum TrainStepLimit {
+    /// The leg being driven ends here.
+    Route,
+    /// The end of the line.
+    Track,
+    /// Other rolling stock in the way.
+    Stock,
+}
+
+/// What a train's step this tick came to.
+///
+/// The distance asked for is kept alongside the distance covered because the two
+/// can disagree about *direction*, not only about size: a train still rolling one
+/// way while its plan has turned it round is asked for travel the plan does not
+/// want, and what a blocked step means depends on which way it was headed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::simulation) struct TrainStep {
+    /// Signed distance the train's velocity asked for, before anything clipped
+    /// it. Zero only when the train did not try to move at all.
+    attempted_fixed: i64,
+    /// Signed distance the train actually covered.
+    travelled_fixed: i64,
+    /// What cut the step short, if anything did.
+    limit: Option<TrainStepLimit>,
+}
 
 impl Simulation {
     /// Rolling stock in the world, in ascending id order.
@@ -143,10 +179,12 @@ impl Simulation {
         }
     }
 
-    /// Sets what a train is doing. This is the drive command: with no
-    /// pathfinding, signals, or schedules yet, it is the only thing that makes
-    /// a train move, and it goes through the ordinary command queue so it lands
-    /// on a tick boundary like every other input.
+    /// Sets what a train is doing by hand, cancelling wherever it was going.
+    ///
+    /// Manual control wins over a plan on purpose. The routing pass writes the
+    /// throttle of every train it is steering, so a drive command that left the
+    /// destination in place would be overwritten within the tick and the train
+    /// would appear to ignore the player.
     pub fn set_train_throttle(
         &mut self,
         train_id: TrainId,
@@ -158,6 +196,9 @@ impl Simulation {
             .get_mut(&train_id)
             .ok_or(TrainControlError::MissingTrain(train_id))?;
         train.throttle = throttle;
+        train.destination = None;
+        train.route = None;
+        train.route_search_exhausted_at = None;
         Ok(())
     }
 
@@ -241,6 +282,12 @@ impl Simulation {
         if self.rolling_stock.trains.is_empty() {
             return;
         }
+        // Planning is one pass for the whole tick, before any train is stepped:
+        // the expansion budget and the occupancy every search reads are both
+        // tick-wide, and a train planned for here is a train steered on the very
+        // step below rather than a tick later.
+        self.train_routing.begin_tick();
+        self.plan_train_routes();
 
         let train_ids = self
             .rolling_stock
@@ -254,6 +301,10 @@ impl Simulation {
     }
 
     fn advance_train(&mut self, train_id: TrainId) {
+        // Plan and throttle first: the step below reads the throttle, so a train
+        // being steered has to be steered before it is stepped rather than a
+        // tick behind.
+        self.steer_train(train_id);
         let Some(train) = self.rolling_stock.trains.get(&train_id) else {
             return;
         };
@@ -274,7 +325,9 @@ impl Simulation {
         let travel_fixed = owed.div_euclid(TRAIN_VELOCITY_SCALE);
         let remainder = owed - travel_fixed * TRAIN_VELOCITY_SCALE;
 
-        let (travelled, blocked) = self.clipped_train_travel(train_id, &stock_ids, travel_fixed);
+        let step = self.clipped_train_travel(train_id, &stock_ids, travel_fixed);
+        let travelled = step.travelled_fixed;
+        let blocked = step.limit.is_some();
         if travelled != 0 {
             for stock_id in &stock_ids {
                 let Some(stock) = self.rolling_stock.stock.get(stock_id) else {
@@ -305,35 +358,86 @@ impl Simulation {
         } else {
             remainder
         };
+
+        // Last, because what a leg has left to run is the distance the step just
+        // covered subtracted from it, and because whether the leg is finished
+        // depends on the train having already come to a stand.
+        self.advance_train_route(train_id, step);
     }
 
-    /// The distance the whole train may travel this tick, and whether that is
-    /// less than it asked for.
+    /// The distance the whole train may travel this tick, and what cut it short
+    /// if anything did.
     ///
     /// A train is rigid, so the answer is the shortest distance any of its
     /// pieces could make: letting the blocked piece stop while the rest carried
     /// on would stretch the couplings.
     ///
-    /// Two things can cut the step short: the end of the line, and other stock
-    /// on it. Both are clipped here rather than only the first, or two trains
-    /// sharing a run would drive through one another — the very overlap
+    /// Three things can cut the step short: the route the train is following,
+    /// the end of the line, and other stock on it. All three are clipped here
+    /// rather than only the last two, so a train stops *on* its mark instead of
+    /// rolling past it and having to be dragged back — and so two trains sharing
+    /// a run cannot drive through one another, which is the very overlap
     /// placement refuses to create.
     ///
-    /// The track measurement is taken from each piece's *leading end* rather
-    /// than its centre, so a train comes to rest with its nose at the buffer
-    /// instead of hanging half a locomotive past the last rail. Which end leads
-    /// follows from the sign of the step, which is why the trailing end never
-    /// needs checking: it cannot run out of track before the end in front of it.
+    /// Which one is reported when several bind at once follows the order they
+    /// are checked in, and that order is the useful one: a train that arrives
+    /// exactly where the track runs out has arrived.
     fn clipped_train_travel(
         &self,
         train_id: TrainId,
         stock_ids: &[RollingStockId],
         travel_fixed: i64,
-    ) -> (i64, bool) {
+    ) -> TrainStep {
         if travel_fixed == 0 {
-            return (0, false);
+            return TrainStep {
+                attempted_fixed: 0,
+                travelled_fixed: 0,
+                limit: None,
+            };
         }
-        let mut allowed = self.train_clearance_fixed(train_id, stock_ids, travel_fixed);
+        let limits = [
+            (
+                self.route_clearance_fixed(train_id, travel_fixed),
+                TrainStepLimit::Route,
+            ),
+            (
+                Some(self.track_clearance_fixed(stock_ids, travel_fixed)),
+                TrainStepLimit::Track,
+            ),
+            (
+                Some(self.train_clearance_fixed(train_id, stock_ids, travel_fixed)),
+                TrainStepLimit::Stock,
+            ),
+        ];
+
+        let mut allowed = travel_fixed;
+        let mut limit = None;
+        for (candidate, reason) in limits {
+            let Some(candidate) = candidate else {
+                continue;
+            };
+            if candidate.abs() < allowed.abs() {
+                allowed = candidate;
+                limit = Some(reason);
+            }
+        }
+        TrainStep {
+            attempted_fixed: travel_fixed,
+            travelled_fixed: allowed,
+            limit,
+        }
+    }
+
+    /// How far the train may travel before one of its pieces runs off the end of
+    /// the line.
+    ///
+    /// The measurement is taken from each piece's *leading end* rather than its
+    /// centre, so a train comes to rest with its nose at the buffer instead of
+    /// hanging half a locomotive past the last rail. Which end leads follows
+    /// from the sign of the step, which is why the trailing end never needs
+    /// checking: it cannot run out of track before the end in front of it.
+    fn track_clearance_fixed(&self, stock_ids: &[RollingStockId], travel_fixed: i64) -> i64 {
+        let mut allowed = travel_fixed;
         for stock_id in stock_ids {
             let Some(stock) = self.rolling_stock.get(*stock_id) else {
                 continue;
@@ -350,7 +454,7 @@ impl Simulation {
                 allowed = reachable.clamp(travel_fixed.min(0), travel_fixed.max(0));
             }
         }
-        (allowed, allowed != travel_fixed)
+        allowed
     }
 
     /// Burns one tick of fuel in every locomotive of the train that is being

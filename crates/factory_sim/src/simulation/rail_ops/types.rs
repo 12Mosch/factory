@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::entities::Direction;
 use crate::ids::EntityId;
-use crate::rail::{RailNetworkSnapshot, RailPieceGeometry};
+use crate::rail::{RailNetworkSnapshot, RailPieceGeometry, RailPoint};
 use crate::simulation::SmallVec;
 
 /// One placed rail as the graph builder sees it. Every rail piece owns exactly
@@ -24,6 +24,17 @@ pub(in crate::simulation) struct RailEdge {
     pub(in crate::simulation) entity_id: EntityId,
     pub(in crate::simulation) nodes: [usize; 2],
     pub(in crate::simulation) headings: [Direction; 2],
+    /// Where each end sits in the world, copied from the piece's geometry when
+    /// the graph is built.
+    ///
+    /// Here for the same reason `length_fixed` is: a route search needs a
+    /// metric over the graph — how far apart two ends are in a straight line is
+    /// what makes its heuristic a lower bound on the track between them — and
+    /// resolving that from the placed entity and its prototype on every node
+    /// expansion would put a catalog lookup and a rotation in the search's inner
+    /// loop. The graph is rebuilt wholesale whenever placement changes, so this
+    /// is a copy that cannot outlive the geometry it came from.
+    pub(in crate::simulation) end_positions: [RailPoint; 2],
     pub(in crate::simulation) length_fixed: i64,
     pub(in crate::simulation) network_id: u32,
 }
@@ -84,24 +95,48 @@ impl RailGraph {
     /// The edge joined to `end_index` of `edge`, and which of *its* two ends
     /// does the joining, or `None` for a free end.
     ///
+    /// The first of [`RailGraph::neighbor_ends`], which is the whole answer for
+    /// the pieces that exist today: two ends at one point facing the same way
+    /// are two rails laid over each other, which placement refuses, so an end
+    /// can only ever be joined to one other end. Anything that must keep
+    /// working when a junction piece lands — route search does — asks for every
+    /// joined end instead.
+    pub(in crate::simulation) fn neighbor_end(
+        &self,
+        edge: &RailEdge,
+        end_index: usize,
+    ) -> Option<(usize, usize)> {
+        self.neighbor_ends(edge, end_index).next()
+    }
+
+    /// Every edge joined to `end_index` of `edge`, and which of *its* two ends
+    /// does the joining. Empty for a free end.
+    ///
     /// Two ends at one node are joined exactly when their headings oppose, so
     /// this is the connection rule itself rather than a cached answer to it.
     /// Which end is reached matters to anything travelling the graph: arriving
     /// at the neighbour's end 0 means entering it at distance zero and running
     /// forwards, and arriving at end 1 means entering at its far end and
     /// running back down it.
-    pub(in crate::simulation) fn neighbor_end(
-        &self,
-        edge: &RailEdge,
+    ///
+    /// Yielded in the node's own end order, which the builder fills in entity id
+    /// order, so a caller that has to break a tie between two branches breaks it
+    /// the same way on every machine and every replay.
+    pub(in crate::simulation) fn neighbor_ends<'graph>(
+        &'graph self,
+        edge: &'graph RailEdge,
         end_index: usize,
-    ) -> Option<(usize, usize)> {
-        let node = self.nodes.get(edge.nodes[end_index])?;
+    ) -> impl Iterator<Item = (usize, usize)> + 'graph {
         let heading = edge.headings[end_index];
-        node.ends.iter().find_map(|other| {
-            let other_edge = self.edges.get(other.edge_index)?;
-            (other_edge.entity_id != edge.entity_id
-                && other_edge.headings[other.end_index] == heading.opposite())
-            .then_some((other.edge_index, other.end_index))
-        })
+        self.nodes
+            .get(edge.nodes[end_index])
+            .into_iter()
+            .flat_map(|node| node.ends.iter())
+            .filter_map(move |other| {
+                let other_edge = self.edges.get(other.edge_index)?;
+                (other_edge.entity_id != edge.entity_id
+                    && other_edge.headings[other.end_index] == heading.opposite())
+                .then_some((other.edge_index, other.end_index))
+            })
     }
 }

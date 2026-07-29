@@ -104,9 +104,10 @@ pub use crate::robots::{
     RobotNetworkSnapshot, TileBounds,
 };
 pub use crate::rolling_stock::{
-    RailPosition, RollingStock, RollingStockId, RollingStockMiningError,
+    RailPosition, RailTarget, RollingStock, RollingStockId, RollingStockMiningError,
     RollingStockPlacementError, RollingStockSubsystem, TRAIN_COUPLING_GAP_FIXED,
-    TRAIN_VELOCITY_SCALE, Train, TrainControlError, TrainForces, TrainId, TrainThrottle,
+    TRAIN_OCCUPIED_RAIL_PENALTY_FIXED, TRAIN_REVERSAL_PENALTY_FIXED, TRAIN_VELOCITY_SCALE, Train,
+    TrainControlError, TrainForces, TrainId, TrainRoute, TrainRouteLeg, TrainThrottle,
 };
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
@@ -225,6 +226,11 @@ pub struct Simulation {
     /// like the robots in flight and for the same reason: a train is a unit
     /// that exists in its own right, not a cache of something placed.
     rolling_stock: RollingStockSubsystem,
+    /// Route search for trains: scratch buffers and the tick's expansion
+    /// budget. Derived, like the enemy navigation beside it, and rebuilt from
+    /// nothing on load — the routes themselves live on the trains.
+    #[serde(skip)]
+    train_routing: rolling_stock_ops::TrainRouting,
     robots: RobotSubsystem,
     /// Robots in flight. Kept beside the network subsystem rather than inside
     /// it because the two have different lifetimes: networks are a cache of
