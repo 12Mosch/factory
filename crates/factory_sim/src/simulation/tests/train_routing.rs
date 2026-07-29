@@ -133,6 +133,95 @@ fn a_train_sent_behind_itself_backs_down_the_run() {
     );
 }
 
+/// A train sent behind itself *while it is running* cannot turn on the spot. It
+/// keeps rolling the old way for as long as stopping takes, off the end of the
+/// track its plan named, and every unit of that is added to the leg it has yet
+/// to turn onto. The whole manoeuvre is a state the simulation produces on its
+/// own, so every tick of it has to be a state a save could hold — `tick`
+/// validates in debug builds, which is what most of this test is.
+#[test]
+fn a_running_train_sent_behind_itself_comes_round_and_arrives() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    // By hand first, because a train under a plan is never driven away from it:
+    // getting up speed in the wrong direction is the player's doing.
+    sim.set_train_throttle(train_id, TrainThrottle::Forward)
+        .expect("the train takes a throttle command");
+    run_until(&mut sim, |sim| {
+        sim.train(train_id)
+            .is_some_and(|train| train.velocity > 100 * TRAIN_VELOCITY_SCALE)
+    });
+
+    let running_from = position(&sim, train_id);
+    sim.set_train_destination(train_id, rails[2])
+        .expect("the train takes a destination");
+
+    // It really does leave the rails its plan lists — otherwise this test would
+    // pass without ever reaching the state it is about.
+    run_until(&mut sim, |sim| {
+        let standing_on = position(sim, train_id).edge;
+        sim.train(train_id)
+            .and_then(|train| train.route.as_ref())
+            .is_some_and(|route| !route.uses_edge(standing_on))
+    });
+    assert!(
+        position(&sim, train_id).distance_fixed > running_from.distance_fixed
+            || position(&sim, train_id).edge != running_from.edge,
+        "it carried on the way it was going while it braked"
+    );
+
+    run_until_arrived(&mut sim, train_id);
+    assert_eq!(
+        position(&sim, train_id),
+        RailPosition::new(rails[2], rail_middle(&sim, rails[2]), true),
+        "having come round, it drove the plan out to the mark"
+    );
+}
+
+/// Running out of track is only an arrival when the train was running *at* the
+/// mark. A train sent behind itself too late to stop reaches the wrong end of
+/// the line, and that buffer says nothing about where it was sent: it has to
+/// come off it and drive the plan it was given.
+#[test]
+fn a_train_that_reaches_the_wrong_buffer_has_not_arrived() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_throttle(train_id, TrainThrottle::Forward)
+        .expect("the train takes a throttle command");
+    // Caught near the end of the run and running: from here the buffer is
+    // closer than the train's stopping distance, so it will reach it whatever
+    // the plan says. Rolling stock is stopped by its nose rather than its
+    // centre, so the last rails of the run are ones no locomotive's centre ever
+    // stands on — hence catching it here rather than on the final piece.
+    run_until(&mut sim, |sim| position(sim, train_id).edge == rails[20]);
+
+    sim.set_train_destination(train_id, rails[2])
+        .expect("the train takes a destination");
+    run_until(&mut sim, |sim| {
+        sim.train(train_id)
+            .is_some_and(|train| train.is_stationary())
+    });
+    let stopped_at = rails
+        .iter()
+        .position(|rail| *rail == position(&sim, train_id).edge)
+        .expect("the train is somewhere on the run");
+    assert!(
+        stopped_at > 20,
+        "it ran on to the end of the line rather than stopping where it was sent"
+    );
+    let train = sim.train(train_id).expect("the train exists");
+    assert_eq!(
+        train.destination.map(|target| target.edge),
+        Some(rails[2]),
+        "the end of the line is not the place it was sent"
+    );
+    assert!(train.route.is_some(), "so its plan is still to be driven");
+
+    run_until_arrived(&mut sim, train_id);
+    assert_eq!(
+        position(&sim, train_id),
+        RailPosition::new(rails[2], rail_middle(&sim, rails[2]), true)
+    );
+}
+
 /// The plan is measured from the train, so a train told to drive to the rail it
 /// is already standing on simply rolls to the mark on it.
 #[test]
@@ -586,11 +675,13 @@ fn a_train_still_rolling_asks_again_after_its_search_ran_out() {
     );
 }
 
-/// A plan has to run over the rail its train is standing on. A route lists every
-/// rail it crosses and a train only moves along the one it is driving, so a save
-/// whose plan is nowhere near its train is a plan that train never made.
+/// What is left of a plan has to be enough to reach the mark. Track between two
+/// points is never shorter than the line between them, so a save whose plan
+/// claims a train standing somewhere else is all but there — here, no distance
+/// at all — is a plan that train never made. The first tick would retire it as
+/// an arrival without the train having moved.
 #[test]
-fn validation_rejects_a_route_that_does_not_run_over_the_train() {
+fn validation_rejects_a_plan_too_short_to_reach_its_mark() {
     let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
     sim.set_train_destination(train_id, rails[20])
         .expect("the train takes a destination");

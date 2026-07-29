@@ -61,6 +61,23 @@ pub(in crate::simulation) enum TrainStepLimit {
     Stock,
 }
 
+/// What a train's step this tick came to.
+///
+/// The distance asked for is kept alongside the distance covered because the two
+/// can disagree about *direction*, not only about size: a train still rolling one
+/// way while its plan has turned it round is asked for travel the plan does not
+/// want, and what a blocked step means depends on which way it was headed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::simulation) struct TrainStep {
+    /// Signed distance the train's velocity asked for, before anything clipped
+    /// it. Zero only when the train did not try to move at all.
+    attempted_fixed: i64,
+    /// Signed distance the train actually covered.
+    travelled_fixed: i64,
+    /// What cut the step short, if anything did.
+    limit: Option<TrainStepLimit>,
+}
+
 impl Simulation {
     /// Rolling stock in the world, in ascending id order.
     pub fn rolling_stock(&self) -> impl Iterator<Item = &RollingStock> {
@@ -308,8 +325,9 @@ impl Simulation {
         let travel_fixed = owed.div_euclid(TRAIN_VELOCITY_SCALE);
         let remainder = owed - travel_fixed * TRAIN_VELOCITY_SCALE;
 
-        let (travelled, limit) = self.clipped_train_travel(train_id, &stock_ids, travel_fixed);
-        let blocked = limit.is_some();
+        let step = self.clipped_train_travel(train_id, &stock_ids, travel_fixed);
+        let travelled = step.travelled_fixed;
+        let blocked = step.limit.is_some();
         if travelled != 0 {
             for stock_id in &stock_ids {
                 let Some(stock) = self.rolling_stock.stock.get(stock_id) else {
@@ -344,7 +362,7 @@ impl Simulation {
         // Last, because what a leg has left to run is the distance the step just
         // covered subtracted from it, and because whether the leg is finished
         // depends on the train having already come to a stand.
-        self.advance_train_route(train_id, travelled, limit);
+        self.advance_train_route(train_id, step);
     }
 
     /// The distance the whole train may travel this tick, and what cut it short
@@ -369,9 +387,13 @@ impl Simulation {
         train_id: TrainId,
         stock_ids: &[RollingStockId],
         travel_fixed: i64,
-    ) -> (i64, Option<TrainStepLimit>) {
+    ) -> TrainStep {
         if travel_fixed == 0 {
-            return (0, None);
+            return TrainStep {
+                attempted_fixed: 0,
+                travelled_fixed: 0,
+                limit: None,
+            };
         }
         let limits = [
             (
@@ -399,7 +421,11 @@ impl Simulation {
                 limit = Some(reason);
             }
         }
-        (allowed, limit)
+        TrainStep {
+            attempted_fixed: travel_fixed,
+            travelled_fixed: allowed,
+            limit,
+        }
     }
 
     /// How far the train may travel before one of its pieces runs off the end of

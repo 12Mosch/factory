@@ -154,20 +154,6 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             if route.edges.last() != train.destination.map(|target| target.edge).as_ref() {
                 return Err(invalid());
             }
-            // …and it runs over the rail the train is standing on. A route lists
-            // every rail it crosses, and a train only ever moves along the one
-            // it is driving, so its own rail is somewhere in that list from the
-            // tick the plan was made to the tick it arrives. Without this a
-            // plan could name a stretch of track nowhere near the train and
-            // still pass every check above.
-            let standing_on = train
-                .stock
-                .first()
-                .and_then(|stock_id| sim.rolling_stock.get(*stock_id))
-                .map(|stock| stock.position.edge);
-            if standing_on.is_none_or(|edge| !route.uses_edge(edge)) {
-                return Err(invalid());
-            }
             // Legs are distances still to run, and consecutive legs always
             // disagree about direction — a leg boundary is a reversal, so two in
             // a row driving the same way would be one leg written twice.
@@ -180,22 +166,27 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             {
                 return Err(invalid());
             }
-            // What is left to run is bracketed at both ends by things that need
-            // no search to check. It fits on the track the route names, because
-            // each listed rail is crossed once; and it is at least the straight
-            // line from the train to the mark, because track between two points
-            // is never shorter than the line between them. The lower bound is
-            // what rejects a plan claiming a train standing somewhere else is
-            // already there — a single zero-distance leg, which the first tick
-            // would retire as an arrival without the train having moved at all.
+            // What ties the plan to the train that is driving it is the distance
+            // still to run: it is at least the straight line from the train to
+            // the mark, because track between two points is never shorter than
+            // the line between them. That is what rejects a plan claiming a train
+            // standing somewhere else is already there — a single zero-distance
+            // leg, which the first tick would retire as an arrival without the
+            // train having moved at all.
+            //
+            // Nothing stronger than a distance holds. The tempting checks — that
+            // the route's rails run under the train, or that what is left to run
+            // fits on the rails the route names, each crossed once — are true of
+            // a plan as it was found and false a tick later. A train sent
+            // somewhere behind itself keeps rolling the old way while it brakes,
+            // off the end of the track its plan listed, and every unit of that is
+            // a unit added to the leg it has yet to turn onto. How far it gets is
+            // the motion model's answer rather than the route's, so nothing here
+            // can bound it without re-deriving the tick that produced it — and a
+            // check that rejects what the simulation itself does is a debug
+            // build panicking in the middle of an ordinary manoeuvre.
             let remaining = route.legs.iter().map(|leg| leg.distance_fixed).sum::<i64>();
-            let listed_length = route
-                .edges
-                .iter()
-                .filter_map(|edge| sim.rail_piece_geometry(*edge))
-                .map(|geometry| geometry.length_fixed)
-                .sum::<i64>();
-            if remaining > listed_length || remaining < straight_line_to_mark(sim, train)? {
+            if remaining < straight_line_to_mark(sim, train)? {
                 return Err(invalid());
             }
         }

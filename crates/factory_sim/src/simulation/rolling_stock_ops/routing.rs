@@ -38,7 +38,7 @@ use crate::simulation::*;
 use factory_data::PrototypeCatalog;
 
 use super::traversal::edges_along;
-use super::{TrainStepLimit, braking_distance_fixed, travel};
+use super::{TrainStep, TrainStepLimit, braking_distance_fixed, travel};
 
 /// Node expansions every route search in one tick may spend between them.
 ///
@@ -484,14 +484,16 @@ impl Simulation {
     /// shows: it is stations, which must land a whole train against a platform,
     /// that will have to teach the plan how long its train is.
     ///
+    /// That only holds for a buffer the train ran *at*, though. A train sent
+    /// somewhere behind itself keeps rolling the old way while it brakes, and it
+    /// can reach the end of the line in that direction — the wrong end, getting
+    /// further from its mark with every tick. The track cut that step short too,
+    /// but nothing about it was an arrival, so a stall only finishes a leg when
+    /// the step it stopped was headed toward that leg's end.
+    ///
     /// A leg cut short by other stock is a different matter — that is a leg the
     /// train is still on, and it waits.
-    pub(super) fn advance_train_route(
-        &mut self,
-        train_id: TrainId,
-        travelled_fixed: i64,
-        limit: Option<TrainStepLimit>,
-    ) {
+    pub(super) fn advance_train_route(&mut self, train_id: TrainId, step: TrainStep) {
         let Some(train) = self.rolling_stock.trains.get_mut(&train_id) else {
             return;
         };
@@ -508,12 +510,17 @@ impl Simulation {
         // leg is spent down by signed travel rather than by how far the train
         // moved.
         leg.distance_fixed -= if leg.forward {
-            travelled_fixed
+            step.travelled_fixed
         } else {
-            -travelled_fixed
+            -step.travelled_fixed
         };
-        let stalled = matches!(limit, Some(TrainStepLimit::Track));
-        if !stationary || (leg.distance_fixed > 0 && !stalled) {
+        // A step that moved no distance at all was aimed nowhere, so it cannot
+        // have been aimed at the leg's end; the sign is only meaningful when the
+        // train asked to go somewhere.
+        let stalled_at_leg_end = matches!(step.limit, Some(TrainStepLimit::Track))
+            && step.attempted_fixed != 0
+            && (step.attempted_fixed > 0) == leg.forward;
+        if !stationary || (leg.distance_fixed > 0 && !stalled_at_leg_end) {
             return;
         }
 
