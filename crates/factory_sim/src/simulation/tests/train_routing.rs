@@ -365,6 +365,34 @@ fn coupling_a_wagon_on_replans_the_journey() {
     assert!(train.destination.is_some());
 }
 
+/// A mark past the end of the rail it names is a destination no command can
+/// produce, and one a route would measure a leg to: a save carrying it would
+/// drive a train off the track it was aiming at.
+#[test]
+fn validation_rejects_a_destination_past_the_end_of_its_rail() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    sim.validate().expect("a routed train is valid");
+
+    for distance_fixed in [-1, i64::MAX] {
+        sim.rolling_stock
+            .trains
+            .get_mut(&train_id)
+            .expect("the train exists")
+            .destination = Some(crate::rolling_stock::RailTarget::new(
+            rails[20],
+            distance_fixed,
+        ));
+
+        assert_eq!(
+            sim.validate(),
+            Err(SimValidationError::InvalidTrain { train_id }),
+            "a mark {distance_fixed} along its rail is off the end of it"
+        );
+    }
+}
+
 #[test]
 fn a_destination_that_is_not_a_rail_is_refused() {
     let (mut sim, _, stock_id, train_id) = world_with_a_driveable_locomotive();

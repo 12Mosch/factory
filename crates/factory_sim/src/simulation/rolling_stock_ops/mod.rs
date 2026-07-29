@@ -264,11 +264,12 @@ impl Simulation {
         if self.rolling_stock.trains.is_empty() {
             return;
         }
-        // One budget for the whole tick, handed out to the trains that need a
-        // route in id order, so which searches a busy tick pays for is a
-        // function of the world rather than of when a command happened to
-        // arrive.
+        // Planning is one pass for the whole tick, before any train is stepped:
+        // the expansion budget and the occupancy every search reads are both
+        // tick-wide, and a train planned for here is a train steered on the very
+        // step below rather than a tick later.
         self.train_routing.begin_tick();
+        self.plan_train_routes();
 
         let train_ids = self
             .rolling_stock

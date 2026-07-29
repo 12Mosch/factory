@@ -5,11 +5,12 @@
 //!
 //! * **A destination outlives a plan.** [`Train::destination`] is what the train
 //!   was asked for; [`Train::route`] is the plan it is currently driving. A
-//!   train with a destination and no route is one waiting for a search, which is
-//!   the state it is in after track was pulled up under its plan and the state
-//!   it is in when the tick's expansion budget was already spent. Nothing
-//!   special has to happen for the re-search: the pass that plans routes finds
-//!   it in exactly that state on a later tick.
+//!   train with a destination and no route is one waiting for a search: track
+//!   was pulled up under its plan, or the tick's expansion budget was already
+//!   spent, or its last search ran out of expansions without an answer. Nothing
+//!   special has to happen for any of those: the pass that plans routes finds it
+//!   in exactly that state on a later tick. Only a search that comes back with
+//!   *no route exists* takes the destination away.
 //! * **Following a route is O(1) per tick.** A leg carries the distance still to
 //!   run rather than the distance already covered, so a train spends its travel
 //!   down against it instead of measuring back up the track it came along. What
@@ -55,8 +56,8 @@ const ROUTE_EXPANSIONS_PER_TICK: usize = 8_192;
 /// rather than truncated: half a route is not a route.
 const ROUTE_MAX_EXPANSIONS: usize = 4_096;
 
-/// The reusable half of train routing: search scratch and the tick's remaining
-/// expansion budget.
+/// The reusable half of train routing: search scratch, the tick's remaining
+/// expansion budget, and where in the trains the last tick got to.
 ///
 /// Derived, runtime-only state. Every route it produces is durable and lives on
 /// the train; nothing here survives a save, and nothing here takes part in
@@ -64,10 +65,24 @@ const ROUTE_MAX_EXPANSIONS: usize = 4_096;
 #[derive(Clone, Debug, Default)]
 pub(in crate::simulation) struct TrainRouting {
     scratch: RailRouteScratch,
-    /// Rails other trains are standing on, ascending. Refilled per search and
-    /// never freed, so the search's one input that is proportional to the world
-    /// is not also an allocation.
+    /// Every rail some piece of stock is standing on, ascending.
+    ///
+    /// Gathered once per tick rather than once per search: it is proportional
+    /// to the world's stock, and rebuilding it for each train that wants a
+    /// route would make a tick where many of them do quadratic in the stock.
+    /// Held here and never freed, so the gathering is not also an allocation.
     occupied: Vec<EntityId>,
+    /// Rails the train currently being planned for is itself standing on,
+    /// ascending. Subtracted from the occupancy above, because a train is not
+    /// in its own way.
+    exempt: Vec<EntityId>,
+    /// Trains that have somewhere to be and no plan for getting there, in id
+    /// order. Refilled each tick the pass runs.
+    waiting: Vec<TrainId>,
+    /// The train planned for last. Planning resumes after it rather than at the
+    /// lowest id, so a train whose search costs the whole budget cannot keep
+    /// every train behind it from ever being planned.
+    planned_last: Option<TrainId>,
     remaining_expansions: usize,
 }
 
@@ -80,10 +95,8 @@ impl TrainRouting {
 
     /// Whether this tick can still pay for a whole search.
     ///
-    /// Asked before the search's inputs are gathered rather than inside it: what
-    /// is standing where is proportional to the world's stock, and a tick where
-    /// every train wants a route would otherwise pay that for every train it was
-    /// about to defer anyway.
+    /// Asked before a search's own inputs are gathered rather than inside it, so
+    /// a train the tick is about to defer costs nothing to defer.
     fn can_search(&self) -> bool {
         self.remaining_expansions >= ROUTE_MAX_EXPANSIONS
     }
@@ -106,7 +119,9 @@ impl TrainRouting {
         let Self {
             scratch,
             occupied,
+            exempt,
             remaining_expansions,
+            ..
         } = self;
         let (outcome, expansions) = scratch.find_route(&RailRouteRequest {
             graph,
@@ -115,41 +130,109 @@ impl TrainRouting {
             reversal_penalty_fixed: TRAIN_REVERSAL_PENALTY_FIXED,
             occupied_penalty_fixed: TRAIN_OCCUPIED_RAIL_PENALTY_FIXED,
             occupied,
+            exempt,
             max_expansions: ROUTE_MAX_EXPANSIONS,
         });
         *remaining_expansions = remaining_expansions.saturating_sub(expansions);
         Some(outcome)
     }
 
-    /// Collects the rails every train other than `train_id` is standing on.
-    ///
-    /// A train is not in its own way, which is why its own stock is skipped —
-    /// including the piece the search starts under.
+    /// Collects every rail any stock is standing on, for the tick.
     fn collect_occupied_rails(
+        &mut self,
+        graph: &RailGraph,
+        rolling_stock: &RollingStockSubsystem,
+        prototypes: &PrototypeCatalog,
+    ) {
+        self.occupied.clear();
+        for stock in rolling_stock.iter() {
+            push_stock_rails(graph, prototypes, stock, &mut self.occupied);
+        }
+        self.occupied.sort_unstable();
+        self.occupied.dedup();
+    }
+
+    /// Collects the rails `train_id`'s own stock is standing on, which the
+    /// search then reads as track nothing is in the way on.
+    fn collect_exempt_rails(
         &mut self,
         graph: &RailGraph,
         rolling_stock: &RollingStockSubsystem,
         prototypes: &PrototypeCatalog,
         train_id: TrainId,
     ) {
-        self.occupied.clear();
-        for stock in rolling_stock.iter() {
-            if stock.train == train_id {
-                continue;
-            }
-            let Some(length_fixed) = prototypes
-                .entity(stock.prototype_id)
-                .and_then(|prototype| prototype.rolling_stock)
-                .map(|rolling_stock| i64::from(rolling_stock.length_fixed))
-            else {
-                continue;
-            };
-            let back = travel(graph, stock.position, -(length_fixed / 2)).position;
-            edges_along(graph, back, length_fixed, |edge| self.occupied.push(edge));
+        self.exempt.clear();
+        for stock in rolling_stock.iter().filter(|stock| stock.train == train_id) {
+            push_stock_rails(graph, prototypes, stock, &mut self.exempt);
         }
-        self.occupied.sort_unstable();
-        self.occupied.dedup();
+        self.exempt.sort_unstable();
+        self.exempt.dedup();
     }
+}
+
+/// The waiting trains in the order this tick plans for them: id order, resumed
+/// just after the one planned for last and wrapping round once.
+///
+/// The rotation is what makes the budget fair. A train whose search costs the
+/// whole of it — a destination across a railway larger than one search may walk
+/// — would otherwise be reached first on every tick and deny every train behind
+/// it a plan for as long as it kept asking.
+fn planning_order(
+    waiting: &[TrainId],
+    planned_last: Option<TrainId>,
+) -> impl Iterator<Item = &TrainId> {
+    let resume = planned_last.map_or(0, |last| waiting.partition_point(|id| *id <= last));
+    waiting[resume..].iter().chain(&waiting[..resume])
+}
+
+/// Records what a search came back with on the train that asked for it.
+///
+/// The two failures are not the same failure, and the difference is the whole
+/// of this function. `Unreachable` is an answer: there is no way there, so the
+/// train stops asking. `Exhausted` is the absence of one — the search ran out of
+/// expansions, which says nothing about whether a route exists — so the
+/// destination is kept and tried again on a later tick. Throwing it away there
+/// would strand a train whose destination is perfectly reachable, on the very
+/// railways big enough to need the cap.
+///
+/// Both brake. A plan can be lost mid-run, which leaves a train at speed with
+/// nothing steering it, and rolling on until resistance stops it is not a train
+/// anybody is driving.
+fn record_route_outcome(train: &mut crate::rolling_stock::Train, outcome: RailRouteOutcome) {
+    match outcome {
+        RailRouteOutcome::Found(route) => train.route = Some(route),
+        RailRouteOutcome::Unreachable => {
+            train.destination = None;
+            train.route = None;
+            train.throttle = TrainThrottle::Brake;
+        }
+        RailRouteOutcome::Exhausted => {
+            train.route = None;
+            train.throttle = TrainThrottle::Brake;
+        }
+    }
+}
+
+/// Adds every rail one piece of stock lies on to `rails`.
+///
+/// The body is walked from its back end forward over its own length — the same
+/// extent [`super::stock_ends`] measures, so occupancy covers exactly the track
+/// the piece stands on and not a unit more of it at either end.
+fn push_stock_rails(
+    graph: &RailGraph,
+    prototypes: &PrototypeCatalog,
+    stock: &crate::rolling_stock::RollingStock,
+    rails: &mut Vec<EntityId>,
+) {
+    let Some(half) = prototypes
+        .entity(stock.prototype_id)
+        .and_then(|prototype| prototype.rolling_stock)
+        .map(|rolling_stock| i64::from(rolling_stock.length_fixed) / 2)
+    else {
+        return;
+    };
+    let back = travel(graph, stock.position, -half).position;
+    edges_along(graph, back, half * 2, |edge| rails.push(edge));
 }
 
 impl Simulation {
@@ -193,27 +276,60 @@ impl Simulation {
         Ok(())
     }
 
-    /// Plans what a routed train has no plan for, and sets its throttle for this
-    /// tick.
+    /// Plans a route for every train that has somewhere to be and no way of
+    /// getting there, until the tick's budget runs out.
     ///
-    /// Runs before the train is stepped, so the throttle the step reads is the
-    /// one this leg asks for.
-    pub(super) fn steer_train(&mut self, train_id: TrainId) {
-        if self
-            .rolling_stock
-            .train(train_id)
-            .is_none_or(|train| !train.is_routed())
-        {
+    /// One pass for the whole tick rather than a search wedged into each train's
+    /// step, because the budget and the occupancy are both tick-wide: the rails
+    /// something is standing on are gathered once here and read by every search,
+    /// and where the pass stopped last tick is where it starts this one.
+    ///
+    /// Round-robin rather than id order. A train whose search costs the whole
+    /// budget every tick — a destination across a railway larger than one search
+    /// may walk — would otherwise deny every train behind it a plan forever,
+    /// which is the difference between one train not moving and none of them
+    /// moving.
+    pub(in crate::simulation) fn plan_train_routes(&mut self) {
+        let mut waiting = std::mem::take(&mut self.train_routing.waiting);
+        waiting.clear();
+        waiting.extend(
+            self.rolling_stock
+                .trains()
+                .filter(|train| train.is_routed() && train.route.is_none())
+                .map(|train| train.id),
+        );
+        if waiting.is_empty() || !self.train_routing.can_search() {
+            self.train_routing.waiting = waiting;
             return;
         }
-        if self
-            .rolling_stock
-            .train(train_id)
-            .is_some_and(|train| train.route.is_none())
-        {
-            self.plan_train_route(train_id);
-        }
 
+        let Simulation {
+            train_routing,
+            rails,
+            rolling_stock,
+            world,
+            ..
+        } = self;
+        train_routing.collect_occupied_rails(&rails.graph, rolling_stock, &world.prototypes);
+
+        for train_id in planning_order(&waiting, self.train_routing.planned_last) {
+            if !self.train_routing.can_search() {
+                break;
+            }
+            self.train_routing.planned_last = Some(*train_id);
+            self.plan_train_route(*train_id);
+        }
+        self.train_routing.waiting = waiting;
+    }
+
+    /// Sets a routed train's throttle for this tick.
+    ///
+    /// Runs before the train is stepped, so the throttle the step reads is the
+    /// one this leg asks for. A train whose plan is still being waited on — the
+    /// tick's budget was spent, or its last search ran out of expansions — is
+    /// left alone: it has already been braked, and there is nothing to steer it
+    /// along yet.
+    pub(super) fn steer_train(&mut self, train_id: TrainId) {
         let Some(train) = self.rolling_stock.train(train_id) else {
             return;
         };
@@ -261,10 +377,7 @@ impl Simulation {
             world,
             ..
         } = self;
-        if !train_routing.can_search() {
-            return;
-        }
-        train_routing.collect_occupied_rails(
+        train_routing.collect_exempt_rails(
             &rails.graph,
             rolling_stock,
             &world.prototypes,
@@ -273,20 +386,8 @@ impl Simulation {
         let Some(outcome) = train_routing.plan(&rails.graph, start, target) else {
             return;
         };
-        let Some(train) = rolling_stock.trains.get_mut(&train_id) else {
-            return;
-        };
-        match outcome {
-            RailRouteOutcome::Found(route) => train.route = Some(route),
-            // Nothing to drive toward, so the train stops asking. Braking rather
-            // than coasting matters here: a route invalidated mid-run can leave
-            // a train at speed with nowhere to go, and rolling on until
-            // resistance stops it would be a train nobody steered.
-            RailRouteOutcome::Unreachable | RailRouteOutcome::Exhausted => {
-                train.destination = None;
-                train.route = None;
-                train.throttle = TrainThrottle::Brake;
-            }
+        if let Some(train) = rolling_stock.trains.get_mut(&train_id) {
+            record_route_outcome(train, outcome);
         }
     }
 
@@ -461,5 +562,57 @@ mod tests {
             routing.can_search(),
             "the next tick pays for searches again"
         );
+    }
+
+    fn train(raw: u64) -> crate::rolling_stock::Train {
+        crate::rolling_stock::Train {
+            id: TrainId::new(raw),
+            stock: Vec::new(),
+            velocity: 0,
+            travel_remainder: 0,
+            throttle: TrainThrottle::Forward,
+            destination: Some(RailTarget::new(EntityId::new(raw), 0)),
+            route: None,
+        }
+    }
+
+    /// A search that ran out of expansions has not answered the question, so the
+    /// train keeps where it was going and is planned for again later. Giving up
+    /// here would strand a train whose destination is perfectly reachable on
+    /// exactly the railways that are big enough to reach the cap.
+    #[test]
+    fn an_exhausted_search_keeps_the_destination_and_an_unreachable_one_does_not() {
+        let mut exhausted = train(1);
+        record_route_outcome(&mut exhausted, RailRouteOutcome::Exhausted);
+        assert!(exhausted.destination.is_some());
+        assert_eq!(exhausted.route, None);
+        assert_eq!(exhausted.throttle, TrainThrottle::Brake);
+
+        let mut unreachable = train(2);
+        record_route_outcome(&mut unreachable, RailRouteOutcome::Unreachable);
+        assert_eq!(unreachable.destination, None);
+        assert_eq!(unreachable.route, None);
+        assert_eq!(unreachable.throttle, TrainThrottle::Brake);
+    }
+
+    /// Planning resumes after the train it last reached and wraps round, so a
+    /// train that spends the whole budget every tick cannot hold the queue
+    /// behind it still.
+    #[test]
+    fn planning_resumes_after_the_train_it_last_reached() {
+        let waiting = [TrainId::new(1), TrainId::new(4), TrainId::new(9)];
+        let order = |planned_last| {
+            planning_order(&waiting, planned_last)
+                .map(|train_id| train_id.raw())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(order(None), vec![1, 4, 9]);
+        assert_eq!(order(Some(TrainId::new(1))), vec![4, 9, 1]);
+        assert_eq!(order(Some(TrainId::new(9))), vec![1, 4, 9]);
+        // A train that has since arrived, been mined, or been cut in two is no
+        // longer waiting; the pass resumes at the next one that is.
+        assert_eq!(order(Some(TrainId::new(5))), vec![9, 1, 4]);
+        assert_eq!(order(Some(TrainId::new(99))), vec![1, 4, 9]);
     }
 }

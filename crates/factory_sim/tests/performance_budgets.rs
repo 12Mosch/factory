@@ -1126,8 +1126,20 @@ fn train_route_search_allocation_budget() {
         sim.tick();
         samples.push(allocation_sample());
     }
-    samples.sort_by_key(|sample| sample.count);
-    let p95 = samples[((samples.len() * 95).div_ceil(100)).saturating_sub(1)];
+    // Each metric is ranked on its own. Reading the bytes off the sample that
+    // happens to sit at the count percentile would report whatever that one tick
+    // allocated, which is only the bytes p95 while the two move together.
+    let index = ((samples.len() * 95).div_ceil(100)).saturating_sub(1);
+    let p95 = AllocationSample {
+        count: {
+            samples.sort_unstable_by_key(|sample| sample.count);
+            samples[index].count
+        },
+        bytes: {
+            samples.sort_unstable_by_key(|sample| sample.bytes);
+            samples[index].bytes
+        },
+    };
     println!(
         "train_route_search_allocation_budget: p95 {} bytes / {} allocs over {} trains",
         p95.bytes,

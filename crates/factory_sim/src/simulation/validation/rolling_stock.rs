@@ -119,11 +119,18 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
         // both are followed without being re-checked: the step spends the leg's
         // distance and the routing pass re-plans against the destination. A save
         // naming track that is not there would drive a train toward nothing.
-        if train
-            .destination
-            .is_some_and(|destination| sim.rail_piece_geometry(destination.edge).is_none())
-        {
-            return Err(invalid());
+        // The mark is checked the same way a piece of stock's own position is,
+        // and for the same reason: a route is measured to it, so a mark past the
+        // end of its rail would produce a leg that drives a train off the track
+        // — or, on the rail the train is already standing on, a negative
+        // distance no command could ask for.
+        if let Some(destination) = train.destination {
+            let geometry = sim
+                .rail_piece_geometry(destination.edge)
+                .ok_or_else(invalid)?;
+            if !(0..=geometry.length_fixed).contains(&destination.distance_fixed) {
+                return Err(invalid());
+            }
         }
         if let Some(route) = &train.route {
             // A route with no destination is a plan nobody asked for, and a route

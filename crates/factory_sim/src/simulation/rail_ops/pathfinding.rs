@@ -53,10 +53,18 @@ pub(in crate::simulation) struct RailRouteRequest<'graph> {
     pub(in crate::simulation) target: RailTarget,
     pub(in crate::simulation) reversal_penalty_fixed: i64,
     pub(in crate::simulation) occupied_penalty_fixed: i64,
-    /// Rails something else is standing on, ascending. Sorted because the
-    /// search asks about them by binary search rather than by building a set it
-    /// would have to allocate.
+    /// Rails something is standing on, ascending. Sorted because the search asks
+    /// about them by binary search rather than by building a set it would have
+    /// to allocate.
     pub(in crate::simulation) occupied: &'graph [EntityId],
+    /// Rails the searching train is itself standing on, ascending. Occupancy is
+    /// about what is in the way, and a train is never in its own way — so these
+    /// are the rails the penalty above is not charged for.
+    ///
+    /// Kept apart from `occupied` rather than subtracted out of it because the
+    /// occupancy is gathered once for the whole tick and read by every search,
+    /// while what to leave out of it differs for each of them.
+    pub(in crate::simulation) exempt: &'graph [EntityId],
     pub(in crate::simulation) max_expansions: usize,
 }
 
@@ -246,7 +254,9 @@ impl RailRouteScratch {
         arrival: &mut Option<RailArrival>,
     ) {
         let next = request.graph.edges[next_index];
-        let penalty = if request.occupied.binary_search(&next.entity_id).is_ok() {
+        let penalty = if request.occupied.binary_search(&next.entity_id).is_ok()
+            && request.exempt.binary_search(&next.entity_id).is_err()
+        {
             request.occupied_penalty_fixed
         } else {
             0
@@ -465,6 +475,7 @@ mod tests {
             reversal_penalty_fixed: TRAIN_REVERSAL_PENALTY_FIXED,
             occupied_penalty_fixed: TRAIN_OCCUPIED_RAIL_PENALTY_FIXED,
             occupied: &[],
+            exempt: &[],
             max_expansions: 4_096,
         }
     }
@@ -731,6 +742,24 @@ mod tests {
         });
 
         assert_eq!(edges(&route), vec![1, 3, 4]);
+    }
+
+    /// A train is not in its own way. The rails it is standing on are occupied
+    /// — by it — so without the exemption a long train would be steered off its
+    /// own branch by the penalty for being where it already is.
+    #[test]
+    fn a_rail_the_searching_train_stands_on_costs_it_nothing() {
+        let graph = parallel_branches_graph();
+        let start = RailPosition::new(rail(1), 1_024, true);
+        let target = RailTarget::new(rail(4), 1_024);
+
+        let route = route(&RailRouteRequest {
+            occupied: &[rail(2)],
+            exempt: &[rail(2)],
+            ..request(&graph, start, target)
+        });
+
+        assert_eq!(edges(&route), vec![1, 2, 4]);
     }
 
     /// Track that is not joined to the train's own is answered without a search

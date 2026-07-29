@@ -16,7 +16,11 @@
 //!
 //! Deliberately keys of their own rather than something tied to holding an
 //! item, and deliberately routed through the ordinary command queue so a drive
-//! command lands on a tick boundary like every other input.
+//! command lands on a tick boundary like every other input. The presses
+//! themselves are collected in the frame schedule and consumed by the fixed one
+//! ([`TrainDebugInput`]), because a key edge belongs to a frame: read straight
+//! from the keyboard in `FixedUpdate`, one press would fire once or twice
+//! depending on how many fixed steps a frame happened to run.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -25,34 +29,49 @@ use factory_sim::{
 };
 
 use crate::input::panels::world_input_blocked;
-use crate::input::resources::{AppInputState, TrainRoutingSelection};
+use crate::input::resources::{AppInputState, TrainDebugInput, TrainRoutingSelection};
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::resources::TechnologyWindowState;
 
-pub(crate) fn drive_train_from_input(
+/// Collects the debug train keys during the frame, for the fixed step to
+/// consume.
+///
+/// The technology window is checked alongside the general world-input block
+/// because it does not set it, which is why the mining input checks both too.
+/// Without it a train could be driven from behind an open full-screen panel,
+/// with the cursor pointing at something the player cannot see. Blocked presses
+/// are dropped here rather than collected and thrown away later, so the fixed
+/// step only ever sees presses the world was meant to hear.
+pub(crate) fn collect_train_debug_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
+    mut pending: ResMut<TrainDebugInput>,
+) {
+    let Some(keyboard) = keyboard.as_deref() else {
+        return;
+    };
+    if world_input_blocked(input_state.as_deref())
+        || technology_window.as_deref().is_some_and(|state| state.open)
+    {
+        return;
+    }
+    pending.drive |= keyboard.just_pressed(KeyCode::F8);
+    pending.brake |= keyboard.just_pressed(KeyCode::F9);
+    pending.route |= keyboard.just_pressed(KeyCode::F10);
+}
+
+pub(crate) fn drive_train_from_input(
+    mut pending: ResMut<TrainDebugInput>,
     sim: Res<SimResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
-    let Some(keyboard) = keyboard.as_deref() else {
-        return;
-    };
-    let drive = keyboard.just_pressed(KeyCode::F8);
-    let brake = keyboard.just_pressed(KeyCode::F9);
-    // The technology window is checked alongside the general world-input block
-    // because it does not set it, which is why the mining input checks both
-    // too. Without it a train could be driven from behind an open full-screen
-    // panel, with the cursor pointing at something the player cannot see.
-    if (!drive && !brake)
-        || world_input_blocked(input_state.as_deref())
-        || technology_window.as_deref().is_some_and(|state| state.open)
-    {
+    let (drive, brake) = pending.take_driving();
+    if !drive && !brake {
         return;
     }
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
@@ -74,27 +93,15 @@ pub(crate) fn drive_train_from_input(
     }));
 }
 
-// Bevy hands a system its resources one parameter at a time, and this one needs
-// the keyboard, two panel states, the simulation, the selection it is building
-// up, the cursor, and somewhere to send the command.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn route_train_from_input(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    input_state: Option<Res<AppInputState>>,
-    technology_window: Option<Res<TechnologyWindowState>>,
+    mut pending: ResMut<TrainDebugInput>,
     sim: Res<SimResource>,
     mut selection: ResMut<TrainRoutingSelection>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
-    let Some(keyboard) = keyboard.as_deref() else {
-        return;
-    };
-    if !keyboard.just_pressed(KeyCode::F10)
-        || world_input_blocked(input_state.as_deref())
-        || technology_window.as_deref().is_some_and(|state| state.open)
-    {
+    if !pending.take_routing() {
         return;
     }
     let Some((x, y)) = cursor_tile_from_window(&windows, &cameras) else {
