@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+/// The derived ordering is only ever a tie-break — it lets a direction be part
+/// of a map key, which is how a signal's crossing is named — and carries no
+/// meaning of its own.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize,
+)]
 pub enum Direction {
     #[default]
     North,

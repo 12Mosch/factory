@@ -317,6 +317,10 @@
         (id: 112, name: "locomotive", stack_size: 5),
         (id: 113, name: "cargo_wagon", stack_size: 5),
         (id: 114, name: "fluid_wagon", stack_size: 5),
+        // Signals are small and go down in numbers: a signalled railway wants
+        // one at every block boundary in both directions.
+        (id: 115, name: "rail_signal", stack_size: 50),
+        (id: 116, name: "chain_signal", stack_size: 50),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1614,6 +1618,30 @@
                 (item: "storage_tank", amount: 1),
             ],
             products: [(item: "fluid_wagon", amount: 1)],
+        ),
+        // Both signals cost the same: the difference between them is the rule
+        // they follow at a block boundary, not the hardware.
+        (
+            id: 113,
+            name: "rail_signal",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "iron_plate", amount: 5),
+                (item: "electronic_circuit", amount: 1),
+            ],
+            products: [(item: "rail_signal", amount: 1)],
+        ),
+        (
+            id: 114,
+            name: "chain_signal",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "iron_plate", amount: 5),
+                (item: "electronic_circuit", amount: 1),
+            ],
+            products: [(item: "chain_signal", amount: 1)],
         ),
     ],
     entities: [
@@ -3099,6 +3127,48 @@
                 max_speed_fixed_per_tick: 1536,
             )),
         ),
+        // Signals. A signal stands on one tile beside the track and binds to
+        // the nearest rail end, and its direction is the travel heading it
+        // governs — so which side of the line it is dropped on is what decides
+        // which way the block it guards may be entered.
+        //
+        // The connector reads rather than controls: what a signal has to say is
+        // its aspect, and a signal a circuit could switch off would be a block
+        // boundary that stopped existing while a train was relying on it.
+        (
+            id: 74,
+            name: "rail_signal",
+            build_item: Some("rail_signal"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(145),
+            entity_kind: RailSignal,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(100),
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
+        ),
+        (
+            id: 75,
+            name: "chain_signal",
+            build_item: Some("chain_signal"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(146),
+            entity_kind: ChainSignal,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(100),
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: false,
+            )),
+        ),
     ],
     tiles: [
         (
@@ -3825,6 +3895,24 @@
             required_units: 100,
             research_time_ticks: 900,
             effects: [UnlockRecipe("fluid_wagon")],
+        ),
+        // Signals gate on the stock rather than on the track: a single train on
+        // a private line needs none of this, and it is the second train that
+        // makes block partitioning worth researching.
+        (
+            id: 45,
+            name: "rail_signals",
+            prerequisites: ["rolling_stock"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 900,
+            effects: [
+                UnlockRecipe("rail_signal"),
+                UnlockRecipe("chain_signal"),
+            ],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

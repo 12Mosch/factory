@@ -146,8 +146,9 @@ pub enum SimCommand {
         entity_id: EntityId,
         read_contents: bool,
     },
-    /// Picks the signal an accumulator reports its charge percentage on.
-    SetAccumulatorChargeSignal {
+    /// Picks the channel an entity reports its one scalar reading on: an
+    /// accumulator's charge percentage, a rail signal's aspect.
+    SetEntityOutputSignal {
         entity_id: EntityId,
         signal: Option<SignalId>,
     },
@@ -595,8 +596,8 @@ impl Simulation {
                     .map_err(SimCommandError::Circuit)?;
                 Ok(SimCommandEffect::None)
             }
-            SimCommand::SetAccumulatorChargeSignal { entity_id, signal } => {
-                self.set_accumulator_charge_signal(entity_id, signal)
+            SimCommand::SetEntityOutputSignal { entity_id, signal } => {
+                self.set_entity_output_signal(entity_id, signal)
                     .map_err(SimCommandError::Circuit)?;
                 Ok(SimCommandEffect::None)
             }

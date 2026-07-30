@@ -527,6 +527,23 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                 });
             }
             EntityKind::RailStraight | EntityKind::RailCurved => {}
+            // A signal stands beside track rather than being track: it binds to
+            // the nearest rail end to *its own tile*, so a footprint wider than
+            // one tile would make the binding ambiguous, and geometry of its own
+            // would make it track. Both are checked in full when the catalog is
+            // loaded; what matters here is that the shape the block partition
+            // assumes still holds.
+            EntityKind::RailSignal | EntityKind::ChainSignal
+                if prototype.size.x != 1
+                    || prototype.size.y != 1
+                    || prototype.rail_piece.is_some()
+                    || prototype.rolling_stock.is_some() =>
+            {
+                return Err(SimValidationError::InvalidCatalogEntityPrototype {
+                    prototype_id: prototype.id,
+                });
+            }
+            EntityKind::RailSignal | EntityKind::ChainSignal => {}
             _ => {}
         }
 

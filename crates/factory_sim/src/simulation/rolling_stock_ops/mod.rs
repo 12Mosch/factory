@@ -10,10 +10,10 @@
 //!   that piece could make and stops — a train never stretches.
 //! * **Bounded per tick.** A step is a force sum over the train's stock and one
 //!   walk per piece along at most a couple of rail edges, plus a single walk
-//!   per *train* to find what is on the track ahead of it. Nothing here scans
-//!   the world per piece, and the searches that are proportional to the track
-//!   around a click — finding what a new piece couples to — run on placement
-//!   rather than every tick.
+//!   per *train* to find what is on the track ahead of it and another to find
+//!   the signal it may not pass. Nothing here scans the world per piece, and the
+//!   searches that are proportional to the track around a click — finding what a
+//!   new piece couples to — run on placement rather than every tick.
 //! * **Integers all the way.** Forces, velocity, and travel are integer; the
 //!   sub-unit part of a tick's travel is carried in a remainder rather than
 //!   rounded away. The only float in sight is the fuel a locomotive burns,
@@ -31,7 +31,7 @@ mod routing;
 mod traversal;
 
 pub use motion::braking_distance_fixed;
-pub(in crate::simulation) use routing::TrainRouting;
+pub(in crate::simulation) use routing::{TrainRouting, push_stock_rails};
 pub(in crate::simulation) use traversal::{TravelOutcome, travel, world_point};
 
 use crate::rail::RailPoint;
@@ -46,17 +46,19 @@ use self::motion::stepped_velocity;
 
 /// What stopped a train's step short of the distance its velocity asked for.
 ///
-/// The three are not interchangeable, which is why the step reports which one
+/// The four are not interchangeable, which is why the step reports which one
 /// bound it rather than a bare "blocked": a train held up by the route in front
 /// of it has arrived somewhere, a train held up by the end of the line will
-/// never get further, and a train held up by other stock is waiting for
-/// something that can move.
+/// never get further, and a train held up by a signal or by other stock is
+/// waiting for something that can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::simulation) enum TrainStepLimit {
     /// The leg being driven ends here.
     Route,
     /// The end of the line.
     Track,
+    /// A signal the train has not been let past.
+    Signal,
     /// Other rolling stock in the way.
     Stock,
 }
@@ -279,15 +281,25 @@ impl Simulation {
     /// the graph to move, so it must be walking the world as it is now rather
     /// than as it was before the last piece of track went down.
     pub(in crate::simulation) fn advance_trains(&mut self) {
-        if self.rolling_stock.trains.is_empty() {
-            return;
-        }
         // Planning is one pass for the whole tick, before any train is stepped:
         // the expansion budget and the occupancy every search reads are both
         // tick-wide, and a train planned for here is a train steered on the very
         // step below rather than a tick later.
         self.train_routing.begin_tick();
         self.plan_train_routes();
+        // Reservation is likewise one pass for the whole tick, and it runs after
+        // the plans because a train's plan is what says which way it is about to
+        // go — and before any train is stepped, because the step is clipped to
+        // the allowance this produces.
+        //
+        // Ahead of the early exit below rather than behind it: a railway with
+        // signals on it and no trains still has aspects to show, and a signal
+        // that went on showing what it showed while the last train was still
+        // there would be a red lamp over empty track.
+        self.advance_rail_signals();
+        if self.rolling_stock.trains.is_empty() {
+            return;
+        }
 
         let train_ids = self
             .rolling_stock
@@ -372,16 +384,18 @@ impl Simulation {
     /// pieces could make: letting the blocked piece stop while the rest carried
     /// on would stretch the couplings.
     ///
-    /// Three things can cut the step short: the route the train is following,
-    /// the end of the line, and other stock on it. All three are clipped here
-    /// rather than only the last two, so a train stops *on* its mark instead of
-    /// rolling past it and having to be dragged back — and so two trains sharing
-    /// a run cannot drive through one another, which is the very overlap
-    /// placement refuses to create.
+    /// Four things can cut the step short: the route the train is following, the
+    /// end of the line, the last signal it was let past, and other stock on the
+    /// track. All four are clipped here rather than only the physical ones, so a
+    /// train stops *on* its mark instead of rolling past it and having to be
+    /// dragged back — and so two trains sharing a run cannot drive through one
+    /// another, which is the very overlap placement refuses to create.
     ///
     /// Which one is reported when several bind at once follows the order they
     /// are checked in, and that order is the useful one: a train that arrives
-    /// exactly where the track runs out has arrived.
+    /// exactly where the track runs out has arrived, and a train stopped at a
+    /// red signal is waiting for the signal rather than for the stock beyond it
+    /// — which is what made the signal red in the first place.
     fn clipped_train_travel(
         &self,
         train_id: TrainId,
@@ -403,6 +417,10 @@ impl Simulation {
             (
                 Some(self.track_clearance_fixed(stock_ids, travel_fixed)),
                 TrainStepLimit::Track,
+            ),
+            (
+                self.signal_clearance_fixed(train_id, travel_fixed),
+                TrainStepLimit::Signal,
             ),
             (
                 Some(self.train_clearance_fixed(train_id, stock_ids, travel_fixed)),
@@ -455,6 +473,45 @@ impl Simulation {
             }
         }
         allowed
+    }
+
+    /// How far the last signal the train was let past lets it travel this tick,
+    /// or `None` when no signal limits the step.
+    ///
+    /// Only travel the way the reservation was taken is limited. The allowance is
+    /// measured from the train's leading end in the direction the signalling pass
+    /// found it going, so a train still rolling the other way is getting further
+    /// from the signal it must stop at, and clipping that would pin it in place
+    /// instead of letting it come round — the same asymmetry
+    /// [`Simulation::route_clearance_fixed`] has.
+    fn signal_clearance_fixed(&self, train_id: TrainId, travel_fixed: i64) -> Option<i64> {
+        let limit = self.rails.signalling.limit(train_id)?;
+        ((travel_fixed > 0) == limit.forward).then(|| {
+            if limit.forward {
+                limit.allowance_fixed
+            } else {
+                -limit.allowance_fixed
+            }
+        })
+    }
+
+    /// The distance a signal leaves a train to run toward the leg it is driving,
+    /// or `None` when no signal stands in the way of it.
+    ///
+    /// What the steering pass brakes against, so a train comes to rest at a red
+    /// signal instead of being clipped to a standstill against it. Only an
+    /// allowance in the leg's own direction counts: a signal behind a reversing
+    /// train is not something it is running at.
+    pub(in crate::simulation) fn signal_allowance_fixed(
+        &self,
+        train_id: TrainId,
+        forward: bool,
+    ) -> Option<i64> {
+        self.rails
+            .signalling
+            .limit(train_id)
+            .filter(|limit| limit.forward == forward)
+            .map(|limit| limit.allowance_fixed)
     }
 
     /// Burns one tick of fuel in every locomotive of the train that is being

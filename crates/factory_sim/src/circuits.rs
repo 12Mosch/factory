@@ -236,9 +236,14 @@ pub struct CircuitEntityState {
     /// Publishes the entity's contents onto its networks. Only meaningful on
     /// prototypes whose connector declares `reads_contents`.
     pub read_contents: bool,
-    /// Channel an accumulator reports its charge percentage on. Ignored by
-    /// every other kind.
-    pub charge_output_signal: Option<SignalId>,
+    /// Channel this entity reports its one scalar reading on: an accumulator's
+    /// charge percentage, a rail signal's aspect. Ignored by kinds that have no
+    /// such reading.
+    ///
+    /// A player-chosen channel rather than a fixed one, because the reading has
+    /// no natural item or fluid identity to land on and two of them on one
+    /// network would otherwise be indistinguishable.
+    pub output_signal: Option<SignalId>,
 }
 
 impl CircuitEntityState {
@@ -249,7 +254,7 @@ impl CircuitEntityState {
         self.connections.is_empty()
             && self.enable_condition.is_none()
             && !self.read_contents
-            && self.charge_output_signal.is_none()
+            && self.output_signal.is_none()
     }
 }
 

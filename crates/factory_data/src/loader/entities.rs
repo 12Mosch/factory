@@ -41,6 +41,7 @@ pub(super) fn load_entities(
             let name = entity.name;
             let size = IVec2::new(entity.size.x, entity.size.y);
             validate_rail_metadata(&name, entity.entity_kind, size, entity.rail_piece.as_ref())?;
+            validate_rail_signal_metadata(&name, entity.entity_kind, size)?;
             let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
             match (
                 build_item.is_some(),
@@ -986,6 +987,29 @@ fn validate_rail_metadata(
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+/// Checks that a signal is something the block partition can bind to a single
+/// point of track.
+///
+/// A signal is placed *beside* a rail rather than on it, and which rail end it
+/// governs is answered from the tile it stands on. A footprint wider than one
+/// tile would make that question ambiguous — two ends could be equally near two
+/// different tiles of the same signal — and the whole binding rule assumes it
+/// cannot be. Nothing later re-checks it.
+fn validate_rail_signal_metadata(
+    name: &str,
+    entity_kind: EntityKind,
+    size: IVec2,
+) -> Result<(), PrototypeLoadError> {
+    if entity_kind.is_rail_signal() && (size.x != 1 || size.y != 1) {
+        return Err(PrototypeLoadError::InvalidRailMetadata {
+            entity: name.to_string(),
+            detail: "a rail signal stands on exactly one tile",
+        });
     }
 
     Ok(())

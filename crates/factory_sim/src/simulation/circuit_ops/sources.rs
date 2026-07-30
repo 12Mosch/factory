@@ -34,7 +34,7 @@ impl Simulation {
                     node,
                     entity_id,
                     prototype,
-                    state.charge_output_signal,
+                    state.output_signal,
                 );
             }
         }
@@ -52,7 +52,7 @@ impl Simulation {
         node: CircuitNode,
         entity_id: EntityId,
         prototype: &factory_data::EntityPrototype,
-        charge_output_signal: Option<SignalId>,
+        output_signal: Option<SignalId>,
     ) {
         match prototype.entity_kind {
             EntityKind::Chest => {
@@ -80,11 +80,26 @@ impl Simulation {
                     }
                 }
             }
+            // A signal reports its aspect, on a channel the player picks for the
+            // same reason an accumulator's charge needs one: there is no item or
+            // fluid the reading naturally belongs to. Circuits resolve before the
+            // rails do, so the aspect a network carries is the one the previous
+            // tick's reservation settled — the same one-tick delay a combinator
+            // and a roboport's network contents both have.
+            EntityKind::RailSignal | EntityKind::ChainSignal => {
+                let Some(signal) = output_signal else {
+                    return;
+                };
+                let Some(aspect) = self.rail_signal_aspect(entity_id) else {
+                    return;
+                };
+                self.publish(networks, node, signal, aspect.circuit_value());
+            }
             EntityKind::Accumulator => {
                 // Accumulators report charge as a percentage, which is the
                 // one reading that has no natural item or fluid channel of its
                 // own, so the player picks the signal it lands on.
-                let Some(signal) = charge_output_signal else {
+                let Some(signal) = output_signal else {
                     return;
                 };
                 let Some(state) = self.entities.accumulators.get(&entity_id) else {

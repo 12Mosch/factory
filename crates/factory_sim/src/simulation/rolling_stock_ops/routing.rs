@@ -17,11 +17,11 @@
 //!   a train has to know each tick is how far to the next stop, and that is a
 //!   subtraction.
 //! * **The route can only stop a train early, never carry it further.** The leg
-//!   distance clips the step the same way the end of the line and other stock
-//!   do, so a train stops exactly at its mark instead of rolling past it and
-//!   being dragged back. Which of the three limits bound the step is what tells
-//!   the difference between arriving, waiting for someone to move, and running
-//!   out of track.
+//!   distance clips the step the same way the end of the line, a signal, and
+//!   other stock do, so a train stops exactly at its mark instead of rolling past
+//!   it and being dragged back. Which of the four limits bound the step is what
+//!   tells the difference between arriving, waiting for someone to move, waiting
+//!   for a signal, and running out of track.
 //!
 //! Manual driving wins: a drive command clears whatever the train was doing, so
 //! the debug throttle keys are never fighting a plan the player cannot see.
@@ -32,7 +32,7 @@ use crate::rolling_stock::{
     TRAIN_REVERSAL_PENALTY_FIXED, TrainControlError, TrainId, TrainThrottle,
 };
 use crate::simulation::rail_ops::{
-    RailGraph, RailRouteOutcome, RailRouteRequest, RailRouteScratch,
+    RailBlockPartition, RailGraph, RailRouteOutcome, RailRouteRequest, RailRouteScratch,
 };
 use crate::simulation::*;
 use factory_data::PrototypeCatalog;
@@ -65,18 +65,24 @@ const ROUTE_MAX_EXPANSIONS: usize = 4_096;
 #[derive(Clone, Debug, Default)]
 pub(in crate::simulation) struct TrainRouting {
     scratch: RailRouteScratch,
-    /// Every rail some piece of stock is standing on, with the train standing
-    /// there, ordered by train and then by rail.
+    /// Every rail of every block some train holds, with the train holding it,
+    /// ordered by train and then by rail.
+    ///
+    /// Blocks rather than the rails stock physically covers, because a block is
+    /// the unit a train waits for: a route through the far end of a block
+    /// somebody is in is a route that stops at the signal in front of it. On
+    /// unsignalled track the whole railway is one block and every rail is
+    /// charged alike, which leaves the ranking where it was.
     ///
     /// Gathered once per tick rather than once per search: it is proportional to
-    /// the world's stock, and rebuilding it for each train that wants a route
-    /// would make a tick where many of them do quadratic in the stock. The
-    /// per-train order is what makes the second question — which of these rails
-    /// are a given train's own — a range in this rather than a second scan over
-    /// everything. Held here and never freed, so the gathering is not also an
-    /// allocation.
-    stock_rails: Vec<(TrainId, EntityId)>,
-    /// Every rail in `stock_rails`, ascending and deduplicated: what the search
+    /// the track the world's trains hold, and rebuilding it for each train that
+    /// wants a route would make a tick where many of them do quadratic in it.
+    /// The per-train order is what makes the second question — which of these
+    /// rails are a given train's own — a range in this rather than a second scan
+    /// over everything. Held here and never freed, so the gathering is not also
+    /// an allocation.
+    held_rails: Vec<(TrainId, EntityId)>,
+    /// Every rail in `held_rails`, ascending and deduplicated: what the search
     /// asks its occupancy question of.
     occupied: Vec<EntityId>,
     /// Rails the train currently being planned for is itself standing on,
@@ -145,50 +151,71 @@ impl TrainRouting {
         Some(outcome)
     }
 
-    /// Collects what is standing where, once for the tick: every rail some stock
-    /// lies on, and which train each of those belongs to.
-    fn collect_stock_rails(
+    /// Collects what is held where, once for the tick: every rail of every block
+    /// a train is standing in or has been let into, and which train holds it.
+    ///
+    /// Both halves are gathered, because they answer at different moments. A
+    /// train that has just been put on the track holds no claim yet and is still
+    /// in somebody's way; a train that has been let into the block ahead is in
+    /// the way of everyone else before it gets there.
+    fn collect_held_rails(
         &mut self,
         graph: &RailGraph,
+        partition: &RailBlockPartition,
         rolling_stock: &RollingStockSubsystem,
         prototypes: &PrototypeCatalog,
     ) {
-        self.stock_rails.clear();
+        self.held_rails.clear();
         for stock in rolling_stock.iter() {
             let train = stock.train;
             push_stock_rails(graph, prototypes, stock, |rail| {
-                self.stock_rails.push((train, rail));
+                match partition.block_for_edge(rail) {
+                    Some(block) => self
+                        .held_rails
+                        .extend(block.edges.iter().map(|edge| (train, *edge))),
+                    // Track the partition has not seen — a rail mined out from
+                    // under a wagon, before the pruning pass reaches it. The rail
+                    // itself is still what is in the way.
+                    None => self.held_rails.push((train, rail)),
+                }
             });
+        }
+        for train in rolling_stock.trains() {
+            for key in &train.reserved_blocks {
+                if let Some(block) = partition.block(*key) {
+                    self.held_rails
+                        .extend(block.edges.iter().map(|edge| (train.id, *edge)));
+                }
+            }
         }
         // By train first, so one train's rails are a contiguous run, and by rail
         // within that, which is the order the search reads them in.
-        self.stock_rails.sort_unstable();
-        self.stock_rails.dedup();
+        self.held_rails.sort_unstable();
+        self.held_rails.dedup();
 
         self.occupied.clear();
         self.occupied
-            .extend(self.stock_rails.iter().map(|(_, rail)| *rail));
+            .extend(self.held_rails.iter().map(|(_, rail)| *rail));
         self.occupied.sort_unstable();
         self.occupied.dedup();
     }
 
-    /// Takes the rails `train_id`'s own stock is standing on out of what the
-    /// tick already gathered, which the search then reads as track nothing is in
-    /// the way on.
+    /// Takes the rails `train_id` itself holds out of what the tick already
+    /// gathered, which the search then reads as track nothing is in the way on.
     ///
     /// A range of the tick's own index rather than another walk over the world's
     /// stock: this runs once per train that wants a route, and a full scan here
     /// would put back the quadratic the tick-wide gathering took out.
     fn collect_exempt_rails(&mut self, train_id: TrainId) {
         let first = self
-            .stock_rails
+            .held_rails
             .partition_point(|(train, _)| *train < train_id);
         let past = self
-            .stock_rails
+            .held_rails
             .partition_point(|(train, _)| *train <= train_id);
         self.exempt.clear();
         self.exempt
-            .extend(self.stock_rails[first..past].iter().map(|(_, rail)| *rail));
+            .extend(self.held_rails[first..past].iter().map(|(_, rail)| *rail));
     }
 }
 
@@ -246,12 +273,17 @@ fn record_route_outcome(
     }
 }
 
-/// Adds every rail one piece of stock lies on to `rails`.
+/// Reports every rail one piece of stock lies on.
 ///
 /// The body is walked from its back end forward over its own length — the same
 /// extent [`super::stock_ends`] measures, so occupancy covers exactly the track
 /// the piece stands on and not a unit more of it at either end.
-fn push_stock_rails(
+///
+/// Shared with the signalling pass rather than written twice: which block a piece
+/// of stock is in and which rails a route is charged for are the same question
+/// asked one step apart, and two walks would eventually disagree about a wagon
+/// sitting exactly on a joint.
+pub(in crate::simulation) fn push_stock_rails(
     graph: &RailGraph,
     prototypes: &PrototypeCatalog,
     stock: &crate::rolling_stock::RollingStock,
@@ -347,7 +379,12 @@ impl Simulation {
             world,
             ..
         } = self;
-        train_routing.collect_stock_rails(&rails.graph, rolling_stock, &world.prototypes);
+        train_routing.collect_held_rails(
+            &rails.graph,
+            &rails.blocks,
+            rolling_stock,
+            &world.prototypes,
+        );
 
         for train_id in planning_order(&waiting, self.rolling_stock.planned_last) {
             if !self.train_routing.can_search() {
@@ -388,8 +425,18 @@ impl Simulation {
         // point on the map, and against the model's own stopping distance rather
         // than a guessed margin, so a heavy train starts braking earlier than a
         // light one without either of them being told to.
+        //
+        // A signal it has not been let past is the nearer of the two marks
+        // whenever there is one, so a train comes to rest *at* a red signal
+        // rather than being clipped to a standstill against it — which is the
+        // difference between a train waiting at a signal and a train that hit it.
         let forces = self.train_forces_now(train_id).unwrap_or_default();
-        let throttle = if leg.distance_fixed <= braking_distance_fixed(train.velocity, forces) {
+        let remaining_fixed = self
+            .signal_allowance_fixed(train_id, leg.forward)
+            .map_or(leg.distance_fixed, |allowance| {
+                leg.distance_fixed.min(allowance)
+            });
+        let throttle = if remaining_fixed <= braking_distance_fixed(train.velocity, forces) {
             TrainThrottle::Brake
         } else if leg.forward {
             TrainThrottle::Forward
@@ -682,6 +729,7 @@ mod tests {
             destination: Some(RailTarget::new(EntityId::new(raw), 0)),
             route: None,
             route_search_exhausted_at: None,
+            reserved_blocks: Vec::new(),
         }
     }
 
@@ -721,7 +769,7 @@ mod tests {
     #[test]
     fn exempt_rails_are_the_train_s_own_range_of_the_ticks_index() {
         let mut routing = TrainRouting {
-            stock_rails: vec![
+            held_rails: vec![
                 (TrainId::new(1), EntityId::new(10)),
                 (TrainId::new(1), EntityId::new(11)),
                 (TrainId::new(4), EntityId::new(20)),

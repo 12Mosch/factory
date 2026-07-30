@@ -579,6 +579,7 @@ impl Simulation {
                         destination: None,
                         route: None,
                         route_search_exhausted_at: None,
+                        reserved_blocks: Vec::new(),
                     },
                 );
                 train_id
@@ -771,6 +772,11 @@ impl Simulation {
                         destination: None,
                         route: None,
                         route_search_exhausted_at: None,
+                        // Nor does either half hold what the whole train held:
+                        // the signalling pass hands each of them the blocks it
+                        // is standing in on the very next tick, and a claim
+                        // ahead belonged to a train that no longer exists.
+                        reserved_blocks: Vec::new(),
                     },
                 );
                 group_id

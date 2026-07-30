@@ -24,7 +24,7 @@ const MAX_SUMMARY_SIGNALS: usize = 6;
 pub(crate) fn spawn_circuit_control_panel(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     connector: factory_data::CircuitConnectorPrototype,
-    is_accumulator: bool,
+    reports_scalar: bool,
 ) {
     parent
         .spawn((
@@ -49,15 +49,15 @@ pub(crate) fn spawn_circuit_control_panel(
                     );
                 });
             }
-            if is_accumulator {
+            if reports_scalar {
                 spawn_row(panel, |row| {
-                    spawn_caption(row, "Charge signal");
+                    spawn_caption(row, "Output signal");
                     spawn_button(
                         row,
                         50.0,
                         "--",
-                        CircuitSignalButton(SignalSlot::AccumulatorCharge),
-                        CircuitLabel(CircuitLabelKind::Signal(SignalSlot::AccumulatorCharge)),
+                        CircuitSignalButton(SignalSlot::EntityOutput),
+                        CircuitLabel(CircuitLabelKind::Signal(SignalSlot::EntityOutput)),
                     );
                 });
             }
@@ -400,9 +400,9 @@ fn slot_value(sim: &Simulation, entity_id: EntityId, slot: SignalSlot) -> SlotVa
             .circuit_entity_state(entity_id)
             .and_then(|state| state.enable_condition)
             .map_or(SlotValue::Constant(0), |condition| operand(condition.right)),
-        SignalSlot::AccumulatorCharge => SlotValue::Signal(
+        SignalSlot::EntityOutput => SlotValue::Signal(
             sim.circuit_entity_state(entity_id)
-                .and_then(|state| state.charge_output_signal),
+                .and_then(|state| state.output_signal),
         ),
         SignalSlot::ConstantSlot(index) => SlotValue::Signal(
             factory_sim::entity_access::constant_combinator_state(sim, entity_id)

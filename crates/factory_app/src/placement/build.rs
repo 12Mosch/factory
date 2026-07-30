@@ -316,6 +316,12 @@ pub(crate) fn build_status_from_error(
         // tile placement carrying one is a routing mistake rather than
         // something the player did wrong. Saying what it needs is more use than
         // saying it cannot be built.
+        // A signal governs a point on the railway together with a direction
+        // through it, so a tile with no aligned joint beside it has nothing for
+        // one to govern.
+        PlayerBuildError::Build(BuildError::NeedsAlignedRail { .. }) => {
+            BuildPlacementStatus::CannotPlace("Needs a rail joint alongside".to_string())
+        }
         PlayerBuildError::Build(BuildError::RunsOnRails { .. }) => {
             BuildPlacementStatus::CannotPlace("Needs a clear run of rail".to_string())
         }
@@ -477,6 +483,9 @@ pub(crate) fn build_status_from_preview_issue(
         BuildPlacementIssueKind::NeedsClearRail { .. } => {
             BuildPlacementStatus::CannotPlace("Needs a clear run of rail".to_string())
         }
+        BuildPlacementIssueKind::NeedsAlignedRail { .. } => {
+            BuildPlacementStatus::CannotPlace("Needs a rail joint alongside".to_string())
+        }
     }
 }
 
@@ -496,6 +505,7 @@ fn preview_issue_priority(issue: &BuildPlacementIssue) -> usize {
         BuildPlacementIssueKind::MissingAdjacentWater => 11,
         BuildPlacementIssueKind::InvalidFootprint { .. } => 12,
         BuildPlacementIssueKind::NeedsClearRail { .. } => 13,
+        BuildPlacementIssueKind::NeedsAlignedRail { .. } => 14,
     }
 }
 

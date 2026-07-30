@@ -189,6 +189,17 @@ pub(crate) fn rail_ballast_color() -> Color {
     Color::srgb(0.30, 0.28, 0.26)
 }
 
+/// A signal's lamp, coloured the way a railway colours it: green for a block
+/// nobody has, yellow for one somebody is on their way into, red for one
+/// somebody is standing in.
+pub(crate) fn rail_signal_color(aspect: factory_sim::RailSignalAspect) -> Color {
+    match aspect {
+        factory_sim::RailSignalAspect::Clear => Color::srgb(0.24, 0.80, 0.36),
+        factory_sim::RailSignalAspect::Reserved => Color::srgb(0.92, 0.78, 0.22),
+        factory_sim::RailSignalAspect::Blocked => Color::srgb(0.88, 0.24, 0.22),
+    }
+}
+
 pub(crate) fn rail_sleeper_color() -> Color {
     Color::srgb(0.38, 0.29, 0.20)
 }
