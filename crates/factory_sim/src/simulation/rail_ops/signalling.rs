@@ -66,6 +66,20 @@ use super::types::RailGraph;
 /// limited by one, which the end of the line and the stock ahead still are.
 const SIGNAL_LOOKAHEAD_REACH_FIXED: i64 = 100 * crate::POSITION_SCALE;
 
+/// How far a walk already inside a chain run may go on looking for the signal
+/// that resolves it, in fixed-point units of track.
+///
+/// Larger than the bound above, because an unresolved chain commits nothing and a
+/// chain run the walk gave up on early would hold trains at its entrance for as
+/// long as the yard beyond it was deeper than the bound. Still a constant, and
+/// that is the point: without one, a chain signal followed by a long unsignalled
+/// stretch would walk to the end of the line every tick, for every train parked
+/// behind it, which is a per-tick cost proportional to the size of the railway.
+///
+/// Five hundred tiles is far past any junction worth calling one, so in practice
+/// this bounds the pathological layout and never the real ones.
+const SIGNAL_CHAIN_REACH_FIXED: i64 = 5 * SIGNAL_LOOKAHEAD_REACH_FIXED;
+
 /// How many signals one lookahead may walk through.
 ///
 /// What makes a chain of chain signals terminate. A ring of them with no
@@ -563,15 +577,23 @@ fn collect_signals_ahead(
         // The reach bound keeps a train on a long unsignalled stretch from paying
         // for the whole of it every tick: a signal further off than this is one
         // the train cannot get near for many ticks yet, and it will be found from
-        // closer. It deliberately does not apply part way through a chain run —
-        // the claim rule needs the signal that resolves the chain, and an
-        // unresolved chain commits nothing, so giving up on the distance would
-        // hold a train at a chain signal for as long as the yard beyond it is
-        // deeper than the bound.
+        // closer.
+        //
+        // A walk part way through a chain run gets the longer bound instead of
+        // the short one. The claim rule needs the signal that resolves the chain
+        // and an unresolved chain commits nothing, so the short bound would hold
+        // a train at a chain signal for as long as the yard beyond it was deeper
+        // than a hundred tiles — but no bound at all would walk to the end of
+        // the line every tick behind a chain signal with nothing past it.
         let inside_chain_run = out
             .last()
             .is_some_and(|signal| signal.kind == RailSignalKind::Chain);
-        if distance_fixed > SIGNAL_LOOKAHEAD_REACH_FIXED && !inside_chain_run {
+        let reach_fixed = if inside_chain_run {
+            SIGNAL_CHAIN_REACH_FIXED
+        } else {
+            SIGNAL_LOOKAHEAD_REACH_FIXED
+        };
+        if distance_fixed > reach_fixed {
             return;
         }
         let Some((next_index, arrival_end)) = graph.neighbor_end(edge, exit_end) else {
@@ -753,6 +775,37 @@ mod tests {
             "the ordinary signal beyond the chain is found"
         );
         assert!(found[1].distance_fixed > SIGNAL_LOOKAHEAD_REACH_FIXED);
+    }
+
+    /// A chain run is followed further than an ordinary walk, but not for ever:
+    /// a chain signal with nothing but empty track past it would otherwise walk
+    /// to the end of the line every tick, for every train parked behind it.
+    #[test]
+    fn a_chain_run_is_still_bounded_by_a_distance() {
+        let past = SIGNAL_CHAIN_REACH_FIXED / STRAIGHT_FIXED + 4;
+        let graph = build_rail_graph_from_pieces(&straight_run(1, past as usize + 4));
+        let partition = build_rail_blocks(
+            &graph,
+            &[
+                signal(100, 1, RailSignalKind::Chain),
+                signal(101, past, RailSignalKind::Block),
+            ],
+        );
+        let mut found = Vec::new();
+
+        collect_signals_ahead(
+            &graph,
+            &partition,
+            RailPosition::new(rail(1), 0, true),
+            &mut found,
+        );
+
+        assert_eq!(
+            found.len(),
+            1,
+            "the walk gave up on the chain rather than following it to the end of the railway"
+        );
+        assert_eq!(found[0].kind, RailSignalKind::Chain);
     }
 
     /// A signal further off than the reach bound with no chain run leading to it

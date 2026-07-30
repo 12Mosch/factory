@@ -82,12 +82,36 @@ pub(in crate::simulation) struct TrainRouting {
     /// over everything. Held here and never freed, so the gathering is not also
     /// an allocation.
     held_rails: Vec<(TrainId, EntityId)>,
+    /// The track each train holds, as `(train, block)` pairs, ascending and
+    /// deduplicated.
+    ///
+    /// The blocks are collected and made unique *before* their rails are
+    /// expanded, which is the difference between a train paying for its blocks
+    /// once and paying for them once per piece of stock and once per rail under
+    /// each piece. On a long unsignalled network — one block over the whole
+    /// railway — the second is thousands of entries per train for the same
+    /// answer.
+    ///
+    /// The second element is a block key, or — for a rail the partition does not
+    /// know — the rail itself. The two cannot be confused: a block's key is one
+    /// of that block's own rails, so a rail belonging to no block is no block's
+    /// key either.
+    held_blocks: Vec<(TrainId, EntityId)>,
     /// Every rail in `held_rails`, ascending and deduplicated: what the search
     /// asks its occupancy question of.
     occupied: Vec<EntityId>,
-    /// Rails the train currently being planned for is itself standing on,
-    /// ascending. Subtracted from the occupancy above, because a train is not
-    /// in its own way.
+    /// Rails more than one train holds, ascending.
+    ///
+    /// What stops "a train is not in its own way" from becoming "a train is in
+    /// nobody's way". Two trains in one block both hold every rail of it, and
+    /// exempting the searching train's own rails wholesale would take the
+    /// penalty off track the *other* train is standing in — on an unsignalled
+    /// railway, where the single block is every train's own, off the whole
+    /// railway at once.
+    shared: Vec<EntityId>,
+    /// Rails the train currently being planned for holds and no other train
+    /// does, ascending. Subtracted from the occupancy above, because a train is
+    /// not in its own way.
     exempt: Vec<EntityId>,
     /// Trains that have somewhere to be and no plan for getting there, in id
     /// order. Refilled each tick the pass runs.
@@ -165,31 +189,41 @@ impl TrainRouting {
         rolling_stock: &RollingStockSubsystem,
         prototypes: &PrototypeCatalog,
     ) {
-        self.held_rails.clear();
+        // Which blocks first, made unique, and only then the rails in them. A
+        // piece of stock covers several rails and a train several pieces, so
+        // expanding as the rails are visited would re-expand one block once per
+        // rail under every piece standing in it.
+        self.held_blocks.clear();
         for stock in rolling_stock.iter() {
             let train = stock.train;
             push_stock_rails(graph, prototypes, stock, |rail| {
-                match partition.block_for_edge(rail) {
-                    Some(block) => self
-                        .held_rails
-                        .extend(block.edges.iter().map(|edge| (train, *edge))),
-                    // Track the partition has not seen — a rail mined out from
-                    // under a wagon, before the pruning pass reaches it. The rail
-                    // itself is still what is in the way.
-                    None => self.held_rails.push((train, rail)),
-                }
+                // A rail the partition has not seen — one mined out from under a
+                // wagon, before the pruning pass reaches it — stands for itself.
+                // It is still what is in the way.
+                let held = partition.block_key_for_edge(rail).unwrap_or(rail);
+                self.held_blocks.push((train, held));
             });
         }
         for train in rolling_stock.trains() {
-            for key in &train.reserved_blocks {
-                if let Some(block) = partition.block(*key) {
-                    self.held_rails
-                        .extend(block.edges.iter().map(|edge| (train.id, *edge)));
-                }
+            self.held_blocks
+                .extend(train.reserved_blocks.iter().map(|key| (train.id, *key)));
+        }
+        self.held_blocks.sort_unstable();
+        self.held_blocks.dedup();
+
+        self.held_rails.clear();
+        for (train, held) in &self.held_blocks {
+            match partition.block(*held) {
+                Some(block) => self
+                    .held_rails
+                    .extend(block.edges.iter().map(|edge| (*train, *edge))),
+                None => self.held_rails.push((*train, *held)),
             }
         }
         // By train first, so one train's rails are a contiguous run, and by rail
-        // within that, which is the order the search reads them in.
+        // within that, which is the order the search reads them in. Blocks do not
+        // overlap, so the only duplicates left are a train's claim on a block it
+        // is also standing in.
         self.held_rails.sort_unstable();
         self.held_rails.dedup();
 
@@ -197,11 +231,30 @@ impl TrainRouting {
         self.occupied
             .extend(self.held_rails.iter().map(|(_, rail)| *rail));
         self.occupied.sort_unstable();
+        // A rail appearing twice here is a rail two *trains* hold: `held_rails`
+        // is already unique per `(train, rail)`, so a repeat cannot be one train
+        // counted twice. Taken before the dedup because the dedup is what would
+        // destroy the evidence.
+        self.shared.clear();
+        self.shared.extend(
+            self.occupied
+                .windows(2)
+                .filter(|pair| pair[0] == pair[1])
+                .map(|pair| pair[0]),
+        );
+        self.shared.dedup();
         self.occupied.dedup();
     }
 
-    /// Takes the rails `train_id` itself holds out of what the tick already
+    /// Takes the rails `train_id` holds *alone* out of what the tick already
     /// gathered, which the search then reads as track nothing is in the way on.
+    ///
+    /// Alone is the operative word. The exemption exists because a train is not
+    /// in its own way — without it a long train would be steered off its own
+    /// branch by the penalty for being where it already is — but a rail another
+    /// train also holds is a rail something *is* in the way on, and exempting it
+    /// would hide that. On an unsignalled railway, where one block is every
+    /// train's own, it would hide every train in the world from every other.
     ///
     /// A range of the tick's own index rather than another walk over the world's
     /// stock: this runs once per train that wants a route, and a full scan here
@@ -213,9 +266,19 @@ impl TrainRouting {
         let past = self
             .held_rails
             .partition_point(|(train, _)| *train <= train_id);
-        self.exempt.clear();
-        self.exempt
-            .extend(self.held_rails[first..past].iter().map(|(_, rail)| *rail));
+        let Self {
+            held_rails,
+            shared,
+            exempt,
+            ..
+        } = self;
+        exempt.clear();
+        exempt.extend(
+            held_rails[first..past]
+                .iter()
+                .map(|(_, rail)| *rail)
+                .filter(|rail| shared.binary_search(rail).is_err()),
+        );
     }
 }
 
@@ -788,6 +851,32 @@ mod tests {
         // beside where it would have been.
         routing.collect_exempt_rails(TrainId::new(9));
         assert!(routing.exempt.is_empty());
+    }
+
+    /// A rail two trains hold is not one either of them is exempt from. The
+    /// exemption is there because a train is not in its own way; a rail somebody
+    /// else is also standing in is a rail something *is* in the way on, and
+    /// exempting it would take the penalty off the whole of an unsignalled
+    /// railway — where one block is every train's own.
+    #[test]
+    fn a_rail_two_trains_hold_is_exempt_for_neither() {
+        let shared = EntityId::new(11);
+        let mut routing = TrainRouting {
+            held_rails: vec![
+                (TrainId::new(1), EntityId::new(10)),
+                (TrainId::new(1), shared),
+                (TrainId::new(4), shared),
+                (TrainId::new(4), EntityId::new(20)),
+            ],
+            shared: vec![shared],
+            ..TrainRouting::default()
+        };
+
+        routing.collect_exempt_rails(TrainId::new(1));
+        assert_eq!(routing.exempt, vec![EntityId::new(10)]);
+
+        routing.collect_exempt_rails(TrainId::new(4));
+        assert_eq!(routing.exempt, vec![EntityId::new(20)]);
     }
 
     /// Planning resumes after the train it last reached and wraps round, so a
