@@ -31,6 +31,11 @@ impl Simulation {
         // keeps the state valid *between* ticks too, so a world saved right
         // after a train's track was blown up still loads.
         self.prune_rolling_stock();
+        // And the marks on the track, for the same reason a train standing on
+        // nothing is pruned: a stop names the rail it is on, so a stop whose rail
+        // was mined names track that is not there — which is a world validation
+        // refuses to save.
+        self.prune_train_stops();
         // The same moment and the same reason, one step further on: a plan that
         // ran over the rail which just went is a plan a train would otherwise
         // keep driving, so it is dropped here rather than discovered later by a

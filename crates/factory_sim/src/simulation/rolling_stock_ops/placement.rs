@@ -579,6 +579,11 @@ impl Simulation {
                         destination: None,
                         route: None,
                         route_search_exhausted_at: None,
+                        schedule: Default::default(),
+                        schedule_arrival_tick: None,
+                        schedule_last_activity_tick: None,
+                        schedule_activity_cargo: None,
+                        scheduled_stop: None,
                         reserved_blocks: Vec::new(),
                     },
                 );
@@ -755,6 +760,17 @@ impl Simulation {
 
         for (index, group) in groups.into_iter().enumerate() {
             let group_id = if index == 0 {
+                // The half that keeps the id has no more of a plan than the
+                // halves that get new ones. It is a different length, its leading
+                // piece may be a different wagon, and the stop it had booked was
+                // booked for the whole run of stock — so it gives the place back
+                // and is scheduled afresh from wherever it now stands, rather
+                // than driving on toward a mark measured for a train that no
+                // longer exists.
+                if let Some(train) = self.rolling_stock.trains.get_mut(&train_id) {
+                    train.destination = None;
+                    train.release_scheduled_stop();
+                }
                 train_id
             } else {
                 let group_id = self.rolling_stock.allocate_train_id();
@@ -772,6 +788,11 @@ impl Simulation {
                         destination: None,
                         route: None,
                         route_search_exhausted_at: None,
+                        schedule: Default::default(),
+                        schedule_arrival_tick: None,
+                        schedule_last_activity_tick: None,
+                        schedule_activity_cargo: None,
+                        scheduled_stop: None,
                         // Nor does either half hold what the whole train held:
                         // the signalling pass hands each of them the blocks it
                         // is standing in on the very next tick, and a claim

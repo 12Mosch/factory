@@ -36,6 +36,7 @@ use crate::ids::EntityId;
 use crate::inventory::Inventory;
 use crate::machines::BurnerEnergy;
 use factory_data::EntityPrototypeId;
+use factory_data::{FluidId, ItemId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -216,6 +217,173 @@ pub struct TrainRoute {
     pub edges: Vec<EntityId>,
 }
 
+/// A condition which keeps a scheduled train at a station.
+///
+/// Conditions in one [`TrainWaitConditionGroup`] are ANDed; groups are ORed.
+/// This normal form makes the grouping unambiguous and avoids maintaining a
+/// second, subtly different circuit-comparison representation — the comparator
+/// the item and fluid conditions compare with is the decider combinator's own.
+///
+/// There is deliberately no circuit condition here yet. A wait on a network
+/// signal needs a connector to read that network *at the stop*, and a stop is
+/// currently a mark on a rail rather than a placed entity with wires on it — so
+/// such a condition could only ever compare against nothing, which is worse
+/// than not offering it: "signal A > 0" would never fire and "signal A = 0"
+/// would fire at every station in the world. It arrives with the stop entity
+/// that can be wired.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum TrainWaitCondition {
+    TimePassed {
+        ticks: u64,
+    },
+    /// Ticks since the train's cargo last changed. Loading or unloading resets
+    /// the clock, so this is "done being served" rather than "here a while".
+    Inactivity {
+        ticks: u64,
+    },
+    CargoFull,
+    CargoEmpty,
+    ItemCount {
+        item: ItemId,
+        comparator: crate::circuits::Comparator,
+        count: i32,
+    },
+    FluidCount {
+        fluid: FluidId,
+        comparator: crate::circuits::Comparator,
+        milliunits: i32,
+    },
+}
+
+/// Conditions which must all hold before this alternative is satisfied.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainWaitConditionGroup(pub Vec<TrainWaitCondition>);
+
+/// A named destination and the alternatives which permit departure.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainScheduleEntry {
+    pub stop_name: String,
+    /// OR alternatives, each containing AND conditions. An empty list means
+    /// depart immediately after arrival.
+    pub wait_conditions: Vec<TrainWaitConditionGroup>,
+}
+
+/// The ordered, durable schedule assigned to a train.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainSchedule {
+    pub entries: Vec<TrainScheduleEntry>,
+    pub current: usize,
+}
+
+/// What a train is carrying, summed over its stock: items over its wagons and
+/// fluids over its tanks.
+///
+/// Canonical, in the sense [`crate::circuits::SignalSet`] is: a count of zero is
+/// absent rather than stored, so two trains carrying the same cargo hold equal
+/// values whatever order it was loaded in. That is what lets the inactivity
+/// clock be a comparison against the previous tick's cargo rather than a
+/// per-transfer notification every loader would have to remember to send.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainCargo {
+    pub items: BTreeMap<ItemId, i32>,
+    pub fluids: BTreeMap<FluidId, i32>,
+}
+
+impl TrainCargo {
+    pub fn item(&self, item: ItemId) -> i32 {
+        self.items.get(&item).copied().unwrap_or(0)
+    }
+
+    pub fn fluid(&self, fluid: FluidId) -> i32 {
+        self.fluids.get(&fluid).copied().unwrap_or(0)
+    }
+
+    /// Whether the train is carrying nothing at all.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.fluids.is_empty()
+    }
+
+    /// Adds `count` of `item`, dropping the entry if the sum comes to nothing.
+    pub(crate) fn add_item(&mut self, item: ItemId, count: i32) {
+        Self::add(&mut self.items, item, count);
+    }
+
+    /// Adds `milliunits` of `fluid`, dropping the entry if the sum comes to
+    /// nothing.
+    pub(crate) fn add_fluid(&mut self, fluid: FluidId, milliunits: i32) {
+        Self::add(&mut self.fluids, fluid, milliunits);
+    }
+
+    fn add<K: Ord>(counts: &mut BTreeMap<K, i32>, key: K, amount: i32) {
+        let total = counts
+            .get(&key)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(amount);
+        if total == 0 {
+            counts.remove(&key);
+        } else {
+            counts.insert(key, total);
+        }
+    }
+}
+
+/// Snapshot used to evaluate schedule conditions without coupling their pure
+/// logic to ECS storage or presentation.
+#[derive(Clone, Debug, Default)]
+pub struct TrainWaitContext {
+    pub waited_ticks: u64,
+    pub inactive_ticks: u64,
+    /// Whether every container the train declares is full to its declared
+    /// capacity — full stacks and full tanks, not merely occupied ones.
+    pub cargo_full: bool,
+    pub cargo_empty: bool,
+    pub cargo: TrainCargo,
+}
+
+impl TrainWaitCondition {
+    pub fn is_met(self, context: &TrainWaitContext) -> bool {
+        match self {
+            Self::TimePassed { ticks } => context.waited_ticks >= ticks,
+            Self::Inactivity { ticks } => context.inactive_ticks >= ticks,
+            Self::CargoFull => context.cargo_full,
+            Self::CargoEmpty => context.cargo_empty,
+            Self::ItemCount {
+                item,
+                comparator,
+                count,
+            } => comparator.apply(context.cargo.item(item), count),
+            Self::FluidCount {
+                fluid,
+                comparator,
+                milliunits,
+            } => comparator.apply(context.cargo.fluid(fluid), milliunits),
+        }
+    }
+}
+
+impl TrainScheduleEntry {
+    pub fn may_depart(&self, context: &TrainWaitContext) -> bool {
+        self.wait_conditions.is_empty()
+            || self
+                .wait_conditions
+                .iter()
+                .any(|group| group.0.iter().all(|condition| condition.is_met(context)))
+    }
+}
+
+impl TrainSchedule {
+    pub fn current_entry(&self) -> Option<&TrainScheduleEntry> {
+        self.entries.get(self.current)
+    }
+
+    pub fn advance(&mut self) {
+        if !self.entries.is_empty() {
+            self.current = (self.current + 1) % self.entries.len();
+        }
+    }
+}
+
 impl TrainRoute {
     /// The leg being driven, or `None` for a route that has been run out.
     pub fn current_leg(&self) -> Option<TrainRouteLeg> {
@@ -332,26 +500,69 @@ pub struct Train {
     /// spend the cap over and over for the whole of it; asking again once it has
     /// come to rest somewhere else costs one search.
     pub route_search_exhausted_at: Option<RailPosition>,
+    /// Automatic orders. Kept on the train so saves and deterministic hashes
+    /// include both the list and the cursor.
+    #[serde(default)]
+    pub schedule: TrainSchedule,
+    /// Tick at which the train came to rest at the stop it claimed, and `None`
+    /// until it actually gets there.
+    ///
+    /// Set when the route to the stop runs out rather than inferred from a train
+    /// standing still with no plan, because the two are not the same train: a
+    /// plan withdrawn by hand, or a stop found to be unreachable, also leaves a
+    /// train stationary and planless — nowhere near the platform it claimed.
+    /// Waiting is timed from here, so inferring it would start the clock of a
+    /// train that never arrived and let an immediate-departure entry tick past a
+    /// station the train never visited.
+    #[serde(default)]
+    pub schedule_arrival_tick: Option<u64>,
+    /// Last tick on which cargo or fluid contents changed while waiting.
+    #[serde(default)]
+    pub schedule_last_activity_tick: Option<u64>,
+    /// Cargo as it stood when [`Train::schedule_last_activity_tick`] was last
+    /// moved on, and `None` while the train is not waiting anywhere.
+    ///
+    /// Durable for the same reason the arrival tick is: an inactivity wait that
+    /// forgot what it was comparing against would restart its clock on load, so
+    /// a train saved four minutes into a five-minute wait would owe five more.
+    #[serde(default)]
+    pub schedule_activity_cargo: Option<TrainCargo>,
+    /// Stable id of the stop currently claimed by this train.
+    ///
+    /// A claim, not merely a note of where it is going: it counts against the
+    /// stop's [`TrainStop::train_limit`], so every path that takes a train's plan
+    /// away gives it back through [`Train::release_scheduled_stop`].
+    #[serde(default)]
+    pub scheduled_stop: Option<TrainStopId>,
     /// Blocks this train holds: the ones it is standing in and the ones it has
     /// been let into ahead, ascending and without repeats.
-    ///
-    /// Each is named by [`crate::rail::RailBlockSnapshot::key`] — the lowest rail
-    /// entity id in the block — rather than by an index into the partition, which
-    /// is derived data that means something else one placement later.
-    ///
-    /// Durable rather than derived, and the one part of signalling that is. A
-    /// claim is the answer to "which block was this train let into next", and
-    /// that cannot be recovered from where the train is standing: two trains at a
-    /// junction are in the same position whichever of them was given the way
-    /// through. Rebuilding the claims on load would be a second resolution whose
-    /// answer could differ from the one the trains were driving on — so they are
-    /// saved, and validation holds them to naming live blocks that no other train
-    /// also holds.
-    ///
-    /// Ascending rather than in travel order because order carries no meaning
-    /// here: which of the held blocks is ahead is the lookahead's answer every
-    /// tick, not something a save has to remember.
+    #[serde(default)]
     pub reserved_blocks: Vec<EntityId>,
+}
+
+/// Stable identity of a named train stop.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct TrainStopId(u64);
+
+impl TrainStopId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+/// A named stopping mark on a rail.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainStop {
+    pub id: TrainStopId,
+    pub name: String,
+    pub target: RailTarget,
+    /// Maximum simultaneously assigned trains. Must be at least 1: a stop no
+    /// train may be sent to is a stop that should not exist, so a zero limit is
+    /// refused when the stop is made rather than quietly disabling it.
+    pub train_limit: u32,
 }
 
 impl Train {
@@ -364,6 +575,41 @@ impl Train {
     /// until it arrives or the plan is cancelled.
     pub const fn is_routed(&self) -> bool {
         self.destination.is_some()
+    }
+
+    /// Whether the train is standing at the stop it claimed, which is when its
+    /// wait conditions are the thing deciding what it does next.
+    pub const fn is_waiting_at_scheduled_stop(&self) -> bool {
+        self.scheduled_stop.is_some() && self.schedule_arrival_tick.is_some()
+    }
+
+    /// Records that the train has come to rest at the stop it claimed, starting
+    /// its wait. Does nothing to a train that claimed nothing, or to one already
+    /// counted as arrived — the wait is timed from the first tick, not the last.
+    pub(crate) fn arrive_at_scheduled_stop(&mut self, tick: u64) {
+        if self.scheduled_stop.is_none() || self.schedule_arrival_tick.is_some() {
+            return;
+        }
+        self.schedule_arrival_tick = Some(tick);
+        self.schedule_last_activity_tick = Some(tick);
+        // Left for the wait pass to fill on the first tick it looks: the cargo
+        // it compares against has to be the cargo *it* read, or the first
+        // comparison would report a change nobody made.
+        self.schedule_activity_cargo = None;
+    }
+
+    /// Gives up the stop this train had claimed, and with it the wait state that
+    /// only means anything while it is standing there.
+    ///
+    /// A claim counts against the stop's train limit, so a train whose plan is
+    /// taken away — by hand, by the stop being removed, by there being no way
+    /// there, or by the train changing shape — has to give it back, or the stop
+    /// stays full of trains that are never coming.
+    pub(crate) fn release_scheduled_stop(&mut self) {
+        self.scheduled_stop = None;
+        self.schedule_arrival_tick = None;
+        self.schedule_last_activity_tick = None;
+        self.schedule_activity_cargo = None;
     }
 }
 
@@ -404,6 +650,10 @@ pub struct RollingStockSubsystem {
     /// different trains than the world it was saved from — and that shows up in
     /// the trains themselves a tick later.
     pub(crate) planned_last: Option<TrainId>,
+    #[serde(default)]
+    pub(crate) stops: BTreeMap<TrainStopId, TrainStop>,
+    #[serde(default)]
+    pub(crate) next_stop_id: u64,
 }
 
 impl RollingStockSubsystem {
@@ -494,6 +744,9 @@ pub enum TrainControlError {
     MissingTrain(TrainId),
     /// The entity a train was told to drive to is not a rail.
     NotRail(EntityId),
+    MissingStop(TrainStopId),
+    EmptyStopName,
+    InvalidTrainLimit,
 }
 
 #[cfg(test)]
@@ -517,5 +770,143 @@ mod tests {
         assert_eq!(TrainThrottle::Reverse.drive_sign(), -1);
         assert_eq!(TrainThrottle::Coast.drive_sign(), 0);
         assert_eq!(TrainThrottle::Brake.drive_sign(), 0);
+    }
+
+    #[test]
+    fn wait_groups_or_alternatives_and_conditions_within_them() {
+        let entry = TrainScheduleEntry {
+            stop_name: "Iron unload".into(),
+            wait_conditions: vec![
+                TrainWaitConditionGroup(vec![
+                    TrainWaitCondition::TimePassed { ticks: 60 },
+                    TrainWaitCondition::CargoEmpty,
+                ]),
+                TrainWaitConditionGroup(vec![TrainWaitCondition::Inactivity { ticks: 300 }]),
+            ],
+        };
+        let context = TrainWaitContext {
+            waited_ticks: 60,
+            cargo_empty: true,
+            ..Default::default()
+        };
+        assert!(entry.may_depart(&context));
+        assert!(!entry.may_depart(&TrainWaitContext {
+            waited_ticks: 60,
+            ..Default::default()
+        }));
+    }
+
+    /// Inactivity is not "here a while": the clock is the one the loading pass
+    /// keeps moving, so the two conditions answer differently about a train that
+    /// is still being filled.
+    #[test]
+    fn inactivity_and_time_passed_are_different_questions() {
+        let context = TrainWaitContext {
+            waited_ticks: 300,
+            inactive_ticks: 5,
+            ..Default::default()
+        };
+        assert!(TrainWaitCondition::TimePassed { ticks: 300 }.is_met(&context));
+        assert!(!TrainWaitCondition::Inactivity { ticks: 300 }.is_met(&context));
+    }
+
+    /// A cargo condition compares what is aboard against the number the player
+    /// asked for, through the comparator the decider combinator already defines.
+    /// Cargo the train is not carrying at all compares as zero rather than as
+    /// "no answer", which is what makes "no more than this much left" a
+    /// condition a train can satisfy by being empty.
+    #[test]
+    fn item_and_fluid_conditions_compare_what_is_aboard() {
+        use crate::circuits::Comparator;
+
+        let iron = ItemId::new(3);
+        let copper = ItemId::new(4);
+        let water = FluidId::new(1);
+        let steam = FluidId::new(2);
+        let mut cargo = TrainCargo::default();
+        cargo.add_item(iron, 500);
+        cargo.add_fluid(water, 12_000);
+        let context = TrainWaitContext {
+            cargo,
+            ..Default::default()
+        };
+
+        let item = |comparator, count| {
+            TrainWaitCondition::ItemCount {
+                item: iron,
+                comparator,
+                count,
+            }
+            .is_met(&context)
+        };
+        assert!(item(Comparator::GreaterOrEqual, 500));
+        assert!(item(Comparator::Less, 501));
+        assert!(!item(Comparator::Greater, 500));
+        assert!(!item(Comparator::Equal, 499));
+
+        let fluid = |comparator, milliunits| {
+            TrainWaitCondition::FluidCount {
+                fluid: water,
+                comparator,
+                milliunits,
+            }
+            .is_met(&context)
+        };
+        assert!(fluid(Comparator::Equal, 12_000));
+        assert!(fluid(Comparator::NotEqual, 0));
+        assert!(!fluid(Comparator::LessOrEqual, 11_999));
+
+        assert!(
+            TrainWaitCondition::ItemCount {
+                item: copper,
+                comparator: Comparator::Equal,
+                count: 0,
+            }
+            .is_met(&context),
+            "cargo the train is not carrying compares as none of it"
+        );
+        assert!(
+            !TrainWaitCondition::FluidCount {
+                fluid: steam,
+                comparator: Comparator::Greater,
+                milliunits: 0,
+            }
+            .is_met(&context)
+        );
+    }
+
+    /// A count of zero is absent rather than stored, so the cargo two trains
+    /// carrying the same thing hold compares equal however it got there — which
+    /// is what the inactivity clock's tick-to-tick comparison rests on.
+    #[test]
+    fn cargo_drops_the_entries_that_came_to_nothing() {
+        let item = ItemId::new(7);
+        let mut cargo = TrainCargo::default();
+        cargo.add_item(item, 50);
+        cargo.add_item(item, -50);
+        assert!(cargo.is_empty(), "a drained wagon carries nothing");
+        assert_eq!(cargo, TrainCargo::default());
+        assert_eq!(cargo.item(item), 0);
+    }
+
+    #[test]
+    fn schedules_wrap_without_losing_their_order() {
+        let mut schedule = TrainSchedule {
+            entries: vec![
+                TrainScheduleEntry {
+                    stop_name: "A".into(),
+                    wait_conditions: vec![],
+                },
+                TrainScheduleEntry {
+                    stop_name: "B".into(),
+                    wait_conditions: vec![],
+                },
+            ],
+            current: 0,
+        };
+        schedule.advance();
+        assert_eq!(schedule.current_entry().unwrap().stop_name, "B");
+        schedule.advance();
+        assert_eq!(schedule.current_entry().unwrap().stop_name, "A");
     }
 }

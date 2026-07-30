@@ -108,7 +108,9 @@ pub use crate::rolling_stock::{
     RailPosition, RailTarget, RollingStock, RollingStockId, RollingStockMiningError,
     RollingStockPlacementError, RollingStockSubsystem, TRAIN_COUPLING_GAP_FIXED,
     TRAIN_OCCUPIED_RAIL_PENALTY_FIXED, TRAIN_REVERSAL_PENALTY_FIXED, TRAIN_VELOCITY_SCALE, Train,
-    TrainControlError, TrainForces, TrainId, TrainRoute, TrainRouteLeg, TrainThrottle,
+    TrainCargo, TrainControlError, TrainForces, TrainId, TrainRoute, TrainRouteLeg, TrainSchedule,
+    TrainScheduleEntry, TrainStop, TrainStopId, TrainThrottle, TrainWaitCondition,
+    TrainWaitConditionGroup, TrainWaitContext,
 };
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
@@ -720,6 +722,9 @@ pub enum SimValidationError {
     /// holds a velocity the model could not have produced.
     InvalidTrain {
         train_id: TrainId,
+    },
+    InvalidTrainStop {
+        stop_id: TrainStopId,
     },
     /// A roboport's charging pads or queue disagree with the robots that claim
     /// to be on them.
