@@ -4,7 +4,9 @@ use super::common::{
 };
 use bevy::prelude::*;
 use factory_app::resources::SimResource;
-use factory_app::ui::inventory_panel::{InventoryPanel, slot_transfer_error_message};
+use factory_app::ui::inventory_panel::{
+    ContainerSlotButton, InventoryPanel, slot_transfer_error_message,
+};
 use factory_app::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use factory_sim::{
     ContainerError, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
@@ -424,6 +426,14 @@ fn shift_clicking_a_wagon_cargo_slot_sets_and_clears_its_filter() {
         Some(iron_plate),
         "shift-clicking an occupied slot reserves it for what it holds"
     );
+    // A reservation made on a slot that still holds its stack has to be visible
+    // on that slot, or the gesture looks like it did nothing.
+    app.update();
+    assert_ne!(
+        wagon_cargo_slot_background(&mut app, 0),
+        wagon_cargo_slot_background(&mut app, 1),
+        "a reserved slot should not look like the free slot beside it"
+    );
 
     // The slot still holds its stack, so the same gesture releases it rather
     // than trying to filter it again. Setting the filter rebuilt the window, and
@@ -443,4 +453,24 @@ fn shift_clicking_a_wagon_cargo_slot_sets_and_clears_its_filter() {
         None,
         "shift-clicking a reserved slot releases it"
     );
+    app.update();
+    assert_eq!(
+        wagon_cargo_slot_background(&mut app, 0),
+        wagon_cargo_slot_background(&mut app, 1),
+        "a released slot should look like any other"
+    );
+}
+
+/// The background colour of one wagon cargo slot button.
+fn wagon_cargo_slot_background(app: &mut App, slot_index: usize) -> Srgba {
+    let world = app.world_mut();
+    let mut buttons = world.query::<(&ContainerSlotButton, &BackgroundColor)>();
+    buttons
+        .iter(world)
+        .find_map(|(button, background)| {
+            (button.panel() == InventoryPanel::RollingStockCargo
+                && button.slot_index() == slot_index)
+                .then(|| background.0.to_srgba())
+        })
+        .expect("the wagon window draws a button for every cargo slot")
 }

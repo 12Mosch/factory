@@ -15,9 +15,21 @@ use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 pub use factory_sim::InventoryPanel;
 
 #[derive(Component)]
-pub(crate) struct ContainerSlotButton {
+pub struct ContainerSlotButton {
     panel: InventoryPanel,
     slot_index: usize,
+}
+
+impl ContainerSlotButton {
+    /// Which panel this button belongs to, for tests that check how a slot is
+    /// drawn rather than what clicking it does.
+    pub fn panel(&self) -> InventoryPanel {
+        self.panel
+    }
+
+    pub fn slot_index(&self) -> usize {
+        self.slot_index
+    }
 }
 
 #[derive(Component)]
@@ -110,6 +122,18 @@ pub(crate) fn spawn_labeled_slot(
         });
 }
 
+/// An ordinary slot.
+const SLOT_BACKGROUND: Color = Color::srgba(0.14, 0.14, 0.15, 0.96);
+
+/// A wagon cargo slot a player has reserved for one item.
+///
+/// A reservation has to be visible while the slot is *full*, because filtering
+/// a slot to what it already holds is the only reservation the gesture can
+/// make: without this, shift-clicking would look like it had done nothing at
+/// all. The name of the reserved item shows in the slot once it empties, where
+/// there is room for it; until then this is what says the slot is spoken for.
+const SLOT_RESERVED_BACKGROUND: Color = Color::srgba(0.26, 0.21, 0.09, 0.96);
+
 pub(crate) fn spawn_slot_button(
     grid: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     panel: InventoryPanel,
@@ -125,7 +149,7 @@ pub(crate) fn spawn_slot_button(
             padding: UiRect::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.14, 0.14, 0.15, 0.96)),
+        BackgroundColor(SLOT_BACKGROUND),
         ContainerSlotButton { panel, slot_index },
     ))
     .with_child((
@@ -266,6 +290,40 @@ pub(crate) fn update_container_slot_text(
                 rolling_stock_slot_filter_label(&sim, &open_container, marker).unwrap_or_default()
             }
         };
+    }
+}
+
+/// Tints the wagon cargo slots a player has reserved.
+///
+/// Kept apart from the slot text because the two live on different entities —
+/// the text on the button's child, the colour on the button itself — and
+/// because the colour is the half of the answer that survives the slot being
+/// full.
+pub(crate) fn update_container_slot_reservation_tint(
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut buttons: Query<(&ContainerSlotButton, &mut BackgroundColor)>,
+) {
+    let sim = sim.read();
+
+    for (button, mut background) in &mut buttons {
+        let reserved = button.panel == InventoryPanel::RollingStockCargo
+            && open_container.rolling_stock.is_some_and(|stock_id| {
+                factory_sim::entity_access::rolling_stock_slot_filter(
+                    &sim,
+                    stock_id,
+                    button.slot_index,
+                )
+                .is_some()
+            });
+        let wanted = if reserved {
+            SLOT_RESERVED_BACKGROUND
+        } else {
+            SLOT_BACKGROUND
+        };
+        if background.0 != wanted {
+            background.0 = wanted;
+        }
     }
 }
 
