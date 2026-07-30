@@ -44,6 +44,8 @@ use crate::rolling_stock::{
     RailPosition, RollingStock, RollingStockId, TRAIN_VELOCITY_SCALE, Train, TrainControlError,
     TrainForces, TrainId, TrainThrottle,
 };
+
+use crate::rolling_stock::{RailTarget, TrainSchedule, TrainStop, TrainStopId};
 use crate::simulation::*;
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
@@ -87,6 +89,196 @@ pub(in crate::simulation) struct TrainStep {
 }
 
 impl Simulation {
+    /// Registers a named stopping mark. Stop ids are monotonic, making equal
+    /// name/distance choices deterministic across saves and replays.
+    pub fn create_train_stop(
+        &mut self,
+        name: impl Into<String>,
+        rail: EntityId,
+        distance_fixed: i64,
+        train_limit: u32,
+    ) -> Result<TrainStopId, TrainControlError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(TrainControlError::EmptyStopName);
+        }
+        if train_limit == 0 {
+            return Err(TrainControlError::InvalidTrainLimit);
+        }
+        let geometry = self
+            .rail_piece_geometry(rail)
+            .ok_or(TrainControlError::NotRail(rail))?;
+        if !(0..=geometry.length_fixed).contains(&distance_fixed) {
+            return Err(TrainControlError::NotRail(rail));
+        }
+        self.rolling_stock.next_stop_id += 1;
+        let id = TrainStopId::new(self.rolling_stock.next_stop_id);
+        self.rolling_stock.stops.insert(
+            id,
+            TrainStop {
+                id,
+                name,
+                target: RailTarget::new(rail, distance_fixed),
+                train_limit,
+            },
+        );
+        Ok(id)
+    }
+
+    pub fn train_stops(&self) -> impl Iterator<Item = &TrainStop> {
+        self.rolling_stock.stops.values()
+    }
+
+    /// Renames one stop, and the schedules that named it only when the old name
+    /// leaves the world with it.
+    ///
+    /// Rewriting schedules is the friendly answer to renaming the *last* stop of
+    /// a name — a schedule left pointing at a station nobody answers to is a
+    /// train with nowhere to go — but it is the wrong answer when other stops
+    /// still bear the old name. Several stops sharing a name is the supported way
+    /// to give one station two platforms, and rewriting a schedule then would
+    /// quietly stop the platforms the player did not touch from ever being
+    /// served.
+    pub fn rename_train_stop(
+        &mut self,
+        id: TrainStopId,
+        name: impl Into<String>,
+    ) -> Result<(), TrainControlError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(TrainControlError::EmptyStopName);
+        }
+        let stop = self
+            .rolling_stock
+            .stops
+            .get_mut(&id)
+            .ok_or(TrainControlError::MissingStop(id))?;
+        let old = std::mem::replace(&mut stop.name, name.clone());
+        if old == name || self.stop_name_exists(&old) {
+            return Ok(());
+        }
+        for train in self.rolling_stock.trains.values_mut() {
+            for entry in &mut train.schedule.entries {
+                if entry.stop_name == old {
+                    entry.stop_name.clone_from(&name);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn remove_train_stop(&mut self, id: TrainStopId) -> Result<TrainStop, TrainControlError> {
+        let stop = self
+            .rolling_stock
+            .stops
+            .remove(&id)
+            .ok_or(TrainControlError::MissingStop(id))?;
+        self.forget_train_stop(&stop);
+        Ok(stop)
+    }
+
+    /// Whether any stop still answers to `name`.
+    fn stop_name_exists(&self, name: &str) -> bool {
+        self.rolling_stock
+            .stops
+            .values()
+            .any(|stop| stop.name == name)
+    }
+
+    /// Releases what a stop that has just gone leaves behind on the trains: the
+    /// claim any of them held on it, and — once no stop answers to its name at
+    /// all — the schedule entries which can no longer be served.
+    ///
+    /// The cursor is what would otherwise strand a train. A train that had
+    /// claimed the removed stop has no claim and no destination, and its current
+    /// entry names a station that no longer exists anywhere, so neither the
+    /// arrival check nor the assignment beneath it can fire again: the train
+    /// idles on that entry for ever with no escape. Stepping past the entry is
+    /// the escape, and it is only taken when the name has left the world — while
+    /// another stop still bears it, the train simply goes there instead.
+    fn forget_train_stop(&mut self, stop: &TrainStop) {
+        let name_remains = self.stop_name_exists(&stop.name);
+        for train in self.rolling_stock.trains.values_mut() {
+            if train.scheduled_stop == Some(stop.id) {
+                train.release_scheduled_stop();
+                train.destination = None;
+                train.route = None;
+                train.route_search_exhausted_at = None;
+                train.throttle = TrainThrottle::Brake;
+            }
+            if !name_remains
+                && train
+                    .schedule
+                    .current_entry()
+                    .is_some_and(|entry| entry.stop_name == stop.name)
+            {
+                train.schedule.advance();
+            }
+        }
+    }
+
+    /// Drops the stops whose rail is no longer there.
+    ///
+    /// The mirror of [`Simulation::prune_rolling_stock`], at the same moment and
+    /// for the same reason: a stop names a rail, and mining that rail would
+    /// otherwise leave the stop naming nothing — a state `validate_rolling_stock`
+    /// rejects, so an ordinary bit of track-pulling would make the world
+    /// unsaveable.
+    pub(in crate::simulation) fn prune_train_stops(&mut self) {
+        if self.rolling_stock.stops.is_empty() {
+            return;
+        }
+        let stranded = self
+            .rolling_stock
+            .stops
+            .values()
+            .filter(|stop| self.rail_piece_geometry(stop.target.edge).is_none())
+            .map(|stop| stop.id)
+            .collect::<Vec<_>>();
+        for id in stranded {
+            let Some(stop) = self.rolling_stock.stops.remove(&id) else {
+                continue;
+            };
+            self.forget_train_stop(&stop);
+        }
+    }
+
+    /// Replaces a train's automatic orders, cancelling whatever it was doing to
+    /// serve the old ones.
+    ///
+    /// Entries are checked before anything is written: an empty station name is
+    /// refused where the stop APIs refuse it rather than accepted here and
+    /// reported much later as a broken world by validation.
+    pub fn set_train_schedule(
+        &mut self,
+        train_id: TrainId,
+        mut schedule: TrainSchedule,
+    ) -> Result<(), TrainControlError> {
+        if schedule
+            .entries
+            .iter()
+            .any(|entry| entry.stop_name.trim().is_empty())
+        {
+            return Err(TrainControlError::EmptyStopName);
+        }
+        let train = self
+            .rolling_stock
+            .trains
+            .get_mut(&train_id)
+            .ok_or(TrainControlError::MissingTrain(train_id))?;
+        if schedule.entries.is_empty() {
+            schedule.current = 0;
+        } else {
+            schedule.current %= schedule.entries.len();
+        }
+        train.schedule = schedule;
+        train.release_scheduled_stop();
+        train.destination = None;
+        train.route = None;
+        train.route_search_exhausted_at = None;
+        Ok(())
+    }
+
     /// Rolling stock in the world, in ascending id order.
     pub fn rolling_stock(&self) -> impl Iterator<Item = &RollingStock> {
         self.rolling_stock.iter()
@@ -235,6 +427,10 @@ impl Simulation {
         train.destination = None;
         train.route = None;
         train.route_search_exhausted_at = None;
+        // The claim goes with the plan. A train being driven by hand is not a
+        // train on its way to the platform it booked, and a claim it kept would
+        // hold a place at that stop against every train that is actually coming.
+        train.release_scheduled_stop();
         Ok(())
     }
 
@@ -315,6 +511,7 @@ impl Simulation {
     /// the graph to move, so it must be walking the world as it is now rather
     /// than as it was before the last piece of track went down.
     pub(in crate::simulation) fn advance_trains(&mut self) {
+        self.advance_train_schedules();
         // Planning is one pass for the whole tick, before any train is stepped:
         // the expansion budget and the occupancy every search reads are both
         // tick-wide, and a train planned for here is a train steered on the very
@@ -348,6 +545,176 @@ impl Simulation {
         // later in the tick resolve wagons by tile out of this index, and a
         // train that arrived is a train they may load from the moment it stops.
         self.refresh_stopped_stock_index();
+    }
+
+    /// Advances station waits and assigns unclaimed destinations before route
+    /// planning. The pass is in train-id order and stop ties are in stop-id
+    /// order, so limits cannot introduce hash-map-order nondeterminism.
+    fn advance_train_schedules(&mut self) {
+        if self.rolling_stock.trains.is_empty() {
+            return;
+        }
+        let ids = self
+            .rolling_stock
+            .trains
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        // How many trains hold each stop, counted once for the pass and kept up
+        // to date as claims are taken and given back. Counting it per candidate
+        // stop per unassigned train — which is what asking the trains again would
+        // be — is a scan over every train in the world squared, on every tick a
+        // queue forms at a capacity-limited station.
+        let mut claims = BTreeMap::<TrainStopId, usize>::new();
+        for stop_id in self
+            .rolling_stock
+            .trains
+            .values()
+            .filter_map(|train| train.scheduled_stop)
+        {
+            *claims.entry(stop_id).or_default() += 1;
+        }
+        let tick = self.tick;
+        for id in ids {
+            if self
+                .rolling_stock
+                .train(id)
+                .is_some_and(Train::is_waiting_at_scheduled_stop)
+            {
+                let mut context = self.train_wait_context(id);
+                let train = self
+                    .rolling_stock
+                    .trains
+                    .get_mut(&id)
+                    .expect("id was collected");
+                // Loading or unloading is what the inactivity clock is about, and
+                // the cargo it compares against is the cargo this pass read a
+                // tick ago: a transfer either side of it changes what is aboard,
+                // whichever machine made it.
+                if train.schedule_activity_cargo.as_ref() != Some(&context.cargo) {
+                    train.schedule_activity_cargo = Some(context.cargo.clone());
+                    train.schedule_last_activity_tick = Some(tick);
+                }
+                context.waited_ticks =
+                    tick.saturating_sub(train.schedule_arrival_tick.unwrap_or(tick));
+                context.inactive_ticks =
+                    tick.saturating_sub(train.schedule_last_activity_tick.unwrap_or(tick));
+                if train
+                    .schedule
+                    .current_entry()
+                    .is_some_and(|entry| entry.may_depart(&context))
+                {
+                    train.schedule.advance();
+                    if let Some(stop_id) = train.scheduled_stop
+                        && let Some(held) = claims.get_mut(&stop_id)
+                    {
+                        // Given back within the pass, so a train queueing for
+                        // this stop takes the free place on the same tick the
+                        // train ahead of it leaves rather than a tick later.
+                        *held = held.saturating_sub(1);
+                    }
+                    train.release_scheduled_stop();
+                }
+            }
+
+            let Some(name) = self.rolling_stock.train(id).and_then(|train| {
+                (train.scheduled_stop.is_none() && train.destination.is_none())
+                    .then(|| {
+                        train
+                            .schedule
+                            .current_entry()
+                            .map(|entry| entry.stop_name.clone())
+                    })
+                    .flatten()
+            }) else {
+                continue;
+            };
+            let chosen = self
+                .rolling_stock
+                .stops
+                .values()
+                .find(|stop| {
+                    stop.name == name
+                        && claims.get(&stop.id).copied().unwrap_or(0) < stop.train_limit as usize
+                })
+                .map(|stop| (stop.id, stop.target));
+            if let Some((stop_id, target)) = chosen
+                && let Some(train) = self.rolling_stock.trains.get_mut(&id)
+            {
+                train.scheduled_stop = Some(stop_id);
+                *claims.entry(stop_id).or_default() += 1;
+                train.destination = Some(target);
+                train.route = None;
+                train.route_search_exhausted_at = None;
+            }
+        }
+    }
+
+    /// What a waiting train's conditions are asked about: its cargo, and whether
+    /// that cargo fills or fails to fill the containers it declares.
+    ///
+    /// The two tick counts are left at zero here and filled in by the caller,
+    /// which is the half of the answer that lives on the train rather than in its
+    /// wagons.
+    fn train_wait_context(&self, id: TrainId) -> crate::rolling_stock::TrainWaitContext {
+        let mut context = crate::rolling_stock::TrainWaitContext::default();
+        let Some(train) = self.rolling_stock.train(id) else {
+            return context;
+        };
+        // A train with nowhere to put cargo is never full: "full" is a statement
+        // about the containers a train declares, and a locomotive on its own
+        // declares none. Tanks count as much as wagons — a fluid train that could
+        // never satisfy `CargoFull` would sit at its loading station for ever.
+        let mut declares_cargo = false;
+        let mut every_container_full = true;
+        for stock_id in &train.stock {
+            let Some(stock) = self.rolling_stock.get(*stock_id) else {
+                continue;
+            };
+            if let Some(inventory) = &stock.inventory {
+                declares_cargo = true;
+                for slot in inventory.slots() {
+                    // Full means nothing more would go in, not merely occupied: a
+                    // wagon holding one plate in each of forty slots is all but
+                    // empty, and departing it as "full" would send a train away
+                    // with a fortieth of a load.
+                    let Some(stack) = slot.stack() else {
+                        every_container_full = false;
+                        continue;
+                    };
+                    every_container_full &= slot
+                        .insert_capacity(&self.world.prototypes, stack.item_id())
+                        .unwrap_or(0)
+                        == 0;
+                    context
+                        .cargo
+                        .add_item(stack.item_id(), i32::from(stack.count()));
+                }
+            }
+            // Capacity comes from the prototype, which is where every other fluid
+            // box in the world reads it from; the two lists agree in length by
+            // validation, so a box without a declaration is a catalog the world
+            // no longer matches rather than an empty tank.
+            let declared_boxes = self
+                .world
+                .prototypes
+                .entity(stock.prototype_id)
+                .map(|prototype| prototype.fluid_boxes.as_slice())
+                .unwrap_or_default();
+            for (fluid_box, declared) in stock.fluid_boxes.iter().zip(declared_boxes) {
+                declares_cargo = true;
+                every_container_full &= fluid_box.amount_milliunits >= declared.capacity_milliunits;
+                if let Some(fluid) = fluid_box.fluid_id {
+                    context.cargo.add_fluid(
+                        fluid,
+                        i32::try_from(fluid_box.amount_milliunits).unwrap_or(i32::MAX),
+                    );
+                }
+            }
+        }
+        context.cargo_empty = context.cargo.is_empty();
+        context.cargo_full = declares_cargo && every_container_full;
+        context
     }
 
     fn advance_train(&mut self, train_id: TrainId) {

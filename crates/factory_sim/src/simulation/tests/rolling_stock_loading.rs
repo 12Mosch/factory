@@ -653,20 +653,27 @@ fn wagon_contents_and_filters_survive_a_save_round_trip() {
     assert_eq!(loaded.state_hash(), sim.state_hash());
 }
 
-/// A railway with no tanker parked anywhere costs a topology rebuild nothing.
+/// Nothing joins a fluid network unless a pump is reaching for it, and a
+/// railway with no tanker parked anywhere does not even look for the pumps.
 ///
-/// The pump-side search exists only to serve parked fluid wagons, so it must
-/// not walk the placed entities of a factory that has none — which is every
-/// factory, most of the time.
+/// Both halves are asserted on the node set rather than on the guard alone, so
+/// the test still means what its name says if the guard is ever moved: what
+/// matters is which fluid boxes the topology ends up with, not which shortcut
+/// got it there.
 #[test]
-fn a_railway_without_a_parked_tanker_adds_no_fluid_nodes() {
+fn a_railway_without_a_pump_at_a_tanker_adds_no_fluid_nodes() {
     let (sim, _rails, _stock_id, _tile) = world_with_parked_wagon("cargo_wagon");
     assert!(
         !sim.any_stopped_stock_carries_fluid(),
         "a cargo wagon has no tank, so nothing asks the pumps about it"
     );
+    assert_eq!(sim.networked_rolling_stock_fluid_boxes().count(), 0);
 
-    // And a fluid wagon parked on the same run does put the search back on.
+    // A parked tanker does put the pump search back on — and still adds
+    // nothing, because no pump on this railway opens onto it. A wagon joins a
+    // network only where something reaches for it, which is what
+    // `a_pump_fills_a_stopped_fluid_wagon` covers from the other side.
     let (sim, _rails, _stock_id, _tile) = world_with_parked_wagon("fluid_wagon");
     assert!(sim.any_stopped_stock_carries_fluid());
+    assert_eq!(sim.networked_rolling_stock_fluid_boxes().count(), 0);
 }

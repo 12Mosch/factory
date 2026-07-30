@@ -59,12 +59,21 @@ use bincode::Options;
 // standing — so the claims are saved with the train. Circuit entity state renamed
 // its accumulator charge channel to the general output channel a rail signal
 // reports its aspect on.
-// v39: wagons joined the factory. Inventories gained per-slot item filters, so
+// v39: named train stops joined the rolling-stock subsystem, and trains gained
+// the schedule that drives them between stops. None of it is derivable: which
+// stop a train has claimed is a reservation against that stop's train limit, and
+// how long it has been waiting — and how long since its cargo last changed —
+// decides when it leaves, so a save that rebuilt any of it would depart trains at
+// different moments than the world it was saved from.
+// v40: wagons joined the factory. Inventories gained per-slot item filters, so
 // every saved inventory carries a filter row (empty for all the ones nobody has
 // filtered); fluid network box snapshots name their holder rather than an entity
 // id, because a stopped fluid wagon is part of the network at the pump it stands
-// at and a wagon has no entity id to be named by.
-pub const SAVE_VERSION: u32 = 39;
+// at and a wagon has no entity id to be named by. A number of its own rather
+// than sharing v39 with the stops above: that version already describes a
+// released format, and a save written here holds both changes rather than
+// either.
+pub const SAVE_VERSION: u32 = 40;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

@@ -323,6 +323,17 @@ fn record_route_outcome(
             train.destination = None;
             train.route = None;
             train.throttle = TrainThrottle::Brake;
+            // A stop there is no way to is a stop this train will not serve, so
+            // it gives back the place it was holding there and its schedule steps
+            // past the entry. Merely giving the claim back would leave the
+            // schedule naming the same unreachable station, which the assignment
+            // pass would book again and search for again on every tick that
+            // follows; stepping past it is what makes the answer stick until the
+            // schedule comes round to the entry again.
+            if train.scheduled_stop.is_some() {
+                train.release_scheduled_stop();
+                train.schedule.advance();
+            }
         }
         RailRouteOutcome::Exhausted => {
             train.route = None;
@@ -387,6 +398,9 @@ impl Simulation {
         train.destination = Some(RailTarget::new(rail, geometry.length_fixed / 2));
         train.route = None;
         train.route_search_exhausted_at = None;
+        // Being sent somewhere by hand replaces where the schedule was sending
+        // it, so the place it had booked at a stop goes back.
+        train.release_scheduled_stop();
         Ok(())
     }
 
@@ -403,6 +417,7 @@ impl Simulation {
         train.route = None;
         train.route_search_exhausted_at = None;
         train.throttle = TrainThrottle::Brake;
+        train.release_scheduled_stop();
         Ok(())
     }
 
@@ -604,6 +619,7 @@ impl Simulation {
     /// A leg cut short by other stock is a different matter — that is a leg the
     /// train is still on, and it waits.
     pub(super) fn advance_train_route(&mut self, train_id: TrainId, step: TrainStep) {
+        let tick = self.tick;
         let Some(train) = self.rolling_stock.trains.get_mut(&train_id) else {
             return;
         };
@@ -648,6 +664,12 @@ impl Simulation {
                 train.route = None;
                 train.destination = None;
                 train.throttle = TrainThrottle::Coast;
+                // The one place a scheduled train has arrived. A run of track
+                // spent down to nothing while standing still is the only thing
+                // that says the train is at the stop it claimed rather than
+                // stopped somewhere else with its orders withdrawn, and the wait
+                // is timed from here.
+                train.arrive_at_scheduled_stop(tick);
             }
         }
     }
@@ -792,6 +814,11 @@ mod tests {
             destination: Some(RailTarget::new(EntityId::new(raw), 0)),
             route: None,
             route_search_exhausted_at: None,
+            schedule: Default::default(),
+            schedule_arrival_tick: None,
+            schedule_last_activity_tick: None,
+            schedule_activity_cargo: None,
+            scheduled_stop: None,
             reserved_blocks: Vec::new(),
         }
     }

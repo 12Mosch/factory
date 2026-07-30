@@ -842,6 +842,11 @@ mod tests {
             destination: None,
             route: None,
             route_search_exhausted_at: None,
+            schedule: Default::default(),
+            schedule_arrival_tick: None,
+            schedule_last_activity_tick: None,
+            schedule_activity_cargo: None,
+            scheduled_stop: None,
             reserved_blocks: Vec::new(),
         };
         assert_eq!(

@@ -34,5 +34,6 @@ mod solar;
 mod statistics;
 mod terrain;
 mod train_routing;
+mod train_schedules;
 mod transfers;
 mod world_generation;
