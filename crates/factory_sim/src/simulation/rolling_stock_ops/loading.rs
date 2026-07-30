@@ -40,7 +40,17 @@ use std::ops::ControlFlow;
 /// is a function of the world rather than of a hash seed.
 #[derive(Clone, Debug, Default)]
 pub(in crate::simulation) struct StoppedStockIndex {
-    tiles: BTreeMap<(WorldTileCoord, WorldTileCoord), RollingStockId>,
+    /// Every stopped piece lying over each tile, ascending, and almost always
+    /// exactly one — hence the inline capacity.
+    ///
+    /// All of them rather than the first to arrive, because a tile can outlive
+    /// one of its claimants: two coupled wagons share the tile where they meet,
+    /// and so do two separate trains parked nose to tail. Recording only one
+    /// would leave the tile unreachable when *that* one pulled away, with the
+    /// wagon still standing on it and its train still indexed — so nothing
+    /// would put the tile back until the remaining train moved and stopped
+    /// again.
+    tiles: BTreeMap<(WorldTileCoord, WorldTileCoord), SmallVec<[RollingStockId; 1]>>,
     /// The tiles each indexed piece put in above, so a departure removes
     /// exactly what the arrival added instead of scanning the map.
     covered: BTreeMap<RollingStockId, Vec<(WorldTileCoord, WorldTileCoord)>>,
@@ -54,12 +64,17 @@ impl_runtime_only_identity!(StoppedStockIndex);
 
 impl StoppedStockIndex {
     /// The stopped piece of stock lying over `(x, y)`, if any.
+    ///
+    /// The lowest id among the pieces standing there. A rule about *which*
+    /// pieces cover the tile rather than about the order they arrived in, so an
+    /// inserter reaching into a shared tile swings into the same wagon however
+    /// the trains around it came and went.
     pub(in crate::simulation) fn stock_at(
         &self,
         x: WorldTileCoord,
         y: WorldTileCoord,
     ) -> Option<RollingStockId> {
-        self.tiles.get(&(x, y)).copied()
+        self.tiles.get(&(x, y))?.first().copied()
     }
 
     /// Every stopped piece, in ascending id order.
@@ -75,11 +90,10 @@ impl StoppedStockIndex {
         self.trains.insert(train_id);
         for (stock_id, tiles) in covered {
             for tile in &tiles {
-                // First piece to claim a tile keeps it. Two coupled wagons
-                // sample the same tile where they meet, and an inserter reaching
-                // into that tile has to swing into one wagon rather than
-                // alternate between them from tick to tick.
-                self.tiles.entry(*tile).or_insert(stock_id);
+                let claimants = self.tiles.entry(*tile).or_default();
+                if let Err(index) = claimants.binary_search(&stock_id) {
+                    claimants.insert(index, stock_id);
+                }
             }
             self.covered.insert(stock_id, tiles);
         }
@@ -93,7 +107,15 @@ impl StoppedStockIndex {
                 continue;
             };
             for tile in tiles {
-                if self.tiles.get(&tile) == Some(stock_id) {
+                let Some(claimants) = self.tiles.get_mut(&tile) else {
+                    continue;
+                };
+                if let Ok(index) = claimants.binary_search(stock_id) {
+                    claimants.remove(index);
+                }
+                // Only once nothing is standing there any more: a tile another
+                // stopped wagon still covers goes on answering with that wagon.
+                if claimants.is_empty() {
                     self.tiles.remove(&tile);
                 }
             }
@@ -420,5 +442,60 @@ impl Simulation {
             ControlFlow::Continue(())
         });
         tiles
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two trains parked nose to tail share the tile where they meet, and one of
+    /// them leaving must not take that tile out of the index with it: the other
+    /// wagon is still standing on it, and its train stays indexed, so nothing
+    /// else would ever put the tile back.
+    #[test]
+    fn a_tile_two_trains_share_still_answers_when_one_departs() {
+        let mut index = StoppedStockIndex::default();
+        let (first, second) = (RollingStockId::new(1), RollingStockId::new(2));
+        let shared = (4, 7);
+
+        index.insert(TrainId::new(1), vec![(first, vec![shared, (4, 8)])]);
+        index.insert(TrainId::new(2), vec![(second, vec![shared, (4, 6)])]);
+        assert_eq!(index.stock_at(shared.0, shared.1), Some(first));
+
+        index.remove_train(TrainId::new(1), &[first]);
+        assert_eq!(
+            index.stock_at(shared.0, shared.1),
+            Some(second),
+            "a wagon still standing on the tile should still be reachable"
+        );
+        assert_eq!(
+            index.stock_at(4, 8),
+            None,
+            "the departed train left nothing"
+        );
+
+        index.remove_train(TrainId::new(2), &[second]);
+        assert_eq!(index.stock_at(shared.0, shared.1), None);
+        assert!(index.tiles.is_empty(), "an emptied tile keeps no entry");
+    }
+
+    /// Which wagon a shared tile answers with follows from the pieces standing
+    /// there, not from the order their trains happened to stop in.
+    #[test]
+    fn a_shared_tile_answers_the_same_whichever_train_stopped_first() {
+        let (first, second) = (RollingStockId::new(1), RollingStockId::new(2));
+        let shared = (0, 0);
+
+        let mut ascending = StoppedStockIndex::default();
+        ascending.insert(TrainId::new(1), vec![(first, vec![shared])]);
+        ascending.insert(TrainId::new(2), vec![(second, vec![shared])]);
+
+        let mut descending = StoppedStockIndex::default();
+        descending.insert(TrainId::new(2), vec![(second, vec![shared])]);
+        descending.insert(TrainId::new(1), vec![(first, vec![shared])]);
+
+        assert_eq!(ascending.stock_at(0, 0), Some(first));
+        assert_eq!(descending.stock_at(0, 0), Some(first));
     }
 }
