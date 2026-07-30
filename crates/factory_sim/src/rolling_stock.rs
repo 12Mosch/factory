@@ -810,6 +810,71 @@ mod tests {
         assert!(!TrainWaitCondition::Inactivity { ticks: 300 }.is_met(&context));
     }
 
+    /// A cargo condition compares what is aboard against the number the player
+    /// asked for, through the comparator the decider combinator already defines.
+    /// Cargo the train is not carrying at all compares as zero rather than as
+    /// "no answer", which is what makes "no more than this much left" a
+    /// condition a train can satisfy by being empty.
+    #[test]
+    fn item_and_fluid_conditions_compare_what_is_aboard() {
+        use crate::circuits::Comparator;
+
+        let iron = ItemId::new(3);
+        let copper = ItemId::new(4);
+        let water = FluidId::new(1);
+        let steam = FluidId::new(2);
+        let mut cargo = TrainCargo::default();
+        cargo.add_item(iron, 500);
+        cargo.add_fluid(water, 12_000);
+        let context = TrainWaitContext {
+            cargo,
+            ..Default::default()
+        };
+
+        let item = |comparator, count| {
+            TrainWaitCondition::ItemCount {
+                item: iron,
+                comparator,
+                count,
+            }
+            .is_met(&context)
+        };
+        assert!(item(Comparator::GreaterOrEqual, 500));
+        assert!(item(Comparator::Less, 501));
+        assert!(!item(Comparator::Greater, 500));
+        assert!(!item(Comparator::Equal, 499));
+
+        let fluid = |comparator, milliunits| {
+            TrainWaitCondition::FluidCount {
+                fluid: water,
+                comparator,
+                milliunits,
+            }
+            .is_met(&context)
+        };
+        assert!(fluid(Comparator::Equal, 12_000));
+        assert!(fluid(Comparator::NotEqual, 0));
+        assert!(!fluid(Comparator::LessOrEqual, 11_999));
+
+        assert!(
+            TrainWaitCondition::ItemCount {
+                item: copper,
+                comparator: Comparator::Equal,
+                count: 0,
+            }
+            .is_met(&context),
+            "cargo the train is not carrying compares as none of it"
+        );
+        assert!(
+            !TrainWaitCondition::FluidCount {
+                fluid: steam,
+                comparator: Comparator::Greater,
+                milliunits: 0,
+            }
+            .is_met(&context)
+        );
+    }
+
     /// A count of zero is absent rather than stored, so the cargo two trains
     /// carrying the same thing hold compares equal however it got there — which
     /// is what the inactivity clock's tick-to-tick comparison rests on.
