@@ -43,7 +43,7 @@ fn opening_clicked_chest_selects_correct_entity() {
 
     assert_eq!(
         opened_container_after_world_click(&sim, Some((x, y))),
-        Some(entity_id)
+        (Some(entity_id), None)
     );
 }
 
@@ -66,7 +66,7 @@ fn opening_clicked_burner_drill_selects_correct_entity() {
 
     assert_eq!(
         opened_container_after_world_click(&sim, Some((x, y))),
-        Some(entity_id)
+        (Some(entity_id), None)
     );
 }
 
@@ -88,7 +88,7 @@ fn opening_clicked_furnace_selects_correct_entity() {
 
     assert_eq!(
         opened_container_after_world_click(&sim, Some((x, y))),
-        Some(entity_id)
+        (Some(entity_id), None)
     );
 }
 
@@ -110,7 +110,7 @@ fn opening_clicked_assembler_selects_correct_entity() {
 
     assert_eq!(
         opened_container_after_world_click(&sim, Some((x, y))),
-        Some(entity_id)
+        (Some(entity_id), None)
     );
 }
 
@@ -132,6 +132,43 @@ fn opening_clicked_lab_selects_correct_entity() {
 
     assert_eq!(
         opened_container_after_world_click(&sim, Some((x, y))),
-        Some(entity_id)
+        (Some(entity_id), None)
+    );
+}
+
+/// A wagon stands on a rail, and a rail is an ordinary placed entity — so the
+/// occupancy lookup would answer with the track and open nothing at all. The
+/// click has to find the stock first.
+#[test]
+fn clicking_a_wagon_opens_the_rolling_stock_window_rather_than_the_rail() {
+    let mut sim = Simulation::new_test_world(123);
+    let straight = entity_id_by_name(sim.catalog(), "rail_straight");
+    let (x, y) = first_buildable_rect(&sim, straight);
+    for index in 0..6 {
+        factory_sim::placement::place(
+            &mut sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: straight,
+                x,
+                y: y + index * 2,
+                direction: Direction::North,
+            },
+        )
+        .expect("a straight run should be placeable at a buildable origin");
+    }
+    sim.tick();
+
+    let wagon = entity_id_by_name(sim.catalog(), "cargo_wagon");
+    let stock_id = sim
+        .place_rolling_stock(wagon, x, y + 4)
+        .expect("a wagon should fit on a six-piece run");
+    sim.tick();
+    let (wagon_x, wagon_y) = sim
+        .rolling_stock_tile(stock_id)
+        .expect("a placed wagon stands somewhere");
+
+    assert_eq!(
+        opened_container_after_world_click(&sim, Some((wagon_x, wagon_y))),
+        (None, Some(stock_id))
     );
 }

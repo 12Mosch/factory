@@ -1,4 +1,5 @@
 use super::*;
+use crate::simulation::rolling_stock_ops::{StoppedStock, StoppedStockMut};
 
 impl MachineTickContext<'_> {
     pub(super) fn advance_inserters<P: TickProfiler>(&mut self, profiler: &mut P) {
@@ -24,7 +25,11 @@ impl MachineTickContext<'_> {
             let next_state = match *state {
                 InserterState::WaitingForItem => {
                     let Some(item_id) = profiler.measure(ProfilePhase::InventoryTransfers, || {
-                        peek_inserter_source_item(self.entities, pickup_tile)
+                        peek_inserter_source_item(
+                            self.entities,
+                            StoppedStock::new(self.stopped_stock, self.rolling_stock),
+                            pickup_tile,
+                        )
                     }) else {
                         self.entities.inserter_energy.insert(entity_id, energy);
                         continue;
@@ -36,6 +41,7 @@ impl MachineTickContext<'_> {
                             &self.world.prototypes,
                             self.research,
                             self.entities,
+                            StoppedStock::new(self.stopped_stock, self.rolling_stock),
                             drop_tile,
                             item,
                         )
@@ -59,9 +65,13 @@ impl MachineTickContext<'_> {
                         InserterState::Picking {
                             ticks_left: ticks_left - 1,
                         }
-                    } else if let Some(item_id) = profiler
-                        .measure(ProfilePhase::InventoryTransfers, || {
-                            peek_inserter_source_item(self.entities, pickup_tile)
+                    } else if let Some(item_id) =
+                        profiler.measure(ProfilePhase::InventoryTransfers, || {
+                            peek_inserter_source_item(
+                                self.entities,
+                                StoppedStock::new(self.stopped_stock, self.rolling_stock),
+                                pickup_tile,
+                            )
                         })
                     {
                         let item = ItemStack::new(&self.world.prototypes, item_id, 1)
@@ -71,6 +81,7 @@ impl MachineTickContext<'_> {
                                 &self.world.prototypes,
                                 self.research,
                                 self.entities,
+                                StoppedStock::new(self.stopped_stock, self.rolling_stock),
                                 drop_tile,
                                 item,
                             )
@@ -82,6 +93,10 @@ impl MachineTickContext<'_> {
                                     try_take_inserter_source_item(
                                         &self.world.prototypes,
                                         self.entities,
+                                        &mut StoppedStockMut::new(
+                                            self.stopped_stock,
+                                            self.rolling_stock,
+                                        ),
                                         self.transport,
                                         pickup_tile,
                                         item_id,
@@ -102,6 +117,7 @@ impl MachineTickContext<'_> {
                                 &self.world.prototypes,
                                 self.research,
                                 self.entities,
+                                StoppedStock::new(self.stopped_stock, self.rolling_stock),
                                 drop_tile,
                                 item,
                             )
@@ -115,6 +131,7 @@ impl MachineTickContext<'_> {
                             &self.world.prototypes,
                             self.research,
                             self.entities,
+                            &mut StoppedStockMut::new(self.stopped_stock, self.rolling_stock),
                             self.transport,
                             drop_tile,
                             item,

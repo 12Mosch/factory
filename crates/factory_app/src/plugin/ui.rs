@@ -53,6 +53,7 @@ use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, InventoryTransferFeedback, OpenContainer,
     ProductionStatsWindowState, TechnologyWindowState,
 };
+use crate::ui::rolling_stock_window::sync_rolling_stock_window;
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
@@ -167,6 +168,14 @@ impl Plugin for UiPlugin {
                 Update,
                 update_module_panel
                     .after(sync_container_window)
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                // Beside the container window and under the same ordering: the
+                // two share the slot grid, and only one of them is ever open.
+                sync_rolling_stock_window
+                    .after(handle_build_menu_buttons)
                     .in_set(InGameSet),
             )
             .add_systems(

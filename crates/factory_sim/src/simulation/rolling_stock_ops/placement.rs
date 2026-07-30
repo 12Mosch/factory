@@ -584,6 +584,10 @@ impl Simulation {
                 );
                 train_id
             });
+        // A train that gains a wagon covers tiles it did not cover a moment
+        // ago, so whatever it was indexed under no longer describes it. Dropped
+        // here and rebuilt on the next tick, from the train as it now is.
+        self.forget_stopped_train(train_id);
 
         let stock_id = self.rolling_stock.allocate_stock_id();
         self.rolling_stock.stock.insert(
@@ -633,6 +637,15 @@ impl Simulation {
 
     /// Removes a piece of stock and repairs the train it left behind.
     fn remove_rolling_stock(&mut self, stock_id: RollingStockId) {
+        let Some(train_id) = self.rolling_stock.get(stock_id).map(|stock| stock.train) else {
+            return;
+        };
+        // Before the piece goes, while the train still names it: the index is
+        // torn down a whole train at a time, and a piece already gone from its
+        // train's list is one the teardown could not find. This also covers the
+        // split below — every piece the removal scatters into new trains left
+        // the index here, with the train they were all part of.
+        self.forget_stopped_train(train_id);
         let Some(stock) = self.rolling_stock.stock.remove(&stock_id) else {
             return;
         };

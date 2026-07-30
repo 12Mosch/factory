@@ -59,6 +59,7 @@ impl Simulation {
             research,
             rolling_stock: RollingStockSubsystem::default(),
             train_routing: rolling_stock_ops::TrainRouting::default(),
+            stopped_stock_index: rolling_stock_ops::StoppedStockIndex::default(),
             power: PowerSubsystem::default(),
             power_demand_cache: PowerDemandCache::default(),
             power_tick_scratch: power_ops::PowerTickScratch::default(),

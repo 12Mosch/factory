@@ -423,6 +423,10 @@ impl RollingStockSubsystem {
         self.stock.get(&id)
     }
 
+    pub(crate) fn get_mut(&mut self, id: RollingStockId) -> Option<&mut RollingStock> {
+        self.stock.get_mut(&id)
+    }
+
     pub fn train_count(&self) -> usize {
         self.trains.len()
     }
@@ -486,6 +490,34 @@ pub enum RollingStockMiningError {
     },
     /// The prototype declares no build item, so there is nothing to recover.
     MissingBuildItem(EntityPrototypeId),
+}
+
+/// Why a player transfer into or out of rolling stock failed.
+///
+/// Separate from [`crate::logistics::ContainerError`] because the endpoint is:
+/// a container error names an [`EntityId`], and a wagon has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RollingStockTransferError {
+    MissingStock(RollingStockId),
+    /// The piece carries no cargo — a locomotive or a fluid wagon.
+    NoInventory(RollingStockId),
+    /// The piece has no burner, so nothing to fuel.
+    NoFuelSlot(RollingStockId),
+    InvalidItem(factory_data::ItemId),
+    InvalidSlot {
+        slot_index: usize,
+    },
+    EmptySlot {
+        slot_index: usize,
+    },
+    /// A filter was asked for on a slot holding something else.
+    SlotNotEmpty {
+        slot_index: usize,
+    },
+    InsufficientSpace,
+    UnknownItem,
+    /// The window asked for a panel this piece of stock does not have.
+    UnsupportedPanel,
 }
 
 /// Why a train would not take a drive command.

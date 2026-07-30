@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
     AssemblerError, BoilerError, ContainerError, FurnaceError, InserterError, MiningDrillError,
-    ModuleError, NuclearReactorError, RoboportError, SimCommand, SlotTransferError,
+    ModuleError, NuclearReactorError, RoboportError, RollingStockTransferError, SimCommand,
+    SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -147,6 +148,16 @@ pub(crate) fn handle_container_slot_clicks(
             continue;
         }
 
+        // The two windows share this grid, so which command a click becomes
+        // follows from what is open rather than from the button.
+        if let Some(stock_id) = open_container.rolling_stock {
+            commands.write(SimCommandRequest(SimCommand::TransferRollingStockSlot {
+                stock_id,
+                panel: button.panel,
+                slot_index: button.slot_index,
+            }));
+            continue;
+        }
         let Some(entity_id) = open_container.entity_id else {
             feedback.message = Some("No open container".to_string());
             continue;
@@ -182,12 +193,21 @@ pub(crate) fn update_container_slot_text(
     let sim = sim.read();
 
     for (marker, mut text) in &mut texts {
-        let stack = factory_sim::entity_access::inventory_panel_slot(
-            &sim,
-            open_container.entity_id,
-            marker.panel,
-            marker.slot_index,
-        );
+        let stack = if open_container.rolling_stock.is_some() {
+            factory_sim::entity_access::rolling_stock_panel_slot(
+                &sim,
+                open_container.rolling_stock,
+                marker.panel,
+                marker.slot_index,
+            )
+        } else {
+            factory_sim::entity_access::inventory_panel_slot(
+                &sim,
+                open_container.entity_id,
+                marker.panel,
+                marker.slot_index,
+            )
+        };
         text.0 = stack
             .map(|stack| format_item_stack(stack, sim.catalog()))
             .unwrap_or_default();
@@ -196,6 +216,7 @@ pub(crate) fn update_container_slot_text(
 
 pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransferError) -> String {
     match error {
+        SlotTransferError::RollingStock(error) => rolling_stock_error_message(catalog, error),
         SlotTransferError::Transfer(error) => container_error_message(catalog, error),
         SlotTransferError::MiningDrill(error) => mining_drill_error_message(catalog, error),
         SlotTransferError::Furnace(error) => furnace_error_message(catalog, error),
@@ -205,6 +226,24 @@ pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransf
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
         SlotTransferError::Inserter(error) => inserter_error_message(catalog, error),
         SlotTransferError::Module(error) => module_error_message(catalog, error),
+    }
+}
+
+fn rolling_stock_error_message(
+    catalog: &PrototypeCatalog,
+    error: RollingStockTransferError,
+) -> String {
+    match error {
+        RollingStockTransferError::MissingStock(_) => "Wagon unavailable".to_string(),
+        RollingStockTransferError::NoInventory(_) => "No cargo space".to_string(),
+        RollingStockTransferError::NoFuelSlot(_) => "No fuel slot".to_string(),
+        RollingStockTransferError::InvalidItem(item_id) => wrong_item_message(catalog, item_id),
+        RollingStockTransferError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        RollingStockTransferError::EmptySlot { .. } => "Empty slot".to_string(),
+        RollingStockTransferError::SlotNotEmpty { .. } => "Empty the slot first".to_string(),
+        RollingStockTransferError::InsufficientSpace => "No space".to_string(),
+        RollingStockTransferError::UnknownItem => "Unknown item".to_string(),
+        RollingStockTransferError::UnsupportedPanel => "Nothing to transfer".to_string(),
     }
 }
 

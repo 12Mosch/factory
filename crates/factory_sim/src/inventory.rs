@@ -4,6 +4,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct Inventory {
     slots: Vec<ItemSlot>,
+    /// Per-slot item filters, parallel to `slots`, or empty when no slot is
+    /// filtered.
+    ///
+    /// Empty rather than a vector of `None` so that an unfiltered inventory —
+    /// which is every inventory in the world until a player says otherwise —
+    /// costs nothing to store, hash, or compare. That makes "unfiltered" a
+    /// single representation instead of two, which is what keeps two worlds
+    /// that filtered nothing from hashing differently; [`Inventory::set_filter`]
+    /// drops the vector again as soon as the last filter is cleared.
+    filters: Vec<Option<ItemId>>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -50,6 +60,12 @@ pub enum InventoryError {
     },
     InsufficientSpace,
     InsufficientItems,
+    /// A filter was set on a slot already holding something else. Refused
+    /// rather than applied so that "a filtered slot holds only what it filters
+    /// for" stays a fact the insert path and validation can both rely on.
+    FilterMismatch {
+        slot_index: usize,
+    },
 }
 
 impl ItemStack {
@@ -205,6 +221,7 @@ impl Inventory {
     pub fn with_slot_count(slot_count: usize) -> Self {
         Self {
             slots: vec![ItemSlot::default(); slot_count],
+            filters: Vec::new(),
         }
     }
 
@@ -219,7 +236,10 @@ impl Inventory {
         for slot in &slots {
             slot.validate(catalog)?;
         }
-        Ok(Self { slots })
+        Ok(Self {
+            slots,
+            filters: Vec::new(),
+        })
     }
 
     pub fn slot(&self, slot_index: usize) -> Option<ItemStack> {
@@ -228,6 +248,58 @@ impl Inventory {
 
     pub fn slots(&self) -> &[ItemSlot] {
         &self.slots
+    }
+
+    /// Per-slot filters, or an empty slice when no slot is filtered.
+    pub fn filters(&self) -> &[Option<ItemId>] {
+        &self.filters
+    }
+
+    /// What `slot_index` is filtered to, if anything.
+    pub fn filter(&self, slot_index: usize) -> Option<ItemId> {
+        self.filters.get(slot_index).copied().flatten()
+    }
+
+    /// Whether `slot_index` would take `item_id` at all, ignoring how full it
+    /// is. An unfiltered slot takes anything.
+    pub fn slot_accepts(&self, slot_index: usize, item_id: ItemId) -> bool {
+        self.filter(slot_index)
+            .is_none_or(|filter| filter == item_id)
+    }
+
+    /// Filters one slot to `filter`, or clears its filter with `None`.
+    ///
+    /// Refused when the slot already holds something the filter would exclude:
+    /// the alternative is a slot whose contents contradict its own filter, and
+    /// every other path here — insertion, validation, the container UI — would
+    /// then have to carry a rule for a state a player cannot do anything about.
+    /// Empty the slot first, which is what the player has to do anyway.
+    pub fn set_filter(
+        &mut self,
+        slot_index: usize,
+        filter: Option<ItemId>,
+    ) -> Result<(), InventoryError> {
+        let slot = *self
+            .slots
+            .get(slot_index)
+            .ok_or(InventoryError::InvalidSlot { slot_index })?;
+        if let Some((filter, stack)) = filter.zip(slot.stack())
+            && stack.item_id != filter
+        {
+            return Err(InventoryError::FilterMismatch { slot_index });
+        }
+
+        if filter.is_none() && self.filters.is_empty() {
+            return Ok(());
+        }
+        if self.filters.is_empty() {
+            self.filters = vec![None; self.slots.len()];
+        }
+        self.filters[slot_index] = filter;
+        if self.filters.iter().all(Option::is_none) {
+            self.filters.clear();
+        }
+        Ok(())
     }
 
     pub(crate) fn item_slot(&self, slot_index: usize) -> Option<&ItemSlot> {
@@ -342,8 +414,28 @@ impl Inventory {
     pub(crate) fn insert_capacity(&self, item_id: ItemId, stack_size: u16) -> u32 {
         self.slots
             .iter()
-            .map(|slot| u32::from(slot.capacity_for(item_id, stack_size)))
+            .enumerate()
+            .map(|(slot_index, slot)| {
+                u32::from(self.slot_capacity_for(slot_index, slot, item_id, stack_size))
+            })
             .sum()
+    }
+
+    /// Room in one slot for `item_id`, with its filter applied. The single
+    /// place the filter rule enters the insert path, so what
+    /// [`Inventory::insert_capacity`] promises and what
+    /// [`Inventory::insert_validated`] does cannot drift apart.
+    fn slot_capacity_for(
+        &self,
+        slot_index: usize,
+        slot: &ItemSlot,
+        item_id: ItemId,
+        stack_size: u16,
+    ) -> u16 {
+        if !self.slot_accepts(slot_index, item_id) {
+            return 0;
+        }
+        slot.capacity_for(item_id, stack_size)
     }
 
     /// Inserts a quantity whose item validity and destination capacity were
@@ -361,10 +453,18 @@ impl Inventory {
 
     fn insert_validated(&mut self, item_id: ItemId, count: u16, stack_size: u16) {
         let mut remaining = u32::from(count);
+        let Self { slots, filters } = self;
+        let accepts = |slot_index: usize| {
+            filters
+                .get(slot_index)
+                .copied()
+                .flatten()
+                .is_none_or(|filter| filter == item_id)
+        };
 
-        for slot in &mut self.slots {
+        for (slot_index, slot) in slots.iter_mut().enumerate() {
             let capacity = slot.capacity_for(item_id, stack_size);
-            if slot.is_empty() || capacity == 0 {
+            if slot.is_empty() || capacity == 0 || !accepts(slot_index) {
                 continue;
             }
             let inserted = remaining.min(u32::from(capacity)) as u16;
@@ -375,16 +475,25 @@ impl Inventory {
             }
         }
 
-        for slot in &mut self.slots {
-            if !slot.is_empty() {
-                continue;
-            }
+        // Filtered empty slots are filled before unfiltered ones. A slot a
+        // player reserved for this item is where they asked it to go, and
+        // spending the free slots first would leave a filtered wagon accepting
+        // less than its filters promised.
+        for filtered_pass in [true, false] {
+            for (slot_index, slot) in slots.iter_mut().enumerate() {
+                if !slot.is_empty()
+                    || !accepts(slot_index)
+                    || filters.get(slot_index).copied().flatten().is_some() != filtered_pass
+                {
+                    continue;
+                }
 
-            let inserted = remaining.min(u32::from(stack_size)) as u16;
-            slot.commit_prevalidated_insert(item_id, inserted, stack_size);
-            remaining -= u32::from(inserted);
-            if remaining == 0 {
-                return;
+                let inserted = remaining.min(u32::from(stack_size)) as u16;
+                slot.commit_prevalidated_insert(item_id, inserted, stack_size);
+                remaining -= u32::from(inserted);
+                if remaining == 0 {
+                    return;
+                }
             }
         }
 

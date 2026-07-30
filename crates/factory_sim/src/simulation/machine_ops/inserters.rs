@@ -1,4 +1,8 @@
 use crate::simulation::entity_transfer::RoboportInventory;
+use crate::simulation::rolling_stock_ops::{
+    StoppedStock, StoppedStockMut, drop_stock_item, stock_can_accept, stock_pickup_item,
+    take_stock_item,
+};
 use crate::simulation::*;
 
 /// Which of a roboport's two inventories would take `item` from an inserter, or
@@ -94,8 +98,18 @@ fn rotate_inserter_offset(offset: (i32, i32), direction: Direction) -> (i32, i32
 
 pub(in crate::simulation) fn peek_inserter_source_item(
     entities: &EntityStore,
+    stopped_stock: StoppedStock<'_>,
     pickup_tile: (WorldTileCoord, WorldTileCoord),
 ) -> Option<ItemId> {
+    // Stopped stock first. A wagon stands on a rail, and the rail is an
+    // ordinary placed entity, so the occupancy lookup below would answer with a
+    // rail piece — an entity that holds nothing — and never look further. The
+    // wagon is the more specific answer for that tile, and the only one that
+    // holds items.
+    if let Some(stock) = stopped_stock.at(pickup_tile.0, pickup_tile.1) {
+        return stock_pickup_item(stock);
+    }
+
     let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
 
     if let Some(inventory) = entities.entity_inventories.get(&entity_id) {
@@ -152,9 +166,14 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     entities: &EntityStore,
+    stopped_stock: StoppedStock<'_>,
     drop_tile: (WorldTileCoord, WorldTileCoord),
     item: ItemStack,
 ) -> bool {
+    if let Some(stock) = stopped_stock.at(drop_tile.0, drop_tile.1) {
+        return stock_can_accept(catalog, research, entities, stock, item);
+    }
+
     let Some(entity_id) = entities.occupancy.entity_at(drop_tile.0, drop_tile.1) else {
         return false;
     };
@@ -295,10 +314,15 @@ pub(in crate::simulation) fn inserter_target_can_accept(
 pub(in crate::simulation) fn try_take_inserter_source_item(
     catalog: &PrototypeCatalog,
     entities: &mut EntityStore,
+    stopped_stock: &mut StoppedStockMut<'_>,
     transport: &mut TransportLaneCache,
     pickup_tile: (WorldTileCoord, WorldTileCoord),
     item_id: ItemId,
 ) -> Option<ItemStack> {
+    if let Some(stock) = stopped_stock.at_mut(pickup_tile.0, pickup_tile.1) {
+        return take_stock_item(catalog, stock, item_id);
+    }
+
     let entity_id = entities.occupancy.entity_at(pickup_tile.0, pickup_tile.1)?;
 
     if let Some(inventory) = entities.chest_inventory_mut(entity_id) {
@@ -407,10 +431,15 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     entities: &mut EntityStore,
+    stopped_stock: &mut StoppedStockMut<'_>,
     transport: &mut TransportLaneCache,
     drop_tile: (WorldTileCoord, WorldTileCoord),
     item: ItemStack,
 ) -> bool {
+    if let Some(stock) = stopped_stock.at_mut(drop_tile.0, drop_tile.1) {
+        return drop_stock_item(catalog, research, entities, stock, item);
+    }
+
     let Some(entity_id) = entities.occupancy.entity_at(drop_tile.0, drop_tile.1) else {
         return false;
     };

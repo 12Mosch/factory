@@ -58,8 +58,8 @@ pub use crate::entities::{
 pub(crate) use crate::entities::{DenseEntityMap, EntityReservation};
 pub use crate::equipment::{InstalledEquipment, PlayerEquipmentError, PlayerEquipmentState};
 pub use crate::fluids::{
-    FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState, FluidNetworkBoxSnapshot,
-    FluidNetworkSnapshot,
+    FluidBoxOwner, FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState,
+    FluidNetworkBoxSnapshot, FluidNetworkSnapshot,
 };
 pub use crate::heat::{
     EntityHeatStatus, HeatBufferState, HeatExchangerState, HeatNetworkBufferSnapshot,
@@ -106,9 +106,10 @@ pub use crate::robots::{
 };
 pub use crate::rolling_stock::{
     RailPosition, RailTarget, RollingStock, RollingStockId, RollingStockMiningError,
-    RollingStockPlacementError, RollingStockSubsystem, TRAIN_COUPLING_GAP_FIXED,
-    TRAIN_OCCUPIED_RAIL_PENALTY_FIXED, TRAIN_REVERSAL_PENALTY_FIXED, TRAIN_VELOCITY_SCALE, Train,
-    TrainControlError, TrainForces, TrainId, TrainRoute, TrainRouteLeg, TrainThrottle,
+    RollingStockPlacementError, RollingStockSubsystem, RollingStockTransferError,
+    TRAIN_COUPLING_GAP_FIXED, TRAIN_OCCUPIED_RAIL_PENALTY_FIXED, TRAIN_REVERSAL_PENALTY_FIXED,
+    TRAIN_VELOCITY_SCALE, Train, TrainControlError, TrainForces, TrainId, TrainRoute,
+    TrainRouteLeg, TrainThrottle,
 };
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,
@@ -138,6 +139,7 @@ pub const BOILER_FUEL_SLOT_INDEX: usize = 0;
 pub const NUCLEAR_REACTOR_FUEL_SLOT_INDEX: usize = 0;
 pub const NUCLEAR_REACTOR_OUTPUT_SLOT_INDEX: usize = 0;
 pub const INSERTER_FUEL_SLOT_INDEX: usize = 0;
+pub const ROLLING_STOCK_FUEL_SLOT_INDEX: usize = 0;
 pub const ASSEMBLING_MACHINE_INPUT_SLOT_COUNT: usize = 4;
 pub const ASSEMBLING_MACHINE_OUTPUT_SLOT_COUNT: usize = 1;
 pub const BELT_SUBTILES_PER_TILE: u16 = 256;
@@ -232,6 +234,11 @@ pub struct Simulation {
     /// nothing on load — the routes themselves live on the trains.
     #[serde(skip)]
     train_routing: rolling_stock_ops::TrainRouting,
+    /// Which tiles the stopped stock covers, so an inserter or a pump can find
+    /// a wagon by tile the way it finds a chest. Derived from where the stock
+    /// stands and rebuilt on the first tick after a load.
+    #[serde(skip)]
+    stopped_stock_index: rolling_stock_ops::StoppedStockIndex,
     robots: RobotSubsystem,
     /// Robots in flight. Kept beside the network subsystem rather than inside
     /// it because the two have different lifetimes: networks are a cache of
@@ -666,6 +673,9 @@ pub enum SimValidationError {
         y: WorldTileCoord,
     },
     UnknownItem(ItemId),
+    /// An inventory's slot filters do not line up with its slots: the wrong
+    /// number of them, or one that contradicts what its slot is holding.
+    InvalidInventoryFilters,
     InvalidFluidId(FluidId),
     EmptyItemStack(ItemId),
     StackExceedsLimit {

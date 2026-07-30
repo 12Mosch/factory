@@ -111,6 +111,13 @@ pub fn transfer_container_slot(
             return module_slot_to_player(sim, entity_id, slot_index)
                 .map_err(SlotTransferError::Module);
         }
+        // A wagon is not an entity, so a click in its window never arrives
+        // here; it goes to `transfer_rolling_stock_slot` instead.
+        InventoryPanel::RollingStockCargo | InventoryPanel::RollingStockFuel => {
+            return Err(SlotTransferError::RollingStock(
+                RollingStockTransferError::UnsupportedPanel,
+            ));
+        }
     }
     .map_err(SlotTransferError::Transfer)
 }
@@ -146,5 +153,41 @@ fn player_slot_to_furnace(
         player_slot_to_furnace_fuel(sim, entity_id, slot_index)
     } else {
         player_slot_to_furnace_input(sim, entity_id, slot_index)
+    }
+}
+
+/// Routes one click in a rolling-stock window to the transfer it means.
+///
+/// The stock counterpart of [`transfer_container_slot`], and split from it for
+/// the same reason the transfers themselves are: the endpoint is a
+/// [`RollingStockId`] rather than an [`EntityId`], and a router that took
+/// either would be a router that has to guess which it was given.
+pub fn transfer_rolling_stock_slot(
+    sim: &mut Simulation,
+    stock_id: RollingStockId,
+    panel: InventoryPanel,
+    slot_index: usize,
+) -> Result<TransferOutcome, RollingStockTransferError> {
+    match panel {
+        // Which half of a piece a player's item goes to follows from the piece:
+        // a locomotive has only a fuel slot and a cargo wagon only an
+        // inventory, so there is nothing to disambiguate and no need to ask
+        // whether the item burns.
+        InventoryPanel::Player => {
+            if sim
+                .rolling_stock
+                .get(stock_id)
+                .is_some_and(|stock| stock.inventory.is_some())
+            {
+                player_slot_to_rolling_stock(sim, stock_id, slot_index)
+            } else {
+                player_slot_to_rolling_stock_fuel(sim, stock_id, slot_index)
+            }
+        }
+        InventoryPanel::RollingStockCargo => {
+            rolling_stock_slot_to_player(sim, stock_id, slot_index)
+        }
+        InventoryPanel::RollingStockFuel => rolling_stock_fuel_to_player(sim, stock_id),
+        _ => Err(RollingStockTransferError::UnsupportedPanel),
     }
 }

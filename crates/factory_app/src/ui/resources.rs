@@ -2,10 +2,29 @@ use bevy::prelude::Resource;
 use factory_data::TechnologyId;
 use factory_sim::EntityId;
 use factory_sim::PlayerEquipmentError;
+use factory_sim::RollingStockId;
 
+/// What the player has open, if anything.
+///
+/// At most one of the two at a time — opening either closes the other — so the
+/// two windows never fight over the shared slot grid, and a system that only
+/// understands entities sees `None` while a wagon is open rather than something
+/// it would misread.
 #[derive(Resource, Default)]
 pub struct OpenContainer {
     pub entity_id: Option<EntityId>,
+    pub rolling_stock: Option<RollingStockId>,
+}
+
+impl OpenContainer {
+    pub fn close(&mut self) {
+        self.entity_id = None;
+        self.rolling_stock = None;
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.entity_id.is_some() || self.rolling_stock.is_some()
+    }
 }
 
 #[derive(Resource, Default)]

@@ -25,7 +25,8 @@ pub(crate) fn destroy_to_player_inventory(
                 | InventoryError::EmptyItemStack(_)
                 | InventoryError::StackExceedsLimit { .. }
                 | InventoryError::InvalidSlot { .. }
-                | InventoryError::EmptySlot { .. } => {
+                | InventoryError::EmptySlot { .. }
+                | InventoryError::FilterMismatch { .. } => {
                     unreachable!("destroy recovery only inserts items")
                 }
             })?;

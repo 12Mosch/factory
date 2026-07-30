@@ -129,7 +129,7 @@ fn unlock_rolling_stock(sim: &mut Simulation) {
     unlock_with_prerequisites(sim, "rolling_stock");
 }
 
-fn unlock_with_prerequisites(sim: &mut Simulation, technology_name: &str) {
+pub(super) fn unlock_with_prerequisites(sim: &mut Simulation, technology_name: &str) {
     if sim.research.is_unlocked(technology_name) {
         return;
     }

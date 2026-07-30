@@ -17,6 +17,9 @@ macro_rules! impl_inventory_error_conversion {
                     | InventoryError::StackExceedsLimit { .. } => {
                         unreachable!("inventory operations only create validated stacks")
                     }
+                    InventoryError::FilterMismatch { .. } => {
+                        unreachable!("only setting a slot filter can contradict one")
+                    }
                 }
             }
         }
@@ -31,3 +34,4 @@ impl_inventory_error_conversion!(NuclearReactorError, "nuclear reactor");
 impl_inventory_error_conversion!(RoboportError, "roboport");
 impl_inventory_error_conversion!(AssemblerError, "assembler");
 impl_inventory_error_conversion!(InserterError, "inserter");
+impl_inventory_error_conversion!(RollingStockTransferError, "rolling stock");

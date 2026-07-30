@@ -5,6 +5,13 @@ use super::*;
 pub(super) struct ConsumerDemandInputs<'a> {
     pub(super) world: &'a WorldSim,
     pub(super) entities: &'a EntityStore,
+    /// Stopped rolling stock, because an inserter serving a wagon is doing work
+    /// and must be billed for it — an estimate blind to trains would idle every
+    /// inserter at a station.
+    pub(super) stopped_stock: crate::simulation::rolling_stock_ops::StoppedStock<'a>,
+    /// Every fluid box in the world, which is what a pump's transfer estimate
+    /// is measured against.
+    pub(super) fluid_boxes: crate::simulation::fluid_ops::FluidBoxes<'a>,
     pub(super) fluids: &'a FluidSubsystem,
     pub(super) research: &'a ResearchState,
 }
@@ -196,6 +203,8 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
     let ConsumerDemandInputs {
         world,
         entities,
+        stopped_stock,
+        fluid_boxes,
         fluids,
         research,
     } = inputs;
@@ -229,13 +238,13 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         .and_then(|placed| catalog.entity(placed.prototype_id))
         .is_some_and(|prototype| prototype.pump.is_some())
     {
-        return pump_fluid_transfer(catalog, entities, fluids, entity_id).is_some();
+        return pump_fluid_transfer(catalog, entities, fluid_boxes, fluids, entity_id).is_some();
     }
     if let (Some(placed), Some(state)) = (
         entities.placed_entity(entity_id),
         entities.inserters.get(&entity_id),
     ) {
-        return inserter_can_work(catalog, research, entities, placed, state);
+        return inserter_can_work(catalog, research, entities, stopped_stock, placed, state);
     }
 
     false
@@ -383,6 +392,7 @@ fn inserter_can_work(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     entities: &EntityStore,
+    stopped_stock: crate::simulation::rolling_stock_ops::StoppedStock<'_>,
     placed: &PlacedEntity,
     state: &InserterState,
 ) -> bool {
@@ -396,13 +406,15 @@ fn inserter_can_work(
 
     match *state {
         InserterState::WaitingForItem => {
-            let Some(item_id) = peek_inserter_source_item(entities, pickup_tile) else {
+            let Some(item_id) = peek_inserter_source_item(entities, stopped_stock, pickup_tile)
+            else {
                 return false;
             };
             inserter_target_can_accept(
                 catalog,
                 research,
                 entities,
+                stopped_stock,
                 drop_tile,
                 ItemStack::new(catalog, item_id, 1)
                     .expect("a source item should exist in the prototype catalog"),
@@ -410,7 +422,7 @@ fn inserter_can_work(
         }
         InserterState::Picking { .. } | InserterState::Dropping { .. } => true,
         InserterState::Holding { item } => {
-            inserter_target_can_accept(catalog, research, entities, drop_tile, item)
+            inserter_target_can_accept(catalog, research, entities, stopped_stock, drop_tile, item)
         }
     }
 }

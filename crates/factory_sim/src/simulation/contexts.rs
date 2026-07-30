@@ -181,6 +181,10 @@ impl<'a> StatisticsContext<'a> {
 pub(super) struct MachineTickContext<'a> {
     pub(super) world: &'a mut WorldSim,
     pub(super) entities: &'a mut EntityStore,
+    /// Stopped rolling stock, so the transfer paths that resolve an endpoint by
+    /// tile can reach a wagon standing at the same tile a chest would be.
+    pub(super) rolling_stock: &'a mut RollingStockSubsystem,
+    pub(super) stopped_stock: &'a rolling_stock_ops::StoppedStockIndex,
     pub(super) transport: &'a mut TransportLaneCache,
     pub(super) research: &'a mut ResearchState,
     pub(super) power: &'a mut PowerSubsystem,
@@ -219,10 +223,8 @@ impl<'a> MachineTickContext<'a> {
     }
 
     pub(super) fn mark_fluid_box_dirty(&mut self, entity_id: EntityId, box_index: usize) {
-        self.fluids.mark_box_dirty(FluidBoxKey {
-            entity_id,
-            box_index,
-        });
+        self.fluids
+            .mark_box_dirty(FluidBoxKey::entity(entity_id, box_index));
     }
 
     pub(super) fn add_research_units(

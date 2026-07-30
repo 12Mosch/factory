@@ -231,14 +231,10 @@ impl Simulation {
 
         let water_milliunits = per_tick_milliunits(boiler.water_consumption_per_second_milliunits);
         let steam_milliunits = per_tick_milliunits(boiler.steam_output_per_second_milliunits);
-        let water_network_id = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 0,
-        })?;
-        let steam_network_id = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 1,
-        })?;
+        let water_network_id =
+            self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 0))?;
+        let steam_network_id =
+            self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 1))?;
         if self.fluid_network_total_for_fluid(water_network_id, water) < water_milliunits
             || self.fluid_network_available_capacity_for_fluid(steam_network_id, steam)
                 < steam_milliunits

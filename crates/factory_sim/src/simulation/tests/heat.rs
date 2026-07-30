@@ -430,14 +430,8 @@ fn reactor_heat_reaches_a_distant_exchanger_and_powers_a_turbine() {
     assert_eq!(sim.heat_networks()[0].buffer_count, 5);
     // Exchanger and turbine share the steam network the exchanger fills.
     assert_eq!(
-        sim.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id: steam_pipe,
-            box_index: 0
-        }),
-        sim.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id: turbine_id,
-            box_index: 0
-        })
+        sim.fluid_network_id_for_box_key(FluidBoxKey::entity(steam_pipe, 0)),
+        sim.fluid_network_id_for_box_key(FluidBoxKey::entity(turbine_id, 0))
     );
     // The consumer is wired to the turbine's power network.
     assert!(sim.entity_power_status(radar_id).is_some());

@@ -2,7 +2,8 @@ use crate::simulation::*;
 
 use super::math::fluid_filter_accepts;
 use super::types::{
-    FluidBoxKey, FluidNetworkBoxTopology, FluidNetworkDynamicSummary, FluidNetworkTopology,
+    FluidBoxKey, FluidBoxes, FluidBoxesMut, FluidNetworkBoxTopology, FluidNetworkDynamicSummary,
+    FluidNetworkTopology,
 };
 
 impl Simulation {
@@ -18,7 +19,7 @@ impl Simulation {
         network_id: u32,
         fluid_id: FluidId,
     ) -> u64 {
-        fluid_network_total_for_fluid(&self.fluids, &self.entities, network_id, fluid_id)
+        fluid_network_total_for_fluid(&self.fluids, self.fluid_boxes(), network_id, fluid_id)
     }
 
     pub(in crate::simulation) fn fluid_network_available_capacity_for_fluid(
@@ -28,7 +29,7 @@ impl Simulation {
     ) -> u64 {
         fluid_network_available_capacity_for_fluid(
             &self.fluids,
-            &self.entities,
+            self.fluid_boxes(),
             network_id,
             fluid_id,
         )
@@ -44,25 +45,27 @@ impl Simulation {
         let Some(network) = fluid_network_topology_by_id(&self.fluids, network_id) else {
             return 0;
         };
-        if !fluid_network_accepts_fluid(&self.entities, network, fluid_id) {
+        if !fluid_network_accepts_fluid(self.fluid_boxes(), network, fluid_id) {
             return 0;
         }
 
+        let Simulation {
+            entities,
+            rolling_stock,
+            fluids,
+            ..
+        } = self;
+        let mut boxes = FluidBoxesMut::new(entities, rolling_stock);
         let mut remaining = amount_milliunits;
         let mut added = 0;
-        for box_topology in &self.fluids.topology_networks[network_id as usize].boxes {
+        for box_topology in &fluids.topology_networks[network_id as usize].boxes {
             if remaining == 0 {
                 break;
             }
             if !fluid_filter_accepts(box_topology.filter, fluid_id) {
                 continue;
             }
-            let Some(state) = self
-                .entities
-                .fluid_boxes
-                .get_mut(&box_topology.key.entity_id)
-                .and_then(|boxes| boxes.get_mut(box_topology.key.box_index))
-            else {
+            let Some(state) = boxes.get_mut(box_topology.key) else {
                 continue;
             };
             if state.fluid_id.is_some_and(|existing| existing != fluid_id) {
@@ -98,23 +101,25 @@ impl Simulation {
         let Some(network) = fluid_network_topology_by_id(&self.fluids, network_id) else {
             return false;
         };
-        if fluid_network_total_for_fluid_in_topology(&self.entities, network, fluid_id)
+        if fluid_network_total_for_fluid_in_topology(self.fluid_boxes(), network, fluid_id)
             < amount_milliunits
         {
             return false;
         }
 
+        let Simulation {
+            entities,
+            rolling_stock,
+            fluids,
+            ..
+        } = self;
+        let mut boxes = FluidBoxesMut::new(entities, rolling_stock);
         let mut remaining = amount_milliunits;
-        for box_topology in &self.fluids.topology_networks[network_id as usize].boxes {
+        for box_topology in &fluids.topology_networks[network_id as usize].boxes {
             if remaining == 0 {
                 break;
             }
-            let Some(state) = self
-                .entities
-                .fluid_boxes
-                .get_mut(&box_topology.key.entity_id)
-                .and_then(|boxes| boxes.get_mut(box_topology.key.box_index))
-            else {
+            let Some(state) = boxes.get_mut(box_topology.key) else {
                 continue;
             };
             if state.fluid_id != Some(fluid_id) {
@@ -138,7 +143,13 @@ impl Simulation {
         &self,
         network: &FluidNetworkTopology,
     ) -> FluidNetworkDynamicSummary {
-        fluid_network_dynamic_summary(&self.entities, network)
+        fluid_network_dynamic_summary(self.fluid_boxes(), network)
+    }
+
+    /// Every fluid box in the world: the placed entities' and the stopped
+    /// stock's alike.
+    pub(in crate::simulation) fn fluid_boxes(&self) -> FluidBoxes<'_> {
+        FluidBoxes::new(&self.entities, &self.rolling_stock)
     }
 }
 
@@ -155,11 +166,11 @@ pub(in crate::simulation) fn fluid_network_id_for_box_key(
 
 pub(in crate::simulation) fn fluid_network_fluid_id(
     fluids: &FluidSubsystem,
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network_id: u32,
 ) -> Option<FluidId> {
     let network = fluid_network_topology_by_id(fluids, network_id)?;
-    let summary = fluid_network_dynamic_summary(entities, network);
+    let summary = fluid_network_dynamic_summary(boxes, network);
     (!summary.blocked && summary.total_milliunits > 0)
         .then_some(summary.fluid_id)
         .flatten()
@@ -167,26 +178,26 @@ pub(in crate::simulation) fn fluid_network_fluid_id(
 
 pub(in crate::simulation) fn fluid_network_total_for_fluid(
     fluids: &FluidSubsystem,
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network_id: u32,
     fluid_id: FluidId,
 ) -> u64 {
     let Some(network) = fluid_network_topology_by_id(fluids, network_id) else {
         return 0;
     };
-    fluid_network_total_for_fluid_in_topology(entities, network, fluid_id)
+    fluid_network_total_for_fluid_in_topology(boxes, network, fluid_id)
 }
 
 pub(in crate::simulation) fn fluid_network_available_capacity_for_fluid(
     fluids: &FluidSubsystem,
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network_id: u32,
     fluid_id: FluidId,
 ) -> u64 {
     let Some(network) = fluid_network_topology_by_id(fluids, network_id) else {
         return 0;
     };
-    fluid_network_available_capacity_for_fluid_in_topology(entities, network, fluid_id)
+    fluid_network_available_capacity_for_fluid_in_topology(boxes, network, fluid_id)
 }
 
 fn fluid_network_topology_by_id(
@@ -204,7 +215,7 @@ fn fluid_network_topology_by_id(
 }
 
 fn fluid_network_total_for_fluid_in_topology(
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network: &FluidNetworkTopology,
     fluid_id: FluidId,
 ) -> u64 {
@@ -217,11 +228,7 @@ fn fluid_network_total_for_fluid_in_topology(
             return 0;
         }
 
-        let Some(state) = entities
-            .fluid_boxes
-            .get(&box_topology.key.entity_id)
-            .and_then(|boxes| boxes.get(box_topology.key.box_index))
-        else {
+        let Some(state) = boxes.get(box_topology.key) else {
             continue;
         };
         scan.observe_fluid_state(state);
@@ -237,7 +244,7 @@ fn fluid_network_total_for_fluid_in_topology(
 }
 
 fn fluid_network_available_capacity_for_fluid_in_topology(
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network: &FluidNetworkTopology,
     fluid_id: FluidId,
 ) -> u64 {
@@ -250,11 +257,7 @@ fn fluid_network_available_capacity_for_fluid_in_topology(
             return 0;
         }
 
-        let Some(state) = entities
-            .fluid_boxes
-            .get(&box_topology.key.entity_id)
-            .and_then(|boxes| boxes.get(box_topology.key.box_index))
-        else {
+        let Some(state) = boxes.get(box_topology.key) else {
             continue;
         };
         scan.observe_fluid_state(state);
@@ -281,7 +284,7 @@ fn fluid_network_available_capacity_for_fluid_in_topology(
 }
 
 fn fluid_network_accepts_fluid(
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network: &FluidNetworkTopology,
     fluid_id: FluidId,
 ) -> bool {
@@ -293,11 +296,7 @@ fn fluid_network_accepts_fluid(
             return false;
         }
 
-        let Some(state) = entities
-            .fluid_boxes
-            .get(&box_topology.key.entity_id)
-            .and_then(|boxes| boxes.get(box_topology.key.box_index))
-        else {
+        let Some(state) = boxes.get(box_topology.key) else {
             continue;
         };
         scan.observe_fluid_state(state);
@@ -310,11 +309,11 @@ fn fluid_network_accepts_fluid(
 }
 
 pub(super) fn update_fluid_network_snapshot(
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network: &FluidNetworkTopology,
     snapshot: &mut FluidNetworkSnapshot,
 ) {
-    let summary = fluid_network_dynamic_summary(entities, network);
+    let summary = fluid_network_dynamic_summary(boxes, network);
     snapshot.network_id = network.network_id;
     snapshot.fluid_id = summary.fluid_id;
     snapshot.total_milliunits = summary.total_milliunits;
@@ -324,7 +323,7 @@ pub(super) fn update_fluid_network_snapshot(
 
     let mut snapshot_box_index = 0;
     for box_topology in &network.boxes {
-        let Some(box_snapshot) = fluid_network_box_snapshot(entities, box_topology) else {
+        let Some(box_snapshot) = fluid_network_box_snapshot(boxes, box_topology) else {
             continue;
         };
         if let Some(existing) = snapshot.boxes.get_mut(snapshot_box_index) {
@@ -338,17 +337,14 @@ pub(super) fn update_fluid_network_snapshot(
 }
 
 fn fluid_network_box_snapshot(
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     box_topology: &FluidNetworkBoxTopology,
 ) -> Option<FluidNetworkBoxSnapshot> {
     let key = box_topology.key;
-    let state = entities
-        .fluid_boxes
-        .get(&key.entity_id)?
-        .get(key.box_index)?;
+    let state = boxes.get(key)?;
 
     Some(FluidNetworkBoxSnapshot {
-        entity_id: key.entity_id,
+        owner: key.owner,
         box_index: key.box_index,
         capacity_milliunits: box_topology.capacity_milliunits,
         amount_milliunits: state.amount_milliunits,
@@ -358,7 +354,7 @@ fn fluid_network_box_snapshot(
 }
 
 pub(super) fn fluid_network_dynamic_summary(
-    entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     network: &FluidNetworkTopology,
 ) -> FluidNetworkDynamicSummary {
     let mut scan = FluidNetworkFluidScan::default();
@@ -367,11 +363,7 @@ pub(super) fn fluid_network_dynamic_summary(
     for box_topology in &network.boxes {
         scan.observe_filter(box_topology.filter);
 
-        let Some(state) = entities
-            .fluid_boxes
-            .get(&box_topology.key.entity_id)
-            .and_then(|boxes| boxes.get(box_topology.key.box_index))
-        else {
+        let Some(state) = boxes.get(box_topology.key) else {
             continue;
         };
         total_milliunits = total_milliunits.saturating_add(state.amount_milliunits);

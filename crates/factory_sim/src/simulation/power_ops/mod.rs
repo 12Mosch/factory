@@ -6,6 +6,8 @@ mod topology;
 mod types;
 
 use super::*;
+use crate::simulation::fluid_ops::FluidBoxes;
+use crate::simulation::rolling_stock_ops::StoppedStock;
 use accounting::*;
 #[allow(unused_imports)]
 use demand::*;
@@ -206,6 +208,8 @@ impl Simulation {
             ConsumerDemandInputs {
                 world: &self.world,
                 entities: &self.entities,
+                stopped_stock: StoppedStock::new(&self.stopped_stock_index, &self.rolling_stock),
+                fluid_boxes: FluidBoxes::new(&self.entities, &self.rolling_stock),
                 fluids: &self.fluids,
                 research: &self.research,
             },

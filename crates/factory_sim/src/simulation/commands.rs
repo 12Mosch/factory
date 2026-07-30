@@ -32,6 +32,20 @@ pub enum SimCommand {
         panel: InventoryPanel,
         slot_index: usize,
     },
+    /// The same, against a piece of rolling stock. A separate command rather
+    /// than an `EntityId` that might not be one: stock is not a placed entity,
+    /// and a command that could name either would be a command the router has
+    /// to guess about.
+    TransferRollingStockSlot {
+        stock_id: RollingStockId,
+        panel: InventoryPanel,
+        slot_index: usize,
+    },
+    SetRollingStockSlotFilter {
+        stock_id: RollingStockId,
+        slot_index: usize,
+        filter: Option<ItemId>,
+    },
     PlaceEntityFromPlayerInventory {
         prototype_id: EntityPrototypeId,
         item_id: ItemId,
@@ -253,6 +267,10 @@ pub enum InventoryPanel {
     AssemblerInput,
     AssemblerOutput,
     Modules,
+    /// A cargo wagon's own inventory.
+    RollingStockCargo,
+    /// A locomotive's fuel slot.
+    RollingStockFuel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,6 +284,7 @@ pub enum SlotTransferError {
     Assembler(AssemblerError),
     Inserter(InserterError),
     Module(ModuleError),
+    RollingStock(RollingStockTransferError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -397,6 +416,28 @@ impl Simulation {
             } => {
                 entity_transfer::transfer_container_slot(self, entity_id, panel, slot_index)
                     .map_err(SimCommandError::Transfer)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::TransferRollingStockSlot {
+                stock_id,
+                panel,
+                slot_index,
+            } => {
+                entity_transfer::transfer_rolling_stock_slot(self, stock_id, panel, slot_index)
+                    .map_err(|error| {
+                        SimCommandError::Transfer(SlotTransferError::RollingStock(error))
+                    })?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetRollingStockSlotFilter {
+                stock_id,
+                slot_index,
+                filter,
+            } => {
+                entity_transfer::set_rolling_stock_slot_filter(self, stock_id, slot_index, filter)
+                    .map_err(|error| {
+                        SimCommandError::Transfer(SlotTransferError::RollingStock(error))
+                    })?;
                 Ok(SimCommandEffect::None)
             }
             SimCommand::PlaceEntityFromPlayerInventory {
