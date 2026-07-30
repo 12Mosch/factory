@@ -193,7 +193,7 @@ impl Simulation {
     pub(in crate::simulation) fn for_each_rolling_stock_tile(
         &self,
         stock: &RollingStock,
-        mut visit: impl FnMut((i64, i64)) -> ControlFlow<()>,
+        mut visit: impl FnMut((WorldTileCoord, WorldTileCoord)) -> ControlFlow<()>,
     ) {
         let Some(half) = self.rolling_stock_half_length(stock) else {
             return;

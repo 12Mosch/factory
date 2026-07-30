@@ -236,7 +236,9 @@ pub struct Simulation {
     train_routing: rolling_stock_ops::TrainRouting,
     /// Which tiles the stopped stock covers, so an inserter or a pump can find
     /// a wagon by tile the way it finds a chest. Derived from where the stock
-    /// stands and rebuilt on the first tick after a load.
+    /// stands, and rebuilt during load rather than on the tick after it: the
+    /// fluid topology is built from it, so a load that deferred it would build
+    /// networks a saved wagon was missing from.
     #[serde(skip)]
     stopped_stock_index: rolling_stock_ops::StoppedStockIndex,
     robots: RobotSubsystem,

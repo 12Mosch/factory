@@ -22,9 +22,10 @@
 //!   inserters needs.
 //! * **Derived, never saved.** The index is a function of where the stock is
 //!   standing and of the rails under it, both of which are durable. It rebuilds
-//!   itself on the first tick after a load, and it is cleared outright whenever
-//!   the track changes under it, because a rail pulled up moves nothing but
-//!   invalidates every tile derived from its geometry.
+//!   itself as part of loading, before anything can ask what a tile holds, and
+//!   it is cleared outright whenever the track changes under it, because a rail
+//!   pulled up moves nothing but invalidates every tile derived from its
+//!   geometry.
 
 use crate::rolling_stock::{RollingStock, RollingStockId, RollingStockSubsystem, TrainId};
 use crate::simulation::*;
@@ -66,7 +67,11 @@ impl StoppedStockIndex {
         self.covered.keys().copied()
     }
 
-    fn insert(&mut self, train_id: TrainId, covered: Vec<(RollingStockId, Vec<(i64, i64)>)>) {
+    fn insert(
+        &mut self,
+        train_id: TrainId,
+        covered: Vec<(RollingStockId, Vec<(WorldTileCoord, WorldTileCoord)>)>,
+    ) {
         self.trains.insert(train_id);
         for (stock_id, tiles) in covered {
             for tile in &tiles {
