@@ -682,6 +682,10 @@ mod tests {
             destination: Some(RailTarget::new(EntityId::new(raw), 0)),
             route: None,
             route_search_exhausted_at: None,
+            schedule: Default::default(),
+            schedule_arrival_tick: None,
+            schedule_last_activity_tick: None,
+            scheduled_stop: None,
         }
     }
 

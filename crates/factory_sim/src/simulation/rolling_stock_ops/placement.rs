@@ -579,6 +579,10 @@ impl Simulation {
                         destination: None,
                         route: None,
                         route_search_exhausted_at: None,
+                        schedule: Default::default(),
+                        schedule_arrival_tick: None,
+                        schedule_last_activity_tick: None,
+                        scheduled_stop: None,
                     },
                 );
                 train_id
@@ -771,6 +775,10 @@ impl Simulation {
                         destination: None,
                         route: None,
                         route_search_exhausted_at: None,
+                        schedule: Default::default(),
+                        schedule_arrival_tick: None,
+                        schedule_last_activity_tick: None,
+                        scheduled_stop: None,
                     },
                 );
                 group_id

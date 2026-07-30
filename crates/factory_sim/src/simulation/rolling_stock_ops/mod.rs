@@ -39,6 +39,8 @@ use crate::rolling_stock::{
     RailPosition, RollingStock, RollingStockId, TRAIN_VELOCITY_SCALE, Train, TrainControlError,
     TrainForces, TrainId, TrainThrottle,
 };
+
+use crate::rolling_stock::{RailTarget, TrainSchedule, TrainStop, TrainStopId};
 use crate::simulation::*;
 use std::collections::BTreeSet;
 
@@ -79,6 +81,115 @@ pub(in crate::simulation) struct TrainStep {
 }
 
 impl Simulation {
+    /// Registers a named stopping mark. Stop ids are monotonic, making equal
+    /// name/distance choices deterministic across saves and replays.
+    pub fn create_train_stop(
+        &mut self,
+        name: impl Into<String>,
+        rail: EntityId,
+        distance_fixed: i64,
+        train_limit: u32,
+    ) -> Result<TrainStopId, TrainControlError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(TrainControlError::EmptyStopName);
+        }
+        if train_limit == 0 {
+            return Err(TrainControlError::InvalidTrainLimit);
+        }
+        let geometry = self
+            .rail_piece_geometry(rail)
+            .ok_or(TrainControlError::NotRail(rail))?;
+        if !(0..=geometry.length_fixed).contains(&distance_fixed) {
+            return Err(TrainControlError::NotRail(rail));
+        }
+        self.rolling_stock.next_stop_id += 1;
+        let id = TrainStopId::new(self.rolling_stock.next_stop_id);
+        self.rolling_stock.stops.insert(
+            id,
+            TrainStop {
+                id,
+                name,
+                target: RailTarget::new(rail, distance_fixed),
+                train_limit,
+            },
+        );
+        Ok(id)
+    }
+
+    pub fn train_stops(&self) -> impl Iterator<Item = &TrainStop> {
+        self.rolling_stock.stops.values()
+    }
+
+    pub fn rename_train_stop(
+        &mut self,
+        id: TrainStopId,
+        name: impl Into<String>,
+    ) -> Result<(), TrainControlError> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(TrainControlError::EmptyStopName);
+        }
+        let stop = self
+            .rolling_stock
+            .stops
+            .get_mut(&id)
+            .ok_or(TrainControlError::MissingStop(id))?;
+        let old = std::mem::replace(&mut stop.name, name.clone());
+        // Renaming is friendly: schedules referring to the old station name
+        // continue referring to this group of stops.
+        for train in self.rolling_stock.trains.values_mut() {
+            for entry in &mut train.schedule.entries {
+                if entry.stop_name == old {
+                    entry.stop_name.clone_from(&name);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn remove_train_stop(&mut self, id: TrainStopId) -> Result<TrainStop, TrainControlError> {
+        let stop = self
+            .rolling_stock
+            .stops
+            .remove(&id)
+            .ok_or(TrainControlError::MissingStop(id))?;
+        for train in self.rolling_stock.trains.values_mut() {
+            if train.scheduled_stop == Some(id) {
+                train.scheduled_stop = None;
+                train.destination = None;
+                train.route = None;
+                train.throttle = TrainThrottle::Brake;
+            }
+        }
+        Ok(stop)
+    }
+
+    pub fn set_train_schedule(
+        &mut self,
+        train_id: TrainId,
+        mut schedule: TrainSchedule,
+    ) -> Result<(), TrainControlError> {
+        let train = self
+            .rolling_stock
+            .trains
+            .get_mut(&train_id)
+            .ok_or(TrainControlError::MissingTrain(train_id))?;
+        if schedule.entries.is_empty() {
+            schedule.current = 0;
+        } else {
+            schedule.current %= schedule.entries.len();
+        }
+        train.schedule = schedule;
+        train.schedule_arrival_tick = None;
+        train.schedule_last_activity_tick = None;
+        train.scheduled_stop = None;
+        train.destination = None;
+        train.route = None;
+        train.route_search_exhausted_at = None;
+        Ok(())
+    }
+
     /// Rolling stock in the world, in ascending id order.
     pub fn rolling_stock(&self) -> impl Iterator<Item = &RollingStock> {
         self.rolling_stock.iter()
@@ -282,6 +393,7 @@ impl Simulation {
         if self.rolling_stock.trains.is_empty() {
             return;
         }
+        self.advance_train_schedules();
         // Planning is one pass for the whole tick, before any train is stepped:
         // the expansion budget and the occupancy every search reads are both
         // tick-wide, and a train planned for here is a train steered on the very
@@ -298,6 +410,122 @@ impl Simulation {
         for train_id in train_ids {
             self.advance_train(train_id);
         }
+    }
+
+    /// Advances station waits and assigns unclaimed destinations before route
+    /// planning. The pass is in train-id order and stop ties are in stop-id
+    /// order, so limits cannot introduce hash-map-order nondeterminism.
+    fn advance_train_schedules(&mut self) {
+        let ids = self
+            .rolling_stock
+            .trains
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for id in ids {
+            let arrived = self.rolling_stock.train(id).is_some_and(|train| {
+                train.scheduled_stop.is_some()
+                    && train.destination.is_none()
+                    && train.route.is_none()
+                    && train.is_stationary()
+            });
+            if arrived {
+                let context = self.train_wait_context(id);
+                let tick = self.tick;
+                let train = self
+                    .rolling_stock
+                    .trains
+                    .get_mut(&id)
+                    .expect("id was collected");
+                let arrived_at = *train.schedule_arrival_tick.get_or_insert(tick);
+                train.schedule_last_activity_tick.get_or_insert(tick);
+                let mut context = context;
+                context.waited_ticks = tick.saturating_sub(arrived_at);
+                context.inactive_ticks =
+                    tick.saturating_sub(train.schedule_last_activity_tick.unwrap_or(tick));
+                if train
+                    .schedule
+                    .current_entry()
+                    .is_some_and(|entry| entry.may_depart(&context))
+                {
+                    train.schedule.advance();
+                    train.scheduled_stop = None;
+                    train.schedule_arrival_tick = None;
+                    train.schedule_last_activity_tick = None;
+                }
+            }
+
+            let Some(name) = self.rolling_stock.train(id).and_then(|train| {
+                (train.scheduled_stop.is_none() && train.destination.is_none())
+                    .then(|| {
+                        train
+                            .schedule
+                            .current_entry()
+                            .map(|entry| entry.stop_name.clone())
+                    })
+                    .flatten()
+            }) else {
+                continue;
+            };
+            let chosen = self
+                .rolling_stock
+                .stops
+                .values()
+                .find(|stop| {
+                    stop.name == name
+                        && self
+                            .rolling_stock
+                            .trains
+                            .values()
+                            .filter(|train| train.scheduled_stop == Some(stop.id))
+                            .count()
+                            < stop.train_limit as usize
+                })
+                .cloned();
+            if let Some(stop) = chosen
+                && let Some(train) = self.rolling_stock.trains.get_mut(&id)
+            {
+                train.scheduled_stop = Some(stop.id);
+                train.destination = Some(stop.target);
+                train.route = None;
+                train.route_search_exhausted_at = None;
+            }
+        }
+    }
+
+    fn train_wait_context(&self, id: TrainId) -> crate::rolling_stock::TrainWaitContext {
+        let mut context = crate::rolling_stock::TrainWaitContext::default();
+        let Some(train) = self.rolling_stock.train(id) else {
+            return context;
+        };
+        let mut saw_cargo = false;
+        let mut every_slot_occupied = true;
+        for stock_id in &train.stock {
+            let Some(stock) = self.rolling_stock.get(*stock_id) else {
+                continue;
+            };
+            if let Some(inventory) = &stock.inventory {
+                saw_cargo = true;
+                for slot in inventory.slots() {
+                    every_slot_occupied &= !slot.is_empty();
+                    if let Some(stack) = slot.stack() {
+                        let count = context.item_counts.entry(stack.item_id()).or_default();
+                        *count = count.saturating_add(i32::from(stack.count()));
+                    }
+                }
+            }
+            for fluid_box in &stock.fluid_boxes {
+                if let Some(fluid) = fluid_box.fluid_id {
+                    let count = context.fluid_counts.entry(fluid).or_default();
+                    *count = count.saturating_add(
+                        i32::try_from(fluid_box.amount_milliunits).unwrap_or(i32::MAX),
+                    );
+                }
+            }
+        }
+        context.cargo_empty = context.item_counts.is_empty() && context.fluid_counts.is_empty();
+        context.cargo_full = saw_cargo && every_slot_occupied;
+        context
     }
 
     fn advance_train(&mut self, train_id: TrainId) {
