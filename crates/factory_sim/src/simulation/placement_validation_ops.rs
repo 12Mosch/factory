@@ -150,12 +150,7 @@ pub(crate) fn validate_rail_signal_placement(
     let needs_rail = || BuildError::NeedsAlignedRail { prototype_id };
     let position =
         rail_ops::signal_binding(sim, footprint.x, footprint.y).ok_or_else(needs_rail)?;
-    // The approach and the far side, in that order: a train travelling
-    // `direction` leaves the rail whose end here faces that way and enters the
-    // one whose end here faces back.
-    if rail_ops::rail_end_at(sim, position, direction).is_none()
-        || rail_ops::rail_end_at(sim, position, direction.opposite()).is_none()
-    {
+    if !rail_ops::crossing_exists(sim, position, direction) {
         return Err(needs_rail());
     }
     if let Some(entity_id) =

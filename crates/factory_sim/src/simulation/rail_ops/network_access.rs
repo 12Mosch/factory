@@ -233,17 +233,36 @@ pub(in crate::simulation) fn signal_governing_crossing(
     None
 }
 
+/// Whether the track at `position` runs the way a signal facing `heading` would
+/// govern: a rail leaving that point that way, and a rail entering it from the
+/// other side.
+///
+/// The one statement of what a signal needs from the track under it, asked both
+/// when a signal is placed and again whenever the block partition is rebuilt.
+/// Both, because the answer can change without the signal moving: placement
+/// settles it for the track that was there, and track can be mined and relaid
+/// underneath afterwards.
+///
+/// Needs no rail graph — it reads the placed rails' own geometry — so a placement
+/// preview can ask it before the graph has seen the track it is about to join.
+pub(in crate::simulation) fn crossing_exists(
+    sim: &Simulation,
+    position: RailPoint,
+    heading: Direction,
+) -> bool {
+    // A train travelling `heading` leaves the rail whose end here faces that way
+    // and enters the one whose end here faces back, because joined ends oppose.
+    rail_end_at(sim, position, heading).is_some()
+        && rail_end_at(sim, position, heading.opposite()).is_some()
+}
+
 /// The placed rail with an end exactly at `position` facing `heading`.
 ///
 /// Looks only at the tiles such a piece must occupy and confirms the candidate
 /// against its geometry — no scan over the placed rails, and no dependence on
 /// the rail graph, which is what lets a placement preview answer this before the
 /// graph has been rebuilt.
-pub(in crate::simulation) fn rail_end_at(
-    sim: &Simulation,
-    position: RailPoint,
-    heading: Direction,
-) -> Option<EntityId> {
+fn rail_end_at(sim: &Simulation, position: RailPoint, heading: Direction) -> Option<EntityId> {
     candidate_tiles(position, heading)
         .into_iter()
         .flatten()

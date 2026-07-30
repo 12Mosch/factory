@@ -11,7 +11,7 @@ mod types;
 pub(in crate::simulation) use blocks::{RailBlockPartition, RailSignalInput};
 pub use geometry::{piece_geometry, placed_piece_geometry};
 pub(in crate::simulation) use network_access::{
-    conflicting_rail_end, placement_connections, rail_end_at, rail_ends_for_placement,
+    conflicting_rail_end, crossing_exists, placement_connections, rail_ends_for_placement,
     signal_binding, signal_governing_crossing,
 };
 pub(in crate::simulation) use pathfinding::{RailRouteOutcome, RailRouteRequest, RailRouteScratch};
@@ -97,10 +97,17 @@ impl Simulation {
 
     /// Every placed signal bound to the rail end it governs, in entity id order.
     ///
-    /// A signal that binds to nothing — one whose track was pulled up from under
-    /// it — is left out rather than kept as a boundary over no rail. It cuts
-    /// nothing and governs nothing until track comes back beside it, which is
-    /// the same thing an unbuilt signal does.
+    /// Two kinds of signal are left out rather than kept as a boundary they
+    /// cannot govern: one that binds to nothing, because its track was pulled up
+    /// from under it, and one that binds to a point the track no longer runs the
+    /// way it faces. Both cut nothing and govern nothing until track comes back
+    /// beside them, which is the same thing an unbuilt signal does.
+    ///
+    /// The alignment is re-asked here rather than trusted from placement, because
+    /// track can be mined and relaid under a signal that never moved. A signal
+    /// left facing across a joint it no longer runs along would still cut the
+    /// boundary while governing neither direction over it — a line silently
+    /// broken by an entity that looks idle, which is worse than no signal at all.
     fn rail_signal_inputs(&self) -> Vec<RailSignalInput> {
         self.entities
             .placed_entities
@@ -108,10 +115,11 @@ impl Simulation {
             .filter_map(|placed| {
                 let prototype = self.world.prototypes.entity(placed.prototype_id)?;
                 let kind = prototype.entity_kind.rail_signal_kind()?;
-                Some(RailSignalInput {
+                let position = signal_binding(self, placed.x, placed.y)?;
+                crossing_exists(self, position, placed.direction).then_some(RailSignalInput {
                     entity_id: placed.id,
                     kind,
-                    position: signal_binding(self, placed.x, placed.y)?,
+                    position,
                     heading: placed.direction,
                 })
             })

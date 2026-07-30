@@ -41,16 +41,17 @@ fn world_with_signalled_run(piece_count: usize) -> (Simulation, Vec<EntityId>) {
         )
         .is_ok()
     };
+    // Clear ground two columns either side of the run as well as the run itself,
+    // so a signal can go on either side of any joint and a test can relay the
+    // track around one.
     let (origin_x, origin_y) = all_tile_coords(&sim.world)
         .into_iter()
         .find(|(x, y)| {
-            (0..piece_count as WorldTileCoord).all(|index| {
-                placeable(&sim, straight, *x, *y + index * 2)
-                    // Both tiles of each pair beside the run, so a signal can go
-                    // on either side of any joint.
-                    && placeable(&sim, stand_in, *x + 1, *y + index * 2)
-                    && placeable(&sim, stand_in, *x + 1, *y + index * 2 + 1)
-                    && placeable(&sim, stand_in, *x - 1, *y + index * 2)
+            (0..piece_count as WorldTileCoord * 2).all(|row| {
+                placeable(&sim, straight, *x, *y + row)
+                    && (-2..=2)
+                        .filter(|column| *column != 0)
+                        .all(|column| placeable(&sim, stand_in, *x + column, *y + row))
             })
         })
         .expect("the test world holds a signalled run somewhere");
@@ -276,6 +277,68 @@ fn one_crossing_takes_one_signal_each_way() {
     // two-way line is signalled.
     place_signal(&mut sim, &rails, 3, Direction::South, "rail_signal");
     assert_eq!(sim.rail_blocks().count(), 2);
+}
+
+/// Placement settles whether a signal is aligned with the track under it, but
+/// track can be mined and relaid under a signal that never moved. A signal left
+/// facing across a joint it no longer runs along must drop out of the partition
+/// rather than cut a boundary it governs in neither direction — otherwise
+/// building a line past an idle-looking signal silently breaks it.
+#[test]
+fn a_signal_left_facing_across_relaid_track_governs_nothing_and_cuts_nothing() {
+    let (mut sim, rails) = world_with_signalled_run(6);
+    let signal = place_signal(&mut sim, &rails, 3, Direction::North, "rail_signal");
+    let footprint = sim
+        .entities
+        .placed_entity(signal)
+        .expect("the signal is placed")
+        .footprint;
+    assert!(
+        sim.rail_signal(signal).is_some(),
+        "it governs the north-south run it was placed against"
+    );
+
+    for rail in &rails {
+        crate::entity_mutation::remove(&mut sim, *rail).expect("a placed rail can be removed");
+    }
+    sim.tick();
+    assert_eq!(sim.rail_signal(signal), None, "its track went with it");
+
+    // An east-west line one row over, joined at a point within the signal's
+    // binding reach. The signal still faces north; the track there runs east and
+    // west, so there is no crossing for it to govern.
+    let straight = entity_id_by_name(&sim.world.prototypes, "rail_straight");
+    let west = place_at(
+        &mut sim,
+        straight,
+        footprint.x - 2,
+        footprint.y + 1,
+        Direction::East,
+    );
+    let east = place_at(
+        &mut sim,
+        straight,
+        footprint.x,
+        footprint.y + 1,
+        Direction::East,
+    );
+    sim.tick();
+
+    assert_eq!(
+        sim.rail_piece_connections(west)[1],
+        Some(east),
+        "the fixture really does join the two pieces at the point beside the signal"
+    );
+    assert_eq!(sim.rail_signal(signal), None);
+    assert_eq!(sim.rail_signal_aspect(signal), None);
+    assert_eq!(
+        sim.rail_blocks().count(),
+        1,
+        "the relaid line is one block: a signal that governs nothing cuts nothing"
+    );
+    assert_eq!(block_of(&sim, west), block_of(&sim, east));
+    sim.validate()
+        .expect("a railway with an orphaned signal beside it is a valid world");
 }
 
 /// A train holds the block it stands in and the one ahead, and nothing further:
