@@ -189,13 +189,17 @@ impl Simulation {
     /// claim any of them held on it, and — once no stop answers to its name at
     /// all — the schedule entries which can no longer be served.
     ///
-    /// The cursor is what would otherwise strand a train. A train that had
-    /// claimed the removed stop has no claim and no destination, and its current
-    /// entry names a station that no longer exists anywhere, so neither the
-    /// arrival check nor the assignment beneath it can fire again: the train
-    /// idles on that entry for ever with no escape. Stepping past the entry is
-    /// the escape, and it is only taken when the name has left the world — while
-    /// another stop still bears it, the train simply goes there instead.
+    /// The entries are what would otherwise strand a train. An entry naming a
+    /// station that no longer exists anywhere can be neither arrived at nor
+    /// claimed, so a train that reaches it idles on it for ever with no escape.
+    /// Dropping such entries is the escape, and it is only taken when the name
+    /// has left the world — while another stop still bears it, the train simply
+    /// goes there instead. It mirrors what renaming the last stop of a name
+    /// already does to the schedules pointing at it.
+    ///
+    /// Every matching entry rather than the one being served, because the
+    /// schedule is a loop: an entry left behind further down it is the same dead
+    /// end, reached a lap later.
     fn forget_train_stop(&mut self, stop: &TrainStop) {
         let name_remains = self.stop_name_exists(&stop.name);
         for train in self.rolling_stock.trains.values_mut() {
@@ -206,13 +210,8 @@ impl Simulation {
                 train.route_search_exhausted_at = None;
                 train.throttle = TrainThrottle::Brake;
             }
-            if !name_remains
-                && train
-                    .schedule
-                    .current_entry()
-                    .is_some_and(|entry| entry.stop_name == stop.name)
-            {
-                train.schedule.advance();
+            if !name_remains {
+                train.schedule.remove_entries_named(&stop.name);
             }
         }
     }

@@ -215,7 +215,7 @@ fn driving_a_scheduled_train_by_hand_gives_its_claim_back() {
 /// current entry named it: the claim is gone, so the arrival check cannot fire,
 /// and no stop answers to the name, so nothing can be claimed again.
 #[test]
-fn removing_the_last_stop_of_a_name_steps_the_schedule_past_it() {
+fn removing_the_last_stop_of_a_name_drops_the_entries_naming_it() {
     let (mut sim, rails, train_id) = world_with_a_schedulable_train();
     let north = stop_at(&mut sim, "North", rails[20], 1);
     stop_at(&mut sim, "South", rails[3], 1);
@@ -231,12 +231,66 @@ fn removing_the_last_stop_of_a_name_steps_the_schedule_past_it() {
     let stranded = train(&sim, train_id);
     assert_eq!(stranded.scheduled_stop, None);
     assert_eq!(
-        stranded.schedule.current, 1,
-        "the entry naming a station that no longer exists is stepped past"
+        stranded
+            .schedule
+            .entries
+            .iter()
+            .map(|entry| entry.stop_name.as_str())
+            .collect::<Vec<_>>(),
+        ["South"],
+        "the entry naming a station that no longer exists is dropped"
+    );
+    assert_eq!(
+        stranded.schedule.current, 0,
+        "the cursor moves onto the entry that survives it"
     );
     run_until(&mut sim, |sim| {
         position(sim, train_id) == RailPosition::new(rails[3], rail_middle(sim, rails[3]), true)
     });
+}
+
+/// The schedule is a loop, so an entry naming a vanished station is a dead end
+/// whether the train is on it now or comes to it a lap later. Stepping past only
+/// the entry being served would leave the one behind it to strand the train on
+/// the next time round — a fault that shows up long after the stop was removed.
+#[test]
+fn removing_a_stop_served_later_in_the_loop_drops_its_entry_too() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let south = stop_at(&mut sim, "South", rails[3], 1);
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    sim.set_train_schedule(
+        train_id,
+        schedule(vec![entry("South", &[FOREVER]), entry("North", &[FOREVER])]),
+    )
+    .expect("the train takes a schedule");
+    run_until_waiting(&mut sim, train_id, south);
+
+    // North is removed while the train is serving South, so the entry naming it
+    // is the one *after* the cursor rather than the one under it.
+    sim.remove_train_stop(north).expect("the stop exists");
+
+    let waiting = train(&sim, train_id);
+    assert_eq!(
+        waiting
+            .schedule
+            .entries
+            .iter()
+            .map(|entry| entry.stop_name.as_str())
+            .collect::<Vec<_>>(),
+        ["South"],
+        "the entry naming the removed station goes with it, wherever the cursor is"
+    );
+    assert_eq!(
+        waiting.schedule.current, 0,
+        "the entry being served is untouched and still the current one"
+    );
+    assert_eq!(
+        waiting.scheduled_stop,
+        Some(south),
+        "the train keeps the platform it is standing at"
+    );
+    sim.validate()
+        .expect("a world one stop lighter is still a valid world");
 }
 
 /// While another stop still answers to the name, removing one is not the end of
@@ -318,9 +372,16 @@ fn a_stop_whose_rail_is_mined_is_forgotten() {
     let train_now = train(&sim, train_id);
     assert_eq!(train_now.scheduled_stop, None);
     assert_eq!(
-        train_now.schedule.current, 1,
-        "the entry naming the vanished station is stepped past"
+        train_now
+            .schedule
+            .entries
+            .iter()
+            .map(|entry| entry.stop_name.as_str())
+            .collect::<Vec<_>>(),
+        ["South"],
+        "the entry naming the vanished station went with the rail under it"
     );
+    assert_eq!(train_now.schedule.current, 0);
     sim.validate()
         .expect("a world whose track was pulled up is still a valid world");
     // And it goes on to serve the entry after it rather than idling for ever.
