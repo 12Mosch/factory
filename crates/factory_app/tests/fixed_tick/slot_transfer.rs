@@ -462,6 +462,91 @@ fn shift_clicking_a_wagon_cargo_slot_sets_and_clears_its_filter() {
     );
 }
 
+/// A wagon slot is a slot, so a click that cannot go through has to say why the
+/// same way a chest's does — otherwise the only signal a player gets from
+/// clicking an empty slot is that nothing happened.
+#[test]
+fn a_wagon_slot_click_that_fails_explains_itself() {
+    let mut app = super::common::test_app(std::time::Duration::from_millis(16));
+    let stock_id = {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let straight = entity_id_by_name(sim.catalog(), "rail_straight");
+        let wagon = entity_id_by_name(sim.catalog(), "cargo_wagon");
+        let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
+        let (x, y) = first_buildable_rect(&sim, straight);
+        for index in 0..6 {
+            place_test_entity(&mut sim, straight, x, y + index * 2);
+        }
+        sim.tick();
+        let stock_id = sim
+            .place_rolling_stock(wagon, x, y + 4)
+            .expect("a wagon should fit on a six-piece run");
+        // One plate in the first cargo slot, so the wagon has both a slot that
+        // can be taken from and empty ones that cannot.
+        *sim.player_inventory_mut() = Inventory::player();
+        set_player_inventory_slot(&mut sim, 0, iron_plate, 1);
+        factory_sim::entity_transfer::player_slot_to_rolling_stock(&mut sim, stock_id, 0)
+            .expect("a cargo wagon takes iron plate from the player");
+        stock_id
+    };
+    app.world_mut()
+        .resource_mut::<OpenContainer>()
+        .rolling_stock = Some(stock_id);
+    app.update();
+    app.update();
+
+    press_wagon_cargo_slot(&mut app, 1);
+    // The click queues a SimCommand in `Update`; the fixed tick that drains it
+    // runs before `Update` on a later frame, so the result is only observable
+    // after a second `app.update()`.
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<InventoryTransferFeedback>()
+            .message
+            .as_deref(),
+        Some("Empty slot"),
+        "taking from a slot with nothing in it says so"
+    );
+
+    // And a click that does go through clears the complaint rather than leaving
+    // it standing over an action that worked.
+    press_wagon_cargo_slot(&mut app, 0);
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<InventoryTransferFeedback>()
+            .message
+            .as_deref(),
+        None,
+        "a transfer that works clears the previous failure"
+    );
+}
+
+/// Presses one wagon cargo slot button by index, for slots whose label is not
+/// distinctive enough to find by text — an empty one has none at all.
+fn press_wagon_cargo_slot(app: &mut App, slot_index: usize) {
+    let world = app.world_mut();
+    let mut buttons = world.query::<(Entity, &ContainerSlotButton)>();
+    let button = buttons
+        .iter(world)
+        .find_map(|(entity, button)| {
+            (button.panel() == InventoryPanel::RollingStockCargo
+                && button.slot_index() == slot_index)
+                .then_some(entity)
+        })
+        .expect("the wagon window draws a button for every cargo slot");
+    *app.world_mut()
+        .entity_mut(button)
+        .get_mut::<Interaction>()
+        .expect("a slot button has interaction state") = Interaction::Pressed;
+}
+
 /// The background colour of one wagon cargo slot button.
 fn wagon_cargo_slot_background(app: &mut App, slot_index: usize) -> Srgba {
     let world = app.world_mut();
