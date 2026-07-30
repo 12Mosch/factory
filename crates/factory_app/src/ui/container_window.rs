@@ -207,8 +207,7 @@ fn spawn_container_window_contents(
             spawn_circuit_control_panel(
                 machine_panel,
                 connector,
-                factory_sim::entity_access::machine_kind(sim, entity_id)
-                    == Some(factory_data::EntityKind::Accumulator),
+                sim.entity_reports_scalar(entity_id),
             );
         }
         if let Some(status) = sim.machine_status_for_entity(entity_id) {

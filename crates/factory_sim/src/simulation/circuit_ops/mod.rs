@@ -235,14 +235,14 @@ pub(in crate::simulation) fn validate_circuit_entity_state(
     if state.read_contents && !connector.reads_contents {
         return Err(invalid());
     }
-    if state.charge_output_signal.is_some() && !sim.entities.accumulators.contains_key(&entity_id) {
+    if state.output_signal.is_some() && !sim.entity_reports_scalar(entity_id) {
         return Err(invalid());
     }
     if let Some(condition) = state.enable_condition {
         validate_signal(sim, entity_id, condition.left)?;
         validate_operand(sim, entity_id, condition.right)?;
     }
-    if let Some(signal) = state.charge_output_signal {
+    if let Some(signal) = state.output_signal {
         validate_signal(sim, entity_id, signal)?;
     }
 

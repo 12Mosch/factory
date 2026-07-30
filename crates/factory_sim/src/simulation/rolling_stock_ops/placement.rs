@@ -583,6 +583,7 @@ impl Simulation {
                         schedule_arrival_tick: None,
                         schedule_last_activity_tick: None,
                         scheduled_stop: None,
+                        reserved_blocks: Vec::new(),
                     },
                 );
                 train_id
@@ -779,6 +780,11 @@ impl Simulation {
                         schedule_arrival_tick: None,
                         schedule_last_activity_tick: None,
                         scheduled_stop: None,
+                        // Nor does either half hold what the whole train held:
+                        // the signalling pass hands each of them the blocks it
+                        // is standing in on the very next tick, and a claim
+                        // ahead belonged to a train that no longer exists.
+                        reserved_blocks: Vec::new(),
                     },
                 );
                 group_id

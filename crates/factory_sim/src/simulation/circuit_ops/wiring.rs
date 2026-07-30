@@ -24,8 +24,9 @@ pub enum CircuitError {
     NotControllable(EntityId),
     /// The entity does not publish its contents onto a network.
     DoesNotReadContents(EntityId),
-    /// The entity is not an accumulator.
-    NotAnAccumulator(EntityId),
+    /// The entity has no single scalar reading to publish, so there is no
+    /// channel for the player to choose.
+    NoScalarReading(EntityId),
     UnknownSignal(SignalId),
     /// The referenced slot index is outside the combinator's configured rows.
     InvalidSlotIndex {
@@ -282,21 +283,43 @@ impl Simulation {
         Ok(())
     }
 
-    pub fn set_accumulator_charge_signal(
+    /// Picks the channel an entity's one scalar reading is published on: an
+    /// accumulator's charge percentage, a rail signal's aspect.
+    ///
+    /// One command for both rather than one each, because the state, the
+    /// validation, and the publishing step are already shared — what differs is
+    /// only which number is read at the end of it.
+    pub fn set_entity_output_signal(
         &mut self,
         entity_id: EntityId,
         signal: Option<SignalId>,
     ) -> Result<(), CircuitError> {
         self.circuit_connector(entity_id)?;
-        if !self.entities.accumulators.contains_key(&entity_id) {
-            return Err(CircuitError::NotAnAccumulator(entity_id));
+        if !self.entity_reports_scalar(entity_id) {
+            return Err(CircuitError::NoScalarReading(entity_id));
         }
         if let Some(signal) = signal {
             self.require_known_signal(signal)?;
         }
-        self.circuit_state_mut(entity_id).charge_output_signal = signal;
+        self.circuit_state_mut(entity_id).output_signal = signal;
         self.prune_inert_circuit_state(entity_id);
         Ok(())
+    }
+
+    /// Whether this entity has a single scalar reading a circuit can carry, and
+    /// therefore a channel worth choosing.
+    ///
+    /// Asked of the placed entity rather than of a state map, because a signal
+    /// keeps no per-entity state of its own: its aspect is derived every tick
+    /// from the reservation.
+    pub fn entity_reports_scalar(&self, entity_id: EntityId) -> bool {
+        if self.entities.accumulators.contains_key(&entity_id) {
+            return true;
+        }
+        self.entities
+            .placed_entity(entity_id)
+            .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+            .is_some_and(|prototype| prototype.entity_kind.is_rail_signal())
     }
 
     pub fn set_constant_combinator_slot(

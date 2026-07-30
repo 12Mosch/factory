@@ -122,6 +122,47 @@ pub(crate) fn validate_rail_placement(
     Err(BuildError::EntityOccupied { x, y, entity_id })
 }
 
+/// Rejects a signal that would govern nothing, or that would govern a crossing
+/// another signal already does.
+///
+/// A signal is a rail end together with a heading through it. It binds to the
+/// nearest end to its own tile, and both a rail leaving that end the way the
+/// signal faces and a rail entering it from the other side have to be there:
+/// with either missing there is no crossing to govern, and the block partition
+/// would still be cut by a signal that did nothing. Which is worse than refusing
+/// it, because a railway silently split in two looks exactly like a railway.
+pub(crate) fn validate_rail_signal_placement(
+    sim: &Simulation,
+    prototype_id: EntityPrototypeId,
+    footprint: &EntityFootprint,
+    direction: Direction,
+    ignored_entity_id: Option<EntityId>,
+) -> Result<(), BuildError> {
+    if sim
+        .world
+        .prototypes
+        .entity(prototype_id)
+        .is_none_or(|prototype| !prototype.entity_kind.is_rail_signal())
+    {
+        return Ok(());
+    }
+
+    let needs_rail = || BuildError::NeedsAlignedRail { prototype_id };
+    let position =
+        rail_ops::signal_binding(sim, footprint.x, footprint.y).ok_or_else(needs_rail)?;
+    if !rail_ops::crossing_exists(sim, position, direction) {
+        return Err(needs_rail());
+    }
+    if let Some(entity_id) =
+        rail_ops::signal_governing_crossing(sim, position, direction, ignored_entity_id)
+    {
+        let (x, y) = position.tile();
+        return Err(BuildError::EntityOccupied { x, y, entity_id });
+    }
+
+    Ok(())
+}
+
 pub(crate) fn validate_entity_placement(
     sim: &Simulation,
     request: EntityPlacementRequest,
@@ -144,6 +185,13 @@ pub(crate) fn validate_entity_placement(
     let footprint = PlacementValidator::new(&sim.world, &sim.entities, &sim.player, &sim.research)
         .validate_entity_placement(request)?;
     validate_rail_placement(
+        sim,
+        request.prototype_id,
+        &footprint,
+        request.direction,
+        None,
+    )?;
+    validate_rail_signal_placement(
         sim,
         request.prototype_id,
         &footprint,
@@ -238,6 +286,16 @@ pub(crate) fn validate_rotation(
     // A rotating rail may not turn into a duplicate of a neighbour's track, but
     // its own current ends are not in its way.
     validate_rail_placement(
+        sim,
+        entity.prototype_id,
+        &footprint,
+        direction,
+        Some(entity_id),
+    )?;
+    // Rotating a signal is what changes which way it governs, so the same rule
+    // applies: the new heading has to be one the track under it actually runs,
+    // and it may not turn into a second signal over a crossing that has one.
+    validate_rail_signal_placement(
         sim,
         entity.prototype_id,
         &footprint,

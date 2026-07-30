@@ -1097,6 +1097,12 @@ pub enum EntityKind {
     CargoWagon,
     /// Rolling stock carrying a fluid box.
     FluidWagon,
+    /// Splits the rail graph into blocks and admits one train at a time into
+    /// the block beyond it; see [`RailSignalKind::Block`].
+    RailSignal,
+    /// A signal that only clears when the signal beyond it can also clear; see
+    /// [`RailSignalKind::Chain`].
+    ChainSignal,
 }
 
 impl EntityKind {
@@ -1104,6 +1110,25 @@ impl EntityKind {
     /// [`RailPiecePrototype`] geometry and takes part in the rail graph.
     pub const fn is_rail(self) -> bool {
         matches!(self, Self::RailStraight | Self::RailCurved)
+    }
+
+    /// What this kind does at a block boundary, or `None` for anything that is
+    /// not a signal.
+    ///
+    /// The rule a signal follows is the whole of what distinguishes the two
+    /// kinds, so it is read off the kind rather than carried in a prototype
+    /// section that could disagree with it.
+    pub const fn rail_signal_kind(self) -> Option<RailSignalKind> {
+        match self {
+            Self::RailSignal => Some(RailSignalKind::Block),
+            Self::ChainSignal => Some(RailSignalKind::Chain),
+            _ => None,
+        }
+    }
+
+    /// Whether this kind stands beside track and partitions it into blocks.
+    pub const fn is_rail_signal(self) -> bool {
+        self.rail_signal_kind().is_some()
     }
 
     /// Whether this kind runs *on* track rather than being track, and therefore
@@ -1115,6 +1140,24 @@ impl EntityKind {
     pub const fn is_rolling_stock(self) -> bool {
         matches!(self, Self::Locomotive | Self::CargoWagon | Self::FluidWagon)
     }
+}
+
+/// What a signal does when the block it guards cannot be claimed.
+///
+/// Both kinds partition the track the same way — a block boundary is a signal
+/// position, whichever kind stands there — and both admit one train at a time.
+/// They differ only in what happens when the claim fails, which is why this is
+/// one enum over one placement rule rather than two unrelated entities.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize)]
+pub enum RailSignalKind {
+    /// Holds the train at the signal and lets it wait there. The ordinary block
+    /// signal, and the only kind it is safe to stop a train at.
+    Block,
+    /// Clears only when the signal beyond the block it guards can itself clear.
+    /// Placed where stopping would foul something — the exits of a junction —
+    /// so a train that could not get all the way through waits before it rather
+    /// than inside it.
+    Chain,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

@@ -695,7 +695,7 @@ fn accumulator_reports_its_charge_percentage() {
     let reader = place_named(&mut sim, "chest", ox + 3, oy);
     sim.set_circuit_read_contents(accumulator, true)
         .expect("accumulators publish their charge");
-    sim.set_accumulator_charge_signal(accumulator, Some(signal))
+    sim.set_entity_output_signal(accumulator, Some(signal))
         .expect("accumulators accept a charge signal");
     connect(&mut sim, accumulator, reader, WireColor::Red);
 
@@ -729,8 +729,8 @@ fn charge_signal_rejects_non_accumulators_with_specific_error() {
     let chest = place_named(&mut sim, "chest", ox, oy);
 
     assert_eq!(
-        sim.set_accumulator_charge_signal(chest, None),
-        Err(CircuitError::NotAnAccumulator(chest))
+        sim.set_entity_output_signal(chest, None),
+        Err(CircuitError::NoScalarReading(chest))
     );
 }
 

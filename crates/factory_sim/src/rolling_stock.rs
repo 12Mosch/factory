@@ -69,15 +69,20 @@ pub const ROLLING_RESISTANCE_NEWTONS_PER_TONNE: i64 = 500;
 /// the search adds up is a distance.
 pub const TRAIN_REVERSAL_PENALTY_FIXED: i64 = 100 * crate::POSITION_SCALE;
 
-/// What a route pays for each rail it plans to run over that something else is
-/// standing on, in fixed-point units of track.
+/// What a route pays for each rail it plans to run over that another train is
+/// standing in or has been let into, in fixed-point units of track.
 ///
-/// A penalty rather than a prohibition: track someone is parked on is track a
+/// A penalty rather than a prohibition: a block someone is holding is track a
 /// train can still be routed over once whatever is there has moved, and a route
 /// that refused it outright would strand a train that has no other way round.
-/// Occupancy is read from the rolling stock in the world today; signals will
-/// replace that source with reserved blocks without changing what a route does
-/// with the answer.
+///
+/// Charged per *rail of a held block* rather than per rail something is
+/// physically standing on, because a block is the unit a train has to wait for:
+/// a route through the far end of an occupied block is a route that stops at the
+/// signal in front of it whatever the geometry says. On unsignalled track the
+/// whole railway is one block and every rail is charged alike, which leaves the
+/// ranking exactly where it was — the penalty only steers a route once a player
+/// has given it a choice of blocks to steer between.
 pub const TRAIN_OCCUPIED_RAIL_PENALTY_FIXED: i64 = 25 * crate::POSITION_SCALE;
 
 /// Gap left between coupled stock, in fixed-point units.
@@ -459,6 +464,10 @@ pub struct Train {
     /// Stable id of the stop currently claimed by this train.
     #[serde(default)]
     pub scheduled_stop: Option<TrainStopId>,
+    /// Blocks this train holds: the ones it is standing in and the ones it has
+    /// been let into ahead, ascending and without repeats.
+    #[serde(default)]
+    pub reserved_blocks: Vec<EntityId>,
 }
 
 /// Stable identity of a named train stop.
