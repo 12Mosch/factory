@@ -131,6 +131,25 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
         {
             return Err(invalid());
         }
+        // Wait state only means something about a train standing at a stop it
+        // claimed. An arrival tick without a claim is a train timing a wait at
+        // nothing; wait state without an arrival is a clock nothing started; a
+        // tick in the future is state no tick could have written; and activity
+        // before arrival would date the inactivity clock to another visit. All
+        // four are read straight by the schedule pass, which departs a train on
+        // the strength of them.
+        let arrival = train.schedule_arrival_tick;
+        let activity = train.schedule_last_activity_tick;
+        if arrival.is_some() && train.scheduled_stop.is_none()
+            || arrival.is_none() && (activity.is_some() || train.schedule_activity_cargo.is_some())
+            || activity < arrival
+            || [arrival, activity]
+                .into_iter()
+                .flatten()
+                .any(|recorded| recorded > sim.tick_count())
+        {
+            return Err(invalid());
+        }
         // The remainder is the sub-unit part of a tick's travel, so a value at
         // or beyond a whole unit is travel the train was owed and never paid.
         if !(0..TRAIN_VELOCITY_SCALE).contains(&train.travel_remainder) {

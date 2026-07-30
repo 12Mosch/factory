@@ -108,7 +108,7 @@ pub use crate::rolling_stock::{
     RailPosition, RailTarget, RollingStock, RollingStockId, RollingStockMiningError,
     RollingStockPlacementError, RollingStockSubsystem, TRAIN_COUPLING_GAP_FIXED,
     TRAIN_OCCUPIED_RAIL_PENALTY_FIXED, TRAIN_REVERSAL_PENALTY_FIXED, TRAIN_VELOCITY_SCALE, Train,
-    TrainControlError, TrainForces, TrainId, TrainRoute, TrainRouteLeg, TrainSchedule,
+    TrainCargo, TrainControlError, TrainForces, TrainId, TrainRoute, TrainRouteLeg, TrainSchedule,
     TrainScheduleEntry, TrainStop, TrainStopId, TrainThrottle, TrainWaitCondition,
     TrainWaitConditionGroup, TrainWaitContext,
 };

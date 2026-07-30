@@ -845,6 +845,7 @@ mod tests {
             schedule: Default::default(),
             schedule_arrival_tick: None,
             schedule_last_activity_tick: None,
+            schedule_activity_cargo: None,
             scheduled_stop: None,
             reserved_blocks: Vec::new(),
         };
