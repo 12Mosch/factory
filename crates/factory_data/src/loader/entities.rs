@@ -999,7 +999,12 @@ fn validate_rail_metadata(
 /// governs is answered from the tile it stands on. A footprint wider than one
 /// tile would make that question ambiguous — two ends could be equally near two
 /// different tiles of the same signal — and the whole binding rule assumes it
-/// cannot be. Nothing later re-checks it.
+/// cannot be.
+///
+/// Checked here so a catalog that breaks it fails to load at all rather than
+/// producing a world whose signals bind arbitrarily. The simulation checks the
+/// same shape again when it validates a loaded catalog, which is what covers a
+/// save carrying a catalog this loader never saw.
 fn validate_rail_signal_metadata(
     name: &str,
     entity_kind: EntityKind,

@@ -478,20 +478,18 @@ impl Simulation {
     /// How far the last signal the train was let past lets it travel this tick,
     /// or `None` when no signal limits the step.
     ///
-    /// Only travel the way the reservation was taken is limited. The allowance is
-    /// measured from the train's leading end in the direction the signalling pass
-    /// found it going, so a train still rolling the other way is getting further
-    /// from the signal it must stop at, and clipping that would pin it in place
-    /// instead of letting it come round — the same asymmetry
-    /// [`Simulation::route_clearance_fixed`] has.
+    /// Looked up by the direction the step is actually taking. The signalling pass
+    /// walks every direction a train may travel this tick — two of them while a
+    /// reversal is being commanded — so a step in either direction finds the
+    /// allowance measured for it, and an absent one really means "nothing ahead
+    /// this way" rather than "measured for the other way".
     fn signal_clearance_fixed(&self, train_id: TrainId, travel_fixed: i64) -> Option<i64> {
-        let limit = self.rails.signalling.limit(train_id)?;
-        ((travel_fixed > 0) == limit.forward).then(|| {
-            if limit.forward {
-                limit.allowance_fixed
-            } else {
-                -limit.allowance_fixed
-            }
+        let forward = travel_fixed > 0;
+        let allowance_fixed = self.rails.signalling.limit(train_id, forward)?;
+        Some(if forward {
+            allowance_fixed
+        } else {
+            -allowance_fixed
         })
     }
 
@@ -507,11 +505,7 @@ impl Simulation {
         train_id: TrainId,
         forward: bool,
     ) -> Option<i64> {
-        self.rails
-            .signalling
-            .limit(train_id)
-            .filter(|limit| limit.forward == forward)
-            .map(|limit| limit.allowance_fixed)
+        self.rails.signalling.limit(train_id, forward)
     }
 
     /// Burns one tick of fuel in every locomotive of the train that is being

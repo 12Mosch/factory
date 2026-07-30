@@ -549,6 +549,38 @@ fn a_chain_signal_in_front_of_a_full_block_holds_the_train_before_it() {
         .expect("a train held at a chain signal is a valid world");
 }
 
+/// A chain signal with no ordinary signal anywhere beyond it never clears. There
+/// is nothing that could clear it — a chain signal asks the signal past it, and
+/// there is none — so the train waits at its entrance rather than being let into
+/// a stretch nothing is protecting the far end of.
+#[test]
+fn a_chain_signal_with_nothing_beyond_it_never_clears() {
+    let (mut sim, rails) = world_with_signalled_run(20);
+    place_signal(&mut sim, &rails, 8, Direction::North, "chain_signal");
+    let (stock_id, train_id) = place_locomotive(&mut sim, &rails, 3);
+
+    sim.set_train_destination(train_id, rails[16])
+        .expect("the train takes a destination");
+    run_until_settled(&mut sim);
+
+    let stopped = sim
+        .rolling_stock_piece(stock_id)
+        .expect("the locomotive is on the track")
+        .position;
+    assert_eq!(
+        sim.rail_block_key(stopped.edge),
+        Some(block_of(&sim, rails[0])),
+        "held on the approach side, because nothing past the chain could clear it"
+    );
+    assert_eq!(
+        reserved(&sim, train_id),
+        vec![block_of(&sim, rails[0])],
+        "an unresolved chain commits nothing"
+    );
+    sim.validate()
+        .expect("a train held at an unresolved chain is a valid world");
+}
+
 /// The same railway with an ordinary signal where the chain was: now the train
 /// is let into the stretch and comes to rest inside it. This is what a chain
 /// signal exists to avoid, and stating it here is what makes the test above

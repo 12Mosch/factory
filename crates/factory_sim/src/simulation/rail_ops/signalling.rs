@@ -5,6 +5,14 @@
 //! railway does follows from those two sentences plus the rule a chain signal
 //! adds, and this module is where all three live.
 //!
+//! "Ahead" is every direction the train may travel *this tick*, which is one
+//! direction except while a reversal is being commanded — the one moment the way
+//! a train is rolling and the way it is being driven disagree, and tractive force
+//! may flip its velocity inside the tick. Both are walked and both are claimed
+//! then, because a limit for the direction the train did not end up taking is a
+//! limit that does not apply, and an unlimited step across a red boundary is a
+//! collision.
+//!
 //! Four properties hold it together.
 //!
 //! * **A claim survives the tick that made it.** The reservation index is
@@ -65,19 +73,6 @@ const SIGNAL_LOOKAHEAD_REACH_FIXED: i64 = 100 * crate::POSITION_SCALE;
 /// has to come back from it.
 const SIGNAL_LOOKAHEAD_LIMIT: usize = 32;
 
-/// How far a train may still run before the signal it cannot pass.
-///
-/// `forward` is in the train's own facing, the same frame a route leg and the
-/// step's travel are in, so the allowance can be compared against a step
-/// directly. Kept apart from the distance rather than folded into its sign
-/// because zero is a real allowance — a train standing at a red signal — and a
-/// signed zero would lose which way it was not allowed to go.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::simulation) struct TrainSignalLimit {
-    pub(in crate::simulation) allowance_fixed: i64,
-    pub(in crate::simulation) forward: bool,
-}
-
 /// One signal the lookahead reached, and what it would take to pass it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SignalAhead {
@@ -110,7 +105,15 @@ pub(in crate::simulation) struct RailSignalling {
     /// inserted where there is none.
     claims: BTreeMap<EntityId, TrainId>,
     aspects: BTreeMap<EntityId, RailSignalAspect>,
-    limits: BTreeMap<TrainId, TrainSignalLimit>,
+    /// How far each train may still run before the signal it has not been let
+    /// past, keyed by the direction along the train's own facing that the
+    /// allowance was measured in.
+    ///
+    /// Keyed by direction rather than carrying one, because a train being
+    /// reversed has an allowance each way and the step has to read the one that
+    /// matches the way it actually moved. An absent entry is a direction the pass
+    /// did not walk, which is only ever a direction the train cannot travel.
+    limits: BTreeMap<(TrainId, bool), i64>,
     /// The signals ahead of the train being planned for, in travel order.
     signals_ahead: Vec<SignalAhead>,
     /// The reservation being built for the train being planned for, ascending.
@@ -129,8 +132,10 @@ impl RailSignalling {
         self.limits.clear();
     }
 
-    pub(in crate::simulation) fn limit(&self, train_id: TrainId) -> Option<TrainSignalLimit> {
-        self.limits.get(&train_id).copied()
+    /// How far `train_id` may run toward `forward`, or `None` when no signal
+    /// limits it that way.
+    pub(in crate::simulation) fn limit(&self, train_id: TrainId, forward: bool) -> Option<i64> {
+        self.limits.get(&(train_id, forward)).copied()
     }
 
     pub(in crate::simulation) fn aspect(&self, signal: EntityId) -> Option<RailSignalAspect> {
@@ -301,9 +306,14 @@ impl Simulation {
         let Some(train) = self.rolling_stock.train(train_id) else {
             return;
         };
-        let heading_forward = self.train_reservation_forward(train);
-        let leading_end =
-            heading_forward.and_then(|forward| self.train_leading_end(train, forward));
+        // Both halves are read before anything is written, because the walk
+        // needs the train as it stands and the writing below borrows it mutably.
+        let leading_ends = train_reservation_directions(train).map(|forward| {
+            forward.and_then(|forward| {
+                self.train_leading_end(train, forward)
+                    .map(|leading_end| (forward, leading_end))
+            })
+        });
 
         let Simulation {
             rails,
@@ -339,9 +349,12 @@ impl Simulation {
             }
         }
 
-        let limit = leading_end.and_then(|leading_end| {
-            self.claim_blocks_ahead(train_id, leading_end, heading_forward?)
-        });
+        let mut limits = [None; 2];
+        for (index, (forward, leading_end)) in leading_ends.into_iter().flatten().enumerate() {
+            limits[index] = self
+                .claim_blocks_ahead(train_id, leading_end)
+                .map(|allowance_fixed| (forward, allowance_fixed));
+        }
 
         let Simulation {
             rails,
@@ -359,8 +372,11 @@ impl Simulation {
                 rails.signalling.claims.remove(block);
             }
         }
-        if let Some(limit) = limit {
-            rails.signalling.limits.insert(train_id, limit);
+        for (forward, allowance_fixed) in limits.into_iter().flatten() {
+            rails
+                .signalling
+                .limits
+                .insert((train_id, forward), allowance_fixed);
         }
         if let Some(train) = rolling_stock.trains.get_mut(&train_id) {
             train
@@ -377,12 +393,16 @@ impl Simulation {
     /// there is now its own; fail anywhere in it and the train takes nothing and
     /// stops at the first signal, which is the only place a chain run leaves it
     /// safe to wait.
-    fn claim_blocks_ahead(
-        &mut self,
-        train_id: TrainId,
-        leading_end: RailPosition,
-        forward: bool,
-    ) -> Option<TrainSignalLimit> {
+    ///
+    /// A list with no ordinary signal in it has no prefix to commit, and that is
+    /// the same answer. A chain signal clears only when the signal beyond it does,
+    /// so with no such signal to ask there is nothing that could clear it —
+    /// whether the chain runs off the end of the railway, or round a loop of
+    /// chain signals, or simply deeper than the walk's own bounds. All three fail
+    /// closed, which is the property a chain signal exists to provide: committing
+    /// the prefix of a chain the walk could not finish is exactly how a train ends
+    /// up stopped inside the junction it was supposed to wait outside.
+    fn claim_blocks_ahead(&mut self, train_id: TrainId, leading_end: RailPosition) -> Option<i64> {
         let Simulation { rails, .. } = self;
         if rails.blocks.signals().is_empty() {
             return None;
@@ -399,7 +419,7 @@ impl Simulation {
             .signals_ahead
             .iter()
             .position(|signal| signal.kind == RailSignalKind::Block)
-            .map_or(signalling.signals_ahead.len(), |index| index + 1);
+            .map_or(0, |index| index + 1);
         let claimable = signalling.signals_ahead[..commit]
             .iter()
             .all(|signal| signalling.is_claimable(signal.guarded_block, train_id));
@@ -425,32 +445,7 @@ impl Simulation {
             signals_ahead.first().copied()
         };
 
-        stop_at.map(|signal| TrainSignalLimit {
-            allowance_fixed: signal.distance_fixed.max(0),
-            forward,
-        })
-    }
-
-    /// Which way along its own facing a train is about to go.
-    ///
-    /// The way it is *moving* whenever it is moving, because that is the
-    /// direction the track has to be reserved in — a train braking toward a
-    /// reversal is still going the old way, and reserving where it means to go
-    /// next would leave the track it is actually rolling onto unclaimed. A train
-    /// at rest has no such answer, so its plan gives one, and a train with
-    /// neither is going nowhere and reserves only what it stands on.
-    fn train_reservation_forward(&self, train: &crate::rolling_stock::Train) -> Option<bool> {
-        if train.velocity != 0 {
-            return Some(train.velocity > 0);
-        }
-        if let Some(leg) = train.route.as_ref().and_then(|route| route.current_leg()) {
-            return Some(leg.forward);
-        }
-        match train.throttle {
-            TrainThrottle::Forward => Some(true),
-            TrainThrottle::Reverse => Some(false),
-            TrainThrottle::Coast | TrainThrottle::Brake => None,
-        }
+        stop_at.map(|signal| signal.distance_fixed.max(0))
     }
 
     /// The leading end of a train going `forward`, oriented so that travelling
@@ -502,6 +497,37 @@ impl Simulation {
     }
 }
 
+/// Every direction along its own facing a train may travel this tick.
+///
+/// Two of them exactly when the way it is rolling and the way it is being driven
+/// disagree, which is a reversal being commanded. Tractive force is the only
+/// thing that can change the sign of a velocity ([`super::super::rolling_stock_ops::braking_distance_fixed`]'s
+/// model clamps braking and resistance at a standstill), so that is the one case
+/// where a tick's travel can come out the opposite way from the velocity it
+/// started with — and reserving only one of the two would leave the other end of
+/// the train crossing a boundary it had not been let past.
+///
+/// A train at rest under no orders returns neither, which is correct: it is going
+/// nowhere, and it reserves only what it stands on.
+fn train_reservation_directions(train: &crate::rolling_stock::Train) -> [Option<bool>; 2] {
+    let rolling = (train.velocity != 0).then_some(train.velocity > 0);
+    let driven = train
+        .route
+        .as_ref()
+        .and_then(|route| route.current_leg())
+        .map(|leg| leg.forward)
+        .or(match train.throttle {
+            TrainThrottle::Forward => Some(true),
+            TrainThrottle::Reverse => Some(false),
+            TrainThrottle::Coast | TrainThrottle::Brake => None,
+        });
+
+    [
+        rolling.or(driven),
+        driven.filter(|driven| Some(*driven) != rolling && rolling.is_some()),
+    ]
+}
+
 /// Collects the signals ahead of `from`, in travel order.
 ///
 /// `from` must be oriented so that travelling forwards travels the way the train
@@ -510,6 +536,10 @@ impl Simulation {
 /// line, at [`SIGNAL_LOOKAHEAD_REACH_FIXED`], at [`SIGNAL_LOOKAHEAD_LIMIT`]
 /// signals, or once it has crossed more rails than the graph holds, which is
 /// what brings it back off a closed loop.
+///
+/// A list that never reaches an ordinary signal is an unresolved one, and the
+/// claim rule commits nothing on it. That is what makes stopping the walk safe
+/// under every one of those bounds rather than only under the first.
 fn collect_signals_ahead(
     graph: &RailGraph,
     partition: &RailBlockPartition,
@@ -530,7 +560,18 @@ fn collect_signals_ahead(
         } else {
             current.distance_fixed
         };
-        if distance_fixed > SIGNAL_LOOKAHEAD_REACH_FIXED {
+        // The reach bound keeps a train on a long unsignalled stretch from paying
+        // for the whole of it every tick: a signal further off than this is one
+        // the train cannot get near for many ticks yet, and it will be found from
+        // closer. It deliberately does not apply part way through a chain run —
+        // the claim rule needs the signal that resolves the chain, and an
+        // unresolved chain commits nothing, so giving up on the distance would
+        // hold a train at a chain signal for as long as the yard beyond it is
+        // deeper than the bound.
+        let inside_chain_run = out
+            .last()
+            .is_some_and(|signal| signal.kind == RailSignalKind::Chain);
+        if distance_fixed > SIGNAL_LOOKAHEAD_REACH_FIXED && !inside_chain_run {
             return;
         }
         let Some((next_index, arrival_end)) = graph.neighbor_end(edge, exit_end) else {
@@ -651,6 +692,123 @@ mod tests {
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].guarded_block, None);
+    }
+
+    /// A chain run the walk could not resolve commits nothing. Reaching the
+    /// signal-count bound part way along a chain is indistinguishable, from
+    /// inside the claim rule, from a chain that leads nowhere — and committing
+    /// the prefix of either is how a train ends up stopped inside the junction
+    /// the chain signal was protecting.
+    #[test]
+    fn a_chain_run_longer_than_the_walk_may_look_stays_unresolved() {
+        let signals = (0..40)
+            .map(|index| signal(100 + index, index as i64 + 1, RailSignalKind::Chain))
+            .collect::<Vec<_>>();
+        let graph = build_rail_graph_from_pieces(&straight_run(1, 48));
+        let partition = build_rail_blocks(&graph, &signals);
+        let mut found = Vec::new();
+
+        collect_signals_ahead(
+            &graph,
+            &partition,
+            RailPosition::new(rail(1), 0, true),
+            &mut found,
+        );
+
+        assert_eq!(found.len(), SIGNAL_LOOKAHEAD_LIMIT);
+        assert!(
+            found
+                .iter()
+                .all(|signal| signal.kind == RailSignalKind::Chain),
+            "the walk never reached an ordinary signal, so nothing resolved the chain"
+        );
+    }
+
+    /// The reach bound must not be what ends a chain walk: a chain run deeper
+    /// than the bound would otherwise never resolve, and a train would wait at
+    /// its entrance for ever.
+    #[test]
+    fn the_reach_bound_does_not_cut_a_chain_run_short() {
+        let far = SIGNAL_LOOKAHEAD_REACH_FIXED / STRAIGHT_FIXED + 4;
+        let graph = build_rail_graph_from_pieces(&straight_run(1, far as usize + 4));
+        let partition = build_rail_blocks(
+            &graph,
+            &[
+                signal(100, 1, RailSignalKind::Chain),
+                signal(101, far, RailSignalKind::Block),
+            ],
+        );
+        let mut found = Vec::new();
+
+        collect_signals_ahead(
+            &graph,
+            &partition,
+            RailPosition::new(rail(1), 0, true),
+            &mut found,
+        );
+
+        assert_eq!(
+            found.len(),
+            2,
+            "the ordinary signal beyond the chain is found"
+        );
+        assert!(found[1].distance_fixed > SIGNAL_LOOKAHEAD_REACH_FIXED);
+    }
+
+    /// A signal further off than the reach bound with no chain run leading to it
+    /// is one the walk does give up on: the train cannot get near it for many
+    /// ticks, and it will be found from closer.
+    #[test]
+    fn the_reach_bound_does_cut_an_ordinary_walk_short() {
+        let far = SIGNAL_LOOKAHEAD_REACH_FIXED / STRAIGHT_FIXED + 4;
+        let graph = build_rail_graph_from_pieces(&straight_run(1, far as usize + 4));
+        let partition = build_rail_blocks(&graph, &[signal(100, far, RailSignalKind::Block)]);
+        let mut found = Vec::new();
+
+        collect_signals_ahead(
+            &graph,
+            &partition,
+            RailPosition::new(rail(1), 0, true),
+            &mut found,
+        );
+
+        assert!(found.is_empty());
+    }
+
+    /// A train being reversed is going two ways at once as far as reservation is
+    /// concerned: tractive force can flip its velocity inside the tick, so the
+    /// track has to be claimed whichever way the step comes out.
+    #[test]
+    fn a_commanded_reversal_reserves_both_ways() {
+        let mut train = crate::rolling_stock::Train {
+            id: TrainId::new(1),
+            stock: Vec::new(),
+            velocity: 1,
+            travel_remainder: 0,
+            throttle: TrainThrottle::Reverse,
+            destination: None,
+            route: None,
+            route_search_exhausted_at: None,
+            reserved_blocks: Vec::new(),
+        };
+        assert_eq!(
+            train_reservation_directions(&train),
+            [Some(true), Some(false)]
+        );
+
+        // Agreeing on the direction is one direction, whichever way round.
+        train.throttle = TrainThrottle::Forward;
+        assert_eq!(train_reservation_directions(&train), [Some(true), None]);
+        train.velocity = -1;
+        train.throttle = TrainThrottle::Reverse;
+        assert_eq!(train_reservation_directions(&train), [Some(false), None]);
+
+        // A train at rest takes the direction it is being driven, and one under
+        // no orders at all is going nowhere.
+        train.velocity = 0;
+        assert_eq!(train_reservation_directions(&train), [Some(false), None]);
+        train.throttle = TrainThrottle::Brake;
+        assert_eq!(train_reservation_directions(&train), [None, None]);
     }
 
     /// Nothing to find, and the walk says so rather than running to the end of
