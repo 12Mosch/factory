@@ -53,7 +53,7 @@ use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, InventoryTransferFeedback, OpenContainer,
     ProductionStatsWindowState, TechnologyWindowState,
 };
-use crate::ui::rolling_stock_window::sync_rolling_stock_window;
+use crate::ui::rolling_stock_window::{sync_rolling_stock_window, update_rolling_stock_fluid_text};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
@@ -180,6 +180,9 @@ impl Plugin for UiPlugin {
                     // reservation shows on the frame it is made rather than the
                     // one after.
                     update_container_slot_reservation_tint.after(sync_rolling_stock_window),
+                    // A live readout the window deliberately does not rebuild
+                    // for, so it is written after the window has settled.
+                    update_rolling_stock_fluid_text.after(sync_rolling_stock_window),
                 )
                     .in_set(InGameSet),
             )

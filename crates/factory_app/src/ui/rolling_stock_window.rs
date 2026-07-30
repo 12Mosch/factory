@@ -25,9 +25,21 @@ use crate::ui::inventory_panel::{
 use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
 
-/// What the window was built from. The slot count is part of it because a
-/// locomotive and a cargo wagon draw different grids, and the fluid readout
-/// because a fluid wagon's contents are the whole of what it shows.
+/// The live fluid readout of an open tanker.
+///
+/// A component the window writes into every frame rather than text baked into
+/// the snapshot below. What a wagon is carrying changes on every tick a pump is
+/// working, and a snapshot carrying it would compare unequal that often — which
+/// means despawning and respawning the whole window, player inventory and slot
+/// grid included, sixty times a second, and clearing any transfer feedback with
+/// it. The same split every other live readout here uses.
+#[derive(Component)]
+pub struct RollingStockFluidText;
+
+/// What the window's *structure* was built from: how many slots of each kind it
+/// draws, whether it has a tank to report on at all, and the two lines that
+/// come and go. Nothing here changes while a train stands still, so the window
+/// is built once and left alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RollingStockWindowSnapshot {
     stock_id: RollingStockId,
@@ -38,7 +50,9 @@ pub(crate) struct RollingStockWindowSnapshot {
     /// is in the snapshot so that setting or clearing one rebuilds the window
     /// rather than leaving a stale grid behind.
     filters: Vec<Option<ItemId>>,
-    fluid: Option<String>,
+    /// Whether there is a tank to draw a readout for — not what is in it, which
+    /// [`RollingStockFluidText`] carries instead.
+    has_fluid_box: bool,
     stopped: bool,
 }
 
@@ -102,8 +116,32 @@ fn rolling_stock_window_snapshot(
         filters: (0..cargo_slots)
             .map(|slot_index| entity_access::rolling_stock_slot_filter(sim, stock_id, slot_index))
             .collect(),
-        fluid: fluid_readout(sim, stock_id),
+        has_fluid_box: sim
+            .rolling_stock_piece(stock_id)
+            .is_some_and(|stock| !stock.fluid_boxes.is_empty()),
         stopped: sim.rolling_stock_is_stopped(stock_id),
+    }
+}
+
+/// Writes what the open tanker is carrying into the readout the window spawned
+/// for it, leaving the rest of the window alone.
+pub(crate) fn update_rolling_stock_fluid_text(
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut texts: Query<&mut Text, With<RollingStockFluidText>>,
+) {
+    if texts.is_empty() {
+        return;
+    }
+    let sim = sim.read();
+    let readout = open_container
+        .rolling_stock
+        .and_then(|stock_id| fluid_readout(&sim, stock_id))
+        .unwrap_or_default();
+    for mut text in &mut texts {
+        if text.0 != readout {
+            text.0.clone_from(&readout);
+        }
     }
 }
 
@@ -179,11 +217,12 @@ fn spawn_rolling_stock_window_contents(
                 TextColor(Color::srgb(0.98, 0.72, 0.28)),
             ));
         }
-        if let Some(fluid) = &snapshot.fluid {
+        if snapshot.has_fluid_box {
             panel.spawn((
-                Text::new(fluid.clone()),
+                Text::new(""),
                 TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.86, 0.88, 0.82)),
+                RollingStockFluidText,
             ));
         }
         if snapshot.fuel_slots > 0 {

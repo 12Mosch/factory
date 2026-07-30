@@ -19,7 +19,7 @@ pub(crate) mod module_panel;
 pub mod objectives_panel;
 pub mod production_stats;
 pub mod resources;
-pub(crate) mod rolling_stock_window;
+pub mod rolling_stock_window;
 pub mod save_load;
 pub mod technology_panel;
 pub mod threat;

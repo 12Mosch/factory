@@ -8,6 +8,7 @@ use factory_app::ui::inventory_panel::{
     ContainerSlotButton, InventoryPanel, slot_transfer_error_message,
 };
 use factory_app::ui::resources::{InventoryTransferFeedback, OpenContainer};
+use factory_app::ui::rolling_stock_window::RollingStockFluidText;
 use factory_sim::{
     ContainerError, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
 };
@@ -473,4 +474,49 @@ fn wagon_cargo_slot_background(app: &mut App, slot_index: usize) -> Srgba {
                 .then(|| background.0.to_srgba())
         })
         .expect("the wagon window draws a button for every cargo slot")
+}
+
+/// A tanker's contents are written into a live text component, not baked into
+/// the window's structural snapshot.
+///
+/// The distinction is what keeps a filling wagon from despawning and respawning
+/// the whole window — player inventory and slot grid included — on every tick
+/// the amount changes. Here it shows up as a readout that is empty when the
+/// window spawns it and filled in by the update system afterwards.
+#[test]
+fn a_fluid_wagon_window_reports_its_tank_through_a_live_readout() {
+    let mut app = super::common::test_app(std::time::Duration::from_millis(16));
+    let stock_id = {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let straight = entity_id_by_name(sim.catalog(), "rail_straight");
+        let tanker = entity_id_by_name(sim.catalog(), "fluid_wagon");
+        let (x, y) = first_buildable_rect(&sim, straight);
+        for index in 0..6 {
+            place_test_entity(&mut sim, straight, x, y + index * 2);
+        }
+        sim.tick();
+        sim.place_rolling_stock(tanker, x, y + 4)
+            .expect("a tanker should fit on a six-piece run")
+    };
+    app.world_mut()
+        .resource_mut::<OpenContainer>()
+        .rolling_stock = Some(stock_id);
+
+    app.update();
+    app.update();
+
+    let readout = {
+        let world = app.world_mut();
+        let mut texts = world.query::<(&Text, &RollingStockFluidText)>();
+        texts
+            .iter(world)
+            .map(|(text, _)| text.0.clone())
+            .next()
+            .expect("a fluid wagon's window draws a readout for its tank")
+    };
+    assert!(
+        readout.starts_with("Empty: 0 /"),
+        "the readout should carry the tank's live contents, got {readout:?}"
+    );
 }

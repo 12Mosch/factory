@@ -292,7 +292,7 @@ mod tests {
         // were appended for heat networks.
         // v30: roboport state was appended for robot networks.
         // v33: logistic chest configuration was appended.
-        // v39: inventories gained a per-slot filter row, so every stored
+        // v40: inventories gained a per-slot filter row, so every stored
         // inventory in the registry carries one (empty until a player filters
         // something).
         const EXPECTED_LAYOUT_HASH: u64 = 0x6a2c_17a4_fadb_b337;
