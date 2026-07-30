@@ -105,9 +105,7 @@ mod tests {
 
         let mut unopenable = Vec::new();
         for (prototype_id, name) in connectors {
-            let Some(entity_id) = place_somewhere(&mut sim, prototype_id, &name) else {
-                continue;
-            };
+            let entity_id = place_somewhere(&mut sim, prototype_id, &name);
             if open_machine_kind(&sim, entity_id).is_none() {
                 unopenable.push(name);
             }
@@ -125,11 +123,15 @@ mod tests {
     /// A signal is the one connector-bearing prototype that cannot stand on its
     /// own: it has to bind to a rail joint running the way it faces, so the test
     /// lays two rails and drops it beside the joint between them.
+    ///
+    /// Panics rather than reporting failure, because a prototype that fits nowhere
+    /// in the test world is a broken fixture and not a case to skip: skipping it
+    /// would let the test pass while covering one entity fewer than it claims to.
     fn place_somewhere(
         sim: &mut Simulation,
         prototype_id: factory_data::EntityPrototypeId,
         name: &str,
-    ) -> Option<EntityId> {
+    ) -> EntityId {
         let rail = crate::utils::find_entity_prototype_id(sim.catalog(), "rail_straight");
         let needs_rail = sim
             .catalog()
@@ -139,7 +141,7 @@ mod tests {
         for (x, y) in placeable_tiles(sim) {
             if !needs_rail {
                 if let Ok(entity_id) = place(sim, prototype_id, x, y, Direction::North) {
-                    return Some(entity_id);
+                    return entity_id;
                 }
                 continue;
             }
@@ -152,7 +154,7 @@ mod tests {
             }
             sim.tick();
             if let Ok(entity_id) = place(sim, prototype_id, x + 1, y + 2, Direction::North) {
-                return Some(entity_id);
+                return entity_id;
             }
         }
 
