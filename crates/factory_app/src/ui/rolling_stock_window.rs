@@ -11,13 +11,13 @@
 //! so clicking a wagon closes a chest and vice versa.
 
 use bevy::prelude::*;
+use factory_data::ItemId;
 use factory_sim::{
     InventoryPanel, ROLLING_STOCK_FUEL_SLOT_INDEX, RollingStockId, Simulation, entity_access,
 };
 
 use crate::placement::build::entity_display_name as prototype_display_name;
 use crate::resources::SimResource;
-use crate::ui::formatting::format_item_display_name;
 use crate::ui::inventory_panel::{
     spawn_inventory_transfer_feedback, spawn_labeled_slot, spawn_player_inventory_panel,
     spawn_slot_button,
@@ -34,9 +34,10 @@ pub(crate) struct RollingStockWindowSnapshot {
     title: String,
     cargo_slots: usize,
     fuel_slots: usize,
-    /// Filter per cargo slot, so a slot a player reserved says so even while it
-    /// is empty. Part of the snapshot because changing one has to redraw.
-    filters: Vec<Option<String>>,
+    /// Filter per cargo slot. The slot buttons draw the names themselves; this
+    /// is in the snapshot so that setting or clearing one rebuilds the window
+    /// rather than leaving a stale grid behind.
+    filters: Vec<Option<ItemId>>,
     fluid: Option<String>,
     stopped: bool,
 }
@@ -99,10 +100,7 @@ fn rolling_stock_window_snapshot(
             InventoryPanel::RollingStockFuel,
         ),
         filters: (0..cargo_slots)
-            .map(|slot_index| {
-                entity_access::rolling_stock_slot_filter(sim, stock_id, slot_index)
-                    .map(|item_id| format_item_display_name(sim.catalog(), item_id))
-            })
+            .map(|slot_index| entity_access::rolling_stock_slot_filter(sim, stock_id, slot_index))
             .collect(),
         fluid: fluid_readout(sim, stock_id),
         stopped: sim.rolling_stock_is_stopped(stock_id),
@@ -223,23 +221,13 @@ fn spawn_rolling_stock_window_contents(
                         spawn_slot_button(grid, InventoryPanel::RollingStockCargo, slot_index);
                     }
                 });
-            let filtered = snapshot
-                .filters
-                .iter()
-                .enumerate()
-                .filter_map(|(slot_index, filter)| {
-                    filter
-                        .as_ref()
-                        .map(|name| format!("{}: {name}", slot_index + 1))
-                })
-                .collect::<Vec<_>>();
-            if !filtered.is_empty() {
-                panel.spawn((
-                    Text::new(format!("Filters — {}", filtered.join(", "))),
-                    TextFont::from_font_size(11.0),
-                    TextColor(Color::srgb(0.78, 0.80, 0.78)),
-                ));
-            }
+            // The slots themselves show which of them are locked, so what is
+            // left to say is how to lock one.
+            panel.spawn((
+                Text::new("Shift-click a slot to reserve it for what it holds"),
+                TextFont::from_font_size(11.0),
+                TextColor(Color::srgb(0.78, 0.80, 0.78)),
+            ));
         }
         spawn_inventory_transfer_feedback(panel);
     });

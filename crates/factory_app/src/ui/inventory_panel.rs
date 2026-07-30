@@ -139,10 +139,16 @@ pub(crate) fn spawn_slot_button(
 
 pub(crate) fn handle_container_slot_clicks(
     mut interactions: ContainerSlotInteractionQuery,
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut feedback: ResMut<InventoryTransferFeedback>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
+    let shift_held = keyboard.as_deref().is_some_and(|keyboard| {
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
+    });
+
     for (interaction, button) in &mut interactions {
         if *interaction != Interaction::Pressed {
             continue;
@@ -151,6 +157,14 @@ pub(crate) fn handle_container_slot_clicks(
         // The two windows share this grid, so which command a click becomes
         // follows from what is open rather than from the button.
         if let Some(stock_id) = open_container.rolling_stock {
+            if shift_held && button.panel == InventoryPanel::RollingStockCargo {
+                commands.write(SimCommandRequest(rolling_stock_filter_command(
+                    &sim.read(),
+                    stock_id,
+                    button.slot_index,
+                )));
+                continue;
+            }
             commands.write(SimCommandRequest(SimCommand::TransferRollingStockSlot {
                 stock_id,
                 panel: button.panel,
@@ -168,6 +182,41 @@ pub(crate) fn handle_container_slot_clicks(
             panel: button.panel,
             slot_index: button.slot_index,
         }));
+    }
+}
+
+/// What shift-clicking a wagon cargo slot means: lock the slot to what it is
+/// holding, or release a slot that is already locked.
+///
+/// One gesture for both directions because they are the same intent — "this
+/// slot is mine for iron plate" and "it is not any more" — and because the slot
+/// itself says which one it is: a filtered slot can only be unfiltered, and an
+/// occupied unfiltered slot can only be filtered to what it holds. That leaves
+/// exactly one thing an empty unfiltered slot could mean, and the simulation
+/// refuses a filter that contradicts a slot's contents anyway, so nothing here
+/// has to ask the player to choose an item from a list.
+fn rolling_stock_filter_command(
+    sim: &factory_sim::Simulation,
+    stock_id: factory_sim::RollingStockId,
+    slot_index: usize,
+) -> SimCommand {
+    let filter = if factory_sim::entity_access::rolling_stock_slot_filter(sim, stock_id, slot_index)
+        .is_some()
+    {
+        None
+    } else {
+        factory_sim::entity_access::rolling_stock_panel_slot(
+            sim,
+            Some(stock_id),
+            InventoryPanel::RollingStockCargo,
+            slot_index,
+        )
+        .map(|stack| stack.item_id())
+    };
+    SimCommand::SetRollingStockSlotFilter {
+        stock_id,
+        slot_index,
+        filter,
     }
 }
 
@@ -208,10 +257,36 @@ pub(crate) fn update_container_slot_text(
                 marker.slot_index,
             )
         };
-        text.0 = stack
-            .map(|stack| format_item_stack(stack, sim.catalog()))
-            .unwrap_or_default();
+        text.0 = match stack {
+            Some(stack) => format_item_stack(stack, sim.catalog()),
+            // An emptied slot that a player locked still belongs to its item, so
+            // it keeps saying so in parentheses rather than going blank and
+            // looking like any other free slot.
+            None => {
+                rolling_stock_slot_filter_label(&sim, &open_container, marker).unwrap_or_default()
+            }
+        };
     }
+}
+
+/// The parenthesised item name an empty but filtered wagon cargo slot shows.
+fn rolling_stock_slot_filter_label(
+    sim: &factory_sim::Simulation,
+    open_container: &OpenContainer,
+    marker: &ContainerSlotText,
+) -> Option<String> {
+    if marker.panel != InventoryPanel::RollingStockCargo {
+        return None;
+    }
+    let filter = factory_sim::entity_access::rolling_stock_slot_filter(
+        sim,
+        open_container.rolling_stock?,
+        marker.slot_index,
+    )?;
+    Some(format!(
+        "({})",
+        format_item_display_name(sim.catalog(), filter)
+    ))
 }
 
 pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransferError) -> String {

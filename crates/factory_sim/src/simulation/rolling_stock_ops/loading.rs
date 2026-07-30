@@ -362,11 +362,7 @@ impl Simulation {
         if self.stopped_stock_index.trains.is_empty() {
             return;
         }
-        let carried_fluid = self
-            .stopped_stock_index
-            .stopped_stock()
-            .filter_map(|stock_id| self.rolling_stock.get(stock_id))
-            .any(|stock| !stock.fluid_boxes.is_empty());
+        let carried_fluid = self.any_stopped_stock_carries_fluid();
         self.stopped_stock_index.clear();
         if carried_fluid {
             self.invalidate_fluid_state();
@@ -377,6 +373,33 @@ impl Simulation {
     /// the container UI can say why a wagon it is showing will not take items.
     pub fn rolling_stock_is_stopped(&self, stock_id: RollingStockId) -> bool {
         self.stopped_stock_index.covered.contains_key(&stock_id)
+    }
+
+    /// The stopped piece of stock lying over `(x, y)`.
+    ///
+    /// The public face of the index, for the cursor: clicking a parked train is
+    /// the common way a player opens a wagon, and answering it from here costs
+    /// one map lookup rather than a walk over every piece of stock in the
+    /// world. Moving stock is deliberately absent — a cursor that wants it too
+    /// falls back to [`Simulation::rolling_stock_covers_tile`].
+    pub fn stopped_rolling_stock_at_tile(
+        &self,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) -> Option<RollingStockId> {
+        self.stopped_stock_index.stock_at(x, y)
+    }
+
+    /// Whether any stopped piece of stock has a tank at all.
+    ///
+    /// What the fluid topology asks before it goes looking for pumps: the whole
+    /// pump-side search exists to serve parked tankers, so with none parked
+    /// there is nothing to find.
+    pub(in crate::simulation) fn any_stopped_stock_carries_fluid(&self) -> bool {
+        self.stopped_stock_index
+            .stopped_stock()
+            .filter_map(|stock_id| self.rolling_stock.get(stock_id))
+            .any(|stock| !stock.fluid_boxes.is_empty())
     }
 
     /// The distinct tiles one piece of stock lies over.

@@ -652,3 +652,21 @@ fn wagon_contents_and_filters_survive_a_save_round_trip() {
     );
     assert_eq!(loaded.state_hash(), sim.state_hash());
 }
+
+/// A railway with no tanker parked anywhere costs a topology rebuild nothing.
+///
+/// The pump-side search exists only to serve parked fluid wagons, so it must
+/// not walk the placed entities of a factory that has none — which is every
+/// factory, most of the time.
+#[test]
+fn a_railway_without_a_parked_tanker_adds_no_fluid_nodes() {
+    let (sim, _rails, _stock_id, _tile) = world_with_parked_wagon("cargo_wagon");
+    assert!(
+        !sim.any_stopped_stock_carries_fluid(),
+        "a cargo wagon has no tank, so nothing asks the pumps about it"
+    );
+
+    // And a fluid wagon parked on the same run does put the search back on.
+    let (sim, _rails, _stock_id, _tile) = world_with_parked_wagon("fluid_wagon");
+    assert!(sim.any_stopped_stock_carries_fluid());
+}

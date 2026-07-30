@@ -370,3 +370,77 @@ fn press_button_with_child_text(app: &mut App, target_text: &str) {
         .expect("button should have interaction state");
     *interaction = Interaction::Pressed;
 }
+
+/// Shift-clicking a wagon cargo slot reserves it for what it holds, and
+/// shift-clicking a reserved slot releases it.
+///
+/// The gesture is the only way a player reaches the slot filters that insertion
+/// honours, so it is exercised through the real click path rather than through
+/// the simulation command it produces.
+#[test]
+fn shift_clicking_a_wagon_cargo_slot_sets_and_clears_its_filter() {
+    let mut app = super::common::test_app(std::time::Duration::from_millis(16));
+    let (stock_id, iron_plate) = {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let straight = entity_id_by_name(sim.catalog(), "rail_straight");
+        let wagon = entity_id_by_name(sim.catalog(), "cargo_wagon");
+        let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
+        let (x, y) = first_buildable_rect(&sim, straight);
+        for index in 0..6 {
+            place_test_entity(&mut sim, straight, x, y + index * 2);
+        }
+        sim.tick();
+        let stock_id = sim
+            .place_rolling_stock(wagon, x, y + 4)
+            .expect("a wagon should fit on a six-piece run");
+        // One plate in the wagon's first cargo slot, put there the way a player
+        // would, so the slot has something for the gesture to reserve it for.
+        *sim.player_inventory_mut() = Inventory::player();
+        set_player_inventory_slot(&mut sim, 0, iron_plate, 1);
+        factory_sim::entity_transfer::player_slot_to_rolling_stock(&mut sim, stock_id, 0)
+            .expect("a cargo wagon takes iron plate from the player");
+        (stock_id, iron_plate)
+    };
+    app.world_mut()
+        .resource_mut::<OpenContainer>()
+        .rolling_stock = Some(stock_id);
+
+    app.update();
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
+    press_button_with_child_text(&mut app, "IP\n1");
+    app.update();
+    app.update();
+
+    assert_eq!(
+        factory_sim::entity_access::rolling_stock_slot_filter(
+            &app.world().resource::<SimResource>().read(),
+            stock_id,
+            0
+        ),
+        Some(iron_plate),
+        "shift-clicking an occupied slot reserves it for what it holds"
+    );
+
+    // The slot still holds its stack, so the same gesture releases it rather
+    // than trying to filter it again. Setting the filter rebuilt the window, and
+    // a freshly spawned slot button only gets its text on the frame after it
+    // appears, so give it that frame before looking for it again.
+    app.update();
+    press_button_with_child_text(&mut app, "IP\n1");
+    app.update();
+    app.update();
+
+    assert_eq!(
+        factory_sim::entity_access::rolling_stock_slot_filter(
+            &app.world().resource::<SimResource>().read(),
+            stock_id,
+            0
+        ),
+        None,
+        "shift-clicking a reserved slot releases it"
+    );
+}

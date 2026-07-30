@@ -129,7 +129,17 @@ impl Simulation {
     ///
     /// Only pumps, deliberately. A pipe run that happened to pass a siding
     /// would otherwise start filling any train parked beside it.
+    ///
+    /// The search is the pump's, not the wagon's, so it has to walk the placed
+    /// entities to find the pumps — but only when there is something for a pump
+    /// to find. A railway with no fluid wagon standing anywhere answers in the
+    /// time it takes to look at the index, which is what a topology rebuild in
+    /// a factory of thousands of entities and no parked tanker should cost.
     fn stopped_stock_fluid_nodes(&self) -> Vec<FluidBoxNode> {
+        if !self.any_stopped_stock_carries_fluid() {
+            return Vec::new();
+        }
+
         let mut endpoints_by_stock = BTreeMap::<RollingStockId, Vec<EdgeEndpoint>>::new();
         for placed in self.entities.placed_entities.values() {
             let Some(prototype) = self

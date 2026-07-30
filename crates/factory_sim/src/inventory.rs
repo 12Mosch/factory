@@ -479,7 +479,17 @@ impl Inventory {
         // player reserved for this item is where they asked it to go, and
         // spending the free slots first would leave a filtered wagon accepting
         // less than its filters promised.
-        for filtered_pass in [true, false] {
+        //
+        // An inventory with no filters at all has nothing to put first, so it
+        // walks its slots once. That is every inventory in the world until a
+        // player says otherwise, and this is the path every furnace, chest, and
+        // assembler insertion takes.
+        let passes: &[bool] = if filters.is_empty() {
+            &[false]
+        } else {
+            &[true, false]
+        };
+        for &filtered_pass in passes {
             for (slot_index, slot) in slots.iter_mut().enumerate() {
                 if !slot.is_empty()
                     || !accepts(slot_index)

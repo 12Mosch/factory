@@ -101,6 +101,12 @@ pub(crate) fn handle_container_close_input(
 /// an ordinary placed entity, so the occupancy lookup would answer with the
 /// track under the train — which opens nothing, and would leave a player
 /// clicking a wagon with no window at all.
+///
+/// The stopped-stock index answers for a parked train in one lookup, which is
+/// the case a player clicks by far the most often: trains are opened at
+/// stations. The walk behind it is what catches a train still rolling, which
+/// the index deliberately does not hold — a moving wagon can still be opened,
+/// it simply cannot be reached by an inserter.
 pub fn opened_container_after_world_click(
     sim: &Simulation,
     cursor_tile: Option<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>,
@@ -108,11 +114,12 @@ pub fn opened_container_after_world_click(
     let Some((x, y)) = cursor_tile else {
         return (None, None);
     };
-    if let Some(stock) = sim
-        .rolling_stock()
-        .find(|stock| sim.rolling_stock_covers_tile(stock.id, x, y))
-    {
-        return (None, Some(stock.id));
+    if let Some(stock_id) = sim.stopped_rolling_stock_at_tile(x, y).or_else(|| {
+        sim.rolling_stock()
+            .find(|stock| sim.rolling_stock_covers_tile(stock.id, x, y))
+            .map(|stock| stock.id)
+    }) {
+        return (None, Some(stock_id));
     }
 
     let opened = sim
