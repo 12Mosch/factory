@@ -21,9 +21,18 @@
 //! The graph itself is a derived cache. It is rebuilt from the placed rails
 //! whenever placement changes — the invalidate-and-rebuild shape the power,
 //! fluid, heat, and robot networks already share — and is never saved.
+//!
+//! Signals partition that graph into *blocks*: a block is a maximal run of
+//! track joined without a signal standing between. The partition is derived from
+//! the same topology cache rather than being a second graph, and it is what
+//! reservation is expressed over — see
+//! [`crate::simulation::rail_ops`] for the reservation rules and
+//! [`RailSignalAspect`] for what a signal reports about the block it guards.
 
 use crate::entities::Direction;
 use crate::ids::EntityId;
+use factory_data::RailSignalKind;
+use serde::{Deserialize, Serialize};
 
 /// A point in world sub-tile space, in fixed-point units
 /// ([`crate::POSITION_SCALE`] per tile). The same units free-moving positions
@@ -109,6 +118,88 @@ pub struct RailNetworkSnapshot {
     /// has `n + 1` nodes, so this is what tells a closed loop from an open run.
     pub node_count: usize,
     pub total_length_fixed: i64,
+}
+
+/// A block of track: a maximal run of rail joined without a signal between.
+///
+/// Derived from the graph and the placed signals, so it is rebuilt whenever
+/// either changes rather than saved. What *is* saved is a train's claim on a
+/// block, and that claim names the block by [`RailBlockSnapshot::key`] for
+/// exactly that reason: an index into the partition would mean something else
+/// one placement later, while the lowest entity id in a block is a name the
+/// world itself carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RailBlockSnapshot {
+    /// The block's durable name: the lowest rail entity id it contains.
+    pub key: EntityId,
+    pub piece_count: usize,
+    pub total_length_fixed: i64,
+    /// Signals standing on this block's boundary that admit a train *into* it.
+    pub entry_signal_count: usize,
+}
+
+/// What a signal says about the block beyond it.
+///
+/// Three states rather than the two a train actually cares about, because
+/// "somebody is standing in there" and "somebody is on their way in" are
+/// different things to a player reading the railway — and the same thing to a
+/// train, which stops either way.
+///
+/// A chain signal reports the block it guards like any other signal does. What
+/// makes it a chain is the reservation rule it follows, not a fourth aspect: a
+/// chain signal showing [`RailSignalAspect::Clear`] may still hold a train,
+/// because the signal *beyond* it could not clear.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize,
+)]
+pub enum RailSignalAspect {
+    /// Nothing is in the block beyond and nothing has claimed it.
+    #[default]
+    Clear,
+    /// A train holds the block beyond but has not reached it yet.
+    Reserved,
+    /// A train is standing in the block beyond.
+    Blocked,
+}
+
+impl RailSignalAspect {
+    /// What a circuit connector publishes for this aspect.
+    ///
+    /// Deliberately non-zero for every aspect: a network carries no difference
+    /// between a channel holding zero and a channel nothing writes to, so a
+    /// clear signal reading zero would be indistinguishable from no signal being
+    /// wired at all.
+    pub const fn circuit_value(self) -> i32 {
+        match self {
+            Self::Clear => 1,
+            Self::Reserved => 2,
+            Self::Blocked => 3,
+        }
+    }
+}
+
+/// A placed signal as the block partition sees it.
+///
+/// The point and the heading together are the signal's position on the railway:
+/// a train crossing that point travelling that way is the one this signal
+/// governs, and a train crossing it the other way is governed by whatever
+/// signal faces the other side — or by nothing, which makes the boundary
+/// impassable that way. That is what "the side it faces is significant" means
+/// once the geometry is resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RailSignalSnapshot {
+    pub entity_id: EntityId,
+    pub kind: RailSignalKind,
+    /// The rail end the signal stands at.
+    pub position: RailPoint,
+    /// The travel heading this signal governs.
+    pub heading: Direction,
+    /// Block a train is in as it comes up to the signal, or `None` when no
+    /// track approaches it from that side.
+    pub approach_block: Option<EntityId>,
+    /// Block the signal admits a train into, or `None` when the track ends
+    /// there.
+    pub guarded_block: Option<EntityId>,
 }
 
 /// One end of a rail the player is about to place, and the rail it would join.

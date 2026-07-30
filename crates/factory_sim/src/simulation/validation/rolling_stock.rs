@@ -84,6 +84,13 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
         }
     }
 
+    // Who holds each block, built up as the trains are walked. A claim is
+    // exclusive, and nothing later re-checks it: the signalling pass seeds itself
+    // from these and then lets a train run to the far end of what it holds, so a
+    // save with two trains on one claim is two trains driving at each other with
+    // nothing to stop them.
+    let mut claimants = BTreeMap::<EntityId, TrainId>::new();
+
     for (train_id, train) in &sim.rolling_stock.trains {
         let invalid = || SimValidationError::InvalidTrain {
             train_id: *train_id,
@@ -197,6 +204,37 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             && (train.destination.is_none() || train.route.is_some())
         {
             return Err(invalid());
+        }
+
+        // What a train holds has to be blocks that exist, held by nobody else,
+        // and named once each. All three are facts the signalling pass assumes:
+        // it seeds its index from these claims without re-deriving them, which is
+        // the whole point of saving them, so a save that broke any of the three
+        // would put two trains into one block or hand a train a stretch of
+        // railway that is no longer there.
+        //
+        // Ascending is checked rather than merely "no duplicates", because that
+        // is the canonical form the pass writes and a save in any other order
+        // came from somewhere else.
+        //
+        // While the graph is dirty the answer is stricter still: invalidating it
+        // gives every claim back, so a world mid-placement holds none at all.
+        // Checking that here rather than skipping the block checks is what keeps
+        // the invariant a statement about every world and not only about
+        // conveniently-timed ones.
+        if sim.rails.graph_dirty {
+            if !train.reserved_blocks.is_empty() {
+                return Err(invalid());
+            }
+        } else {
+            for (index, block) in train.reserved_blocks.iter().enumerate() {
+                if sim.rails.blocks.block(*block).is_none()
+                    || index > 0 && train.reserved_blocks[index - 1] >= *block
+                    || claimants.insert(*block, *train_id).is_some()
+                {
+                    return Err(invalid());
+                }
+            }
         }
 
         // A train may not exceed the top speed of its slowest piece; the step

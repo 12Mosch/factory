@@ -13,7 +13,7 @@ pub use crate::{
     MiningDrillPrototype, ModuleEffectPrototype, NuclearReactorPrototype, OffshorePumpPrototype,
     POSITION_SCALE, PrototypeCatalog, PrototypeLoadError, PumpPrototype, PumpjackPrototype,
     RadarPrototype, RailCurvePrototype, RailEndPrototype, RailHeading, RailPiecePrototype,
-    RailPointPrototype, RecipeId, RecipePrototype, ResourceDistanceScalingConfig,
+    RailPointPrototype, RailSignalKind, RecipeId, RecipePrototype, ResourceDistanceScalingConfig,
     ResourceExtraction, ResourceGenerationConfig, ResourcePatchGridConfig, RoboportPrototype,
     RobotKind, RobotPrototype, RollingStockPrototype, SolarPanelPrototype, StartingAreaConfig,
     SteamEnginePrototype, TechnologyEffect, TechnologyId, TechnologyPrototype, TerrainNoiseConfig,

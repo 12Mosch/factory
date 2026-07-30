@@ -13,7 +13,7 @@ use super::power::{
 use super::production::{
     assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers,
 };
-use super::rails::rail_layers;
+use super::rails::{rail_layers, rail_signal_layers};
 use crate::rendering::visuals::EntityVisualStyle;
 use crate::rendering::visuals::layers::{VisualLayer, VisualLayerBuilder};
 
@@ -72,6 +72,11 @@ pub(super) fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         // the shared body below so a malformed prototype is visible rather than
         // invisible.
         EntityKind::RailStraight | EntityKind::RailCurved => {}
+        EntityKind::RailSignal | EntityKind::ChainSignal => {
+            if let Some(kind) = style.kind.rail_signal_kind() {
+                rail_signal_layers(&mut builder, style, kind);
+            }
+        }
         // Rolling stock has no placed-entity sprite to build layers for.
         EntityKind::Locomotive | EntityKind::CargoWagon | EntityKind::FluidWagon => {}
         EntityKind::ResourcePatch => {}

@@ -11,7 +11,9 @@ use factory_sim::{
 pub(crate) enum SignalSlot {
     ConditionLeft,
     ConditionRight,
-    AccumulatorCharge,
+    /// The one scalar reading an entity publishes: an accumulator's charge
+    /// percentage, a rail signal's aspect.
+    EntityOutput,
     ConstantSlot(usize),
     ArithmeticLeft,
     ArithmeticRight,

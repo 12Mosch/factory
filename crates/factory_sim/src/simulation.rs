@@ -93,7 +93,8 @@ pub use crate::power::{
 };
 pub use crate::radar::RadarState;
 pub use crate::rail::{
-    RailConnectionPreview, RailCurve, RailEnd, RailNetworkSnapshot, RailPieceGeometry, RailPoint,
+    RailBlockSnapshot, RailConnectionPreview, RailCurve, RailEnd, RailNetworkSnapshot,
+    RailPieceGeometry, RailPoint, RailSignalAspect, RailSignalSnapshot,
 };
 pub use crate::research::{
     ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,

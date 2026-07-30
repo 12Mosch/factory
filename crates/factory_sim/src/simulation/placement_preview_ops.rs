@@ -247,6 +247,28 @@ fn collect_placement_preview_issues_for_footprint(
         });
     }
 
+    // A signal with no aligned joint beside it, or one over a crossing another
+    // signal already governs: the same rule placement validation applies, for
+    // the same reason the rail case above is mirrored here.
+    match placement_validation_ops::validate_rail_signal_placement(
+        sim,
+        prototype.id,
+        footprint,
+        direction,
+        None,
+    ) {
+        Ok(()) => {}
+        Err(BuildError::NeedsAlignedRail { prototype_id }) => issues.push(BuildPlacementIssue {
+            tile: Some((footprint.x, footprint.y)),
+            kind: BuildPlacementIssueKind::NeedsAlignedRail { prototype_id },
+        }),
+        Err(BuildError::EntityOccupied { x, y, entity_id }) => issues.push(BuildPlacementIssue {
+            tile: Some((x, y)),
+            kind: BuildPlacementIssueKind::EntityOccupied { entity_id },
+        }),
+        Err(_) => {}
+    }
+
     for (x, y) in footprint.tiles() {
         if let Some(entity_id) = sim.entities.occupancy.entity_at(x, y) {
             issues.push(BuildPlacementIssue {

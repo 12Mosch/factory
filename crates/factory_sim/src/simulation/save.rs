@@ -52,7 +52,14 @@ use bincode::Options;
 // routing pass's cursor with them, because which trains a tick with more
 // searches than budget plans for follows from it, and a train remembers a
 // search that ran out of expansions so it does not repeat it every tick.
-pub const SAVE_VERSION: u32 = 37;
+// v38: trains gained the blocks they hold. Rail and chain signals join the
+// catalog as ordinary placed entities and the blocks they cut the graph into are
+// a derived cache rebuilt on load, but a train's *claim* on a block is not
+// derivable — which block a train was let into cannot be read off where it is
+// standing — so the claims are saved with the train. Circuit entity state renamed
+// its accumulator charge channel to the general output channel a rail signal
+// reports its aspect on.
+pub const SAVE_VERSION: u32 = 38;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -78,7 +85,9 @@ pub const SAVE_VERSION: u32 = 37;
 // and the curve between them).
 // v26: entity prototypes gained rolling stock metadata (length, weight,
 // braking force, top speed, and locomotive tractive force).
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 26;
+// v27: rail signal and chain signal entity kinds, which partition the rail
+// graph into blocks.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 27;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

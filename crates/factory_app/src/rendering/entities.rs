@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, PrototypeCatalog};
-use factory_sim::{Direction, EntityFootprint, EntityId, PlacedEntity, Simulation};
+use factory_sim::{
+    Direction, EntityFootprint, EntityId, PlacedEntity, RailSignalAspect, Simulation,
+};
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -15,8 +17,8 @@ use crate::rendering::colors::{
     gun_turret_color, heat_exchanger_color, heat_pipe_color, inserter_color, lab_color, lamp_color,
     laser_turret_color, mining_drill_color, nuclear_reactor_color, offshore_pump_color,
     oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, rail_ballast_color,
-    roboport_color, solar_panel_color, splitter_color, steam_engine_color, storage_tank_color,
-    transport_belt_color, wall_color,
+    rail_signal_color, roboport_color, solar_panel_color, splitter_color, steam_engine_color,
+    storage_tank_color, transport_belt_color, wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
@@ -139,6 +141,11 @@ pub(crate) fn renderable_entity_visual_style(
         && let Some(lit) = factory_sim::entity_access::lamp_is_lit(sim, entity_id)
     {
         style.base_color = lamp_color(lit);
+    }
+    if style.kind.is_rail_signal()
+        && let Some(aspect) = sim.rail_signal_aspect(entity_id)
+    {
+        style.base_color = rail_signal_color(aspect);
     }
     Some(style)
 }
@@ -469,6 +476,16 @@ pub(crate) fn entity_prototype_visual_style(
             connections: ConnectionMask::EMPTY,
             rail: factory_sim::rail_ops::piece_geometry(prototype, direction),
         }),
+        // A signal shows its aspect, so the prototype-only style — a preview, a
+        // ghost, a build-menu icon — shows the clear one and
+        // `renderable_entity_visual_style` swaps in the live aspect, the same
+        // way a lamp's lit state is handled.
+        EntityKind::RailSignal | EntityKind::ChainSignal => Some(entity_visual_style(
+            rail_signal_color(RailSignalAspect::Clear),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
         // Rolling stock is never a placed entity, so the placed-entity renderer
         // never sees one: it is drawn along the track it stands on by
         // [`crate::rendering::rolling_stock`], which is the only renderer that
