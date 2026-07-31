@@ -806,6 +806,7 @@ pub(crate) fn update_machine_indicators(
                 | OpenMachineKind::ConstantCombinator
                 | OpenMachineKind::ArithmeticCombinator
                 | OpenMachineKind::DeciderCombinator
+                | OpenMachineKind::TrainStop
                 | OpenMachineKind::Circuit => None,
             });
 

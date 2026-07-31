@@ -337,6 +337,12 @@ pub(crate) fn command_for_picked_signal(
             })
         }
         SignalSlot::EntityOutput => Some(SimCommand::SetEntityOutputSignal { entity_id, signal }),
+        // Clearing it hands the stop back to its hand-set limit, which is why
+        // the picker's clear button is not a dead end here.
+        SignalSlot::TrainStopLimit => Some(SimCommand::SetTrainStopLimitSignal {
+            stop: entity_id,
+            signal,
+        }),
         SignalSlot::ConstantSlot(slot_index) => {
             let mut value = factory_sim::entity_access::constant_combinator_state(sim, entity_id)
                 .and_then(|state| state.slots.get(slot_index))

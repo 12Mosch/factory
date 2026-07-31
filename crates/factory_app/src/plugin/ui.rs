@@ -61,6 +61,14 @@ use crate::ui::technology_panel::{
 use crate::ui::threat::{
     ThreatUiState, handle_threat_alert_clicks, setup_threat_ui, sync_threat_ui,
 };
+use crate::ui::train_schedule_panel::{
+    handle_schedule_add_button, handle_schedule_condition_buttons, handle_schedule_remove_buttons,
+    handle_schedule_stop_buttons, handle_schedule_wait_step_buttons, update_train_schedule_status,
+};
+use crate::ui::train_stop_panel::{
+    TrainStopRenameState, handle_train_stop_limit_buttons, handle_train_stop_limit_signal_button,
+    handle_train_stop_rename_button, handle_train_stop_rename_input, update_train_stop_panel,
+};
 
 /// General UI: debug overlay, containers and inventory, technology window,
 /// manual crafting, production stats, and machine indicators.
@@ -104,6 +112,7 @@ impl Plugin for UiPlugin {
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
             .init_resource::<CircuitEditorState>()
+            .init_resource::<TrainStopRenameState>()
             .add_systems(
                 Startup,
                 (setup_debug_overlay, setup_objectives_panel, setup_threat_ui),
@@ -183,6 +192,32 @@ impl Plugin for UiPlugin {
                     // A live readout the window deliberately does not rebuild
                     // for, so it is written after the window has settled.
                     update_rolling_stock_fluid_text.after(sync_rolling_stock_window),
+                    // The schedule editor lives in the same window. Its buttons
+                    // rewrite the whole schedule, so they run in the shared
+                    // interaction set and the window picks the change up on the
+                    // frame the command lands.
+                    handle_schedule_stop_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_condition_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_wait_step_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_remove_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_add_button.in_set(AppSet::UiInteraction),
+                    update_train_schedule_status.after(sync_rolling_stock_window),
+                )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    // Typing a station name reads the keyboard directly, so it
+                    // runs with the other window input rather than in the
+                    // button-interaction set.
+                    handle_train_stop_rename_input.in_set(AppSet::WorldInput),
+                    handle_train_stop_rename_button.in_set(AppSet::UiInteraction),
+                    handle_train_stop_limit_buttons.in_set(AppSet::UiInteraction),
+                    handle_train_stop_limit_signal_button.in_set(AppSet::UiInteraction),
+                    update_train_stop_panel
+                        .after(sync_container_window)
+                        .after(handle_train_stop_rename_input),
                 )
                     .in_set(InGameSet),
             )

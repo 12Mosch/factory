@@ -23,4 +23,6 @@ pub mod rolling_stock_window;
 pub mod save_load;
 pub mod technology_panel;
 pub mod threat;
+pub(crate) mod train_schedule_panel;
+pub(crate) mod train_stop_panel;
 pub(crate) mod window_sync;

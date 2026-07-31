@@ -25,6 +25,10 @@ pub(crate) enum SignalSlot {
     /// circuit editors because picking "which item" is the same interaction; a
     /// chest row is item-only, so it hides the fluid and virtual channels.
     LogisticRequest(usize),
+    /// The channel a train stop reads its train limit from. Not a condition —
+    /// the number itself is what the stop uses — so it takes a bare signal
+    /// rather than an operand.
+    TrainStopLimit,
 }
 
 impl SignalSlot {
