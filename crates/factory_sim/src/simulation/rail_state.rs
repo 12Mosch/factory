@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use crate::ids::EntityId;
+use crate::rolling_stock::RailTarget;
 use crate::simulation::rail_ops::{RailBlockPartition, RailGraph, RailSignalling};
 
 /// Runtime rail state: the graph the placed rails form, the blocks the signals
@@ -22,6 +26,15 @@ pub(in crate::simulation) struct RailSubsystem {
     /// graph, because a signal appearing changes both.
     pub(in crate::simulation) blocks: RailBlockPartition,
     pub(in crate::simulation) signalling: RailSignalling,
+    /// The mark each placed train stop puts on the track, in stop-entity order.
+    ///
+    /// Derived from where the stop stands and what track is beside it, and
+    /// therefore rebuilt with the graph: a stop whose rail was mined out from
+    /// under it simply drops out of here, and one that had none until the player
+    /// laid some appears. Deriving it is what stops a stop from ever naming a
+    /// rail that is no longer there — the state a durable mark would have to be
+    /// pruned out of.
+    pub(in crate::simulation) stop_targets: BTreeMap<EntityId, RailTarget>,
     #[cfg(test)]
     pub(in crate::simulation) graph_rebuilds: u64,
 }
@@ -33,6 +46,7 @@ impl Default for RailSubsystem {
             graph: RailGraph::default(),
             blocks: RailBlockPartition::default(),
             signalling: RailSignalling::default(),
+            stop_targets: BTreeMap::new(),
             #[cfg(test)]
             graph_rebuilds: 0,
         }
@@ -45,15 +59,18 @@ impl RailSubsystem {
         self.graph = RailGraph::default();
         self.blocks = RailBlockPartition::default();
         self.signalling.clear();
+        self.stop_targets.clear();
     }
 
     pub(in crate::simulation) fn replace_graph(
         &mut self,
         graph: RailGraph,
         blocks: RailBlockPartition,
+        stop_targets: BTreeMap<EntityId, RailTarget>,
     ) {
         self.graph = graph;
         self.blocks = blocks;
+        self.stop_targets = stop_targets;
         self.graph_dirty = false;
     }
 }

@@ -11,8 +11,8 @@
 use super::super::*;
 use super::rolling_stock::{fuel_train, place_stock, world_with_rail_run};
 use crate::rolling_stock::{
-    Train, TrainId, TrainSchedule, TrainScheduleEntry, TrainStopId, TrainThrottle,
-    TrainWaitCondition, TrainWaitConditionGroup,
+    Train, TrainId, TrainSchedule, TrainScheduleEntry, TrainThrottle, TrainWaitCondition,
+    TrainWaitConditionGroup,
 };
 
 /// Ticks long enough for a locomotive to run the length of these fixtures twice
@@ -49,10 +49,49 @@ fn rail_middle(sim: &Simulation, rail: EntityId) -> i64 {
         / 2
 }
 
-fn stop_at(sim: &mut Simulation, name: &str, rail: EntityId, train_limit: u32) -> TrainStopId {
-    let distance = rail_middle(sim, rail);
-    sim.create_train_stop(name, rail, distance, train_limit)
-        .expect("the middle of a placed rail takes a stop")
+/// Puts a stop on the tile beside `rail` and gives it a name and a limit.
+///
+/// Beside rather than on: a stop is an ordinary placed entity that binds to the
+/// track next to it, so every test here builds its station the way a player
+/// would. Either side will do — which one is free depends on the terrain the
+/// fixture found room on — and the binding rule picks the same rail from both.
+fn stop_at(sim: &mut Simulation, name: &str, rail: EntityId, train_limit: u32) -> EntityId {
+    let prototype_id =
+        factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "train_stop");
+    let (rail_x, rail_y) = sim
+        .entities
+        .placed_entity(rail)
+        .map(|placed| (placed.x, placed.y))
+        .expect("the run's rails are placed");
+    let stop = [1, -1]
+        .into_iter()
+        .find_map(|dx| {
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x: rail_x + dx,
+                    y: rail_y,
+                    direction: Direction::North,
+                },
+            )
+            .ok()
+        })
+        .expect("one of the tiles beside the track takes a stop");
+    sim.rename_train_stop(stop, name)
+        .expect("a fresh stop takes a name");
+    sim.set_train_stop_limit(stop, train_limit)
+        .expect("a fresh stop takes a train limit");
+    // The mark a stop puts on the track is derived with the rail graph, so it
+    // exists from the next rebuild on — which the placement above has already
+    // asked for.
+    sim.ensure_rail_graph();
+    assert_eq!(
+        sim.train_stop_target(stop),
+        Some(RailTarget::new(rail, rail_middle(sim, rail))),
+        "a stop beside a rail marks the middle of it"
+    );
+    stop
 }
 
 fn train(sim: &Simulation, train_id: TrainId) -> &Train {
@@ -94,7 +133,7 @@ fn run_until(sim: &mut Simulation, ready: impl Fn(&Simulation) -> bool) {
     panic!("the train never reached the state this test was waiting for");
 }
 
-fn run_until_waiting(sim: &mut Simulation, train_id: TrainId, stop_id: TrainStopId) {
+fn run_until_waiting(sim: &mut Simulation, train_id: TrainId, stop_id: EntityId) {
     run_until(sim, |sim| {
         sim.train(train_id).is_some_and(|train| {
             train.is_waiting_at_scheduled_stop() && train.scheduled_stop == Some(stop_id)
@@ -226,7 +265,7 @@ fn removing_the_last_stop_of_a_name_drops_the_entries_naming_it() {
     .expect("the train takes a schedule");
     run_until_waiting(&mut sim, train_id, north);
 
-    sim.remove_train_stop(north).expect("the stop exists");
+    crate::entity_mutation::remove(&mut sim, north).expect("the stop exists");
 
     let stranded = train(&sim, train_id);
     assert_eq!(stranded.scheduled_stop, None);
@@ -267,7 +306,7 @@ fn removing_a_stop_served_later_in_the_loop_drops_its_entry_too() {
 
     // North is removed while the train is serving South, so the entry naming it
     // is the one *after* the cursor rather than the one under it.
-    sim.remove_train_stop(north).expect("the stop exists");
+    crate::entity_mutation::remove(&mut sim, north).expect("the stop exists");
 
     let waiting = train(&sim, train_id);
     assert_eq!(
@@ -298,22 +337,79 @@ fn removing_a_stop_served_later_in_the_loop_drops_its_entry_too() {
 #[test]
 fn removing_one_of_two_stops_sharing_a_name_keeps_the_schedule_on_it() {
     let (mut sim, rails, train_id) = world_with_a_schedulable_train();
-    let first = stop_at(&mut sim, "North", rails[20], 1);
-    stop_at(&mut sim, "North", rails[16], 1);
+    let far = stop_at(&mut sim, "North", rails[20], 1);
+    let near = stop_at(&mut sim, "North", rails[16], 1);
     sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
         .expect("the train takes a schedule");
-    run_until_waiting(&mut sim, train_id, first);
+    run_until_waiting(&mut sim, train_id, near);
 
-    sim.remove_train_stop(first).expect("the stop exists");
+    crate::entity_mutation::remove(&mut sim, near).expect("the stop exists");
 
     assert_eq!(
         train(&sim, train_id).schedule.current,
         0,
         "the name is still served, so the entry still is"
     );
-    run_until(&mut sim, |sim| {
-        position(sim, train_id) == RailPosition::new(rails[16], rail_middle(sim, rails[16]), true)
-    });
+    run_until_waiting(&mut sim, train_id, far);
+    assert_eq!(
+        position(&sim, train_id),
+        RailPosition::new(rails[20], rail_middle(&sim, rails[20]), true)
+    );
+}
+
+/// Two platforms of one station, and the train takes the one it can *get to*
+/// most cheaply rather than the first in id order. The far platform is placed
+/// first here for exactly that reason: an id-order pick would send the train
+/// past the near one and on up the line.
+#[test]
+fn a_train_takes_the_platform_that_is_cheapest_to_reach() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let far = stop_at(&mut sim, "North", rails[22], 1);
+    let near = stop_at(&mut sim, "North", rails[12], 1);
+    assert!(far < near, "the far platform is the lower stop id");
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+
+    run_until_waiting(&mut sim, train_id, near);
+
+    assert_eq!(
+        position(&sim, train_id),
+        RailPosition::new(rails[12], rail_middle(&sim, rails[12]), true),
+        "the nearer platform is the one it stopped at"
+    );
+}
+
+/// A platform already booked to capacity is not a candidate at all, so a second
+/// train takes the other one — even though it is the dearer of the two.
+#[test]
+fn a_full_platform_sends_the_next_train_to_the_other_one() {
+    let (mut sim, rails) = world_with_rail_run(24);
+    let first_stock = place_stock(&mut sim, &rails, 4, "locomotive").expect("the first fits");
+    let second_stock = place_stock(&mut sim, &rails, 12, "locomotive").expect("the second fits");
+    let first = sim.rolling_stock_piece(first_stock).expect("placed").train;
+    let second = sim.rolling_stock_piece(second_stock).expect("placed").train;
+    assert_ne!(first, second, "the two locomotives are two trains");
+    fuel_train(&mut sim, first, 50);
+    fuel_train(&mut sim, second, 50);
+    let far = stop_at(&mut sim, "North", rails[22], 1);
+    let near = stop_at(&mut sim, "North", rails[16], 1);
+    for train_id in [first, second] {
+        sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+            .expect("the train takes a schedule");
+    }
+
+    sim.tick();
+
+    assert_eq!(
+        train(&sim, first).scheduled_stop,
+        Some(near),
+        "the lower train id books first, and books the platform it can reach cheapest"
+    );
+    assert_eq!(
+        train(&sim, second).scheduled_stop,
+        Some(far),
+        "the second train takes the platform the first one left"
+    );
 }
 
 /// Renaming one platform of a two-platform station is a change to that platform
@@ -346,11 +442,15 @@ fn renaming_one_of_two_stops_sharing_a_name_leaves_schedules_alone() {
     );
 }
 
-/// A stop names a rail, and mining that rail leaves it naming nothing — a world
-/// validation refuses, which would make an ordinary bit of track-pulling
-/// unsaveable.
+/// A stop's mark on the track is derived from the rail beside it, so mining
+/// that rail leaves the stop standing with nothing to serve — rather than
+/// leaving it pointing at track that is not there, which is the state a durable
+/// mark would have to be pruned out of.
+///
+/// The train booked into it has to be let go of, or it would hold a place at a
+/// platform it can never reach against every train that could.
 #[test]
-fn a_stop_whose_rail_is_mined_is_forgotten() {
+fn a_stop_whose_rail_is_mined_keeps_its_name_and_loses_its_platform() {
     let (mut sim, rails, train_id) = world_with_a_schedulable_train();
     let north = stop_at(&mut sim, "North", rails[20], 1);
     stop_at(&mut sim, "South", rails[3], 1);
@@ -361,16 +461,35 @@ fn a_stop_whose_rail_is_mined_is_forgotten() {
     .expect("the train takes a schedule");
     // One tick to book the stop and be given a route to it. The rail is pulled up
     // while the train is still a third of the way down the run, so what is being
-    // tested is the stop going rather than the train being stranded on the track
-    // that went with it.
+    // tested is the platform going rather than the train being stranded on the
+    // track that went with it.
     sim.tick();
     assert_eq!(train(&sim, train_id).scheduled_stop, Some(north));
 
-    crate::entity_mutation::remove(&mut sim, rails[20]);
+    // The whole of the track within reach of the stop, because the rule is
+    // "the nearest rail": pulling up only the one it marks would hand it the
+    // one beside that, which is a station shifting up the line rather than a
+    // station with no platform.
+    for rail in [rails[19], rails[20], rails[21]] {
+        crate::entity_mutation::remove(&mut sim, rail);
+    }
+    sim.tick();
 
-    assert_eq!(sim.train_stops().count(), 1, "the stop went with its rail");
+    assert_eq!(
+        sim.train_stops().count(),
+        2,
+        "the stop is a placed entity and outlives the track beside it"
+    );
+    assert_eq!(
+        sim.train_stop_target(north),
+        None,
+        "with no rail beside it, it marks nothing"
+    );
     let train_now = train(&sim, train_id);
-    assert_eq!(train_now.scheduled_stop, None);
+    assert_eq!(
+        train_now.scheduled_stop, None,
+        "the train gives back a place it can no longer be sent to"
+    );
     assert_eq!(
         train_now
             .schedule
@@ -378,16 +497,19 @@ fn a_stop_whose_rail_is_mined_is_forgotten() {
             .iter()
             .map(|entry| entry.stop_name.as_str())
             .collect::<Vec<_>>(),
-        ["South"],
-        "the entry naming the vanished station went with the rail under it"
+        ["North", "South"],
+        "the station still exists, so the entry naming it does too"
     );
-    assert_eq!(train_now.schedule.current, 0);
     sim.validate()
         .expect("a world whose track was pulled up is still a valid world");
-    // And it goes on to serve the entry after it rather than idling for ever.
+    // The entry it cannot serve is not a dead end either: with nothing to
+    // claim, the cursor stays where it is and the train comes quietly to a
+    // stand, waiting for a platform to answer to the name again.
     run_until(&mut sim, |sim| {
-        position(sim, train_id) == RailPosition::new(rails[3], rail_middle(sim, rails[3]), true)
+        sim.train(train_id)
+            .is_some_and(|train| train.destination.is_none() && train.is_stationary())
     });
+    assert_eq!(train(&sim, train_id).schedule.current, 0);
 }
 
 /// A stop's train limit is a limit on trains, so a second train wanting a full
@@ -538,6 +660,271 @@ fn a_schedule_naming_no_station_is_refused() {
         good,
         "a refused schedule leaves the train the one it had"
     );
+}
+
+/// A wildcard channel stands for an iteration over a whole network, which is
+/// not something one train can wait on: a train let go by "anything above zero"
+/// could not say what let it go. Refused where the schedule is set, rather than
+/// evaluated to something arbitrary at the station.
+#[test]
+fn a_wait_on_a_wildcard_channel_is_refused() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    stop_at(&mut sim, "North", rails[20], 1);
+    let each = virtual_signal(&sim, "signal_each");
+
+    assert_eq!(
+        sim.set_train_schedule(
+            train_id,
+            schedule(vec![entry(
+                "North",
+                &[TrainWaitCondition::Circuit(
+                    crate::circuits::CircuitCondition {
+                        left: each,
+                        comparator: crate::circuits::Comparator::Greater,
+                        right: crate::circuits::SignalOperand::Constant(0),
+                    }
+                )]
+            )]),
+        ),
+        Err(crate::rolling_stock::TrainControlError::WildcardSignal(
+            each
+        ))
+    );
+    assert!(train(&sim, train_id).schedule.entries.is_empty());
+}
+
+/// The condition the connector on a stop exists for: a train held at a platform
+/// until the factory behind it says otherwise.
+///
+/// Both halves are checked, because only one of them is obvious. A stop nothing
+/// is wired to reads every channel as zero, so "green > 0" holds the train there
+/// indefinitely; wiring a source that says otherwise is what releases it.
+#[test]
+fn a_circuit_condition_holds_a_train_until_the_stop_s_network_says_go() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    let green = virtual_signal(&sim, "signal_green");
+    sim.set_train_schedule(
+        train_id,
+        schedule(vec![
+            entry(
+                "North",
+                &[TrainWaitCondition::Circuit(
+                    crate::circuits::CircuitCondition {
+                        left: green,
+                        comparator: crate::circuits::Comparator::Greater,
+                        right: crate::circuits::SignalOperand::Constant(0),
+                    },
+                )],
+            ),
+            entry("South", &[FOREVER]),
+        ]),
+    )
+    .expect("the train takes a schedule");
+    run_until_waiting(&mut sim, train_id, north);
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+    assert_eq!(
+        train(&sim, train_id).schedule.current,
+        0,
+        "an unwired stop publishes nothing, and nothing is not above zero"
+    );
+
+    wire_constant_source(&mut sim, north, green, 1);
+    sim.tick();
+    sim.tick();
+
+    assert_eq!(
+        train(&sim, train_id).schedule.current,
+        1,
+        "the network said go, so the train left"
+    );
+}
+
+/// A stop reports what the train standing at it carries. This is the one way a
+/// wagon's contents reach a circuit at all — a wagon is not a placed entity, so
+/// no wire can be attached to one.
+#[test]
+fn a_stop_publishes_what_the_train_standing_at_it_carries() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let wagon = place_stock(&mut sim, &rails, 6, "cargo_wagon").expect("the wagon fits");
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    let coal = factory_data::item_id_by_name(&sim.world.prototypes, "coal");
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    // Wired to a combinator so the stop has a network to publish onto, and
+    // reading turned on so it publishes at all.
+    let red = virtual_signal(&sim, "signal_red");
+    wire_constant_source(&mut sim, north, red, 1);
+    sim.set_circuit_read_contents(north, true)
+        .expect("a stop reads contents");
+    assert_eq!(
+        sim.rolling_stock_piece(wagon).expect("placed").train,
+        train_id,
+        "the wagon coupled onto the locomotive"
+    );
+    put_one_item_in_every_slot(&mut sim, wagon);
+
+    run_until_waiting(&mut sim, train_id, north);
+    sim.tick();
+
+    let carried = sim
+        .circuit_signals_at_entity(north)
+        .value(crate::circuits::SignalId::Item(coal));
+    assert_eq!(
+        carried,
+        i32::try_from(
+            sim.rolling_stock_piece(wagon)
+                .expect("the wagon is placed")
+                .inventory
+                .as_ref()
+                .expect("a cargo wagon declares an inventory")
+                .slots()
+                .len()
+        )
+        .expect("a wagon has a small number of slots"),
+        "one coal in every slot of the wagon standing here"
+    );
+}
+
+/// A limit read off a network is how a station closes itself: a yard that is
+/// full stops taking trains rather than queueing them at its throat.
+#[test]
+fn a_signal_driven_train_limit_closes_a_station() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    let red = virtual_signal(&sim, "signal_red");
+    let source = wire_constant_source(&mut sim, north, red, 0);
+    sim.set_train_stop_limit_signal(north, Some(red))
+        .expect("a stop takes a limit channel");
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+
+    for _ in 0..10 {
+        sim.tick();
+    }
+    assert_eq!(
+        train(&sim, train_id).scheduled_stop,
+        None,
+        "a station saying nought admits nobody, whatever its hand-set limit says"
+    );
+
+    sim.set_constant_combinator_slot(
+        source,
+        0,
+        crate::circuits::ConstantSignalSlot {
+            signal: Some(red),
+            value: 1,
+        },
+    )
+    .expect("the source takes a new value");
+
+    run_until_waiting(&mut sim, train_id, north);
+    sim.validate()
+        .expect("a train at a signal-limited station is a valid world");
+}
+
+/// A stop's work is taking trains, so the enable condition every controllable
+/// connector offers has to switch that off. A condition the network does not
+/// satisfy is a station closed, and a connector that accepted one and then
+/// ignored it would be a control that looks wired and does nothing.
+#[test]
+fn an_enable_condition_the_network_fails_closes_a_stop() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    let red = virtual_signal(&sim, "signal_red");
+    wire_constant_source(&mut sim, north, red, 0);
+    sim.set_circuit_condition(
+        north,
+        Some(crate::circuits::CircuitCondition {
+            left: red,
+            comparator: crate::circuits::Comparator::Greater,
+            right: crate::circuits::SignalOperand::Constant(0),
+        }),
+    )
+    .expect("a stop takes an enable condition");
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+
+    for _ in 0..10 {
+        sim.tick();
+    }
+
+    assert_eq!(sim.train_stop_effective_limit(north), 0);
+    assert_eq!(
+        train(&sim, train_id).scheduled_stop,
+        None,
+        "a stop switched off by its condition admits nobody"
+    );
+}
+
+fn virtual_signal(sim: &Simulation, name: &str) -> crate::circuits::SignalId {
+    crate::circuits::SignalId::Virtual(
+        sim.world
+            .prototypes
+            .virtual_signals
+            .iter()
+            .find(|signal| signal.name == name)
+            .unwrap_or_else(|| panic!("the catalog defines virtual signal {name}"))
+            .id,
+    )
+}
+
+/// A constant combinator publishing `value` on `signal`, wired to `stop`.
+///
+/// Placed on the tile beyond the stop's own, which is well inside a connector's
+/// wire reach; whichever side of the track the stop ended up on, the tile
+/// further out from the rails is clear ground the fixture already found room in.
+fn wire_constant_source(
+    sim: &mut Simulation,
+    stop: EntityId,
+    signal: crate::circuits::SignalId,
+    value: i32,
+) -> EntityId {
+    let catalog = sim.world.prototypes.clone();
+    let wire = factory_data::item_id_by_name(&catalog, "red_wire");
+    sim.player_inventory
+        .insert(&catalog, wire, 10)
+        .expect("the player inventory takes wire");
+    let (stop_x, stop_y) = sim
+        .entities
+        .placed_entity(stop)
+        .map(|placed| (placed.x, placed.y))
+        .expect("the stop is placed");
+    let prototype_id = factory_data::entity_prototype_id_by_name(&catalog, "constant_combinator");
+    let combinator = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1)]
+        .into_iter()
+        .find_map(|(dx, dy)| {
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id,
+                    x: stop_x + dx,
+                    y: stop_y + dy,
+                    direction: Direction::North,
+                },
+            )
+            .ok()
+        })
+        .expect("one of the tiles around the stop takes a combinator");
+    sim.set_constant_combinator_slot(
+        combinator,
+        0,
+        crate::circuits::ConstantSignalSlot {
+            signal: Some(signal),
+            value,
+        },
+    )
+    .expect("the combinator takes a slot");
+    sim.connect_circuit_wire(
+        crate::circuits::CircuitNode::new(combinator, crate::circuits::ConnectorPort::Output),
+        crate::circuits::CircuitNode::new(stop, crate::circuits::ConnectorPort::Single),
+        crate::circuits::WireColor::Red,
+    )
+    .expect("a combinator beside a stop is within reach of it");
+    combinator
 }
 
 /// Puts a single item in every slot of a wagon: occupied everywhere, full

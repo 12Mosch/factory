@@ -57,7 +57,21 @@ pub(in crate::simulation) fn reservation_for_prototype(
         heat_exchangers: heat_exchanger_state_for_prototype(prototype),
         roboports: roboport_state_for_prototype(prototype),
         logistic_chests: logistic_chest_state_for_prototype(prototype),
+        train_stops: train_stop_state_for_prototype(prototype),
     }
+}
+
+/// A freshly placed stop admits one train and answers to a placeholder name.
+///
+/// The placeholder is replaced with a numbered one the moment the entity has an
+/// id to number it by — see `Simulation::on_train_stop_placed` — because a name
+/// is what a schedule asks for and two stops sharing one is a two-platform
+/// station rather than a default nobody chose.
+fn train_stop_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<crate::rolling_stock::TrainStopState> {
+    (prototype.entity_kind == EntityKind::TrainStop)
+        .then(|| crate::rolling_stock::TrainStopState::new("Stop"))
 }
 
 /// A freshly placed logistic chest has its rows laid out but none of them set,

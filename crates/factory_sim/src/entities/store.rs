@@ -58,6 +58,7 @@ macro_rules! for_each_entity_state_map {
             heat_exchangers: crate::heat::HeatExchangerState => HeatExchanger,
             roboports: crate::robots::RoboportState => Roboport,
             logistic_chests: crate::logistics::LogisticChestState => _,
+            train_stops: crate::rolling_stock::TrainStopState => TrainStop,
         }
     };
 }
@@ -295,7 +296,9 @@ mod tests {
         // v40: inventories gained a per-slot filter row, so every stored
         // inventory in the registry carries one (empty until a player filters
         // something).
-        const EXPECTED_LAYOUT_HASH: u64 = 0x6a2c_17a4_fadb_b337;
+        // v41: train stop state was appended — the name a schedule asks for,
+        // the train limit, and the channel that limit may be read from.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x3786_7855_ebb3_1077;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");

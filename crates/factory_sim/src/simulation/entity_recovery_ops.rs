@@ -35,6 +35,9 @@ pub(crate) fn destroy_to_player_inventory(
     // Unlink before removal: the reverse links live on the neighbors, and
     // `remove_placed_entity` only drops this entity's own side.
     sim.unlink_circuit_wires(entity_id);
+    // And likewise before the stop's own state goes: the schedules naming it
+    // are rewritten while the name it carried can still be read off it.
+    sim.forget_train_stop(entity_id);
     let removed = sim
         .entities
         .remove_placed_entity(entity_id)

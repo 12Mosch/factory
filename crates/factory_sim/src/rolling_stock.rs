@@ -222,15 +222,9 @@ pub struct TrainRoute {
 /// Conditions in one [`TrainWaitConditionGroup`] are ANDed; groups are ORed.
 /// This normal form makes the grouping unambiguous and avoids maintaining a
 /// second, subtly different circuit-comparison representation — the comparator
-/// the item and fluid conditions compare with is the decider combinator's own.
-///
-/// There is deliberately no circuit condition here yet. A wait on a network
-/// signal needs a connector to read that network *at the stop*, and a stop is
-/// currently a mark on a rail rather than a placed entity with wires on it — so
-/// such a condition could only ever compare against nothing, which is worse
-/// than not offering it: "signal A > 0" would never fire and "signal A = 0"
-/// would fire at every station in the world. It arrives with the stop entity
-/// that can be wired.
+/// the item and fluid conditions compare with is the decider combinator's own,
+/// and the circuit condition *is* the decider's own condition rather than a
+/// second spelling of it.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum TrainWaitCondition {
     TimePassed {
@@ -253,6 +247,16 @@ pub enum TrainWaitCondition {
         comparator: crate::circuits::Comparator,
         milliunits: i32,
     },
+    /// A comparison against the signals reaching the stop the train is standing
+    /// at, so a station can hold a train until the factory behind it says
+    /// otherwise.
+    ///
+    /// Read at the *stop* rather than at the train: a train carries no wires,
+    /// and a condition on a network the train could not be attached to would be
+    /// a comparison against nothing. A stop with no wire on it therefore
+    /// compares against an empty network, where every channel reads zero — the
+    /// same thing an unwired decider combinator sees.
+    Circuit(crate::circuits::CircuitCondition),
 }
 
 /// Conditions which must all hold before this alternative is satisfied.
@@ -339,6 +343,14 @@ pub struct TrainWaitContext {
     pub cargo_full: bool,
     pub cargo_empty: bool,
     pub cargo: TrainCargo,
+    /// The signals reaching the stop the train is standing at, merged over both
+    /// wire colors, and empty for a stop nothing is wired to.
+    ///
+    /// Carried in the context rather than looked up while a condition is
+    /// evaluated so that deciding whether a train may leave stays a pure
+    /// function of what was read this tick — the same shape the cargo above
+    /// follows.
+    pub circuit_signals: crate::circuits::SignalSet,
 }
 
 impl TrainWaitCondition {
@@ -358,6 +370,23 @@ impl TrainWaitCondition {
                 comparator,
                 milliunits,
             } => comparator.apply(context.cargo.fluid(fluid), milliunits),
+            // A channel nothing publishes reads zero, which is what makes
+            // "signal A = 0" a condition an unwired station satisfies. The
+            // wildcard channels a combinator understands are refused where a
+            // schedule is set rather than given a meaning here: "wait until
+            // anything is above zero" is a comparison over a whole network,
+            // and a train waiting on one could not say which signal let it go.
+            Self::Circuit(condition) => {
+                let right = match condition.right {
+                    crate::circuits::SignalOperand::Constant(value) => value,
+                    crate::circuits::SignalOperand::Signal(signal) => {
+                        context.circuit_signals.value(signal)
+                    }
+                };
+                condition
+                    .comparator
+                    .apply(context.circuit_signals.value(condition.left), right)
+            }
         }
     }
 }
@@ -554,42 +583,56 @@ pub struct Train {
     /// a train saved four minutes into a five-minute wait would owe five more.
     #[serde(default)]
     pub schedule_activity_cargo: Option<TrainCargo>,
-    /// Stable id of the stop currently claimed by this train.
+    /// The stop entity currently claimed by this train.
     ///
     /// A claim, not merely a note of where it is going: it counts against the
-    /// stop's [`TrainStop::train_limit`], so every path that takes a train's plan
-    /// away gives it back through [`Train::release_scheduled_stop`].
+    /// stop's [`TrainStopState::train_limit`], so every path that takes a
+    /// train's plan away gives it back through
+    /// [`Train::release_scheduled_stop`].
     #[serde(default)]
-    pub scheduled_stop: Option<TrainStopId>,
+    pub scheduled_stop: Option<EntityId>,
     /// Blocks this train holds: the ones it is standing in and the ones it has
     /// been let into ahead, ascending and without repeats.
     #[serde(default)]
     pub reserved_blocks: Vec<EntityId>,
 }
 
-/// Stable identity of a named train stop.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct TrainStopId(u64);
-
-impl TrainStopId {
-    pub const fn new(raw: u64) -> Self {
-        Self(raw)
-    }
-    pub const fn raw(self) -> u64 {
-        self.0
-    }
+/// What a placed train stop carries: the name schedules ask for, and how many
+/// trains may be sent to it at once.
+///
+/// The stop is an ordinary placed entity, so *where* it is comes from the entity
+/// and the mark it puts on the track is derived from the rail beside it — see
+/// [`crate::simulation::Simulation::train_stop_target`]. Only the two things a
+/// player chooses live here.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TrainStopState {
+    pub name: String,
+    /// Maximum simultaneously assigned trains. Never zero: a stop no train may
+    /// be sent to is a stop that should not exist, so a zero limit is refused
+    /// when it is set by hand rather than quietly disabling the station.
+    pub train_limit: u32,
+    /// Channel the limit is read from instead, when the player has picked one.
+    ///
+    /// A network *may* say zero, unlike the hand-set limit above, and that is
+    /// the point of the feature: a yard that is full closes the station feeding
+    /// it rather than queueing more trains at its throat. What it cannot do is
+    /// dislodge a train already standing there — a claim is given up by the
+    /// train that holds it, never taken back by the stop.
+    pub train_limit_signal: Option<crate::circuits::SignalId>,
 }
 
-/// A named stopping mark on a rail.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
-pub struct TrainStop {
-    pub id: TrainStopId,
-    pub name: String,
-    pub target: RailTarget,
-    /// Maximum simultaneously assigned trains. Must be at least 1: a stop no
-    /// train may be sent to is a stop that should not exist, so a zero limit is
-    /// refused when the stop is made rather than quietly disabling it.
-    pub train_limit: u32,
+/// What a freshly placed stop admits: one train, the way a single platform
+/// serves one.
+pub const DEFAULT_TRAIN_LIMIT: u32 = 1;
+
+impl TrainStopState {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            train_limit: DEFAULT_TRAIN_LIMIT,
+            train_limit_signal: None,
+        }
+    }
 }
 
 impl Train {
@@ -677,10 +720,6 @@ pub struct RollingStockSubsystem {
     /// different trains than the world it was saved from — and that shows up in
     /// the trains themselves a tick later.
     pub(crate) planned_last: Option<TrainId>,
-    #[serde(default)]
-    pub(crate) stops: BTreeMap<TrainStopId, TrainStop>,
-    #[serde(default)]
-    pub(crate) next_stop_id: u64,
 }
 
 impl RollingStockSubsystem {
@@ -803,9 +842,14 @@ pub enum TrainControlError {
     MissingTrain(TrainId),
     /// The entity a train was told to drive to is not a rail.
     NotRail(EntityId),
-    MissingStop(TrainStopId),
+    /// The entity named is not a placed train stop.
+    MissingStop(EntityId),
     EmptyStopName,
     InvalidTrainLimit,
+    /// A wait condition compared against one of the wildcard channels, which
+    /// stand for an iteration over a whole network rather than for a value a
+    /// train could wait on.
+    WildcardSignal(crate::circuits::SignalId),
 }
 
 #[cfg(test)]

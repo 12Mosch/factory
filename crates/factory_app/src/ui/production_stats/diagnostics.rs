@@ -109,5 +109,6 @@ fn entity_kind_name(kind: EntityKind) -> &'static str {
         EntityKind::Locomotive => "Locomotives",
         EntityKind::CargoWagon => "Cargo wagons",
         EntityKind::FluidWagon => "Fluid wagons",
+        EntityKind::TrainStop => "Train stops",
     }
 }

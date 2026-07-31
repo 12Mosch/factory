@@ -349,6 +349,37 @@ impl EntityStateBehavior for LogisticChestState {
     }
 }
 
+// A stop holds a name and a limit, not goods: what comes back when one is
+// mined is the stop item itself, which the ordinary build-item recovery
+// already hands over.
+impl EntityStateBehavior for crate::rolling_stock::TrainStopState {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        let invalid = || SimValidationError::InvalidEntityState { entity_id };
+        sim.entities
+            .placed_entity(entity_id)
+            .and_then(|placed| sim.world.prototypes.entity(placed.prototype_id))
+            .filter(|prototype| prototype.entity_kind == EntityKind::TrainStop)
+            .ok_or_else(invalid)?;
+        // A nameless stop is one no schedule could ask for, and a stop that
+        // admits no trains is one no schedule could use: both are states the
+        // commands refuse to produce, so a save carrying either has been
+        // tampered with.
+        if self.name.trim().is_empty() || self.train_limit == 0 {
+            return Err(invalid());
+        }
+        if let Some(signal) = self.train_limit_signal {
+            circuit_ops::validate_signal(sim, entity_id, signal)?;
+        }
+        Ok(())
+    }
+}
+
 /// Confirms a heat state entry sits on an entity of the expected kind that
 /// actually declares a heat buffer, so a stale entry can never look valid.
 fn require_heat_kind(

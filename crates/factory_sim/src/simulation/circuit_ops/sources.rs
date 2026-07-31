@@ -95,6 +95,33 @@ impl Simulation {
                 };
                 self.publish(networks, node, signal, aspect.circuit_value());
             }
+            // A stop reports what the train standing at it is carrying, summed
+            // over its wagons and its tanks. The station is where a wire can
+            // reach — a wagon is not a placed entity and has nothing to attach
+            // to — so this is the one place the contents of a train become a
+            // signal at all.
+            //
+            // Only a train that has *arrived* counts. One still on its way has
+            // claimed this platform but is nowhere near it, and publishing its
+            // cargo would have a station reporting goods that are still out on
+            // the main line.
+            EntityKind::TrainStop => {
+                let Some(cargo) = self.train_stop_cargo(entity_id) else {
+                    return;
+                };
+                for (&item_id, &count) in &cargo.items {
+                    self.publish(networks, node, SignalId::Item(item_id), count);
+                }
+                for (&fluid_id, &milliunits) in &cargo.fluids {
+                    let units = u64::try_from(milliunits).unwrap_or(0) / FLUID_MILLIUNITS_PER_UNIT;
+                    self.publish(
+                        networks,
+                        node,
+                        SignalId::Fluid(fluid_id),
+                        signal_value_from_count(units),
+                    );
+                }
+            }
             EntityKind::Accumulator => {
                 // Accumulators report charge as a percentage, which is the
                 // one reading that has no natural item or fluid channel of its

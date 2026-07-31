@@ -50,7 +50,17 @@ pub(in crate::simulation) struct RailRouteRequest<'graph> {
     /// starts by driving forwards and one that starts by reversing out are
     /// different routes with different costs.
     pub(in crate::simulation) start: RailPosition,
-    pub(in crate::simulation) target: RailTarget,
+    /// The marks the train would accept, cheapest one wins.
+    ///
+    /// A list rather than one target because a schedule names a *station* and a
+    /// station may have several platforms: which of them a train is sent to is
+    /// decided by which is cheapest to get to, and that is one search over all
+    /// of them rather than one search each. A single destination is the same
+    /// question with a list of one.
+    ///
+    /// Ties go to the earliest target in the list, so a caller that passes its
+    /// candidates in a deterministic order gets a deterministic choice.
+    pub(in crate::simulation) targets: &'graph [RailTarget],
     pub(in crate::simulation) reversal_penalty_fixed: i64,
     pub(in crate::simulation) occupied_penalty_fixed: i64,
     /// Rails something is standing on, ascending. Sorted because the search asks
@@ -71,7 +81,11 @@ pub(in crate::simulation) struct RailRouteRequest<'graph> {
 /// How a route search ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::simulation) enum RailRouteOutcome {
-    Found(TrainRoute),
+    Found {
+        /// Which of the request's targets the route arrives at.
+        target: usize,
+        route: TrainRoute,
+    },
     /// No route exists: the destination is on other track, or the rail named by
     /// either end of the request is no longer there.
     Unreachable,
@@ -95,9 +109,21 @@ pub(in crate::simulation) struct RailRouteScratch {
     came_from: Vec<u32>,
     /// States of the found route, goal first, before it is turned into legs.
     trail: Vec<u32>,
+    /// The request's targets that are on this railway at all, in request order.
+    goals: Vec<RailGoal>,
 }
 
-/// The cheapest way found so far of arriving on the destination rail.
+/// One mark the search would accept, resolved against the graph.
+#[derive(Clone, Copy, Debug)]
+struct RailGoal {
+    /// Which of the request's targets this is, so the caller can tell which of
+    /// its candidates won.
+    target: usize,
+    edge_index: usize,
+    mark: RailTarget,
+}
+
+/// The cheapest way found so far of arriving on a destination rail.
 ///
 /// Arrival is priced when a route *enters* the destination rather than when it
 /// has run the whole of it, because a train stops at the mark rather than at the
@@ -109,6 +135,8 @@ struct RailArrival {
     predecessor: u32,
     /// Which end of the destination rail the route comes in through.
     entry_end: usize,
+    /// Index into the search's goals: which mark this arrival is at.
+    goal: usize,
     cost: i64,
 }
 
@@ -123,44 +151,76 @@ impl RailRouteScratch {
         request: &RailRouteRequest<'_>,
     ) -> (RailRouteOutcome, usize) {
         let graph = request.graph;
-        let (Some(&start_index), Some(&target_index)) = (
-            graph.edge_indices_by_entity.get(&request.start.edge),
-            graph.edge_indices_by_entity.get(&request.target.edge),
-        ) else {
+        let Some(&start_index) = graph.edge_indices_by_entity.get(&request.start.edge) else {
             return (RailRouteOutcome::Unreachable, 0);
         };
         let start_edge = graph.edges[start_index];
-        let target_edge = graph.edges[target_index];
         // Track that is not joined to the train's own is not track it can reach,
         // and answering that from the network ids costs one comparison. Without
         // it the search would have to exhaust everything reachable — the one
-        // case where a bounded search cannot tell "no" from "not yet".
-        if start_edge.network_id != target_edge.network_id {
+        // case where a bounded search cannot tell "no" from "not yet". A target
+        // that fails it is dropped rather than failing the whole request: one
+        // platform of a station being on a private siding says nothing about the
+        // others.
+        self.goals.clear();
+        self.goals.extend(
+            request
+                .targets
+                .iter()
+                .enumerate()
+                .filter_map(|(target, mark)| {
+                    let &edge_index = graph.edge_indices_by_entity.get(&mark.edge)?;
+                    (graph.edges[edge_index].network_id == start_edge.network_id).then_some(
+                        RailGoal {
+                            target,
+                            edge_index,
+                            mark: *mark,
+                        },
+                    )
+                }),
+        );
+        if self.goals.is_empty() {
             return (RailRouteOutcome::Unreachable, 0);
         }
-        // A train sent to the rail it is already standing on has a route without
-        // a search: the stretch of that rail between it and the mark. That is
-        // only the *cheapest* route when it needs no reversal, though — turning
-        // round costs a penalty a way round the railway might not pay — so a
-        // direct route that reverses is kept as the one to beat and priced
-        // against whatever the search comes back with.
-        let direct = match start_index == target_index {
-            false => None,
-            true => {
-                let direct = route_along_one_rail(
-                    request.start,
-                    request.target,
-                    request.reversal_penalty_fixed,
-                );
-                if !direct.reverses {
-                    return (RailRouteOutcome::Found(direct.route), 0);
-                }
-                Some(direct)
+
+        // A train sent to a mark on the rail it is already standing on has a
+        // route without a search: the stretch of that rail between it and the
+        // mark. That is only the *cheapest* route when it needs no reversal,
+        // though — turning round costs a penalty a way round the railway might
+        // not pay — so a direct route that reverses is kept as the one to beat
+        // and priced against whatever the search comes back with.
+        //
+        // A mark ahead on this very rail cannot be beaten by anything: every
+        // other route runs to one end of this rail first, which is at least as
+        // far. So the cheapest non-reversing direct route ends the search before
+        // it starts.
+        let mut direct: Option<(usize, DirectRoute)> = None;
+        for goal in self
+            .goals
+            .iter()
+            .filter(|goal| goal.edge_index == start_index)
+        {
+            let candidate =
+                route_along_one_rail(request.start, goal.mark, request.reversal_penalty_fixed);
+            if direct
+                .as_ref()
+                .is_none_or(|(_, best)| candidate.cost < best.cost)
+            {
+                direct = Some((goal.target, candidate));
             }
-        };
+        }
+        if let Some((target, direct)) = direct.take_if(|(_, direct)| !direct.reverses) {
+            return (
+                RailRouteOutcome::Found {
+                    target,
+                    route: direct.route,
+                },
+                0,
+            );
+        }
 
         self.reset(graph.edges.len());
-        self.seed(request, start_index, &start_edge, &target_edge);
+        self.seed(request, start_index, &start_edge);
 
         let mut expansions = 0;
         let mut exhausted = false;
@@ -172,7 +232,7 @@ impl RailRouteScratch {
             let best_known = arrival
                 .map(|found| found.cost)
                 .into_iter()
-                .chain(direct.as_ref().map(|direct| direct.cost))
+                .chain(direct.as_ref().map(|(_, direct)| direct.cost))
                 .min();
             if best_known.is_some_and(|limit| estimate >= limit) {
                 break;
@@ -200,8 +260,6 @@ impl RailRouteScratch {
             ))) {
                 self.relax(
                     request,
-                    &target_edge,
-                    target_index,
                     state,
                     cost + penalty,
                     next_index,
@@ -217,16 +275,29 @@ impl RailRouteScratch {
         let arrival = arrival.filter(|found| {
             direct
                 .as_ref()
-                .is_none_or(|direct| found.cost < direct.cost)
+                .is_none_or(|(_, direct)| found.cost < direct.cost)
         });
         match (arrival, direct) {
-            (Some(arrival), _) => (
-                RailRouteOutcome::Found(self.rebuild(request, &start_edge, &target_edge, arrival)),
-                expansions,
-            ),
+            (Some(arrival), _) => {
+                let goal = self.goals[arrival.goal];
+                let target_edge = graph.edges[goal.edge_index];
+                (
+                    RailRouteOutcome::Found {
+                        target: goal.target,
+                        route: self.rebuild(request, &start_edge, &target_edge, goal.mark, arrival),
+                    },
+                    expansions,
+                )
+            }
             // A search that ran out while a route was already in hand has still
             // found one: it only failed to prove that nothing beats it.
-            (None, Some(direct)) => (RailRouteOutcome::Found(direct.route), expansions),
+            (None, Some((target, direct))) => (
+                RailRouteOutcome::Found {
+                    target,
+                    route: direct.route,
+                },
+                expansions,
+            ),
             (None, None) if exhausted => (RailRouteOutcome::Exhausted, expansions),
             (None, None) => (RailRouteOutcome::Unreachable, expansions),
         }
@@ -242,18 +313,27 @@ impl RailRouteScratch {
         self.trail.clear();
     }
 
+    /// A lower bound on the track left between the end of a traversal and the
+    /// nearest of the marks the search would accept.
+    ///
+    /// The minimum over the goals, because a route only has to reach *one* of
+    /// them: an estimate that pointed at a particular goal would overstate what
+    /// is left for a route heading to a different one, and an estimate that
+    /// overstates is one that can send the search past the cheapest answer.
+    fn heuristic(&self, graph: &RailGraph, edge: &RailEdge, exit_end: usize) -> i64 {
+        self.goals
+            .iter()
+            .map(|goal| heuristic(edge, exit_end, &graph.edges[goal.edge_index]))
+            .min()
+            .unwrap_or(0)
+    }
+
     /// Opens the search with the two ways a train can leave where it stands:
     /// forwards, and — for the price of a reversal — backwards.
     ///
     /// Both seeds sit on the rail the train is already on, so neither pays that
     /// rail's occupancy penalty: the train is what is standing on it.
-    fn seed(
-        &mut self,
-        request: &RailRouteRequest<'_>,
-        start_index: usize,
-        start_edge: &RailEdge,
-        target_edge: &RailEdge,
-    ) {
+    fn seed(&mut self, request: &RailRouteRequest<'_>, start_index: usize, start_edge: &RailEdge) {
         for exit_end in [0, 1] {
             let reversal = if exit_end == usize::from(request.start.forward) {
                 0
@@ -265,21 +345,25 @@ impl RailRouteScratch {
             let state = encode(start_index, exit_end);
             self.best_cost[state as usize] = cost;
             self.open.push(Reverse((
-                cost + heuristic(start_edge, exit_end, target_edge),
+                cost + self.heuristic(request.graph, start_edge, exit_end),
                 cost,
                 state,
             )));
         }
     }
 
-    /// Prices one step out of `state` and either records an arrival or opens the
-    /// state it leads to.
-    #[allow(clippy::too_many_arguments)]
+    /// Prices one step out of `state`, recording an arrival at every mark on the
+    /// rail it leads to and opening that rail's state.
+    ///
+    /// Both, rather than one or the other: a mark is where a route may *end*,
+    /// and with several of them the rail carrying one can also be track on the
+    /// way to another — the second platform of a station is often straight past
+    /// the first. Opening it costs nothing on a single-target search, because a
+    /// state whose cost already exceeds the arrival it was priced against is cut
+    /// by the estimate check before it is ever expanded.
     fn relax(
         &mut self,
         request: &RailRouteRequest<'_>,
-        target_edge: &RailEdge,
-        target_index: usize,
         state: u32,
         cost: i64,
         next_index: usize,
@@ -295,25 +379,28 @@ impl RailRouteScratch {
             0
         };
 
-        if next_index == target_index {
-            // The destination is where the route ends, so it is priced to the
-            // mark and never opened: a route that ran on past it would only be
-            // a longer way of getting there.
-            let cost = cost
-                + distance_from_end(target_edge, request.target.distance_fixed, entry_end)
-                + penalty;
+        for (goal_index, goal) in self.goals.iter().enumerate() {
+            if goal.edge_index != next_index {
+                continue;
+            }
+            let cost =
+                cost + distance_from_end(&next, goal.mark.distance_fixed, entry_end) + penalty;
             let candidate = RailArrival {
                 predecessor: state,
                 entry_end,
+                goal: goal_index,
                 cost,
             };
             if arrival.is_none_or(|found| {
-                (candidate.cost, candidate.predecessor, candidate.entry_end)
-                    < (found.cost, found.predecessor, found.entry_end)
+                (
+                    candidate.cost,
+                    candidate.goal,
+                    candidate.predecessor,
+                    candidate.entry_end,
+                ) < (found.cost, found.goal, found.predecessor, found.entry_end)
             }) {
                 *arrival = Some(candidate);
             }
-            return;
         }
 
         let cost = cost + next.length_fixed + penalty;
@@ -323,7 +410,7 @@ impl RailRouteScratch {
             self.best_cost[next_state as usize] = cost;
             self.came_from[next_state as usize] = state;
             self.open.push(Reverse((
-                cost + heuristic(&next, 1 - entry_end, target_edge),
+                cost + self.heuristic(request.graph, &next, 1 - entry_end),
                 cost,
                 next_state,
             )));
@@ -340,6 +427,7 @@ impl RailRouteScratch {
         request: &RailRouteRequest<'_>,
         start_edge: &RailEdge,
         target_edge: &RailEdge,
+        mark: RailTarget,
         arrival: RailArrival,
     ) -> TrainRoute {
         let graph = request.graph;
@@ -385,11 +473,7 @@ impl RailRouteScratch {
         // The destination rail is entered but never traversed: the train stops
         // on it, at the mark.
         edges.push(target_edge.entity_id);
-        distance_fixed += distance_from_end(
-            target_edge,
-            request.target.distance_fixed,
-            arrival.entry_end,
-        );
+        distance_fixed += distance_from_end(target_edge, mark.distance_fixed, arrival.entry_end);
         legs.push_back(TrainRouteLeg {
             distance_fixed,
             forward,
@@ -520,12 +604,12 @@ mod tests {
     fn request<'graph>(
         graph: &'graph RailGraph,
         start: RailPosition,
-        target: RailTarget,
+        targets: &'graph [RailTarget],
     ) -> RailRouteRequest<'graph> {
         RailRouteRequest {
             graph,
             start,
-            target,
+            targets,
             reversal_penalty_fixed: TRAIN_REVERSAL_PENALTY_FIXED,
             occupied_penalty_fixed: TRAIN_OCCUPIED_RAIL_PENALTY_FIXED,
             occupied: &[],
@@ -540,7 +624,7 @@ mod tests {
 
     fn route(request: &RailRouteRequest<'_>) -> TrainRoute {
         match search(request).0 {
-            RailRouteOutcome::Found(route) => route,
+            RailRouteOutcome::Found { route, .. } => route,
             other => panic!("expected a route, found {other:?}"),
         }
     }
@@ -661,9 +745,9 @@ mod tests {
     fn a_route_down_a_run_is_one_leg_of_the_track_between() {
         let graph = build_rail_graph_from_pieces(&straight_run(1, 4));
         let start = RailPosition::new(rail(1), 512, true);
-        let target = RailTarget::new(rail(4), 1_024);
+        let target = [RailTarget::new(rail(4), 1_024)];
 
-        let route = route(&request(&graph, start, target));
+        let route = route(&request(&graph, start, &target));
 
         // Out of the first rail, over the two between, and a thousand units into
         // the fourth.
@@ -680,9 +764,9 @@ mod tests {
     fn a_destination_behind_the_train_is_driven_in_reverse() {
         let graph = build_rail_graph_from_pieces(&straight_run(1, 4));
         let start = RailPosition::new(rail(4), 512, true);
-        let target = RailTarget::new(rail(1), 1_024);
+        let target = [RailTarget::new(rail(1), 1_024)];
 
-        let route = route(&request(&graph, start, target));
+        let route = route(&request(&graph, start, &target));
 
         assert_eq!(
             legs(&route),
@@ -701,10 +785,10 @@ mod tests {
         let start = RailPosition::new(rail(1), 500, true);
 
         let (outcome, expansions) =
-            search(&request(&graph, start, RailTarget::new(rail(1), 1_500)));
+            search(&request(&graph, start, &[RailTarget::new(rail(1), 1_500)]));
 
         assert_eq!(expansions, 0);
-        let RailRouteOutcome::Found(route) = outcome else {
+        let RailRouteOutcome::Found { route, .. } = outcome else {
             panic!("a train on its destination rail has a route");
         };
         assert_eq!(legs(&route), vec![(1_000, true)]);
@@ -723,11 +807,11 @@ mod tests {
             let (outcome, expansions) = search(&request(
                 &graph,
                 RailPosition::new(rail(1), 1_024, forward),
-                RailTarget::new(rail(1), 1_024),
+                &[RailTarget::new(rail(1), 1_024)],
             ));
 
             assert_eq!(expansions, 0);
-            let RailRouteOutcome::Found(route) = outcome else {
+            let RailRouteOutcome::Found { route, .. } = outcome else {
                 panic!("a train on its mark has a route");
             };
             assert_eq!(legs(&route), vec![(0, true)]);
@@ -743,7 +827,7 @@ mod tests {
         let graph = build_rail_graph_from_pieces(&straight_run(1, 2));
         let start = RailPosition::new(rail(1), 1_500, true);
 
-        let route = route(&request(&graph, start, RailTarget::new(rail(1), 500)));
+        let route = route(&request(&graph, start, &[RailTarget::new(rail(1), 500)]));
 
         assert_eq!(legs(&route), vec![(1_000, false)]);
         assert_eq!(edges(&route), vec![1]);
@@ -757,7 +841,7 @@ mod tests {
         let graph = loop_graph();
         let start = RailPosition::new(rail(1), 1_500, true);
 
-        let route = route(&request(&graph, start, RailTarget::new(rail(1), 500)));
+        let route = route(&request(&graph, start, &[RailTarget::new(rail(1), 500)]));
 
         assert_eq!(route.legs.len(), 1, "going round needs no reversal");
         assert!(route.current_leg().expect("a route has a leg").forward);
@@ -771,9 +855,9 @@ mod tests {
     fn crossing_between_two_branches_runs_out_and_backs_in() {
         let graph = junction_graph();
         let start = RailPosition::new(rail(2), 1_024, false);
-        let target = RailTarget::new(rail(3), 1_206);
+        let target = [RailTarget::new(rail(3), 1_206)];
 
-        let route = route(&request(&graph, start, target));
+        let route = route(&request(&graph, start, &target));
 
         assert_eq!(
             legs(&route),
@@ -786,6 +870,55 @@ mod tests {
         assert_eq!(edges(&route), vec![2, 1, 1, 3]);
     }
 
+    /// Several marks, one search: what comes back is the cheapest of them and
+    /// which one it is. This is how a schedule picks between the platforms of a
+    /// station, and picking by *path* cost is the whole point — the far platform
+    /// here is the earlier target, so an answer that took the first reachable one
+    /// would send the train past the near one and on up the line.
+    #[test]
+    fn the_cheapest_of_several_targets_is_the_one_found() {
+        let graph = build_rail_graph_from_pieces(&straight_run(1, 8));
+        let start = RailPosition::new(rail(1), 512, true);
+        let targets = [
+            RailTarget::new(rail(7), 1_024),
+            RailTarget::new(rail(3), 1_024),
+        ];
+
+        let (outcome, _) = search(&request(&graph, start, &targets));
+
+        let RailRouteOutcome::Found { target, route } = outcome else {
+            panic!("a run of track reaches both marks");
+        };
+        assert_eq!(target, 1, "the nearer mark is the one it goes to");
+        assert_eq!(edges(&route), vec![1, 2, 3]);
+    }
+
+    /// Two marks the same distance away resolve to the earlier of them, so a
+    /// caller handing its candidates over in a deterministic order gets a
+    /// deterministic answer on every machine and every replay.
+    #[test]
+    fn equally_distant_targets_resolve_to_the_earlier_one() {
+        let graph = build_rail_graph_from_pieces(&straight_run(1, 8));
+        let start = RailPosition::new(rail(4), STRAIGHT_FIXED / 2, true);
+        // One mark two rails ahead and one two rails behind, each the same
+        // distance from the train — but the one behind needs a reversal, so the
+        // tie is broken before the order is even reached. Both orders are asked
+        // for, which is what makes this a statement about the rule rather than
+        // about the geometry.
+        let ahead = RailTarget::new(rail(6), STRAIGHT_FIXED / 2);
+        let behind = RailTarget::new(rail(2), STRAIGHT_FIXED / 2);
+        for (targets, expected) in [([ahead, behind], 0), ([behind, ahead], 1)] {
+            let (outcome, _) = search(&request(&graph, start, &targets));
+            let RailRouteOutcome::Found { target, .. } = outcome else {
+                panic!("a run of track reaches both marks");
+            };
+            assert_eq!(
+                target, expected,
+                "the mark ahead wins, wherever it sits in the list"
+            );
+        }
+    }
+
     /// Going round is cheaper than turning round: the loop is far shorter than
     /// what a reversal costs, so the train keeps driving forwards past its own
     /// starting point rather than backing up to a destination just behind it.
@@ -793,9 +926,9 @@ mod tests {
     fn a_short_loop_is_preferred_to_turning_round() {
         let graph = loop_graph();
         let start = RailPosition::new(rail(1), 1_024, true);
-        let target = RailTarget::new(rail(7), 1_024);
+        let target = [RailTarget::new(rail(7), 1_024)];
 
-        let route = route(&request(&graph, start, target));
+        let route = route(&request(&graph, start, &target));
 
         assert_eq!(route.legs.len(), 1);
         assert!(route.current_leg().expect("a route has a leg").forward);
@@ -809,11 +942,11 @@ mod tests {
     fn a_cheap_reversal_sends_the_train_back_rather_than_round() {
         let graph = loop_graph();
         let start = RailPosition::new(rail(1), 1_024, true);
-        let target = RailTarget::new(rail(7), 1_024);
+        let target = [RailTarget::new(rail(7), 1_024)];
 
         let route = route(&RailRouteRequest {
             reversal_penalty_fixed: STRAIGHT_FIXED,
-            ..request(&graph, start, target)
+            ..request(&graph, start, &target)
         });
 
         assert_eq!(route.legs.len(), 1);
@@ -828,11 +961,11 @@ mod tests {
     #[test]
     fn equal_cost_branches_resolve_the_same_way_every_time() {
         let start = RailPosition::new(rail(1), 1_024, true);
-        let target = RailTarget::new(rail(4), 1_024);
+        let target = [RailTarget::new(rail(4), 1_024)];
 
         for _ in 0..2 {
             let graph = parallel_branches_graph();
-            let route = route(&request(&graph, start, target));
+            let route = route(&request(&graph, start, &target));
             assert_eq!(edges(&route), vec![1, 2, 4]);
         }
     }
@@ -843,11 +976,11 @@ mod tests {
     fn a_rail_under_another_train_pushes_the_route_onto_the_branch_beside_it() {
         let graph = parallel_branches_graph();
         let start = RailPosition::new(rail(1), 1_024, true);
-        let target = RailTarget::new(rail(4), 1_024);
+        let target = [RailTarget::new(rail(4), 1_024)];
 
         let route = route(&RailRouteRequest {
             occupied: &[rail(2)],
-            ..request(&graph, start, target)
+            ..request(&graph, start, &target)
         });
 
         assert_eq!(edges(&route), vec![1, 3, 4]);
@@ -860,12 +993,12 @@ mod tests {
     fn a_rail_the_searching_train_stands_on_costs_it_nothing() {
         let graph = parallel_branches_graph();
         let start = RailPosition::new(rail(1), 1_024, true);
-        let target = RailTarget::new(rail(4), 1_024);
+        let target = [RailTarget::new(rail(4), 1_024)];
 
         let route = route(&RailRouteRequest {
             occupied: &[rail(2)],
             exempt: &[rail(2)],
-            ..request(&graph, start, target)
+            ..request(&graph, start, &target)
         });
 
         assert_eq!(edges(&route), vec![1, 2, 4]);
@@ -888,7 +1021,7 @@ mod tests {
         let (outcome, expansions) = search(&request(
             &graph,
             RailPosition::new(rail(1), 0, true),
-            RailTarget::new(rail(3), 1_024),
+            &[RailTarget::new(rail(3), 1_024)],
         ));
 
         assert_eq!(outcome, RailRouteOutcome::Unreachable);
@@ -906,7 +1039,7 @@ mod tests {
             ..request(
                 &graph,
                 RailPosition::new(rail(1), 0, true),
-                RailTarget::new(rail(32), 1_024),
+                &[RailTarget::new(rail(32), 1_024)],
             )
         });
 
@@ -923,10 +1056,11 @@ mod tests {
     fn a_second_search_reuses_the_first_one_s_buffers() {
         let graph = loop_graph();
         let mut scratch = RailRouteScratch::default();
+        let first_target = [RailTarget::new(rail(5), 1_024)];
         let first = request(
             &graph,
             RailPosition::new(rail(1), 1_024, true),
-            RailTarget::new(rail(5), 1_024),
+            &first_target,
         );
         scratch.find_route(&first);
         let capacities = scratch.capacities();
@@ -937,7 +1071,7 @@ mod tests {
         scratch.find_route(&request(
             &graph,
             RailPosition::new(rail(3), 512, false),
-            RailTarget::new(rail(7), 1_024),
+            &[RailTarget::new(rail(7), 1_024)],
         ));
 
         assert_eq!(scratch.capacities(), capacities);
@@ -963,7 +1097,7 @@ mod tests {
                     // Standing at the very end of this rail, facing out of it,
                     // is where its estimate is measured from.
                     RailPosition::new(edge.entity_id, edge.length_fixed * exit_end as i64, true),
-                    RailTarget::new(rail(5), target.length_fixed / 2),
+                    &[RailTarget::new(rail(5), target.length_fixed / 2)],
                 ));
                 let travelled = route.legs.iter().map(|leg| leg.distance_fixed).sum::<i64>();
                 assert!(

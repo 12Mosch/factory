@@ -3,6 +3,7 @@ use factory_data::EntityPrototypeId;
 use crate::rail::{
     RailConnectionPreview, RailEnd, RailNetworkSnapshot, RailPieceGeometry, RailPoint,
 };
+use crate::rolling_stock::RailTarget;
 use crate::simulation::*;
 
 use super::geometry::{footprint_piece_geometry, placed_piece_geometry};
@@ -182,6 +183,77 @@ pub(in crate::simulation) fn signal_binding(
     }
 
     nearest.map(|(_, point)| point)
+}
+
+/// How far a train stop reaches from the middle of its own tile to the rail it
+/// serves, in fixed-point units.
+///
+/// Two and a half tiles, which is further than a signal reaches, and for a
+/// different question: a signal binds to a rail *end*, and the ends of the base
+/// pieces are about a tile from the track beside them, while a stop binds to the
+/// *middle* of a rail — up to a whole piece away along the line. A stop dropped
+/// anywhere beside a two-tile straight has to find it, or a player would have to
+/// hunt for the one tile that works.
+const STOP_BINDING_REACH_FIXED: i64 = 5 * crate::POSITION_SCALE / 2;
+
+/// The mark a train stop standing on `(tile_x, tile_y)` puts on the track, or
+/// `None` when no rail is near enough.
+///
+/// The middle of the nearest rail, out of the rails in the eight tiles around
+/// the stop. The *middle* rather than a projection of the stop onto the track,
+/// because where a train comes to rest decides which tiles its wagons cover, and
+/// a mark that moved with the stop's own tile would make that depend on which
+/// side of the line the player happened to drop the sign. A mark at the middle
+/// of a piece is a mark a player can see in the track itself.
+///
+/// Ties — two rails whose middles are exactly as far from the stop — go to the
+/// lower entity id, so the answer is the same on every machine and every replay.
+/// Reading the neighbouring tiles rather than scanning the placed rails is what
+/// keeps this O(1); it is asked once per stop on every graph rebuild.
+pub(in crate::simulation) fn stop_binding(
+    sim: &Simulation,
+    tile_x: WorldTileCoord,
+    tile_y: WorldTileCoord,
+) -> Option<RailTarget> {
+    let half_tile = crate::POSITION_SCALE / 2;
+    let center = RailPoint::new(
+        tile_x * crate::POSITION_SCALE + half_tile,
+        tile_y * crate::POSITION_SCALE + half_tile,
+    );
+    let reach = i128::from(STOP_BINDING_REACH_FIXED);
+    let mut nearest: Option<(i128, EntityId, i64)> = None;
+    for offset_y in -1..=1 {
+        for offset_x in -1..=1 {
+            let Some(entity_id) = sim
+                .entities
+                .occupancy
+                .entity_at(tile_x + offset_x, tile_y + offset_y)
+            else {
+                continue;
+            };
+            let Some(geometry) = sim.rail_piece_geometry(entity_id) else {
+                continue;
+            };
+            let middle_fixed = geometry.length_fixed / 2;
+            let Some(middle) = crate::simulation::rolling_stock_ops::world_point(
+                sim,
+                crate::rolling_stock::RailPosition::new(entity_id, middle_fixed, true),
+            ) else {
+                continue;
+            };
+            let dx = i128::from(middle.x) - i128::from(center.x);
+            let dy = i128::from(middle.y) - i128::from(center.y);
+            let squared = dx * dx + dy * dy;
+            if squared > reach * reach {
+                continue;
+            }
+            if nearest.is_none_or(|(best, best_id, _)| (squared, entity_id) < (best, best_id)) {
+                nearest = Some((squared, entity_id, middle_fixed));
+            }
+        }
+    }
+
+    nearest.map(|(_, entity_id, distance_fixed)| RailTarget::new(entity_id, distance_fixed))
 }
 
 /// The placed signal governing a train crossing `position` while travelling

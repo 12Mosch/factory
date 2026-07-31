@@ -39,6 +39,7 @@ fn place_validated_entity(
 ) -> EntityId {
     let prototype = &sim.world.prototypes.entities[request.prototype_id.index()];
     let is_enemy_spawner = prototype.entity_kind == EntityKind::EnemySpawner;
+    let is_train_stop = prototype.entity_kind == EntityKind::TrainStop;
     let reservation = reservation_for_prototype(
         prototype,
         request.prototype_id,
@@ -53,6 +54,9 @@ fn place_validated_entity(
     sim.register_pollution_emitter(entity_id, request.prototype_id, request.x, request.y);
     if is_enemy_spawner {
         sim.on_enemy_spawner_placed(entity_id, request.x, request.y);
+    }
+    if is_train_stop {
+        sim.on_train_stop_placed(entity_id);
     }
     apply_entity_topology_change(sim, impact, entity_id, footprint);
     entity_id

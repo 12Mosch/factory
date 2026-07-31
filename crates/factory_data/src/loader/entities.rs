@@ -41,7 +41,7 @@ pub(super) fn load_entities(
             let name = entity.name;
             let size = IVec2::new(entity.size.x, entity.size.y);
             validate_rail_metadata(&name, entity.entity_kind, size, entity.rail_piece.as_ref())?;
-            validate_rail_signal_metadata(&name, entity.entity_kind, size)?;
+            validate_trackside_metadata(&name, entity.entity_kind, size)?;
             let build_item = resolve_entity_build_item(&name, entity.build_item, item_ids_by_name)?;
             match (
                 build_item.is_some(),
@@ -992,28 +992,28 @@ fn validate_rail_metadata(
     Ok(())
 }
 
-/// Checks that a signal is something the block partition can bind to a single
-/// point of track.
+/// Checks that a trackside entity is something the simulation can bind to a
+/// single piece of track.
 ///
-/// A signal is placed *beside* a rail rather than on it, and which rail end it
-/// governs is answered from the tile it stands on. A footprint wider than one
-/// tile would make that question ambiguous — two ends could be equally near two
-/// different tiles of the same signal — and the whole binding rule assumes it
-/// cannot be.
+/// A signal or a train stop is placed *beside* a rail rather than on it, and
+/// which rail it belongs to is answered from the tile it stands on. A footprint
+/// wider than one tile would make that question ambiguous — two rails could be
+/// equally near two different tiles of the same entity — and the whole binding
+/// rule assumes it cannot be.
 ///
 /// Checked here so a catalog that breaks it fails to load at all rather than
 /// producing a world whose signals bind arbitrarily. The simulation checks the
 /// same shape again when it validates a loaded catalog, which is what covers a
 /// save carrying a catalog this loader never saw.
-fn validate_rail_signal_metadata(
+fn validate_trackside_metadata(
     name: &str,
     entity_kind: EntityKind,
     size: IVec2,
 ) -> Result<(), PrototypeLoadError> {
-    if entity_kind.is_rail_signal() && (size.x != 1 || size.y != 1) {
+    if entity_kind.binds_to_nearby_rail() && (size.x != 1 || size.y != 1) {
         return Err(PrototypeLoadError::InvalidRailMetadata {
             entity: name.to_string(),
-            detail: "a rail signal stands on exactly one tile",
+            detail: "an entity beside the track stands on exactly one tile",
         });
     }
 

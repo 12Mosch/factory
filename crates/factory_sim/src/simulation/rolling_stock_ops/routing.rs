@@ -122,6 +122,16 @@ pub(in crate::simulation) struct TrainRouting {
     /// a save could forget.
     waiting: Vec<TrainId>,
     remaining_expansions: usize,
+    /// Marks the tick's targets buffer, so one search can hand the goals to the
+    /// pathfinder without allocating a vector per call.
+    targets: Vec<RailTarget>,
+    /// Whether the rails above describe *this* tick.
+    ///
+    /// Gathering them is proportional to the track the world's trains stand on,
+    /// so it is done once, lazily, on the first search of a tick — and not at
+    /// all on the great majority of ticks, where every train already has a plan
+    /// and nothing asks.
+    held_rails_ready: bool,
 }
 
 impl_runtime_only_identity!(TrainRouting);
@@ -129,13 +139,14 @@ impl_runtime_only_identity!(TrainRouting);
 impl TrainRouting {
     pub(in crate::simulation) fn begin_tick(&mut self) {
         self.remaining_expansions = ROUTE_EXPANSIONS_PER_TICK;
+        self.held_rails_ready = false;
     }
 
     /// Whether this tick can still pay for a whole search.
     ///
     /// Asked before a search's own inputs are gathered rather than inside it, so
     /// a train the tick is about to defer costs nothing to defer.
-    fn can_search(&self) -> bool {
+    pub(in crate::simulation) fn can_search(&self) -> bool {
         self.remaining_expansions >= ROUTE_MAX_EXPANSIONS
     }
 
@@ -145,11 +156,11 @@ impl TrainRouting {
     /// Deferral is a `None`, and it is deliberately not an outcome of its own:
     /// the caller does nothing either way, and the train asks again next tick
     /// because it still has a destination and no route.
-    fn plan(
+    pub(in crate::simulation) fn plan(
         &mut self,
         graph: &RailGraph,
         start: RailPosition,
-        target: RailTarget,
+        marks: &[RailTarget],
     ) -> Option<RailRouteOutcome> {
         if !self.can_search() {
             return None;
@@ -159,12 +170,15 @@ impl TrainRouting {
             occupied,
             exempt,
             remaining_expansions,
+            targets,
             ..
         } = self;
+        targets.clear();
+        targets.extend_from_slice(marks);
         let (outcome, expansions) = scratch.find_route(&RailRouteRequest {
             graph,
             start,
-            target,
+            targets,
             reversal_penalty_fixed: TRAIN_REVERSAL_PENALTY_FIXED,
             occupied_penalty_fixed: TRAIN_OCCUPIED_RAIL_PENALTY_FIXED,
             occupied,
@@ -259,7 +273,7 @@ impl TrainRouting {
     /// A range of the tick's own index rather than another walk over the world's
     /// stock: this runs once per train that wants a route, and a full scan here
     /// would put back the quadratic the tick-wide gathering took out.
-    fn collect_exempt_rails(&mut self, train_id: TrainId) {
+    pub(in crate::simulation) fn collect_exempt_rails(&mut self, train_id: TrainId) {
         let first = self
             .held_rails
             .partition_point(|(train, _)| *train < train_id);
@@ -318,7 +332,7 @@ fn record_route_outcome(
     // not finish, so what was remembered about that one goes.
     train.route_search_exhausted_at = None;
     match outcome {
-        RailRouteOutcome::Found(route) => train.route = Some(route),
+        RailRouteOutcome::Found { route, .. } => train.route = Some(route),
         RailRouteOutcome::Unreachable => {
             train.destination = None;
             train.route = None;
@@ -450,6 +464,31 @@ impl Simulation {
             return;
         }
 
+        self.ensure_train_occupancy();
+
+        for train_id in planning_order(&waiting, self.rolling_stock.planned_last) {
+            if !self.train_routing.can_search() {
+                break;
+            }
+            self.rolling_stock.planned_last = Some(*train_id);
+            self.plan_train_route(*train_id);
+        }
+        self.train_routing.waiting = waiting;
+    }
+
+    /// Gathers what track the world's trains hold, once per tick and only if
+    /// something is going to search.
+    ///
+    /// Both callers — picking between the platforms of a station, and planning
+    /// the route to wherever a train was sent — read the same occupancy, and it
+    /// is proportional to the track under the world's stock. Doing it once is
+    /// what keeps a tick where many trains want a plan from being quadratic in
+    /// that track; doing it lazily is what keeps the ordinary tick, where every
+    /// train already has a plan, from paying for it at all.
+    pub(in crate::simulation) fn ensure_train_occupancy(&mut self) {
+        if self.train_routing.held_rails_ready {
+            return;
+        }
         let Simulation {
             train_routing,
             rails,
@@ -463,15 +502,7 @@ impl Simulation {
             rolling_stock,
             &world.prototypes,
         );
-
-        for train_id in planning_order(&waiting, self.rolling_stock.planned_last) {
-            if !self.train_routing.can_search() {
-                break;
-            }
-            self.rolling_stock.planned_last = Some(*train_id);
-            self.plan_train_route(*train_id);
-        }
-        self.train_routing.waiting = waiting;
+        train_routing.held_rails_ready = true;
     }
 
     /// Sets a routed train's throttle for this tick.
@@ -553,7 +584,7 @@ impl Simulation {
     }
 
     /// Where a search for this train would start: its leading piece's position.
-    fn train_search_position(&self, train_id: TrainId) -> Option<RailPosition> {
+    pub(super) fn train_search_position(&self, train_id: TrainId) -> Option<RailPosition> {
         let train = self.rolling_stock.train(train_id)?;
         self.rolling_stock
             .get(*train.stock.first()?)
@@ -583,7 +614,7 @@ impl Simulation {
             ..
         } = self;
         train_routing.collect_exempt_rails(train_id);
-        let Some(outcome) = train_routing.plan(&rails.graph, start, target) else {
+        let Some(outcome) = train_routing.plan(&rails.graph, start, &[target]) else {
             return;
         };
         if let Some(train) = rolling_stock.trains.get_mut(&train_id) {
@@ -791,7 +822,7 @@ mod tests {
             routing.plan(
                 &RailGraph::default(),
                 RailPosition::new(EntityId::new(1), 0, true),
-                RailTarget::new(EntityId::new(2), 0),
+                &[RailTarget::new(EntityId::new(2), 0)],
             ),
             None,
             "a deferred search reports nothing rather than a failure to find a route"

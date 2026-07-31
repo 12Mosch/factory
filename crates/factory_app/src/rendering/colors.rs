@@ -200,6 +200,12 @@ pub(crate) fn rail_signal_color(aspect: factory_sim::RailSignalAspect) -> Color 
     }
 }
 
+/// A train stop's post: the blue a station sign is painted, bright enough
+/// against the ballast beside it to be picked out along a line of track.
+pub(crate) fn train_stop_color() -> Color {
+    Color::srgb(0.26, 0.52, 0.86)
+}
+
 pub(crate) fn rail_sleeper_color() -> Color {
     Color::srgb(0.38, 0.29, 0.20)
 }

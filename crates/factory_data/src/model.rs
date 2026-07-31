@@ -1103,6 +1103,9 @@ pub enum EntityKind {
     /// A signal that only clears when the signal beyond it can also clear; see
     /// [`RailSignalKind::Chain`].
     ChainSignal,
+    /// A named stopping place beside the track: it carries the name a schedule
+    /// asks for and marks where the train that serves it comes to rest.
+    TrainStop,
 }
 
 impl EntityKind {
@@ -1129,6 +1132,17 @@ impl EntityKind {
     /// Whether this kind stands beside track and partitions it into blocks.
     pub const fn is_rail_signal(self) -> bool {
         self.rail_signal_kind().is_some()
+    }
+
+    /// Whether this kind stands on one tile beside the track and binds to the
+    /// rail it is nearest.
+    ///
+    /// Signals and stops answer alike because the binding rule is the same one:
+    /// a single tile with a neighbourhood of track around it, so "the nearest
+    /// rail" is a question about eight tiles rather than about the world. The
+    /// catalog loader enforces the one-tile footprint the rule rests on.
+    pub const fn binds_to_nearby_rail(self) -> bool {
+        self.is_rail_signal() || matches!(self, Self::TrainStop)
     }
 
     /// Whether this kind runs *on* track rather than being track, and therefore
