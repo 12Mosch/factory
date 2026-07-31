@@ -814,6 +814,17 @@ impl Simulation {
             return;
         };
 
+        // Track that is not joined to the train's own is not track it can
+        // reach, so a platform on another railway is not a candidate at all.
+        //
+        // The search would answer the same — it drops goals off the train's
+        // network before it expands anything — but the *fallback* would not:
+        // when the tick cannot pay for a search, the lowest stop id is taken,
+        // and taking one on a railway the train is not on books a place it can
+        // never reach and steps the schedule past a station that had a perfectly
+        // good platform. Asking here costs one comparison per candidate and
+        // makes the two agree.
+        let network = self.train_rail_network(train_id);
         let candidates = self
             .entities
             .train_stops
@@ -824,6 +835,11 @@ impl Simulation {
                         < self.train_stop_effective_limit(**entity_id) as usize
             })
             .filter_map(|(entity_id, _)| Some((*entity_id, self.train_stop_target(*entity_id)?)))
+            .filter(|(_, target)| {
+                network.is_none_or(|network| {
+                    self.rail_network_id_for_entity(target.edge) == Some(network)
+                })
+            })
             .collect::<Vec<_>>();
         let Some((&(first_stop, first_target), rest)) = candidates.split_first() else {
             return;
@@ -845,6 +861,14 @@ impl Simulation {
         train.destination = Some(target);
         train.route = route;
         train.route_search_exhausted_at = None;
+    }
+
+    /// The railway the train is standing on, or `None` when its leading piece
+    /// is on no rail the graph knows — which is a train the graph is about to
+    /// prune rather than one anything can be planned for.
+    fn train_rail_network(&self, train_id: TrainId) -> Option<u32> {
+        let position = self.train_search_position(train_id)?;
+        self.rail_network_id_for_entity(position.edge)
     }
 
     /// The candidate a train can reach most cheaply, with the route that gets it

@@ -94,6 +94,38 @@ fn stop_at(sim: &mut Simulation, name: &str, rail: EntityId, train_limit: u32) -
     stop
 }
 
+/// One piece of track laid past the end of the run and joined to nothing.
+///
+/// Three empty rows of gap: enough that neither end meets the run's, so the two
+/// are separate railways, and enough that a stop beside this piece is well out
+/// of binding reach of the run's last rail.
+fn disconnected_rail(sim: &mut Simulation, rails: &[EntityId]) -> EntityId {
+    let prototype_id =
+        factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "rail_straight");
+    let (x, y) = sim
+        .entities
+        .placed_entity(*rails.last().expect("the run has rails"))
+        .map(|placed| (placed.x, placed.y))
+        .expect("the run's rails are placed");
+    let rail = crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id,
+            x,
+            y: y + 5,
+            direction: Direction::North,
+        },
+    )
+    .expect("the column the run was laid in is clear past the end of it");
+    sim.ensure_rail_graph();
+    assert_ne!(
+        sim.rail_network_id_for_entity(rail),
+        sim.rail_network_id_for_entity(rails[0]),
+        "the gap is wide enough that the two are separate railways"
+    );
+    rail
+}
+
 fn train(sim: &Simulation, train_id: TrainId) -> &Train {
     sim.train(train_id).expect("the train exists")
 }
@@ -495,6 +527,52 @@ fn renaming_the_last_platform_of_a_station_keeps_the_train_that_booked_it() {
     );
     assert!(renamed.is_waiting_at_scheduled_stop());
     assert_eq!(renamed.schedule.entries[0].stop_name, "Depot");
+}
+
+/// A platform on a railway the train is not on is not a platform it can be
+/// booked into, however few of them there are and whatever the tick's search
+/// budget has left.
+///
+/// Booking it and finding out afterwards is the trap: the routing pass answers
+/// "no way there" by stepping the schedule past the entry, so a train would skip
+/// a station rather than wait for one it can reach. It waits instead — the same
+/// thing it does for a station with no track beside it at all.
+#[test]
+fn a_platform_on_another_railway_is_not_booked() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let siding = disconnected_rail(&mut sim, &rails);
+    let stranded = stop_at(&mut sim, "North", siding, 1);
+    sim.set_train_schedule(
+        train_id,
+        schedule(vec![entry("North", &[FOREVER]), entry("South", &[FOREVER])]),
+    )
+    .expect("the train takes a schedule");
+
+    for _ in 0..10 {
+        sim.tick();
+    }
+
+    let waiting = train(&sim, train_id);
+    assert_eq!(
+        waiting.scheduled_stop, None,
+        "the only platform of that name is on track this train cannot reach"
+    );
+    assert_eq!(waiting.destination, None);
+    assert_eq!(
+        waiting.schedule.current, 0,
+        "and the entry naming it is not stepped past, which would skip the station"
+    );
+    sim.validate()
+        .expect("a train waiting for a platform it can reach is a valid world");
+
+    // Lay a platform of the same name on the train's own railway and it goes.
+    let reachable = stop_at(&mut sim, "North", rails[20], 1);
+    assert!(
+        stranded < reachable,
+        "the unreachable platform is the lower stop id, so it is the one a \
+         fallback would have taken"
+    );
+    run_until_waiting(&mut sim, train_id, reachable);
 }
 
 /// A platform that moves takes the train booked into it with it.
