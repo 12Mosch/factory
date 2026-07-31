@@ -928,20 +928,13 @@ impl Simulation {
         (cargo, declares_cargo, every_container_full)
     }
 
-    /// What the train standing at this stop is carrying, or `None` when nothing
-    /// has arrived here.
+    /// What one train is carrying, summed over its wagons and its tanks.
     ///
-    /// Arrival rather than a claim: a train on its way has booked the platform
-    /// but is out on the main line, and a station reporting its cargo would be
-    /// reporting goods that are not there yet.
-    pub(in crate::simulation) fn train_stop_cargo(
-        &self,
-        entity_id: EntityId,
-    ) -> Option<TrainCargo> {
-        let train = self.rolling_stock.trains().find(|train| {
-            train.scheduled_stop == Some(entity_id) && train.schedule_arrival_tick.is_some()
-        })?;
-        Some(self.train_cargo_snapshot(train.id).0)
+    /// What a stop's connector publishes, and the same figure the cargo wait
+    /// conditions are asked about — one walk over the train's stock, so the two
+    /// cannot disagree about what is aboard.
+    pub(in crate::simulation) fn train_cargo(&self, train_id: TrainId) -> TrainCargo {
+        self.train_cargo_snapshot(train_id).0
     }
 
     fn advance_train(&mut self, train_id: TrainId) {

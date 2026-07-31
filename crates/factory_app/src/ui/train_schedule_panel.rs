@@ -578,14 +578,28 @@ pub(crate) fn handle_schedule_remove_buttons(
     }
     sounds.write(SoundEvent::UiClick);
     schedule.entries.remove(index);
-    // The cursor follows the list: an entry removed before the one being served
-    // shifts it down, and one removed at the end wraps it to the top. The
-    // simulation clamps it too, but doing it here is what keeps the train on
-    // the station it is actually standing at.
-    if schedule.current > index || schedule.current >= schedule.entries.len() {
-        schedule.current = schedule.current.saturating_sub(1);
-    }
+    schedule.current = cursor_after_removing(schedule.current, index, schedule.entries.len());
     send(&mut commands, train_id, schedule);
+}
+
+/// Where the schedule cursor lands once the entry at `index` is gone.
+///
+/// Three cases, and the third is the one worth stating. An entry removed
+/// *before* the one being served shifts it down by one, so the train keeps
+/// serving the station it is actually standing at. An entry removed at or after
+/// it leaves the cursor where it is — which is now the entry that has slid into
+/// that slot, the next station of the loop. And a cursor left off the end goes
+/// to the top rather than back one, because a schedule is a loop: removing the
+/// last entry while it is the one being served sends the train round to the
+/// first, the way finishing that entry would have. Stepping back instead would
+/// run the loop backwards.
+fn cursor_after_removing(current: usize, index: usize, remaining: usize) -> usize {
+    let moved = if current > index {
+        current - 1
+    } else {
+        current
+    };
+    if moved >= remaining { 0 } else { moved }
 }
 
 pub(crate) fn handle_schedule_add_button(
@@ -614,4 +628,30 @@ pub(crate) fn handle_schedule_add_button(
         wait_conditions: Vec::new(),
     });
     send(&mut commands, train_id, schedule);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cursor has to survive a deletion, because it is what the train does
+    /// next. Every case is stated here rather than left to the simulation's
+    /// clamp: a clamp keeps the schedule *valid*, and what matters is which
+    /// station the train goes to.
+    #[test]
+    fn removing_an_entry_leaves_the_cursor_on_the_next_station_of_the_loop() {
+        // Before the cursor: the train keeps serving the station it is at.
+        assert_eq!(cursor_after_removing(2, 0, 2), 1);
+        assert_eq!(cursor_after_removing(1, 0, 2), 0);
+        // After the cursor: nothing about this journey changed.
+        assert_eq!(cursor_after_removing(0, 2, 2), 0);
+        // The entry being served, with more of the loop behind it: the cursor
+        // stays put, which is the entry that slid into the slot.
+        assert_eq!(cursor_after_removing(1, 1, 2), 1);
+        // The *last* entry while it is being served: round to the top, the way
+        // finishing it would have gone, rather than back to the one before.
+        assert_eq!(cursor_after_removing(2, 2, 2), 0);
+        // The only entry there was.
+        assert_eq!(cursor_after_removing(0, 0, 0), 0);
+    }
 }
