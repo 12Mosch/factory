@@ -321,6 +321,9 @@
         // one at every block boundary in both directions.
         (id: 115, name: "rail_signal", stack_size: 50),
         (id: 116, name: "chain_signal", stack_size: 50),
+        // One stop per platform, and a station of any size wants only a
+        // handful: they go down far more sparsely than signals do.
+        (id: 117, name: "train_stop", stack_size: 10),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1642,6 +1645,20 @@
                 (item: "electronic_circuit", amount: 1),
             ],
             products: [(item: "chain_signal", amount: 1)],
+        ),
+        // A stop is a signpost with a lamp and a little logic in it: cheaper
+        // than the stock it directs, and dearer than the signal beside it.
+        (
+            id: 115,
+            name: "train_stop",
+            category: Crafting,
+            crafting_time_ticks: 30,
+            ingredients: [
+                (item: "iron_plate", amount: 6),
+                (item: "steel_plate", amount: 3),
+                (item: "electronic_circuit", amount: 5),
+            ],
+            products: [(item: "train_stop", amount: 1)],
         ),
     ],
     entities: [
@@ -3169,6 +3186,32 @@
                 controllable: false,
             )),
         ),
+        // A stop stands on one tile beside the track and binds to the rail
+        // nearest it, the way a signal binds to the nearest rail end. What it
+        // carries is a name and a train limit, so it is the schedule's half of
+        // the railway rather than the signalling's.
+        //
+        // The connector both reads and controls: `reads_contents` publishes
+        // what the train standing here is carrying, and `controllable` is what
+        // lets a network set the stop's train limit — a station that closes
+        // itself when its yard is full.
+        (
+            id: 76,
+            name: "train_stop",
+            build_item: Some("train_stop"),
+            building_category: Some(Logistics),
+            building_menu_order: Some(147),
+            entity_kind: TrainStop,
+            size: (x: 1, y: 1),
+            collision_mask: (layers: ["ground", "building"]),
+            max_health: Some(250),
+            circuit_connector: Some((
+                ports: Single,
+                wire_reach_tiles_x2: 18,
+                reads_contents: true,
+                controllable: true,
+            )),
+        ),
     ],
     tiles: [
         (
@@ -3913,6 +3956,21 @@
                 UnlockRecipe("rail_signal"),
                 UnlockRecipe("chain_signal"),
             ],
+        ),
+        // The point at which a train runs unattended: a named stop is what a
+        // schedule asks for, so this is gated on there being stock to schedule
+        // rather than on the signalling that lets several of them share a line.
+        (
+            id: 46,
+            name: "automated_rail_transport",
+            prerequisites: ["rolling_stock"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 900,
+            effects: [UnlockRecipe("train_stop")],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

@@ -239,6 +239,31 @@ pub enum SimCommand {
     ClearTrainDestination {
         train_id: TrainId,
     },
+    /// Replaces a train's automatic orders. The whole schedule at once rather
+    /// than an edit to one entry: the cursor into it has to move with the list,
+    /// and a command per edit would have to describe that move as well.
+    SetTrainSchedule {
+        train_id: TrainId,
+        schedule: TrainSchedule,
+    },
+    /// Renames a stop, and — when the old name leaves the world with it — the
+    /// schedule entries that asked for it.
+    RenameTrainStop {
+        stop: EntityId,
+        name: String,
+    },
+    /// Sets how many trains a stop admits at once. Refused for zero, which is
+    /// what the signal-driven limit below is for.
+    SetTrainStopLimit {
+        stop: EntityId,
+        train_limit: u32,
+    },
+    /// Picks the channel a stop reads its train limit from, or `None` to go
+    /// back to the hand-set number.
+    SetTrainStopLimitSignal {
+        stop: EntityId,
+        signal: Option<SignalId>,
+    },
     BuildRedScienceResearchFixture,
     BuildChemicalScienceFactoryFixture,
     /// Applies the chemical science fixture's pending recipe selections as
@@ -729,6 +754,29 @@ impl Simulation {
             }
             SimCommand::ClearTrainDestination { train_id } => {
                 self.clear_train_destination(train_id)
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetTrainSchedule {
+                train_id,
+                ref schedule,
+            } => {
+                self.set_train_schedule(train_id, schedule.clone())
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::RenameTrainStop { stop, ref name } => {
+                self.rename_train_stop(stop, name.clone())
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetTrainStopLimit { stop, train_limit } => {
+                self.set_train_stop_limit(stop, train_limit)
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetTrainStopLimitSignal { stop, signal } => {
+                self.set_train_stop_limit_signal(stop, signal)
                     .map_err(SimCommandError::TrainControl)?;
                 Ok(SimCommandEffect::None)
             }

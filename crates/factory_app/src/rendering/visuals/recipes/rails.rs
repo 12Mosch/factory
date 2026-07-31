@@ -111,6 +111,45 @@ pub(super) fn rail_signal_layers(
     }
 }
 
+/// A station sign beside the track: a post with a board on top of it, turned to
+/// face the way the stop was dropped.
+///
+/// Deliberately unlike a signal, which is the other thing standing on a single
+/// tile beside a line. A player scanning a station has to be able to tell at a
+/// glance which posts are stops the schedule names and which are boundaries the
+/// trains wait at, and the two carry quite different colours as well as quite
+/// different shapes.
+pub(super) fn train_stop_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
+    let forward = direction_vec(style.direction);
+    let board = forward * 0.18;
+    builder
+        // The post, set back from the board so the sign reads as standing
+        // proud of it rather than painted on it.
+        .scaled_rounded(
+            Vec2::new(0.22, 0.22),
+            forward * -0.22,
+            0.02,
+            Color::srgba(0.20, 0.21, 0.23, 0.96),
+            0.30,
+        )
+        .oriented(
+            (Vec2::new(0.70, 0.30), Vec2::new(0.30, 0.70)),
+            (board, board),
+            style.direction,
+            0.10,
+            tinted(style.base_color, 0.10),
+        )
+        // A pale stripe along the board, which is what a name plate looks like
+        // at the zoom a railway is read at.
+        .oriented(
+            (Vec2::new(0.52, 0.12), Vec2::new(0.12, 0.52)),
+            (board, board),
+            style.direction,
+            0.18,
+            Color::srgba(0.90, 0.92, 0.95, 0.92),
+        );
+}
+
 /// The piece's travel path in sprite-local pixels, from one end to the other.
 fn sample_path(size: Vec2, geometry: RailPieceGeometry) -> Vec<Vec2> {
     let start = to_local_pixels(size, geometry.start.position);

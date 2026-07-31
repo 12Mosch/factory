@@ -18,7 +18,7 @@ use crate::rendering::colors::{
     laser_turret_color, mining_drill_color, nuclear_reactor_color, offshore_pump_color,
     oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, rail_ballast_color,
     rail_signal_color, roboport_color, solar_panel_color, splitter_color, steam_engine_color,
-    storage_tank_color, transport_belt_color, wall_color,
+    storage_tank_color, train_stop_color, transport_belt_color, wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
@@ -482,6 +482,14 @@ pub(crate) fn entity_prototype_visual_style(
         // way a lamp's lit state is handled.
         EntityKind::RailSignal | EntityKind::ChainSignal => Some(entity_visual_style(
             rail_signal_color(RailSignalAspect::Clear),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        // A stop is a sign beside the track, drawn like the signal it stands
+        // near: one tile, its own colour, and the direction it was dropped in.
+        EntityKind::TrainStop => Some(entity_visual_style(
+            train_stop_color(),
             machine_size(),
             prototype.entity_kind,
             direction,

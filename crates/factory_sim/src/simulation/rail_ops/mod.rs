@@ -12,7 +12,7 @@ pub(in crate::simulation) use blocks::{RailBlockPartition, RailSignalInput};
 pub use geometry::{piece_geometry, placed_piece_geometry};
 pub(in crate::simulation) use network_access::{
     conflicting_rail_end, crossing_exists, placement_connections, rail_ends_for_placement,
-    signal_binding, signal_governing_crossing,
+    signal_binding, signal_governing_crossing, stop_binding,
 };
 pub(in crate::simulation) use pathfinding::{RailRouteOutcome, RailRouteRequest, RailRouteScratch};
 pub(in crate::simulation) use signalling::RailSignalling;
@@ -31,11 +31,6 @@ impl Simulation {
         // keeps the state valid *between* ticks too, so a world saved right
         // after a train's track was blown up still loads.
         self.prune_rolling_stock();
-        // And the marks on the track, for the same reason a train standing on
-        // nothing is pruned: a stop names the rail it is on, so a stop whose rail
-        // was mined names track that is not there — which is a world validation
-        // refuses to save.
-        self.prune_train_stops();
         // The same moment and the same reason, one step further on: a plan that
         // ran over the rail which just went is a plan a train would otherwise
         // keep driving, so it is dropped here rather than discovered later by a
@@ -60,15 +55,18 @@ impl Simulation {
         self.clear_stopped_stock_index();
     }
 
-    /// Whether placing or destroying this prototype can change rail
-    /// connectivity. Track and signals both can — a signal is where the block
-    /// partition is cut — and nothing else does, so nothing else pays for a
-    /// rebuild.
+    /// Whether placing or destroying this prototype can change what the rail
+    /// rebuild produces. Track and signals both can — a signal is where the
+    /// block partition is cut — and so does a train stop, whose mark on the
+    /// track is derived in the same pass. Nothing else does, so nothing else
+    /// pays for a rebuild.
     pub(super) fn prototype_affects_rail_graph(
         &self,
         prototype: &factory_data::EntityPrototype,
     ) -> bool {
-        prototype.rail_piece.is_some() || prototype.entity_kind.is_rail_signal()
+        prototype.rail_piece.is_some()
+            || prototype.entity_kind.is_rail_signal()
+            || prototype.entity_kind == EntityKind::TrainStop
     }
 
     /// Rebuilds the rail graph and the blocks it is cut into, if placement
@@ -85,7 +83,20 @@ impl Simulation {
 
         let graph = build_rail_graph_from_pieces(&self.rail_piece_inputs());
         let blocks = build_rail_blocks(&graph, &self.rail_signal_inputs());
-        self.rails.replace_graph(graph, blocks);
+        let stop_targets = self.train_stop_targets();
+        // Which platforms are somewhere else than they were, taken before the
+        // new marks are written. Walked over the *previous* marks, so a stop
+        // whose mark this build is the first to know about — every stop, on the
+        // first build of a loaded world — is not reported as having moved.
+        let moved = self
+            .rails
+            .stop_targets
+            .iter()
+            .filter(|(stop, previous)| stop_targets.get(stop) != Some(previous))
+            .map(|(stop, _)| *stop)
+            .collect::<Vec<_>>();
+        self.rails.replace_graph(graph, blocks, stop_targets);
+        self.release_claims_on_moved_stops(&moved);
         #[cfg(test)]
         {
             self.rails.graph_rebuilds += 1;
@@ -135,6 +146,25 @@ impl Simulation {
                     position,
                     heading: placed.direction,
                 })
+            })
+            .collect()
+    }
+
+    /// The mark every placed stop puts on the track, in stop-entity order.
+    ///
+    /// Rebuilt with the graph rather than kept on the stop, because it is a
+    /// statement about the *track* beside the stop: laying a rail next to a stop
+    /// that had none gives it a platform, and mining that rail takes it away
+    /// again without either touching the stop itself. A stop with no track near
+    /// it is simply left out — it keeps its name and its limit, and no train can
+    /// be sent there until somebody lays some.
+    fn train_stop_targets(&self) -> BTreeMap<EntityId, RailTarget> {
+        self.entities
+            .train_stops
+            .keys()
+            .filter_map(|&entity_id| {
+                let placed = self.entities.placed_entity(entity_id)?;
+                Some((entity_id, stop_binding(self, placed.x, placed.y)?))
             })
             .collect()
     }

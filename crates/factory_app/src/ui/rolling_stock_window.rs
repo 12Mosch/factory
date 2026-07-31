@@ -23,6 +23,9 @@ use crate::ui::inventory_panel::{
     spawn_slot_button,
 };
 use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
+use crate::ui::train_schedule_panel::{
+    ScheduleSnapshot, schedule_snapshot, spawn_train_schedule_panel,
+};
 use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
 
 /// The live fluid readout of an open tanker.
@@ -54,6 +57,12 @@ pub(crate) struct RollingStockWindowSnapshot {
     /// [`RollingStockFluidText`] carries instead.
     has_fluid_box: bool,
     stopped: bool,
+    /// The schedule editor's rows. In the structure snapshot because adding or
+    /// removing an entry changes how many rows there are, and editing one
+    /// changes what a row says; what the train is *doing* about the schedule is
+    /// a live label instead, so the editor does not rebuild under the player's
+    /// cursor every tick.
+    schedule: Option<ScheduleSnapshot>,
 }
 
 pub(crate) fn sync_rolling_stock_window(
@@ -120,6 +129,7 @@ fn rolling_stock_window_snapshot(
             .rolling_stock_piece(stock_id)
             .is_some_and(|stock| !stock.fluid_boxes.is_empty()),
         stopped: sim.rolling_stock_is_stopped(stock_id),
+        schedule: schedule_snapshot(sim, stock_id),
     }
 }
 
@@ -267,6 +277,11 @@ fn spawn_rolling_stock_window_contents(
                 TextFont::from_font_size(11.0),
                 TextColor(Color::srgb(0.78, 0.80, 0.78)),
             ));
+        }
+        // Under the cargo, because a schedule is about the train while
+        // everything above it is about this one piece of it.
+        if let Some(schedule) = &snapshot.schedule {
+            spawn_train_schedule_panel(panel, schedule);
         }
         spawn_inventory_transfer_feedback(panel);
     });

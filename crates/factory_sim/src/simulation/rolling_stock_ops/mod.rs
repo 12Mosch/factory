@@ -44,8 +44,12 @@ use crate::rolling_stock::{
     RailPosition, RollingStock, RollingStockId, TRAIN_VELOCITY_SCALE, Train, TrainControlError,
     TrainForces, TrainId, TrainThrottle,
 };
+use crate::simulation::rail_ops::RailRouteOutcome;
 
-use crate::rolling_stock::{RailTarget, TrainSchedule, TrainStop, TrainStopId};
+use crate::circuits::SignalId;
+use crate::rolling_stock::{
+    RailTarget, TrainSchedule, TrainStopState, TrainWaitCondition, TrainWaitContext,
+};
 use crate::simulation::*;
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
@@ -89,44 +93,43 @@ pub(in crate::simulation) struct TrainStep {
 }
 
 impl Simulation {
-    /// Registers a named stopping mark. Stop ids are monotonic, making equal
-    /// name/distance choices deterministic across saves and replays.
-    pub fn create_train_stop(
-        &mut self,
-        name: impl Into<String>,
-        rail: EntityId,
-        distance_fixed: i64,
-        train_limit: u32,
-    ) -> Result<TrainStopId, TrainControlError> {
-        let name = name.into();
-        if name.trim().is_empty() {
-            return Err(TrainControlError::EmptyStopName);
+    /// Gives a freshly placed stop a name of its own.
+    ///
+    /// Numbered by entity id rather than by a counter, so it is unique without
+    /// any state to keep and the same on every machine. A default name matters
+    /// more than it looks: a schedule asks for a *name*, and two stops sharing
+    /// one is the supported way to say "either platform of this station" — so a
+    /// default that repeated would silently build two-platform stations out of
+    /// unrelated stops.
+    pub(in crate::simulation) fn on_train_stop_placed(&mut self, entity_id: EntityId) {
+        if let Some(state) = self.entities.train_stops.get_mut(&entity_id) {
+            state.name = format!("Stop {}", entity_id.raw());
         }
-        if train_limit == 0 {
-            return Err(TrainControlError::InvalidTrainLimit);
-        }
-        let geometry = self
-            .rail_piece_geometry(rail)
-            .ok_or(TrainControlError::NotRail(rail))?;
-        if !(0..=geometry.length_fixed).contains(&distance_fixed) {
-            return Err(TrainControlError::NotRail(rail));
-        }
-        self.rolling_stock.next_stop_id += 1;
-        let id = TrainStopId::new(self.rolling_stock.next_stop_id);
-        self.rolling_stock.stops.insert(
-            id,
-            TrainStop {
-                id,
-                name,
-                target: RailTarget::new(rail, distance_fixed),
-                train_limit,
-            },
-        );
-        Ok(id)
     }
 
-    pub fn train_stops(&self) -> impl Iterator<Item = &TrainStop> {
-        self.rolling_stock.stops.values()
+    /// Every placed train stop, in entity-id order.
+    pub fn train_stops(&self) -> impl Iterator<Item = (EntityId, &TrainStopState)> {
+        self.entities
+            .train_stops
+            .iter()
+            .map(|(&entity_id, state)| (entity_id, state))
+    }
+
+    pub fn train_stop(&self, entity_id: EntityId) -> Option<&TrainStopState> {
+        self.entities.train_stops.get(&entity_id)
+    }
+
+    /// Where on the track a stop brings a train to rest, or `None` for a stop
+    /// with no rail beside it.
+    ///
+    /// Derived with the rail graph rather than stored, so a stop is never
+    /// holding a mark on track that has since been mined.
+    pub fn train_stop_target(&self, entity_id: EntityId) -> Option<RailTarget> {
+        debug_assert!(
+            !self.rails.graph_dirty,
+            "rail graph must be ensured before querying stop marks"
+        );
+        self.rails.stop_targets.get(&entity_id).copied()
     }
 
     /// Renames one stop, and the schedules that named it only when the old name
@@ -141,51 +144,169 @@ impl Simulation {
     /// served.
     pub fn rename_train_stop(
         &mut self,
-        id: TrainStopId,
+        entity_id: EntityId,
         name: impl Into<String>,
     ) -> Result<(), TrainControlError> {
         let name = name.into();
         if name.trim().is_empty() {
             return Err(TrainControlError::EmptyStopName);
         }
-        let stop = self
-            .rolling_stock
-            .stops
-            .get_mut(&id)
-            .ok_or(TrainControlError::MissingStop(id))?;
-        let old = std::mem::replace(&mut stop.name, name.clone());
-        if old == name || self.stop_name_exists(&old) {
+        let state = self
+            .entities
+            .train_stops
+            .get_mut(&entity_id)
+            .ok_or(TrainControlError::MissingStop(entity_id))?;
+        let old = std::mem::replace(&mut state.name, name.clone());
+        if old == name {
             return Ok(());
         }
-        for train in self.rolling_stock.trains.values_mut() {
-            for entry in &mut train.schedule.entries {
-                if entry.stop_name == old {
-                    entry.stop_name.clone_from(&name);
+        if !self.stop_name_exists(&old) {
+            for train in self.rolling_stock.trains.values_mut() {
+                for entry in &mut train.schedule.entries {
+                    if entry.stop_name == old {
+                        entry.stop_name.clone_from(&name);
+                    }
                 }
             }
         }
+        // A claim is a booking made against the name an entry asked for, so a
+        // platform renamed out from under the train that booked it is a train
+        // running to a station its schedule no longer names — and loading there
+        // when it arrives. It gives the place back and books one that does
+        // answer to its entry instead.
+        //
+        // Which is exactly the trains whose entry does *not* now name this stop.
+        // When the rewrite above ran, every entry that asked for the old name
+        // asks for the new one, so the trains already heading here keep their
+        // place and nothing moves: renaming the last platform of a station is
+        // renaming the station, not closing it.
+        self.release_stop_claims(entity_id, |train| {
+            train
+                .schedule
+                .current_entry()
+                .is_some_and(|entry| entry.stop_name == name)
+        });
         Ok(())
     }
 
-    pub fn remove_train_stop(&mut self, id: TrainStopId) -> Result<TrainStop, TrainControlError> {
-        let stop = self
-            .rolling_stock
-            .stops
-            .remove(&id)
-            .ok_or(TrainControlError::MissingStop(id))?;
-        self.forget_train_stop(&stop);
-        Ok(stop)
+    /// Gives up every claim on `stop` that `keep` does not vouch for, and stops
+    /// the trains that lose one.
+    ///
+    /// A train that loses its claim loses the plan that went with it: the
+    /// destination was this stop's mark, and the route was measured to it. Both
+    /// go, and the train brakes — the schedule pass books it somewhere on one of
+    /// the next ticks, which for a train that still wants this station is this
+    /// very tick.
+    fn release_stop_claims(&mut self, stop: EntityId, keep: impl Fn(&Train) -> bool) {
+        for train in self.rolling_stock.trains.values_mut() {
+            if train.scheduled_stop != Some(stop) || keep(train) {
+                continue;
+            }
+            train.release_scheduled_stop();
+            train.destination = None;
+            train.route = None;
+            train.route_search_exhausted_at = None;
+            train.throttle = TrainThrottle::Brake;
+        }
+    }
+
+    /// Gives up every claim on a stop whose mark has moved to another rail.
+    ///
+    /// A claim aims a train at a point on the track: the destination is that
+    /// point and the route is measured to it. A stop that binds to a different
+    /// rail — because a nearer one was laid beside it — leaves both describing
+    /// where the platform *used* to be, and the train would run out its old
+    /// route and call that an arrival on track the station no longer marks.
+    /// Nothing else catches it: the old rail is still there, so the route is
+    /// still valid track, and only the meaning of it changed.
+    pub(in crate::simulation) fn release_claims_on_moved_stops(&mut self, moved: &[EntityId]) {
+        for stop in moved {
+            self.release_stop_claims(*stop, |_| false);
+        }
+    }
+
+    /// Sets how many trains may be booked into one stop at a time.
+    ///
+    /// Zero is refused: a stop no train may be sent to is a stop that should not
+    /// exist, and a player who wants one closed has the signal-driven limit
+    /// below — which says so explicitly, and says it from the factory rather
+    /// than by hand.
+    pub fn set_train_stop_limit(
+        &mut self,
+        entity_id: EntityId,
+        train_limit: u32,
+    ) -> Result<(), TrainControlError> {
+        if train_limit == 0 {
+            return Err(TrainControlError::InvalidTrainLimit);
+        }
+        let state = self
+            .entities
+            .train_stops
+            .get_mut(&entity_id)
+            .ok_or(TrainControlError::MissingStop(entity_id))?;
+        state.train_limit = train_limit;
+        Ok(())
+    }
+
+    /// Picks the channel a stop reads its train limit from, or `None` to go back
+    /// to the hand-set one.
+    pub fn set_train_stop_limit_signal(
+        &mut self,
+        entity_id: EntityId,
+        signal: Option<crate::circuits::SignalId>,
+    ) -> Result<(), TrainControlError> {
+        if let Some(signal) = signal
+            && self.signal_role(signal) != circuit_ops::SignalRole::Value
+        {
+            return Err(TrainControlError::WildcardSignal(signal));
+        }
+        let state = self
+            .entities
+            .train_stops
+            .get_mut(&entity_id)
+            .ok_or(TrainControlError::MissingStop(entity_id))?;
+        state.train_limit_signal = signal;
+        Ok(())
+    }
+
+    /// How many trains this stop admits right now: what the network says when
+    /// the player has wired the limit up, and the hand-set number otherwise.
+    ///
+    /// A network reading below zero is read as none: a limit is a count of
+    /// trains, and a negative one is the same instruction as zero — send
+    /// nobody.
+    ///
+    /// An enable condition the network does not satisfy admits nobody either,
+    /// which is what "controllable" means for a stop. A stop's work is taking
+    /// trains, so a condition that switches it off has to switch that off — a
+    /// connector that accepted a condition and then ignored it would be a
+    /// control that looks wired and does nothing.
+    ///
+    /// Neither closes a stop a train is already standing at: a claim is given up
+    /// by the train holding it, never taken back by the station.
+    pub fn train_stop_effective_limit(&self, entity_id: EntityId) -> u32 {
+        let Some(state) = self.entities.train_stops.get(&entity_id) else {
+            return 0;
+        };
+        if !self.circuit_work_allowed(entity_id) {
+            return 0;
+        }
+        let Some(signal) = state.train_limit_signal else {
+            return state.train_limit;
+        };
+        let node = CircuitNode::new(entity_id, ConnectorPort::Single);
+        u32::try_from(self.circuits.value_at(node, signal)).unwrap_or(0)
     }
 
     /// Whether any stop still answers to `name`.
     fn stop_name_exists(&self, name: &str) -> bool {
-        self.rolling_stock
-            .stops
+        self.entities
+            .train_stops
             .values()
-            .any(|stop| stop.name == name)
+            .any(|state| state.name == name)
     }
 
-    /// Releases what a stop that has just gone leaves behind on the trains: the
+    /// Releases what a stop that is about to go leaves behind on the trains: the
     /// claim any of them held on it, and — once no stop answers to its name at
     /// all — the schedule entries which can no longer be served.
     ///
@@ -200,10 +321,25 @@ impl Simulation {
     /// Every matching entry rather than the one being served, because the
     /// schedule is a loop: an entry left behind further down it is the same dead
     /// end, reached a lap later.
-    fn forget_train_stop(&mut self, stop: &TrainStop) {
-        let name_remains = self.stop_name_exists(&stop.name);
+    ///
+    /// Called while the stop is still in the store, from the destroy path, so
+    /// "does the name survive" is asked of the world the removal leaves behind.
+    pub(in crate::simulation) fn forget_train_stop(&mut self, entity_id: EntityId) {
+        let Some(name) = self
+            .entities
+            .train_stops
+            .get(&entity_id)
+            .map(|state| state.name.clone())
+        else {
+            return;
+        };
+        let name_remains = self
+            .entities
+            .train_stops
+            .iter()
+            .any(|(&other, state)| other != entity_id && state.name == name);
         for train in self.rolling_stock.trains.values_mut() {
-            if train.scheduled_stop == Some(stop.id) {
+            if train.scheduled_stop == Some(entity_id) {
                 train.release_scheduled_stop();
                 train.destination = None;
                 train.route = None;
@@ -211,43 +347,18 @@ impl Simulation {
                 train.throttle = TrainThrottle::Brake;
             }
             if !name_remains {
-                train.schedule.remove_entries_named(&stop.name);
+                train.schedule.remove_entries_named(&name);
             }
-        }
-    }
-
-    /// Drops the stops whose rail is no longer there.
-    ///
-    /// The mirror of [`Simulation::prune_rolling_stock`], at the same moment and
-    /// for the same reason: a stop names a rail, and mining that rail would
-    /// otherwise leave the stop naming nothing — a state `validate_rolling_stock`
-    /// rejects, so an ordinary bit of track-pulling would make the world
-    /// unsaveable.
-    pub(in crate::simulation) fn prune_train_stops(&mut self) {
-        if self.rolling_stock.stops.is_empty() {
-            return;
-        }
-        let stranded = self
-            .rolling_stock
-            .stops
-            .values()
-            .filter(|stop| self.rail_piece_geometry(stop.target.edge).is_none())
-            .map(|stop| stop.id)
-            .collect::<Vec<_>>();
-        for id in stranded {
-            let Some(stop) = self.rolling_stock.stops.remove(&id) else {
-                continue;
-            };
-            self.forget_train_stop(&stop);
         }
     }
 
     /// Replaces a train's automatic orders, cancelling whatever it was doing to
     /// serve the old ones.
     ///
-    /// Entries are checked before anything is written: an empty station name is
-    /// refused where the stop APIs refuse it rather than accepted here and
-    /// reported much later as a broken world by validation.
+    /// Entries are checked before anything is written: an empty station name, or
+    /// a circuit condition on one of the wildcard channels, is refused here
+    /// rather than accepted and reported much later as a broken world by
+    /// validation.
     pub fn set_train_schedule(
         &mut self,
         train_id: TrainId,
@@ -259,6 +370,17 @@ impl Simulation {
             .any(|entry| entry.stop_name.trim().is_empty())
         {
             return Err(TrainControlError::EmptyStopName);
+        }
+        for signal in schedule
+            .entries
+            .iter()
+            .flat_map(|entry| &entry.wait_conditions)
+            .flat_map(|group| &group.0)
+            .flat_map(wait_condition_signals)
+        {
+            if self.signal_role(signal) != circuit_ops::SignalRole::Value {
+                return Err(TrainControlError::WildcardSignal(signal));
+            }
         }
         let train = self
             .rolling_stock
@@ -510,12 +632,16 @@ impl Simulation {
     /// the graph to move, so it must be walking the world as it is now rather
     /// than as it was before the last piece of track went down.
     pub(in crate::simulation) fn advance_trains(&mut self) {
+        // The tick's expansion budget opens before the schedules rather than
+        // after them, because choosing between platforms of one station is
+        // itself a search — the cheapest way there is what picks the platform —
+        // and it is charged against the same budget every other search is.
+        self.train_routing.begin_tick();
         self.advance_train_schedules();
         // Planning is one pass for the whole tick, before any train is stepped:
         // the expansion budget and the occupancy every search reads are both
         // tick-wide, and a train planned for here is a train steered on the very
         // step below rather than a tick later.
-        self.train_routing.begin_tick();
         self.plan_train_routes();
         // Reservation is likewise one pass for the whole tick, and it runs after
         // the plans because a train's plan is what says which way it is about to
@@ -547,7 +673,7 @@ impl Simulation {
     }
 
     /// Advances station waits and assigns unclaimed destinations before route
-    /// planning. The pass is in train-id order and stop ties are in stop-id
+    /// planning. The pass is in train-id order and stop ties are in stop-entity
     /// order, so limits cannot introduce hash-map-order nondeterminism.
     fn advance_train_schedules(&mut self) {
         if self.rolling_stock.trains.is_empty() {
@@ -564,7 +690,7 @@ impl Simulation {
         // stop per unassigned train — which is what asking the trains again would
         // be — is a scan over every train in the world squared, on every tick a
         // queue forms at a capacity-limited station.
-        let mut claims = BTreeMap::<TrainStopId, usize>::new();
+        let mut claims = BTreeMap::<EntityId, usize>::new();
         for stop_id in self
             .rolling_stock
             .trains
@@ -616,36 +742,175 @@ impl Simulation {
                 }
             }
 
-            let Some(name) = self.rolling_stock.train(id).and_then(|train| {
-                (train.scheduled_stop.is_none() && train.destination.is_none())
-                    .then(|| {
-                        train
-                            .schedule
-                            .current_entry()
-                            .map(|entry| entry.stop_name.clone())
-                    })
-                    .flatten()
-            }) else {
-                continue;
-            };
-            let chosen = self
-                .rolling_stock
-                .stops
-                .values()
-                .find(|stop| {
-                    stop.name == name
-                        && claims.get(&stop.id).copied().unwrap_or(0) < stop.train_limit as usize
+            self.release_stranded_claim(id, &mut claims);
+            self.claim_scheduled_stop(id, &mut claims);
+        }
+    }
+
+    /// Gives back the claim of a train that is booked into a stop it is no
+    /// longer on its way to.
+    ///
+    /// A claim is taken with a destination and given up on arrival, so a train
+    /// holding one while having neither is a train whose plan went out from
+    /// under it — its stop's rail was mined, or the route to it was invalidated
+    /// and the destination went with the track. Releasing here is what lets it
+    /// book the station again, or another platform of it, on this very tick;
+    /// left alone it would hold a place at a stop it will never reach against
+    /// every train that could.
+    fn release_stranded_claim(
+        &mut self,
+        train_id: TrainId,
+        claims: &mut BTreeMap<EntityId, usize>,
+    ) {
+        let Some(train) = self.rolling_stock.train(train_id) else {
+            return;
+        };
+        let Some(stop_id) = train.scheduled_stop else {
+            return;
+        };
+        let stranded = train.schedule_arrival_tick.is_none()
+            && train.destination.is_none()
+            && train.route.is_none();
+        if !stranded {
+            return;
+        }
+        if let Some(held) = claims.get_mut(&stop_id) {
+            *held = held.saturating_sub(1);
+        }
+        if let Some(train) = self.rolling_stock.trains.get_mut(&train_id) {
+            train.release_scheduled_stop();
+        }
+    }
+
+    /// Books an idle scheduled train into a stop serving the entry it is on, and
+    /// sends it there.
+    ///
+    /// Several stops may answer to one name — that is how a station gets a
+    /// second platform — and the one chosen is the one this train can *get to*
+    /// most cheaply, not the first in id order. The two differ exactly where it
+    /// matters: a platform on the far side of the yard is nearer in a straight
+    /// line and much further to drive to, and a train sent there queues behind
+    /// the junction it has to cross twice.
+    ///
+    /// One search decides it, for the same reason the routing pass runs one per
+    /// train: the search that ranks the platforms is the search that produces
+    /// the route to the winner, so the plan comes back with the choice rather
+    /// than being looked up again afterwards. When the tick cannot pay for a
+    /// search, or the search runs out of expansions, the lowest stop id is taken
+    /// instead and the ordinary routing pass plans for it — a deterministic
+    /// fallback that costs nothing, rather than a train standing still because
+    /// the budget was busy.
+    fn claim_scheduled_stop(&mut self, train_id: TrainId, claims: &mut BTreeMap<EntityId, usize>) {
+        let Some(name) = self.rolling_stock.train(train_id).and_then(|train| {
+            (train.scheduled_stop.is_none() && train.destination.is_none())
+                .then(|| {
+                    train
+                        .schedule
+                        .current_entry()
+                        .map(|entry| entry.stop_name.clone())
                 })
-                .map(|stop| (stop.id, stop.target));
-            if let Some((stop_id, target)) = chosen
-                && let Some(train) = self.rolling_stock.trains.get_mut(&id)
-            {
-                train.scheduled_stop = Some(stop_id);
-                *claims.entry(stop_id).or_default() += 1;
-                train.destination = Some(target);
-                train.route = None;
-                train.route_search_exhausted_at = None;
+                .flatten()
+        }) else {
+            return;
+        };
+
+        // Track that is not joined to the train's own is not track it can
+        // reach, so a platform on another railway is not a candidate at all.
+        //
+        // The search would answer the same — it drops goals off the train's
+        // network before it expands anything — but the *fallback* would not:
+        // when the tick cannot pay for a search, the lowest stop id is taken,
+        // and taking one on a railway the train is not on books a place it can
+        // never reach and steps the schedule past a station that had a perfectly
+        // good platform. Asking here costs one comparison per candidate and
+        // makes the two agree.
+        let network = self.train_rail_network(train_id);
+        let candidates = self
+            .entities
+            .train_stops
+            .iter()
+            .filter(|(entity_id, state)| {
+                state.name == name
+                    && claims.get(*entity_id).copied().unwrap_or(0)
+                        < self.train_stop_effective_limit(**entity_id) as usize
+            })
+            .filter_map(|(entity_id, _)| Some((*entity_id, self.train_stop_target(*entity_id)?)))
+            .filter(|(_, target)| {
+                network.is_none_or(|network| {
+                    self.rail_network_id_for_entity(target.edge) == Some(network)
+                })
+            })
+            .collect::<Vec<_>>();
+        let Some((&(first_stop, first_target), rest)) = candidates.split_first() else {
+            return;
+        };
+
+        let (stop_id, target, route) = match rest.is_empty() {
+            true => (first_stop, first_target, None),
+            false => self.nearest_train_stop(train_id, &candidates).unwrap_or((
+                first_stop,
+                first_target,
+                None,
+            )),
+        };
+        let Some(train) = self.rolling_stock.trains.get_mut(&train_id) else {
+            return;
+        };
+        train.scheduled_stop = Some(stop_id);
+        *claims.entry(stop_id).or_default() += 1;
+        train.destination = Some(target);
+        train.route = route;
+        train.route_search_exhausted_at = None;
+    }
+
+    /// The railway the train is standing on, or `None` when its leading piece
+    /// is on no rail the graph knows — which is a train the graph is about to
+    /// prune rather than one anything can be planned for.
+    fn train_rail_network(&self, train_id: TrainId) -> Option<u32> {
+        let position = self.train_search_position(train_id)?;
+        self.rail_network_id_for_entity(position.edge)
+    }
+
+    /// The candidate a train can reach most cheaply, with the route that gets it
+    /// there, or `None` when no search could be made or none of them is
+    /// reachable.
+    ///
+    /// Ties go to the lowest stop id, which is the order the candidates are
+    /// gathered in and the order the search itself breaks ties by.
+    fn nearest_train_stop(
+        &mut self,
+        train_id: TrainId,
+        candidates: &[(EntityId, RailTarget)],
+    ) -> Option<(
+        EntityId,
+        RailTarget,
+        Option<crate::rolling_stock::TrainRoute>,
+    )> {
+        let start = self.train_search_position(train_id)?;
+        if !self.train_routing.can_search() {
+            return None;
+        }
+        self.ensure_train_occupancy();
+        let Simulation {
+            train_routing,
+            rails,
+            ..
+        } = self;
+        train_routing.collect_exempt_rails(train_id);
+        let targets = candidates
+            .iter()
+            .map(|(_, target)| *target)
+            .collect::<Vec<_>>();
+        match train_routing.plan(&rails.graph, start, &targets)? {
+            RailRouteOutcome::Found { target, route } => {
+                let (stop_id, stop_target) = candidates[target];
+                Some((stop_id, stop_target, Some(route)))
             }
+            // Nowhere to go and no answer are the same answer here: the claim
+            // falls back to the lowest stop id, and the routing pass — which
+            // owns the "this destination is unreachable" rule and the schedule
+            // step past it — settles what happens next.
+            RailRouteOutcome::Unreachable | RailRouteOutcome::Exhausted => None,
         }
     }
 
@@ -655,10 +920,40 @@ impl Simulation {
     /// The two tick counts are left at zero here and filled in by the caller,
     /// which is the half of the answer that lives on the train rather than in its
     /// wagons.
-    fn train_wait_context(&self, id: TrainId) -> crate::rolling_stock::TrainWaitContext {
-        let mut context = crate::rolling_stock::TrainWaitContext::default();
+    fn train_wait_context(&self, id: TrainId) -> TrainWaitContext {
         let Some(train) = self.rolling_stock.train(id) else {
-            return context;
+            return TrainWaitContext::default();
+        };
+        let (cargo, declares_cargo, every_container_full) = self.train_cargo_snapshot(id);
+        let mut context = TrainWaitContext {
+            cargo_empty: cargo.is_empty(),
+            cargo_full: declares_cargo && every_container_full,
+            cargo,
+            ..TrainWaitContext::default()
+        };
+        // The stop is where the wires are, so the network a condition compares
+        // against is the one reaching the platform this train is standing at.
+        // Read every tick rather than when the train arrives: what the factory
+        // is saying is exactly the thing that changes while it waits.
+        if let Some(stop_id) = train.scheduled_stop {
+            self.circuits.merged_at(
+                CircuitNode::new(stop_id, ConnectorPort::Single),
+                &mut context.circuit_signals,
+            );
+        }
+        context
+    }
+
+    /// What a train is carrying, whether it can carry anything at all, and
+    /// whether every container it declares is full to capacity.
+    ///
+    /// The three come out of one walk over the train's stock because they are
+    /// three readings of the same thing: the wait conditions ask all three, and
+    /// a stop's connector publishes the first.
+    fn train_cargo_snapshot(&self, id: TrainId) -> (TrainCargo, bool, bool) {
+        let mut cargo = TrainCargo::default();
+        let Some(train) = self.rolling_stock.train(id) else {
+            return (cargo, false, false);
         };
         // A train with nowhere to put cargo is never full: "full" is a statement
         // about the containers a train declares, and a locomotive on its own
@@ -685,9 +980,7 @@ impl Simulation {
                         .insert_capacity(&self.world.prototypes, stack.item_id())
                         .unwrap_or(0)
                         == 0;
-                    context
-                        .cargo
-                        .add_item(stack.item_id(), i32::from(stack.count()));
+                    cargo.add_item(stack.item_id(), i32::from(stack.count()));
                 }
             }
             // Capacity comes from the prototype, which is where every other fluid
@@ -704,16 +997,23 @@ impl Simulation {
                 declares_cargo = true;
                 every_container_full &= fluid_box.amount_milliunits >= declared.capacity_milliunits;
                 if let Some(fluid) = fluid_box.fluid_id {
-                    context.cargo.add_fluid(
+                    cargo.add_fluid(
                         fluid,
                         i32::try_from(fluid_box.amount_milliunits).unwrap_or(i32::MAX),
                     );
                 }
             }
         }
-        context.cargo_empty = context.cargo.is_empty();
-        context.cargo_full = declares_cargo && every_container_full;
-        context
+        (cargo, declares_cargo, every_container_full)
+    }
+
+    /// What one train is carrying, summed over its wagons and its tanks.
+    ///
+    /// What a stop's connector publishes, and the same figure the cargo wait
+    /// conditions are asked about — one walk over the train's stock, so the two
+    /// cannot disagree about what is aboard.
+    pub(in crate::simulation) fn train_cargo(&self, train_id: TrainId) -> TrainCargo {
+        self.train_cargo_snapshot(train_id).0
     }
 
     fn advance_train(&mut self, train_id: TrainId) {
@@ -964,6 +1264,19 @@ impl Simulation {
         }
         fuelled
     }
+}
+
+/// The channels one wait condition names, so a schedule can be checked against
+/// the catalog before it is taken.
+fn wait_condition_signals(condition: &TrainWaitCondition) -> Vec<SignalId> {
+    let TrainWaitCondition::Circuit(condition) = condition else {
+        return Vec::new();
+    };
+    let mut signals = vec![condition.left];
+    if let crate::circuits::SignalOperand::Signal(signal) = condition.right {
+        signals.push(signal);
+    }
+    signals
 }
 
 /// The along-track distance one piece of stock keeps from the next when the two

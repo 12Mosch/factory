@@ -12,20 +12,6 @@ use crate::rolling_stock::{RollingStock, TRAIN_VELOCITY_SCALE};
 /// broke the invariant would produce a train standing on nothing, and nothing
 /// later would report it.
 pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidationError> {
-    for (stop_id, stop) in &sim.rolling_stock.stops {
-        if stop.id != *stop_id
-            || stop_id.raw() > sim.rolling_stock.next_stop_id
-            || stop.name.trim().is_empty()
-            || stop.train_limit == 0
-            || sim
-                .rail_piece_geometry(stop.target.edge)
-                .is_none_or(|geometry| {
-                    !(0..=geometry.length_fixed).contains(&stop.target.distance_fixed)
-                })
-        {
-            return Err(SimValidationError::InvalidTrainStop { stop_id: *stop_id });
-        }
-    }
     for (stock_id, stock) in &sim.rolling_stock.stock {
         let invalid = || SimValidationError::InvalidRollingStock {
             stock_id: *stock_id,
@@ -127,7 +113,7 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
                 .any(|entry| entry.stop_name.trim().is_empty())
             || train
                 .scheduled_stop
-                .is_some_and(|stop| !sim.rolling_stock.stops.contains_key(&stop))
+                .is_some_and(|stop| !sim.entities.train_stops.contains_key(&stop))
         {
             return Err(invalid());
         }

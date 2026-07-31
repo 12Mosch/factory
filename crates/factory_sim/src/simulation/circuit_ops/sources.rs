@@ -39,10 +39,74 @@ impl Simulation {
             }
         }
 
+        self.publish_stopped_train_cargo(&mut networks);
         self.publish_constant_combinators(&mut networks);
         self.publish_stored_combinator_outputs(&mut networks);
 
         self.circuits.networks = networks;
+    }
+
+    /// Publishes what each stopped train is carrying onto the stop it is
+    /// standing at.
+    ///
+    /// Driven from the *trains* rather than from the stops, which is the
+    /// difference between one walk over the world's trains per tick and one per
+    /// wired stop. A train knows which stop it claimed, so the stop it publishes
+    /// to is a lookup; asked the other way round — "which train is standing
+    /// here?" — every stop would have to search every train, and a railway with
+    /// twenty wired stations and twenty trains would pay four hundred times over
+    /// for an answer twenty walks could give.
+    ///
+    /// Only a train that has *arrived* counts. One still on its way has claimed
+    /// this platform but is nowhere near it, and publishing its cargo would have
+    /// a station reporting goods that are still out on the main line.
+    ///
+    /// Two trains standing at one stop — which a train limit above one allows —
+    /// report the sum of what they carry, because that is what is standing
+    /// there. Nothing here picks one of them, so no answer depends on which
+    /// train happened to arrive first.
+    fn publish_stopped_train_cargo(&self, networks: &mut [SignalSet]) {
+        if self.entities.train_stops.is_empty() {
+            return;
+        }
+        for train in self.rolling_stock.trains() {
+            let Some(stop_id) = train
+                .scheduled_stop
+                .filter(|_| train.schedule_arrival_tick.is_some())
+            else {
+                continue;
+            };
+            // The same two gates the loop above applies: the prototype has to
+            // offer a contents reading, and the player has to have asked for it.
+            if !self
+                .entities
+                .circuit_entities
+                .get(&stop_id)
+                .is_some_and(|state| state.read_contents)
+                || !self
+                    .entities
+                    .placed_entity(stop_id)
+                    .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+                    .and_then(|prototype| prototype.circuit_connector)
+                    .is_some_and(|connector| connector.reads_contents)
+            {
+                continue;
+            }
+            let node = CircuitNode::new(stop_id, ConnectorPort::Single);
+            let cargo = self.train_cargo(train.id);
+            for (&item_id, &count) in &cargo.items {
+                self.publish(networks, node, SignalId::Item(item_id), count);
+            }
+            for (&fluid_id, &milliunits) in &cargo.fluids {
+                let units = u64::try_from(milliunits).unwrap_or(0) / FLUID_MILLIUNITS_PER_UNIT;
+                self.publish(
+                    networks,
+                    node,
+                    SignalId::Fluid(fluid_id),
+                    signal_value_from_count(units),
+                );
+            }
+        }
     }
 
     /// Adds one entity's readable contents onto the networks at `node`.
@@ -199,7 +263,11 @@ impl Simulation {
             // read at the station it is stopped in, not off the wagon.
             | EntityKind::Locomotive
             | EntityKind::CargoWagon
-            | EntityKind::FluidWagon => {}
+            | EntityKind::FluidWagon
+            // A stop does report what is standing at it, but it is published by
+            // `publish_stopped_train_cargo` rather than here: the question is
+            // one the *trains* answer cheaply and the stops answer by searching.
+            | EntityKind::TrainStop => {}
         }
     }
 

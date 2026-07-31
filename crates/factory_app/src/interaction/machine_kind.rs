@@ -21,6 +21,9 @@ pub(crate) enum OpenMachineKind {
     ConstantCombinator,
     ArithmeticCombinator,
     DeciderCombinator,
+    /// A named stop beside the track: its name, its train limit, and the
+    /// circuit controls every connectable entity gets.
+    TrainStop,
     /// An entity whose only configurable surface is its circuit connector
     /// (belts, pumps, tanks, accumulators, lamps). Without this the player
     /// would have no way to reach their conditions.
@@ -59,6 +62,7 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
             EntityKind::ConstantCombinator => Some(OpenMachineKind::ConstantCombinator),
             EntityKind::ArithmeticCombinator => Some(OpenMachineKind::ArithmeticCombinator),
             EntityKind::DeciderCombinator => Some(OpenMachineKind::DeciderCombinator),
+            EntityKind::TrainStop => Some(OpenMachineKind::TrainStop),
             EntityKind::Inserter => sim
                 .entities()
                 .placed_entity(entity_id)

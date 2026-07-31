@@ -38,6 +38,9 @@ pub fn remove(sim: &mut Simulation, entity_id: EntityId) -> Option<PlacedEntity>
     // wires are lost along with the entity's contents, but the neighbors must
     // still be unlinked.
     sim.unlink_circuit_wires(entity_id);
+    // Before the state goes: a stop's name is what schedules ask for, and the
+    // trains pointing at it have to be told while it is still there to read.
+    sim.forget_train_stop(entity_id);
     let removed = sim.entities.remove_placed_entity(entity_id);
     if let Some(removed) = &removed {
         sim.unregister_pollution_emitter(entity_id);

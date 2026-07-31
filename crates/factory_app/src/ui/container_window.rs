@@ -23,6 +23,7 @@ use crate::ui::machine_indicators::{
 };
 use crate::ui::module_panel::{module_slot_count, spawn_module_panel};
 use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
+use crate::ui::train_stop_panel::spawn_train_stop_panel;
 use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_window};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +150,7 @@ fn spawn_container_window_contents(
                 spawn_arithmetic_combinator_panel(machine_panel);
             }
             OpenMachineKind::DeciderCombinator => spawn_decider_combinator_panel(machine_panel),
+            OpenMachineKind::TrainStop => spawn_train_stop_panel(machine_panel),
             // Circuit-only entities get no other panel, so the heading below
             // carries the entity name.
             OpenMachineKind::Circuit => {
@@ -244,6 +246,8 @@ fn machine_panel_width(kind: OpenMachineKind) -> f32 {
         | OpenMachineKind::NuclearReactor
         | OpenMachineKind::HeatBuffer
         | OpenMachineKind::Inserter
+        // The stop's rows carry a caption, a stepper, and a signal button.
+        | OpenMachineKind::TrainStop
         | OpenMachineKind::Circuit => 260.0,
     }
 }

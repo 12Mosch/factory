@@ -404,6 +404,12 @@ fn slot_value(sim: &Simulation, entity_id: EntityId, slot: SignalSlot) -> SlotVa
             sim.circuit_entity_state(entity_id)
                 .and_then(|state| state.output_signal),
         ),
+        // The stop's own panel draws this one; it is here so the shared picker
+        // can report what the slot currently holds.
+        SignalSlot::TrainStopLimit => SlotValue::Signal(
+            sim.train_stop(entity_id)
+                .and_then(|state| state.train_limit_signal),
+        ),
         SignalSlot::ConstantSlot(index) => SlotValue::Signal(
             factory_sim::entity_access::constant_combinator_state(sim, entity_id)
                 .and_then(|state| state.slots.get(index))

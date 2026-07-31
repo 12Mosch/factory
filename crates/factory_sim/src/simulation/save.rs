@@ -73,7 +73,13 @@ use bincode::Options;
 // than sharing v39 with the stops above: that version already describes a
 // released format, and a save written here holds both changes rather than
 // either.
-pub const SAVE_VERSION: u32 = 40;
+// v41: a train stop became a placed entity rather than a mark held by the
+// rolling-stock subsystem. Its name, train limit, and the channel that limit may
+// be read from join the entity state registry; the mark it puts on the track is
+// derived with the rail graph and no longer saved, and a train's claim on a stop
+// names that entity. Wait conditions gained a comparison against the signals
+// reaching the stop, which is what the connector on it is for.
+pub const SAVE_VERSION: u32 = 41;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

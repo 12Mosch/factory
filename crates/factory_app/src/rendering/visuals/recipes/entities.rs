@@ -13,7 +13,7 @@ use super::power::{
 use super::production::{
     assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers,
 };
-use super::rails::{rail_layers, rail_signal_layers};
+use super::rails::{rail_layers, rail_signal_layers, train_stop_layers};
 use crate::rendering::visuals::EntityVisualStyle;
 use crate::rendering::visuals::layers::{VisualLayer, VisualLayerBuilder};
 
@@ -77,6 +77,7 @@ pub(super) fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
                 rail_signal_layers(&mut builder, style, kind);
             }
         }
+        EntityKind::TrainStop => train_stop_layers(&mut builder, style),
         // Rolling stock has no placed-entity sprite to build layers for.
         EntityKind::Locomotive | EntityKind::CargoWagon | EntityKind::FluidWagon => {}
         EntityKind::ResourcePatch => {}
