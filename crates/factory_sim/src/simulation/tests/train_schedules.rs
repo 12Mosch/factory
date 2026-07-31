@@ -9,7 +9,9 @@
 //! together.
 
 use super::super::*;
-use super::rolling_stock::{fuel_train, place_stock, world_with_rail_run};
+use super::rolling_stock::{
+    fuel_train, place_stock, unlock_with_prerequisites, world_with_rail_run,
+};
 use crate::rolling_stock::{
     Train, TrainId, TrainSchedule, TrainScheduleEntry, TrainThrottle, TrainWaitCondition,
     TrainWaitConditionGroup,
@@ -971,6 +973,250 @@ fn a_stop_publishes_what_the_train_standing_at_it_carries() {
     );
 }
 
+/// Tanks are read the same way wagons are, and in the same whole units the
+/// fluid UI and every other tank's connector report — a tank holding a fraction
+/// of a unit reads as nothing rather than as a thousand of something.
+#[test]
+fn a_stop_publishes_the_fluid_the_tanks_standing_at_it_hold() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    // A fluid wagon sits behind a technology of its own that a locomotive does
+    // not need, and placement goes through the ordinary gate.
+    unlock_with_prerequisites(&mut sim, "fluid_wagon");
+    let tanker = place_stock(&mut sim, &rails, 6, "fluid_wagon").expect("the tank wagon fits");
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    let water = factory_data::BasePrototypeIds::from_catalog(&sim.world.prototypes)
+        .fluids
+        .water;
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    let red = virtual_signal(&sim, "signal_red");
+    wire_constant_source(&mut sim, north, red, 1);
+    sim.set_circuit_read_contents(north, true)
+        .expect("a stop reads contents");
+    assert_eq!(
+        sim.rolling_stock_piece(tanker).expect("placed").train,
+        train_id,
+        "the tank wagon coupled onto the locomotive"
+    );
+    // Not a round number of units, so the reading has to be the truncated
+    // quotient rather than anything that happens to agree with it.
+    fill_tank(&mut sim, tanker, water, 12_345_678);
+
+    run_until_waiting(&mut sim, train_id, north);
+    sim.tick();
+
+    assert_eq!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Fluid(water)),
+        12_345,
+        "the tank standing here holds twelve thousand three hundred and forty five whole units"
+    );
+}
+
+/// A train that has booked the platform is not standing on it. Publishing on the
+/// strength of the claim alone would have a station reporting goods that are
+/// still out on the main line, and a train rolling through a station it does not
+/// serve would flicker onto the network as it passed.
+#[test]
+fn a_stop_publishes_nothing_for_a_train_that_has_not_arrived() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let wagon = place_stock(&mut sim, &rails, 6, "cargo_wagon").expect("the wagon fits");
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    let coal = factory_data::item_id_by_name(&sim.world.prototypes, "coal");
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    let red = virtual_signal(&sim, "signal_red");
+    wire_constant_source(&mut sim, north, red, 1);
+    sim.set_circuit_read_contents(north, true)
+        .expect("a stop reads contents");
+    put_one_item_in_every_slot(&mut sim, wagon);
+
+    // Out on the run with the claim in hand: the stop is spoken for and the
+    // cargo is aboard, but the train is not there yet.
+    run_until(&mut sim, |sim| {
+        sim.train(train_id)
+            .is_some_and(|train| train.scheduled_stop == Some(north) && train.velocity > 0)
+    });
+    assert!(
+        !train(&sim, train_id).is_waiting_at_scheduled_stop(),
+        "the train is still on its way"
+    );
+    assert_eq!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Item(coal)),
+        0,
+        "a claim is not an arrival, and an empty platform carries no cargo"
+    );
+
+    // And once it does arrive, the same network says so.
+    run_until_waiting(&mut sim, train_id, north);
+    sim.tick();
+    assert!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Item(coal))
+            > 0,
+        "the train that arrived publishes what it carries"
+    );
+}
+
+/// What a stop reports is what is standing there now. A train that has left
+/// takes its cargo off the network with it, rather than leaving the last
+/// reading behind for a factory to act on.
+#[test]
+fn a_departed_train_takes_its_cargo_off_the_stop_s_network() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let wagon = place_stock(&mut sim, &rails, 6, "cargo_wagon").expect("the wagon fits");
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    stop_at(&mut sim, "South", rails[3], 1);
+    let coal = factory_data::item_id_by_name(&sim.world.prototypes, "coal");
+    sim.set_train_schedule(
+        train_id,
+        schedule(vec![
+            entry("North", &[TrainWaitCondition::TimePassed { ticks: 120 }]),
+            entry("South", &[FOREVER]),
+        ]),
+    )
+    .expect("the train takes a schedule");
+    let red = virtual_signal(&sim, "signal_red");
+    wire_constant_source(&mut sim, north, red, 1);
+    sim.set_circuit_read_contents(north, true)
+        .expect("a stop reads contents");
+    put_one_item_in_every_slot(&mut sim, wagon);
+
+    run_until_waiting(&mut sim, train_id, north);
+    sim.tick();
+    assert!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Item(coal))
+            > 0,
+        "the train is standing at the stop with a loaded wagon"
+    );
+
+    // The wait runs out and the train leaves for the other station.
+    run_until(&mut sim, |sim| {
+        sim.train(train_id)
+            .is_some_and(|train| !train.is_waiting_at_scheduled_stop())
+    });
+    sim.tick();
+
+    assert_eq!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Item(coal)),
+        0,
+        "an empty platform reads as an empty signal set, not as the last train's cargo"
+    );
+    assert_eq!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Virtual(match red {
+                crate::circuits::SignalId::Virtual(id) => id,
+                _ => unreachable!("the fixture wires a virtual signal"),
+            })),
+        1,
+        "the wire itself is untouched: only the cargo went away"
+    );
+}
+
+/// The reading is opt-in the way every other connector's is. A stop wired for
+/// control alone publishes nothing, and turning the toggle on is what puts the
+/// cargo onto the network.
+#[test]
+fn a_stop_not_asked_to_read_contents_publishes_nothing() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let wagon = place_stock(&mut sim, &rails, 6, "cargo_wagon").expect("the wagon fits");
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    let coal = factory_data::item_id_by_name(&sim.world.prototypes, "coal");
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    let red = virtual_signal(&sim, "signal_red");
+    wire_constant_source(&mut sim, north, red, 1);
+    put_one_item_in_every_slot(&mut sim, wagon);
+
+    run_until_waiting(&mut sim, train_id, north);
+    sim.tick();
+    assert_eq!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Item(coal)),
+        0,
+        "a stop nobody asked for a reading from keeps the cargo to itself"
+    );
+
+    sim.set_circuit_read_contents(north, true)
+        .expect("a stop reads contents");
+    sim.tick();
+
+    assert!(
+        sim.circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Item(coal))
+            > 0,
+        "asked for the reading, the same standing train publishes it"
+    );
+}
+
+/// Everything a player configured on a stop is durable, and so is the reading it
+/// takes off the train standing at it. The networks themselves are runtime state
+/// rebuilt from the wires, so the check that matters is that the loaded world
+/// publishes the same cargo onto them without being told what was there before.
+#[test]
+fn a_stop_and_what_it_publishes_survive_a_save_and_load() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let wagon = place_stock(&mut sim, &rails, 6, "cargo_wagon").expect("the wagon fits");
+    let north = stop_at(&mut sim, "North", rails[20], 2);
+    let coal = factory_data::item_id_by_name(&sim.world.prototypes, "coal");
+    let red = virtual_signal(&sim, "signal_red");
+    wire_constant_source(&mut sim, north, red, 1);
+    sim.set_circuit_read_contents(north, true)
+        .expect("a stop reads contents");
+    sim.set_train_stop_limit_signal(north, Some(red))
+        .expect("a stop takes a limit channel");
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    put_one_item_in_every_slot(&mut sim, wagon);
+    run_until_waiting(&mut sim, train_id, north);
+    sim.tick();
+    let published = sim
+        .circuit_signals_at_entity(north)
+        .value(crate::circuits::SignalId::Item(coal));
+    assert!(published > 0, "the standing train is being read");
+
+    let before = sim.state_hash();
+    let bytes = crate::save_to_bytes(&sim).expect("a world with a wired stop saves");
+    let mut loaded = crate::load_from_bytes(&bytes).expect("a world with a wired stop loads");
+
+    assert_eq!(
+        before,
+        loaded.state_hash(),
+        "a stop's name, limit, and limit channel are part of what the world is"
+    );
+    let stop = loaded.train_stop(north).expect("the stop came back");
+    assert_eq!(stop.name, "North");
+    assert_eq!(stop.train_limit, 2);
+    assert_eq!(stop.train_limit_signal, Some(red));
+    assert!(
+        loaded
+            .circuit_entity_state(north)
+            .is_some_and(|state| state.read_contents),
+        "the toggle came back with it"
+    );
+    assert_eq!(
+        loaded
+            .circuit_signals_at_entity(north)
+            .value(crate::circuits::SignalId::Item(coal)),
+        published,
+        "the reloaded stop reads the train still standing at it"
+    );
+
+    loaded.tick();
+    sim.tick();
+    assert_eq!(
+        sim.state_hash(),
+        loaded.state_hash(),
+        "the two worlds go on being the same world"
+    );
+    loaded
+        .validate()
+        .expect("a reloaded wired stop is a valid world");
+}
+
 /// A limit read off a network is how a station closes itself: a yard that is
 /// full stops taking trains rather than queueing them at its throat.
 #[test]
@@ -1116,6 +1362,30 @@ fn put_one_item_in_every_slot(
     stock_id: crate::rolling_stock::RollingStockId,
 ) {
     set_every_slot(sim, stock_id, 1);
+}
+
+/// Puts `milliunits` of `fluid` into a tank wagon's one tank.
+///
+/// Set on the stock directly, the way the slot helpers above load a cargo
+/// wagon: what these tests are about is the reading, and pumping the fluid in
+/// through a network would only add a fixture that `a_pump_fills_a_stopped_
+/// fluid_wagon` already covers.
+fn fill_tank(
+    sim: &mut Simulation,
+    stock_id: crate::rolling_stock::RollingStockId,
+    fluid: factory_data::FluidId,
+    milliunits: u64,
+) {
+    let tank = sim
+        .rolling_stock
+        .stock
+        .get_mut(&stock_id)
+        .expect("the wagon is placed")
+        .fluid_boxes
+        .first_mut()
+        .expect("a fluid wagon declares a tank");
+    tank.fluid_id = Some(fluid);
+    tank.amount_milliunits = milliunits;
 }
 
 /// Fills every slot of a wagon to its stack size.

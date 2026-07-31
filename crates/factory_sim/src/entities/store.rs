@@ -266,6 +266,7 @@ mod tests {
     };
     use crate::radar::RadarState;
     use crate::robots::RoboportState;
+    use crate::rolling_stock::TrainStopState;
     use factory_data::{FluidId, ItemId, RecipeId, TechnologyId, VirtualSignalId};
 
     #[test]
@@ -297,8 +298,11 @@ mod tests {
         // inventory in the registry carries one (empty until a player filters
         // something).
         // v41: train stop state was appended — the name a schedule asks for,
-        // the train limit, and the channel that limit may be read from.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x3786_7855_ebb3_1077;
+        // the train limit, and the channel that limit may be read from. The
+        // fixture gained a populated stop afterwards, so those three fields are
+        // pinned rather than only the map that holds them; the save format did
+        // not change with it.
+        const EXPECTED_LAYOUT_HASH: u64 = 0x15c2_9868_4bbe_d5e3;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -336,9 +340,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(30);
+        let mut store = EntityStore::empty(31);
 
-        for raw in 1..=29 {
+        for raw in 1..=30 {
             let id = EntityId::new(raw);
             let tile = raw as i64;
             store.entities.push(SimEntity {
@@ -626,6 +630,17 @@ mod tests {
                 robots: test_inventory(vec![Some(test_stack(iron, 3)), None]),
                 materials: test_inventory(vec![Some(test_stack(copper, 2))]),
                 charge_energy_joules: 7_654_321,
+            },
+        );
+
+        // A named stop with a hand-set limit *and* a channel to read one off,
+        // so the layout pins all three fields and the `Some` arm of the signal.
+        store.train_stops.insert(
+            EntityId::new(30),
+            TrainStopState {
+                name: "North Yard".to_string(),
+                train_limit: 3,
+                train_limit_signal: Some(SignalId::Virtual(VirtualSignalId::new(2))),
             },
         );
 
