@@ -84,7 +84,19 @@ impl Simulation {
         let graph = build_rail_graph_from_pieces(&self.rail_piece_inputs());
         let blocks = build_rail_blocks(&graph, &self.rail_signal_inputs());
         let stop_targets = self.train_stop_targets();
+        // Which platforms are somewhere else than they were, taken before the
+        // new marks are written. Walked over the *previous* marks, so a stop
+        // whose mark this build is the first to know about — every stop, on the
+        // first build of a loaded world — is not reported as having moved.
+        let moved = self
+            .rails
+            .stop_targets
+            .iter()
+            .filter(|(stop, previous)| stop_targets.get(stop) != Some(previous))
+            .map(|(stop, _)| *stop)
+            .collect::<Vec<_>>();
         self.rails.replace_graph(graph, blocks, stop_targets);
+        self.release_claims_on_moved_stops(&moved);
         #[cfg(test)]
         {
             self.rails.graph_rebuilds += 1;

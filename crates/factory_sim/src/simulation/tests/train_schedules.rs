@@ -442,6 +442,110 @@ fn renaming_one_of_two_stops_sharing_a_name_leaves_schedules_alone() {
     );
 }
 
+/// Renaming the platform a train has booked is not a change to that train's
+/// orders: its entry still names the old station, and running on to the renamed
+/// platform would have it load at a station its schedule no longer asks for.
+/// The place goes back, and the train takes one that still answers.
+#[test]
+fn renaming_a_platform_a_train_booked_sends_it_to_one_that_still_answers() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let far = stop_at(&mut sim, "North", rails[20], 1);
+    let near = stop_at(&mut sim, "North", rails[16], 1);
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    run_until_waiting(&mut sim, train_id, near);
+
+    sim.rename_train_stop(near, "Depot")
+        .expect("the stop takes a name");
+
+    let renamed = train(&sim, train_id);
+    assert_eq!(
+        renamed.scheduled_stop, None,
+        "the platform it booked no longer answers to the entry it is serving"
+    );
+    assert_eq!(renamed.schedule_arrival_tick, None, "so it is not waiting");
+    assert_eq!(
+        renamed.schedule.entries[0].stop_name, "North",
+        "the other platform still bears the name, so the schedule is untouched"
+    );
+    run_until_waiting(&mut sim, train_id, far);
+    sim.validate()
+        .expect("a train sent to the other platform is a valid world");
+}
+
+/// The mirror of it: renaming the *last* platform of a station renames the
+/// station, so the schedules follow it and the train already on its way keeps
+/// the place it booked rather than being sent round again for no reason.
+#[test]
+fn renaming_the_last_platform_of_a_station_keeps_the_train_that_booked_it() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    run_until_waiting(&mut sim, train_id, north);
+
+    sim.rename_train_stop(north, "Depot")
+        .expect("the stop takes a name");
+
+    let renamed = train(&sim, train_id);
+    assert_eq!(
+        renamed.scheduled_stop,
+        Some(north),
+        "the station was renamed, not closed"
+    );
+    assert!(renamed.is_waiting_at_scheduled_stop());
+    assert_eq!(renamed.schedule.entries[0].stop_name, "Depot");
+}
+
+/// A platform that moves takes the train booked into it with it.
+///
+/// The mark is derived from the track beside the stop, so it can move while the
+/// stop never does — here by pulling up the rail it marked and leaving it the
+/// one beside that. A train aimed at the old mark would run out its old route
+/// and call that an arrival on track the station no longer marks, so the claim
+/// goes back and the train is aimed again.
+#[test]
+fn a_stop_that_binds_to_other_track_aims_its_train_again() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    // One tick to book the platform and be given a route to it. The train is
+    // still a third of the way down the run, so the rail that goes is track it
+    // is heading for rather than track it is standing on.
+    sim.tick();
+    assert_eq!(train(&sim, train_id).scheduled_stop, Some(north));
+    let marked = sim.train_stop_target(north).expect("the stop marks a rail");
+
+    crate::entity_mutation::remove(&mut sim, rails[20]);
+    sim.tick();
+
+    let moved = sim
+        .train_stop_target(north)
+        .expect("the rail beside the mined one is still within reach");
+    assert_ne!(moved, marked, "the platform is on other track now");
+    // Given back and taken again within the tick, because the schedule pass
+    // runs straight after the rebuild that moved the mark: what is worth
+    // asserting is not that the claim blinked but that the train is aimed at
+    // where the platform is *now*.
+    let aimed = train(&sim, train_id);
+    assert_eq!(aimed.scheduled_stop, Some(north));
+    assert_eq!(
+        aimed.destination,
+        Some(moved),
+        "the train is sent to the mark that moved, not the one it was given"
+    );
+
+    // And it goes on to serve the station rather than idling at the mark it was
+    // given. It comes to rest short of the new mark rather than on it, because
+    // pulling up that rail put the end of the line within half a train of it —
+    // the limitation `advance_train_route` names — so what is asserted is that
+    // it arrives at all.
+    run_until_waiting(&mut sim, train_id, north);
+    sim.validate()
+        .expect("a train at a platform that moved is a valid world");
+}
+
 /// A stop's mark on the track is derived from the rail beside it, so mining
 /// that rail leaves the stop standing with nothing to serve — rather than
 /// leaving it pointing at track that is not there, which is the state a durable

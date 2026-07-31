@@ -157,17 +157,72 @@ impl Simulation {
             .get_mut(&entity_id)
             .ok_or(TrainControlError::MissingStop(entity_id))?;
         let old = std::mem::replace(&mut state.name, name.clone());
-        if old == name || self.stop_name_exists(&old) {
+        if old == name {
             return Ok(());
         }
-        for train in self.rolling_stock.trains.values_mut() {
-            for entry in &mut train.schedule.entries {
-                if entry.stop_name == old {
-                    entry.stop_name.clone_from(&name);
+        if !self.stop_name_exists(&old) {
+            for train in self.rolling_stock.trains.values_mut() {
+                for entry in &mut train.schedule.entries {
+                    if entry.stop_name == old {
+                        entry.stop_name.clone_from(&name);
+                    }
                 }
             }
         }
+        // A claim is a booking made against the name an entry asked for, so a
+        // platform renamed out from under the train that booked it is a train
+        // running to a station its schedule no longer names — and loading there
+        // when it arrives. It gives the place back and books one that does
+        // answer to its entry instead.
+        //
+        // Which is exactly the trains whose entry does *not* now name this stop.
+        // When the rewrite above ran, every entry that asked for the old name
+        // asks for the new one, so the trains already heading here keep their
+        // place and nothing moves: renaming the last platform of a station is
+        // renaming the station, not closing it.
+        self.release_stop_claims(entity_id, |train| {
+            train
+                .schedule
+                .current_entry()
+                .is_some_and(|entry| entry.stop_name == name)
+        });
         Ok(())
+    }
+
+    /// Gives up every claim on `stop` that `keep` does not vouch for, and stops
+    /// the trains that lose one.
+    ///
+    /// A train that loses its claim loses the plan that went with it: the
+    /// destination was this stop's mark, and the route was measured to it. Both
+    /// go, and the train brakes — the schedule pass books it somewhere on one of
+    /// the next ticks, which for a train that still wants this station is this
+    /// very tick.
+    fn release_stop_claims(&mut self, stop: EntityId, keep: impl Fn(&Train) -> bool) {
+        for train in self.rolling_stock.trains.values_mut() {
+            if train.scheduled_stop != Some(stop) || keep(train) {
+                continue;
+            }
+            train.release_scheduled_stop();
+            train.destination = None;
+            train.route = None;
+            train.route_search_exhausted_at = None;
+            train.throttle = TrainThrottle::Brake;
+        }
+    }
+
+    /// Gives up every claim on a stop whose mark has moved to another rail.
+    ///
+    /// A claim aims a train at a point on the track: the destination is that
+    /// point and the route is measured to it. A stop that binds to a different
+    /// rail — because a nearer one was laid beside it — leaves both describing
+    /// where the platform *used* to be, and the train would run out its old
+    /// route and call that an arrival on track the station no longer marks.
+    /// Nothing else catches it: the old rail is still there, so the route is
+    /// still valid track, and only the meaning of it changed.
+    pub(in crate::simulation) fn release_claims_on_moved_stops(&mut self, moved: &[EntityId]) {
+        for stop in moved {
+            self.release_stop_claims(*stop, |_| false);
+        }
     }
 
     /// Sets how many trains may be booked into one stop at a time.

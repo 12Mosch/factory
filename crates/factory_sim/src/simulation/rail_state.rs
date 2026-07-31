@@ -54,12 +54,20 @@ impl Default for RailSubsystem {
 }
 
 impl RailSubsystem {
+    /// Drops what the rebuild will replace, and marks it as owed.
+    ///
+    /// The stop marks are deliberately *not* dropped here. They are what the
+    /// next rebuild compares against to find the platforms that have moved, and
+    /// a train booked into one of those has to be told; clearing them would make
+    /// every stop look newly bound and nothing look moved. Nothing reads them
+    /// while the graph is dirty — [`crate::simulation::Simulation::
+    /// train_stop_target`] says so — so holding a description of the world as it
+    /// was until the rebuild replaces it costs nothing.
     pub(in crate::simulation) fn invalidate(&mut self) {
         self.graph_dirty = true;
         self.graph = RailGraph::default();
         self.blocks = RailBlockPartition::default();
         self.signalling.clear();
-        self.stop_targets.clear();
     }
 
     pub(in crate::simulation) fn replace_graph(
