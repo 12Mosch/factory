@@ -70,15 +70,24 @@ pub(super) fn validate_fluid_box_states(sim: &Simulation) -> Result<(), SimValid
 }
 
 pub(super) fn validate_fluid_network_snapshots(sim: &Simulation) -> Result<(), SimValidationError> {
-    let expected_boxes = sim
+    // Every box the networks must account for. Placed entities always, and
+    // stopped rolling stock as well: a wagon standing at a pump is part of the
+    // network it is being filled from, and one that is moving — or standing
+    // where no pump reaches — is not in a network at all, which is why the
+    // stopped index rather than the whole subsystem is what says so.
+    let mut expected_boxes = sim
         .entities
         .fluid_boxes
         .iter()
         .flat_map(|(entity_id, boxes)| {
-            let entity_id = *entity_id;
-            (0..boxes.len()).map(move |box_index| (entity_id, box_index))
+            let owner = FluidBoxOwner::Entity(*entity_id);
+            (0..boxes.len()).map(move |box_index| (owner, box_index))
         })
         .collect::<BTreeSet<_>>();
+    expected_boxes.extend(
+        sim.networked_rolling_stock_fluid_boxes()
+            .map(|(stock_id, box_index)| (FluidBoxOwner::RollingStock(stock_id), box_index)),
+    );
     let mut networked_boxes = BTreeSet::new();
 
     for (expected_network_id, network) in sim.fluids.networks.iter().enumerate() {
@@ -97,35 +106,42 @@ pub(super) fn validate_fluid_network_snapshots(sim: &Simulation) -> Result<(), S
         let mut filters = BTreeSet::new();
         let mut nonempty_fluids = BTreeSet::new();
         for box_snapshot in &network.boxes {
-            let box_key = (box_snapshot.entity_id, box_snapshot.box_index);
+            let box_key = (box_snapshot.owner, box_snapshot.box_index);
             if !seen_boxes.insert(box_key) || !networked_boxes.insert(box_key) {
                 return Err(SimValidationError::InvalidFluidNetwork {
                     network_id: network.network_id,
                 });
             }
-            let placed = sim.entities.placed_entity(box_snapshot.entity_id).ok_or(
-                SimValidationError::InvalidFluidNetwork {
-                    network_id: network.network_id,
-                },
-            )?;
-            let prototype = sim.world.prototypes.entity(placed.prototype_id).ok_or(
-                SimValidationError::InvalidFluidNetwork {
-                    network_id: network.network_id,
-                },
-            )?;
-            let fluid_box = prototype.fluid_boxes.get(box_snapshot.box_index).ok_or(
-                SimValidationError::InvalidFluidNetwork {
-                    network_id: network.network_id,
-                },
-            )?;
-            let state = sim
-                .entities
+            let invalid = || SimValidationError::InvalidFluidNetwork {
+                network_id: network.network_id,
+            };
+            let prototype_id = match box_snapshot.owner {
+                FluidBoxOwner::Entity(entity_id) => sim
+                    .entities
+                    .placed_entity(entity_id)
+                    .map(|placed| placed.prototype_id),
+                FluidBoxOwner::RollingStock(stock_id) => sim
+                    .rolling_stock
+                    .get(stock_id)
+                    .map(|stock| stock.prototype_id),
+            }
+            .ok_or_else(invalid)?;
+            let prototype = sim
+                .world
+                .prototypes
+                .entity(prototype_id)
+                .ok_or_else(invalid)?;
+            let fluid_box = prototype
                 .fluid_boxes
-                .get(&box_snapshot.entity_id)
-                .and_then(|boxes| boxes.get(box_snapshot.box_index))
-                .ok_or(SimValidationError::InvalidFluidNetwork {
-                    network_id: network.network_id,
-                })?;
+                .get(box_snapshot.box_index)
+                .ok_or_else(invalid)?;
+            let state = sim
+                .fluid_boxes()
+                .get(FluidBoxKey {
+                    owner: box_snapshot.owner,
+                    box_index: box_snapshot.box_index,
+                })
+                .ok_or_else(invalid)?;
 
             if box_snapshot.capacity_milliunits != fluid_box.capacity_milliunits
                 || box_snapshot.amount_milliunits != state.amount_milliunits

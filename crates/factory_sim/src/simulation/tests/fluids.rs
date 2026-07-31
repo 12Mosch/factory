@@ -601,16 +601,10 @@ fn only_mutated_fluid_network_is_invalidated_and_refreshed() {
 
     sim.refresh_fluid_networks_after_dynamic_changes();
     let first_network = sim
-        .fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id: first_pipe,
-            box_index: 0,
-        })
+        .fluid_network_id_for_box_key(FluidBoxKey::entity(first_pipe, 0))
         .expect("first pipe should have a fluid network");
     let second_network = sim
-        .fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id: second_pipe,
-            box_index: 0,
-        })
+        .fluid_network_id_for_box_key(FluidBoxKey::entity(second_pipe, 0))
         .expect("second pipe should have a fluid network");
     assert_ne!(first_network, second_network);
     let unchanged_snapshot = sim.fluid_networks()[second_network as usize].clone();
@@ -879,10 +873,7 @@ fn filtered_empty_network_rejects_wrong_fluid_before_insert() {
     .expect("tank should be placeable");
     sim.ensure_fluid_network_topology();
     let network_id = sim
-        .fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id: tank_id,
-            box_index: 0,
-        })
+        .fluid_network_id_for_box_key(FluidBoxKey::entity(tank_id, 0))
         .expect("tank should be in a fluid network");
 
     assert_eq!(

@@ -35,8 +35,8 @@ use crate::ui::equipment_window::{
     update_equipment_selection_colors, update_equipment_window_text,
 };
 use crate::ui::inventory_panel::{
-    handle_container_slot_clicks, update_container_slot_text,
-    update_inventory_transfer_feedback_text,
+    handle_container_slot_clicks, update_container_slot_reservation_tint,
+    update_container_slot_text, update_inventory_transfer_feedback_text,
 };
 use crate::ui::logistics_panel::{handle_logistic_request_step_buttons, update_logistic_panel};
 use crate::ui::machine_indicators::{update_machine_guidance, update_machine_indicators};
@@ -53,6 +53,7 @@ use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, InventoryTransferFeedback, OpenContainer,
     ProductionStatsWindowState, TechnologyWindowState,
 };
+use crate::ui::rolling_stock_window::{sync_rolling_stock_window, update_rolling_stock_fluid_text};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
@@ -167,6 +168,22 @@ impl Plugin for UiPlugin {
                 Update,
                 update_module_panel
                     .after(sync_container_window)
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                // Beside the container window and under the same ordering: the
+                // two share the slot grid, and only one of them is ever open.
+                (
+                    sync_rolling_stock_window.after(handle_build_menu_buttons),
+                    // After the window may have respawned its buttons, so a
+                    // reservation shows on the frame it is made rather than the
+                    // one after.
+                    update_container_slot_reservation_tint.after(sync_rolling_stock_window),
+                    // A live readout the window deliberately does not rebuild
+                    // for, so it is written after the window has settled.
+                    update_rolling_stock_fluid_text.after(sync_rolling_stock_window),
+                )
                     .in_set(InGameSet),
             )
             .add_systems(

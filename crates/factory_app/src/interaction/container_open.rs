@@ -1,7 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use factory_sim::{EntityId, Simulation};
+use factory_sim::{EntityId, RollingStockId, Simulation};
 
 use crate::build::resources::{BuildPlacementState, PlannerState, PlannerTool};
 use crate::input::panels::{escape_consumed, world_input_blocked};
@@ -73,8 +73,9 @@ pub(crate) fn handle_container_open_input(
         return;
     }
 
-    state.open_container.entity_id =
-        opened_container_after_world_click(&state.sim.read(), cursor_tile);
+    let (entity_id, stock_id) = opened_container_after_world_click(&state.sim.read(), cursor_tile);
+    state.open_container.entity_id = entity_id;
+    state.open_container.rolling_stock = stock_id;
 }
 
 pub(crate) fn handle_container_close_input(
@@ -89,20 +90,44 @@ pub(crate) fn handle_container_close_input(
         return;
     }
     if keyboard.just_pressed(KeyCode::Escape) {
-        open_container.entity_id = None;
+        open_container.close();
     }
 }
 
+/// What a click on `cursor_tile` opens: an entity's window, a piece of rolling
+/// stock's, or neither. At most one is ever `Some`.
+///
+/// Rolling stock is checked first. A wagon stands *on* a rail, and the rail is
+/// an ordinary placed entity, so the occupancy lookup would answer with the
+/// track under the train — which opens nothing, and would leave a player
+/// clicking a wagon with no window at all.
+///
+/// The stopped-stock index answers for a parked train in one lookup, which is
+/// the case a player clicks by far the most often: trains are opened at
+/// stations. The walk behind it is what catches a train still rolling, which
+/// the index deliberately does not hold — a moving wagon can still be opened,
+/// it simply cannot be reached by an inserter.
 pub fn opened_container_after_world_click(
     sim: &Simulation,
     cursor_tile: Option<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>,
-) -> Option<EntityId> {
-    let (x, y) = cursor_tile?;
-    let entity_id = sim.entities().occupancy().entity_at(x, y)?;
+) -> (Option<EntityId>, Option<RollingStockId>) {
+    let Some((x, y)) = cursor_tile else {
+        return (None, None);
+    };
+    if let Some(stock_id) = sim.stopped_rolling_stock_at_tile(x, y).or_else(|| {
+        sim.rolling_stock()
+            .find(|stock| sim.rolling_stock_covers_tile(stock.id, x, y))
+            .map(|stock| stock.id)
+    }) {
+        return (None, Some(stock_id));
+    }
 
-    open_machine_kind(sim, entity_id)
-        .is_some()
-        .then_some(entity_id)
+    let opened = sim
+        .entities()
+        .occupancy()
+        .entity_at(x, y)
+        .filter(|entity_id| open_machine_kind(sim, *entity_id).is_some());
+    (opened, None)
 }
 
 pub fn container_open_input_allowed(build_state: &BuildPlacementState) -> bool {

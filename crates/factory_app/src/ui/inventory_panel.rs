@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
     AssemblerError, BoilerError, ContainerError, FurnaceError, InserterError, MiningDrillError,
-    ModuleError, NuclearReactorError, RoboportError, SimCommand, SlotTransferError,
+    ModuleError, NuclearReactorError, RoboportError, RollingStockTransferError, SimCommand,
+    SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -14,9 +15,21 @@ use crate::ui::resources::{InventoryTransferFeedback, OpenContainer};
 pub use factory_sim::InventoryPanel;
 
 #[derive(Component)]
-pub(crate) struct ContainerSlotButton {
+pub struct ContainerSlotButton {
     panel: InventoryPanel,
     slot_index: usize,
+}
+
+impl ContainerSlotButton {
+    /// Which panel this button belongs to, for tests that check how a slot is
+    /// drawn rather than what clicking it does.
+    pub fn panel(&self) -> InventoryPanel {
+        self.panel
+    }
+
+    pub fn slot_index(&self) -> usize {
+        self.slot_index
+    }
 }
 
 #[derive(Component)]
@@ -109,6 +122,18 @@ pub(crate) fn spawn_labeled_slot(
         });
 }
 
+/// An ordinary slot.
+const SLOT_BACKGROUND: Color = Color::srgba(0.14, 0.14, 0.15, 0.96);
+
+/// A wagon cargo slot a player has reserved for one item.
+///
+/// A reservation has to be visible while the slot is *full*, because filtering
+/// a slot to what it already holds is the only reservation the gesture can
+/// make: without this, shift-clicking would look like it had done nothing at
+/// all. The name of the reserved item shows in the slot once it empties, where
+/// there is room for it; until then this is what says the slot is spoken for.
+const SLOT_RESERVED_BACKGROUND: Color = Color::srgba(0.26, 0.21, 0.09, 0.96);
+
 pub(crate) fn spawn_slot_button(
     grid: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     panel: InventoryPanel,
@@ -124,7 +149,7 @@ pub(crate) fn spawn_slot_button(
             padding: UiRect::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.14, 0.14, 0.15, 0.96)),
+        BackgroundColor(SLOT_BACKGROUND),
         ContainerSlotButton { panel, slot_index },
     ))
     .with_child((
@@ -138,15 +163,39 @@ pub(crate) fn spawn_slot_button(
 
 pub(crate) fn handle_container_slot_clicks(
     mut interactions: ContainerSlotInteractionQuery,
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut feedback: ResMut<InventoryTransferFeedback>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
+    let shift_held = keyboard.as_deref().is_some_and(|keyboard| {
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
+    });
+
     for (interaction, button) in &mut interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
 
+        // The two windows share this grid, so which command a click becomes
+        // follows from what is open rather than from the button.
+        if let Some(stock_id) = open_container.rolling_stock {
+            if shift_held && button.panel == InventoryPanel::RollingStockCargo {
+                commands.write(SimCommandRequest(rolling_stock_filter_command(
+                    &sim.read(),
+                    stock_id,
+                    button.slot_index,
+                )));
+                continue;
+            }
+            commands.write(SimCommandRequest(SimCommand::TransferRollingStockSlot {
+                stock_id,
+                panel: button.panel,
+                slot_index: button.slot_index,
+            }));
+            continue;
+        }
         let Some(entity_id) = open_container.entity_id else {
             feedback.message = Some("No open container".to_string());
             continue;
@@ -157,6 +206,41 @@ pub(crate) fn handle_container_slot_clicks(
             panel: button.panel,
             slot_index: button.slot_index,
         }));
+    }
+}
+
+/// What shift-clicking a wagon cargo slot means: lock the slot to what it is
+/// holding, or release a slot that is already locked.
+///
+/// One gesture for both directions because they are the same intent — "this
+/// slot is mine for iron plate" and "it is not any more" — and because the slot
+/// itself says which one it is: a filtered slot can only be unfiltered, and an
+/// occupied unfiltered slot can only be filtered to what it holds. That leaves
+/// exactly one thing an empty unfiltered slot could mean, and the simulation
+/// refuses a filter that contradicts a slot's contents anyway, so nothing here
+/// has to ask the player to choose an item from a list.
+fn rolling_stock_filter_command(
+    sim: &factory_sim::Simulation,
+    stock_id: factory_sim::RollingStockId,
+    slot_index: usize,
+) -> SimCommand {
+    let filter = if factory_sim::entity_access::rolling_stock_slot_filter(sim, stock_id, slot_index)
+        .is_some()
+    {
+        None
+    } else {
+        factory_sim::entity_access::rolling_stock_panel_slot(
+            sim,
+            Some(stock_id),
+            InventoryPanel::RollingStockCargo,
+            slot_index,
+        )
+        .map(|stack| stack.item_id())
+    };
+    SimCommand::SetRollingStockSlotFilter {
+        stock_id,
+        slot_index,
+        filter,
     }
 }
 
@@ -182,20 +266,90 @@ pub(crate) fn update_container_slot_text(
     let sim = sim.read();
 
     for (marker, mut text) in &mut texts {
-        let stack = factory_sim::entity_access::inventory_panel_slot(
-            &sim,
-            open_container.entity_id,
-            marker.panel,
-            marker.slot_index,
-        );
-        text.0 = stack
-            .map(|stack| format_item_stack(stack, sim.catalog()))
-            .unwrap_or_default();
+        let stack = if open_container.rolling_stock.is_some() {
+            factory_sim::entity_access::rolling_stock_panel_slot(
+                &sim,
+                open_container.rolling_stock,
+                marker.panel,
+                marker.slot_index,
+            )
+        } else {
+            factory_sim::entity_access::inventory_panel_slot(
+                &sim,
+                open_container.entity_id,
+                marker.panel,
+                marker.slot_index,
+            )
+        };
+        text.0 = match stack {
+            Some(stack) => format_item_stack(stack, sim.catalog()),
+            // An emptied slot that a player locked still belongs to its item, so
+            // it keeps saying so in parentheses rather than going blank and
+            // looking like any other free slot.
+            None => {
+                rolling_stock_slot_filter_label(&sim, &open_container, marker).unwrap_or_default()
+            }
+        };
     }
+}
+
+/// Tints the wagon cargo slots a player has reserved.
+///
+/// Kept apart from the slot text because the two live on different entities —
+/// the text on the button's child, the colour on the button itself — and
+/// because the colour is the half of the answer that survives the slot being
+/// full.
+pub(crate) fn update_container_slot_reservation_tint(
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut buttons: Query<(&ContainerSlotButton, &mut BackgroundColor)>,
+) {
+    let sim = sim.read();
+
+    for (button, mut background) in &mut buttons {
+        let reserved = button.panel == InventoryPanel::RollingStockCargo
+            && open_container.rolling_stock.is_some_and(|stock_id| {
+                factory_sim::entity_access::rolling_stock_slot_filter(
+                    &sim,
+                    stock_id,
+                    button.slot_index,
+                )
+                .is_some()
+            });
+        let wanted = if reserved {
+            SLOT_RESERVED_BACKGROUND
+        } else {
+            SLOT_BACKGROUND
+        };
+        if background.0 != wanted {
+            background.0 = wanted;
+        }
+    }
+}
+
+/// The parenthesised item name an empty but filtered wagon cargo slot shows.
+fn rolling_stock_slot_filter_label(
+    sim: &factory_sim::Simulation,
+    open_container: &OpenContainer,
+    marker: &ContainerSlotText,
+) -> Option<String> {
+    if marker.panel != InventoryPanel::RollingStockCargo {
+        return None;
+    }
+    let filter = factory_sim::entity_access::rolling_stock_slot_filter(
+        sim,
+        open_container.rolling_stock?,
+        marker.slot_index,
+    )?;
+    Some(format!(
+        "({})",
+        format_item_display_name(sim.catalog(), filter)
+    ))
 }
 
 pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransferError) -> String {
     match error {
+        SlotTransferError::RollingStock(error) => rolling_stock_error_message(catalog, error),
         SlotTransferError::Transfer(error) => container_error_message(catalog, error),
         SlotTransferError::MiningDrill(error) => mining_drill_error_message(catalog, error),
         SlotTransferError::Furnace(error) => furnace_error_message(catalog, error),
@@ -205,6 +359,24 @@ pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransf
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
         SlotTransferError::Inserter(error) => inserter_error_message(catalog, error),
         SlotTransferError::Module(error) => module_error_message(catalog, error),
+    }
+}
+
+fn rolling_stock_error_message(
+    catalog: &PrototypeCatalog,
+    error: RollingStockTransferError,
+) -> String {
+    match error {
+        RollingStockTransferError::MissingStock(_) => "Wagon unavailable".to_string(),
+        RollingStockTransferError::NoInventory(_) => "No cargo space".to_string(),
+        RollingStockTransferError::NoFuelSlot(_) => "No fuel slot".to_string(),
+        RollingStockTransferError::InvalidItem(item_id) => wrong_item_message(catalog, item_id),
+        RollingStockTransferError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        RollingStockTransferError::EmptySlot { .. } => "Empty slot".to_string(),
+        RollingStockTransferError::SlotNotEmpty { .. } => "Empty the slot first".to_string(),
+        RollingStockTransferError::InsufficientSpace => "No space".to_string(),
+        RollingStockTransferError::UnknownItem => "Unknown item".to_string(),
+        RollingStockTransferError::UnsupportedPanel => "Nothing to transfer".to_string(),
     }
 }
 

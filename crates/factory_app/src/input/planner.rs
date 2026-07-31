@@ -127,7 +127,7 @@ pub(crate) fn activate_planner_tool(
     planner.set_tool(tool);
     build_state.selected = None;
     build_state.last_status = Default::default();
-    open_container.entity_id = None;
+    open_container.close();
 }
 
 #[derive(SystemParam)]

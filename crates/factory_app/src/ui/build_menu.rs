@@ -122,7 +122,7 @@ pub(crate) fn handle_build_menu_buttons(
         } else if toggle {
             state.menu.open_fresh();
             state.build_state.selected = None;
-            state.open_container.entity_id = None;
+            state.open_container.close();
         }
         return;
     }

@@ -13,6 +13,7 @@ mod mining_drills;
 mod modules;
 mod power_entities;
 mod roboports;
+mod rolling_stock;
 mod routing;
 mod transfer;
 
@@ -23,7 +24,8 @@ pub use inserters::*;
 pub use mining_drills::*;
 pub use power_entities::*;
 pub use roboports::*;
-pub use routing::transfer_container_slot;
+pub use rolling_stock::*;
+pub use routing::{transfer_container_slot, transfer_rolling_stock_slot};
 pub use transfer::TransferOutcome;
 
 use modules::*;

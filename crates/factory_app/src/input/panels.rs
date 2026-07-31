@@ -168,7 +168,7 @@ pub(crate) fn handle_panel_input(
         resources.map.open = !resources.map.open;
         if resources.map.open {
             resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
+            resources.open_container.close();
             if resources.map.follow_player {
                 let (x, y) = resources.sim.read().player().position_tiles();
                 resources.map.center_tile = Vec2::new(x, y);
@@ -179,7 +179,7 @@ pub(crate) fn handle_panel_input(
         resources.stats.open = !resources.stats.open;
         if resources.stats.open {
             resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
+            resources.open_container.close();
         }
     }
     let control_held =
@@ -188,21 +188,21 @@ pub(crate) fn handle_panel_input(
         resources.crafting.open = !resources.crafting.open;
         if resources.crafting.open {
             resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
+            resources.open_container.close();
         }
     }
     if keyboard.just_pressed(KeyCode::KeyO) {
         resources.audio_settings.open = !resources.audio_settings.open;
         if resources.audio_settings.open {
             resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
+            resources.open_container.close();
         }
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
         resources.enemy_settings.open = !resources.enemy_settings.open;
         if resources.enemy_settings.open {
             resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
+            resources.open_container.close();
         }
     }
     if keyboard.just_pressed(KeyCode::KeyE) {
@@ -211,7 +211,7 @@ pub(crate) fn handle_panel_input(
         resources.equipment.feedback = None;
         if resources.equipment.open {
             resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
+            resources.open_container.close();
         }
     }
     if keyboard.just_pressed(KeyCode::KeyB) && control_held {
@@ -220,13 +220,13 @@ pub(crate) fn handle_panel_input(
         } else {
             resources.blueprint_library.open = true;
             resources.build_state.selected = None;
-            resources.open_container.entity_id = None;
+            resources.open_container.close();
         }
     }
     if keyboard.just_pressed(KeyCode::KeyB) && !control_held {
         resources.build_menu.open_fresh();
         resources.build_state.selected = None;
-        resources.open_container.entity_id = None;
+        resources.open_container.close();
     }
     if keyboard.just_pressed(KeyCode::F3) {
         resources.settings.debug_reveal_all = !resources.settings.debug_reveal_all;
@@ -263,8 +263,8 @@ pub(crate) fn handle_panel_input(
                 resources.blueprint_library.close();
             }
             resources.input_state.escape_consumed = true;
-        } else if resources.open_container.entity_id.is_some() {
-            resources.open_container.entity_id = None;
+        } else if resources.open_container.is_open() {
+            resources.open_container.close();
             resources.input_state.escape_consumed = true;
         } else if resources.planner.tool != PlannerTool::None {
             resources.planner.set_tool(PlannerTool::None);

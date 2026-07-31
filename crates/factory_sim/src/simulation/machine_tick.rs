@@ -14,6 +14,8 @@ impl Simulation {
         MachineTickContext {
             world: &mut self.world,
             entities: &mut self.entities,
+            rolling_stock: &mut self.rolling_stock,
+            stopped_stock: &self.stopped_stock_index,
             transport: &mut self.transport,
             research: &mut self.research,
             power: &mut self.power,

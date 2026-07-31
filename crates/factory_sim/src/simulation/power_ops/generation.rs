@@ -46,10 +46,9 @@ impl Simulation {
             let Some(engine_prototype) = self.steam_engine_prototype(engine_id) else {
                 continue;
             };
-            let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-                entity_id: engine_id,
-                box_index: 0,
-            }) else {
+            let Some(steam_network_id) =
+                self.fluid_network_id_for_box_key(FluidBoxKey::entity(engine_id, 0))
+            else {
                 continue;
             };
             let Some(remaining_steam) =
@@ -121,10 +120,7 @@ impl Simulation {
                         per_tick_milliunits(prototype.steam_consumption_per_second_milliunits) > 0
                     })
                 && self
-                    .fluid_network_id_for_box_key(FluidBoxKey {
-                        entity_id: engine_id,
-                        box_index: 0,
-                    })
+                    .fluid_network_id_for_box_key(FluidBoxKey::entity(engine_id, 0))
                     .and_then(|steam_network_id| {
                         self.fluids
                             .topology_networks

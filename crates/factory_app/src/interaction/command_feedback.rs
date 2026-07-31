@@ -59,11 +59,25 @@ pub(crate) fn handle_sim_command_results(
         }
 
         match (&outcome.command, &outcome.result) {
-            (SimCommand::TransferSlot { .. }, Ok(_)) => {
+            // A wagon slot is a slot: clicking one that is empty, or full, or
+            // holds something a locomotive will not burn, has to say so the same
+            // way clicking a chest's does. Both wagon commands already fail as
+            // `SimCommandError::Transfer`, so they answer with the same message.
+            (
+                SimCommand::TransferSlot { .. }
+                | SimCommand::TransferRollingStockSlot { .. }
+                | SimCommand::SetRollingStockSlotFilter { .. },
+                Ok(_),
+            ) => {
                 feedback.message = None;
                 sounds.write(SoundEvent::UiClick);
             }
-            (SimCommand::TransferSlot { .. }, Err(SimCommandError::Transfer(error))) => {
+            (
+                SimCommand::TransferSlot { .. }
+                | SimCommand::TransferRollingStockSlot { .. }
+                | SimCommand::SetRollingStockSlotFilter { .. },
+                Err(SimCommandError::Transfer(error)),
+            ) => {
                 feedback.message = Some(slot_transfer_error_message(sim.read().catalog(), *error));
             }
             (SimCommand::StartManualCraft(_), Ok(_))

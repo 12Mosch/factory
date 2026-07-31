@@ -382,6 +382,33 @@ impl TrainSchedule {
             self.current = (self.current + 1) % self.entries.len();
         }
     }
+
+    /// Drops every entry naming `name`, and leaves the cursor on the first entry
+    /// that survives at or after where it was — wrapping to the top when
+    /// everything from the cursor on has gone, the way [`Self::advance`] would
+    /// have taken it there.
+    ///
+    /// Every entry rather than the current one, because the cursor wraps: an
+    /// entry naming a station nobody answers to is a train with nowhere to go
+    /// whenever it comes round, not only the once. Stepping past it would put
+    /// the train back on it a lap later, which is the same dead end reached
+    /// slower.
+    pub fn remove_entries_named(&mut self, name: &str) {
+        let cursor = self.current;
+        let mut kept = Vec::with_capacity(self.entries.len());
+        let mut moved = None;
+        for (index, entry) in self.entries.drain(..).enumerate() {
+            if entry.stop_name == name {
+                continue;
+            }
+            if moved.is_none() && index >= cursor {
+                moved = Some(kept.len());
+            }
+            kept.push(entry);
+        }
+        self.entries = kept;
+        self.current = moved.unwrap_or(0);
+    }
 }
 
 impl TrainRoute {
@@ -673,6 +700,10 @@ impl RollingStockSubsystem {
         self.stock.get(&id)
     }
 
+    pub(crate) fn get_mut(&mut self, id: RollingStockId) -> Option<&mut RollingStock> {
+        self.stock.get_mut(&id)
+    }
+
     pub fn train_count(&self) -> usize {
         self.trains.len()
     }
@@ -736,6 +767,34 @@ pub enum RollingStockMiningError {
     },
     /// The prototype declares no build item, so there is nothing to recover.
     MissingBuildItem(EntityPrototypeId),
+}
+
+/// Why a player transfer into or out of rolling stock failed.
+///
+/// Separate from [`crate::logistics::ContainerError`] because the endpoint is:
+/// a container error names an [`EntityId`], and a wagon has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RollingStockTransferError {
+    MissingStock(RollingStockId),
+    /// The piece carries no cargo — a locomotive or a fluid wagon.
+    NoInventory(RollingStockId),
+    /// The piece has no burner, so nothing to fuel.
+    NoFuelSlot(RollingStockId),
+    InvalidItem(factory_data::ItemId),
+    InvalidSlot {
+        slot_index: usize,
+    },
+    EmptySlot {
+        slot_index: usize,
+    },
+    /// A filter was asked for on a slot holding something else.
+    SlotNotEmpty {
+        slot_index: usize,
+    },
+    InsufficientSpace,
+    UnknownItem,
+    /// The window asked for a panel this piece of stock does not have.
+    UnsupportedPanel,
 }
 
 /// Why a train would not take a drive command.

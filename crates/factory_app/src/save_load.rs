@@ -471,7 +471,7 @@ pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile:
     // so the same number in the loaded one is a different train entirely.
     state.train_selection.train = None;
     state.train_input.clear();
-    state.open_container.entity_id = None;
+    state.open_container.close();
     *state.equipment_window = EquipmentWindowState::default();
     state.window.open = false;
     state.autosave.last_autosave_tick = tick;

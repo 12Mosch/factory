@@ -5,7 +5,7 @@ use super::network_access::{
     fluid_network_available_capacity_for_fluid, fluid_network_fluid_id,
     fluid_network_id_for_box_key, fluid_network_total_for_fluid,
 };
-use super::types::FluidBoxKey;
+use super::types::{FluidBoxKey, FluidBoxes};
 
 impl Simulation {
     pub(in crate::simulation) fn advance_fluids_before_power(&mut self) {
@@ -38,6 +38,7 @@ impl Simulation {
             let Some(transfer) = pump_fluid_transfer(
                 &self.world.prototypes,
                 &self.entities,
+                self.fluid_boxes(),
                 &self.fluids,
                 entity_id,
             ) else {
@@ -89,10 +90,9 @@ impl Simulation {
             else {
                 continue;
             };
-            let Some(network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-                entity_id,
-                box_index: 0,
-            }) else {
+            let Some(network_id) =
+                self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 0))
+            else {
                 continue;
             };
 
@@ -123,16 +123,14 @@ impl Simulation {
             };
             let water_amount = per_tick_milliunits(boiler.water_consumption_per_second_milliunits);
             let steam_amount = per_tick_milliunits(boiler.steam_output_per_second_milliunits);
-            let Some(water_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-                entity_id,
-                box_index: 0,
-            }) else {
+            let Some(water_network_id) =
+                self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 0))
+            else {
                 continue;
             };
-            let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-                entity_id,
-                box_index: 1,
-            }) else {
+            let Some(steam_network_id) =
+                self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 1))
+            else {
                 continue;
             };
             if self.fluid_network_total_for_fluid(water_network_id, water) < water_amount
@@ -209,40 +207,30 @@ pub(in crate::simulation) struct PumpFluidTransfer {
 pub(in crate::simulation) fn pump_fluid_transfer(
     catalog: &PrototypeCatalog,
     entities: &EntityStore,
+    boxes: FluidBoxes<'_>,
     fluids: &FluidSubsystem,
     entity_id: EntityId,
 ) -> Option<PumpFluidTransfer> {
     let placed = entities.placed_entity(entity_id)?;
     let pump = catalog.entity(placed.prototype_id)?.pump.as_ref()?;
-    let input_network_id = fluid_network_id_for_box_key(
-        fluids,
-        FluidBoxKey {
-            entity_id,
-            box_index: 0,
-        },
-    )?;
-    let output_network_id = fluid_network_id_for_box_key(
-        fluids,
-        FluidBoxKey {
-            entity_id,
-            box_index: 1,
-        },
-    )?;
+    let input_network_id = fluid_network_id_for_box_key(fluids, FluidBoxKey::entity(entity_id, 0))?;
+    let output_network_id =
+        fluid_network_id_for_box_key(fluids, FluidBoxKey::entity(entity_id, 1))?;
     if input_network_id == output_network_id {
         return None;
     }
 
-    let fluid_id = fluid_network_fluid_id(fluids, entities, input_network_id)?;
+    let fluid_id = fluid_network_fluid_id(fluids, boxes, input_network_id)?;
     let amount_milliunits = per_tick_milliunits(pump.pumping_speed_per_second_milliunits)
         .min(fluid_network_total_for_fluid(
             fluids,
-            entities,
+            boxes,
             input_network_id,
             fluid_id,
         ))
         .min(fluid_network_available_capacity_for_fluid(
             fluids,
-            entities,
+            boxes,
             output_network_id,
             fluid_id,
         ));

@@ -565,16 +565,14 @@ impl Simulation {
     ) -> Option<MachineStatus> {
         // An unnetworked box is itself a blocker, so neither lookup may use `?`:
         // `None` from this helper means "the fluids are fine".
-        let Some(water_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 0,
-        }) else {
+        let Some(water_network_id) =
+            self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 0))
+        else {
             return Some(MachineStatus::NoFluid);
         };
-        let Some(steam_network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 1,
-        }) else {
+        let Some(steam_network_id) =
+            self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 1))
+        else {
             return Some(MachineStatus::NoFluid);
         };
 
@@ -706,10 +704,8 @@ impl Simulation {
         let Some(engine) = self.steam_engine_prototype(entity_id) else {
             return MachineStatus::Idle;
         };
-        let Some(network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 0,
-        }) else {
+        let Some(network_id) = self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 0))
+        else {
             return MachineStatus::NoFluid;
         };
         let required = per_tick_milliunits(engine.steam_consumption_per_second_milliunits);
@@ -720,10 +716,8 @@ impl Simulation {
     }
 
     fn offshore_pump_status(&self, entity_id: EntityId, water: FluidId) -> MachineStatus {
-        let Some(network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-            entity_id,
-            box_index: 0,
-        }) else {
+        let Some(network_id) = self.fluid_network_id_for_box_key(FluidBoxKey::entity(entity_id, 0))
+        else {
             return MachineStatus::NoFluid;
         };
         if self.fluid_network_available_capacity_for_fluid(network_id, water) == 0 {
@@ -799,10 +793,9 @@ impl Simulation {
             let Some(engine) = self.steam_engine_prototype(*entity_id) else {
                 return false;
             };
-            let Some(network_id) = self.fluid_network_id_for_box_key(FluidBoxKey {
-                entity_id: *entity_id,
-                box_index: 0,
-            }) else {
+            let Some(network_id) =
+                self.fluid_network_id_for_box_key(FluidBoxKey::entity(*entity_id, 0))
+            else {
                 return true;
             };
             let required = per_tick_milliunits(engine.steam_consumption_per_second_milliunits);

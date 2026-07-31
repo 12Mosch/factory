@@ -292,7 +292,10 @@ mod tests {
         // were appended for heat networks.
         // v30: roboport state was appended for robot networks.
         // v33: logistic chest configuration was appended.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xc2d4_9fe8_4a0b_54d7;
+        // v40: inventories gained a per-slot filter row, so every stored
+        // inventory in the registry carries one (empty until a player filters
+        // something).
+        const EXPECTED_LAYOUT_HASH: u64 = 0x6a2c_17a4_fadb_b337;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");

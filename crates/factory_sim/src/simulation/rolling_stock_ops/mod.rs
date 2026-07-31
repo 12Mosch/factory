@@ -25,11 +25,16 @@
 //! per-train step is O(1), and a coarser schedule would need its own
 //! sub-stepping to keep stopping points exact once signals and stations land.
 
+mod loading;
 mod motion;
 mod placement;
 mod routing;
 mod traversal;
 
+pub(in crate::simulation) use loading::{
+    StoppedStock, StoppedStockIndex, StoppedStockMut, drop_stock_item, stock_can_accept,
+    stock_pickup_item, take_stock_item,
+};
 pub use motion::braking_distance_fixed;
 pub(in crate::simulation) use routing::{TrainRouting, push_stock_rails};
 pub(in crate::simulation) use traversal::{TravelOutcome, travel, world_point};
@@ -43,6 +48,7 @@ use crate::rolling_stock::{
 use crate::rolling_stock::{RailTarget, TrainSchedule, TrainStop, TrainStopId};
 use crate::simulation::*;
 use std::collections::BTreeSet;
+use std::ops::ControlFlow;
 
 use self::motion::stepped_velocity;
 
@@ -183,13 +189,17 @@ impl Simulation {
     /// claim any of them held on it, and — once no stop answers to its name at
     /// all — the schedule entries which can no longer be served.
     ///
-    /// The cursor is what would otherwise strand a train. A train that had
-    /// claimed the removed stop has no claim and no destination, and its current
-    /// entry names a station that no longer exists anywhere, so neither the
-    /// arrival check nor the assignment beneath it can fire again: the train
-    /// idles on that entry for ever with no escape. Stepping past the entry is
-    /// the escape, and it is only taken when the name has left the world — while
-    /// another stop still bears it, the train simply goes there instead.
+    /// The entries are what would otherwise strand a train. An entry naming a
+    /// station that no longer exists anywhere can be neither arrived at nor
+    /// claimed, so a train that reaches it idles on it for ever with no escape.
+    /// Dropping such entries is the escape, and it is only taken when the name
+    /// has left the world — while another stop still bears it, the train simply
+    /// goes there instead. It mirrors what renaming the last stop of a name
+    /// already does to the schedules pointing at it.
+    ///
+    /// Every matching entry rather than the one being served, because the
+    /// schedule is a loop: an entry left behind further down it is the same dead
+    /// end, reached a lap later.
     fn forget_train_stop(&mut self, stop: &TrainStop) {
         let name_remains = self.stop_name_exists(&stop.name);
         for train in self.rolling_stock.trains.values_mut() {
@@ -200,13 +210,8 @@ impl Simulation {
                 train.route_search_exhausted_at = None;
                 train.throttle = TrainThrottle::Brake;
             }
-            if !name_remains
-                && train
-                    .schedule
-                    .current_entry()
-                    .is_some_and(|entry| entry.stop_name == stop.name)
-            {
-                train.schedule.advance();
+            if !name_remains {
+                train.schedule.remove_entries_named(&stop.name);
             }
         }
     }
@@ -324,31 +329,23 @@ impl Simulation {
 
     /// Whether a piece of stock lies over `(x, y)`.
     ///
-    /// Walked along the body rather than tested against the rectangle its two
-    /// ends span: a piece taking a quarter turn spans a square whose far
-    /// corners its arc never crosses, and a cursor in one of those corners
-    /// would otherwise pick up — and drive, or mine — a wagon that is visibly
-    /// somewhere else. Samples are half a tile apart, short enough that
-    /// consecutive ones cannot skip a tile at any curvature a rail can declare,
-    /// and this lives here rather than in the caller because the track geometry
-    /// the answer follows from does.
-    ///
-    /// A cursor query, never a per-tick one.
+    /// A cursor query, never a per-tick one: the pre-filter below is what keeps
+    /// a held right-click from walking every wagon in the world, and the
+    /// per-tick answer to the same question comes from the stopped-stock index
+    /// instead.
     pub fn rolling_stock_covers_tile(&self, id: RollingStockId, x: i64, y: i64) -> bool {
         let Some(stock) = self.rolling_stock.get(id) else {
             return false;
         };
-        let Some(half) = self.rolling_stock_half_length(stock) else {
+        let Some(length) = self.rolling_stock_half_length(stock).map(|half| half * 2) else {
             return false;
         };
-        let length = half * 2;
         // Cheap reject first. Every point of the body is within the piece's own
         // length of its centre along the track, so it is within that distance
-        // in a straight line too — a tile further out cannot be covered, and
-        // this is what keeps a held right-click from walking every wagon in the
-        // world. Deliberately a distance from the centre rather than the box
-        // the two ends span: a body across an S-bend leaves that box, and a
-        // pre-filter that is merely usually right would hide stock instead of
+        // in a straight line too — a tile further out cannot be covered.
+        // Deliberately a distance from the centre rather than the box the two
+        // ends span: a body across an S-bend leaves that box, and a pre-filter
+        // that is merely usually right would hide stock instead of
         // over-reporting it.
         let Some(center) = self.rolling_stock_world_point(id) else {
             return false;
@@ -359,15 +356,51 @@ impl Simulation {
             return false;
         }
 
+        let mut covered = false;
+        self.for_each_rolling_stock_tile(stock, |tile| {
+            covered = tile == (x, y);
+            if covered {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        covered
+    }
+
+    /// Visits every tile a piece of stock lies over, in order from its back end
+    /// to its front, repeats included.
+    ///
+    /// Walked along the body rather than derived from the rectangle its two
+    /// ends span: a piece taking a quarter turn spans a square whose far
+    /// corners its arc never crosses, and a tile in one of those corners is not
+    /// one an inserter should be able to reach into. Samples are half a tile
+    /// apart, short enough that consecutive ones cannot skip a tile at any
+    /// curvature a rail can declare.
+    ///
+    /// The one place the "which tiles is this wagon on" question is answered,
+    /// so the cursor and the stopped-stock index cannot disagree about where a
+    /// wagon is.
+    pub(in crate::simulation) fn for_each_rolling_stock_tile(
+        &self,
+        stock: &RollingStock,
+        mut visit: impl FnMut((WorldTileCoord, WorldTileCoord)) -> ControlFlow<()>,
+    ) {
+        let Some(half) = self.rolling_stock_half_length(stock) else {
+            return;
+        };
+        let length = half * 2;
         let back = travel(&self.rails.graph, stock.position, -half).position;
         let mut travelled = 0;
         loop {
             let sampled = travel(&self.rails.graph, back, travelled).position;
-            if world_point(self, sampled).is_some_and(|point| point.tile() == (x, y)) {
-                return true;
+            if let Some(point) = world_point(self, sampled)
+                && visit(point.tile()).is_break()
+            {
+                return;
             }
             if travelled >= length {
-                return false;
+                return;
             }
             travelled = (travelled + crate::POSITION_SCALE / 2).min(length);
         }
@@ -507,6 +540,10 @@ impl Simulation {
         for train_id in train_ids {
             self.advance_train(train_id);
         }
+        // Last, once every train is where this tick leaves it: the transfers
+        // later in the tick resolve wagons by tile out of this index, and a
+        // train that arrived is a train they may load from the moment it stops.
+        self.refresh_stopped_stock_index();
     }
 
     /// Advances station waits and assigns unclaimed destinations before route
@@ -708,6 +745,13 @@ impl Simulation {
         let travelled = step.travelled_fixed;
         let blocked = step.limit.is_some();
         if travelled != 0 {
+            // The train has stirred, so whatever tiles it was indexed under are
+            // now a description of where it used to be. Dropped before the
+            // positions are written rather than after, so no window exists in
+            // which the index and the stock disagree — and dropped on *any*
+            // movement, including a train that starts and stops inside one tick,
+            // which is the case a "is it stationary now?" check would miss.
+            self.forget_stopped_train(train_id);
             for stock_id in &stock_ids {
                 let Some(stock) = self.rolling_stock.stock.get(stock_id) else {
                     continue;

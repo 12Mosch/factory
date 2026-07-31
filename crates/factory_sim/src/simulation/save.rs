@@ -65,7 +65,15 @@ use bincode::Options;
 // how long it has been waiting — and how long since its cargo last changed —
 // decides when it leaves, so a save that rebuilt any of it would depart trains at
 // different moments than the world it was saved from.
-pub const SAVE_VERSION: u32 = 39;
+// v40: wagons joined the factory. Inventories gained per-slot item filters, so
+// every saved inventory carries a filter row (empty for all the ones nobody has
+// filtered); fluid network box snapshots name their holder rather than an entity
+// id, because a stopped fluid wagon is part of the network at the pump it stands
+// at and a wagon has no entity id to be named by. A number of its own rather
+// than sharing v39 with the stops above: that version already describes a
+// released format, and a save written here holds both changes rather than
+// either.
+pub const SAVE_VERSION: u32 = 40;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -392,6 +400,7 @@ impl SimulationSnapshotOwned {
             heat: HeatSubsystem::from_networks(self.heat_networks),
             rails: RailSubsystem::default(),
             train_routing: rolling_stock_ops::TrainRouting::default(),
+            stopped_stock_index: rolling_stock_ops::StoppedStockIndex::default(),
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
             rolling_stock: self.rolling_stock,
@@ -414,13 +423,25 @@ impl SimulationSnapshotOwned {
             transport: TransportLaneCache::default(),
         };
         sim.transport.initialize_item_tracking(&sim.entities);
+        // The rail graph is a derived cache like the circuit topology, so a
+        // loaded world rebuilds it before anything can ask what connects — and
+        // before the stopped-stock index, which is read off the geometry it
+        // holds.
+        sim.ensure_rail_graph();
+        // Ahead of the fluid topology, because a stopped fluid wagon is part of
+        // the network at the pump it is standing at: a topology built before the
+        // index would leave the wagon out, and the saved network snapshots —
+        // taken from a world that had it in — would not describe it.
+        sim.refresh_stopped_stock_index();
         sim.ensure_fluid_network_topology();
+        // The snapshots are re-derived rather than trusted, because the index
+        // above may have joined a wagon onto a network and cleared them. A valid
+        // save re-derives exactly what it stored: the topology is a function of
+        // the same entities, rails, and stock positions it was saved from.
+        sim.refresh_fluid_network_snapshots();
         // Robot coverage queries read the topology cache, so rebuild it before
         // anything can ask a loaded world which network covers a tile.
         sim.ensure_robot_network_topology();
-        // The rail graph is a derived cache like the circuit topology, so a
-        // loaded world rebuilds it before anything can ask what connects.
-        sim.ensure_rail_graph();
         sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();

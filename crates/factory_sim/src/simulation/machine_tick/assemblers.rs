@@ -110,10 +110,8 @@ impl MachineTickContext<'_> {
                     output_copies,
                 );
                 for &box_index in ingredient_boxes.iter().chain(&product_boxes) {
-                    self.fluids.mark_box_dirty(FluidBoxKey {
-                        entity_id,
-                        box_index,
-                    });
+                    self.fluids
+                        .mark_box_dirty(FluidBoxKey::entity(entity_id, box_index));
                 }
             }
             // Recipe slices borrow prototypes here, so record through the field

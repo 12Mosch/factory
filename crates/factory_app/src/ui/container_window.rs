@@ -42,7 +42,7 @@ pub(crate) fn sync_container_window(
         .entity_id
         .and_then(|entity_id| open_machine_kind(&sim.read(), entity_id));
     if open_container.entity_id.is_some() && open_kind.is_none() {
-        open_container.entity_id = None;
+        open_container.close();
     }
     let open = open_container.entity_id.zip(open_kind);
 
@@ -58,9 +58,16 @@ pub(crate) fn sync_container_window(
         container_window_root,
         |root, snapshot| spawn_container_window_contents(root, &sim.read(), snapshot),
     );
-    // Transfer feedback belongs to the container it was produced in; drop it
-    // whenever the window closed or switched to another container.
-    if result != WindowSync::Unchanged {
+    // Transfer feedback belongs to the container it was produced in, so a
+    // window that spawns or switches subject starts with none.
+    //
+    // Only those two, deliberately: `Closed` is reported on every frame no
+    // window is open, and this window is closed for the whole time the
+    // rolling-stock window beside it is showing something — clearing on it
+    // would wipe that window's message the frame after it was set. Nothing
+    // stale survives, because the text this feedback is drawn in is despawned
+    // with the window that owned it and the next window to open clears it.
+    if matches!(result, WindowSync::Spawned | WindowSync::Rebuilt) {
         feedback.message = None;
     }
 }

@@ -261,6 +261,10 @@ pub fn inventory_panel_slot(
             .filter(|_| slot_index == INSERTER_FUEL_SLOT_INDEX)
             .and_then(MachineEnergy::fuel_slot)
             .and_then(|slot| slot.stack()),
+        // Rolling stock is not a placed entity, so an entity-keyed lookup has
+        // nothing to answer with; the wagon window reads
+        // `rolling_stock_panel_slot` instead.
+        InventoryPanel::RollingStockCargo | InventoryPanel::RollingStockFuel => None,
         InventoryPanel::AssemblerInput => entity_id
             .and_then(|id| sim.entities.assembler_state(id).ok())
             .and_then(|state| state.input_inventory.slot(slot_index)),
@@ -296,6 +300,7 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::FurnaceInput | InventoryPanel::FurnaceOutput => entity_id
             .and_then(|id| sim.entities.furnace_state(id).ok())
             .map_or(0, |_| 1),
+        InventoryPanel::RollingStockCargo | InventoryPanel::RollingStockFuel => 0,
         InventoryPanel::BoilerFuel => entity_id
             .and_then(|id| sim.entities.boiler_state(id).ok())
             .map_or(0, |_| 1),
@@ -320,5 +325,67 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::Modules => entity_id
             .and_then(|id| module_slots(sim, id).ok())
             .map_or(0, ModuleSlots::len),
+    }
+}
+
+/// What a rolling-stock window shows in one slot.
+///
+/// The stock counterpart of [`inventory_panel_slot`]: the wagon window draws
+/// the player's inventory beside a piece of rolling stock, so `Player` answers
+/// the same way it does there and the two stock panels answer from the piece.
+pub fn rolling_stock_panel_slot(
+    sim: &Simulation,
+    stock_id: Option<RollingStockId>,
+    panel: InventoryPanel,
+    slot_index: usize,
+) -> Option<ItemStack> {
+    match panel {
+        InventoryPanel::Player => sim.player_inventory.slot(slot_index),
+        InventoryPanel::RollingStockCargo => sim
+            .rolling_stock_piece(stock_id?)?
+            .inventory
+            .as_ref()?
+            .slot(slot_index),
+        InventoryPanel::RollingStockFuel => sim
+            .rolling_stock_piece(stock_id?)?
+            .energy
+            .as_ref()
+            .filter(|_| slot_index == ROLLING_STOCK_FUEL_SLOT_INDEX)?
+            .fuel_slot
+            .stack(),
+        _ => None,
+    }
+}
+
+/// The filter set on one cargo slot of a piece of rolling stock, if any.
+pub fn rolling_stock_slot_filter(
+    sim: &Simulation,
+    stock_id: RollingStockId,
+    slot_index: usize,
+) -> Option<ItemId> {
+    sim.rolling_stock_piece(stock_id)?
+        .inventory
+        .as_ref()?
+        .filter(slot_index)
+}
+
+pub fn rolling_stock_panel_slot_count(
+    sim: &Simulation,
+    stock_id: Option<RollingStockId>,
+    panel: InventoryPanel,
+) -> usize {
+    let Some(stock_id) = stock_id else {
+        return 0;
+    };
+    match panel {
+        InventoryPanel::Player => sim.player_inventory.slots().len(),
+        InventoryPanel::RollingStockCargo => sim
+            .rolling_stock_piece(stock_id)
+            .and_then(|stock| stock.inventory.as_ref())
+            .map_or(0, |inventory| inventory.slots().len()),
+        InventoryPanel::RollingStockFuel => sim
+            .rolling_stock_piece(stock_id)
+            .map_or(0, |stock| usize::from(stock.energy.is_some())),
+        _ => 0,
     }
 }

@@ -1,5 +1,6 @@
 use super::super::*;
 use super::support::*;
+use crate::simulation::rolling_stock_ops::StoppedStockMut;
 
 #[test]
 fn belt_moves_item_to_next_segment() {
@@ -394,6 +395,7 @@ fn unblocked_jam_wakes_upstream_one_lane_per_tick() {
     try_take_inserter_source_item(
         &sim.world.prototypes,
         &mut sim.entities,
+        &mut StoppedStockMut::new(&sim.stopped_stock_index, &mut sim.rolling_stock),
         &mut sim.transport,
         pickup_tile,
         iron_ore,

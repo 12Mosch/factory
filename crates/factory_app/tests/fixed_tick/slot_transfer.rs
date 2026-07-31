@@ -4,8 +4,11 @@ use super::common::{
 };
 use bevy::prelude::*;
 use factory_app::resources::SimResource;
-use factory_app::ui::inventory_panel::{InventoryPanel, slot_transfer_error_message};
+use factory_app::ui::inventory_panel::{
+    ContainerSlotButton, InventoryPanel, slot_transfer_error_message,
+};
 use factory_app::ui::resources::{InventoryTransferFeedback, OpenContainer};
+use factory_app::ui::rolling_stock_window::RollingStockFluidText;
 use factory_sim::{
     ContainerError, FurnaceError, Inventory, ItemStack, Simulation, SlotTransferError,
 };
@@ -369,4 +372,236 @@ fn press_button_with_child_text(app: &mut App, target_text: &str) {
         .get_mut::<Interaction>()
         .expect("button should have interaction state");
     *interaction = Interaction::Pressed;
+}
+
+/// Shift-clicking a wagon cargo slot reserves it for what it holds, and
+/// shift-clicking a reserved slot releases it.
+///
+/// The gesture is the only way a player reaches the slot filters that insertion
+/// honours, so it is exercised through the real click path rather than through
+/// the simulation command it produces.
+#[test]
+fn shift_clicking_a_wagon_cargo_slot_sets_and_clears_its_filter() {
+    let mut app = super::common::test_app(std::time::Duration::from_millis(16));
+    let (stock_id, iron_plate) = {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let straight = entity_id_by_name(sim.catalog(), "rail_straight");
+        let wagon = entity_id_by_name(sim.catalog(), "cargo_wagon");
+        let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
+        let (x, y) = first_buildable_rect(&sim, straight);
+        for index in 0..6 {
+            place_test_entity(&mut sim, straight, x, y + index * 2);
+        }
+        sim.tick();
+        let stock_id = sim
+            .place_rolling_stock(wagon, x, y + 4)
+            .expect("a wagon should fit on a six-piece run");
+        // One plate in the wagon's first cargo slot, put there the way a player
+        // would, so the slot has something for the gesture to reserve it for.
+        *sim.player_inventory_mut() = Inventory::player();
+        set_player_inventory_slot(&mut sim, 0, iron_plate, 1);
+        factory_sim::entity_transfer::player_slot_to_rolling_stock(&mut sim, stock_id, 0)
+            .expect("a cargo wagon takes iron plate from the player");
+        (stock_id, iron_plate)
+    };
+    app.world_mut()
+        .resource_mut::<OpenContainer>()
+        .rolling_stock = Some(stock_id);
+
+    app.update();
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
+    press_button_with_child_text(&mut app, "IP\n1");
+    app.update();
+    app.update();
+
+    assert_eq!(
+        factory_sim::entity_access::rolling_stock_slot_filter(
+            &app.world().resource::<SimResource>().read(),
+            stock_id,
+            0
+        ),
+        Some(iron_plate),
+        "shift-clicking an occupied slot reserves it for what it holds"
+    );
+    // A reservation made on a slot that still holds its stack has to be visible
+    // on that slot, or the gesture looks like it did nothing.
+    app.update();
+    assert_ne!(
+        wagon_cargo_slot_background(&mut app, 0),
+        wagon_cargo_slot_background(&mut app, 1),
+        "a reserved slot should not look like the free slot beside it"
+    );
+
+    // The slot still holds its stack, so the same gesture releases it rather
+    // than trying to filter it again. Setting the filter rebuilt the window, and
+    // a freshly spawned slot button only gets its text on the frame after it
+    // appears, so give it that frame before looking for it again.
+    app.update();
+    press_button_with_child_text(&mut app, "IP\n1");
+    app.update();
+    app.update();
+
+    assert_eq!(
+        factory_sim::entity_access::rolling_stock_slot_filter(
+            &app.world().resource::<SimResource>().read(),
+            stock_id,
+            0
+        ),
+        None,
+        "shift-clicking a reserved slot releases it"
+    );
+    app.update();
+    assert_eq!(
+        wagon_cargo_slot_background(&mut app, 0),
+        wagon_cargo_slot_background(&mut app, 1),
+        "a released slot should look like any other"
+    );
+}
+
+/// A wagon slot is a slot, so a click that cannot go through has to say why the
+/// same way a chest's does — otherwise the only signal a player gets from
+/// clicking an empty slot is that nothing happened.
+#[test]
+fn a_wagon_slot_click_that_fails_explains_itself() {
+    let mut app = super::common::test_app(std::time::Duration::from_millis(16));
+    let stock_id = {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let straight = entity_id_by_name(sim.catalog(), "rail_straight");
+        let wagon = entity_id_by_name(sim.catalog(), "cargo_wagon");
+        let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
+        let (x, y) = first_buildable_rect(&sim, straight);
+        for index in 0..6 {
+            place_test_entity(&mut sim, straight, x, y + index * 2);
+        }
+        sim.tick();
+        let stock_id = sim
+            .place_rolling_stock(wagon, x, y + 4)
+            .expect("a wagon should fit on a six-piece run");
+        // One plate in the first cargo slot, so the wagon has both a slot that
+        // can be taken from and empty ones that cannot.
+        *sim.player_inventory_mut() = Inventory::player();
+        set_player_inventory_slot(&mut sim, 0, iron_plate, 1);
+        factory_sim::entity_transfer::player_slot_to_rolling_stock(&mut sim, stock_id, 0)
+            .expect("a cargo wagon takes iron plate from the player");
+        stock_id
+    };
+    app.world_mut()
+        .resource_mut::<OpenContainer>()
+        .rolling_stock = Some(stock_id);
+    app.update();
+    app.update();
+
+    press_wagon_cargo_slot(&mut app, 1);
+    // The click queues a SimCommand in `Update`; the fixed tick that drains it
+    // runs before `Update` on a later frame, so the result is only observable
+    // after a second `app.update()`.
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<InventoryTransferFeedback>()
+            .message
+            .as_deref(),
+        Some("Empty slot"),
+        "taking from a slot with nothing in it says so"
+    );
+
+    // And a click that does go through clears the complaint rather than leaving
+    // it standing over an action that worked.
+    press_wagon_cargo_slot(&mut app, 0);
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<InventoryTransferFeedback>()
+            .message
+            .as_deref(),
+        None,
+        "a transfer that works clears the previous failure"
+    );
+}
+
+/// Presses one wagon cargo slot button by index, for slots whose label is not
+/// distinctive enough to find by text — an empty one has none at all.
+fn press_wagon_cargo_slot(app: &mut App, slot_index: usize) {
+    let world = app.world_mut();
+    let mut buttons = world.query::<(Entity, &ContainerSlotButton)>();
+    let button = buttons
+        .iter(world)
+        .find_map(|(entity, button)| {
+            (button.panel() == InventoryPanel::RollingStockCargo
+                && button.slot_index() == slot_index)
+                .then_some(entity)
+        })
+        .expect("the wagon window draws a button for every cargo slot");
+    *app.world_mut()
+        .entity_mut(button)
+        .get_mut::<Interaction>()
+        .expect("a slot button has interaction state") = Interaction::Pressed;
+}
+
+/// The background colour of one wagon cargo slot button.
+fn wagon_cargo_slot_background(app: &mut App, slot_index: usize) -> Srgba {
+    let world = app.world_mut();
+    let mut buttons = world.query::<(&ContainerSlotButton, &BackgroundColor)>();
+    buttons
+        .iter(world)
+        .find_map(|(button, background)| {
+            (button.panel() == InventoryPanel::RollingStockCargo
+                && button.slot_index() == slot_index)
+                .then(|| background.0.to_srgba())
+        })
+        .expect("the wagon window draws a button for every cargo slot")
+}
+
+/// A tanker's contents are written into a live text component, not baked into
+/// the window's structural snapshot.
+///
+/// The distinction is what keeps a filling wagon from despawning and respawning
+/// the whole window — player inventory and slot grid included — on every tick
+/// the amount changes. Here it shows up as a readout that is empty when the
+/// window spawns it and filled in by the update system afterwards.
+#[test]
+fn a_fluid_wagon_window_reports_its_tank_through_a_live_readout() {
+    let mut app = super::common::test_app(std::time::Duration::from_millis(16));
+    let stock_id = {
+        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = sim_resource.write_for_tests();
+        let straight = entity_id_by_name(sim.catalog(), "rail_straight");
+        let tanker = entity_id_by_name(sim.catalog(), "fluid_wagon");
+        let (x, y) = first_buildable_rect(&sim, straight);
+        for index in 0..6 {
+            place_test_entity(&mut sim, straight, x, y + index * 2);
+        }
+        sim.tick();
+        sim.place_rolling_stock(tanker, x, y + 4)
+            .expect("a tanker should fit on a six-piece run")
+    };
+    app.world_mut()
+        .resource_mut::<OpenContainer>()
+        .rolling_stock = Some(stock_id);
+
+    app.update();
+    app.update();
+
+    let readout = {
+        let world = app.world_mut();
+        let mut texts = world.query::<(&Text, &RollingStockFluidText)>();
+        texts
+            .iter(world)
+            .map(|(text, _)| text.0.clone())
+            .next()
+            .expect("a fluid wagon's window draws a readout for its tank")
+    };
+    assert!(
+        readout.starts_with("Empty: 0 /"),
+        "the readout should carry the tank's live contents, got {readout:?}"
+    );
 }

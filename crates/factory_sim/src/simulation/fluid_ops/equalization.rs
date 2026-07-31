@@ -3,8 +3,12 @@ use crate::simulation::*;
 use super::math::proportional_amount;
 use super::network_access::{fluid_network_dynamic_summary, update_fluid_network_snapshot};
 use super::network_builder::build_fluid_network_topology_from_nodes;
-use super::types::{FluidBoxAssignment, FluidBoxNode, FluidNetworkTopology};
-use crate::simulation::edge_geometry::rotated_edge_endpoint;
+use super::types::{
+    FluidBoxAssignment, FluidBoxNode, FluidBoxes, FluidBoxesMut, FluidNetworkTopology,
+};
+use crate::simulation::edge_geometry::{
+    EdgeEndpoint, rotated_edge_connection_geometry, rotated_edge_endpoint,
+};
 
 impl Simulation {
     pub(in crate::simulation) fn ensure_fluid_network_topology(&mut self) {
@@ -28,10 +32,16 @@ impl Simulation {
             }
             self.fluids.networks_needing_equalization[network_index] = false;
             self.fluids.networks_needing_snapshot[network_index] = true;
+            let Simulation {
+                entities,
+                rolling_stock,
+                fluids,
+                ..
+            } = self;
             equalize_fluid_network(
-                &mut self.entities,
-                &self.fluids.topology_networks[network_index],
-                &mut self.fluids.equalization_assignments,
+                FluidBoxesMut::new(entities, rolling_stock),
+                &fluids.topology_networks[network_index],
+                &mut fluids.equalization_assignments,
             );
         }
     }
@@ -47,10 +57,16 @@ impl Simulation {
                 continue;
             }
             self.fluids.networks_needing_snapshot[network_index] = false;
+            let Simulation {
+                entities,
+                rolling_stock,
+                fluids,
+                ..
+            } = self;
             update_fluid_network_snapshot(
-                &self.entities,
-                &self.fluids.topology_networks[network_index],
-                &mut self.fluids.networks[network_index],
+                FluidBoxes::new(entities, rolling_stock),
+                &fluids.topology_networks[network_index],
+                &mut fluids.networks[network_index],
             );
         }
     }
@@ -83,10 +99,7 @@ impl Simulation {
                     .filter_map(|connection| rotated_edge_endpoint(placed, prototype, connection))
                     .collect();
                 nodes.push(FluidBoxNode {
-                    key: FluidBoxKey {
-                        entity_id: placed.id,
-                        box_index,
-                    },
+                    key: FluidBoxKey::entity(placed.id, box_index),
                     capacity_milliunits: fluid_box.capacity_milliunits,
                     filter: fluid_box.filter,
                     endpoints,
@@ -97,7 +110,110 @@ impl Simulation {
                 });
             }
         }
+        nodes.extend(self.stopped_stock_fluid_nodes());
         nodes
+    }
+
+    /// The fluid boxes of stopped rolling stock a pump reaches, as network
+    /// nodes.
+    ///
+    /// A wagon declares no fluid connections of its own, and that is the whole
+    /// design: its tank is filled and drained at a station, not by touching a
+    /// pipe. So the *pump* is what reaches out — a pump connection whose facing
+    /// tile a stopped wagon lies over joins that wagon's tank onto the same
+    /// edge endpoint, which is exactly the adjacency two pipes would have. That
+    /// is what puts the wagon on the pump's own side of the transfer rather
+    /// than straight onto the main line: a wagon at a pump's output is filled
+    /// at the pump's rate, and one at its input drains at that rate, instead of
+    /// equalizing with the whole pipe network the instant it stops.
+    ///
+    /// Only pumps, deliberately. A pipe run that happened to pass a siding
+    /// would otherwise start filling any train parked beside it.
+    ///
+    /// The search is the pump's, not the wagon's, so it has to walk the placed
+    /// entities to find the pumps — but only when there is something for a pump
+    /// to find. A railway with no fluid wagon standing anywhere answers in the
+    /// time it takes to look at the index, which is what a topology rebuild in
+    /// a factory of thousands of entities and no parked tanker should cost.
+    fn stopped_stock_fluid_nodes(&self) -> Vec<FluidBoxNode> {
+        if !self.any_stopped_stock_carries_fluid() {
+            return Vec::new();
+        }
+
+        let mut endpoints_by_stock = BTreeMap::<RollingStockId, Vec<EdgeEndpoint>>::new();
+        for placed in self.entities.placed_entities.values() {
+            let Some(prototype) = self
+                .world
+                .prototypes
+                .entity(placed.prototype_id)
+                .filter(|prototype| prototype.pump.is_some())
+            else {
+                continue;
+            };
+            for connection in prototype
+                .fluid_boxes
+                .iter()
+                .flat_map(|fluid_box| &fluid_box.connections)
+            {
+                let Some(geometry) =
+                    rotated_edge_connection_geometry(placed, prototype, connection)
+                else {
+                    continue;
+                };
+                let Some(stock) = self
+                    .stopped_stock()
+                    .at(geometry.facing_tile.0, geometry.facing_tile.1)
+                    .filter(|stock| !stock.fluid_boxes.is_empty())
+                else {
+                    continue;
+                };
+                let endpoints = endpoints_by_stock.entry(stock.id).or_default();
+                if !endpoints.contains(&geometry.endpoint) {
+                    endpoints.push(geometry.endpoint);
+                }
+            }
+        }
+
+        endpoints_by_stock
+            .into_iter()
+            .flat_map(|(stock_id, endpoints)| {
+                let prototype = self
+                    .rolling_stock
+                    .get(stock_id)
+                    .and_then(|stock| self.world.prototypes.entity(stock.prototype_id));
+                prototype
+                    .into_iter()
+                    .flat_map(move |prototype| prototype.fluid_boxes.iter().enumerate())
+                    .map(move |(box_index, fluid_box)| FluidBoxNode {
+                        key: FluidBoxKey::rolling_stock(stock_id, box_index),
+                        capacity_milliunits: fluid_box.capacity_milliunits,
+                        filter: fluid_box.filter,
+                        // Every declared tank on the piece shares the reaching
+                        // connections. Base rolling stock declares exactly one,
+                        // so this is the whole of it; a catalog that declared
+                        // more would have them all reachable rather than
+                        // silently leaving all but the first unfillable.
+                        endpoints: endpoints.clone(),
+                        underground_pairs: Vec::new(),
+                    })
+            })
+            .collect()
+    }
+
+    /// Which rolling-stock fluid boxes the networks are expected to account
+    /// for. Validation asks, so that it holds the snapshots to the same rule
+    /// the topology is built by rather than to a second copy of it.
+    pub(in crate::simulation) fn networked_rolling_stock_fluid_boxes(
+        &self,
+    ) -> impl Iterator<Item = (RollingStockId, usize)> + '_ {
+        self.stopped_stock_fluid_nodes()
+            .into_iter()
+            .filter_map(|node| {
+                node.key
+                    .owner
+                    .rolling_stock_id()
+                    .map(|stock_id| (stock_id, node.key.box_index))
+            })
     }
 
     fn underground_pipe_pairs(&self) -> BTreeMap<EntityId, Vec<(EntityId, EntityId)>> {
@@ -145,7 +261,7 @@ impl Simulation {
 }
 
 fn equalize_fluid_network(
-    entities: &mut EntityStore,
+    mut boxes: FluidBoxesMut<'_>,
     network: &FluidNetworkTopology,
     assignments: &mut Vec<FluidBoxAssignment>,
 ) {
@@ -153,19 +269,14 @@ fn equalize_fluid_network(
         return;
     }
 
-    let summary = fluid_network_dynamic_summary(entities, network);
+    let summary = fluid_network_dynamic_summary(boxes.as_ref(), network);
     if summary.blocked {
         return;
     }
 
     if summary.total_milliunits == 0 {
         for box_topology in &network.boxes {
-            let key = box_topology.key;
-            if let Some(state) = entities
-                .fluid_boxes
-                .get_mut(&key.entity_id)
-                .and_then(|boxes| boxes.get_mut(key.box_index))
-            {
+            if let Some(state) = boxes.get_mut(box_topology.key) {
                 state.amount_milliunits = 0;
                 state.fluid_id = None;
             }
@@ -207,13 +318,8 @@ fn equalize_fluid_network(
 
     debug_assert_eq!(remainder, 0);
     for assignment in assignments.iter() {
-        let key = assignment.key;
         let assigned = assignment.amount_milliunits;
-        if let Some(state) = entities
-            .fluid_boxes
-            .get_mut(&key.entity_id)
-            .and_then(|boxes| boxes.get_mut(key.box_index))
-        {
+        if let Some(state) = boxes.get_mut(assignment.key) {
             state.amount_milliunits = assigned;
             state.fluid_id = (assigned > 0).then_some(fluid_id);
         }

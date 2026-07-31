@@ -50,6 +50,14 @@ impl Simulation {
         // standing in before anything else asks for them, so no train is ever
         // displaced from where it already is by the reset.
         self.release_train_block_reservations();
+        // Last, the tiles a stopped wagon covers. Those are read off the
+        // geometry of the rail under it, so track changing can move the answer
+        // for a wagon that never moved itself — and an inserter reaching into a
+        // tile no wagon is on any more would be loading thin air. Cleared
+        // outright rather than per train: the whole index is derived from the
+        // graph that just went, and every stopped train re-enters it on the
+        // next tick.
+        self.clear_stopped_stock_index();
     }
 
     /// Whether placing or destroying this prototype can change rail
