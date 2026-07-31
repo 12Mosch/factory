@@ -70,9 +70,12 @@ impl Simulation {
             return;
         }
         for train in self.rolling_stock.trains() {
+            // Asked of the train through the same predicate the schedule uses,
+            // so what counts as standing at a stop cannot come to mean one
+            // thing to the wait conditions and another to the wires.
             let Some(stop_id) = train
                 .scheduled_stop
-                .filter(|_| train.schedule_arrival_tick.is_some())
+                .filter(|_| train.is_waiting_at_scheduled_stop())
             else {
                 continue;
             };
