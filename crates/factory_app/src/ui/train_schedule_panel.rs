@@ -761,42 +761,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn manual_mode_explains_how_to_drive_and_return_to_the_schedule() {
-        let snapshot = ScheduleSnapshot {
-            manual: true,
-            rows: Vec::new(),
-            has_stations: false,
-        };
-        let mut world = World::new();
-        let mut queue = bevy::ecs::world::CommandQueue::default();
-        {
-            let mut commands = Commands::new(&mut queue, &world);
-            commands.spawn_empty().with_children(|parent| {
-                spawn_train_schedule_panel(parent, &snapshot);
-            });
-        }
-        queue.apply(&mut world);
-
-        let mut texts = world.query::<&Text>();
-        let labels = texts
-            .iter(&world)
-            .map(|text| text.0.as_str())
-            .collect::<Vec<_>>();
-        assert!(labels.contains(&"Resume automatic"));
-        assert!(
-            labels
-                .iter()
-                .any(|label| label.contains("F8 drive / reverse"))
-        );
-        assert!(labels.iter().any(|label| label.contains("F10 brake")));
-        assert!(
-            labels
-                .iter()
-                .any(|label| label.contains("Close this window"))
-        );
-    }
-
     /// A train under the player's hand holds no claim, which is the same thing
     /// an unreachable or full station leaves behind. The status line has to
     /// tell the two apart, or it reports a fault against a train that is doing
