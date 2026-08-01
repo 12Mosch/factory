@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::build::resources::BuildPlacementState;
 use crate::constants::SIM_TICKS_PER_SECOND;
-use crate::input::resources::{TrainDebugInput, TrainRoutingSelection};
+use crate::input::resources::TrainManualInput;
 use crate::map::resources::{MapDetailCache, MapTextureCache, MapViewState};
 use crate::rendering::map_texture::MapTextureUploadQueue;
 use crate::rendering::resource_cells::ResourceRenderCache;
@@ -389,8 +389,7 @@ pub(crate) struct LoadState<'w> {
     pub(crate) resource_cache: ResMut<'w, ResourceRenderCache>,
     pub(crate) visible_entity_ids: ResMut<'w, VisibleEntityIds>,
     pub(crate) reload_token: ResMut<'w, PresentationReloadToken>,
-    pub(crate) train_selection: ResMut<'w, TrainRoutingSelection>,
-    pub(crate) train_input: ResMut<'w, TrainDebugInput>,
+    pub(crate) train_input: ResMut<'w, TrainManualInput>,
     pub(crate) pending_commands: ResMut<'w, Messages<SimCommandRequest>>,
     pub(crate) pending_results: ResMut<'w, Messages<SimCommandResult>>,
     pub(crate) command_backlog: ResMut<'w, SimCommandBacklog>,
@@ -465,11 +464,10 @@ pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile:
     state.command_backlog.0.clear();
     state.build_state.selected = None;
     state.build_state.last_status = Default::default();
-    // Half-finished input belongs to the world it was aimed at. A train picked
-    // for routing, or a press waiting for the next fixed step, names ids and
-    // tiles of the world being replaced — and train ids are monotonic per world,
-    // so the same number in the loaded one is a different train entirely.
-    state.train_selection.train = None;
+    // Half-finished input belongs to the world it was aimed at. A driving press
+    // waiting for the next fixed step names ids and tiles of the world being
+    // replaced — and train ids are monotonic per world, so the same number in
+    // the loaded one is a different train entirely.
     state.train_input.clear();
     state.open_container.close();
     *state.equipment_window = EquipmentWindowState::default();
