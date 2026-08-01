@@ -510,20 +510,27 @@ impl Simulation {
     /// Runs before the train is stepped, so the throttle the step reads is the
     /// one this leg asks for.
     ///
-    /// A train that has somewhere to be and no plan for getting there brakes,
-    /// however it came to be in that state: the tick's budget was spent before
-    /// its search, its last search ran out of expansions, or the track under its
-    /// plan was pulled up. Whatever throttle it was last driving on belonged to
-    /// a plan that no longer exists, and holding it would run the train on
-    /// toward a mark nothing is measuring any more. It costs a routed train a
-    /// little speed while it waits, and that is the right trade: a train under
-    /// no plan should not be moving under one.
+    /// A train with no leg to drive brakes, however it came to be in that
+    /// state: the tick's budget was spent before its search, its last search ran
+    /// out of expansions, the track under its plan was pulled up, or its
+    /// schedule found no platform it could be sent to at all. Whatever throttle
+    /// it was last driving on belonged to a plan that no longer exists, and
+    /// holding it would run the train on toward a mark nothing is measuring any
+    /// more. It costs a routed train a little speed while it waits, and that is
+    /// the right trade: a train under no plan should not be moving under one.
+    ///
+    /// The exception is the train being driven by hand, whose throttle *is* the
+    /// plan. That is the only reason this asks about manual control rather than
+    /// simply braking everything without a leg: a train handed back to its
+    /// schedule while every platform is full has no plan and no driver, and left
+    /// alone it would keep accelerating on the throttle its driver walked away
+    /// from.
     pub(in crate::simulation) fn steer_train(&mut self, train_id: TrainId) {
         let Some(train) = self.rolling_stock.train(train_id) else {
             return;
         };
         let Some(leg) = train.route.as_ref().and_then(|route| route.current_leg()) else {
-            if train.is_routed()
+            if !train.manual
                 && let Some(train) = self.rolling_stock.trains.get_mut(&train_id)
             {
                 train.throttle = TrainThrottle::Brake;

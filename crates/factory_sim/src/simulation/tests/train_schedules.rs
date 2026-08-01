@@ -1480,3 +1480,39 @@ fn handing_a_train_back_lets_its_schedule_have_it_again() {
     );
     sim.validate().expect("the world is valid");
 }
+
+/// Handing a moving train back to a schedule that cannot place it anywhere.
+///
+/// The claim fails — every platform is full — so the train gets no destination
+/// and no route, and nothing was left to steer it. Without the rule that a
+/// train with no leg brakes, it would keep accelerating on the throttle its
+/// driver walked away from, under nobody's control at all.
+#[test]
+fn a_train_handed_back_with_nowhere_to_go_does_not_keep_driving() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    // The only platform of that name is on track this train cannot reach, so
+    // the claim never succeeds however long it waits.
+    let siding = disconnected_rail(&mut sim, &rails);
+    stop_at(&mut sim, "North", siding, 1);
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    sim.set_train_throttle(train_id, TrainThrottle::Forward)
+        .expect("the player takes the controls");
+    run_until(&mut sim, |sim| train(sim, train_id).velocity != 0);
+
+    sim.set_train_manual(train_id, false)
+        .expect("the player hands it back");
+    sim.tick();
+
+    let train = train(&sim, train_id);
+    assert_eq!(
+        train.scheduled_stop, None,
+        "this test is only meaningful while the station cannot take the train"
+    );
+    assert_eq!(
+        train.throttle,
+        TrainThrottle::Brake,
+        "an automatic train with no plan drove on under its old throttle"
+    );
+    sim.validate().expect("the world is valid");
+}

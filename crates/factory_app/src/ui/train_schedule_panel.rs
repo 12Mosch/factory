@@ -199,6 +199,24 @@ impl ScheduleSnapshot {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScheduleRevision(pub(crate) u64);
 
+/// A [`spawn_button`] that stamps the revision onto the button itself.
+///
+/// Every button in this panel goes through here rather than through
+/// `spawn_button` directly, because the revision has to land on the same entity
+/// as the `Interaction` and the marker for the handlers to see it at all — and
+/// `spawn_button`'s last argument decorates the button's *text*, one entity
+/// down. Passing it there costs nothing and compiles cleanly, and the press is
+/// simply never matched.
+fn spawn_schedule_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    width: f32,
+    text: &str,
+    marker: impl Bundle,
+    revision: ScheduleRevision,
+) {
+    spawn_button(parent, width, text, (marker, revision), ());
+}
+
 /// What the editor shows for a train, or `None` for a piece of stock that is
 /// not part of one.
 pub(crate) fn schedule_snapshot(
@@ -315,7 +333,7 @@ pub(crate) fn spawn_train_schedule_panel(
             // give it back — otherwise a train driven once is a train that
             // never runs its schedule again.
             spawn_row(panel, |controls| {
-                spawn_button(
+                spawn_schedule_button(
                     controls,
                     88.0,
                     if snapshot.manual {
@@ -340,7 +358,7 @@ pub(crate) fn spawn_train_schedule_panel(
             }
             if snapshot.has_stations {
                 spawn_row(panel, |controls| {
-                    spawn_button(
+                    spawn_schedule_button(
                         controls,
                         66.0,
                         "Add stop",
@@ -367,14 +385,14 @@ fn spawn_entry(
     revision: ScheduleRevision,
 ) {
     spawn_row(panel, |controls| {
-        spawn_button(
+        spawn_schedule_button(
             controls,
             140.0,
             &row.stop_name,
             ScheduleStationButton(index),
             revision,
         );
-        spawn_button(controls, 18.0, "x", ScheduleRemoveButton(index), revision);
+        spawn_schedule_button(controls, 18.0, "x", ScheduleRemoveButton(index), revision);
     });
     if row.groups.is_empty() {
         spawn_caption(panel, "  Leaves as soon as it arrives");
@@ -398,7 +416,7 @@ fn spawn_entry(
         }
         spawn_row(panel, |controls| {
             spawn_caption(controls, "   ");
-            spawn_button(
+            spawn_schedule_button(
                 controls,
                 44.0,
                 "+ and",
@@ -416,7 +434,7 @@ fn spawn_entry(
         // on it is gaining its first condition rather than an alternative to
         // one, and calling that "or" would describe a choice between one thing
         // and nothing.
-        spawn_button(
+        spawn_schedule_button(
             controls,
             44.0,
             if row.groups.is_empty() {
@@ -443,7 +461,7 @@ fn spawn_condition(
     // conditions still take one line.
     spawn_wrapping_row(panel, |controls| {
         spawn_caption(controls, if leads_with_and { "and" } else { "   " });
-        spawn_button(
+        spawn_schedule_button(
             controls,
             42.0,
             condition.kind_label,
@@ -451,7 +469,7 @@ fn spawn_condition(
             revision,
         );
         if let Some(channel) = &condition.channel {
-            spawn_button(
+            spawn_schedule_button(
                 controls,
                 44.0,
                 channel,
@@ -463,7 +481,7 @@ fn spawn_condition(
             );
         }
         if let Some(comparator) = condition.comparator {
-            spawn_button(
+            spawn_schedule_button(
                 controls,
                 24.0,
                 comparator,
@@ -472,7 +490,7 @@ fn spawn_condition(
             );
         }
         if let Some(mode) = condition.operand_mode {
-            spawn_button(
+            spawn_schedule_button(
                 controls,
                 30.0,
                 mode,
@@ -484,7 +502,7 @@ fn spawn_condition(
             // A circuit operand holding a signal is picked rather than typed,
             // so its value doubles as the button that opens the grid.
             if condition.kind == TrainWaitConditionKind::Circuit {
-                spawn_button(
+                spawn_schedule_button(
                     controls,
                     44.0,
                     value,
@@ -508,7 +526,7 @@ fn spawn_condition(
         }
         if condition.steppable {
             for delta in [-1, 1] {
-                spawn_button(
+                spawn_schedule_button(
                     controls,
                     18.0,
                     if delta > 0 { "+" } else { "-" },
@@ -520,7 +538,7 @@ fn spawn_condition(
                 );
             }
         }
-        spawn_button(
+        spawn_schedule_button(
             controls,
             18.0,
             "x",
@@ -670,6 +688,53 @@ mod tests {
             before.revision(),
             after.revision(),
             "a condition shifting into another's address must not go unnoticed"
+        );
+    }
+
+    /// Every button the panel draws must carry its revision on the button
+    /// itself.
+    ///
+    /// The handlers ask for `Interaction`, the marker and the revision on one
+    /// entity. Put the revision a level down — on the button's text, which is
+    /// where the obvious spelling of this puts it — and that query matches
+    /// nothing, so every press in the editor is silently dropped. Nothing about
+    /// that fails to compile, and no test of the revision *value* can see it,
+    /// so the wiring is asserted here.
+    #[test]
+    fn every_button_the_panel_draws_carries_its_revision() {
+        let sim = Simulation::new_test_world(1);
+        let snapshot = ScheduleSnapshot {
+            manual: false,
+            rows: vec![ScheduleRowSnapshot {
+                stop_name: "North".into(),
+                groups: vec![vec![condition_snapshot(
+                    &sim,
+                    TrainWaitCondition::TimePassed { ticks: 60 },
+                )]],
+            }],
+            has_stations: true,
+        };
+
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            commands.spawn_empty().with_children(|parent| {
+                spawn_train_schedule_panel(parent, &snapshot);
+            });
+        }
+        queue.apply(&mut world);
+
+        let mut buttons = world.query_filtered::<Entity, (With<Interaction>, With<Button>)>();
+        let total = buttons.iter(&world).count();
+        assert!(total > 0, "the panel drew no buttons at all");
+
+        let mut stamped =
+            world.query_filtered::<Entity, (With<Interaction>, With<ScheduleRevision>)>();
+        assert_eq!(
+            stamped.iter(&world).count(),
+            total,
+            "a button was drawn without the revision on the entity the press arrives at"
         );
     }
 
