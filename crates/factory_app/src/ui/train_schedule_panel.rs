@@ -561,22 +561,51 @@ fn schedule_status(sim: &Simulation, train_id: TrainId) -> String {
     let Some(train) = sim.train(train_id) else {
         return String::new();
     };
-    let Some(entry) = train.schedule.current_entry() else {
-        return "No schedule: this train is driven by hand".to_string();
+    train_status_line(
+        train.manual,
+        &train.schedule,
+        train.scheduled_stop.is_some(),
+        train.is_waiting_at_scheduled_stop(),
+    )
+}
+
+/// What the line under the editor says about what the train is doing.
+///
+/// Taken as plain facts rather than as a train so the wording can be tested
+/// without a world to put a train in.
+fn train_status_line(
+    manual: bool,
+    schedule: &factory_sim::TrainSchedule,
+    claimed: bool,
+    waiting: bool,
+) -> String {
+    // Being driven is answered before anything the schedule would say, because
+    // a hand-driven train holds no claim — which every line below reads as a
+    // station that could not take it. Reporting "no platform free" for a train
+    // doing exactly what it was asked to is a fault diagnosis for a fault that
+    // is not there.
+    if manual {
+        return match schedule.current_stop_name() {
+            Some(name) => format!("Driven by hand — {name} when it is handed back"),
+            None => "Driven by hand".to_string(),
+        };
+    }
+    let Some(entry) = schedule.current_entry() else {
+        return "No schedule: this train goes nowhere on its own".to_string();
     };
     let position = format!(
         "{} of {}: {}",
-        train.schedule.current + 1,
-        train.schedule.entries.len(),
+        schedule.current + 1,
+        schedule.entries.len(),
         entry.stop_name
     );
-    match (train.scheduled_stop, train.is_waiting_at_scheduled_stop()) {
-        (Some(_), true) => format!("{position} — waiting here"),
-        (Some(_), false) => format!("{position} — on the way"),
+    match (claimed, waiting) {
+        (true, true) => format!("{position} — waiting here"),
+        (true, false) => format!("{position} — on the way"),
         // A claimed nothing is a station either full or with no track beside
         // it, and both look the same to the player: the train is not moving and
         // it is worth saying why.
-        (None, _) => format!("{position} — no platform free"),
+        (false, _) => format!("{position} — no platform free"),
     }
 }
 
@@ -641,6 +670,33 @@ mod tests {
             before.revision(),
             after.revision(),
             "a condition shifting into another's address must not go unnoticed"
+        );
+    }
+
+    /// A train under the player's hand holds no claim, which is the same thing
+    /// an unreachable or full station leaves behind. The status line has to
+    /// tell the two apart, or it reports a fault against a train that is doing
+    /// exactly what it was asked to.
+    #[test]
+    fn a_hand_driven_train_is_not_reported_as_a_station_that_would_not_take_it() {
+        let schedule = factory_sim::TrainSchedule {
+            entries: vec![factory_sim::TrainScheduleEntry::new("North")],
+            current: 0,
+        };
+
+        let driven = train_status_line(true, &schedule, false, false);
+        assert!(
+            !driven.contains("no platform free"),
+            "a hand-driven train was blamed on its station: {driven}"
+        );
+        assert!(
+            driven.contains("North"),
+            "it still says where it goes when handed back: {driven}"
+        );
+        assert_eq!(
+            train_status_line(false, &schedule, false, false),
+            "1 of 1: North — no platform free",
+            "an automatic train with no claim still reports why it is standing"
         );
     }
 
