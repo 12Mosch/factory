@@ -110,7 +110,7 @@ pub use crate::rolling_stock::{
     TRAIN_COUPLING_GAP_FIXED, TRAIN_OCCUPIED_RAIL_PENALTY_FIXED, TRAIN_REVERSAL_PENALTY_FIXED,
     TRAIN_VELOCITY_SCALE, Train, TrainCargo, TrainControlError, TrainForces, TrainId, TrainRoute,
     TrainRouteLeg, TrainSchedule, TrainScheduleEntry, TrainStopState, TrainThrottle,
-    TrainWaitCondition, TrainWaitConditionGroup, TrainWaitContext,
+    TrainWaitCondition, TrainWaitConditionGroup, TrainWaitConditionKind, TrainWaitContext,
 };
 pub use crate::world::{
     Chunk, ChunkCoord, ChunkGenerationResult, MinedResource, ResourceCell, ResourceTileChange,

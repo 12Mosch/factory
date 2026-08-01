@@ -259,6 +259,38 @@ pub enum TrainWaitCondition {
     Circuit(crate::circuits::CircuitCondition),
 }
 
+/// Which of the [`TrainWaitCondition`] alternatives a condition is, without
+/// the values it carries.
+///
+/// An editor needs to ask "which kind is this one" and "what else could it be"
+/// separately from the payload, and a comparison against a constructed sample
+/// would need a payload to construct. Ordered the way an editor offers them:
+/// the two that need nothing configured first, then the timed ones, then the
+/// ones that name a channel.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum TrainWaitConditionKind {
+    CargoFull,
+    CargoEmpty,
+    TimePassed,
+    Inactivity,
+    ItemCount,
+    FluidCount,
+    Circuit,
+}
+
+impl TrainWaitConditionKind {
+    /// Every kind, in the order an editor cycles through them.
+    pub const ALL: [Self; 7] = [
+        Self::CargoFull,
+        Self::CargoEmpty,
+        Self::TimePassed,
+        Self::Inactivity,
+        Self::ItemCount,
+        Self::FluidCount,
+        Self::Circuit,
+    ];
+}
+
 /// Conditions which must all hold before this alternative is satisfied.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TrainWaitConditionGroup(pub Vec<TrainWaitCondition>);
@@ -354,6 +386,59 @@ pub struct TrainWaitContext {
 }
 
 impl TrainWaitCondition {
+    /// Which alternative this is, with the payload dropped.
+    pub const fn kind(self) -> TrainWaitConditionKind {
+        match self {
+            Self::TimePassed { .. } => TrainWaitConditionKind::TimePassed,
+            Self::Inactivity { .. } => TrainWaitConditionKind::Inactivity,
+            Self::CargoFull => TrainWaitConditionKind::CargoFull,
+            Self::CargoEmpty => TrainWaitConditionKind::CargoEmpty,
+            Self::ItemCount { .. } => TrainWaitConditionKind::ItemCount,
+            Self::FluidCount { .. } => TrainWaitConditionKind::FluidCount,
+            Self::Circuit(_) => TrainWaitConditionKind::Circuit,
+        }
+    }
+
+    /// The comparator this condition compares with, or `None` for the kinds
+    /// that compare nothing.
+    pub const fn comparator(self) -> Option<crate::circuits::Comparator> {
+        match self {
+            Self::ItemCount { comparator, .. } | Self::FluidCount { comparator, .. } => {
+                Some(comparator)
+            }
+            Self::Circuit(condition) => Some(condition.comparator),
+            Self::TimePassed { .. }
+            | Self::Inactivity { .. }
+            | Self::CargoFull
+            | Self::CargoEmpty => None,
+        }
+    }
+
+    /// The same condition compared a different way. A kind that compares
+    /// nothing is returned unchanged rather than gaining a comparator it would
+    /// never read.
+    pub const fn with_comparator(self, comparator: crate::circuits::Comparator) -> Self {
+        match self {
+            Self::ItemCount { item, count, .. } => Self::ItemCount {
+                item,
+                comparator,
+                count,
+            },
+            Self::FluidCount {
+                fluid, milliunits, ..
+            } => Self::FluidCount {
+                fluid,
+                comparator,
+                milliunits,
+            },
+            Self::Circuit(condition) => Self::Circuit(crate::circuits::CircuitCondition {
+                comparator,
+                ..condition
+            }),
+            other => other,
+        }
+    }
+
     pub fn is_met(self, context: &TrainWaitContext) -> bool {
         match self {
             Self::TimePassed { ticks } => context.waited_ticks >= ticks,
@@ -392,6 +477,56 @@ impl TrainWaitCondition {
 }
 
 impl TrainScheduleEntry {
+    /// A stop with no conditions on it: arrive, and leave again.
+    pub fn new(stop_name: impl Into<String>) -> Self {
+        Self {
+            stop_name: stop_name.into(),
+            wait_conditions: Vec::new(),
+        }
+    }
+
+    /// The condition at a group and an index within it, if both exist.
+    pub fn condition(&self, group: usize, index: usize) -> Option<TrainWaitCondition> {
+        self.wait_conditions.get(group)?.0.get(index).copied()
+    }
+
+    /// Replaces one condition, doing nothing when the address names a
+    /// condition that is not there.
+    ///
+    /// An editor addresses a condition by where it sits, and where it sits is
+    /// read from one frame's panel and acted on in the next: an address can
+    /// name a row that a click in between has already removed. Ignoring such an
+    /// address is the whole reason the group and index are checked here rather
+    /// than indexed into by the caller.
+    pub fn set_condition(&mut self, group: usize, index: usize, condition: TrainWaitCondition) {
+        if let Some(slot) = self
+            .wait_conditions
+            .get_mut(group)
+            .and_then(|group| group.0.get_mut(index))
+        {
+            *slot = condition;
+        }
+    }
+
+    /// Removes one condition, and the group with it when that was its last.
+    ///
+    /// An empty group is not the same as no group: it is an alternative with
+    /// nothing to satisfy, which [`TrainScheduleEntry::may_depart`] reads as
+    /// satisfied and which would therefore turn "wait for a full load" into
+    /// "leave at once" the moment its last condition was taken off.
+    pub fn remove_condition(&mut self, group: usize, index: usize) {
+        let Some(conditions) = self.wait_conditions.get_mut(group) else {
+            return;
+        };
+        if index >= conditions.0.len() {
+            return;
+        }
+        conditions.0.remove(index);
+        if conditions.0.is_empty() {
+            self.wait_conditions.remove(group);
+        }
+    }
+
     pub fn may_depart(&self, context: &TrainWaitContext) -> bool {
         self.wait_conditions.is_empty()
             || self
@@ -409,6 +544,85 @@ impl TrainSchedule {
     pub fn advance(&mut self) {
         if !self.entries.is_empty() {
             self.current = (self.current + 1) % self.entries.len();
+        }
+    }
+
+    pub fn current_entry_mut(&mut self) -> Option<&mut TrainScheduleEntry> {
+        self.entries.get_mut(self.current)
+    }
+
+    /// The station the train is currently making for, if it has one.
+    pub fn current_stop_name(&self) -> Option<&str> {
+        self.current_entry().map(|entry| entry.stop_name.as_str())
+    }
+
+    /// Adds an entry at `index`, keeping the cursor on the entry it was on.
+    ///
+    /// Every edit below moves the cursor with the entry it was pointing at
+    /// rather than leaving it on an index. A player inserting a stop ahead of
+    /// the one a train is running to is describing where the train goes *next*,
+    /// and a cursor that stayed put would silently redirect the journey already
+    /// under way — the one thing an edit to a later part of the list must not
+    /// do.
+    ///
+    /// An index past the end appends, so a caller can say "on the end" without
+    /// having to know how long the list is.
+    pub fn insert_entry(&mut self, index: usize, entry: TrainScheduleEntry) {
+        let index = index.min(self.entries.len());
+        self.entries.insert(index, entry);
+        if index <= self.current && self.entries.len() > 1 {
+            self.current += 1;
+        }
+    }
+
+    /// Removes the entry at `index`, keeping the cursor on the entry it was on
+    /// where that entry survives.
+    ///
+    /// Removing the current entry leaves the cursor where it is, which is the
+    /// entry that followed — the next stop of what remains of the schedule.
+    /// Removing the last entry of all leaves an empty schedule with the cursor
+    /// at zero, the only value an empty one may hold.
+    pub fn remove_entry(&mut self, index: usize) -> Option<TrainScheduleEntry> {
+        if index >= self.entries.len() {
+            return None;
+        }
+        let removed = self.entries.remove(index);
+        if index < self.current {
+            self.current -= 1;
+        }
+        self.clamp_current();
+        Some(removed)
+    }
+
+    /// Moves the entry at `from` to `to`, carrying the cursor with whichever
+    /// entry it was on.
+    pub fn move_entry(&mut self, from: usize, to: usize) {
+        if from >= self.entries.len() || to >= self.entries.len() || from == to {
+            return;
+        }
+        let entry = self.entries.remove(from);
+        self.entries.insert(to, entry);
+        // Where the cursor's entry ended up is a question about the two indices
+        // rather than about the entry, so it is re-derived from them instead of
+        // by searching for the entry again: two stops can name the same
+        // station, and a search would not tell them apart.
+        self.current = match self.current {
+            index if index == from => to,
+            index if from < index && index <= to => index - 1,
+            index if to <= index && index < from => index + 1,
+            index => index,
+        };
+        self.clamp_current();
+    }
+
+    /// Puts the cursor back inside the list. An empty schedule's cursor is
+    /// zero, which is what the validator insists on and what
+    /// [`TrainSchedule::current_entry`] reads as "nowhere to be".
+    pub fn clamp_current(&mut self) {
+        if self.entries.is_empty() {
+            self.current = 0;
+        } else {
+            self.current = self.current.min(self.entries.len() - 1);
         }
     }
 
@@ -990,6 +1204,112 @@ mod tests {
         assert!(cargo.is_empty(), "a drained wagon carries nothing");
         assert_eq!(cargo, TrainCargo::default());
         assert_eq!(cargo.item(item), 0);
+    }
+
+    /// Editing the list must not redirect the journey already under way: the
+    /// cursor follows the entry it was on rather than staying on an index.
+    #[test]
+    fn editing_a_schedule_carries_the_cursor_with_the_entry_it_was_on() {
+        let mut schedule = TrainSchedule {
+            entries: vec![
+                TrainScheduleEntry::new("A"),
+                TrainScheduleEntry::new("B"),
+                TrainScheduleEntry::new("C"),
+            ],
+            current: 1,
+        };
+
+        schedule.insert_entry(0, TrainScheduleEntry::new("Z"));
+        assert_eq!(schedule.current_stop_name(), Some("B"));
+        schedule.insert_entry(99, TrainScheduleEntry::new("End"));
+        assert_eq!(schedule.current_stop_name(), Some("B"));
+        assert_eq!(schedule.entries.len(), 5, "an index past the end appends");
+
+        // Moving the current entry takes the cursor with it; moving another
+        // entry across it shifts the cursor to keep it where it was.
+        schedule.move_entry(2, 4);
+        assert_eq!(schedule.current_stop_name(), Some("B"));
+        schedule.move_entry(0, 4);
+        assert_eq!(schedule.current_stop_name(), Some("B"));
+
+        // Removing the current entry leaves the cursor on what followed it.
+        let current = schedule.current;
+        assert_eq!(
+            schedule
+                .remove_entry(current)
+                .map(|e| e.stop_name)
+                .as_deref(),
+            Some("B")
+        );
+        assert_ne!(schedule.current_stop_name(), Some("B"));
+        assert_eq!(schedule.current, current);
+
+        while !schedule.entries.is_empty() {
+            schedule.remove_entry(0);
+        }
+        assert_eq!(
+            schedule.current, 0,
+            "an emptied schedule keeps the only cursor an empty one may hold"
+        );
+        assert_eq!(schedule.remove_entry(0), None);
+    }
+
+    /// A group with nothing in it is an alternative that is satisfied by
+    /// nothing at all, so taking the last condition out of one takes the group
+    /// with it rather than turning a wait into an immediate departure.
+    #[test]
+    fn removing_the_last_condition_of_a_group_removes_the_group() {
+        let mut entry = TrainScheduleEntry {
+            stop_name: "Iron load".into(),
+            wait_conditions: vec![TrainWaitConditionGroup(vec![
+                TrainWaitCondition::CargoFull,
+                TrainWaitCondition::TimePassed { ticks: 60 },
+            ])],
+        };
+
+        entry.remove_condition(0, 1);
+        assert_eq!(entry.wait_conditions.len(), 1);
+        assert!(!entry.may_depart(&TrainWaitContext::default()));
+
+        entry.remove_condition(0, 0);
+        assert!(entry.wait_conditions.is_empty());
+        assert!(
+            entry.may_depart(&TrainWaitContext::default()),
+            "a stop with no conditions at all is one the train leaves at once"
+        );
+
+        // An address naming a row that is no longer there is ignored rather
+        // than indexed into: a panel is built one frame and clicked the next.
+        entry.remove_condition(3, 7);
+        entry.set_condition(3, 7, TrainWaitCondition::CargoEmpty);
+        assert!(entry.wait_conditions.is_empty());
+    }
+
+    /// The comparator is the one part of a condition an editor changes without
+    /// touching what is being compared, and the kinds that compare nothing are
+    /// left alone rather than gaining a comparator they would never read.
+    #[test]
+    fn a_condition_keeps_its_subject_when_its_comparator_changes() {
+        let condition = TrainWaitCondition::ItemCount {
+            item: ItemId::new(3),
+            comparator: crate::circuits::Comparator::Greater,
+            count: 400,
+        };
+        assert_eq!(condition.kind(), TrainWaitConditionKind::ItemCount);
+        assert_eq!(
+            condition.with_comparator(crate::circuits::Comparator::Less),
+            TrainWaitCondition::ItemCount {
+                item: ItemId::new(3),
+                comparator: crate::circuits::Comparator::Less,
+                count: 400,
+            }
+        );
+
+        assert_eq!(TrainWaitCondition::CargoFull.comparator(), None);
+        assert_eq!(
+            TrainWaitCondition::CargoFull.with_comparator(crate::circuits::Comparator::Less),
+            TrainWaitCondition::CargoFull
+        );
     }
 
     #[test]

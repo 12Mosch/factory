@@ -1,0 +1,942 @@
+//! What the schedule editor's buttons do, and the two windows they open.
+//!
+//! Split from the panel that draws them because the drawing is a function of
+//! the schedule and this is a function of a press: keeping them apart is what
+//! lets the panel stay a pure view over a snapshot.
+//!
+//! Two things are picked from a list rather than cycled or typed — the station
+//! an entry names, and the channel a condition counts — so there are two picker
+//! windows. Neither is an edit on its own: opening one asks a question the
+//! player has yet to answer, and nothing is sent until they do.
+
+use bevy::prelude::*;
+use factory_data::{FluidId, ItemId, PrototypeCatalog};
+use factory_sim::{
+    CircuitCondition, Comparator, SignalId, SignalOperand, SimCommand, Simulation, TrainId,
+    TrainSchedule, TrainScheduleEntry, TrainWaitCondition, TrainWaitConditionGroup,
+    TrainWaitConditionKind,
+};
+
+use crate::audio::SoundEvent;
+use crate::resources::SimResource;
+use crate::simulation::SimCommandRequest;
+use crate::ui::circuit::state::cycle;
+use crate::ui::circuit::widgets::{spawn_button, spawn_caption, spawn_heading};
+use crate::ui::resources::OpenContainer;
+use crate::ui::signal_picker::{SignalFilter, signal_picker_root, spawn_signal_picker_contents};
+use crate::ui::train_schedule_panel::{
+    ConditionPart, ConditionRef, ConditionSlot, MILLIUNITS_PER_UNIT, ScheduleAddConditionButton,
+    ScheduleAddGroupButton, ScheduleChannelButton, ScheduleComparatorButton,
+    ScheduleConditionKindButton, ScheduleConditionRemoveButton, ScheduleConditionStepButton,
+    ScheduleOperandModeButton, ScheduleRemoveButton, ScheduleStationButton, WAIT_STEP_TICKS,
+    station_names,
+};
+use crate::ui::window_sync::{WindowRootQuery, sync_window};
+
+/// What a fresh timed condition starts at: five seconds, long enough to be a
+/// real wait and short enough to watch happen.
+const DEFAULT_WAIT_TICKS: u64 = 5 * WAIT_STEP_TICKS;
+
+/// Which list the editor is waiting on an answer from.
+///
+/// One at a time: both windows sit in the same corner, and a press in either
+/// fills exactly the slot that opened it.
+#[derive(Resource, Default)]
+pub(crate) struct TrainScheduleEditorState {
+    /// The condition slot the signal grid is filling.
+    pub(crate) channel: Option<ConditionSlot>,
+    /// The entry a station is being chosen for. An index one past the end
+    /// appends, which is how the "Add stop" button asks.
+    pub(crate) station: Option<usize>,
+}
+
+impl TrainScheduleEditorState {
+    fn close(&mut self) {
+        self.channel = None;
+        self.station = None;
+    }
+}
+
+/// A station name offered to an entry. `None` backs out without choosing one.
+#[derive(Component, Clone, Debug)]
+pub(crate) struct StationPickerButton(pub(crate) Option<String>);
+
+/// `None` is the grid's clearing button; `Some` assigns that signal.
+#[derive(Component)]
+pub(crate) struct ScheduleSignalPickerButton(pub(crate) Option<SignalId>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StationPickerSnapshot {
+    entry: usize,
+    names: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScheduleSignalPickerSnapshot {
+    slot: ConditionSlot,
+    filter: SignalFilter,
+}
+
+fn pressed(interaction: &Interaction) -> bool {
+    *interaction == Interaction::Pressed
+}
+
+/// The open train's schedule and its id, for an edit to start from.
+fn open_schedule(sim: &Simulation, open: &OpenContainer) -> Option<(TrainId, TrainSchedule)> {
+    let train_id = sim.rolling_stock_piece(open.rolling_stock?)?.train;
+    Some((train_id, sim.train(train_id)?.schedule.clone()))
+}
+
+fn send(
+    commands: &mut MessageWriter<SimCommandRequest>,
+    train_id: TrainId,
+    schedule: TrainSchedule,
+) {
+    commands.write(SimCommandRequest(SimCommand::SetTrainSchedule {
+        train_id,
+        schedule,
+    }));
+}
+
+/// Opens the station list for an entry, or for one past the end to append.
+pub(crate) fn handle_schedule_station_buttons(
+    buttons: Query<(&Interaction, &ScheduleStationButton), Changed<Interaction>>,
+    mut editor: ResMut<TrainScheduleEditorState>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some(entry) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| button.0)
+    else {
+        return;
+    };
+    sounds.write(SoundEvent::UiClick);
+    editor.close();
+    editor.station = Some(entry);
+}
+
+/// Opens the signal grid for one half of a condition.
+pub(crate) fn handle_schedule_channel_buttons(
+    buttons: Query<(&Interaction, &ScheduleChannelButton), Changed<Interaction>>,
+    mut editor: ResMut<TrainScheduleEditorState>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some(slot) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| button.0)
+    else {
+        return;
+    };
+    sounds.write(SoundEvent::UiClick);
+    editor.close();
+    editor.channel = Some(slot);
+}
+
+pub(crate) fn handle_schedule_remove_buttons(
+    buttons: Query<(&Interaction, &ScheduleRemoveButton), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut editor: ResMut<TrainScheduleEditorState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some(index) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| button.0)
+    else {
+        return;
+    };
+    let sim = sim.read();
+    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+        return;
+    };
+    if schedule.remove_entry(index).is_none() {
+        return;
+    }
+    sounds.write(SoundEvent::UiClick);
+    // Whatever the pickers were asking about was addressed against the list as
+    // it was a moment ago; an answer given now would fill the wrong row.
+    editor.close();
+    send(&mut commands, train_id, schedule);
+}
+
+pub(crate) fn handle_schedule_add_group_buttons(
+    buttons: Query<(&Interaction, &ScheduleAddGroupButton), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some(index) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| button.0)
+    else {
+        return;
+    };
+    let sim = sim.read();
+    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+        return;
+    };
+    let Some(entry) = schedule.entries.get_mut(index) else {
+        return;
+    };
+    sounds.write(SoundEvent::UiClick);
+    entry
+        .wait_conditions
+        .push(TrainWaitConditionGroup(vec![default_condition()]));
+    send(&mut commands, train_id, schedule);
+}
+
+pub(crate) fn handle_schedule_add_condition_buttons(
+    buttons: Query<(&Interaction, &ScheduleAddConditionButton), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some((index, group)) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| (button.entry, button.group))
+    else {
+        return;
+    };
+    let sim = sim.read();
+    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+        return;
+    };
+    let Some(alternative) = schedule
+        .entries
+        .get_mut(index)
+        .and_then(|entry| entry.wait_conditions.get_mut(group))
+    else {
+        return;
+    };
+    sounds.write(SoundEvent::UiClick);
+    alternative.0.push(default_condition());
+    send(&mut commands, train_id, schedule);
+}
+
+pub(crate) fn handle_schedule_condition_remove_buttons(
+    buttons: Query<(&Interaction, &ScheduleConditionRemoveButton), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut editor: ResMut<TrainScheduleEditorState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some(address) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| button.0)
+    else {
+        return;
+    };
+    let sim = sim.read();
+    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+        return;
+    };
+    let Some(entry) = schedule.entries.get_mut(address.entry) else {
+        return;
+    };
+    if entry.condition(address.group, address.index).is_none() {
+        return;
+    }
+    sounds.write(SoundEvent::UiClick);
+    entry.remove_condition(address.group, address.index);
+    editor.close();
+    send(&mut commands, train_id, schedule);
+}
+
+/// Steps a condition's kind, its comparator, its operand mode, or its number —
+/// four buttons, one shape, because each is a rewrite of one condition in
+/// place.
+pub(crate) fn handle_schedule_condition_edit_buttons(
+    buttons: ConditionEditButtons,
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    // Shift steps a cycling button backwards, the rule every other cycling
+    // button in the game follows.
+    let backwards = keyboard
+        .as_deref()
+        .is_some_and(|keys| keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
+    let Some((address, edit)) = buttons.pressed_edit() else {
+        return;
+    };
+
+    let sim = sim.read();
+    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+        return;
+    };
+    let catalog = sim.catalog();
+    let Some(entry) = schedule.entries.get_mut(address.entry) else {
+        return;
+    };
+    let Some(current) = entry.condition(address.group, address.index) else {
+        return;
+    };
+    let replacement = match edit {
+        Edit::Kind => cycled_condition(current, backwards, catalog),
+        Edit::Comparator => current.with_comparator(cycle(
+            &Comparator::ALL,
+            current.comparator().unwrap_or(Comparator::Greater),
+            backwards,
+        )),
+        Edit::OperandMode => toggled_operand_mode(current),
+        Edit::Step(delta) => stepped_condition(current, delta),
+    };
+    sounds.write(SoundEvent::UiClick);
+    entry.set_condition(address.group, address.index, replacement);
+    send(&mut commands, train_id, schedule);
+}
+
+/// Which of the four in-place rewrites a press asked for.
+#[derive(Clone, Copy)]
+enum Edit {
+    Kind,
+    Comparator,
+    OperandMode,
+    Step(i32),
+}
+
+/// The four buttons that rewrite one condition where it stands.
+///
+/// One parameter rather than four, and one system rather than four, because
+/// they all end in the same place: read the schedule, replace one condition,
+/// send the whole thing. Two of them acting on one frame would each answer
+/// against the same pre-edit schedule, and the second would land on top of the
+/// first as though it had never happened.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ConditionEditButtons<'w, 's> {
+    kinds: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static ScheduleConditionKindButton),
+        Changed<Interaction>,
+    >,
+    comparators: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static ScheduleComparatorButton),
+        Changed<Interaction>,
+    >,
+    modes: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static ScheduleOperandModeButton),
+        Changed<Interaction>,
+    >,
+    steps: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static ScheduleConditionStepButton),
+        Changed<Interaction>,
+    >,
+}
+
+impl ConditionEditButtons<'_, '_> {
+    /// The one press to act on this frame, if any.
+    fn pressed_edit(&self) -> Option<(ConditionRef, Edit)> {
+        self.kinds
+            .iter()
+            .find(|(interaction, _)| pressed(interaction))
+            .map(|(_, button)| (button.0, Edit::Kind))
+            .or_else(|| {
+                self.comparators
+                    .iter()
+                    .find(|(interaction, _)| pressed(interaction))
+                    .map(|(_, button)| (button.0, Edit::Comparator))
+            })
+            .or_else(|| {
+                self.modes
+                    .iter()
+                    .find(|(interaction, _)| pressed(interaction))
+                    .map(|(_, button)| (button.0, Edit::OperandMode))
+            })
+            .or_else(|| {
+                self.steps
+                    .iter()
+                    .find(|(interaction, _)| pressed(interaction))
+                    .map(|(_, button)| (button.condition, Edit::Step(button.delta)))
+            })
+    }
+}
+
+/// The condition a fresh row starts as: a full load, which needs nothing
+/// configured and is what most stops actually want.
+const fn default_condition() -> TrainWaitCondition {
+    TrainWaitCondition::CargoFull
+}
+
+/// The next kind round the cycle that this catalog can actually express.
+///
+/// A kind that names a channel needs one to name. A catalog with no fluids in
+/// it cannot make a fluid condition, and a button that does nothing when
+/// pressed is worse than one that is not offered — so such a kind is stepped
+/// over rather than offered and then refused.
+fn cycled_condition(
+    current: TrainWaitCondition,
+    backwards: bool,
+    catalog: &PrototypeCatalog,
+) -> TrainWaitCondition {
+    let kinds = TrainWaitConditionKind::ALL;
+    let start = kinds
+        .iter()
+        .position(|kind| *kind == current.kind())
+        .unwrap_or(0);
+    for step in 1..=kinds.len() {
+        let offset = if backwards { kinds.len() - step } else { step };
+        let kind = kinds[(start + offset) % kinds.len()];
+        if let Some(condition) = condition_of_kind(kind, current, catalog) {
+            return condition;
+        }
+    }
+    current
+}
+
+/// A condition of `kind`, carrying over from `previous` whatever the new kind
+/// can still use — which is the comparator, and nothing else: an item count and
+/// a fluid count are not the same number, and carrying one into the other would
+/// silently ask for a hundred thousand units of water.
+fn condition_of_kind(
+    kind: TrainWaitConditionKind,
+    previous: TrainWaitCondition,
+    catalog: &PrototypeCatalog,
+) -> Option<TrainWaitCondition> {
+    let comparator = previous.comparator().unwrap_or(Comparator::Greater);
+    Some(match kind {
+        TrainWaitConditionKind::CargoFull => TrainWaitCondition::CargoFull,
+        TrainWaitConditionKind::CargoEmpty => TrainWaitCondition::CargoEmpty,
+        TrainWaitConditionKind::TimePassed => TrainWaitCondition::TimePassed {
+            ticks: DEFAULT_WAIT_TICKS,
+        },
+        TrainWaitConditionKind::Inactivity => TrainWaitCondition::Inactivity {
+            ticks: DEFAULT_WAIT_TICKS,
+        },
+        TrainWaitConditionKind::ItemCount => TrainWaitCondition::ItemCount {
+            item: first_item(catalog)?,
+            comparator,
+            count: 0,
+        },
+        TrainWaitConditionKind::FluidCount => TrainWaitCondition::FluidCount {
+            fluid: first_fluid(catalog)?,
+            comparator,
+            milliunits: 0,
+        },
+        TrainWaitConditionKind::Circuit => TrainWaitCondition::Circuit(CircuitCondition {
+            left: first_signal(catalog)?,
+            comparator,
+            right: SignalOperand::Constant(0),
+        }),
+    })
+}
+
+fn first_item(catalog: &PrototypeCatalog) -> Option<ItemId> {
+    catalog.items.first().map(|item| item.id)
+}
+
+fn first_fluid(catalog: &PrototypeCatalog) -> Option<FluidId> {
+    catalog.fluids.first().map(|fluid| fluid.id)
+}
+
+/// A channel a circuit condition can start on: a virtual signal where the
+/// catalog declares any, and otherwise the first item, because every catalog
+/// has items.
+fn first_signal(catalog: &PrototypeCatalog) -> Option<SignalId> {
+    catalog
+        .virtual_signals
+        .first()
+        .map(|signal| SignalId::Virtual(signal.id))
+        .or_else(|| first_item(catalog).map(SignalId::Item))
+}
+
+/// Flips a circuit condition's right-hand operand between a signal and a plain
+/// number, switching to the channel the condition is already about — so the
+/// toggle reads as "against this channel" rather than as losing what was
+/// configured.
+fn toggled_operand_mode(condition: TrainWaitCondition) -> TrainWaitCondition {
+    let TrainWaitCondition::Circuit(inner) = condition else {
+        return condition;
+    };
+    TrainWaitCondition::Circuit(CircuitCondition {
+        right: match inner.right {
+            SignalOperand::Constant(_) => SignalOperand::Signal(inner.left),
+            SignalOperand::Signal(_) => SignalOperand::Constant(0),
+        },
+        ..inner
+    })
+}
+
+/// The condition with its number moved by one step.
+///
+/// What a step *is* depends on the kind, and that is the point of doing it
+/// here: a second for the timed conditions, an item for an item count, a whole
+/// unit for a fluid. One stepper that moved every one of them by one would be
+/// useless for two of the three.
+fn stepped_condition(condition: TrainWaitCondition, delta: i32) -> TrainWaitCondition {
+    let step_ticks = |ticks: u64| {
+        let magnitude = u64::from(delta.unsigned_abs()).saturating_mul(WAIT_STEP_TICKS);
+        if delta < 0 {
+            ticks.saturating_sub(magnitude)
+        } else {
+            ticks.saturating_add(magnitude)
+        }
+    };
+    match condition {
+        TrainWaitCondition::TimePassed { ticks } => TrainWaitCondition::TimePassed {
+            ticks: step_ticks(ticks),
+        },
+        TrainWaitCondition::Inactivity { ticks } => TrainWaitCondition::Inactivity {
+            ticks: step_ticks(ticks),
+        },
+        TrainWaitCondition::ItemCount {
+            item,
+            comparator,
+            count,
+        } => TrainWaitCondition::ItemCount {
+            item,
+            comparator,
+            count: count.saturating_add(delta).max(0),
+        },
+        TrainWaitCondition::FluidCount {
+            fluid,
+            comparator,
+            milliunits,
+        } => TrainWaitCondition::FluidCount {
+            fluid,
+            comparator,
+            milliunits: milliunits
+                .saturating_add(delta.saturating_mul(MILLIUNITS_PER_UNIT))
+                .max(0),
+        },
+        TrainWaitCondition::Circuit(inner) => TrainWaitCondition::Circuit(CircuitCondition {
+            right: match inner.right {
+                SignalOperand::Constant(value) => {
+                    SignalOperand::Constant(value.saturating_add(delta))
+                }
+                signal @ SignalOperand::Signal(_) => signal,
+            },
+            ..inner
+        }),
+        other => other,
+    }
+}
+
+/// The signals a condition's slot will accept.
+fn slot_filter(condition: TrainWaitCondition, part: ConditionPart) -> SignalFilter {
+    match (part, condition.kind()) {
+        (ConditionPart::Subject, TrainWaitConditionKind::ItemCount) => SignalFilter::ItemsOnly,
+        (ConditionPart::Subject, TrainWaitConditionKind::FluidCount) => SignalFilter::FluidsOnly,
+        _ => SignalFilter::Any,
+    }
+}
+
+/// The condition with a picked signal written into one of its halves, or `None`
+/// when the pick cannot land there.
+///
+/// A `None` signal is the grid's clearing button: on a circuit condition's
+/// right-hand operand that means "back to a plain number", and on anything else
+/// there is nothing sensible to clear a condition's subject to, so the pick is
+/// refused rather than leaving a condition that names nothing.
+fn condition_with_signal(
+    condition: TrainWaitCondition,
+    part: ConditionPart,
+    signal: Option<SignalId>,
+) -> Option<TrainWaitCondition> {
+    match (part, condition, signal) {
+        (
+            ConditionPart::Subject,
+            TrainWaitCondition::ItemCount {
+                comparator, count, ..
+            },
+            Some(SignalId::Item(item)),
+        ) => Some(TrainWaitCondition::ItemCount {
+            item,
+            comparator,
+            count,
+        }),
+        (
+            ConditionPart::Subject,
+            TrainWaitCondition::FluidCount {
+                comparator,
+                milliunits,
+                ..
+            },
+            Some(SignalId::Fluid(fluid)),
+        ) => Some(TrainWaitCondition::FluidCount {
+            fluid,
+            comparator,
+            milliunits,
+        }),
+        (ConditionPart::Subject, TrainWaitCondition::Circuit(inner), Some(left)) => {
+            Some(TrainWaitCondition::Circuit(CircuitCondition {
+                left,
+                ..inner
+            }))
+        }
+        (ConditionPart::CircuitRight, TrainWaitCondition::Circuit(inner), signal) => {
+            Some(TrainWaitCondition::Circuit(CircuitCondition {
+                right: match signal {
+                    Some(signal) => SignalOperand::Signal(signal),
+                    None => SignalOperand::Constant(0),
+                },
+                ..inner
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// The condition an open channel picker is filling, if it still exists.
+fn slot_condition(
+    sim: &Simulation,
+    open: &OpenContainer,
+    slot: ConditionSlot,
+) -> Option<TrainWaitCondition> {
+    let (_, schedule) = open_schedule(sim, open)?;
+    schedule
+        .entries
+        .get(slot.condition.entry)?
+        .condition(slot.condition.group, slot.condition.index)
+}
+
+pub(crate) fn sync_station_picker(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    editor: Res<TrainScheduleEditorState>,
+    open_container: Res<OpenContainer>,
+    mut roots: WindowRootQuery<StationPickerSnapshot>,
+) {
+    // The picker belongs to the open train, so it closes with the window.
+    let Some(entry) = open_container.rolling_stock.and(editor.station) else {
+        for (entity, _, _) in roots.iter() {
+            commands.entity(entity).despawn();
+        }
+        return;
+    };
+    let sim = sim.read();
+    sync_window(
+        &mut commands,
+        &mut roots,
+        true,
+        true,
+        || StationPickerSnapshot {
+            entry,
+            names: station_names(&sim),
+        },
+        station_picker_root,
+        |root, snapshot| {
+            spawn_heading(
+                root,
+                &format!("Stop {} — pick a station", snapshot.entry + 1),
+            );
+            if snapshot.names.is_empty() {
+                spawn_caption(root, "No stations yet. Build a train stop first.");
+            }
+            for name in &snapshot.names {
+                spawn_button(
+                    root,
+                    210.0,
+                    name,
+                    StationPickerButton(Some(name.clone())),
+                    (),
+                );
+            }
+            spawn_button(root, 80.0, "Cancel", StationPickerButton(None), ());
+        },
+    );
+}
+
+fn station_picker_root() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(12.0),
+            bottom: Val::Px(12.0),
+            width: Val::Px(240.0),
+            max_height: Val::Vh(50.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            overflow: Overflow::scroll_y(),
+            scrollbar_width: 10.0,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.035, 0.038, 0.040, 0.98)),
+        GlobalZIndex(1200),
+    )
+}
+
+pub(crate) fn sync_schedule_signal_picker(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    editor: Res<TrainScheduleEditorState>,
+    open_container: Res<OpenContainer>,
+    mut roots: WindowRootQuery<ScheduleSignalPickerSnapshot>,
+) {
+    let sim = sim.read();
+    // A slot naming a condition that has since been removed has nothing to
+    // fill, so the window goes with it.
+    let open = editor
+        .channel
+        .filter(|_| open_container.rolling_stock.is_some())
+        .and_then(|slot| {
+            slot_condition(&sim, &open_container, slot)
+                .map(|condition| (slot, slot_filter(condition, slot.part)))
+        });
+    let Some((slot, filter)) = open else {
+        for (entity, _, _) in roots.iter() {
+            commands.entity(entity).despawn();
+        }
+        return;
+    };
+    sync_window(
+        &mut commands,
+        &mut roots,
+        true,
+        true,
+        || ScheduleSignalPickerSnapshot { slot, filter },
+        signal_picker_root,
+        |root, snapshot| {
+            spawn_signal_picker_contents(
+                root,
+                sim.catalog(),
+                snapshot.filter,
+                // Only an operand can go back to being a plain number; a
+                // condition's subject has nothing to clear to.
+                if snapshot.slot.part == ConditionPart::CircuitRight {
+                    "Use a number"
+                } else {
+                    "Cancel"
+                },
+                ScheduleSignalPickerButton,
+            );
+        },
+    );
+}
+
+/// Points an entry at the station the player chose, appending a stop when the
+/// picker was opened one past the end.
+pub(crate) fn handle_station_picker_buttons(
+    buttons: Query<(&Interaction, &StationPickerButton), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut editor: ResMut<TrainScheduleEditorState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some(name) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| button.0.clone())
+    else {
+        return;
+    };
+    let Some(entry) = editor.station else {
+        return;
+    };
+    sounds.write(SoundEvent::UiClick);
+    editor.station = None;
+    let Some(name) = name else {
+        return;
+    };
+
+    let sim = sim.read();
+    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+        return;
+    };
+    if let Some(existing) = schedule.entries.get_mut(entry) {
+        existing.stop_name = name;
+    } else if entry == schedule.entries.len() {
+        // Only the exact append index appends. A stale one names an entry that
+        // has since been removed, and adding a stop nobody asked for is worse
+        // than doing nothing.
+        schedule.insert_entry(entry, TrainScheduleEntry::new(name));
+    } else {
+        return;
+    }
+    send(&mut commands, train_id, schedule);
+}
+
+pub(crate) fn handle_schedule_signal_picker_buttons(
+    buttons: Query<(&Interaction, &ScheduleSignalPickerButton), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut editor: ResMut<TrainScheduleEditorState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some(signal) = buttons
+        .iter()
+        .find(|(interaction, _)| pressed(interaction))
+        .map(|(_, button)| button.0)
+    else {
+        return;
+    };
+    let Some(slot) = editor.channel else {
+        return;
+    };
+    sounds.write(SoundEvent::UiClick);
+    editor.channel = None;
+
+    let sim = sim.read();
+    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+        return;
+    };
+    let Some(entry) = schedule.entries.get_mut(slot.condition.entry) else {
+        return;
+    };
+    let Some(current) = entry.condition(slot.condition.group, slot.condition.index) else {
+        return;
+    };
+    let Some(replacement) = condition_with_signal(current, slot.part, signal) else {
+        return;
+    };
+    entry.set_condition(slot.condition.group, slot.condition.index, replacement);
+    send(&mut commands, train_id, schedule);
+}
+
+/// Closes both pickers when the window they belong to does, so a picker never
+/// outlives the schedule it was filling.
+pub(crate) fn close_schedule_pickers_with_window(
+    open_container: Res<OpenContainer>,
+    mut editor: ResMut<TrainScheduleEditorState>,
+) {
+    if open_container.rolling_stock.is_none()
+        && (editor.channel.is_some() || editor.station.is_some())
+    {
+        editor.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog() -> PrototypeCatalog {
+        Simulation::new_test_world(1).catalog().clone()
+    }
+
+    /// Cycling a kind walks every kind the catalog can express and comes back
+    /// round, which is what makes the item, fluid, and circuit conditions —
+    /// the ones the old editor could not write at all — reachable.
+    #[test]
+    fn cycling_a_kind_reaches_every_condition_the_catalog_can_express() {
+        let catalog = catalog();
+        let mut condition = default_condition();
+        let mut seen = vec![condition.kind()];
+        for _ in 0..TrainWaitConditionKind::ALL.len() {
+            condition = cycled_condition(condition, false, &catalog);
+            seen.push(condition.kind());
+        }
+        assert_eq!(seen.first(), seen.last(), "the cycle comes back round");
+        for kind in TrainWaitConditionKind::ALL {
+            assert!(seen.contains(&kind), "{kind:?} is never offered: {seen:?}");
+        }
+    }
+
+    /// A comparator change keeps what is being compared, and a kind that
+    /// compares nothing is left alone rather than gaining one it never reads.
+    #[test]
+    fn changing_a_comparator_keeps_the_channel_under_it() {
+        let catalog = catalog();
+        let item = TrainWaitCondition::ItemCount {
+            item: first_item(&catalog).expect("a catalog has items"),
+            comparator: Comparator::Greater,
+            count: 400,
+        };
+        let changed = item.with_comparator(Comparator::Less);
+        assert_eq!(changed.comparator(), Some(Comparator::Less));
+        assert_eq!(changed.kind(), TrainWaitConditionKind::ItemCount);
+
+        assert_eq!(TrainWaitCondition::CargoFull.comparator(), None);
+    }
+
+    /// Each kind's step is the unit a player thinks in for that kind, and none
+    /// of them can be driven below zero.
+    #[test]
+    fn a_step_means_what_the_kind_under_it_means() {
+        assert_eq!(
+            stepped_condition(TrainWaitCondition::TimePassed { ticks: 60 }, 1),
+            TrainWaitCondition::TimePassed { ticks: 120 }
+        );
+        assert_eq!(
+            stepped_condition(TrainWaitCondition::TimePassed { ticks: 60 }, -5),
+            TrainWaitCondition::TimePassed { ticks: 0 },
+            "a wait cannot be stepped to a negative length"
+        );
+
+        let catalog = catalog();
+        let fluid = TrainWaitCondition::FluidCount {
+            fluid: first_fluid(&catalog).expect("a catalog has fluids"),
+            comparator: Comparator::Greater,
+            milliunits: 0,
+        };
+        let TrainWaitCondition::FluidCount { milliunits, .. } = stepped_condition(fluid, 1) else {
+            panic!("stepping a fluid condition keeps it one");
+        };
+        assert_eq!(milliunits, MILLIUNITS_PER_UNIT, "a fluid steps by the unit");
+    }
+
+    /// The right-hand operand flips to the channel the condition is already
+    /// about, so the toggle is a way of saying "against this" rather than a way
+    /// of losing what was configured.
+    #[test]
+    fn toggling_an_operand_keeps_the_channel_it_was_about() {
+        let catalog = catalog();
+        let left = first_signal(&catalog).expect("a catalog has signals");
+        let condition = TrainWaitCondition::Circuit(CircuitCondition {
+            left,
+            comparator: Comparator::Greater,
+            right: SignalOperand::Constant(0),
+        });
+        let TrainWaitCondition::Circuit(inner) = toggled_operand_mode(condition) else {
+            panic!("it is still a circuit condition");
+        };
+        assert_eq!(inner.right, SignalOperand::Signal(left));
+        assert_eq!(inner.left, left, "the left-hand channel is untouched");
+    }
+
+    /// A slot only accepts what its kind can hold, so the grid cannot put a
+    /// fluid into an item count.
+    #[test]
+    fn a_pick_only_lands_where_the_kind_can_hold_it() {
+        let catalog = catalog();
+        let item_id = first_item(&catalog).expect("a catalog has items");
+        let fluid_id = first_fluid(&catalog).expect("a catalog has fluids");
+        let item = TrainWaitCondition::ItemCount {
+            item: item_id,
+            comparator: Comparator::Greater,
+            count: 0,
+        };
+        assert_eq!(
+            slot_filter(item, ConditionPart::Subject),
+            SignalFilter::ItemsOnly
+        );
+        assert!(
+            condition_with_signal(
+                item,
+                ConditionPart::Subject,
+                Some(SignalId::Fluid(fluid_id))
+            )
+            .is_none(),
+            "a fluid is not an item count's subject"
+        );
+        assert!(
+            condition_with_signal(item, ConditionPart::Subject, Some(SignalId::Item(item_id)))
+                .is_some()
+        );
+        assert!(
+            condition_with_signal(item, ConditionPart::Subject, None).is_none(),
+            "there is nothing to clear a subject to"
+        );
+    }
+}

@@ -61,10 +61,15 @@ use crate::ui::technology_panel::{
 use crate::ui::threat::{
     ThreatUiState, handle_threat_alert_clicks, setup_threat_ui, sync_threat_ui,
 };
-use crate::ui::train_schedule_panel::{
-    handle_schedule_add_button, handle_schedule_condition_buttons, handle_schedule_remove_buttons,
-    handle_schedule_stop_buttons, handle_schedule_wait_step_buttons, update_train_schedule_status,
+use crate::ui::train_schedule_edit::{
+    TrainScheduleEditorState, close_schedule_pickers_with_window,
+    handle_schedule_add_condition_buttons, handle_schedule_add_group_buttons,
+    handle_schedule_channel_buttons, handle_schedule_condition_edit_buttons,
+    handle_schedule_condition_remove_buttons, handle_schedule_remove_buttons,
+    handle_schedule_signal_picker_buttons, handle_schedule_station_buttons,
+    handle_station_picker_buttons, sync_schedule_signal_picker, sync_station_picker,
 };
+use crate::ui::train_schedule_panel::update_train_schedule_status;
 use crate::ui::train_stop_panel::{
     TrainStopRenameState, handle_train_stop_limit_buttons, handle_train_stop_limit_signal_button,
     handle_train_stop_rename_button, handle_train_stop_rename_input, update_train_stop_panel,
@@ -112,6 +117,7 @@ impl Plugin for UiPlugin {
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
             .init_resource::<CircuitEditorState>()
+            .init_resource::<TrainScheduleEditorState>()
             .init_resource::<TrainStopRenameState>()
             .add_systems(
                 Startup,
@@ -196,11 +202,29 @@ impl Plugin for UiPlugin {
                     // rewrite the whole schedule, so they run in the shared
                     // interaction set and the window picks the change up on the
                     // frame the command lands.
-                    handle_schedule_stop_buttons.in_set(AppSet::UiInteraction),
-                    handle_schedule_condition_buttons.in_set(AppSet::UiInteraction),
-                    handle_schedule_wait_step_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_station_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_channel_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_condition_edit_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_add_group_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_add_condition_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_condition_remove_buttons.in_set(AppSet::UiInteraction),
                     handle_schedule_remove_buttons.in_set(AppSet::UiInteraction),
-                    handle_schedule_add_button.in_set(AppSet::UiInteraction),
+                    handle_station_picker_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_signal_picker_buttons.in_set(AppSet::UiInteraction),
+                    close_schedule_pickers_with_window,
+                    // The pickers read the slot the buttons above may have just
+                    // opened, so they sync after every one of them: a list that
+                    // waited a frame would look like a press that did nothing.
+                    sync_station_picker
+                        .after(handle_schedule_station_buttons)
+                        .after(handle_station_picker_buttons)
+                        .after(handle_schedule_remove_buttons)
+                        .after(close_schedule_pickers_with_window),
+                    sync_schedule_signal_picker
+                        .after(handle_schedule_channel_buttons)
+                        .after(handle_schedule_signal_picker_buttons)
+                        .after(handle_schedule_condition_remove_buttons)
+                        .after(close_schedule_pickers_with_window),
                     update_train_schedule_status.after(sync_rolling_stock_window),
                 )
                     .in_set(InGameSet),
