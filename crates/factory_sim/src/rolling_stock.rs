@@ -580,6 +580,13 @@ impl TrainSchedule {
     ///
     /// Removing the current entry leaves the cursor where it is, which is the
     /// entry that followed — the next stop of what remains of the schedule.
+    /// Removing the *last* entry is the same rule read round the loop: a
+    /// schedule is a ring, so what follows the tail is the head, and the cursor
+    /// wraps to zero rather than stepping back onto the new tail. Clamping
+    /// instead would send the train to the stop it had just come from and run
+    /// the list backwards, which is the one direction a schedule never goes.
+    /// [`Self::remove_entries_named`] wraps for the same reason.
+    ///
     /// Removing the last entry of all leaves an empty schedule with the cursor
     /// at zero, the only value an empty one may hold.
     pub fn remove_entry(&mut self, index: usize) -> Option<TrainScheduleEntry> {
@@ -590,7 +597,9 @@ impl TrainSchedule {
         if index < self.current {
             self.current -= 1;
         }
-        self.clamp_current();
+        if self.current >= self.entries.len() {
+            self.current = 0;
+        }
         Some(removed)
     }
 
@@ -1252,6 +1261,41 @@ mod tests {
             "an emptied schedule keeps the only cursor an empty one may hold"
         );
         assert_eq!(schedule.remove_entry(0), None);
+    }
+
+    /// A schedule is a ring, so what follows the last entry is the first one.
+    /// Deleting the stop a train is running to has to send it on round the
+    /// loop; stepping back onto the new tail would run the list backwards,
+    /// which is the one direction a schedule never goes.
+    #[test]
+    fn deleting_the_last_stop_sends_the_train_round_to_the_first() {
+        let mut schedule = TrainSchedule {
+            entries: vec![
+                TrainScheduleEntry::new("A"),
+                TrainScheduleEntry::new("B"),
+                TrainScheduleEntry::new("C"),
+            ],
+            current: 2,
+        };
+
+        schedule.remove_entry(2);
+        assert_eq!(
+            schedule.current_stop_name(),
+            Some("A"),
+            "the stop after the tail is the head, not the stop before it"
+        );
+
+        // Deleting from the middle still leaves the cursor on what followed.
+        let mut middle = TrainSchedule {
+            entries: vec![
+                TrainScheduleEntry::new("A"),
+                TrainScheduleEntry::new("B"),
+                TrainScheduleEntry::new("C"),
+            ],
+            current: 1,
+        };
+        middle.remove_entry(1);
+        assert_eq!(middle.current_stop_name(), Some("C"));
     }
 
     /// A group with nothing in it is an alternative that is satisfied by

@@ -10,6 +10,7 @@
 //! player has yet to answer, and nothing is sent until they do.
 
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use factory_data::{FluidId, ItemId, PrototypeCatalog};
 use factory_sim::{
     CircuitCondition, Comparator, SignalId, SignalOperand, SimCommand, Simulation, TrainId,
@@ -447,13 +448,19 @@ fn first_fluid(catalog: &PrototypeCatalog) -> Option<FluidId> {
     catalog.fluids.first().map(|fluid| fluid.id)
 }
 
-/// A channel a circuit condition can start on: a virtual signal where the
-/// catalog declares any, and otherwise the first item, because every catalog
-/// has items.
+/// A channel a circuit condition can start on.
+///
+/// The first *concrete* virtual signal, not simply the first one: the catalog
+/// leads with `each`, `anything`, and `everything`, and a wait condition naming
+/// one of those is refused outright by `set_train_schedule`. Starting there
+/// would make the circuit kind impossible to reach — cycling onto it would send
+/// a schedule that comes straight back rejected. A catalog with nothing but
+/// wildcards falls through to the first item, because every catalog has items.
 fn first_signal(catalog: &PrototypeCatalog) -> Option<SignalId> {
     catalog
         .virtual_signals
-        .first()
+        .iter()
+        .find(|signal| !signal.kind.is_wildcard())
         .map(|signal| SignalId::Virtual(signal.id))
         .or_else(|| first_item(catalog).map(SignalId::Item))
 }
@@ -531,11 +538,16 @@ fn stepped_condition(condition: TrainWaitCondition, delta: i32) -> TrainWaitCond
 }
 
 /// The signals a condition's slot will accept.
+///
+/// Never `Any`: every signal in a wait condition is read as one number off the
+/// network the train is standing at, and `set_train_schedule` refuses a
+/// combinator wildcard on either side of the comparison. Offering one would be
+/// offering a pick that comes back rejected.
 fn slot_filter(condition: TrainWaitCondition, part: ConditionPart) -> SignalFilter {
     match (part, condition.kind()) {
         (ConditionPart::Subject, TrainWaitConditionKind::ItemCount) => SignalFilter::ItemsOnly,
         (ConditionPart::Subject, TrainWaitConditionKind::FluidCount) => SignalFilter::FluidsOnly,
-        _ => SignalFilter::Any,
+        _ => SignalFilter::ValuesOnly,
     }
 }
 
@@ -641,15 +653,34 @@ pub(crate) fn sync_station_picker(
             if snapshot.names.is_empty() {
                 spawn_caption(root, "No stations yet. Build a train stop first.");
             }
-            for name in &snapshot.names {
-                spawn_button(
-                    root,
-                    210.0,
-                    name,
-                    StationPickerButton(Some(name.clone())),
-                    (),
-                );
-            }
+            // The names scroll and the chrome around them does not, so a railway
+            // with more stations than fit on screen still leaves "Cancel" where
+            // the player can reach it. `ScrollArea` rather than `Overflow`
+            // alone: the overflow only clips, and the component is what carries
+            // the scroll position and the wheel observer.
+            root.spawn((
+                Node {
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(4.0),
+                    overflow: Overflow::scroll_y(),
+                    scrollbar_width: 10.0,
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+                ScrollArea,
+            ))
+            .with_children(|list| {
+                for name in &snapshot.names {
+                    spawn_button(
+                        list,
+                        200.0,
+                        name,
+                        StationPickerButton(Some(name.clone())),
+                        (),
+                    );
+                }
+            });
             spawn_button(root, 80.0, "Cancel", StationPickerButton(None), ());
         },
     );
@@ -666,8 +697,6 @@ fn station_picker_root() -> impl Bundle {
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(4.0),
             padding: UiRect::all(Val::Px(10.0)),
-            overflow: Overflow::scroll_y(),
-            scrollbar_width: 10.0,
             ..default()
         },
         BackgroundColor(Color::srgba(0.035, 0.038, 0.040, 0.98)),
@@ -840,6 +869,71 @@ mod tests {
         assert_eq!(seen.first(), seen.last(), "the cycle comes back round");
         for kind in TrainWaitConditionKind::ALL {
             assert!(seen.contains(&kind), "{kind:?} is never offered: {seen:?}");
+        }
+    }
+
+    /// A circuit condition has to start on a channel the simulation will
+    /// accept. The catalog leads with `each`, `anything`, and `everything`, and
+    /// `set_train_schedule` refuses all three — so starting there would make the
+    /// circuit kind impossible to reach at all: cycling onto it would send a
+    /// schedule that came straight back rejected.
+    #[test]
+    fn a_circuit_condition_starts_on_a_channel_the_simulation_accepts() {
+        let mut sim = Simulation::new_test_world(1);
+        let catalog = sim.catalog().clone();
+        assert!(
+            catalog
+                .virtual_signals
+                .first()
+                .is_some_and(|signal| signal.kind.is_wildcard()),
+            "this test is only meaningful while the catalog still leads with a wildcard"
+        );
+
+        let condition = condition_of_kind(
+            TrainWaitConditionKind::Circuit,
+            default_condition(),
+            &catalog,
+        )
+        .expect("the catalog can express a circuit condition");
+        let train_id = sim
+            .rolling_stock()
+            .next()
+            .map(|stock| stock.train)
+            .unwrap_or(TrainId::new(1));
+        // The proof is the simulation taking it, not the shape of the signal.
+        let schedule = TrainSchedule {
+            entries: vec![TrainScheduleEntry {
+                stop_name: "Depot".into(),
+                wait_conditions: vec![TrainWaitConditionGroup(vec![condition])],
+            }],
+            current: 0,
+        };
+        assert!(
+            !matches!(
+                sim.set_train_schedule(train_id, schedule),
+                Err(factory_sim::TrainControlError::WildcardSignal(_))
+            ),
+            "the condition the editor builds must not be one the simulation refuses"
+        );
+    }
+
+    /// The picker must not offer what the slot cannot hold, for the same
+    /// reason: a wildcard picked into a wait condition comes back rejected.
+    #[test]
+    fn a_condition_slot_never_offers_a_wildcard() {
+        let catalog = catalog();
+        let circuit = condition_of_kind(
+            TrainWaitConditionKind::Circuit,
+            default_condition(),
+            &catalog,
+        )
+        .expect("the catalog can express a circuit condition");
+        for part in [ConditionPart::Subject, ConditionPart::CircuitRight] {
+            assert_eq!(
+                slot_filter(circuit, part),
+                SignalFilter::ValuesOnly,
+                "both halves of a circuit condition are read as values"
+            );
         }
     }
 

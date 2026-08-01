@@ -40,22 +40,44 @@ pub(crate) enum SignalFilter {
     Any,
     ItemsOnly,
     FluidsOnly,
+    /// Any channel that carries a value, which is every one except the
+    /// combinator wildcards.
+    ///
+    /// `each`, `anything`, and `everything` mean "fold over the inputs", and
+    /// only a combinator knows how to do that. A train's wait condition reads
+    /// one number off the network it is standing at, so the simulation refuses
+    /// a wildcard outright — and a picker that offered one would be offering a
+    /// pick that comes back rejected.
+    ValuesOnly,
 }
 
 impl SignalFilter {
-    const fn accepts(self, section: SignalSection) -> bool {
+    const fn accepts_section(self, section: SignalSection) -> bool {
         match self {
-            Self::Any => true,
+            Self::Any | Self::ValuesOnly => true,
             Self::ItemsOnly => matches!(section, SignalSection::Items),
             Self::FluidsOnly => matches!(section, SignalSection::Fluids),
         }
+    }
+
+    /// Whether one channel of an accepted section is itself offered. Only the
+    /// wildcards are ever held back, and only from the slots that cannot use
+    /// them.
+    fn accepts_signal(self, catalog: &PrototypeCatalog, signal: SignalId) -> bool {
+        if self != Self::ValuesOnly {
+            return true;
+        }
+        !matches!(signal, SignalId::Virtual(virtual_id)
+            if catalog
+                .virtual_signal(virtual_id)
+                .is_some_and(|prototype| prototype.kind.is_wildcard()))
     }
 
     /// What the window calls itself, which is the shortest way to say what it
     /// will accept before the player goes looking for it.
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::Any => "Pick a signal",
+            Self::Any | Self::ValuesOnly => "Pick a signal",
             Self::ItemsOnly => "Pick an item",
             Self::FluidsOnly => "Pick a fluid",
         }
@@ -136,7 +158,12 @@ pub(crate) fn spawn_signal_picker_contents<M: Bundle>(
             ("Fluids", SignalSection::Fluids, &signals.fluids),
             ("Signals", SignalSection::Virtuals, &signals.virtuals),
         ] {
-            if entries.is_empty() || !filter.accepts(section) {
+            let offered = entries
+                .iter()
+                .copied()
+                .filter(|signal| filter.accepts_signal(catalog, *signal))
+                .collect::<Vec<_>>();
+            if offered.is_empty() || !filter.accepts_section(section) {
                 continue;
             }
             viewport.spawn((
@@ -155,7 +182,7 @@ pub(crate) fn spawn_signal_picker_contents<M: Bundle>(
                     BackgroundColor(Color::NONE),
                 ))
                 .with_children(|grid| {
-                    for &signal in entries {
+                    for &signal in &offered {
                         grid.spawn((
                             Button,
                             Node {
