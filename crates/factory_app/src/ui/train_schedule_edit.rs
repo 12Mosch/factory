@@ -49,12 +49,32 @@ pub(crate) struct TrainScheduleEditorState {
     /// The entry a station is being chosen for. An index one past the end
     /// appends, which is how the "Add stop" button asks.
     pub(crate) station: Option<usize>,
+    /// What the schedule looked like when the open picker was opened.
+    ///
+    /// A picker outlives the press that opened it — that is the whole point of
+    /// it — so the schedule can move underneath it while the player is reading
+    /// the list. Nothing the editor itself does can cause that, because every
+    /// edit closes the pickers; the simulation can, and does. Mine the last
+    /// stop of a name and `forget_train_stop` drops the entries naming it, and
+    /// the addresses held above then name whatever slid down into them.
+    revision: Option<ScheduleRevision>,
 }
 
 impl TrainScheduleEditorState {
     fn close(&mut self) {
         self.channel = None;
         self.station = None;
+        self.revision = None;
+    }
+
+    /// The schedule an answer applies to, or `None` if it has moved on since
+    /// the question was asked.
+    fn answered_schedule(
+        &self,
+        sim: &Simulation,
+        open: &OpenContainer,
+    ) -> Option<(TrainId, TrainSchedule)> {
+        schedule_for_press(sim, open, self.revision?)
     }
 }
 
@@ -151,6 +171,7 @@ pub(crate) fn handle_schedule_station_buttons(
     sounds.write(SoundEvent::UiClick);
     editor.close();
     editor.station = Some(button.0);
+    editor.revision = Some(revision);
 }
 
 /// Opens the signal grid for one half of a condition.
@@ -170,6 +191,7 @@ pub(crate) fn handle_schedule_channel_buttons(
     sounds.write(SoundEvent::UiClick);
     editor.close();
     editor.channel = Some(button.0);
+    editor.revision = Some(revision);
 }
 
 /// Hands the train back to its schedule, or takes it off it.
@@ -840,13 +862,13 @@ pub(crate) fn handle_station_picker_buttons(
         return;
     };
     sounds.write(SoundEvent::UiClick);
-    editor.station = None;
+    let sim = sim.read();
+    let answered = editor.answered_schedule(&sim, &open_container);
+    editor.close();
     let Some(name) = name else {
         return;
     };
-
-    let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+    let Some((train_id, mut schedule)) = answered else {
         return;
     };
     if let Some(existing) = schedule.entries.get_mut(entry) {
@@ -881,10 +903,10 @@ pub(crate) fn handle_schedule_signal_picker_buttons(
         return;
     };
     sounds.write(SoundEvent::UiClick);
-    editor.channel = None;
-
     let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+    let answered = editor.answered_schedule(&sim, &open_container);
+    editor.close();
+    let Some((train_id, mut schedule)) = answered else {
         return;
     };
     let Some(entry) = schedule.entries.get_mut(slot.condition.entry) else {

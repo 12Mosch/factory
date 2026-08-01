@@ -32,6 +32,7 @@
 //! the train. That also means only *one* press may be acted on per frame, which
 //! is why each handler takes the first press it finds.
 
+use std::collections::BTreeSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use bevy::prelude::*;
@@ -246,7 +247,7 @@ pub(crate) fn schedule_snapshot(
                     .collect(),
             })
             .collect(),
-        has_stations: !station_names(sim).is_empty(),
+        has_stations: any_station_exists(sim),
     })
 }
 
@@ -633,13 +634,26 @@ fn train_status_line(
 /// First occurrence wins rather than sorting, so the list does not reorder
 /// itself when a station is renamed.
 pub(crate) fn station_names(sim: &Simulation) -> Vec<String> {
+    // Membership is asked once per stop, so it is asked through a set: the
+    // straight scan over what has been kept is quadratic in the number of
+    // stops, and this list is rebuilt whenever the picker is.
+    let mut seen = BTreeSet::new();
     let mut names = Vec::new();
     for (_, state) in sim.train_stops() {
-        if !names.contains(&state.name) {
+        if seen.insert(state.name.as_str()) {
             names.push(state.name.clone());
         }
     }
     names
+}
+
+/// Whether any station exists to name at all.
+///
+/// Asked on every frame a rolling-stock window is open, which is why it is not
+/// `!station_names(sim).is_empty()`: that builds and de-duplicates the whole
+/// list to answer a question the first stop already settles.
+fn any_station_exists(sim: &Simulation) -> bool {
+    sim.train_stops().next().is_some()
 }
 
 fn seconds(ticks: u64) -> String {
