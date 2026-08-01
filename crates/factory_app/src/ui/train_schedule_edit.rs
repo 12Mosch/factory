@@ -29,8 +29,8 @@ use crate::ui::train_schedule_panel::{
     ConditionPart, ConditionRef, ConditionSlot, MILLIUNITS_PER_UNIT, ScheduleAddConditionButton,
     ScheduleAddGroupButton, ScheduleChannelButton, ScheduleComparatorButton,
     ScheduleConditionKindButton, ScheduleConditionRemoveButton, ScheduleConditionStepButton,
-    ScheduleOperandModeButton, ScheduleRemoveButton, ScheduleRevision, ScheduleStationButton,
-    WAIT_STEP_TICKS, schedule_snapshot, station_names,
+    ScheduleManualButton, ScheduleOperandModeButton, ScheduleRemoveButton, ScheduleRevision,
+    ScheduleStationButton, WAIT_STEP_TICKS, schedule_snapshot, station_names,
 };
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
@@ -170,6 +170,28 @@ pub(crate) fn handle_schedule_channel_buttons(
     sounds.write(SoundEvent::UiClick);
     editor.close();
     editor.channel = Some(button.0);
+}
+
+/// Hands the train back to its schedule, or takes it off it.
+pub(crate) fn handle_schedule_manual_buttons(
+    buttons: Query<(&Interaction, &ScheduleManualButton, &ScheduleRevision), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
+    mut commands: MessageWriter<SimCommandRequest>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let Some((button, revision)) = pressed_schedule_button(&buttons) else {
+        return;
+    };
+    let sim = sim.read();
+    let Some((train_id, _)) = schedule_for_press(&sim, &open_container, revision) else {
+        return;
+    };
+    sounds.write(SoundEvent::UiClick);
+    commands.write(SimCommandRequest(SimCommand::SetTrainManual {
+        train_id,
+        manual: !button.0,
+    }));
 }
 
 pub(crate) fn handle_schedule_remove_buttons(

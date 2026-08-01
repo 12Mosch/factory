@@ -818,6 +818,21 @@ pub struct Train {
     /// been let into ahead, ascending and without repeats.
     #[serde(default)]
     pub reserved_blocks: Vec<EntityId>,
+    /// Whether the player is driving this train rather than its schedule.
+    ///
+    /// A flag on the train rather than an absence of orders, because "being
+    /// driven" and "having nothing to do" are different states that look alike
+    /// from the outside: both leave a train with no claim, no destination and no
+    /// route. Without somewhere to say which it is, the scheduling pass reads a
+    /// hand-driven train as an idle one and books it into the next stop on its
+    /// list — on the very tick the player took the controls, before the throttle
+    /// they asked for has moved the train at all.
+    ///
+    /// Durable because the alternative is a save that quietly hands a train back
+    /// to its schedule on load, sending it off from wherever the player parked
+    /// it.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 /// What a placed train stop carries: the name schedules ask for, and how many

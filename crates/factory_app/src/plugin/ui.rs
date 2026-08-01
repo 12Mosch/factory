@@ -65,9 +65,10 @@ use crate::ui::train_schedule_edit::{
     TrainScheduleEditorState, close_schedule_pickers_with_window,
     handle_schedule_add_condition_buttons, handle_schedule_add_group_buttons,
     handle_schedule_channel_buttons, handle_schedule_condition_edit_buttons,
-    handle_schedule_condition_remove_buttons, handle_schedule_remove_buttons,
-    handle_schedule_signal_picker_buttons, handle_schedule_station_buttons,
-    handle_station_picker_buttons, sync_schedule_signal_picker, sync_station_picker,
+    handle_schedule_condition_remove_buttons, handle_schedule_manual_buttons,
+    handle_schedule_remove_buttons, handle_schedule_signal_picker_buttons,
+    handle_schedule_station_buttons, handle_station_picker_buttons, sync_schedule_signal_picker,
+    sync_station_picker,
 };
 use crate::ui::train_schedule_panel::update_train_schedule_status;
 use crate::ui::train_stop_panel::{
@@ -209,6 +210,7 @@ impl Plugin for UiPlugin {
                     handle_schedule_add_condition_buttons.in_set(AppSet::UiInteraction),
                     handle_schedule_condition_remove_buttons.in_set(AppSet::UiInteraction),
                     handle_schedule_remove_buttons.in_set(AppSet::UiInteraction),
+                    handle_schedule_manual_buttons.in_set(AppSet::UiInteraction),
                     handle_station_picker_buttons.in_set(AppSet::UiInteraction),
                     handle_schedule_signal_picker_buttons.in_set(AppSet::UiInteraction),
                     close_schedule_pickers_with_window,

@@ -96,6 +96,31 @@ pub(crate) fn spawn_caption(parent: &mut bevy::ecs::hierarchy::ChildSpawnerComma
     ));
 }
 
+/// A [`spawn_row`] whose controls fall onto a second line rather than off the
+/// side of the panel.
+///
+/// For rows whose length is not fixed by the layout but by what the thing being
+/// edited turns out to be: a wait condition comparing a signal against a number
+/// carries twice the controls of one that waits for a full load, and the wide
+/// case does not fit the panel the narrow case sized.
+pub(crate) fn spawn_wrapping_row(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    build: impl FnOnce(&mut bevy::ecs::hierarchy::ChildSpawnerCommands),
+) {
+    parent
+        .spawn((
+            Node {
+                align_items: AlignItems::Center,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: Val::Px(4.0),
+                row_gap: Val::Px(2.0),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ))
+        .with_children(build);
+}
+
 /// A horizontal row the editors lay their controls out in.
 pub(crate) fn spawn_row(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,

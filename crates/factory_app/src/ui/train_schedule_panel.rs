@@ -42,7 +42,7 @@ use factory_sim::{
 use crate::resources::SimResource;
 use crate::ui::circuit::signals::signal_short_label;
 use crate::ui::circuit::widgets::{
-    LABEL_COLOR, spawn_button, spawn_caption, spawn_heading, spawn_row,
+    LABEL_COLOR, spawn_button, spawn_caption, spawn_heading, spawn_row, spawn_wrapping_row,
 };
 use crate::ui::resources::OpenContainer;
 
@@ -97,6 +97,11 @@ pub(crate) struct ScheduleStationButton(pub(crate) usize);
 
 #[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleRemoveButton(pub(crate) usize);
+
+/// Hands the train back to its schedule, or takes it off. Carries the mode it
+/// was drawn in, so the press asks for the other one.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleManualButton(pub(crate) bool);
 
 /// Adds an OR alternative to an entry, with one condition in it.
 #[derive(Component, Clone, Copy)]
@@ -164,6 +169,9 @@ pub(crate) struct ScheduleRowSnapshot {
 /// What the schedule editor was built from.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct ScheduleSnapshot {
+    /// Whether the player is driving, in which case the list below is what the
+    /// train will do once it is handed back rather than what it is doing.
+    pub(crate) manual: bool,
     pub(crate) rows: Vec<ScheduleRowSnapshot>,
     /// Whether any station exists to name. With none, the editor says so
     /// instead of offering an "add" button that could only add nothing.
@@ -200,6 +208,7 @@ pub(crate) fn schedule_snapshot(
     let train_id = sim.rolling_stock_piece(stock_id)?.train;
     let train = sim.train(train_id)?;
     Some(ScheduleSnapshot {
+        manual: train.manual,
         rows: train
             .schedule
             .entries
@@ -302,6 +311,30 @@ pub(crate) fn spawn_train_schedule_panel(
         .with_children(|panel| {
             let revision = ScheduleRevision(snapshot.revision());
             spawn_heading(panel, "Schedule");
+            // Driving a train takes it off its orders, and something has to
+            // give it back — otherwise a train driven once is a train that
+            // never runs its schedule again.
+            spawn_row(panel, |controls| {
+                spawn_button(
+                    controls,
+                    88.0,
+                    if snapshot.manual {
+                        "Manual"
+                    } else {
+                        "Automatic"
+                    },
+                    ScheduleManualButton(snapshot.manual),
+                    revision,
+                );
+                spawn_caption(
+                    controls,
+                    if snapshot.manual {
+                        "driven by hand"
+                    } else {
+                        "running its schedule"
+                    },
+                );
+            });
             for (index, row) in snapshot.rows.iter().enumerate() {
                 spawn_entry(panel, index, row, revision);
             }
@@ -404,7 +437,11 @@ fn spawn_condition(
     leads_with_and: bool,
     revision: ScheduleRevision,
 ) {
-    spawn_row(panel, |controls| {
+    // Wrapping rather than fixed: a circuit condition compared against a number
+    // carries a kind, a channel, a comparator, an operand mode, a value, two
+    // steppers and a remove button, which is wider than the panel. The narrow
+    // conditions still take one line.
+    spawn_wrapping_row(panel, |controls| {
         spawn_caption(controls, if leads_with_and { "and" } else { "   " });
         spawn_button(
             controls,
@@ -571,6 +608,7 @@ mod tests {
 
     fn snapshot_of(sim: &Simulation, conditions: &[TrainWaitCondition]) -> ScheduleSnapshot {
         ScheduleSnapshot {
+            manual: false,
             rows: vec![ScheduleRowSnapshot {
                 stop_name: "Depot".into(),
                 groups: vec![

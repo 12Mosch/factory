@@ -182,19 +182,36 @@ fn prototype_display_name_for(name: &str) -> String {
     crate::ui::formatting::format_recipe_display_name(name)
 }
 
+/// The window's frame, which is also what scrolls.
+///
+/// Bounded and scrolled because the schedule editor inside it grows without a
+/// ceiling: every stop, every OR alternative, and every ANDed condition adds
+/// rows, and unbounded a long schedule pushes its own remove buttons past the
+/// bottom of the screen — where they cannot be reached to shorten it again.
+///
+/// On the root rather than around the contents because the root is the one
+/// entity a rebuild keeps: [`sync_window`] despawns and respawns the children
+/// whenever the snapshot changes, and every schedule edit changes it. A scroll
+/// container among those children would be rebuilt with them, taking the scroll
+/// position back to the top after each edit and sending the player looking for
+/// the row they were working on again.
 fn rolling_stock_window_root() -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(12.0),
             top: Val::Px(12.0),
+            max_height: Val::Vh(92.0),
             padding: UiRect::all(Val::Px(10.0)),
             column_gap: Val::Px(10.0),
             align_items: AlignItems::FlexStart,
+            overflow: Overflow::scroll_y(),
+            scrollbar_width: 10.0,
             ..default()
         },
         BackgroundColor(Color::srgba(0.03, 0.03, 0.035, 0.88)),
         GlobalZIndex(1100),
+        ScrollArea,
     )
 }
 
@@ -203,22 +220,14 @@ fn spawn_rolling_stock_window_contents(
     snapshot: &RollingStockWindowSnapshot,
 ) {
     spawn_player_inventory_panel(root);
-    // Bounded and scrolled, because the schedule editor below grows without a
-    // ceiling: every stop, every OR alternative, and every ANDed condition adds
-    // rows. Unbounded, a long schedule pushes its own remove buttons past the
-    // bottom of the screen, where they cannot be reached to shorten it again.
     root.spawn((
         Node {
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(8.0),
-            width: Val::Px(270.0),
-            max_height: Val::Vh(88.0),
-            overflow: Overflow::scroll_y(),
-            scrollbar_width: 10.0,
+            width: Val::Px(260.0),
             ..default()
         },
         BackgroundColor(Color::NONE),
-        ScrollArea,
     ))
     .with_children(|panel| {
         panel.spawn((

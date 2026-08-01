@@ -79,7 +79,10 @@ use bincode::Options;
 // derived with the rail graph and no longer saved, and a train's claim on a stop
 // names that entity. Wait conditions gained a comparison against the signals
 // reaching the stop, which is what the connector on it is for.
-pub const SAVE_VERSION: u32 = 41;
+// v42: a train records whether the player is driving it. The flag is durable
+// because a save that dropped it would hand every hand-parked train back to its
+// schedule on load and send it off again.
+pub const SAVE_VERSION: u32 = 42;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
