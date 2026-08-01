@@ -336,11 +336,11 @@ pub(crate) fn spawn_train_schedule_panel(
             spawn_row(panel, |controls| {
                 spawn_schedule_button(
                     controls,
-                    88.0,
+                    112.0,
                     if snapshot.manual {
-                        "Manual"
+                        "Resume automatic"
                     } else {
-                        "Automatic"
+                        "Drive manually"
                     },
                     ScheduleManualButton(snapshot.manual),
                     revision,
@@ -354,6 +354,15 @@ pub(crate) fn spawn_train_schedule_panel(
                     },
                 );
             });
+            if snapshot.manual {
+                // Manual driving happens in the world rather than through this
+                // modal window. Say both that the window must be closed and
+                // which keys act on the train; without this, the mode button
+                // leaves the player in a state whose controls exist only in
+                // the source code.
+                spawn_caption(panel, "Close this window, point at the train, then press:");
+                spawn_caption(panel, "F8 drive / reverse  ·  F10 brake");
+            }
             for (index, row) in snapshot.rows.iter().enumerate() {
                 spawn_entry(panel, index, row, revision);
             }
@@ -749,6 +758,42 @@ mod tests {
             stamped.iter(&world).count(),
             total,
             "a button was drawn without the revision on the entity the press arrives at"
+        );
+    }
+
+    #[test]
+    fn manual_mode_explains_how_to_drive_and_return_to_the_schedule() {
+        let snapshot = ScheduleSnapshot {
+            manual: true,
+            rows: Vec::new(),
+            has_stations: false,
+        };
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            commands.spawn_empty().with_children(|parent| {
+                spawn_train_schedule_panel(parent, &snapshot);
+            });
+        }
+        queue.apply(&mut world);
+
+        let mut texts = world.query::<&Text>();
+        let labels = texts
+            .iter(&world)
+            .map(|text| text.0.as_str())
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"Resume automatic"));
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("F8 drive / reverse"))
+        );
+        assert!(labels.iter().any(|label| label.contains("F10 brake")));
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("Close this window"))
         );
     }
 
