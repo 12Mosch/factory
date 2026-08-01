@@ -548,10 +548,45 @@ impl Simulation {
         train.destination = None;
         train.route = None;
         train.route_search_exhausted_at = None;
+        // Taking the controls is what puts a train under the player's hand.
+        // Without this the scheduling pass would book it into its next stop on
+        // this very tick — it has no claim and no destination, which is exactly
+        // what an idle train looks like — and the route it planned would drive
+        // the throttle straight back over the one that was just asked for.
+        train.manual = true;
         // The claim goes with the plan. A train being driven by hand is not a
         // train on its way to the platform it booked, and a claim it kept would
         // hold a place at that stop against every train that is actually coming.
         train.release_scheduled_stop();
+        Ok(())
+    }
+
+    /// Hands a train to its schedule, or takes it back.
+    ///
+    /// Returning to automatic keeps whatever the train is doing this instant —
+    /// the scheduling pass picks it up on the next tick and decides from there,
+    /// which for a moving train means a stop chosen from where it now is rather
+    /// than from where it was parked.
+    pub fn set_train_manual(
+        &mut self,
+        train_id: TrainId,
+        manual: bool,
+    ) -> Result<(), TrainControlError> {
+        let train = self
+            .rolling_stock
+            .trains
+            .get_mut(&train_id)
+            .ok_or(TrainControlError::MissingTrain(train_id))?;
+        if train.manual == manual {
+            return Ok(());
+        }
+        train.manual = manual;
+        if manual {
+            train.destination = None;
+            train.route = None;
+            train.route_search_exhausted_at = None;
+            train.release_scheduled_stop();
+        }
         Ok(())
     }
 
@@ -701,6 +736,17 @@ impl Simulation {
         }
         let tick = self.tick;
         for id in ids {
+            // A train under the player's hand has no schedule as far as this
+            // pass is concerned: not the cursor, not the claim, not the stop it
+            // would otherwise be sent to. Its orders are waiting for it when it
+            // is given back.
+            if self
+                .rolling_stock
+                .train(id)
+                .is_some_and(|train| train.manual)
+            {
+                continue;
+            }
             if self
                 .rolling_stock
                 .train(id)

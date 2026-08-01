@@ -11,11 +11,9 @@ use crate::input::panels::{
 };
 use crate::input::rail_debug::toggle_rail_overlay_from_input;
 use crate::input::repair::update_repair_from_input;
-use crate::input::resources::{
-    AppInputState, RailGraphOverlay, TrainDebugInput, TrainRoutingSelection,
-};
+use crate::input::resources::{AppInputState, RailGraphOverlay, TrainManualInput};
 use crate::input::robot_debug::dispatch_debug_robot_from_input;
-use crate::input::train_debug::{apply_train_debug_input, collect_train_debug_input};
+use crate::input::train_manual::{apply_train_manual_input, collect_train_manual_input};
 
 /// Input resources, panel-state collection, and the fixed-step systems that
 /// feed frame-collected input into the simulation.
@@ -30,8 +28,7 @@ impl Plugin for InputPlugin {
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<AppInputState>()
             .init_resource::<RailGraphOverlay>()
-            .init_resource::<TrainRoutingSelection>()
-            .init_resource::<TrainDebugInput>()
+            .init_resource::<TrainManualInput>()
             .add_systems(
                 PreUpdate,
                 (
@@ -49,7 +46,7 @@ impl Plugin for InputPlugin {
                     update_manual_mining_from_input,
                     update_repair_from_input,
                     dispatch_debug_robot_from_input,
-                    apply_train_debug_input,
+                    apply_train_manual_input,
                 )
                     .chain()
                     .in_set(AppSet::SimInput),
@@ -59,7 +56,7 @@ impl Plugin for InputPlugin {
                 (
                     zoom_camera,
                     toggle_rail_overlay_from_input,
-                    collect_train_debug_input,
+                    collect_train_manual_input,
                 )
                     .in_set(AppSet::WorldInput),
             );

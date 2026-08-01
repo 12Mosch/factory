@@ -220,13 +220,17 @@ pub enum SimCommand {
     MineRollingStock {
         stock_id: RollingStockId,
     },
-    /// Debug drive command: sets what a train is doing. With no pathfinding,
-    /// signals, or schedules yet, this is the only thing that makes a train
-    /// move, and it goes through the command queue so it lands on a tick
-    /// boundary like every other input.
+    /// Drives a train by hand, which also takes it off its schedule: a train
+    /// cannot be steered by the player and by its orders at once.
     SetTrainThrottle {
         train_id: TrainId,
         throttle: TrainThrottle,
+    },
+    /// Hands a train back to its schedule, or takes it off again without
+    /// touching the throttle.
+    SetTrainManual {
+        train_id: TrainId,
+        manual: bool,
     },
     /// Debug routing command: sends a train to a rail. The route is searched
     /// inside the tick against the rail graph as it then is, so this only
@@ -744,6 +748,11 @@ impl Simulation {
             }
             SimCommand::SetTrainThrottle { train_id, throttle } => {
                 self.set_train_throttle(train_id, throttle)
+                    .map_err(SimCommandError::TrainControl)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::SetTrainManual { train_id, manual } => {
+                self.set_train_manual(train_id, manual)
                     .map_err(SimCommandError::TrainControl)?;
                 Ok(SimCommandEffect::None)
             }

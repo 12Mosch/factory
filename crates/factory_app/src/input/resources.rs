@@ -17,27 +17,15 @@ pub struct RailGraphOverlay {
     pub enabled: bool,
 }
 
-/// The train the debug routing key is about to send somewhere.
-///
-/// Sending a train to a rail is two presses' worth of information — which
-/// train, and which rail — and the cursor can only name one of them at a time,
-/// so the first press has to be remembered somewhere. Frame-side state rather
-/// than simulation state: it is a half-finished input, not something the world
-/// knows about, and a save that remembered it would be remembering a keystroke.
-#[derive(Resource, Default)]
-pub struct TrainRoutingSelection {
-    pub train: Option<factory_sim::TrainId>,
-}
-
-/// Debug train presses collected since the fixed step last looked, in the order
-/// they were made.
+/// Manual driving presses collected since the fixed step last looked, in the
+/// order they were made.
 ///
 /// A key press is an edge, and an edge belongs to a frame rather than to a fixed
 /// step: a dropped frame runs several fixed steps while `just_pressed` stays
 /// true for all of them, and a fast one runs several frames before any fixed
 /// step at all. So the presses are collected in the frame schedule and the fixed
-/// step consumes them — a train picked up by a stutter and put straight back
-/// down is not what the player asked for.
+/// step consumes them — a train pulling away twice because a frame was dropped
+/// is not what the player asked for.
 ///
 /// A queue rather than a flag per key, because both the order and the repeats
 /// matter: two presses of the drive key are two changes of direction, and drive
@@ -47,28 +35,26 @@ pub struct TrainRoutingSelection {
 /// re-reading the cursor when the fixed step gets round to it would answer with
 /// wherever the mouse has since moved to.
 #[derive(Resource, Default)]
-pub struct TrainDebugInput {
-    pending: VecDeque<TrainDebugPress>,
+pub struct TrainManualInput {
+    pending: VecDeque<TrainManualPress>,
 }
 
-/// One press of a debug train key, and where it was aimed.
+/// One press of a manual driving key, and where it was aimed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TrainDebugPress {
-    pub key: TrainDebugKey,
+pub struct TrainManualPress {
+    pub key: TrainManualKey,
     pub tile: (WorldTileCoord, WorldTileCoord),
 }
 
-/// Which debug train key was pressed.
+/// Which manual driving key was pressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrainDebugKey {
+pub enum TrainManualKey {
     /// Pull away, or turn around if the train is already driving.
     Drive,
     Brake,
-    /// Pick a train up, or put it down where the cursor is pointing.
-    Route,
 }
 
-impl TrainDebugInput {
+impl TrainManualInput {
     /// Presses held for a fixed step that has not run yet.
     ///
     /// Deeper than the handful of presses a player can make between two fixed
@@ -77,9 +63,9 @@ impl TrainDebugInput {
     /// of them replayed at once.
     const CAPACITY: usize = 8;
 
-    pub fn push(&mut self, key: TrainDebugKey, tile: (WorldTileCoord, WorldTileCoord)) {
+    pub fn push(&mut self, key: TrainManualKey, tile: (WorldTileCoord, WorldTileCoord)) {
         if self.pending.len() < Self::CAPACITY {
-            self.pending.push_back(TrainDebugPress { key, tile });
+            self.pending.push_back(TrainManualPress { key, tile });
         }
     }
 
@@ -95,7 +81,7 @@ impl TrainDebugInput {
     }
 
     /// Takes the presses waiting, oldest first.
-    pub fn drain(&mut self) -> impl Iterator<Item = TrainDebugPress> + '_ {
+    pub fn drain(&mut self) -> impl Iterator<Item = TrainManualPress> + '_ {
         self.pending.drain(..)
     }
 }
@@ -109,25 +95,25 @@ mod tests {
     /// rather than a flag per key.
     #[test]
     fn presses_are_kept_in_order_with_their_tiles_and_capped() {
-        let mut input = TrainDebugInput::default();
+        let mut input = TrainManualInput::default();
         assert!(input.is_empty());
 
-        input.push(TrainDebugKey::Route, (1, 2));
-        input.push(TrainDebugKey::Drive, (3, 4));
-        input.push(TrainDebugKey::Drive, (3, 4));
+        input.push(TrainManualKey::Brake, (1, 2));
+        input.push(TrainManualKey::Drive, (3, 4));
+        input.push(TrainManualKey::Drive, (3, 4));
         assert_eq!(
             input.drain().collect::<Vec<_>>(),
             vec![
-                TrainDebugPress {
-                    key: TrainDebugKey::Route,
+                TrainManualPress {
+                    key: TrainManualKey::Brake,
                     tile: (1, 2)
                 },
-                TrainDebugPress {
-                    key: TrainDebugKey::Drive,
+                TrainManualPress {
+                    key: TrainManualKey::Drive,
                     tile: (3, 4)
                 },
-                TrainDebugPress {
-                    key: TrainDebugKey::Drive,
+                TrainManualPress {
+                    key: TrainManualKey::Drive,
                     tile: (3, 4)
                 },
             ]
@@ -135,8 +121,8 @@ mod tests {
         assert!(input.is_empty(), "draining leaves nothing behind");
 
         for _ in 0..64 {
-            input.push(TrainDebugKey::Route, (0, 0));
+            input.push(TrainManualKey::Drive, (0, 0));
         }
-        assert_eq!(input.drain().count(), TrainDebugInput::CAPACITY);
+        assert_eq!(input.drain().count(), TrainManualInput::CAPACITY);
     }
 }

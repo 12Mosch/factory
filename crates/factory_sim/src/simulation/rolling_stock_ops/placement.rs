@@ -585,6 +585,7 @@ impl Simulation {
                         schedule_activity_cargo: None,
                         scheduled_stop: None,
                         reserved_blocks: Vec::new(),
+                        manual: false,
                     },
                 );
                 train_id
@@ -811,6 +812,7 @@ impl Simulation {
                         // is standing in on the very next tick, and a claim
                         // ahead belonged to a train that no longer exists.
                         reserved_blocks: Vec::new(),
+                        manual: false,
                     },
                 );
                 group_id

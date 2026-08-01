@@ -4,7 +4,7 @@ use factory_sim::{ManualMiningTarget, SimCommand};
 
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
-use crate::input::train_debug::stock_at_tile;
+use crate::input::train_manual::stock_at_tile;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;

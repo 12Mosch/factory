@@ -1,131 +1,222 @@
-//! The schedule editor: the ordered list of stations a train serves and what
-//! keeps it at each of them.
+//! The schedule editor: the ordered list of stations a train serves and the
+//! conditions that keep it at each of them.
 //!
 //! Shown inside the rolling-stock window, because a schedule belongs to the
 //! *train* rather than to any one piece of it: opening any wagon of a train
 //! shows the same list, and editing it from a wagon is editing the train.
 //!
-//! Two decisions shape the controls.
+//! Three decisions shape the controls.
 //!
 //! * **Stations are chosen, not typed.** An entry names a station by name, and
 //!   a name that answers to nothing is a train with nowhere to go, so the entry
-//!   cycles through the names that exist rather than offering a text field that
-//!   could hold anything. Renaming a station is done at the station, where the
+//!   is filled from a list of the names that exist. A list rather than the
+//!   `< name >` cycle it replaces: cycling is fine for three stations and
+//!   unusable for thirty, and it never shows the player what the alternatives
+//!   are. Renaming a station is still done at the station, where the
 //!   consequences of it are visible.
-//! * **One condition per entry here.** The simulation stores ORs of ANDs, and
-//!   saves and loads the whole of that; what this edits is the common case —
-//!   one rule per stop — so a row stays a row. An entry carrying something
-//!   richer is shown as what it is and left alone rather than flattened by an
-//!   editor that cannot express it.
+//! * **The editor says everything the simulation stores.** Wait conditions are
+//!   ORs of ANDs, and every one of them — a time, an idle spell, a full or
+//!   empty load, an item or fluid count, a comparison against the signals
+//!   reaching the stop — can be written here. An editor that could only express
+//!   the simple half would quietly flatten the rest, so the panel grew the
+//!   nesting instead of hiding from it.
+//! * **A row shows only controls that do something.** "Wait until the cargo is
+//!   full" has no number in it and no channel; a circuit condition compared
+//!   against a signal has no number either. Spawning a stepper there would be a
+//!   button that answers nothing.
+//!
+//! Every edit reads the schedule the simulation currently holds, applies one
+//! change to a copy, and sends the copy. Nothing here keeps a draft: a draft is
+//! a second version of the schedule the panel could show and the train could
+//! not be running, and the two would disagree the moment anything else touched
+//! the train. That also means only *one* press may be acted on per frame, which
+//! is why each handler takes the first press it finds.
+
+use std::collections::BTreeSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use bevy::prelude::*;
 use factory_sim::{
-    RollingStockId, SignalOperand, SimCommand, Simulation, TrainId, TrainSchedule,
-    TrainScheduleEntry, TrainWaitCondition, TrainWaitConditionGroup,
+    RollingStockId, SignalOperand, Simulation, TrainId, TrainWaitCondition, TrainWaitConditionKind,
 };
 
-use crate::audio::SoundEvent;
 use crate::resources::SimResource;
-use crate::simulation::SimCommandRequest;
-use crate::ui::circuit::signals::signal_display_name;
-use crate::ui::circuit::state::cycle;
+use crate::ui::circuit::signals::signal_short_label;
 use crate::ui::circuit::widgets::{
-    LABEL_COLOR, spawn_button, spawn_caption, spawn_heading, spawn_row,
+    LABEL_COLOR, spawn_button, spawn_caption, spawn_heading, spawn_row, spawn_wrapping_row,
 };
 use crate::ui::resources::OpenContainer;
 
 /// Ticks a step button moves a timed condition by: one second, the unit a
 /// player thinks about a station wait in.
-const WAIT_STEP_TICKS: u64 = 60;
+pub(crate) const WAIT_STEP_TICKS: u64 = 60;
 
-/// What a fresh timed condition starts at: five seconds, long enough to be a
-/// real wait and short enough to watch happen.
-const DEFAULT_WAIT_TICKS: u64 = 5 * WAIT_STEP_TICKS;
+/// Milliunits in one unit of fluid, matching how every other panel shows a
+/// fluid amount.
+pub(crate) const MILLIUNITS_PER_UNIT: i32 = 1_000;
 
-/// The condition kinds the row cycles through.
+/// Where one condition sits in a schedule: which stop, which OR alternative,
+/// and which AND condition within it.
 ///
-/// A closed list rather than the whole of [`TrainWaitCondition`]: item, fluid,
-/// and circuit conditions each need a channel picked as well as a comparator,
-/// which is more than a cycling button can say. They are readable here and
-/// editable where the signals they compare against are — see the module note.
+/// An address rather than a handle, because the panel is built from one frame's
+/// schedule and clicked in a later one. An address alone cannot say whether it
+/// still names what it was written for — remove the first of two conditions and
+/// the second answers to the first one's address — so every button carries the
+/// [`ScheduleRevision`] it was drawn with, and a press whose revision has since
+/// moved on is dropped rather than applied to whatever took its place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WaitKind {
-    Immediate,
-    TimePassed,
-    Inactivity,
-    CargoFull,
-    CargoEmpty,
+pub(crate) struct ConditionRef {
+    pub(crate) entry: usize,
+    pub(crate) group: usize,
+    pub(crate) index: usize,
 }
 
-impl WaitKind {
-    const ALL: [Self; 5] = [
-        Self::Immediate,
-        Self::TimePassed,
-        Self::Inactivity,
-        Self::CargoFull,
-        Self::CargoEmpty,
-    ];
+/// Which half of a condition a picked signal lands in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConditionPart {
+    /// What is being counted: the item, the fluid, or a circuit condition's
+    /// left-hand signal.
+    Subject,
+    /// A circuit condition's right-hand operand, which may hold a signal or a
+    /// plain number instead.
+    CircuitRight,
+}
 
-    /// The condition this kind produces, keeping whatever tick count the entry
-    /// already carried so cycling past a timed condition and back does not
-    /// silently reset it.
-    fn condition(self, ticks: u64) -> Option<TrainWaitCondition> {
-        match self {
-            Self::Immediate => None,
-            Self::TimePassed => Some(TrainWaitCondition::TimePassed { ticks }),
-            Self::Inactivity => Some(TrainWaitCondition::Inactivity { ticks }),
-            Self::CargoFull => Some(TrainWaitCondition::CargoFull),
-            Self::CargoEmpty => Some(TrainWaitCondition::CargoEmpty),
-        }
-    }
+/// The condition slot an open signal picker is filling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConditionSlot {
+    pub(crate) condition: ConditionRef,
+    pub(crate) part: ConditionPart,
+}
+
+#[derive(Component)]
+pub(crate) struct ScheduleStatusText;
+
+/// Opens the station list for an entry. An index one past the end appends.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleStationButton(pub(crate) usize);
+
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleRemoveButton(pub(crate) usize);
+
+/// Hands the train back to its schedule, or takes it off. Carries the mode it
+/// was drawn in, so the press asks for the other one.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleManualButton(pub(crate) bool);
+
+/// Adds an OR alternative to an entry, with one condition in it.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleAddGroupButton(pub(crate) usize);
+
+/// Adds an AND condition to an alternative that already exists.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleAddConditionButton {
+    pub(crate) entry: usize,
+    pub(crate) group: usize,
+}
+
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleConditionKindButton(pub(crate) ConditionRef);
+
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleComparatorButton(pub(crate) ConditionRef);
+
+/// Switches a circuit condition's right-hand operand between a signal and a
+/// plain number.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleOperandModeButton(pub(crate) ConditionRef);
+
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleConditionStepButton {
+    pub(crate) condition: ConditionRef,
+    pub(crate) delta: i32,
+}
+
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleConditionRemoveButton(pub(crate) ConditionRef);
+
+/// Opens the signal grid for one half of a condition.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ScheduleChannelButton(pub(crate) ConditionSlot);
+
+/// One condition as the editor draws it: what it is, what it is about, and what
+/// it is compared against — each `None` where the kind has no such part, so the
+/// view spawns no control the press could not answer.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct ConditionSnapshot {
+    kind: TrainWaitConditionKind,
+    kind_label: &'static str,
+    /// The channel the condition counts, for kinds that name one.
+    channel: Option<String>,
+    comparator: Option<&'static str>,
+    /// `NUM`/`SIG` for a circuit condition's right-hand operand.
+    operand_mode: Option<&'static str>,
+    /// What the condition compares against, as it reads on the row.
+    value: Option<String>,
+    /// Whether the stepper has a number to move.
+    steppable: bool,
 }
 
 /// A row of the editor as it was built: what the entry says, so the window
-/// rebuilds when an entry is added, removed, or changed and stays put while the
-/// train runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// rebuilds when an entry or a condition changes and stays put while the train
+/// runs.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct ScheduleRowSnapshot {
     pub(crate) stop_name: String,
-    pub(crate) condition: String,
-    /// Whether the row's condition is one the stepper can move.
-    pub(crate) timed: bool,
+    /// OR alternatives, each a run of ANDed conditions.
+    pub(crate) groups: Vec<Vec<ConditionSnapshot>>,
 }
 
 /// What the schedule editor was built from.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct ScheduleSnapshot {
+    /// Whether the player is driving, in which case the list below is what the
+    /// train will do once it is handed back rather than what it is doing.
+    pub(crate) manual: bool,
     pub(crate) rows: Vec<ScheduleRowSnapshot>,
     /// Whether any station exists to name. With none, the editor says so
     /// instead of offering an "add" button that could only add nothing.
     pub(crate) has_stations: bool,
 }
 
-#[derive(Component)]
-pub(crate) struct ScheduleStatusText;
-
-#[derive(Component)]
-pub(crate) struct ScheduleStopCycleButton {
-    pub(crate) index: usize,
-    pub(crate) backwards: bool,
+impl ScheduleSnapshot {
+    /// A short stand-in for the whole snapshot, cheap enough to hang off every
+    /// button the panel spawns.
+    ///
+    /// Hashed from the snapshot rather than from the schedule because the
+    /// snapshot is what the panel was drawn from, and the window is rebuilt
+    /// exactly when the snapshot changes. A schedule that changed without
+    /// changing the snapshot left the panel correct, and its buttons must keep
+    /// working.
+    pub(crate) fn revision(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
-#[derive(Component)]
-pub(crate) struct ScheduleConditionCycleButton {
-    pub(crate) index: usize,
-    pub(crate) backwards: bool,
+/// The snapshot a button was drawn from, so a press can be told apart from one
+/// meant for a panel that no longer exists.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScheduleRevision(pub(crate) u64);
+
+/// A [`spawn_button`] that stamps the revision onto the button itself.
+///
+/// Every button in this panel goes through here rather than through
+/// `spawn_button` directly, because the revision has to land on the same entity
+/// as the `Interaction` and the marker for the handlers to see it at all — and
+/// `spawn_button`'s last argument decorates the button's *text*, one entity
+/// down. Passing it there costs nothing and compiles cleanly, and the press is
+/// simply never matched.
+fn spawn_schedule_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    width: f32,
+    text: &str,
+    marker: impl Bundle,
+    revision: ScheduleRevision,
+) {
+    spawn_button(parent, width, text, (marker, revision), ());
 }
-
-#[derive(Component)]
-pub(crate) struct ScheduleWaitStepButton {
-    pub(crate) index: usize,
-    pub(crate) delta: i64,
-}
-
-#[derive(Component)]
-pub(crate) struct ScheduleRemoveButton(pub(crate) usize);
-
-#[derive(Component)]
-pub(crate) struct ScheduleAddButton;
 
 /// What the editor shows for a train, or `None` for a piece of stock that is
 /// not part of one.
@@ -136,24 +227,91 @@ pub(crate) fn schedule_snapshot(
     let train_id = sim.rolling_stock_piece(stock_id)?.train;
     let train = sim.train(train_id)?;
     Some(ScheduleSnapshot {
+        manual: train.manual,
         rows: train
             .schedule
             .entries
             .iter()
             .map(|entry| ScheduleRowSnapshot {
                 stop_name: entry.stop_name.clone(),
-                condition: condition_label(sim, entry),
-                timed: matches!(
-                    sole_condition(entry),
-                    Some(
-                        TrainWaitCondition::TimePassed { .. }
-                            | TrainWaitCondition::Inactivity { .. }
-                    )
-                ),
+                groups: entry
+                    .wait_conditions
+                    .iter()
+                    .map(|group| {
+                        group
+                            .0
+                            .iter()
+                            .map(|condition| condition_snapshot(sim, *condition))
+                            .collect()
+                    })
+                    .collect(),
             })
             .collect(),
-        has_stations: !station_names(sim).is_empty(),
+        has_stations: any_station_exists(sim),
     })
+}
+
+fn condition_snapshot(sim: &Simulation, condition: TrainWaitCondition) -> ConditionSnapshot {
+    let catalog = sim.catalog();
+    let short = |signal| signal_short_label(catalog, signal);
+    ConditionSnapshot {
+        kind: condition.kind(),
+        kind_label: condition_kind_label(condition.kind()),
+        channel: match condition {
+            TrainWaitCondition::ItemCount { item, .. } => {
+                Some(short(factory_sim::SignalId::Item(item)))
+            }
+            TrainWaitCondition::FluidCount { fluid, .. } => {
+                Some(short(factory_sim::SignalId::Fluid(fluid)))
+            }
+            TrainWaitCondition::Circuit(inner) => Some(short(inner.left)),
+            _ => None,
+        },
+        comparator: condition.comparator().map(|comparator| comparator.symbol()),
+        operand_mode: match condition {
+            TrainWaitCondition::Circuit(inner) => Some(match inner.right {
+                SignalOperand::Constant(_) => "NUM",
+                SignalOperand::Signal(_) => "SIG",
+            }),
+            _ => None,
+        },
+        value: match condition {
+            TrainWaitCondition::TimePassed { ticks } | TrainWaitCondition::Inactivity { ticks } => {
+                Some(seconds(ticks))
+            }
+            TrainWaitCondition::ItemCount { count, .. } => Some(count.to_string()),
+            TrainWaitCondition::FluidCount { milliunits, .. } => {
+                Some((milliunits / MILLIUNITS_PER_UNIT).to_string())
+            }
+            TrainWaitCondition::Circuit(inner) => Some(match inner.right {
+                SignalOperand::Constant(value) => value.to_string(),
+                SignalOperand::Signal(signal) => short(signal),
+            }),
+            _ => None,
+        },
+        // A circuit condition compared against a signal reads whatever is on
+        // the wire, so there is no number on that row for a stepper to move.
+        steppable: match condition {
+            TrainWaitCondition::Circuit(inner) => {
+                matches!(inner.right, SignalOperand::Constant(_))
+            }
+            TrainWaitCondition::CargoFull | TrainWaitCondition::CargoEmpty => false,
+            _ => true,
+        },
+    }
+}
+
+/// What a wait condition's kind is called on its button.
+pub(crate) const fn condition_kind_label(kind: TrainWaitConditionKind) -> &'static str {
+    match kind {
+        TrainWaitConditionKind::CargoFull => "Full",
+        TrainWaitConditionKind::CargoEmpty => "Empty",
+        TrainWaitConditionKind::TimePassed => "Time",
+        TrainWaitConditionKind::Inactivity => "Idle",
+        TrainWaitConditionKind::ItemCount => "Item",
+        TrainWaitConditionKind::FluidCount => "Fluid",
+        TrainWaitConditionKind::Circuit => "Signal",
+    }
 }
 
 pub(crate) fn spawn_train_schedule_panel(
@@ -170,99 +328,44 @@ pub(crate) fn spawn_train_schedule_panel(
             BackgroundColor(Color::NONE),
         ))
         .with_children(|panel| {
+            let revision = ScheduleRevision(snapshot.revision());
             spawn_heading(panel, "Schedule");
+            // Driving a train takes it off its orders, and something has to
+            // give it back — otherwise a train driven once is a train that
+            // never runs its schedule again.
+            spawn_row(panel, |controls| {
+                spawn_schedule_button(
+                    controls,
+                    88.0,
+                    if snapshot.manual {
+                        "Manual"
+                    } else {
+                        "Automatic"
+                    },
+                    ScheduleManualButton(snapshot.manual),
+                    revision,
+                );
+                spawn_caption(
+                    controls,
+                    if snapshot.manual {
+                        "driven by hand"
+                    } else {
+                        "running its schedule"
+                    },
+                );
+            });
             for (index, row) in snapshot.rows.iter().enumerate() {
-                spawn_row(panel, |controls| {
-                    spawn_button(
-                        controls,
-                        18.0,
-                        "<",
-                        ScheduleStopCycleButton {
-                            index,
-                            backwards: true,
-                        },
-                        (),
-                    );
-                    controls.spawn((
-                        Node {
-                            width: Val::Px(120.0),
-                            ..default()
-                        },
-                        Text::new(row.stop_name.clone()),
-                        TextFont::from_font_size(11.0),
-                        TextColor(Color::WHITE),
-                    ));
-                    spawn_button(
-                        controls,
-                        18.0,
-                        ">",
-                        ScheduleStopCycleButton {
-                            index,
-                            backwards: false,
-                        },
-                        (),
-                    );
-                    spawn_button(controls, 18.0, "x", ScheduleRemoveButton(index), ());
-                });
-                spawn_row(panel, |controls| {
-                    spawn_button(
-                        controls,
-                        18.0,
-                        "<",
-                        ScheduleConditionCycleButton {
-                            index,
-                            backwards: true,
-                        },
-                        (),
-                    );
-                    controls.spawn((
-                        Node {
-                            width: Val::Px(120.0),
-                            ..default()
-                        },
-                        Text::new(row.condition.clone()),
-                        TextFont::from_font_size(10.0),
-                        TextColor(LABEL_COLOR),
-                    ));
-                    spawn_button(
-                        controls,
-                        18.0,
-                        ">",
-                        ScheduleConditionCycleButton {
-                            index,
-                            backwards: false,
-                        },
-                        (),
-                    );
-                    // A stepper only where there is a number to step; a row
-                    // whose condition carries none would answer nothing.
-                    if row.timed {
-                        spawn_button(
-                            controls,
-                            18.0,
-                            "-",
-                            ScheduleWaitStepButton {
-                                index,
-                                delta: -(WAIT_STEP_TICKS as i64),
-                            },
-                            (),
-                        );
-                        spawn_button(
-                            controls,
-                            18.0,
-                            "+",
-                            ScheduleWaitStepButton {
-                                index,
-                                delta: WAIT_STEP_TICKS as i64,
-                            },
-                            (),
-                        );
-                    }
-                });
+                spawn_entry(panel, index, row, revision);
             }
             if snapshot.has_stations {
                 spawn_row(panel, |controls| {
-                    spawn_button(controls, 66.0, "Add stop", ScheduleAddButton, ());
+                    spawn_schedule_button(
+                        controls,
+                        66.0,
+                        "Add stop",
+                        ScheduleStationButton(snapshot.rows.len()),
+                        revision,
+                    );
                 });
             } else {
                 spawn_caption(panel, "Build a train stop to schedule this train");
@@ -274,6 +377,176 @@ pub(crate) fn spawn_train_schedule_panel(
                 ScheduleStatusText,
             ));
         });
+}
+
+fn spawn_entry(
+    panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    index: usize,
+    row: &ScheduleRowSnapshot,
+    revision: ScheduleRevision,
+) {
+    spawn_row(panel, |controls| {
+        spawn_schedule_button(
+            controls,
+            140.0,
+            &row.stop_name,
+            ScheduleStationButton(index),
+            revision,
+        );
+        spawn_schedule_button(controls, 18.0, "x", ScheduleRemoveButton(index), revision);
+    });
+    if row.groups.is_empty() {
+        spawn_caption(panel, "  Leaves as soon as it arrives");
+    }
+    for (group_index, group) in row.groups.iter().enumerate() {
+        if group_index > 0 {
+            spawn_caption(panel, "  — or —");
+        }
+        for (condition_index, condition) in group.iter().enumerate() {
+            spawn_condition(
+                panel,
+                ConditionRef {
+                    entry: index,
+                    group: group_index,
+                    index: condition_index,
+                },
+                condition,
+                condition_index > 0,
+                revision,
+            );
+        }
+        spawn_row(panel, |controls| {
+            spawn_caption(controls, "   ");
+            spawn_schedule_button(
+                controls,
+                44.0,
+                "+ and",
+                ScheduleAddConditionButton {
+                    entry: index,
+                    group: group_index,
+                },
+                revision,
+            );
+        });
+    }
+    spawn_row(panel, |controls| {
+        spawn_caption(controls, "   ");
+        // The same button, named for what it does here: an entry with nothing
+        // on it is gaining its first condition rather than an alternative to
+        // one, and calling that "or" would describe a choice between one thing
+        // and nothing.
+        spawn_schedule_button(
+            controls,
+            44.0,
+            if row.groups.is_empty() {
+                "+ wait"
+            } else {
+                "+ or"
+            },
+            ScheduleAddGroupButton(index),
+            revision,
+        );
+    });
+}
+
+fn spawn_condition(
+    panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    address: ConditionRef,
+    condition: &ConditionSnapshot,
+    leads_with_and: bool,
+    revision: ScheduleRevision,
+) {
+    // Wrapping rather than fixed: a circuit condition compared against a number
+    // carries a kind, a channel, a comparator, an operand mode, a value, two
+    // steppers and a remove button, which is wider than the panel. The narrow
+    // conditions still take one line.
+    spawn_wrapping_row(panel, |controls| {
+        spawn_caption(controls, if leads_with_and { "and" } else { "   " });
+        spawn_schedule_button(
+            controls,
+            42.0,
+            condition.kind_label,
+            ScheduleConditionKindButton(address),
+            revision,
+        );
+        if let Some(channel) = &condition.channel {
+            spawn_schedule_button(
+                controls,
+                44.0,
+                channel,
+                ScheduleChannelButton(ConditionSlot {
+                    condition: address,
+                    part: ConditionPart::Subject,
+                }),
+                revision,
+            );
+        }
+        if let Some(comparator) = condition.comparator {
+            spawn_schedule_button(
+                controls,
+                24.0,
+                comparator,
+                ScheduleComparatorButton(address),
+                revision,
+            );
+        }
+        if let Some(mode) = condition.operand_mode {
+            spawn_schedule_button(
+                controls,
+                30.0,
+                mode,
+                ScheduleOperandModeButton(address),
+                revision,
+            );
+        }
+        if let Some(value) = &condition.value {
+            // A circuit operand holding a signal is picked rather than typed,
+            // so its value doubles as the button that opens the grid.
+            if condition.kind == TrainWaitConditionKind::Circuit {
+                spawn_schedule_button(
+                    controls,
+                    44.0,
+                    value,
+                    ScheduleChannelButton(ConditionSlot {
+                        condition: address,
+                        part: ConditionPart::CircuitRight,
+                    }),
+                    revision,
+                );
+            } else {
+                controls.spawn((
+                    Node {
+                        width: Val::Px(44.0),
+                        ..default()
+                    },
+                    Text::new(value.clone()),
+                    TextFont::from_font_size(10.0),
+                    TextColor(LABEL_COLOR),
+                ));
+            }
+        }
+        if condition.steppable {
+            for delta in [-1, 1] {
+                spawn_schedule_button(
+                    controls,
+                    18.0,
+                    if delta > 0 { "+" } else { "-" },
+                    ScheduleConditionStepButton {
+                        condition: address,
+                        delta,
+                    },
+                    revision,
+                );
+            }
+        }
+        spawn_schedule_button(
+            controls,
+            18.0,
+            "x",
+            ScheduleConditionRemoveButton(address),
+            revision,
+        );
+    });
 }
 
 /// Writes the one line that changes while the train runs: which entry it is
@@ -307,96 +580,80 @@ fn schedule_status(sim: &Simulation, train_id: TrainId) -> String {
     let Some(train) = sim.train(train_id) else {
         return String::new();
     };
-    let Some(entry) = train.schedule.current_entry() else {
-        return "No schedule: this train is driven by hand".to_string();
+    train_status_line(
+        train.manual,
+        &train.schedule,
+        train.scheduled_stop.is_some(),
+        train.is_waiting_at_scheduled_stop(),
+    )
+}
+
+/// What the line under the editor says about what the train is doing.
+///
+/// Taken as plain facts rather than as a train so the wording can be tested
+/// without a world to put a train in.
+fn train_status_line(
+    manual: bool,
+    schedule: &factory_sim::TrainSchedule,
+    claimed: bool,
+    waiting: bool,
+) -> String {
+    // Being driven is answered before anything the schedule would say, because
+    // a hand-driven train holds no claim — which every line below reads as a
+    // station that could not take it. Reporting "no platform free" for a train
+    // doing exactly what it was asked to is a fault diagnosis for a fault that
+    // is not there.
+    if manual {
+        return match schedule.current_stop_name() {
+            Some(name) => format!("Driven by hand — {name} when it is handed back"),
+            None => "Driven by hand".to_string(),
+        };
+    }
+    let Some(entry) = schedule.current_entry() else {
+        return "No schedule: this train goes nowhere on its own".to_string();
     };
     let position = format!(
         "{} of {}: {}",
-        train.schedule.current + 1,
-        train.schedule.entries.len(),
+        schedule.current + 1,
+        schedule.entries.len(),
         entry.stop_name
     );
-    match (train.scheduled_stop, train.is_waiting_at_scheduled_stop()) {
-        (Some(_), true) => format!("{position} — waiting here"),
-        (Some(_), false) => format!("{position} — on the way"),
+    match (claimed, waiting) {
+        (true, true) => format!("{position} — waiting here"),
+        (true, false) => format!("{position} — on the way"),
         // A claimed nothing is a station either full or with no track beside
         // it, and both look the same to the player: the train is not moving and
         // it is worth saying why.
-        (None, _) => format!("{position} — no platform free"),
+        (false, _) => format!("{position} — no platform free"),
     }
 }
 
 /// Every station name in the world, in the order the stops were built, without
 /// repeats: two platforms of one station are one choice, not two.
 ///
-/// First occurrence wins rather than sorting, so the list a player cycles
-/// through does not reorder itself when a station is renamed.
-fn station_names(sim: &Simulation) -> Vec<String> {
+/// First occurrence wins rather than sorting, so the list does not reorder
+/// itself when a station is renamed.
+pub(crate) fn station_names(sim: &Simulation) -> Vec<String> {
+    // Membership is asked once per stop, so it is asked through a set: the
+    // straight scan over what has been kept is quadratic in the number of
+    // stops, and this list is rebuilt whenever the picker is.
+    let mut seen = BTreeSet::new();
     let mut names = Vec::new();
     for (_, state) in sim.train_stops() {
-        if !names.contains(&state.name) {
+        if seen.insert(state.name.as_str()) {
             names.push(state.name.clone());
         }
     }
     names
 }
 
-/// The one condition a row edits, or `None` for an entry that departs at once.
+/// Whether any station exists to name at all.
 ///
-/// Deliberately `None` for anything richer than one condition in one group as
-/// well: the editor treats what it cannot express as "leave it alone", which is
-/// what `condition_label` says out loud.
-fn sole_condition(entry: &TrainScheduleEntry) -> Option<TrainWaitCondition> {
-    match entry.wait_conditions.as_slice() {
-        [group] => match group.0.as_slice() {
-            [condition] => Some(*condition),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn condition_label(sim: &Simulation, entry: &TrainScheduleEntry) -> String {
-    if entry.wait_conditions.is_empty() {
-        return "Leave at once".to_string();
-    }
-    let Some(condition) = sole_condition(entry) else {
-        return "Several conditions".to_string();
-    };
-    match condition {
-        TrainWaitCondition::TimePassed { ticks } => format!("Wait {}", seconds(ticks)),
-        TrainWaitCondition::Inactivity { ticks } => format!("Idle {}", seconds(ticks)),
-        TrainWaitCondition::CargoFull => "Cargo full".to_string(),
-        TrainWaitCondition::CargoEmpty => "Cargo empty".to_string(),
-        TrainWaitCondition::ItemCount {
-            item,
-            comparator,
-            count,
-        } => format!(
-            "{} {} {count}",
-            signal_display_name(sim.catalog(), factory_sim::SignalId::Item(item)),
-            comparator.symbol()
-        ),
-        TrainWaitCondition::FluidCount {
-            fluid,
-            comparator,
-            milliunits,
-        } => format!(
-            "{} {} {}",
-            signal_display_name(sim.catalog(), factory_sim::SignalId::Fluid(fluid)),
-            comparator.symbol(),
-            milliunits / 1_000
-        ),
-        TrainWaitCondition::Circuit(condition) => format!(
-            "{} {} {}",
-            signal_display_name(sim.catalog(), condition.left),
-            condition.comparator.symbol(),
-            match condition.right {
-                SignalOperand::Constant(value) => value.to_string(),
-                SignalOperand::Signal(signal) => signal_display_name(sim.catalog(), signal),
-            }
-        ),
-    }
+/// Asked on every frame a rolling-stock window is open, which is why it is not
+/// `!station_names(sim).is_empty()`: that builds and de-duplicates the whole
+/// list to answer a question the first stop already settles.
+fn any_station_exists(sim: &Simulation) -> bool {
+    sim.train_stops().next().is_some()
 }
 
 fn seconds(ticks: u64) -> String {
@@ -406,252 +663,133 @@ fn seconds(ticks: u64) -> String {
     format!("{}s", ticks / WAIT_STEP_TICKS)
 }
 
-/// Which kind a row's condition is, so cycling starts from what is there.
-fn wait_kind(entry: &TrainScheduleEntry) -> WaitKind {
-    match sole_condition(entry) {
-        None if entry.wait_conditions.is_empty() => WaitKind::Immediate,
-        Some(TrainWaitCondition::TimePassed { .. }) => WaitKind::TimePassed,
-        Some(TrainWaitCondition::Inactivity { .. }) => WaitKind::Inactivity,
-        Some(TrainWaitCondition::CargoFull) => WaitKind::CargoFull,
-        Some(TrainWaitCondition::CargoEmpty) => WaitKind::CargoEmpty,
-        // Anything the row cannot express starts the cycle from the top, so
-        // clicking through it replaces it rather than jamming.
-        _ => WaitKind::Immediate,
-    }
-}
-
-fn wait_ticks(entry: &TrainScheduleEntry) -> u64 {
-    match sole_condition(entry) {
-        Some(
-            TrainWaitCondition::TimePassed { ticks } | TrainWaitCondition::Inactivity { ticks },
-        ) => ticks,
-        _ => DEFAULT_WAIT_TICKS,
-    }
-}
-
-fn pressed(interaction: &Interaction) -> bool {
-    *interaction == Interaction::Pressed
-}
-
-/// The open train's schedule and its id, for an edit to start from.
-fn open_schedule(sim: &Simulation, open: &OpenContainer) -> Option<(TrainId, TrainSchedule)> {
-    let train_id = sim.rolling_stock_piece(open.rolling_stock?)?.train;
-    Some((train_id, sim.train(train_id)?.schedule.clone()))
-}
-
-fn send(
-    commands: &mut MessageWriter<SimCommandRequest>,
-    train_id: TrainId,
-    schedule: TrainSchedule,
-) {
-    commands.write(SimCommandRequest(SimCommand::SetTrainSchedule {
-        train_id,
-        schedule,
-    }));
-}
-
-pub(crate) fn handle_schedule_stop_buttons(
-    buttons: Query<(&Interaction, &ScheduleStopCycleButton), Changed<Interaction>>,
-    sim: Res<SimResource>,
-    open_container: Res<OpenContainer>,
-    mut commands: MessageWriter<SimCommandRequest>,
-    mut sounds: MessageWriter<SoundEvent>,
-) {
-    let Some((index, backwards)) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| (button.index, button.backwards))
-    else {
-        return;
-    };
-    let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
-        return;
-    };
-    let names = station_names(&sim);
-    let Some(entry) = schedule.entries.get_mut(index) else {
-        return;
-    };
-    // An entry naming a station that no longer answers to anything starts from
-    // the first real one; otherwise the cycle moves along the list.
-    let next = match names.iter().position(|name| *name == entry.stop_name) {
-        Some(current) => cycle(&(0..names.len()).collect::<Vec<_>>(), current, backwards),
-        None => 0,
-    };
-    let Some(name) = names.get(next) else {
-        return;
-    };
-    sounds.write(SoundEvent::UiClick);
-    entry.stop_name.clone_from(name);
-    send(&mut commands, train_id, schedule);
-}
-
-pub(crate) fn handle_schedule_condition_buttons(
-    buttons: Query<(&Interaction, &ScheduleConditionCycleButton), Changed<Interaction>>,
-    sim: Res<SimResource>,
-    open_container: Res<OpenContainer>,
-    mut commands: MessageWriter<SimCommandRequest>,
-    mut sounds: MessageWriter<SoundEvent>,
-) {
-    let Some((index, backwards)) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| (button.index, button.backwards))
-    else {
-        return;
-    };
-    let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
-        return;
-    };
-    let Some(entry) = schedule.entries.get_mut(index) else {
-        return;
-    };
-    sounds.write(SoundEvent::UiClick);
-    let ticks = wait_ticks(entry);
-    let kind = cycle(&WaitKind::ALL, wait_kind(entry), backwards);
-    entry.wait_conditions = match kind.condition(ticks) {
-        Some(condition) => vec![TrainWaitConditionGroup(vec![condition])],
-        None => Vec::new(),
-    };
-    send(&mut commands, train_id, schedule);
-}
-
-pub(crate) fn handle_schedule_wait_step_buttons(
-    buttons: Query<(&Interaction, &ScheduleWaitStepButton), Changed<Interaction>>,
-    sim: Res<SimResource>,
-    open_container: Res<OpenContainer>,
-    mut commands: MessageWriter<SimCommandRequest>,
-    mut sounds: MessageWriter<SoundEvent>,
-) {
-    let Some((index, delta)) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| (button.index, button.delta))
-    else {
-        return;
-    };
-    let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
-        return;
-    };
-    let Some(entry) = schedule.entries.get_mut(index) else {
-        return;
-    };
-    // A wait of no time at all is "leave at once" spelled the long way, so the
-    // step stops at one second rather than passing through zero.
-    let ticks = wait_ticks(entry)
-        .saturating_add_signed(delta)
-        .max(WAIT_STEP_TICKS);
-    let Some(condition) = sole_condition(entry).and_then(|condition| match condition {
-        TrainWaitCondition::TimePassed { .. } => Some(TrainWaitCondition::TimePassed { ticks }),
-        TrainWaitCondition::Inactivity { .. } => Some(TrainWaitCondition::Inactivity { ticks }),
-        _ => None,
-    }) else {
-        return;
-    };
-    sounds.write(SoundEvent::UiClick);
-    entry.wait_conditions = vec![TrainWaitConditionGroup(vec![condition])];
-    send(&mut commands, train_id, schedule);
-}
-
-pub(crate) fn handle_schedule_remove_buttons(
-    buttons: Query<(&Interaction, &ScheduleRemoveButton), Changed<Interaction>>,
-    sim: Res<SimResource>,
-    open_container: Res<OpenContainer>,
-    mut commands: MessageWriter<SimCommandRequest>,
-    mut sounds: MessageWriter<SoundEvent>,
-) {
-    let Some(index) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| button.0)
-    else {
-        return;
-    };
-    let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
-        return;
-    };
-    if index >= schedule.entries.len() {
-        return;
-    }
-    sounds.write(SoundEvent::UiClick);
-    schedule.entries.remove(index);
-    schedule.current = cursor_after_removing(schedule.current, index, schedule.entries.len());
-    send(&mut commands, train_id, schedule);
-}
-
-/// Where the schedule cursor lands once the entry at `index` is gone.
-///
-/// Three cases, and the third is the one worth stating. An entry removed
-/// *before* the one being served shifts it down by one, so the train keeps
-/// serving the station it is actually standing at. An entry removed at or after
-/// it leaves the cursor where it is — which is now the entry that has slid into
-/// that slot, the next station of the loop. And a cursor left off the end goes
-/// to the top rather than back one, because a schedule is a loop: removing the
-/// last entry while it is the one being served sends the train round to the
-/// first, the way finishing that entry would have. Stepping back instead would
-/// run the loop backwards.
-fn cursor_after_removing(current: usize, index: usize, remaining: usize) -> usize {
-    let moved = if current > index {
-        current - 1
-    } else {
-        current
-    };
-    if moved >= remaining { 0 } else { moved }
-}
-
-pub(crate) fn handle_schedule_add_button(
-    buttons: Query<&Interaction, (Changed<Interaction>, With<ScheduleAddButton>)>,
-    sim: Res<SimResource>,
-    open_container: Res<OpenContainer>,
-    mut commands: MessageWriter<SimCommandRequest>,
-    mut sounds: MessageWriter<SoundEvent>,
-) {
-    if !buttons.iter().any(pressed) {
-        return;
-    }
-    let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
-        return;
-    };
-    let names = station_names(&sim);
-    let Some(name) = names.first() else {
-        return;
-    };
-    sounds.write(SoundEvent::UiClick);
-    // A new entry leaves at once, which is the one setting that can never
-    // strand the train while the player decides what it should wait for.
-    schedule.entries.push(TrainScheduleEntry {
-        stop_name: name.clone(),
-        wait_conditions: Vec::new(),
-    });
-    send(&mut commands, train_id, schedule);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The cursor has to survive a deletion, because it is what the train does
-    /// next. Every case is stated here rather than left to the simulation's
-    /// clamp: a clamp keeps the schedule *valid*, and what matters is which
-    /// station the train goes to.
+    fn snapshot_of(sim: &Simulation, conditions: &[TrainWaitCondition]) -> ScheduleSnapshot {
+        ScheduleSnapshot {
+            manual: false,
+            rows: vec![ScheduleRowSnapshot {
+                stop_name: "Depot".into(),
+                groups: vec![
+                    conditions
+                        .iter()
+                        .map(|condition| condition_snapshot(sim, *condition))
+                        .collect(),
+                ],
+            }],
+            has_stations: true,
+        }
+    }
+
+    /// The press this revision exists to refuse.
+    ///
+    /// A schedule edit reaches the simulation a frame before the panel is
+    /// redrawn, so for that frame the buttons on screen still address the
+    /// schedule as it was. Remove the first of two conditions and the second
+    /// slides into its address: a second press of the same stale button finds
+    /// something there and would remove it too. It carries the revision it was
+    /// drawn under, which no longer matches, so the press is dropped instead.
     #[test]
-    fn removing_an_entry_leaves_the_cursor_on_the_next_station_of_the_loop() {
-        // Before the cursor: the train keeps serving the station it is at.
-        assert_eq!(cursor_after_removing(2, 0, 2), 1);
-        assert_eq!(cursor_after_removing(1, 0, 2), 0);
-        // After the cursor: nothing about this journey changed.
-        assert_eq!(cursor_after_removing(0, 2, 2), 0);
-        // The entry being served, with more of the loop behind it: the cursor
-        // stays put, which is the entry that slid into the slot.
-        assert_eq!(cursor_after_removing(1, 1, 2), 1);
-        // The *last* entry while it is being served: round to the top, the way
-        // finishing it would have gone, rather than back to the one before.
-        assert_eq!(cursor_after_removing(2, 2, 2), 0);
-        // The only entry there was.
-        assert_eq!(cursor_after_removing(0, 0, 0), 0);
+    fn removing_a_condition_leaves_the_buttons_drawn_beside_it_stale() {
+        let sim = Simulation::new_test_world(1);
+        let waited = TrainWaitCondition::TimePassed { ticks: 60 };
+        let before = snapshot_of(&sim, &[TrainWaitCondition::CargoFull, waited]);
+        let after = snapshot_of(&sim, &[waited]);
+
+        assert_ne!(
+            before.revision(),
+            after.revision(),
+            "a condition shifting into another's address must not go unnoticed"
+        );
+    }
+
+    /// Every button the panel draws must carry its revision on the button
+    /// itself.
+    ///
+    /// The handlers ask for `Interaction`, the marker and the revision on one
+    /// entity. Put the revision a level down — on the button's text, which is
+    /// where the obvious spelling of this puts it — and that query matches
+    /// nothing, so every press in the editor is silently dropped. Nothing about
+    /// that fails to compile, and no test of the revision *value* can see it,
+    /// so the wiring is asserted here.
+    #[test]
+    fn every_button_the_panel_draws_carries_its_revision() {
+        let sim = Simulation::new_test_world(1);
+        let snapshot = ScheduleSnapshot {
+            manual: false,
+            rows: vec![ScheduleRowSnapshot {
+                stop_name: "North".into(),
+                groups: vec![vec![condition_snapshot(
+                    &sim,
+                    TrainWaitCondition::TimePassed { ticks: 60 },
+                )]],
+            }],
+            has_stations: true,
+        };
+
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            commands.spawn_empty().with_children(|parent| {
+                spawn_train_schedule_panel(parent, &snapshot);
+            });
+        }
+        queue.apply(&mut world);
+
+        let mut buttons = world.query_filtered::<Entity, (With<Interaction>, With<Button>)>();
+        let total = buttons.iter(&world).count();
+        assert!(total > 0, "the panel drew no buttons at all");
+
+        let mut stamped =
+            world.query_filtered::<Entity, (With<Interaction>, With<ScheduleRevision>)>();
+        assert_eq!(
+            stamped.iter(&world).count(),
+            total,
+            "a button was drawn without the revision on the entity the press arrives at"
+        );
+    }
+
+    /// A train under the player's hand holds no claim, which is the same thing
+    /// an unreachable or full station leaves behind. The status line has to
+    /// tell the two apart, or it reports a fault against a train that is doing
+    /// exactly what it was asked to.
+    #[test]
+    fn a_hand_driven_train_is_not_reported_as_a_station_that_would_not_take_it() {
+        let schedule = factory_sim::TrainSchedule {
+            entries: vec![factory_sim::TrainScheduleEntry::new("North")],
+            current: 0,
+        };
+
+        let driven = train_status_line(true, &schedule, false, false);
+        assert!(
+            !driven.contains("no platform free"),
+            "a hand-driven train was blamed on its station: {driven}"
+        );
+        assert!(
+            driven.contains("North"),
+            "it still says where it goes when handed back: {driven}"
+        );
+        assert_eq!(
+            train_status_line(false, &schedule, false, false),
+            "1 of 1: North — no platform free",
+            "an automatic train with no claim still reports why it is standing"
+        );
+    }
+
+    /// The other half of the bargain: a revision that rejected ordinary presses
+    /// would be a schedule editor with dead buttons.
+    #[test]
+    fn a_schedule_that_did_not_change_keeps_its_buttons_live() {
+        let sim = Simulation::new_test_world(1);
+        let conditions = [TrainWaitCondition::CargoEmpty];
+
+        assert_eq!(
+            snapshot_of(&sim, &conditions).revision(),
+            snapshot_of(&sim, &conditions).revision(),
+            "the same panel drawn twice must answer its own presses"
+        );
     }
 }

@@ -1421,3 +1421,98 @@ fn set_every_slot(
     *inventory = Inventory::from_slots(&catalog, vec![slot; slot_count])
         .expect("the slots were built against this catalog");
 }
+
+/// The whole of manual control: a train under the player's hand keeps the
+/// throttle it was given.
+///
+/// Without the flag this is exactly what fails. Taking the controls releases the
+/// claim, the destination and the route — which leaves the train looking like an
+/// idle one to the scheduling pass, so it books the next stop on the same tick
+/// and the route it plans drives the throttle straight back over the one that
+/// was just asked for.
+#[test]
+fn a_train_driven_by_hand_keeps_the_controls_it_was_given() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    stop_at(&mut sim, "North", rails[20], 1);
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+
+    sim.set_train_throttle(train_id, TrainThrottle::Forward)
+        .expect("the player takes the controls");
+    for _ in 0..10 {
+        sim.tick();
+        let train = train(&sim, train_id);
+        assert!(train.manual, "the train stayed under the player's hand");
+        assert_eq!(
+            train.throttle,
+            TrainThrottle::Forward,
+            "the schedule drove over the throttle the player asked for"
+        );
+        assert_eq!(
+            train.scheduled_stop, None,
+            "a hand-driven train booked a platform it is not going to"
+        );
+    }
+    sim.validate()
+        .expect("a hand-driven train is a valid world");
+}
+
+/// And the way back: the schedule picks the train up again from wherever it was
+/// left, rather than from where it was when the player took over.
+#[test]
+fn handing_a_train_back_lets_its_schedule_have_it_again() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    let north = stop_at(&mut sim, "North", rails[20], 1);
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    sim.set_train_throttle(train_id, TrainThrottle::Brake)
+        .expect("the player takes the controls");
+    sim.tick();
+    assert_eq!(train(&sim, train_id).scheduled_stop, None);
+
+    sim.set_train_manual(train_id, false)
+        .expect("the player hands it back");
+
+    run_until_waiting(&mut sim, train_id, north);
+    assert!(
+        !train(&sim, train_id).manual,
+        "it is running its schedule again"
+    );
+    sim.validate().expect("the world is valid");
+}
+
+/// Handing a moving train back to a schedule that cannot place it anywhere.
+///
+/// The claim fails — every platform is full — so the train gets no destination
+/// and no route, and nothing was left to steer it. Without the rule that a
+/// train with no leg brakes, it would keep accelerating on the throttle its
+/// driver walked away from, under nobody's control at all.
+#[test]
+fn a_train_handed_back_with_nowhere_to_go_does_not_keep_driving() {
+    let (mut sim, rails, train_id) = world_with_a_schedulable_train();
+    // The only platform of that name is on track this train cannot reach, so
+    // the claim never succeeds however long it waits.
+    let siding = disconnected_rail(&mut sim, &rails);
+    stop_at(&mut sim, "North", siding, 1);
+    sim.set_train_schedule(train_id, schedule(vec![entry("North", &[FOREVER])]))
+        .expect("the train takes a schedule");
+    sim.set_train_throttle(train_id, TrainThrottle::Forward)
+        .expect("the player takes the controls");
+    run_until(&mut sim, |sim| train(sim, train_id).velocity != 0);
+
+    sim.set_train_manual(train_id, false)
+        .expect("the player hands it back");
+    sim.tick();
+
+    let train = train(&sim, train_id);
+    assert_eq!(
+        train.scheduled_stop, None,
+        "this test is only meaningful while the station cannot take the train"
+    );
+    assert_eq!(
+        train.throttle,
+        TrainThrottle::Brake,
+        "an automatic train with no plan drove on under its old throttle"
+    );
+    sim.validate().expect("the world is valid");
+}

@@ -11,6 +11,7 @@
 //! so clicking a wagon closes a chest and vice versa.
 
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use factory_data::ItemId;
 use factory_sim::{
     InventoryPanel, ROLLING_STOCK_FUEL_SLOT_INDEX, RollingStockId, Simulation, entity_access,
@@ -181,19 +182,36 @@ fn prototype_display_name_for(name: &str) -> String {
     crate::ui::formatting::format_recipe_display_name(name)
 }
 
+/// The window's frame, which is also what scrolls.
+///
+/// Bounded and scrolled because the schedule editor inside it grows without a
+/// ceiling: every stop, every OR alternative, and every ANDed condition adds
+/// rows, and unbounded a long schedule pushes its own remove buttons past the
+/// bottom of the screen — where they cannot be reached to shorten it again.
+///
+/// On the root rather than around the contents because the root is the one
+/// entity a rebuild keeps: [`sync_window`] despawns and respawns the children
+/// whenever the snapshot changes, and every schedule edit changes it. A scroll
+/// container among those children would be rebuilt with them, taking the scroll
+/// position back to the top after each edit and sending the player looking for
+/// the row they were working on again.
 fn rolling_stock_window_root() -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(12.0),
             top: Val::Px(12.0),
+            max_height: Val::Vh(92.0),
             padding: UiRect::all(Val::Px(10.0)),
             column_gap: Val::Px(10.0),
             align_items: AlignItems::FlexStart,
+            overflow: Overflow::scroll_y(),
+            scrollbar_width: 10.0,
             ..default()
         },
         BackgroundColor(Color::srgba(0.03, 0.03, 0.035, 0.88)),
         GlobalZIndex(1100),
+        ScrollArea,
     )
 }
 
