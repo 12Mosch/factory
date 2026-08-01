@@ -40,6 +40,14 @@ use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::resources::TechnologyWindowState;
 
+const TRAIN_DRIVE_KEY: KeyCode = KeyCode::F8;
+const TRAIN_BRAKE_KEY: KeyCode = KeyCode::F10;
+
+/// Player-facing control copy derived from the keys the input system reads.
+pub(crate) fn manual_train_controls_hint() -> String {
+    format!("{TRAIN_DRIVE_KEY:?} drive / reverse  ·  {TRAIN_BRAKE_KEY:?} brake")
+}
+
 /// Collects the manual driving keys during the frame, each with the tile it was
 /// aimed at, for the fixed step to consume.
 ///
@@ -67,8 +75,8 @@ pub(crate) fn collect_train_manual_input(
         return;
     }
     let presses = [
-        (KeyCode::F8, TrainManualKey::Drive),
-        (KeyCode::F10, TrainManualKey::Brake),
+        (TRAIN_DRIVE_KEY, TrainManualKey::Drive),
+        (TRAIN_BRAKE_KEY, TrainManualKey::Brake),
     ]
     .into_iter()
     .filter(|(key, _)| keyboard.just_pressed(*key));
