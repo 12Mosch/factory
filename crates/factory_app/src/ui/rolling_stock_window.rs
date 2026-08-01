@@ -11,6 +11,7 @@
 //! so clicking a wagon closes a chest and vice versa.
 
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use factory_data::ItemId;
 use factory_sim::{
     InventoryPanel, ROLLING_STOCK_FUEL_SLOT_INDEX, RollingStockId, Simulation, entity_access,
@@ -202,14 +203,22 @@ fn spawn_rolling_stock_window_contents(
     snapshot: &RollingStockWindowSnapshot,
 ) {
     spawn_player_inventory_panel(root);
+    // Bounded and scrolled, because the schedule editor below grows without a
+    // ceiling: every stop, every OR alternative, and every ANDed condition adds
+    // rows. Unbounded, a long schedule pushes its own remove buttons past the
+    // bottom of the screen, where they cannot be reached to shorten it again.
     root.spawn((
         Node {
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(8.0),
-            width: Val::Px(260.0),
+            width: Val::Px(270.0),
+            max_height: Val::Vh(88.0),
+            overflow: Overflow::scroll_y(),
+            scrollbar_width: 10.0,
             ..default()
         },
         BackgroundColor(Color::NONE),
+        ScrollArea,
     ))
     .with_children(|panel| {
         panel.spawn((

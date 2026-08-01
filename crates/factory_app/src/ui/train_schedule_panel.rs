@@ -32,6 +32,8 @@
 //! the train. That also means only *one* press may be acted on per frame, which
 //! is why each handler takes the first press it finds.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use bevy::prelude::*;
 use factory_sim::{
     RollingStockId, SignalOperand, Simulation, TrainId, TrainWaitCondition, TrainWaitConditionKind,
@@ -56,9 +58,11 @@ pub(crate) const MILLIUNITS_PER_UNIT: i32 = 1_000;
 /// and which AND condition within it.
 ///
 /// An address rather than a handle, because the panel is built from one frame's
-/// schedule and clicked in a later one. Every use of it is checked against the
-/// schedule as it then is, so an address naming a row that has since been
-/// removed does nothing instead of editing whatever moved into its place.
+/// schedule and clicked in a later one. An address alone cannot say whether it
+/// still names what it was written for — remove the first of two conditions and
+/// the second answers to the first one's address — so every button carries the
+/// [`ScheduleRevision`] it was drawn with, and a press whose revision has since
+/// moved on is dropped rather than applied to whatever took its place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConditionRef {
     pub(crate) entry: usize,
@@ -88,51 +92,51 @@ pub(crate) struct ConditionSlot {
 pub(crate) struct ScheduleStatusText;
 
 /// Opens the station list for an entry. An index one past the end appends.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleStationButton(pub(crate) usize);
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleRemoveButton(pub(crate) usize);
 
 /// Adds an OR alternative to an entry, with one condition in it.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleAddGroupButton(pub(crate) usize);
 
 /// Adds an AND condition to an alternative that already exists.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleAddConditionButton {
     pub(crate) entry: usize,
     pub(crate) group: usize,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleConditionKindButton(pub(crate) ConditionRef);
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleComparatorButton(pub(crate) ConditionRef);
 
 /// Switches a circuit condition's right-hand operand between a signal and a
 /// plain number.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleOperandModeButton(pub(crate) ConditionRef);
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleConditionStepButton {
     pub(crate) condition: ConditionRef,
     pub(crate) delta: i32,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleConditionRemoveButton(pub(crate) ConditionRef);
 
 /// Opens the signal grid for one half of a condition.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub(crate) struct ScheduleChannelButton(pub(crate) ConditionSlot);
 
 /// One condition as the editor draws it: what it is, what it is about, and what
 /// it is compared against — each `None` where the kind has no such part, so the
 /// view spawns no control the press could not answer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct ConditionSnapshot {
     kind: TrainWaitConditionKind,
     kind_label: &'static str,
@@ -150,7 +154,7 @@ pub(crate) struct ConditionSnapshot {
 /// A row of the editor as it was built: what the entry says, so the window
 /// rebuilds when an entry or a condition changes and stays put while the train
 /// runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct ScheduleRowSnapshot {
     pub(crate) stop_name: String,
     /// OR alternatives, each a run of ANDed conditions.
@@ -158,13 +162,34 @@ pub(crate) struct ScheduleRowSnapshot {
 }
 
 /// What the schedule editor was built from.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct ScheduleSnapshot {
     pub(crate) rows: Vec<ScheduleRowSnapshot>,
     /// Whether any station exists to name. With none, the editor says so
     /// instead of offering an "add" button that could only add nothing.
     pub(crate) has_stations: bool,
 }
+
+impl ScheduleSnapshot {
+    /// A short stand-in for the whole snapshot, cheap enough to hang off every
+    /// button the panel spawns.
+    ///
+    /// Hashed from the snapshot rather than from the schedule because the
+    /// snapshot is what the panel was drawn from, and the window is rebuilt
+    /// exactly when the snapshot changes. A schedule that changed without
+    /// changing the snapshot left the panel correct, and its buttons must keep
+    /// working.
+    pub(crate) fn revision(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// The snapshot a button was drawn from, so a press can be told apart from one
+/// meant for a panel that no longer exists.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScheduleRevision(pub(crate) u64);
 
 /// What the editor shows for a train, or `None` for a piece of stock that is
 /// not part of one.
@@ -275,9 +300,10 @@ pub(crate) fn spawn_train_schedule_panel(
             BackgroundColor(Color::NONE),
         ))
         .with_children(|panel| {
+            let revision = ScheduleRevision(snapshot.revision());
             spawn_heading(panel, "Schedule");
             for (index, row) in snapshot.rows.iter().enumerate() {
-                spawn_entry(panel, index, row);
+                spawn_entry(panel, index, row, revision);
             }
             if snapshot.has_stations {
                 spawn_row(panel, |controls| {
@@ -286,7 +312,7 @@ pub(crate) fn spawn_train_schedule_panel(
                         66.0,
                         "Add stop",
                         ScheduleStationButton(snapshot.rows.len()),
-                        (),
+                        revision,
                     );
                 });
             } else {
@@ -305,6 +331,7 @@ fn spawn_entry(
     panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     index: usize,
     row: &ScheduleRowSnapshot,
+    revision: ScheduleRevision,
 ) {
     spawn_row(panel, |controls| {
         spawn_button(
@@ -312,9 +339,9 @@ fn spawn_entry(
             140.0,
             &row.stop_name,
             ScheduleStationButton(index),
-            (),
+            revision,
         );
-        spawn_button(controls, 18.0, "x", ScheduleRemoveButton(index), ());
+        spawn_button(controls, 18.0, "x", ScheduleRemoveButton(index), revision);
     });
     if row.groups.is_empty() {
         spawn_caption(panel, "  Leaves as soon as it arrives");
@@ -333,6 +360,7 @@ fn spawn_entry(
                 },
                 condition,
                 condition_index > 0,
+                revision,
             );
         }
         spawn_row(panel, |controls| {
@@ -345,7 +373,7 @@ fn spawn_entry(
                     entry: index,
                     group: group_index,
                 },
-                (),
+                revision,
             );
         });
     }
@@ -364,7 +392,7 @@ fn spawn_entry(
                 "+ or"
             },
             ScheduleAddGroupButton(index),
-            (),
+            revision,
         );
     });
 }
@@ -374,6 +402,7 @@ fn spawn_condition(
     address: ConditionRef,
     condition: &ConditionSnapshot,
     leads_with_and: bool,
+    revision: ScheduleRevision,
 ) {
     spawn_row(panel, |controls| {
         spawn_caption(controls, if leads_with_and { "and" } else { "   " });
@@ -382,7 +411,7 @@ fn spawn_condition(
             42.0,
             condition.kind_label,
             ScheduleConditionKindButton(address),
-            (),
+            revision,
         );
         if let Some(channel) = &condition.channel {
             spawn_button(
@@ -393,7 +422,7 @@ fn spawn_condition(
                     condition: address,
                     part: ConditionPart::Subject,
                 }),
-                (),
+                revision,
             );
         }
         if let Some(comparator) = condition.comparator {
@@ -402,11 +431,17 @@ fn spawn_condition(
                 24.0,
                 comparator,
                 ScheduleComparatorButton(address),
-                (),
+                revision,
             );
         }
         if let Some(mode) = condition.operand_mode {
-            spawn_button(controls, 30.0, mode, ScheduleOperandModeButton(address), ());
+            spawn_button(
+                controls,
+                30.0,
+                mode,
+                ScheduleOperandModeButton(address),
+                revision,
+            );
         }
         if let Some(value) = &condition.value {
             // A circuit operand holding a signal is picked rather than typed,
@@ -420,7 +455,7 @@ fn spawn_condition(
                         condition: address,
                         part: ConditionPart::CircuitRight,
                     }),
-                    (),
+                    revision,
                 );
             } else {
                 controls.spawn((
@@ -444,7 +479,7 @@ fn spawn_condition(
                         condition: address,
                         delta,
                     },
-                    (),
+                    revision,
                 );
             }
         }
@@ -453,7 +488,7 @@ fn spawn_condition(
             18.0,
             "x",
             ScheduleConditionRemoveButton(address),
-            (),
+            revision,
         );
     });
 }
@@ -528,4 +563,60 @@ fn seconds(ticks: u64) -> String {
         return "for ever".to_string();
     }
     format!("{}s", ticks / WAIT_STEP_TICKS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot_of(sim: &Simulation, conditions: &[TrainWaitCondition]) -> ScheduleSnapshot {
+        ScheduleSnapshot {
+            rows: vec![ScheduleRowSnapshot {
+                stop_name: "Depot".into(),
+                groups: vec![
+                    conditions
+                        .iter()
+                        .map(|condition| condition_snapshot(sim, *condition))
+                        .collect(),
+                ],
+            }],
+            has_stations: true,
+        }
+    }
+
+    /// The press this revision exists to refuse.
+    ///
+    /// A schedule edit reaches the simulation a frame before the panel is
+    /// redrawn, so for that frame the buttons on screen still address the
+    /// schedule as it was. Remove the first of two conditions and the second
+    /// slides into its address: a second press of the same stale button finds
+    /// something there and would remove it too. It carries the revision it was
+    /// drawn under, which no longer matches, so the press is dropped instead.
+    #[test]
+    fn removing_a_condition_leaves_the_buttons_drawn_beside_it_stale() {
+        let sim = Simulation::new_test_world(1);
+        let waited = TrainWaitCondition::TimePassed { ticks: 60 };
+        let before = snapshot_of(&sim, &[TrainWaitCondition::CargoFull, waited]);
+        let after = snapshot_of(&sim, &[waited]);
+
+        assert_ne!(
+            before.revision(),
+            after.revision(),
+            "a condition shifting into another's address must not go unnoticed"
+        );
+    }
+
+    /// The other half of the bargain: a revision that rejected ordinary presses
+    /// would be a schedule editor with dead buttons.
+    #[test]
+    fn a_schedule_that_did_not_change_keeps_its_buttons_live() {
+        let sim = Simulation::new_test_world(1);
+        let conditions = [TrainWaitCondition::CargoEmpty];
+
+        assert_eq!(
+            snapshot_of(&sim, &conditions).revision(),
+            snapshot_of(&sim, &conditions).revision(),
+            "the same panel drawn twice must answer its own presses"
+        );
+    }
 }

@@ -29,8 +29,8 @@ use crate::ui::train_schedule_panel::{
     ConditionPart, ConditionRef, ConditionSlot, MILLIUNITS_PER_UNIT, ScheduleAddConditionButton,
     ScheduleAddGroupButton, ScheduleChannelButton, ScheduleComparatorButton,
     ScheduleConditionKindButton, ScheduleConditionRemoveButton, ScheduleConditionStepButton,
-    ScheduleOperandModeButton, ScheduleRemoveButton, ScheduleStationButton, WAIT_STEP_TICKS,
-    station_names,
+    ScheduleOperandModeButton, ScheduleRemoveButton, ScheduleRevision, ScheduleStationButton,
+    WAIT_STEP_TICKS, schedule_snapshot, station_names,
 };
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
@@ -88,6 +88,41 @@ fn open_schedule(sim: &Simulation, open: &OpenContainer) -> Option<(TrainId, Tra
     Some((train_id, sim.train(train_id)?.schedule.clone()))
 }
 
+/// The schedule an edit starts from, or `None` when the button that was pressed
+/// belongs to a panel the schedule has since outgrown.
+///
+/// A press is answered at least one frame after the panel that drew it was
+/// built, and the panel is rebuilt *after* these handlers run — so an edit that
+/// has already reached the simulation leaves a frame in which the buttons on
+/// screen still address the schedule as it was. Checking that the address still
+/// exists does not catch that: remove the first of two conditions and the
+/// second slides into its address, where a second press of the same stale
+/// button would remove it as well. Comparing what the panel was drawn from
+/// against what it would be drawn from now rejects exactly those presses, and
+/// only those.
+fn schedule_for_press(
+    sim: &Simulation,
+    open: &OpenContainer,
+    revision: ScheduleRevision,
+) -> Option<(TrainId, TrainSchedule)> {
+    let current = schedule_snapshot(sim, open.rolling_stock?)?;
+    if current.revision() != revision.0 {
+        return None;
+    }
+    open_schedule(sim, open)
+}
+
+/// The first press in a query of schedule buttons, with the revision it was
+/// drawn under.
+fn pressed_schedule_button<B: Component + Copy>(
+    buttons: &Query<(&Interaction, &B, &ScheduleRevision), Changed<Interaction>>,
+) -> Option<(B, ScheduleRevision)> {
+    buttons
+        .iter()
+        .find(|(interaction, _, _)| pressed(interaction))
+        .map(|(_, button, revision)| (*button, *revision))
+}
+
 fn send(
     commands: &mut MessageWriter<SimCommandRequest>,
     train_id: TrainId,
@@ -101,60 +136,58 @@ fn send(
 
 /// Opens the station list for an entry, or for one past the end to append.
 pub(crate) fn handle_schedule_station_buttons(
-    buttons: Query<(&Interaction, &ScheduleStationButton), Changed<Interaction>>,
+    buttons: Query<(&Interaction, &ScheduleStationButton, &ScheduleRevision), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
     mut editor: ResMut<TrainScheduleEditorState>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let Some(entry) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| button.0)
-    else {
+    let Some((button, revision)) = pressed_schedule_button(&buttons) else {
         return;
     };
+    if schedule_for_press(&sim.read(), &open_container, revision).is_none() {
+        return;
+    }
     sounds.write(SoundEvent::UiClick);
     editor.close();
-    editor.station = Some(entry);
+    editor.station = Some(button.0);
 }
 
 /// Opens the signal grid for one half of a condition.
 pub(crate) fn handle_schedule_channel_buttons(
-    buttons: Query<(&Interaction, &ScheduleChannelButton), Changed<Interaction>>,
+    buttons: Query<(&Interaction, &ScheduleChannelButton, &ScheduleRevision), Changed<Interaction>>,
+    sim: Res<SimResource>,
+    open_container: Res<OpenContainer>,
     mut editor: ResMut<TrainScheduleEditorState>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let Some(slot) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| button.0)
-    else {
+    let Some((button, revision)) = pressed_schedule_button(&buttons) else {
         return;
     };
+    if schedule_for_press(&sim.read(), &open_container, revision).is_none() {
+        return;
+    }
     sounds.write(SoundEvent::UiClick);
     editor.close();
-    editor.channel = Some(slot);
+    editor.channel = Some(button.0);
 }
 
 pub(crate) fn handle_schedule_remove_buttons(
-    buttons: Query<(&Interaction, &ScheduleRemoveButton), Changed<Interaction>>,
+    buttons: Query<(&Interaction, &ScheduleRemoveButton, &ScheduleRevision), Changed<Interaction>>,
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut editor: ResMut<TrainScheduleEditorState>,
     mut commands: MessageWriter<SimCommandRequest>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let Some(index) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| button.0)
-    else {
+    let Some((button, revision)) = pressed_schedule_button(&buttons) else {
         return;
     };
     let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+    let Some((train_id, mut schedule)) = schedule_for_press(&sim, &open_container, revision) else {
         return;
     };
-    if schedule.remove_entry(index).is_none() {
+    if schedule.remove_entry(button.0).is_none() {
         return;
     }
     sounds.write(SoundEvent::UiClick);
@@ -165,24 +198,23 @@ pub(crate) fn handle_schedule_remove_buttons(
 }
 
 pub(crate) fn handle_schedule_add_group_buttons(
-    buttons: Query<(&Interaction, &ScheduleAddGroupButton), Changed<Interaction>>,
+    buttons: Query<
+        (&Interaction, &ScheduleAddGroupButton, &ScheduleRevision),
+        Changed<Interaction>,
+    >,
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut commands: MessageWriter<SimCommandRequest>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let Some(index) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| button.0)
-    else {
+    let Some((button, revision)) = pressed_schedule_button(&buttons) else {
         return;
     };
     let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+    let Some((train_id, mut schedule)) = schedule_for_press(&sim, &open_container, revision) else {
         return;
     };
-    let Some(entry) = schedule.entries.get_mut(index) else {
+    let Some(entry) = schedule.entries.get_mut(button.0) else {
         return;
     };
     sounds.write(SoundEvent::UiClick);
@@ -193,27 +225,26 @@ pub(crate) fn handle_schedule_add_group_buttons(
 }
 
 pub(crate) fn handle_schedule_add_condition_buttons(
-    buttons: Query<(&Interaction, &ScheduleAddConditionButton), Changed<Interaction>>,
+    buttons: Query<
+        (&Interaction, &ScheduleAddConditionButton, &ScheduleRevision),
+        Changed<Interaction>,
+    >,
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut commands: MessageWriter<SimCommandRequest>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let Some((index, group)) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| (button.entry, button.group))
-    else {
+    let Some((button, revision)) = pressed_schedule_button(&buttons) else {
         return;
     };
     let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+    let Some((train_id, mut schedule)) = schedule_for_press(&sim, &open_container, revision) else {
         return;
     };
     let Some(alternative) = schedule
         .entries
-        .get_mut(index)
-        .and_then(|entry| entry.wait_conditions.get_mut(group))
+        .get_mut(button.entry)
+        .and_then(|entry| entry.wait_conditions.get_mut(button.group))
     else {
         return;
     };
@@ -223,22 +254,26 @@ pub(crate) fn handle_schedule_add_condition_buttons(
 }
 
 pub(crate) fn handle_schedule_condition_remove_buttons(
-    buttons: Query<(&Interaction, &ScheduleConditionRemoveButton), Changed<Interaction>>,
+    buttons: Query<
+        (
+            &Interaction,
+            &ScheduleConditionRemoveButton,
+            &ScheduleRevision,
+        ),
+        Changed<Interaction>,
+    >,
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut editor: ResMut<TrainScheduleEditorState>,
     mut commands: MessageWriter<SimCommandRequest>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let Some(address) = buttons
-        .iter()
-        .find(|(interaction, _)| pressed(interaction))
-        .map(|(_, button)| button.0)
-    else {
+    let Some((button, revision)) = pressed_schedule_button(&buttons) else {
         return;
     };
+    let address = button.0;
     let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+    let Some((train_id, mut schedule)) = schedule_for_press(&sim, &open_container, revision) else {
         return;
     };
     let Some(entry) = schedule.entries.get_mut(address.entry) else {
@@ -269,12 +304,12 @@ pub(crate) fn handle_schedule_condition_edit_buttons(
     let backwards = keyboard
         .as_deref()
         .is_some_and(|keys| keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
-    let Some((address, edit)) = buttons.pressed_edit() else {
+    let Some((address, edit, revision)) = buttons.pressed_edit() else {
         return;
     };
 
     let sim = sim.read();
-    let Some((train_id, mut schedule)) = open_schedule(&sim, &open_container) else {
+    let Some((train_id, mut schedule)) = schedule_for_press(&sim, &open_container, revision) else {
         return;
     };
     let catalog = sim.catalog();
@@ -320,53 +355,63 @@ pub(crate) struct ConditionEditButtons<'w, 's> {
     kinds: Query<
         'w,
         's,
-        (&'static Interaction, &'static ScheduleConditionKindButton),
+        (
+            &'static Interaction,
+            &'static ScheduleConditionKindButton,
+            &'static ScheduleRevision,
+        ),
         Changed<Interaction>,
     >,
     comparators: Query<
         'w,
         's,
-        (&'static Interaction, &'static ScheduleComparatorButton),
+        (
+            &'static Interaction,
+            &'static ScheduleComparatorButton,
+            &'static ScheduleRevision,
+        ),
         Changed<Interaction>,
     >,
     modes: Query<
         'w,
         's,
-        (&'static Interaction, &'static ScheduleOperandModeButton),
+        (
+            &'static Interaction,
+            &'static ScheduleOperandModeButton,
+            &'static ScheduleRevision,
+        ),
         Changed<Interaction>,
     >,
     steps: Query<
         'w,
         's,
-        (&'static Interaction, &'static ScheduleConditionStepButton),
+        (
+            &'static Interaction,
+            &'static ScheduleConditionStepButton,
+            &'static ScheduleRevision,
+        ),
         Changed<Interaction>,
     >,
 }
 
 impl ConditionEditButtons<'_, '_> {
-    /// The one press to act on this frame, if any.
-    fn pressed_edit(&self) -> Option<(ConditionRef, Edit)> {
-        self.kinds
-            .iter()
-            .find(|(interaction, _)| pressed(interaction))
-            .map(|(_, button)| (button.0, Edit::Kind))
+    /// The one press to act on this frame, if any, with the revision it was
+    /// drawn under.
+    fn pressed_edit(&self) -> Option<(ConditionRef, Edit, ScheduleRevision)> {
+        pressed_schedule_button(&self.kinds)
+            .map(|(button, revision)| (button.0, Edit::Kind, revision))
             .or_else(|| {
-                self.comparators
-                    .iter()
-                    .find(|(interaction, _)| pressed(interaction))
-                    .map(|(_, button)| (button.0, Edit::Comparator))
+                pressed_schedule_button(&self.comparators)
+                    .map(|(button, revision)| (button.0, Edit::Comparator, revision))
             })
             .or_else(|| {
-                self.modes
-                    .iter()
-                    .find(|(interaction, _)| pressed(interaction))
-                    .map(|(_, button)| (button.0, Edit::OperandMode))
+                pressed_schedule_button(&self.modes)
+                    .map(|(button, revision)| (button.0, Edit::OperandMode, revision))
             })
             .or_else(|| {
-                self.steps
-                    .iter()
-                    .find(|(interaction, _)| pressed(interaction))
-                    .map(|(_, button)| (button.condition, Edit::Step(button.delta)))
+                pressed_schedule_button(&self.steps).map(|(button, revision)| {
+                    (button.condition, Edit::Step(button.delta), revision)
+                })
             })
     }
 }
