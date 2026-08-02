@@ -91,6 +91,7 @@ pub(super) fn load_entities(
                 entity.burner.is_some(),
                 entity.electric_energy_source.is_some(),
             )?;
+            validate_lab_metadata(&name, entity.entity_kind, entity.inventory_slot_count)?;
             validate_machine_fluid_roles(
                 &name,
                 entity.entity_kind,
@@ -599,6 +600,28 @@ fn validate_radar_metadata(
         (EntityKind::Radar, None) => return invalid("radar entities require radar metadata"),
         (_, Some(_)) => return invalid("radar metadata is only valid on radar entities"),
         (_, None) => {}
+    }
+
+    Ok(())
+}
+
+/// A lab holds the science packs it consumes, so its prototype has to declare
+/// the inventory it holds them in.
+///
+/// The simulation builds a lab's inventory straight from this count when the
+/// lab is placed, and a lab with no slots could never be fed. Rejecting it here
+/// keeps the omission a named load failure rather than a placement-time panic
+/// deep in machine state construction.
+fn validate_lab_metadata(
+    entity_name: &str,
+    entity_kind: EntityKind,
+    inventory_slot_count: Option<usize>,
+) -> Result<(), PrototypeLoadError> {
+    if entity_kind == EntityKind::Lab && inventory_slot_count.is_none_or(|count| count == 0) {
+        return Err(PrototypeLoadError::InvalidEntityMetadata {
+            entity: entity_name.to_string(),
+            detail: "lab entities require inventory slots to hold science packs",
+        });
     }
 
     Ok(())

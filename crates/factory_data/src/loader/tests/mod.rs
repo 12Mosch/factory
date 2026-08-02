@@ -1,3 +1,4 @@
+mod base_prototypes;
 mod catalog;
 mod common;
 mod day_night;

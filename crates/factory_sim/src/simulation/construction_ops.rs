@@ -356,8 +356,17 @@ fn capture_blueprint(
         return Err(ConstructionError::EmptyBlueprintArea);
     }
 
-    let origin_x = captured.iter().map(|entry| entry.0).min().unwrap();
-    let origin_y = captured.iter().map(|entry| entry.1).min().unwrap();
+    // The empty case returned above, so both minima exist.
+    let origin_x = captured
+        .iter()
+        .map(|entry| entry.0)
+        .min()
+        .expect("a non-empty capture has a leftmost tile");
+    let origin_y = captured
+        .iter()
+        .map(|entry| entry.1)
+        .min()
+        .expect("a non-empty capture has a topmost tile");
     captured.sort_by_key(|&(x, y, prototype_id, ..)| (y, x, prototype_id));
 
     let entities = captured

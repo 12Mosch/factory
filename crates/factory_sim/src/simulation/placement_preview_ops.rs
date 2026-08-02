@@ -302,7 +302,7 @@ fn collect_pumpjack_preview_issues(
     let pumpjack = prototype
         .pumpjack
         .as_ref()
-        .expect("pumpjack prototype should have pumpjack metadata");
+        .expect("prototype validation requires pumpjack entities to declare pumpjack metadata");
     if footprint.tiles().into_iter().all(|(x, y)| {
         sim.world
             .tile_at(x, y)
@@ -341,7 +341,7 @@ fn collect_mining_drill_preview_issues(
     let mining_drill = prototype
         .mining_drill
         .as_ref()
-        .expect("mining drill prototype should have mining metadata");
+        .expect("prototype validation requires mining drills to declare mining metadata");
     let mining_tiles = mining_area_tiles(footprint, mining_drill);
     if mining_tiles.iter().all(|(x, y)| {
         sim.world

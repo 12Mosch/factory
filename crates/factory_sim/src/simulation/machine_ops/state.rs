@@ -278,13 +278,19 @@ fn assembling_machine_state_for_prototype(
     })
 }
 
+/// A lab's science-pack inventory, sized from its prototype.
+///
+/// Prototype validation requires every lab to declare a positive
+/// `inventory_slot_count`, so the count is present by the time a lab can be
+/// placed; a catalog that skipped that check is a programming error rather than
+/// a content-data one.
 fn lab_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<LabState> {
     (prototype.entity_kind == EntityKind::Lab).then(|| LabState {
         modules: MachineModuleState::with_slot_count(prototype.module_slot_count),
         inventory: Inventory::with_slot_count(
             prototype
                 .inventory_slot_count
-                .expect("lab prototype should define inventory slots"),
+                .expect("prototype validation requires labs to declare inventory slots"),
         ),
         active_technology: None,
         progress_ticks: 0,

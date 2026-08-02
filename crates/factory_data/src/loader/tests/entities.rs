@@ -1,6 +1,7 @@
 use glam::IVec2;
 
 use crate::catalog::PrototypeCatalog;
+use crate::error::PrototypeLoadError;
 use crate::model::{
     AssemblingMachinePrototype, BuildingCategory, CraftingCategory, ElectricEnergySourcePrototype,
     EntityKind, POSITION_SCALE, RailCurvePrototype, RailEndPrototype, RailHeading,
@@ -666,4 +667,81 @@ fn entity_by_name<'a>(
         .iter()
         .find(|prototype| prototype.name == name)
         .unwrap_or_else(|| panic!("base catalog should contain {name}"))
+}
+
+/// A lab prototype with `inventory_slot_count` spliced in, so each case below
+/// differs only in the field under test.
+fn lab_catalog(inventory_slot_count: &str) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "lab", stack_size: 10)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "lab",
+                entity_kind: Lab,
+                build_item: Some("lab"),
+                building_category: Some(Production),
+                building_menu_order: Some(30),
+                size: (x: 3, y: 3),
+                collision_mask: (layers: ["building"]),
+                inventory_slot_count: {inventory_slot_count},
+                electric_energy_source: Some((energy_usage_watts: 60000, drain_watts: 0)),
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+#[test]
+fn lab_entity_requires_inventory_slots() {
+    let error = lab_catalog("None").expect_err("a lab with no inventory could never be fed");
+    assert!(
+        matches!(
+            &error,
+            PrototypeLoadError::InvalidEntityMetadata { entity, .. } if entity == "lab"
+        ),
+        "expected invalid lab metadata, got {error}"
+    );
+}
+
+#[test]
+fn lab_entity_rejects_zero_inventory_slots() {
+    let error =
+        lab_catalog("Some(0)").expect_err("a zero-slot lab could never hold a science pack");
+    assert!(
+        matches!(
+            &error,
+            PrototypeLoadError::InvalidEntityMetadata { entity, .. } if entity == "lab"
+        ),
+        "expected invalid lab metadata, got {error}"
+    );
+}
+
+#[test]
+fn lab_entity_loads_with_inventory_slots() {
+    let catalog = lab_catalog("Some(16)").expect("a lab declaring slots should load");
+    let lab = catalog
+        .entities
+        .iter()
+        .find(|prototype| prototype.name == "lab")
+        .expect("catalog should contain the lab entity");
+
+    assert_eq!(lab.inventory_slot_count, Some(16));
+}
+
+#[test]
+fn base_labs_declare_inventory_slots() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    for lab in catalog
+        .entities
+        .iter()
+        .filter(|prototype| prototype.entity_kind == EntityKind::Lab)
+    {
+        assert!(
+            lab.inventory_slot_count.is_some_and(|count| count > 0),
+            "lab {:?} should declare inventory slots",
+            lab.name
+        );
+    }
 }
