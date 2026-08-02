@@ -192,12 +192,23 @@ impl ItemSlot {
         stack_size: u16,
     ) {
         debug_assert!(count > 0);
-        assert!(self.capacity_for(item_id, stack_size) >= count);
+        // Identity first: `capacity_for` reports no room at all for a different
+        // item, so checking capacity first would report every mismatch as a
+        // capacity failure and this diagnostic would never be reached.
+        if let Some(existing) = &self.0 {
+            assert_eq!(
+                existing.item_id, item_id,
+                "commit of a prevalidated insert targets a slot whose item changed since planning",
+            );
+        }
+        let available = self.capacity_for(item_id, stack_size);
+        assert!(
+            available >= count,
+            "commit of a prevalidated insert exceeds slot capacity: {count} of item {item_id:?} \
+             into a slot with room for {available}",
+        );
         match &mut self.0 {
-            Some(existing) => {
-                assert_eq!(existing.item_id, item_id);
-                existing.count += count;
-            }
+            Some(existing) => existing.count += count,
             None => self.0 = Some(ItemStack { item_id, count }),
         }
     }
@@ -208,8 +219,15 @@ impl ItemSlot {
             .0
             .as_mut()
             .expect("a planned item slot remains occupied during commit");
-        assert_eq!(stack.item_id, item_id);
-        assert!(stack.count >= count);
+        assert_eq!(
+            stack.item_id, item_id,
+            "commit of a prevalidated removal targets a slot whose item changed since planning",
+        );
+        assert!(
+            stack.count >= count,
+            "commit of a prevalidated removal takes {count} from a slot holding {held}",
+            held = stack.count,
+        );
         stack.count -= count;
         if stack.count == 0 {
             self.0 = None;

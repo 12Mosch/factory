@@ -198,6 +198,9 @@ pub enum PrototypeLoadError {
         item: String,
         detail: &'static str,
     },
+    /// Content data does not define a prototype the engine hard-codes a
+    /// dependency on, so the catalog cannot drive a simulation.
+    MissingRequiredPrototype(crate::base_ids::MissingBasePrototype),
 }
 
 impl fmt::Display for PrototypeLoadError {
@@ -465,6 +468,7 @@ impl fmt::Display for PrototypeLoadError {
                     "item {item:?} has invalid fuel metadata: {detail}"
                 )
             }
+            Self::MissingRequiredPrototype(missing) => write!(formatter, "{missing}"),
         }
     }
 }
@@ -474,6 +478,7 @@ impl std::error::Error for PrototypeLoadError {
         match self {
             Self::Io(error) => Some(error),
             Self::Ron(error) => Some(error),
+            Self::MissingRequiredPrototype(error) => Some(error),
             _ => None,
         }
     }

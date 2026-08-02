@@ -24,10 +24,9 @@ impl MachineTickContext<'_> {
                 state.modules.productivity_progress_permyriad = 0;
             }
             let required_ticks = if recipe_changed {
-                let furnace = prototype
-                    .furnace
-                    .as_ref()
-                    .expect("validated furnace has crafting metadata");
+                let furnace = prototype.furnace.as_ref().expect(
+                    "prototype validation requires furnace entities to declare a furnace section",
+                );
                 required_ticks_with_modules(
                     recipe_ticks,
                     furnace.crafting_speed_numerator,

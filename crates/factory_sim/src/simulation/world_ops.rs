@@ -478,7 +478,7 @@ impl WorldSim {
         let mining_drill = prototype
             .mining_drill
             .as_ref()
-            .expect("mining drill prototype should have mining metadata");
+            .expect("the mining_drill section was just checked above");
         if first_resource_in_mining_area(self, footprint, mining_drill).is_none() {
             return Err(BuildError::TileBlocked {
                 x: footprint.x,

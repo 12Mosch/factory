@@ -10,8 +10,10 @@ mod raw;
 mod validation;
 
 pub use base_ids::{
-    BaseFluidIds, BaseItemIds, BasePrototypeIds, BaseTileIds, entity_prototype_id_by_name,
-    fluid_id_by_name, item_id_by_name, recipe_id_by_name, technology_id_by_name, tile_id_by_name,
+    BaseFluidIds, BaseItemIds, BasePrototypeIds, BaseTileIds, MissingBasePrototype,
+    entity_prototype_id_by_name, fluid_id_by_name, item_id_by_name, recipe_id_by_name,
+    technology_id_by_name, tile_id_by_name, try_entity_prototype_id_by_name, try_fluid_id_by_name,
+    try_item_id_by_name, try_recipe_id_by_name, try_technology_id_by_name, try_tile_id_by_name,
 };
 pub use catalog::PrototypeCatalog;
 pub use error::PrototypeLoadError;

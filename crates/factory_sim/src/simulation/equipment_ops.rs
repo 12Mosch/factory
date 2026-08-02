@@ -65,7 +65,7 @@ impl Simulation {
         let mut inventory = self.player_inventory.clone();
         inventory
             .item_slot_mut(inventory_slot)
-            .expect("validated inventory slot")
+            .expect("the equip plan resolved this player inventory slot")
             .remove(item_id, 1)
             .expect("selected stack contains one armor");
         if let Some(previous) = self.player_equipment.equipped_armor
@@ -132,7 +132,7 @@ impl Simulation {
         let mut inventory = self.player_inventory.clone();
         inventory
             .item_slot_mut(inventory_slot)
-            .expect("validated inventory slot")
+            .expect("the equip plan resolved this player inventory slot")
             .remove(item_id, 1)
             .expect("selected stack contains one equipment item");
         let mut installed = self.player_equipment.installed.clone();

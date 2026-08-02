@@ -157,10 +157,20 @@ impl Simulation {
             .fluids
             .steam;
         let mut consumed_any = false;
+        // `zip` stops at the shorter side, so a length mismatch would silently
+        // skip a tail of engines rather than trip the per-pair check below.
+        assert_eq!(
+            engine_output_watts.len(),
+            engine_assignments.len(),
+            "engine outputs and steam assignments are built in one pass and must stay the same length",
+        );
         for (&(engine_id, output_watts), &(assignment_id, assignment)) in
             engine_output_watts.iter().zip(engine_assignments)
         {
-            assert_eq!(engine_id, assignment_id);
+            assert_eq!(
+                engine_id, assignment_id,
+                "engine outputs and steam assignments are built in one pass and must stay aligned",
+            );
             if output_watts == 0 {
                 continue;
             }

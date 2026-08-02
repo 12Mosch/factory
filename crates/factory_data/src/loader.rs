@@ -31,12 +31,27 @@ mod tests;
 
 impl PrototypeCatalog {
     pub fn load_base() -> Result<Self, PrototypeLoadError> {
-        Self::from_ron_str(include_str!("../data/base.ron"))
+        Self::load_playable_from_ron_str(include_str!("../data/base.ron"))
     }
 
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, PrototypeLoadError> {
         let data = std::fs::read_to_string(path).map_err(PrototypeLoadError::Io)?;
-        Self::from_ron_str(&data)
+        Self::load_playable_from_ron_str(&data)
+    }
+
+    /// Loads a catalog that has to be able to drive a simulation.
+    ///
+    /// Beyond the structural and referential checks [`Self::from_ron_str`]
+    /// runs, this resolves every prototype the engine hard-codes a dependency
+    /// on. Doing it here means a data file that is well-formed but missing, say,
+    /// the `iron_plate` item is a rejected load with a named cause, rather than
+    /// a panic once something reaches for the id. `from_ron_str` itself stays
+    /// permissive so partial catalogs remain loadable for focused tests.
+    fn load_playable_from_ron_str(data: &str) -> Result<Self, PrototypeLoadError> {
+        let catalog = Self::from_ron_str(data)?;
+        crate::BasePrototypeIds::try_from_catalog(&catalog)
+            .map_err(PrototypeLoadError::MissingRequiredPrototype)?;
+        Ok(catalog)
     }
 
     pub fn from_ron_str(data: &str) -> Result<Self, PrototypeLoadError> {
