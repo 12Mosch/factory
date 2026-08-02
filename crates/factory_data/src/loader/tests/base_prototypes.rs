@@ -20,8 +20,9 @@ const MINIMAL_CATALOG: &str = r#"(
 
 #[test]
 fn base_catalog_defines_every_required_prototype() {
-    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    BasePrototypeIds::try_from_catalog(&catalog)
+    // `load_base` resolves the required set as part of loading, so a shipped
+    // catalog missing one of them fails here with the name it could not find.
+    PrototypeCatalog::load_base()
         .expect("the shipped catalog should define every required prototype");
 }
 
@@ -55,10 +56,12 @@ fn loading_a_playable_catalog_rejects_missing_required_prototypes() {
     ));
     fs::write(&path, MINIMAL_CATALOG).expect("temp catalog should be writable");
 
-    let error = PrototypeCatalog::load_from_path(&path)
-        .expect_err("a catalog missing required prototypes should not load as playable");
+    // Clean up before asserting, so a failure cannot leave the file behind.
+    let result = PrototypeCatalog::load_from_path(&path);
     let _ = fs::remove_file(&path);
 
+    let error =
+        result.expect_err("a catalog missing required prototypes should not load as playable");
     let PrototypeLoadError::MissingRequiredPrototype(missing) = error else {
         panic!("expected a missing-required-prototype error, got {error}");
     };
