@@ -12,7 +12,6 @@ use crate::input::panels::{
 use crate::input::rail_debug::toggle_rail_overlay_from_input;
 use crate::input::repair::update_repair_from_input;
 use crate::input::resources::{AppInputState, RailGraphOverlay, TrainManualInput};
-use crate::input::robot_debug::dispatch_debug_robot_from_input;
 use crate::input::train_manual::{apply_train_manual_input, collect_train_manual_input};
 
 /// Input resources, panel-state collection, and the fixed-step systems that
@@ -45,7 +44,6 @@ impl Plugin for InputPlugin {
                     move_player_from_input,
                     update_manual_mining_from_input,
                     update_repair_from_input,
-                    dispatch_debug_robot_from_input,
                     apply_train_manual_input,
                 )
                     .chain()
