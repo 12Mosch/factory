@@ -7,6 +7,5 @@ pub(crate) mod planner;
 pub(crate) mod rail_debug;
 pub(crate) mod repair;
 pub mod resources;
-pub(crate) mod robot_debug;
 pub(crate) mod train_manual;
 pub(crate) mod wiring;

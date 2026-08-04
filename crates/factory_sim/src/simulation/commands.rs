@@ -197,14 +197,6 @@ pub enum SimCommand {
         slot_index: usize,
         request: LogisticRequest,
     },
-    /// Debug errand: sends one stationed robot to a tile and back. Robots have
-    /// no jobs yet, so this is how the flight layer is exercised from outside
-    /// the simulation.
-    DispatchRobot {
-        roboport: EntityId,
-        x: WorldTileCoord,
-        y: WorldTileCoord,
-    },
     /// Puts a locomotive or wagon on the rail under `(x, y)`. Separate from
     /// [`SimCommand::PlaceEntityFromPlayerInventory`] because rolling stock is
     /// not tile-locked: there is no footprint to reserve, and what comes back
@@ -328,7 +320,6 @@ pub enum SimCommandError {
     Equipment(PlayerEquipmentError),
     TilePlacement(TilePlacementError),
     Circuit(CircuitError),
-    RobotDispatch(RobotDispatchError),
     LogisticChest(LogisticChestError),
     RollingStockPlacement(RollingStockPlacementError),
     RollingStockMining(RollingStockMiningError),
@@ -369,7 +360,6 @@ pub enum SimCommandEffect {
     CircuitWiresRemoved {
         removed: usize,
     },
-    RobotDispatched(RobotId),
     RollingStockPlaced(RollingStockId),
     RollingStockMined,
 }
@@ -723,12 +713,6 @@ impl Simulation {
                 self.set_logistic_request(entity_id, slot_index, request)
                     .map_err(SimCommandError::LogisticChest)?;
                 Ok(SimCommandEffect::None)
-            }
-            SimCommand::DispatchRobot { roboport, x, y } => {
-                let robot_id = self
-                    .dispatch_robot(roboport, x, y)
-                    .map_err(SimCommandError::RobotDispatch)?;
-                Ok(SimCommandEffect::RobotDispatched(robot_id))
             }
             SimCommand::PlaceRollingStockFromPlayerInventory {
                 prototype_id,
