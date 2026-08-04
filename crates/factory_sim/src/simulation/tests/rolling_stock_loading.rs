@@ -2,7 +2,7 @@
 //! locomotives, pumps against fluid wagons, and the player's own window.
 
 use super::super::*;
-use super::rolling_stock::{fuel_train, place_stock, unlock_with_prerequisites};
+use super::rolling_stock::{fuel_train, place_stock};
 use super::support::*;
 use crate::rolling_stock::{RollingStockId, TrainThrottle};
 

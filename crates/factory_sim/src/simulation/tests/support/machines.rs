@@ -53,6 +53,47 @@ pub(in crate::simulation::tests) fn complete_research_by_name(
         .unwrap_or_else(|_| panic!("{technology_name} should complete"));
 }
 
+/// Researches `technology_name` and everything it depends on, so whatever it
+/// unlocks is reached through the same technology gate a player passes rather
+/// than around it. Prerequisites are followed rather than listed: the chain is
+/// a property of the catalog, and a hand-written list is one catalog edit away
+/// from being wrong.
+pub(in crate::simulation::tests) fn unlock_with_prerequisites(
+    sim: &mut Simulation,
+    technology_name: &str,
+) {
+    if sim.research.is_unlocked(technology_name) {
+        return;
+    }
+    let technology_id = technology_id(&sim.world.prototypes, technology_name);
+    let prerequisites = sim.world.prototypes.technologies[technology_id.index()]
+        .prerequisites
+        .clone();
+    for prerequisite in prerequisites {
+        let name = sim.world.prototypes.technologies[prerequisite.index()]
+            .name
+            .clone();
+        unlock_with_prerequisites(sim, &name);
+    }
+    complete_research_by_name(sim, technology_name);
+}
+
+/// A chemical plant standing on powered ground, ready for a recipe.
+pub(in crate::simulation::tests) fn place_powered_chemical_plant(sim: &mut Simulation) -> EntityId {
+    let chemical_plant = entity_id_by_name(&sim.world.prototypes, "chemical_plant");
+    let (x, y) = place_powered_fixture_origin(sim, 3, 3, (3, 1));
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chemical_plant,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("chemical plant should be placeable")
+}
+
 pub(in crate::simulation::tests) fn add_furnace_input_and_fuel(
     sim: &mut Simulation,
     entity_id: EntityId,

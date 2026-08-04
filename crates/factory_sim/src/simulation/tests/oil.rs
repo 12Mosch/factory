@@ -92,35 +92,6 @@ fn sim_with_powered_refinery() -> (Simulation, EntityId) {
     panic!("expected a seed with room for a powered oil refinery");
 }
 
-fn place_powered_chemical_plant(sim: &mut Simulation) -> EntityId {
-    let chemical_plant = entity_id_by_name(&sim.world.prototypes, "chemical_plant");
-    let (x, y) = place_powered_fixture_origin(sim, 3, 3, (3, 1));
-    crate::placement::place(
-        sim,
-        crate::placement::EntityPlacementRequest {
-            prototype_id: chemical_plant,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("chemical plant should be placeable")
-}
-
-fn fluid_box_amount(
-    sim: &Simulation,
-    entity_id: EntityId,
-    box_index: usize,
-) -> (Option<FluidId>, u64) {
-    let state = sim
-        .entities
-        .fluid_boxes
-        .get(&entity_id)
-        .and_then(|boxes| boxes.get(box_index))
-        .expect("entity should expose requested fluid box");
-    (state.fluid_id, state.amount_milliunits)
-}
-
 #[test]
 fn starting_world_contains_crude_oil_patches() {
     let sim = Simulation::new_test_world(123);

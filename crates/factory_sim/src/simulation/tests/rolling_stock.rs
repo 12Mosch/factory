@@ -122,34 +122,28 @@ pub(super) fn place_stock(
 
 /// Researches `rolling_stock` and everything it depends on, so placement is
 /// exercised through the same technology gate a player passes rather than
-/// around it. Prerequisites are followed rather than listed: the chain is a
-/// property of the catalog, and a hand-written list is one catalog edit away
-/// from being wrong.
+/// around it.
 fn unlock_rolling_stock(sim: &mut Simulation) {
-    unlock_with_prerequisites(sim, "rolling_stock");
+    super::support::unlock_with_prerequisites(sim, "rolling_stock");
 }
 
-pub(super) fn unlock_with_prerequisites(sim: &mut Simulation, technology_name: &str) {
-    if sim.research.is_unlocked(technology_name) {
-        return;
-    }
-    let technology_id = factory_data::technology_id_by_name(&sim.world.prototypes, technology_name);
-    let prerequisites = sim.world.prototypes.technologies[technology_id.index()]
-        .prerequisites
-        .clone();
-    for prerequisite in prerequisites {
-        let name = sim.world.prototypes.technologies[prerequisite.index()]
-            .name
-            .clone();
-        unlock_with_prerequisites(sim, &name);
-    }
-    super::support::complete_research_by_name(sim, technology_name);
-}
-
-/// Fuels every locomotive of a train so it can actually pull.
+/// Fuels every locomotive of a train with coal so it can actually pull.
 pub(super) fn fuel_train(sim: &mut Simulation, train_id: TrainId, coal_count: u16) {
+    let coal = factory_data::item_id_by_name(&sim.world.prototypes, "coal");
+    fuel_train_with(sim, train_id, coal, coal_count);
+}
+
+/// Fuels every locomotive of a train with `fuel_item`, replacing whatever it
+/// was carrying. Which fuel is in the slot is the only thing that separates one
+/// rung of the fuel ladder from another, so the fixture takes it as a
+/// parameter rather than assuming coal.
+pub(super) fn fuel_train_with(
+    sim: &mut Simulation,
+    train_id: TrainId,
+    fuel_item: ItemId,
+    count: u16,
+) {
     let catalog = sim.world.prototypes.clone();
-    let coal = factory_data::item_id_by_name(&catalog, "coal");
     let members = sim.train(train_id).expect("the train exists").stock.clone();
     for stock_id in members {
         let Some(stock) = sim.rolling_stock.stock.get_mut(&stock_id) else {
@@ -160,9 +154,9 @@ pub(super) fn fuel_train(sim: &mut Simulation, train_id: TrainId, coal_count: u1
         };
         energy.fuel_slot = ItemSlot::from_stack(
             &catalog,
-            ItemStack::new(&catalog, coal, coal_count).expect("coal forms a valid stack"),
+            ItemStack::new(&catalog, fuel_item, count).expect("the fuel forms a valid stack"),
         )
-        .expect("a locomotive fuel slot accepts coal");
+        .expect("a locomotive fuel slot accepts fuel");
     }
 }
 

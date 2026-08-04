@@ -415,6 +415,20 @@ pub(in crate::simulation::tests) fn set_fluid_box(
     sim.invalidate_fluid_state();
 }
 
+pub(in crate::simulation::tests) fn fluid_box_amount(
+    sim: &Simulation,
+    entity_id: EntityId,
+    box_index: usize,
+) -> (Option<FluidId>, u64) {
+    let state = sim
+        .entities
+        .fluid_boxes
+        .get(&entity_id)
+        .and_then(|boxes| boxes.get(box_index))
+        .expect("entity should expose requested fluid box");
+    (state.fluid_id, state.amount_milliunits)
+}
+
 pub(in crate::simulation::tests) fn total_fluid_amount(sim: &Simulation, fluid_id: FluidId) -> u64 {
     sim.entities
         .fluid_boxes
