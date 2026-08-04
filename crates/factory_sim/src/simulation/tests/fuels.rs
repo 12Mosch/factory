@@ -15,6 +15,11 @@ use crate::rolling_stock::{TrainId, TrainThrottle};
 /// Joules a locomotive spends per tick, from its 600 kW burner.
 const LOCOMOTIVE_JOULES_PER_TICK: f64 = 600_000.0 / FIXED_SIM_TICKS_PER_SECOND_F64;
 
+/// Ceiling on the loop that measures how long one item of fuel lasts. The
+/// longest leg is one rocket fuel at 10 000 driving ticks, so this is only
+/// reached when a locomotive has stopped spending fuel altogether.
+const MAX_MEASURED_DRIVING_TICKS: u32 = 15_000;
+
 fn burner_energy_remaining(sim: &Simulation, entity_id: EntityId) -> f64 {
     crate::entity_access::furnace_state(sim, entity_id)
         .expect("furnace should expose state")
@@ -247,7 +252,15 @@ fn a_locomotive_pulls_the_same_on_every_fuel_but_runs_longer_on_a_better_one() {
         let mut ticks = 0;
         // The locomotive runs out of track long before it runs out of fuel;
         // the throttle stays open either way, which is what keeps burning.
+        // Bounded rather than a bare `while`: a regression that stopped a
+        // throttled locomotive spending fuel would otherwise hang the suite
+        // instead of failing it.
         while tractive_force(&sim, train_id) > 0 {
+            assert!(
+                ticks < MAX_MEASURED_DRIVING_TICKS,
+                "a throttled locomotive should burn one item dry within \
+                 {MAX_MEASURED_DRIVING_TICKS} ticks"
+            );
             sim.tick();
             ticks += 1;
         }
