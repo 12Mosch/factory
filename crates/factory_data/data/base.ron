@@ -324,6 +324,13 @@
         // One stop per platform, and a station of any size wants only a
         // handful: they go down far more sparsely than signals do.
         (id: 117, name: "train_stop", stack_size: 10),
+        // The rungs between coal and the fuel cell. Coal is 4 MJ and a cell is
+        // 8 GJ, so without these there is nothing to put in a burner once the
+        // oil chain exists. Neither leaves a residue: `burnt_result` is what
+        // makes reprocessing a closed loop for fuel cells, and refined fuel
+        // simply burns away, so both go through the ordinary burner path.
+        (id: 118, name: "solid_fuel", stack_size: 50, fuel_value_joules: Some(12000000)),
+        (id: 119, name: "rocket_fuel", stack_size: 10, fuel_value_joules: Some(100000000)),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1659,6 +1666,30 @@
                 (item: "electronic_circuit", amount: 5),
             ],
             products: [(item: "train_stop", amount: 1)],
+        ),
+        // Light oil's first sink that is not a drain. Cracking turns it back
+        // into petroleum gas, which is the chain eating its own output; this
+        // turns it into something every burner in the game can eat.
+        (
+            id: 116,
+            name: "solid_fuel",
+            category: Chemistry,
+            crafting_time_ticks: 120,
+            fluid_ingredients: [(fluid: "light_oil", amount: 10)],
+            products: [(item: "solid_fuel", amount: 1)],
+        ),
+        // Ten solid fuel packed with another ten light oil, and half a minute
+        // of a chemical plant to do it: the energy per stack is what is being
+        // bought, so this is worth running for the fuel slots that are
+        // refilled by hand or by train rather than for a furnace column.
+        (
+            id: 117,
+            name: "rocket_fuel",
+            category: Chemistry,
+            crafting_time_ticks: 1800,
+            ingredients: [(item: "solid_fuel", amount: 10)],
+            fluid_ingredients: [(fluid: "light_oil", amount: 10)],
+            products: [(item: "rocket_fuel", amount: 1)],
         ),
     ],
     entities: [
@@ -3971,6 +4002,39 @@
             required_units: 100,
             research_time_ticks: 900,
             effects: [UnlockRecipe("train_stop")],
+        ),
+        // Sits with the oil technologies, and behind advanced oil processing
+        // rather than beside plastics and sulfur: light oil does not exist
+        // until the refinery splits crude three ways, so unlocking this any
+        // earlier would hand the player a recipe with nothing to feed it.
+        (
+            id: 47,
+            name: "solid_fuel",
+            prerequisites: ["advanced_oil_processing"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+            ],
+            required_units: 100,
+            research_time_ticks: 600,
+            effects: [UnlockRecipe("solid_fuel")],
+        ),
+        // The rung above, and priced like one: solid fuel is already enough to
+        // run a factory's burners, so this is researched for the density
+        // rather than for the fuel.
+        (
+            id: 48,
+            name: "rocket_fuel",
+            prerequisites: ["solid_fuel"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+            ],
+            required_units: 250,
+            research_time_ticks: 900,
+            effects: [UnlockRecipe("rocket_fuel")],
         ),
     ],
     // Signal channels with no item or fluid identity. The three

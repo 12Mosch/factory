@@ -8,6 +8,7 @@ mod commands;
 mod construction;
 mod equipment;
 mod fluids;
+mod fuels;
 mod furnaces;
 mod heat;
 mod inserters;

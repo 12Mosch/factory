@@ -9,9 +9,8 @@
 //! together.
 
 use super::super::*;
-use super::rolling_stock::{
-    fuel_train, place_stock, unlock_with_prerequisites, world_with_rail_run,
-};
+use super::rolling_stock::{fuel_train, place_stock, world_with_rail_run};
+use super::support::unlock_with_prerequisites;
 use crate::rolling_stock::{
     Train, TrainId, TrainSchedule, TrainScheduleEntry, TrainThrottle, TrainWaitCondition,
     TrainWaitConditionGroup,

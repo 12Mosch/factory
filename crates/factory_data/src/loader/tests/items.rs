@@ -23,6 +23,45 @@ fn coal_loads_fuel_value() {
     assert_eq!(iron_ore.fuel_value_joules, None);
 }
 
+/// The fuels form a ladder rather than two far-apart points, and every rung is
+/// a real step: this is the thing the refined fuels exist for, so it is worth
+/// asserting on the ordering and not only on the individual values.
+#[test]
+fn refined_fuels_sit_between_coal_and_the_uranium_fuel_cell() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let fuel_value = |name: &str| {
+        catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain {name}"))
+            .fuel_value_joules
+            .unwrap_or_else(|| panic!("{name} should be a fuel"))
+    };
+
+    let ladder = ["coal", "solid_fuel", "rocket_fuel", "uranium_fuel_cell"];
+    let values = ladder.map(fuel_value);
+    assert_eq!(values, [4_000_000, 12_000_000, 100_000_000, 8_000_000_000]);
+    assert!(
+        values.windows(2).all(|rungs| rungs[0] < rungs[1]),
+        "the fuel ladder should be strictly increasing: {values:?}"
+    );
+
+    // Residue is what makes reprocessing a closed loop for fuel cells. Refined
+    // fuels burn away, which is what lets them go in every burner slot.
+    for name in ["solid_fuel", "rocket_fuel"] {
+        let item = catalog
+            .items
+            .iter()
+            .find(|prototype| prototype.name == name)
+            .expect("base catalog should contain the refined fuels");
+        assert_eq!(
+            item.burnt_result, None,
+            "{name} should burn without residue"
+        );
+    }
+}
+
 #[test]
 fn military_items_load_typed_ammo_armor_and_powered_equipment() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
