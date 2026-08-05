@@ -10,7 +10,14 @@ use crate::constants::TILE_SIZE;
 
 const VISUAL_TEXTURE_PIXELS_PER_TILE: f32 = 64.0;
 const MIN_VISUAL_TEXTURE_PIXELS: u32 = 16;
-const MAX_VISUAL_TEXTURE_PIXELS: u32 = 256;
+/// Ceiling on a visual's texture, in pixels per axis.
+///
+/// Sized so the largest footprint in the catalog — the rocket silo, at nine
+/// tiles a side — still rasterizes at the full pixels-per-tile every smaller
+/// entity gets. The clamp is a bound on pathological content data rather than a
+/// budget the base game runs into: below it, a visual's texel density is the
+/// same whatever its size, so the biggest building is not also the blurriest.
+const MAX_VISUAL_TEXTURE_PIXELS: u32 = 640;
 
 #[derive(Clone)]
 pub(super) struct RasterizedVisual {

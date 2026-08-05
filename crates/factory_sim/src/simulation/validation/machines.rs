@@ -208,6 +208,35 @@ pub(in crate::simulation) fn validate_assembler(
     Ok(())
 }
 
+/// A silo's crafting state is not checked against a required tick count the way
+/// an assembler's is: the silo derives that count from the catalog every tick,
+/// so there is no stored value that could disagree with the recipe. What is
+/// checked is what the silo does store — its ingredient slots, its modules, and
+/// a part count that never runs past a whole rocket.
+pub(in crate::simulation) fn validate_rocket_silo(
+    sim: &Simulation,
+    entity_id: EntityId,
+    state: &RocketSiloState,
+) -> Result<(), SimValidationError> {
+    validate_machine_modules(sim, entity_id, &state.modules)?;
+    validate_inventory(&sim.world.prototypes, &state.input_inventory)?;
+    for slot in state.input_inventory.slots() {
+        validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::RocketPartIngredient)?;
+    }
+
+    if state.parts_per_rocket == 0 || state.parts_completed > state.parts_per_rocket {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+    if state.crafting_speed_numerator == 0 || state.crafting_speed_denominator == 0 {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+    if state.crafting_required_ticks == 0 && state.crafting_progress_ticks != 0 {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+
+    Ok(())
+}
+
 pub(in crate::simulation) fn validate_lab(
     sim: &Simulation,
     entity_id: EntityId,

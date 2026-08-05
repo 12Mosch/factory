@@ -287,6 +287,9 @@ pub enum InventoryPanel {
     InserterFuel,
     AssemblerInput,
     AssemblerOutput,
+    /// A rocket silo's ingredient slots. There is no output counterpart: a
+    /// finished part becomes part of the rocket rather than an item in a slot.
+    RocketSiloInput,
     Modules,
     /// A cargo wagon's own inventory.
     RollingStockCargo,
@@ -303,6 +306,7 @@ pub enum SlotTransferError {
     NuclearReactor(NuclearReactorError),
     Roboport(RoboportError),
     Assembler(AssemblerError),
+    RocketSilo(RocketSiloError),
     Inserter(InserterError),
     Module(ModuleError),
     RollingStock(RollingStockTransferError),

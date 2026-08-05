@@ -59,6 +59,7 @@ macro_rules! for_each_entity_state_map {
             roboports: crate::robots::RoboportState => Roboport,
             logistic_chests: crate::logistics::LogisticChestState => _,
             train_stops: crate::rolling_stock::TrainStopState => TrainStop,
+            rocket_silos: crate::machines::RocketSiloState => RocketSilo,
         }
     };
 }
@@ -161,6 +162,8 @@ macro_rules! define_entity_store {
                     Some(&state.modules)
                 } else if let Some(state) = self.mining_drills.get(&entity_id) {
                     Some(&state.modules)
+                } else if let Some(state) = self.rocket_silos.get(&entity_id) {
+                    Some(&state.modules)
                 } else {
                     self.labs.get(&entity_id).map(|state| &state.modules)
                 }
@@ -175,6 +178,8 @@ macro_rules! define_entity_store {
                 } else if let Some(state) = self.furnaces.get_mut(&entity_id) {
                     Some(&mut state.modules)
                 } else if let Some(state) = self.mining_drills.get_mut(&entity_id) {
+                    Some(&mut state.modules)
+                } else if let Some(state) = self.rocket_silos.get_mut(&entity_id) {
                     Some(&mut state.modules)
                 } else {
                     self.labs.get_mut(&entity_id).map(|state| &mut state.modules)
@@ -257,7 +262,7 @@ mod tests {
     };
     use crate::machines::{
         AssemblingMachineState, BurnerEnergy, FurnaceState, LabState, MachineEnergy,
-        MachineModuleState, MiningDrillState, PumpjackState,
+        MachineModuleState, MiningDrillState, PumpjackState, RocketSiloState,
     };
     use crate::player::ManualMiningTarget;
     use crate::power::{
@@ -297,12 +302,14 @@ mod tests {
         // v40: inventories gained a per-slot filter row, so every stored
         // inventory in the registry carries one (empty until a player filters
         // something).
+        // v43: rocket silo state was appended — ingredient slots and the part
+        // counter that is the rocket under construction.
         // v41: train stop state was appended — the name a schedule asks for,
         // the train limit, and the channel that limit may be read from. The
         // fixture gained a populated stop afterwards, so those three fields are
         // pinned rather than only the map that holds them; the save format did
         // not change with it.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x15c2_9868_4bbe_d5e3;
+        const EXPECTED_LAYOUT_HASH: u64 = 0xa46e_0e9d_ffc9_b47e;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -340,9 +347,9 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(31);
+        let mut store = EntityStore::empty(32);
 
-        for raw in 1..=30 {
+        for raw in 1..=31 {
             let id = EntityId::new(raw);
             let tile = raw as i64;
             store.entities.push(SimEntity {
@@ -630,6 +637,23 @@ mod tests {
                 robots: test_inventory(vec![Some(test_stack(iron, 3)), None]),
                 materials: test_inventory(vec![Some(test_stack(copper, 2))]),
                 charge_energy_joules: 7_654_321,
+            },
+        );
+
+        // A silo part-way through a rocket, so the layout pins the part counter
+        // as well as the map that holds it: the count is the only record that a
+        // rocket is under construction.
+        store.rocket_silos.insert(
+            EntityId::new(31),
+            RocketSiloState {
+                modules: MachineModuleState::with_slot_count(0),
+                input_inventory: test_inventory(vec![Some(test_stack(iron, 6))]),
+                crafting_progress_ticks: 45,
+                crafting_required_ticks: 180,
+                crafting_speed_numerator: 1,
+                crafting_speed_denominator: 1,
+                parts_completed: 17,
+                parts_per_rocket: 100,
             },
         );
 

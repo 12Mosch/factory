@@ -33,5 +33,6 @@ impl_inventory_error_conversion!(BoilerError, "boiler");
 impl_inventory_error_conversion!(NuclearReactorError, "nuclear reactor");
 impl_inventory_error_conversion!(RoboportError, "roboport");
 impl_inventory_error_conversion!(AssemblerError, "assembler");
+impl_inventory_error_conversion!(RocketSiloError, "rocket silo");
 impl_inventory_error_conversion!(InserterError, "inserter");
 impl_inventory_error_conversion!(RollingStockTransferError, "rolling stock");

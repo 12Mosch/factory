@@ -5,6 +5,7 @@ pub mod lab;
 pub mod mining_drill;
 pub mod modules;
 pub mod pumpjack;
+pub mod rocket_silo;
 
 pub use crate::power::{BoilerError, BoilerState};
 
@@ -17,6 +18,7 @@ pub use self::modules::{
     BeaconState, MachineModuleState, ModuleError, ModuleSlots, ResolvedModuleEffects,
 };
 pub use self::pumpjack::PumpjackState;
+pub use self::rocket_silo::{RocketSiloError, RocketSiloState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MachineStatus {

@@ -11,7 +11,7 @@ use super::power::{
     nuclear_reactor_layers, solar_panel_layers, steam_engine_layers,
 };
 use super::production::{
-    assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers,
+    assembler_layers, beacon_layers, drill_layers, furnace_layers, lab_layers, rocket_silo_layers,
 };
 use super::rails::{rail_layers, rail_signal_layers, train_stop_layers};
 use crate::rendering::visuals::EntityVisualStyle;
@@ -44,6 +44,7 @@ pub(super) fn entity_layers(style: EntityVisualStyle) -> Vec<VisualLayer> {
         EntityKind::MiningDrill => drill_layers(&mut builder, style),
         EntityKind::Furnace => furnace_layers(&mut builder, style),
         EntityKind::AssemblingMachine => assembler_layers(&mut builder, style),
+        EntityKind::RocketSilo => rocket_silo_layers(&mut builder, style),
         EntityKind::Lab => lab_layers(&mut builder, style),
         EntityKind::Beacon => beacon_layers(&mut builder, style),
         EntityKind::Inserter => inserter_layers(&mut builder, style),

@@ -1,3 +1,4 @@
+use super::crafting::{CraftProducts, ItemCraft, record_item_craft};
 use super::progress::{ProgressAdvance, advance_electric_progress};
 use super::*;
 
@@ -20,21 +21,17 @@ impl MachineTickContext<'_> {
                 state.crafting_required_ticks = 0;
                 continue;
             };
-            let ingredients = recipe.ingredients.as_slice();
-            let products = recipe.products.as_slice();
             let fluid_ingredients = recipe.fluid_ingredients.as_slice();
             let fluid_products = recipe.fluid_products.as_slice();
             let required_ticks = state.crafting_required_ticks;
             let output_copies = state.modules.output_copies_due();
 
             let can_craft_items = profiler.measure(ProfilePhase::InventoryTransfers, || {
-                assembler_has_ingredients(&state.input_inventory, ingredients)
-                    && assembler_output_can_accept_copies(
-                        &self.world.prototypes,
-                        &state.output_inventory,
-                        products,
-                        output_copies,
-                    )
+                ItemCraft {
+                    input_inventory: &mut state.input_inventory,
+                    products: CraftProducts::Inventory(&mut state.output_inventory),
+                }
+                .can_craft(&self.world.prototypes, recipe, output_copies)
             });
             let fluid_assignment = if fluid_ingredients.is_empty() && fluid_products.is_empty() {
                 Some((Vec::new(), Vec::new()))
@@ -81,20 +78,11 @@ impl MachineTickContext<'_> {
             debug_assert_eq!(output_copies, 1 + bonus_copies);
 
             profiler.measure(ProfilePhase::InventoryTransfers, || {
-                for ingredient in ingredients {
-                    state
-                        .input_inventory
-                        .remove(ingredient.item, ingredient.amount)
-                        .expect("assembler checked ingredients before completion");
+                ItemCraft {
+                    input_inventory: &mut state.input_inventory,
+                    products: CraftProducts::Inventory(&mut state.output_inventory),
                 }
-                for _ in 0..output_copies {
-                    for product in products {
-                        state
-                            .output_inventory
-                            .insert(&self.world.prototypes, product.item, product.amount)
-                            .expect("assembler checked output capacity before completion");
-                    }
-                }
+                .complete(&self.world.prototypes, recipe, output_copies)
             });
             if !fluid_ingredients.is_empty() || !fluid_products.is_empty() {
                 let box_states = self
@@ -114,22 +102,16 @@ impl MachineTickContext<'_> {
                         .mark_box_dirty(FluidBoxKey::entity(entity_id, box_index));
                 }
             }
-            // Recipe slices borrow prototypes here, so record through the field
+            // Recipe slices borrow prototypes here, so record through the fields
             // instead of taking a mutable borrow of the whole tick context.
-            for ingredient in ingredients {
-                self.statistics
-                    .record_item_consumed(ingredient.item, u64::from(ingredient.amount));
-            }
-            for product in products {
-                self.statistics.record_item_produced(
-                    product.item,
-                    u64::from(product.amount).saturating_mul(output_copies),
-                );
-                self.onboarding_progress.record_item_produced(
-                    &self.base,
-                    product.item,
-                    u64::from(product.amount).saturating_mul(output_copies),
-                );
+            record_item_craft(
+                &mut self.statistics,
+                self.onboarding_progress,
+                &self.base,
+                recipe,
+                output_copies,
+            );
+            for product in &recipe.products {
                 self.onboarding_progress.record_counter(
                     |progress| &mut progress.assembler_items_produced,
                     u64::from(product.amount).saturating_mul(output_copies),

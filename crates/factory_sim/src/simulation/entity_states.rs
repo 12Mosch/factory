@@ -1,6 +1,7 @@
 use super::validation::machines::{
     validate_assembler, validate_belt_segment, validate_boiler, validate_furnace,
-    validate_inserter, validate_lab, validate_mining_drill, validate_splitter_state,
+    validate_inserter, validate_lab, validate_mining_drill, validate_rocket_silo,
+    validate_splitter_state,
 };
 use super::*;
 
@@ -87,6 +88,24 @@ impl EntityStateBehavior for AssemblingMachineState {
         entity_id: EntityId,
     ) -> Result<(), SimValidationError> {
         validate_assembler(sim, entity_id, self)
+    }
+}
+
+impl EntityStateBehavior for RocketSiloState {
+    /// Only the ingredients and modules come back. A part already counted
+    /// toward the rocket is not an item and was never in a slot, so mining a
+    /// half-built silo loses the rocket rather than refunding it in pieces.
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
+        push_inventory_stacks(stacks, &self.input_inventory);
+        push_module_stacks(stacks, &self.modules.slots);
+    }
+
+    fn validate_state(
+        &self,
+        sim: &Simulation,
+        entity_id: EntityId,
+    ) -> Result<(), SimValidationError> {
+        validate_rocket_silo(sim, entity_id, self)
     }
 }
 

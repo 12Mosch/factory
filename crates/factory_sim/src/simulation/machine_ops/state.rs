@@ -58,7 +58,34 @@ pub(in crate::simulation) fn reservation_for_prototype(
         roboports: roboport_state_for_prototype(prototype),
         logistic_chests: logistic_chest_state_for_prototype(prototype),
         train_stops: train_stop_state_for_prototype(prototype),
+        rocket_silos: rocket_silo_state_for_prototype(prototype),
     }
+}
+
+/// A freshly placed silo stands empty with no rocket in it.
+///
+/// `parts_per_rocket` is copied out of the prototype rather than read back from
+/// it every tick, so a silo that is already part-way through a rocket keeps
+/// counting to the target it started against even if content data later changes
+/// the size of a rocket.
+fn rocket_silo_state_for_prototype(
+    prototype: &factory_data::EntityPrototype,
+) -> Option<crate::machines::RocketSiloState> {
+    if prototype.entity_kind != EntityKind::RocketSilo {
+        return None;
+    }
+
+    let rocket_silo = prototype.rocket_silo?;
+    Some(crate::machines::RocketSiloState {
+        modules: MachineModuleState::with_slot_count(prototype.module_slot_count),
+        input_inventory: Inventory::with_slot_count(rocket_silo.input_slot_count),
+        crafting_progress_ticks: 0,
+        crafting_required_ticks: 0,
+        crafting_speed_numerator: rocket_silo.crafting_speed_numerator,
+        crafting_speed_denominator: rocket_silo.crafting_speed_denominator,
+        parts_completed: 0,
+        parts_per_rocket: rocket_silo.parts_per_rocket,
+    })
 }
 
 /// A freshly placed stop admits one train and answers to a placeholder name.

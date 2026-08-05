@@ -2,13 +2,13 @@ use super::common::{
     all_tile_coords, complete_research_by_name, entity_id_by_name, first_buildable_rect,
     format_item_name_for_test, item_id_by_name, nearest_resource_tile_for_app,
     place_powered_fixture_origin, recipe_id_by_name, set_player_inventory_slot,
-    technology_id_by_name,
+    technology_id_by_name, unlock_with_prerequisites,
 };
 use factory_app::rendering::resources::RenderSyncStats;
 use factory_app::resources::SimProfileStats;
 use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
-    available_crafting_recipe_choices, crafting_recipe_choices, format_assembler_detail_text,
+    available_crafting_recipe_choices, crafting_recipe_choices, format_crafting_detail_text,
 };
 use factory_app::ui::production_stats::{
     bottleneck_lines, diagnostic_lines, fluid_consumption_rows, fluid_production_rows,
@@ -424,7 +424,7 @@ fn assembler_detail_formatting_reports_partial_ingredients() {
         .expect("partial ingredients should transfer to assembler input");
 
     let details =
-        format_assembler_detail_text(&sim, entity_id).expect("assembler details should format");
+        format_crafting_detail_text(&sim, entity_id).expect("assembler details should format");
 
     assert_eq!(details.recipe, "Recipe: Iron Gear Wheel");
     assert_eq!(
@@ -433,4 +433,51 @@ fn assembler_detail_formatting_reports_partial_ingredients() {
     );
     assert_eq!(details.products, "Output: Iron Gear Wheel x1");
     assert_eq!(details.progress, "Progress: 0/60");
+}
+
+/// The silo shows the same four lines an assembler does, with the two
+/// substitutions its window is defined by: a recipe it states rather than offers,
+/// and a rocket in place of an output stack.
+#[test]
+fn rocket_silo_detail_formatting_reports_ingredients_and_rocket_progress() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "rocket_silo");
+    let silo = entity_id_by_name(sim.catalog(), "rocket_silo");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 9, 9, (-1, 4));
+    let entity_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: silo,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("rocket silo should be placeable");
+
+    let ingredient = sim
+        .rocket_silo_recipe()
+        .expect("the part recipe should be unlocked")
+        .ingredients[0]
+        .clone();
+    *sim.player_inventory_mut() = Inventory::player();
+    set_player_inventory_slot(&mut sim, 2, ingredient.item, 1);
+    factory_sim::entity_transfer::player_slot_to_rocket_silo_input(&mut sim, entity_id, 2)
+        .expect("an ingredient should transfer to the silo");
+
+    let details = format_crafting_detail_text(&sim, entity_id).expect("silo details should format");
+
+    assert_eq!(details.recipe, "Recipe: Rocket Part");
+    assert!(
+        details.ingredients.starts_with("Ingredients:\n"),
+        "the silo lists what a part needs: {}",
+        details.ingredients
+    );
+    assert!(
+        details.ingredients.contains("have 1"),
+        "the transferred ingredient should be counted: {}",
+        details.ingredients
+    );
+    assert_eq!(details.products, "Output: Rocket 0/100");
+    assert_eq!(details.progress, "Progress: 0/180");
 }

@@ -1,67 +1,88 @@
 use bevy::prelude::*;
 use factory_data::{CraftingCategory, PrototypeCatalog, RecipeId};
-use factory_sim::SimCommand;
+use factory_sim::{InventoryPanel, SimCommand};
 
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::{
-    AssemblerDetailText, format_assembler_detail_text, format_recipe_display_name,
+    CraftingDetailText, format_crafting_detail_text, format_recipe_display_name,
     machine_recipe_choices,
 };
-use crate::ui::inventory_panel::{InventoryPanel, spawn_slot_button};
+use crate::ui::inventory_panel::spawn_slot_button;
 use crate::ui::machine_indicators::MachineProgressFill;
 use crate::ui::resources::OpenContainer;
 
+/// What one crafting machine's window shows.
+///
+/// Assembling machines and rocket silos share this panel because they share the
+/// thing it is a window onto: ingredients going in, a recipe, progress toward
+/// the next one. The two fields that are optional are exactly the two things a
+/// silo does not have — a recipe to choose and an output slot to empty.
+pub(crate) struct CraftingPanelSpec<'a> {
+    pub(crate) title: &'a str,
+    /// Slots the machine's ingredients sit in.
+    pub(crate) input: CraftingPanelSlots,
+    /// Slots finished products sit in, or `None` for a machine whose product is
+    /// not an item in a slot.
+    pub(crate) output: Option<CraftingPanelSlots>,
+    /// Category whose recipes the player may pick between, or `None` for a
+    /// machine whose recipe is fixed.
+    pub(crate) selectable_category: Option<CraftingCategory>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CraftingPanelSlots {
+    pub(crate) panel: InventoryPanel,
+    pub(crate) count: usize,
+}
+
 #[derive(Component)]
-pub(crate) struct AssemblerRecipeButton {
+pub(crate) struct CraftingRecipeButton {
     recipe_id: RecipeId,
 }
 
 #[derive(Component)]
-pub(crate) struct AssemblerRecipeText;
+pub(crate) struct CraftingRecipeText;
 
 #[derive(Component)]
-pub(crate) struct AssemblerIngredientsText;
+pub(crate) struct CraftingIngredientsText;
 
 #[derive(Component)]
-pub(crate) struct AssemblerProductsText;
+pub(crate) struct CraftingProductsText;
 
 #[derive(Component)]
-pub(crate) struct AssemblerProgressText;
+pub(crate) struct CraftingProgressText;
 
-pub(crate) type AssemblerRecipeButtonInteractionQuery<'w, 's> = Query<
+pub(crate) type CraftingRecipeButtonInteractionQuery<'w, 's> = Query<
     'w,
     's,
-    (&'static Interaction, &'static AssemblerRecipeButton),
+    (&'static Interaction, &'static CraftingRecipeButton),
     (Changed<Interaction>, With<Button>),
 >;
-pub(crate) type AssemblerDetailTextQuery<'w, 's> = Query<
+pub(crate) type CraftingDetailTextQuery<'w, 's> = Query<
     'w,
     's,
     (
         &'static mut Text,
-        Has<AssemblerRecipeText>,
-        Has<AssemblerIngredientsText>,
-        Has<AssemblerProductsText>,
-        Has<AssemblerProgressText>,
+        Has<CraftingRecipeText>,
+        Has<CraftingIngredientsText>,
+        Has<CraftingProductsText>,
+        Has<CraftingProgressText>,
     ),
     Or<(
-        With<AssemblerRecipeText>,
-        With<AssemblerIngredientsText>,
-        With<AssemblerProductsText>,
-        With<AssemblerProgressText>,
+        With<CraftingRecipeText>,
+        With<CraftingIngredientsText>,
+        With<CraftingProductsText>,
+        With<CraftingProgressText>,
     )>,
 >;
 
-pub(crate) fn spawn_assembler_panel(
+pub(crate) fn spawn_crafting_panel(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     catalog: &PrototypeCatalog,
-    input_slot_count: usize,
-    output_slot_count: usize,
-    machine_category: CraftingCategory,
-    title: &str,
+    spec: CraftingPanelSpec<'_>,
 ) {
     root.spawn((
         Node {
@@ -74,7 +95,7 @@ pub(crate) fn spawn_assembler_panel(
     ))
     .with_children(|panel| {
         panel.spawn((
-            Text::new(title.to_string()),
+            Text::new(spec.title.to_string()),
             TextFont::from_font_size(14.0),
             TextColor(Color::WHITE),
         ));
@@ -82,41 +103,43 @@ pub(crate) fn spawn_assembler_panel(
             Text::new("Recipe: <none>"),
             TextFont::from_font_size(12.0),
             TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            AssemblerRecipeText,
+            CraftingRecipeText,
         ));
-        panel
-            .spawn((
-                Node {
-                    width: Val::Px(420.0),
-                    flex_wrap: FlexWrap::Wrap,
-                    row_gap: Val::Px(4.0),
-                    column_gap: Val::Px(4.0),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|recipes| {
-                for recipe in machine_recipe_choices(catalog, machine_category) {
-                    spawn_assembler_recipe_button(recipes, recipe.id, &recipe.name);
-                }
-            });
+        if let Some(category) = spec.selectable_category {
+            panel
+                .spawn((
+                    Node {
+                        width: Val::Px(420.0),
+                        flex_wrap: FlexWrap::Wrap,
+                        row_gap: Val::Px(4.0),
+                        column_gap: Val::Px(4.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|recipes| {
+                    for recipe in machine_recipe_choices(catalog, category) {
+                        spawn_crafting_recipe_button(recipes, recipe.id, &recipe.name);
+                    }
+                });
+        }
         panel.spawn((
             Text::new("Ingredients: <none>"),
             TextFont::from_font_size(11.0),
             TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            AssemblerIngredientsText,
+            CraftingIngredientsText,
         ));
         panel.spawn((
             Text::new("Output: <none>"),
             TextFont::from_font_size(11.0),
             TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            AssemblerProductsText,
+            CraftingProductsText,
         ));
         panel.spawn((
             Text::new("Progress: 0/0"),
             TextFont::from_font_size(11.0),
             TextColor(Color::srgb(0.86, 0.88, 0.82)),
-            AssemblerProgressText,
+            CraftingProgressText,
         ));
         panel
             .spawn((
@@ -146,51 +169,42 @@ pub(crate) fn spawn_assembler_panel(
                 BackgroundColor(Color::NONE),
             ))
             .with_children(|groups| {
-                groups.spawn((
-                    Text::new("Input"),
-                    TextFont::from_font_size(11.0),
-                    TextColor(Color::srgb(0.78, 0.80, 0.78)),
-                ));
-                groups
-                    .spawn((
-                        Node {
-                            flex_wrap: FlexWrap::Wrap,
-                            row_gap: Val::Px(4.0),
-                            column_gap: Val::Px(4.0),
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|slots| {
-                        for slot_index in 0..input_slot_count {
-                            spawn_slot_button(slots, InventoryPanel::AssemblerInput, slot_index);
-                        }
-                    });
-                groups.spawn((
-                    Text::new("Output"),
-                    TextFont::from_font_size(11.0),
-                    TextColor(Color::srgb(0.78, 0.80, 0.78)),
-                ));
-                groups
-                    .spawn((
-                        Node {
-                            flex_wrap: FlexWrap::Wrap,
-                            row_gap: Val::Px(4.0),
-                            column_gap: Val::Px(4.0),
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|slots| {
-                        for slot_index in 0..output_slot_count {
-                            spawn_slot_button(slots, InventoryPanel::AssemblerOutput, slot_index);
-                        }
-                    });
+                spawn_slot_group(groups, "Input", spec.input);
+                if let Some(output) = spec.output {
+                    spawn_slot_group(groups, "Output", output);
+                }
             });
     });
 }
 
-pub(crate) fn spawn_assembler_recipe_button(
+fn spawn_slot_group(
+    groups: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    slots: CraftingPanelSlots,
+) {
+    groups.spawn((
+        Text::new(label.to_string()),
+        TextFont::from_font_size(11.0),
+        TextColor(Color::srgb(0.78, 0.80, 0.78)),
+    ));
+    groups
+        .spawn((
+            Node {
+                flex_wrap: FlexWrap::Wrap,
+                row_gap: Val::Px(4.0),
+                column_gap: Val::Px(4.0),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ))
+        .with_children(|buttons| {
+            for slot_index in 0..slots.count {
+                spawn_slot_button(buttons, slots.panel, slot_index);
+            }
+        });
+}
+
+pub(crate) fn spawn_crafting_recipe_button(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     recipe_id: RecipeId,
     recipe_name: &str,
@@ -206,8 +220,8 @@ pub(crate) fn spawn_assembler_recipe_button(
                 padding: UiRect::all(Val::Px(3.0)),
                 ..default()
             },
-            BackgroundColor(assembler_recipe_button_normal_color()),
-            AssemblerRecipeButton { recipe_id },
+            BackgroundColor(crafting_recipe_button_normal_color()),
+            CraftingRecipeButton { recipe_id },
         ))
         .with_child((
             Text::new(format_recipe_button_label(recipe_name)),
@@ -217,8 +231,8 @@ pub(crate) fn spawn_assembler_recipe_button(
         ));
 }
 
-pub(crate) fn handle_assembler_recipe_button_clicks(
-    mut interactions: AssemblerRecipeButtonInteractionQuery,
+pub(crate) fn handle_crafting_recipe_button_clicks(
+    mut interactions: CraftingRecipeButtonInteractionQuery,
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut commands: MessageWriter<SimCommandRequest>,
@@ -226,6 +240,8 @@ pub(crate) fn handle_assembler_recipe_button_clicks(
     let Some(entity_id) = open_container.entity_id else {
         return;
     };
+    // Recipe buttons only ever exist for an assembler; a silo's panel spawns
+    // none, so a click that arrives while one is open is a stale button.
     if open_machine_kind(&sim.read(), entity_id) != Some(OpenMachineKind::Assembler) {
         return;
     }
@@ -242,15 +258,15 @@ pub(crate) fn handle_assembler_recipe_button_clicks(
     }
 }
 
-pub(crate) fn update_assembler_detail_text(
+pub(crate) fn update_crafting_detail_text(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
-    mut texts: AssemblerDetailTextQuery,
+    mut texts: CraftingDetailTextQuery,
 ) {
     let details = open_container
         .entity_id
-        .and_then(|entity_id| format_assembler_detail_text(&sim.read(), entity_id))
-        .unwrap_or_else(AssemblerDetailText::empty);
+        .and_then(|entity_id| format_crafting_detail_text(&sim.read(), entity_id))
+        .unwrap_or_else(CraftingDetailText::empty);
 
     for (mut text, is_recipe, is_ingredients, is_products, is_progress) in &mut texts {
         if is_recipe {
@@ -265,10 +281,10 @@ pub(crate) fn update_assembler_detail_text(
     }
 }
 
-pub(crate) fn update_assembler_recipe_button_colors(
+pub(crate) fn update_crafting_recipe_button_colors(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
-    mut buttons: Query<(&AssemblerRecipeButton, &mut BackgroundColor)>,
+    mut buttons: Query<(&CraftingRecipeButton, &mut BackgroundColor)>,
 ) {
     let Some(entity_id) = open_container.entity_id else {
         return;
@@ -279,15 +295,15 @@ pub(crate) fn update_assembler_recipe_button_colors(
 
     for (button, mut color) in &mut buttons {
         color.0 = if selected_recipe == Some(button.recipe_id) {
-            assembler_recipe_button_selected_color()
+            crafting_recipe_button_selected_color()
         } else if sim
             .read()
             .can_select_assembler_recipe(entity_id, button.recipe_id)
             .unwrap_or(false)
         {
-            assembler_recipe_button_normal_color()
+            crafting_recipe_button_normal_color()
         } else {
-            assembler_recipe_button_muted_color()
+            crafting_recipe_button_muted_color()
         };
     }
 }
@@ -296,14 +312,14 @@ pub(crate) fn format_recipe_button_label(name: &str) -> String {
     format_recipe_display_name(name)
 }
 
-pub(crate) fn assembler_recipe_button_normal_color() -> Color {
+pub(crate) fn crafting_recipe_button_normal_color() -> Color {
     Color::srgba(0.16, 0.18, 0.18, 0.96)
 }
 
-pub(crate) fn assembler_recipe_button_selected_color() -> Color {
+pub(crate) fn crafting_recipe_button_selected_color() -> Color {
     Color::srgba(0.18, 0.43, 0.55, 0.98)
 }
 
-pub(crate) fn assembler_recipe_button_muted_color() -> Color {
+pub(crate) fn crafting_recipe_button_muted_color() -> Color {
     Color::srgba(0.08, 0.09, 0.09, 0.96)
 }

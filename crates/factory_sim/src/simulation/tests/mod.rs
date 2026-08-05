@@ -29,6 +29,7 @@ mod rail_signals;
 mod rails;
 mod research;
 mod robots;
+mod rocket_silos;
 pub(in crate::simulation) mod rolling_stock;
 mod rolling_stock_loading;
 mod solar;

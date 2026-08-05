@@ -457,6 +457,7 @@ fn machine_loop_candidate(
         | EntityKind::Boiler
         | EntityKind::NuclearReactor => MachineLoopKind::Burner,
         EntityKind::AssemblingMachine
+        | EntityKind::RocketSilo
         | EntityKind::Lab
         | EntityKind::SteamEngine
         | EntityKind::OffshorePump

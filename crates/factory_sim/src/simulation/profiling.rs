@@ -234,6 +234,12 @@ impl Simulation {
                 .count()
             + self
                 .entities
+                .rocket_silos
+                .values()
+                .filter(|state| self.rocket_silo_is_active(state))
+                .count()
+            + self
+                .entities
                 .labs
                 .values()
                 .filter(|state| self.lab_is_active(state))
@@ -304,6 +310,15 @@ impl Simulation {
                 &state.output_inventory,
                 &recipe.products,
             )
+    }
+
+    fn rocket_silo_is_active(&self, state: &RocketSiloState) -> bool {
+        let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, &self.research) else {
+            return false;
+        };
+
+        !state.rocket_ready()
+            && assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
     }
 
     fn lab_is_active(&self, state: &LabState) -> bool {

@@ -76,6 +76,40 @@ pub(in crate::simulation) fn furnace_input_accepts_item(
     first_matching_unlocked_smelting_recipe(catalog, research, item_id).is_some()
 }
 
+/// The recipe a rocket silo builds parts from, or `None` until the technology
+/// that unlocks it is researched.
+///
+/// Derived rather than selected, and derived the same way a furnace derives its
+/// smelting recipe: the first unlocked recipe in the category the machine
+/// serves. `RocketBuilding` is served by nothing but silos and holds nothing but
+/// the part recipe, so "the silo's recipe" needs no state to remember and no
+/// player action to set — which is the point of giving rocket parts a category
+/// of their own.
+pub(in crate::simulation) fn rocket_silo_recipe<'a>(
+    catalog: &'a PrototypeCatalog,
+    research: &ResearchState,
+) -> Option<&'a factory_data::RecipePrototype> {
+    catalog.recipes.iter().find(|recipe| {
+        recipe.category == CraftingCategory::RocketBuilding
+            && recipe_is_unlocked(catalog, research, recipe.id)
+    })
+}
+
+/// Whether a silo has any use for `item_id`: it is an ingredient of the part
+/// recipe the silo is currently able to build.
+pub(in crate::simulation) fn rocket_silo_input_accepts_item(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    item_id: ItemId,
+) -> bool {
+    rocket_silo_recipe(catalog, research).is_some_and(|recipe| {
+        recipe
+            .ingredients
+            .iter()
+            .any(|ingredient| ingredient.item == item_id)
+    })
+}
+
 pub(in crate::simulation) fn assembler_is_empty_for_recipe_change(
     state: &AssemblingMachineState,
 ) -> bool {
@@ -346,6 +380,16 @@ fn assembler_recipe(
 }
 
 impl Simulation {
+    /// The part recipe every rocket silo is currently building from, or `None`
+    /// until the technology that unlocks it is researched.
+    ///
+    /// One answer for the whole world rather than one per silo: the recipe is
+    /// derived from the catalog and research, neither of which varies by
+    /// machine.
+    pub fn rocket_silo_recipe(&self) -> Option<&factory_data::RecipePrototype> {
+        rocket_silo_recipe(&self.world.prototypes, &self.research)
+    }
+
     pub fn select_assembler_recipe(
         &mut self,
         entity_id: EntityId,

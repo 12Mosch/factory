@@ -1,12 +1,14 @@
 use super::*;
 
 mod assemblers;
+mod crafting;
 mod furnaces;
 mod inserters;
 mod labs;
 mod mining_drills;
 mod progress;
 mod pumpjacks;
+mod rocket_silos;
 
 impl Simulation {
     fn machine_tick_context(&mut self) -> MachineTickContext<'_> {
@@ -38,6 +40,7 @@ impl Simulation {
         context.advance_pumpjacks();
         context.advance_furnaces(profiler);
         context.advance_assembling_machines(profiler);
+        context.advance_rocket_silos(profiler);
         context.advance_labs(profiler);
     }
 

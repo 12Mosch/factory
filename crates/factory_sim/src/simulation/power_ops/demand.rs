@@ -215,6 +215,9 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
     if let Some(state) = entities.assembling_machines.get(&entity_id) {
         return assembler_can_work(catalog, entities, research, entity_id, state);
     }
+    if let Some(state) = entities.rocket_silos.get(&entity_id) {
+        return rocket_silo_can_work(catalog, research, state);
+    }
     if let Some(state) = entities.furnaces.get(&entity_id) {
         return furnace_can_work(catalog, research, state);
     }
@@ -248,6 +251,21 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
     }
 
     false
+}
+
+/// A silo draws power while it is building a part, which is to say while it has
+/// ingredients *and* a rocket short of whole to add the part to. A silo holding
+/// a finished rocket is idle and pays only its drain, the same as an assembler
+/// with a full output.
+fn rocket_silo_can_work(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    state: &RocketSiloState,
+) -> bool {
+    let Some(recipe) = rocket_silo_recipe(catalog, research) else {
+        return false;
+    };
+    !state.rocket_ready() && assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
 }
 
 fn furnace_can_work(

@@ -270,7 +270,12 @@ impl Simulation {
             // A stop does report what is standing at it, but it is published by
             // `publish_stopped_train_cargo` rather than here: the question is
             // one the *trains* answer cheaply and the stops answer by searching.
-            | EntityKind::TrainStop => {}
+            | EntityKind::TrainStop
+            // A silo's ingredients are readable in principle, but the reading
+            // worth wiring is how far along the rocket is, and that is a count
+            // of parts rather than of anything the signal channels name. It
+            // belongs with the launch surface in #199 rather than here.
+            | EntityKind::RocketSilo => {}
         }
     }
 

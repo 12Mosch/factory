@@ -31,6 +31,7 @@ impl Simulation {
             .keys()
             .chain(self.entities.furnaces.keys())
             .chain(self.entities.assembling_machines.keys())
+            .chain(self.entities.rocket_silos.keys())
             .chain(self.entities.labs.keys())
             .copied()
             .collect::<BTreeSet<_>>();
@@ -97,6 +98,24 @@ impl Simulation {
                 state.mining_progress_ticks,
                 required_ticks_with_modules(base, 1, 1, effects),
             )
+        } else if let Some(state) = self.entities.rocket_silos.get(&entity_id) {
+            // The silo's recipe is derived rather than stored, so the effect
+            // refresh derives it too — the same recipe the tick loop will time
+            // the next part against.
+            let new_required =
+                rocket_silo_recipe(&self.world.prototypes, &self.research).map(|recipe| {
+                    required_ticks_with_modules(
+                        recipe.crafting_time_ticks,
+                        state.crafting_speed_numerator,
+                        state.crafting_speed_denominator,
+                        effects,
+                    )
+                });
+            (
+                state.crafting_required_ticks,
+                state.crafting_progress_ticks,
+                new_required.unwrap_or(0),
+            )
         } else if let Some(state) = self.entities.labs.get(&entity_id) {
             let new_required = state.active_technology.and_then(|technology_id| {
                 self.world
@@ -128,6 +147,10 @@ impl Simulation {
             state.modules.resolved_effects = effects;
             state.mining_required_ticks = new_required;
             state.mining_progress_ticks = new_progress;
+        } else if let Some(state) = self.entities.rocket_silos.get_mut(&entity_id) {
+            state.modules.resolved_effects = effects;
+            state.crafting_required_ticks = new_required;
+            state.crafting_progress_ticks = new_progress;
         } else if let Some(state) = self.entities.labs.get_mut(&entity_id) {
             state.modules.resolved_effects = effects;
             state.required_ticks = new_required;
@@ -158,7 +181,11 @@ impl Simulation {
     }
 }
 
-fn rescale_progress(progress: u32, old_required: u32, new_required: u32) -> u32 {
+pub(in crate::simulation) fn rescale_progress(
+    progress: u32,
+    old_required: u32,
+    new_required: u32,
+) -> u32 {
     if old_required == 0 || new_required == 0 {
         return 0;
     }

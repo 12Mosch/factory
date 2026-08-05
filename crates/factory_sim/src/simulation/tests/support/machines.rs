@@ -94,6 +94,53 @@ pub(in crate::simulation::tests) fn place_powered_chemical_plant(sim: &mut Simul
     .expect("chemical plant should be placeable")
 }
 
+/// A researched rocket silo standing on powered ground.
+///
+/// The pole goes on the silo's west edge rather than beside a corner: at nine
+/// tiles across, a pole placed the way the smaller fixtures place theirs would
+/// be out of wire reach of the fixture's source pole.
+pub(in crate::simulation::tests) fn place_powered_rocket_silo(sim: &mut Simulation) -> EntityId {
+    unlock_with_prerequisites(sim, "rocket_silo");
+    let rocket_silo = entity_id_by_name(&sim.world.prototypes, "rocket_silo");
+    let (x, y) = place_powered_fixture_origin(sim, 9, 9, (-1, 4));
+    crate::placement::place(
+        sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: rocket_silo,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("rocket silo should be placeable")
+}
+
+/// Fills the silo's ingredient slots with `parts` cycles' worth of every
+/// ingredient its recipe asks for, so a test can run it without restocking.
+pub(in crate::simulation::tests) fn stock_rocket_silo(
+    sim: &mut Simulation,
+    entity_id: EntityId,
+    parts: u16,
+) {
+    let ingredients = sim
+        .rocket_silo_recipe()
+        .expect("the rocket part recipe should be unlocked")
+        .ingredients
+        .clone();
+
+    sim.player_inventory = Inventory::player();
+    for (slot_index, ingredient) in ingredients.iter().enumerate() {
+        set_inventory_slot(
+            &mut sim.player_inventory,
+            slot_index,
+            ingredient.item,
+            ingredient.amount * parts,
+        );
+        crate::entity_transfer::player_slot_to_rocket_silo_input(sim, entity_id, slot_index)
+            .expect("silo ingredients should transfer");
+    }
+}
+
 pub(in crate::simulation::tests) fn add_furnace_input_and_fuel(
     sim: &mut Simulation,
     entity_id: EntityId,

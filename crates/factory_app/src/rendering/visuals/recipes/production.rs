@@ -63,6 +63,43 @@ pub(super) fn assembler_layers(builder: &mut VisualLayerBuilder, _style: EntityV
         );
 }
 
+/// A launch pad seen from above: a ring of blast apron, the open doors inside
+/// it, and the nose of the rocket standing in the middle.
+pub(super) fn rocket_silo_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+    builder
+        .scaled_ellipse(
+            Vec2::splat(0.92),
+            Vec2::ZERO,
+            0.02,
+            Color::srgba(0.30, 0.31, 0.30, 0.62),
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.70),
+            Vec2::ZERO,
+            0.06,
+            Color::srgba(0.14, 0.15, 0.16, 0.80),
+        )
+        .scaled_rounded(
+            Vec2::new(0.62, 0.08),
+            Vec2::ZERO,
+            0.09,
+            Color::srgba(0.86, 0.84, 0.78, 0.66),
+            0.45,
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.30),
+            Vec2::ZERO,
+            0.12,
+            Color::srgba(0.92, 0.90, 0.86, 0.90),
+        )
+        .scaled_ellipse(
+            Vec2::splat(0.13),
+            Vec2::ZERO,
+            0.14,
+            Color::srgba(0.88, 0.34, 0.24, 0.92),
+        );
+}
+
 pub(super) fn lab_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
     builder
         .scaled_ellipse(

@@ -27,6 +27,13 @@ impl Simulation {
                 self.assembler_status(*entity_id, state),
             );
         }
+        for (entity_id, state) in &self.entities.rocket_silos {
+            push_production_map_status(
+                &mut next,
+                *entity_id,
+                self.rocket_silo_status(*entity_id, state),
+            );
+        }
         for (entity_id, state) in &self.entities.labs {
             push_production_map_status(&mut next, *entity_id, self.lab_status(*entity_id, state));
         }
@@ -110,6 +117,15 @@ impl Simulation {
                 .assembling_machines
                 .iter()
                 .map(|(entity_id, state)| self.assembler_status(*entity_id, state)),
+        );
+        self.push_status_group(
+            &mut groups,
+            &mut total_by_status,
+            EntityKind::RocketSilo,
+            self.entities
+                .rocket_silos
+                .iter()
+                .map(|(entity_id, state)| self.rocket_silo_status(*entity_id, state)),
         );
         self.push_status_group(
             &mut groups,
@@ -202,6 +218,9 @@ impl Simulation {
         }
         if let Some(state) = self.entities.assembling_machines.get(&entity_id) {
             return Some(self.assembler_status(entity_id, state));
+        }
+        if let Some(state) = self.entities.rocket_silos.get(&entity_id) {
+            return Some(self.rocket_silo_status(entity_id, state));
         }
         if let Some(state) = self.entities.labs.get(&entity_id) {
             return Some(self.lab_status(entity_id, state));
@@ -435,6 +454,33 @@ impl Simulation {
                 (satisfaction == 0).then_some(MachineStatus::NoPower)
             }
         }
+    }
+
+    /// A silo reports `NoRecipe` until its technology is researched, because
+    /// that is the same fix the player has to make — there is just no dropdown
+    /// to make it in. `OutputFull` is the finished rocket: the silo is blocked
+    /// by its own product exactly the way a full assembler is.
+    fn rocket_silo_status(&self, entity_id: EntityId, state: &RocketSiloState) -> MachineStatus {
+        let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, &self.research) else {
+            return MachineStatus::NoRecipe;
+        };
+        if state.rocket_ready() {
+            return MachineStatus::OutputFull;
+        }
+        if !assembler_has_ingredients(&state.input_inventory, &recipe.ingredients) {
+            return MachineStatus::NoInput;
+        }
+        if self
+            .power
+            .entity_statuses
+            .get(&entity_id)
+            .map(|status| status.satisfaction_permyriad)
+            .unwrap_or(0)
+            == 0
+        {
+            return MachineStatus::NoPower;
+        }
+        MachineStatus::Working
     }
 
     fn assembler_status(

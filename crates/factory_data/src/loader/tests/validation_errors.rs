@@ -1841,3 +1841,115 @@ fn wagons_without_the_cargo_their_kind_implies_are_rejected() {
         "a fluid wagon's unconnected tank is well formed"
     );
 }
+
+/// Builds a rocket silo catalog whose silo section and surrounding fields can be
+/// overridden, so each check below differs only in the field it is about.
+fn rocket_silo_catalog(
+    entity_kind: &str,
+    rocket_silo: &str,
+    extra_fields: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    const ELECTRIC: &str =
+        "electric_energy_source: Some((energy_usage_watts: 4000000, drain_watts: 250000)),";
+    let extra_fields = if extra_fields.contains("electric_energy_source") {
+        extra_fields.to_string()
+    } else {
+        format!("{ELECTRIC}{extra_fields}")
+    };
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "rocket_silo", stack_size: 1)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "rocket_silo",
+                entity_kind: {entity_kind},
+                build_item: Some("rocket_silo"),
+                building_category: Some(Production),
+                building_menu_order: Some(80),
+                size: (x: 9, y: 9),
+                collision_mask: (layers: ["building"]),
+                max_health: Some(5000),
+                rocket_silo: {rocket_silo},
+                {extra_fields}
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+const VALID_ROCKET_SILO: &str = r#"Some((
+    crafting_speed_numerator: 1,
+    crafting_speed_denominator: 1,
+    input_slot_count: 4,
+    parts_per_rocket: 100,
+))"#;
+
+#[test]
+fn valid_rocket_silo_loads_with_module_slots() {
+    let catalog = rocket_silo_catalog("RocketSilo", VALID_ROCKET_SILO, " module_slot_count: 4,")
+        .expect("rocket silo should load");
+    let rocket_silo = catalog.entities[0]
+        .rocket_silo
+        .expect("rocket silo metadata should survive loading");
+
+    assert_eq!(rocket_silo.parts_per_rocket, 100);
+    assert_eq!(catalog.entities[0].module_slot_count, 4);
+}
+
+/// Each of these leaves the silo unable to derive the thing the simulation asks
+/// it for: the section itself, the power it runs on, somewhere to hold
+/// ingredients, a speed to craft at, or a rocket size to count toward.
+#[test]
+fn incoherent_rocket_silo_metadata_fails() {
+    let cases = [
+        (
+            "None",
+            "",
+            "a silo without its section has no recipe to run",
+        ),
+        (
+            VALID_ROCKET_SILO,
+            "electric_energy_source: None,",
+            "a silo with no energy source could never work",
+        ),
+        (
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 0, input_slot_count: 4, parts_per_rocket: 100))"#,
+            "",
+            "a zero crafting-speed denominator is not a fraction",
+        ),
+        (
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 0, parts_per_rocket: 100))"#,
+            "",
+            "a silo with no ingredient slots could never be fed",
+        ),
+        (
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 4, parts_per_rocket: 0))"#,
+            "",
+            "a rocket of no parts would be finished before it started",
+        ),
+    ];
+
+    for (rocket_silo, extra_fields, reason) in cases {
+        let error = rocket_silo_catalog("RocketSilo", rocket_silo, extra_fields)
+            .err()
+            .unwrap_or_else(|| panic!("{reason}"));
+        assert!(
+            matches!(
+                error,
+                PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. }
+                    if entity == "rocket_silo"
+            ),
+            "{reason}"
+        );
+    }
+}
+
+#[test]
+fn rocket_silo_metadata_on_another_kind_fails() {
+    let error = rocket_silo_catalog("AssemblingMachine", VALID_ROCKET_SILO, "")
+        .expect_err("only a rocket silo builds rockets");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. } if entity == "rocket_silo")
+    );
+}

@@ -31,6 +31,7 @@ pub(super) fn load_entities(
             validate_circuit_metadata(&entity.name, &entity)?;
             validate_roboport_metadata(&entity.name, &entity)?;
             validate_logistic_chest_metadata(&entity.name, &entity)?;
+            validate_rocket_silo_metadata(&entity.name, &entity)?;
             validate_rolling_stock_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
@@ -123,6 +124,7 @@ pub(super) fn load_entities(
                         ticks_per_item: mining_drill.ticks_per_item,
                     }),
                 assembling_machine: entity.assembling_machine,
+                rocket_silo: entity.rocket_silo,
                 transport_belt: entity.transport_belt,
                 splitter: entity.splitter,
                 inserter: entity.inserter.map(|inserter| InserterPrototype {
@@ -366,6 +368,52 @@ fn validate_logistic_chest_metadata(
     }
 }
 
+/// A silo's recipe is derived rather than declared, so everything the derivation
+/// needs has to be present before the simulation can lean on it: the silo
+/// section itself, an electric energy source to run on, ingredient slots to hold
+/// what a part is made of, and a positive rocket size to count toward.
+fn validate_rocket_silo_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRocketSiloMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    if entity.entity_kind != EntityKind::RocketSilo {
+        return if entity.rocket_silo.is_some() {
+            invalid("rocket silo metadata is only valid on rocket silo entities")
+        } else {
+            Ok(())
+        };
+    }
+
+    let Some(rocket_silo) = entity.rocket_silo else {
+        return invalid("rocket silo entities require rocket silo metadata");
+    };
+    if entity.electric_energy_source.is_none() {
+        return invalid("rocket silos run on an electric energy source");
+    }
+    if entity.burner.is_some() {
+        return invalid("rocket silos cannot also declare a burner");
+    }
+    if rocket_silo.crafting_speed_numerator == 0 || rocket_silo.crafting_speed_denominator == 0 {
+        return invalid("crafting speed must be a positive fraction");
+    }
+    if rocket_silo.input_slot_count == 0 {
+        return invalid("rocket silos require ingredient slots");
+    }
+    if rocket_silo.parts_per_rocket == 0 {
+        return invalid("a rocket must take at least one part");
+    }
+    Ok(())
+}
+
 fn validate_module_and_beacon_metadata(
     name: &str,
     entity: &RawEntityPrototype,
@@ -379,6 +427,7 @@ fn validate_module_and_beacon_metadata(
             | EntityKind::MiningDrill
             | EntityKind::Lab
             | EntityKind::Beacon
+            | EntityKind::RocketSilo
     );
     if entity.module_slot_count > 0 && !supports_modules {
         return Err(PrototypeLoadError::InvalidModuleSlotMetadata {
