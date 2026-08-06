@@ -5,10 +5,10 @@ use glam::IVec2;
 use crate::error::PrototypeLoadError;
 use crate::ids::{EntityPrototypeId, FluidId, ItemId};
 use crate::model::{
-    ConnectionSide, EdgeConnectionPrototype, ElectricPolePrototype, EnemySpawnerPrototype,
-    EntityKind, EntityPrototype, FluidBoxPrototype, HeatBufferPrototype, InserterPrototype,
-    MiningDrillPrototype, POSITION_SCALE, PumpjackPrototype, RailCurvePrototype, RailHeading,
-    RailPiecePrototype, RailPointPrototype,
+    ConnectionSide, CraftingCategory, EdgeConnectionPrototype, ElectricPolePrototype,
+    EnemySpawnerPrototype, EntityKind, EntityPrototype, FluidBoxPrototype, HeatBufferPrototype,
+    InserterPrototype, ItemPrototype, MiningDrillPrototype, POSITION_SCALE, PumpjackPrototype,
+    RailCurvePrototype, RailHeading, RailPiecePrototype, RailPointPrototype, RecipePrototype,
 };
 use crate::raw::{
     RawEdgeConnectionPrototype, RawEntityPrototype, RawFluidBoxPrototype, RawHeatBufferPrototype,
@@ -178,6 +178,59 @@ pub(super) fn load_entities(
             })
         })
         .collect()
+}
+
+/// Ensures every silo can hold one complete set of its fixed recipe's ingredients.
+///
+/// This is a catalog-level check because entity metadata is loaded independently
+/// from recipes and item stack sizes. Each distinct ingredient needs enough
+/// slots for its full amount: crafting consumes all ingredients atomically, so
+/// accepting a silo with less capacity would create a machine that can never run.
+pub(super) fn validate_rocket_silo_recipe_capacity(
+    entities: &[EntityPrototype],
+    recipes: &[RecipePrototype],
+    items: &[ItemPrototype],
+) -> Result<(), PrototypeLoadError> {
+    let Some(recipe) = recipes
+        .iter()
+        .find(|recipe| recipe.category == CraftingCategory::RocketBuilding)
+    else {
+        return Ok(());
+    };
+
+    let mut amounts_by_item = HashMap::<ItemId, u32>::new();
+    for ingredient in &recipe.ingredients {
+        let amount = amounts_by_item.entry(ingredient.item).or_default();
+        *amount = amount.saturating_add(u32::from(ingredient.amount));
+    }
+    let required_slots =
+        amounts_by_item
+            .into_iter()
+            .try_fold(0_usize, |total, (item_id, amount)| {
+                let stack_size = items
+                    .iter()
+                    .find(|item| item.id == item_id)
+                    .expect("recipe item references were resolved while loading")
+                    .stack_size;
+                let stack_size = u32::from(stack_size);
+                let stacks = amount
+                    .checked_add(stack_size.checked_sub(1)?)?
+                    .checked_div(stack_size)?;
+                total.checked_add(usize::try_from(stacks).ok()?)
+            });
+
+    for entity in entities {
+        let Some(silo) = entity.rocket_silo else {
+            continue;
+        };
+        if required_slots.is_none_or(|required| required > silo.input_slot_count) {
+            return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
+                entity: entity.name.clone(),
+                detail: "ingredient slots cannot hold one complete rocket-building recipe",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Circuit metadata is only coherent when the entity kind, the connector
