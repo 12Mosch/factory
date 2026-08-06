@@ -199,8 +199,8 @@ fn production_and_utility_science_items_and_recipes_load_exactly() {
             crafting_time_ticks: 1_260,
             ingredients: &[
                 ("electric_furnace", 1),
-                ("advanced_circuit", 1),
-                ("stone_brick", 10),
+                ("productivity_module_1", 1),
+                ("rail", 30),
             ],
             products: &[("production_science_pack", 3)],
         },

@@ -1099,6 +1099,13 @@
             ],
             products: [(item: "flying_robot_frame", amount: 1)],
         ),
+        // The pack is built from the mechanics it gates: a module and a length
+        // of track alongside the furnace. Thirty rails per batch is the point
+        // rather than an accident — it is the first recipe that makes a stone
+        // and steel line worth automating at scale, and it forces the module
+        // assembly the tree unlocks two tiers of. The furnace stays as the
+        // smelting-tier anchor; the advanced circuits the simplified recipe
+        // asked for directly now arrive through the module.
         (
             id: 69,
             name: "production_science_pack",
@@ -1106,8 +1113,8 @@
             crafting_time_ticks: 1260,
             ingredients: [
                 (item: "electric_furnace", amount: 1),
-                (item: "advanced_circuit", amount: 1),
-                (item: "stone_brick", amount: 10),
+                (item: "productivity_module_1", amount: 1),
+                (item: "rail", amount: 30),
             ],
             products: [(item: "production_science_pack", amount: 3)],
         ),
@@ -3659,10 +3666,15 @@
                 UnlockRecipe("energy_shield_equipment"),
             ],
         ),
+        // Prerequisites state what the recipe now needs: the electric furnace
+        // from advanced material processing 2, modules for the productivity
+        // module, and railway for the track. Both of the latter sit on the
+        // red/green branch, so neither can deadlock a tree that has already
+        // reached blue science.
         (
             id: 26,
             name: "production_science_pack",
-            prerequisites: ["advanced_material_processing_2"],
+            prerequisites: ["advanced_material_processing_2", "modules", "railway"],
             science_packs: [
                 (item: "automation_science_pack", amount: 1),
                 (item: "logistic_science_pack", amount: 1),
@@ -3903,10 +3915,13 @@
         // follows robotics rather than standing beside it. The logistic robot
         // unlocks here rather than with robotics for the same reason from the
         // other side: it has nothing to carry until the chests exist.
+        // Production science is listed alongside robotics because the research
+        // already consumes the pack, and because the chests are built on the
+        // steel chest that branch reaches through advanced material processing.
         (
             id: 41,
             name: "logistic_system",
-            prerequisites: ["robotics"],
+            prerequisites: ["robotics", "production_science_pack"],
             science_packs: [
                 (item: "automation_science_pack", amount: 1),
                 (item: "logistic_science_pack", amount: 1),

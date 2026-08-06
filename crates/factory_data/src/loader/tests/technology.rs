@@ -118,7 +118,11 @@ fn production_and_utility_science_technologies_form_parallel_rgb_branches() {
     assert_eq!(production.id.index(), 26);
     assert_eq!(
         production.prerequisites,
-        vec![technology("advanced_material_processing_2").id]
+        vec![
+            technology("advanced_material_processing_2").id,
+            technology("modules").id,
+            technology("railway").id,
+        ]
     );
     assert_eq!(production.science_packs, rgb_cost);
     assert_eq!(production.required_units, 100);
@@ -512,6 +516,86 @@ fn technology_science_pack_recipes_are_unlocked_before_they_are_required() {
         for effect in &technology.effects {
             let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
             unlocked_recipes.insert(recipe_id);
+        }
+    }
+}
+
+/// Every recipe a technology unlocks must be craftable the moment it unlocks:
+/// each ingredient is either a raw resource nothing crafts, or the product of a
+/// recipe that the same technology or one of its transitive prerequisites has
+/// already unlocked. A recipe that reaches for an item from a sibling branch is
+/// dead data — the player can select it and never fill it — so the prerequisite
+/// list has to state what the ingredient list needs.
+#[test]
+fn unlocked_recipes_only_ask_for_ingredients_their_prerequisites_reach() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+
+    let recipes_unlocked_by = |technology: &crate::model::TechnologyPrototype| {
+        technology
+            .effects
+            .iter()
+            .map(|effect| {
+                let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
+                recipe_id
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let gated_recipes = catalog
+        .technologies
+        .iter()
+        .flat_map(recipes_unlocked_by)
+        .collect::<BTreeSet<_>>();
+
+    for technology in &catalog.technologies {
+        // Recipes nothing gates are available from the first tick, so they are
+        // the floor every technology builds on.
+        let mut available = catalog
+            .recipes
+            .iter()
+            .map(|recipe| recipe.id)
+            .filter(|recipe_id| !gated_recipes.contains(recipe_id))
+            .collect::<BTreeSet<_>>();
+        let mut pending = vec![technology.id];
+        let mut visited = BTreeSet::from([technology.id]);
+        while let Some(technology_id) = pending.pop() {
+            let ancestor = catalog
+                .technology(technology_id)
+                .expect("prerequisite ids are resolved at load");
+            available.extend(recipes_unlocked_by(ancestor));
+            for prerequisite in &ancestor.prerequisites {
+                if visited.insert(*prerequisite) {
+                    pending.push(*prerequisite);
+                }
+            }
+        }
+
+        let craftable = available
+            .iter()
+            .filter_map(|recipe_id| catalog.recipe(*recipe_id))
+            .flat_map(|recipe| recipe.products.iter().map(|product| product.item))
+            .collect::<BTreeSet<_>>();
+
+        for recipe_id in recipes_unlocked_by(technology) {
+            let recipe = catalog
+                .recipe(recipe_id)
+                .expect("unlock effects are resolved at load");
+            for ingredient in &recipe.ingredients {
+                let crafted_somewhere = catalog.recipes.iter().any(|candidate| {
+                    candidate
+                        .products
+                        .iter()
+                        .any(|product| product.item == ingredient.item)
+                });
+                assert!(
+                    !crafted_somewhere || craftable.contains(&ingredient.item),
+                    "{} unlocks {}, which needs {} before any prerequisite unlocks a recipe for it",
+                    technology.name,
+                    recipe.name,
+                    catalog
+                        .item(ingredient.item)
+                        .map_or("<unknown item>", |item| item.name.as_str()),
+                );
+            }
         }
     }
 }
