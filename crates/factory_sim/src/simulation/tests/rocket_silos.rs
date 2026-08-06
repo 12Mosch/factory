@@ -239,3 +239,38 @@ fn destroying_a_silo_recovers_ingredients_but_not_parts() {
     );
     assert_eq!(sim.player_inventory.count(rocket_part), 0);
 }
+
+/// Research completes in `advance_labs`, which runs after `advance_rocket_silos`
+/// in the same tick, so on the tick the silo technology lands every silo still
+/// holds the tick count it derived while the recipe was locked. Validation runs
+/// at the end of that tick and has to accept it: the silo corrects itself on the
+/// next one, and a world that is one tick behind is not a corrupt world.
+///
+/// Pinned as a test because it is the reason `validate_rocket_silo` bounds the
+/// two counts against each other rather than against the recipe.
+#[test]
+fn a_silo_stays_valid_on_the_tick_its_technology_lands() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    stock_rocket_silo(&mut sim, silo_id, 1);
+    // One tick first so the fixture's fluid network settles; what is under test
+    // is the silo's own state, not the boiler beside it.
+    sim.tick();
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .expect("the silo was just placed")
+        .crafting_required_ticks = 0;
+
+    sim.validate()
+        .expect("a silo whose recipe has not reached it yet is a valid world");
+
+    sim.tick();
+
+    assert!(
+        sim.entities.rocket_silos[&silo_id].crafting_required_ticks > 0,
+        "the next tick derives the count the silo was missing"
+    );
+    sim.validate()
+        .expect("and the corrected world is valid too");
+}

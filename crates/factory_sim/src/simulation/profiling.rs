@@ -153,6 +153,7 @@ impl Simulation {
         let machine_count = self.entities.mining_drills.len()
             + self.entities.furnaces.len()
             + self.entities.assembling_machines.len()
+            + self.entities.rocket_silos.len()
             + self.entities.labs.len();
         let active_machines = self.active_machine_count();
 

@@ -208,11 +208,20 @@ pub(in crate::simulation) fn validate_assembler(
     Ok(())
 }
 
-/// A silo's crafting state is not checked against a required tick count the way
-/// an assembler's is: the silo derives that count from the catalog every tick,
-/// so there is no stored value that could disagree with the recipe. What is
-/// checked is what the silo does store — its ingredient slots, its modules, and
-/// a part count that never runs past a whole rocket.
+/// A silo's stored tick count is bounded rather than pinned to the recipe.
+///
+/// An assembler's required count is checked against its selected recipe exactly,
+/// because the two only ever change together. A silo's cannot be: the count is
+/// derived from research, and research completes in `advance_labs`, which runs
+/// *after* `advance_rocket_silos` in the same tick. On the tick the silo
+/// technology lands, every silo therefore still holds the count it derived while
+/// the recipe was locked, and an equality check would reject a world that is
+/// merely one tick behind — a tick it corrects by itself.
+///
+/// What is invariant, and is checked, is the relationship between the two
+/// counts: progress never reaches the count it is measured against, because
+/// reaching it completes a part and resets to zero. That is the bound a
+/// corrupted save would actually break.
 pub(in crate::simulation) fn validate_rocket_silo(
     sim: &Simulation,
     entity_id: EntityId,
@@ -230,7 +239,12 @@ pub(in crate::simulation) fn validate_rocket_silo(
     if state.crafting_speed_numerator == 0 || state.crafting_speed_denominator == 0 {
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }
-    if state.crafting_required_ticks == 0 && state.crafting_progress_ticks != 0 {
+    let progress_within_bound = if state.crafting_required_ticks == 0 {
+        state.crafting_progress_ticks == 0
+    } else {
+        state.crafting_progress_ticks < state.crafting_required_ticks
+    };
+    if !progress_within_bound {
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 

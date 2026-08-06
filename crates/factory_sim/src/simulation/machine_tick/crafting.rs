@@ -14,6 +14,11 @@ pub(super) enum CraftProducts<'a> {
     /// A rocket under construction. Parts are counted rather than stored, and
     /// the rocket standing on the pad is the reason a full silo stops: there is
     /// nowhere for the next part to go until it leaves.
+    ///
+    /// One craft is one part. That is a catalog invariant rather than an
+    /// assumption made here — loading rejects a `RocketBuilding` recipe that
+    /// yields anything but a single unit — and it is what keeps this counter
+    /// agreeing with the production statistics recorded from the same craft.
     RocketParts {
         completed: &'a mut u32,
         per_rocket: u32,
@@ -67,6 +72,10 @@ impl CraftProducts<'_> {
                 completed,
                 per_rocket,
             } => {
+                debug_assert!(
+                    matches!(products, [product] if product.amount == 1),
+                    "catalog loading rejects a rocket-building recipe that is not one part a craft"
+                );
                 let stored = copies.min(u64::from(per_rocket.saturating_sub(**completed)));
                 **completed = completed.saturating_add(stored.min(u64::from(u32::MAX)) as u32);
                 stored

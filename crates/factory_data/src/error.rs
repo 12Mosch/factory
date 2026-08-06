@@ -85,6 +85,10 @@ pub enum PrototypeLoadError {
         recipe: String,
         fluid: String,
     },
+    InvalidRocketBuildingRecipe {
+        recipe: String,
+        detail: &'static str,
+    },
     MissingPumpjackResourceItem {
         entity: String,
         item: String,
@@ -306,6 +310,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "recipe {recipe:?} requires a non-zero amount of fluid {fluid:?}"
+                )
+            }
+            Self::InvalidRocketBuildingRecipe { recipe, detail } => {
+                write!(
+                    formatter,
+                    "rocket-building recipe {recipe:?} is not one a silo can build: {detail}"
                 )
             }
             Self::MissingPumpjackResourceItem { entity, item } => {

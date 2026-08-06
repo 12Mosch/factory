@@ -80,11 +80,13 @@ pub(in crate::simulation) fn furnace_input_accepts_item(
 /// that unlocks it is researched.
 ///
 /// Derived rather than selected, and derived the same way a furnace derives its
-/// smelting recipe: the first unlocked recipe in the category the machine
-/// serves. `RocketBuilding` is served by nothing but silos and holds nothing but
-/// the part recipe, so "the silo's recipe" needs no state to remember and no
-/// player action to set — which is the point of giving rocket parts a category
-/// of their own.
+/// smelting recipe: the unlocked recipe in the category the machine serves.
+/// `RocketBuilding` is served by nothing but silos, and catalog loading admits
+/// at most one recipe in it, so "the silo's recipe" needs no state to remember
+/// and no player action to set — which is the point of giving rocket parts a
+/// category of their own. The single-recipe rule is what makes the search below
+/// deterministic rather than order-dependent: with two, a later research could
+/// swap every silo's recipe out from under the ingredients already in it.
 pub(in crate::simulation) fn rocket_silo_recipe<'a>(
     catalog: &'a PrototypeCatalog,
     research: &ResearchState,
