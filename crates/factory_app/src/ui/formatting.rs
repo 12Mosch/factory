@@ -11,15 +11,21 @@ pub(crate) fn format_item_stack(stack: ItemStack, catalog: &PrototypeCatalog) ->
     format!("{}\n{}", compact_item_name(name), stack.count())
 }
 
+/// The four lines a crafting machine's window shows about what it is making.
+///
+/// Shared by assembling machines and rocket silos: both answer "which recipe,
+/// what does it need, what does it make, how far along", and a silo's answers
+/// differ only in that the recipe is fixed and the product is a rocket rather
+/// than a stack.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AssemblerDetailText {
+pub struct CraftingDetailText {
     pub recipe: String,
     pub ingredients: String,
     pub products: String,
     pub progress: String,
 }
 
-impl AssemblerDetailText {
+impl CraftingDetailText {
     pub(crate) fn empty() -> Self {
         Self {
             recipe: "Recipe: <none>".to_string(),
@@ -49,16 +55,78 @@ pub fn available_crafting_recipe_choices(sim: &Simulation) -> Vec<&factory_data:
     sim.available_recipes(CraftingCategory::Crafting)
 }
 
-pub fn format_assembler_detail_text(
+/// The crafting lines for whichever kind of crafting machine `entity_id` is.
+pub fn format_crafting_detail_text(
     sim: &Simulation,
     entity_id: EntityId,
-) -> Option<AssemblerDetailText> {
+) -> Option<CraftingDetailText> {
+    format_assembler_detail_text(sim, entity_id)
+        .or_else(|| format_rocket_silo_detail_text(sim, entity_id))
+}
+
+/// A silo's lines. The recipe is stated rather than chosen, and the "output" is
+/// how much of a rocket stands in the silo — the counter is what a player is
+/// actually watching, so it takes the place the product stack has elsewhere.
+fn format_rocket_silo_detail_text(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<CraftingDetailText> {
+    let state = factory_sim::entity_access::rocket_silo_state(sim, entity_id).ok()?;
+    let rocket = format!(
+        "Output: Rocket {}/{}",
+        state.parts_completed, state.parts_per_rocket
+    );
+    let progress = format!(
+        "Progress: {}/{}",
+        state.crafting_progress_ticks, state.crafting_required_ticks
+    );
+    let Some(recipe) = sim.rocket_silo_recipe() else {
+        return Some(CraftingDetailText {
+            recipe: "Recipe: <locked>".to_string(),
+            ingredients: "Ingredients: <none>".to_string(),
+            products: rocket,
+            progress,
+        });
+    };
+
+    let ingredient_lines = recipe
+        .ingredients
+        .iter()
+        .map(|ingredient| {
+            let required = u32::from(ingredient.amount);
+            let available = state.input_inventory.count(ingredient.item);
+            format!(
+                "{}: need {}, have {}, missing {}",
+                format_item_display_name(sim.catalog(), ingredient.item),
+                required,
+                available,
+                required.saturating_sub(available)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Some(CraftingDetailText {
+        recipe: format!("Recipe: {}", format_recipe_display_name(&recipe.name)),
+        ingredients: if ingredient_lines.is_empty() {
+            "Ingredients: <none>".to_string()
+        } else {
+            format!("Ingredients:\n{}", ingredient_lines.join("\n"))
+        },
+        products: rocket,
+        progress,
+    })
+}
+
+fn format_assembler_detail_text(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<CraftingDetailText> {
     let state = factory_sim::entity_access::assembler_state(sim, entity_id).ok()?;
     let Some(recipe) = state
         .selected_recipe
         .and_then(|recipe_id| sim.catalog().recipe(recipe_id))
     else {
-        return Some(AssemblerDetailText::empty());
+        return Some(CraftingDetailText::empty());
     };
 
     let statuses = sim.assembler_ingredient_status(entity_id).ok()?;
@@ -119,7 +187,7 @@ pub fn format_assembler_detail_text(
         format!("Output: {}", product_parts.join(", "))
     };
 
-    Some(AssemblerDetailText {
+    Some(CraftingDetailText {
         recipe: format!("Recipe: {}", format_recipe_display_name(&recipe.name)),
         ingredients,
         products,

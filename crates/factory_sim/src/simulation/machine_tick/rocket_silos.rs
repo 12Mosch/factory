@@ -1,0 +1,109 @@
+use super::crafting::{CraftProducts, ItemCraft, record_item_craft};
+use super::progress::{ProgressAdvance, advance_electric_progress};
+use super::*;
+use crate::simulation::module_ops::rescale_progress;
+
+impl MachineTickContext<'_> {
+    /// Advances every rocket silo by one tick.
+    ///
+    /// The shape is the assembler's, and the two differences are both visible
+    /// here: the recipe is derived from the catalog rather than read off the
+    /// state, and the products go to [`CraftProducts::RocketParts`] rather than
+    /// to an output inventory. A silo holding a whole rocket fails
+    /// [`ItemCraft::can_craft`] on the room check and so accumulates no progress
+    /// and draws no power until the rocket leaves.
+    pub(super) fn advance_rocket_silos<P: TickProfiler>(&mut self, profiler: &mut P) {
+        let mut rocket_silos = std::mem::take(&mut self.entities.rocket_silos);
+
+        for (&entity_id, state) in &mut rocket_silos {
+            if self.entities.placed_entity(entity_id).is_none() {
+                continue;
+            }
+
+            let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, self.research) else {
+                state.crafting_progress_ticks = 0;
+                state.crafting_required_ticks = 0;
+                continue;
+            };
+            // An assembler computes its required tick count when the player
+            // picks a recipe. A silo has no such moment — nobody picks, and the
+            // recipe appears when research lands — so the count is derived here
+            // and the stored one is kept in step with it. Module effects still
+            // arrive through `refresh_module_effects` like every other machine's;
+            // what this covers is the recipe itself changing underfoot.
+            let required_ticks = required_ticks_with_modules(
+                recipe.crafting_time_ticks,
+                state.crafting_speed_numerator,
+                state.crafting_speed_denominator,
+                state.modules.resolved_effects,
+            );
+            if state.crafting_required_ticks != required_ticks {
+                state.crafting_progress_ticks = rescale_progress(
+                    state.crafting_progress_ticks,
+                    state.crafting_required_ticks,
+                    required_ticks,
+                );
+                state.crafting_required_ticks = required_ticks;
+            }
+            let output_copies = state.modules.output_copies_due();
+
+            let can_craft = profiler.measure(ProfilePhase::InventoryTransfers, || {
+                ItemCraft {
+                    input_inventory: &mut state.input_inventory,
+                    products: CraftProducts::RocketParts {
+                        completed: &mut state.parts_completed,
+                        per_rocket: state.parts_per_rocket,
+                    },
+                }
+                .can_craft(&self.world.prototypes, recipe, output_copies)
+            });
+            if !can_craft {
+                continue;
+            }
+            if !electric_work_allowed_for(
+                self.power,
+                &mut self.entities.electric_consumers,
+                entity_id,
+            ) {
+                continue;
+            }
+
+            let completed = matches!(
+                advance_electric_progress(&mut state.crafting_progress_ticks, required_ticks),
+                ProgressAdvance::Completed
+            );
+            self.pollution_emitters.mark_active(entity_id);
+            if !completed {
+                continue;
+            }
+            let bonus_copies = state.modules.complete_productive_cycle();
+            debug_assert_eq!(output_copies, 1 + bonus_copies);
+
+            let parts_built = profiler.measure(ProfilePhase::InventoryTransfers, || {
+                ItemCraft {
+                    input_inventory: &mut state.input_inventory,
+                    products: CraftProducts::RocketParts {
+                        completed: &mut state.parts_completed,
+                        per_rocket: state.parts_per_rocket,
+                    },
+                }
+                .complete(&self.world.prototypes, recipe, output_copies)
+            });
+
+            // Recipe slices borrow prototypes here, so record through the fields
+            // instead of taking a mutable borrow of the whole tick context. Only
+            // the parts that landed are counted: a productivity bonus lost to a
+            // rocket that was already all but whole never existed.
+            record_item_craft(
+                &mut self.statistics,
+                self.onboarding_progress,
+                &self.base,
+                recipe,
+                parts_built,
+            );
+            self.power_demand_cache.mark_dirty(entity_id);
+        }
+
+        self.entities.rocket_silos = rocket_silos;
+    }
+}

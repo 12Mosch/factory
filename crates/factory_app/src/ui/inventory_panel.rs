@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{
     AssemblerError, BoilerError, ContainerError, FurnaceError, InserterError, MiningDrillError,
-    ModuleError, NuclearReactorError, RoboportError, RollingStockTransferError, SimCommand,
-    SlotTransferError,
+    ModuleError, NuclearReactorError, RoboportError, RocketSiloError, RollingStockTransferError,
+    SimCommand, SlotTransferError,
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
@@ -357,6 +357,7 @@ pub fn slot_transfer_error_message(catalog: &PrototypeCatalog, error: SlotTransf
         SlotTransferError::NuclearReactor(error) => nuclear_reactor_error_message(catalog, error),
         SlotTransferError::Roboport(error) => roboport_error_message(catalog, error),
         SlotTransferError::Assembler(error) => assembler_error_message(catalog, error),
+        SlotTransferError::RocketSilo(error) => rocket_silo_error_message(catalog, error),
         SlotTransferError::Inserter(error) => inserter_error_message(catalog, error),
         SlotTransferError::Module(error) => module_error_message(catalog, error),
     }
@@ -494,6 +495,19 @@ fn roboport_error_message(catalog: &PrototypeCatalog, error: RoboportError) -> S
         RoboportError::EmptySlot { .. } => "Empty slot".to_string(),
         RoboportError::InsufficientSpace => "No space".to_string(),
         RoboportError::UnknownItem => "Unknown item".to_string(),
+    }
+}
+
+fn rocket_silo_error_message(catalog: &PrototypeCatalog, error: RocketSiloError) -> String {
+    match error {
+        RocketSiloError::MissingEntity(_) | RocketSiloError::NotRocketSilo(_) => {
+            "Machine unavailable".to_string()
+        }
+        RocketSiloError::InvalidInput(item_id) => wrong_item_message(catalog, item_id),
+        RocketSiloError::InvalidSlot { .. } => "Invalid slot".to_string(),
+        RocketSiloError::EmptySlot { .. } => "Empty slot".to_string(),
+        RocketSiloError::InsufficientSpace => "No space".to_string(),
+        RocketSiloError::UnknownItem => "Unknown item".to_string(),
     }
 }
 

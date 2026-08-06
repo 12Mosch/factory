@@ -294,6 +294,21 @@ pub(in crate::simulation) fn inserter_target_can_accept(
             .can_insert(catalog, item.item_id(), item.count());
     }
 
+    // Only insertion: a silo's parts are counted rather than stored, so there
+    // is nothing on the other side for an inserter to take back out.
+    if let Some(silo) = entities.rocket_silos.get(&entity_id) {
+        return item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::RocketPartIngredient,
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        ) && silo
+            .input_inventory
+            .can_insert(catalog, item.item_id(), item.count());
+    }
+
     entities
         .transport_belts
         .get(&entity_id)
@@ -667,6 +682,29 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         }
 
         return assembler
+            .input_inventory
+            .insert(catalog, item.item_id(), item.count())
+            .is_ok();
+    }
+
+    if entities.rocket_silos.contains_key(&entity_id) {
+        let accepts = item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::RocketPartIngredient,
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        );
+        if !accepts {
+            return false;
+        }
+        let silo = entities
+            .rocket_silos
+            .get_mut(&entity_id)
+            .expect("rocket silo presence was checked above");
+
+        return silo
             .input_inventory
             .insert(catalog, item.item_id(), item.count())
             .is_ok();

@@ -17,8 +17,8 @@ use crate::rendering::colors::{
     gun_turret_color, heat_exchanger_color, heat_pipe_color, inserter_color, lab_color, lamp_color,
     laser_turret_color, mining_drill_color, nuclear_reactor_color, offshore_pump_color,
     oil_refinery_color, pipe_color, pump_color, pumpjack_color, radar_color, rail_ballast_color,
-    rail_signal_color, roboport_color, solar_panel_color, splitter_color, steam_engine_color,
-    storage_tank_color, train_stop_color, transport_belt_color, wall_color,
+    rail_signal_color, roboport_color, rocket_silo_color, solar_panel_color, splitter_color,
+    steam_engine_color, storage_tank_color, train_stop_color, transport_belt_color, wall_color,
 };
 use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
@@ -284,6 +284,12 @@ pub(crate) fn entity_prototype_visual_style(
         )),
         EntityKind::Furnace => Some(entity_visual_style(
             furnace_color(),
+            machine_size(),
+            prototype.entity_kind,
+            direction,
+        )),
+        EntityKind::RocketSilo => Some(entity_visual_style(
+            rocket_silo_color(),
             machine_size(),
             prototype.entity_kind,
             direction,

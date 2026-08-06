@@ -10,10 +10,6 @@ use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
 use crate::resources::UpsStats;
-use crate::ui::assembler_panel::{
-    handle_assembler_recipe_button_clicks, update_assembler_detail_text,
-    update_assembler_recipe_button_colors,
-};
 use crate::ui::build_menu::handle_build_menu_buttons;
 use crate::ui::circuit::interaction::{
     handle_circuit_constant_step_buttons, handle_circuit_operand_mode_buttons,
@@ -23,6 +19,10 @@ use crate::ui::circuit::panel::update_circuit_panel;
 use crate::ui::circuit::picker::{handle_signal_picker_buttons, sync_signal_picker};
 use crate::ui::circuit::state::CircuitEditorState;
 use crate::ui::container_window::sync_container_window;
+use crate::ui::crafting_panel::{
+    handle_crafting_recipe_button_clicks, update_crafting_detail_text,
+    update_crafting_recipe_button_colors,
+};
 use crate::ui::debug_overlay::{
     DebugOverlayVisible, apply_debug_overlay_visibility, debug_overlay_refresh_due,
     setup_debug_overlay, toggle_debug_overlay, update_debug_overlay, update_ups_stats,
@@ -283,11 +283,11 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
-                    handle_assembler_recipe_button_clicks
+                    handle_crafting_recipe_button_clicks
                         .in_set(AppSet::UiInteraction)
                         .after(sync_container_window),
-                    update_assembler_detail_text.after(sync_container_window),
-                    update_assembler_recipe_button_colors.after(sync_container_window),
+                    update_crafting_detail_text.after(sync_container_window),
+                    update_crafting_recipe_button_colors.after(sync_container_window),
                 )
                     .in_set(InGameSet),
             );

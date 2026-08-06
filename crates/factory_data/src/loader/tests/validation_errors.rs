@@ -1841,3 +1841,267 @@ fn wagons_without_the_cargo_their_kind_implies_are_rejected() {
         "a fluid wagon's unconnected tank is well formed"
     );
 }
+
+/// Builds a rocket silo catalog whose silo section and surrounding fields can be
+/// overridden, so each check below differs only in the field it is about.
+fn rocket_silo_catalog(
+    entity_kind: &str,
+    rocket_silo: &str,
+    extra_fields: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    const ELECTRIC: &str =
+        "electric_energy_source: Some((energy_usage_watts: 4000000, drain_watts: 250000)),";
+    let extra_fields = if extra_fields.contains("electric_energy_source") {
+        extra_fields.to_string()
+    } else {
+        format!("{ELECTRIC}{extra_fields}")
+    };
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [(id: 0, name: "rocket_silo", stack_size: 1)],
+            recipes: [],
+            entities: [(
+                id: 0,
+                name: "rocket_silo",
+                entity_kind: {entity_kind},
+                build_item: Some("rocket_silo"),
+                building_category: Some(Production),
+                building_menu_order: Some(80),
+                size: (x: 9, y: 9),
+                collision_mask: (layers: ["building"]),
+                max_health: Some(5000),
+                rocket_silo: {rocket_silo},
+                {extra_fields}
+            )],
+            tiles: [],
+        )"#
+    ))
+}
+
+const VALID_ROCKET_SILO: &str = r#"Some((
+    crafting_speed_numerator: 1,
+    crafting_speed_denominator: 1,
+    input_slot_count: 4,
+    parts_per_rocket: 100,
+))"#;
+
+#[test]
+fn valid_rocket_silo_loads_with_module_slots() {
+    let catalog = rocket_silo_catalog("RocketSilo", VALID_ROCKET_SILO, " module_slot_count: 4,")
+        .expect("rocket silo should load");
+    let rocket_silo = catalog.entities[0]
+        .rocket_silo
+        .expect("rocket silo metadata should survive loading");
+
+    assert_eq!(rocket_silo.parts_per_rocket, 100);
+    assert_eq!(catalog.entities[0].module_slot_count, 4);
+}
+
+/// Each of these leaves the silo unable to derive the thing the simulation asks
+/// it for: the section itself, the power it runs on, somewhere to hold
+/// ingredients, a speed to craft at, or a rocket size to count toward.
+#[test]
+fn incoherent_rocket_silo_metadata_fails() {
+    let cases = [
+        (
+            "None",
+            "",
+            "a silo without its section has no recipe to run",
+        ),
+        (
+            VALID_ROCKET_SILO,
+            "electric_energy_source: None,",
+            "a silo with no energy source could never work",
+        ),
+        (
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 0, input_slot_count: 4, parts_per_rocket: 100))"#,
+            "",
+            "a zero crafting-speed denominator is not a fraction",
+        ),
+        (
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 0, parts_per_rocket: 100))"#,
+            "",
+            "a silo with no ingredient slots could never be fed",
+        ),
+        (
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 4, parts_per_rocket: 0))"#,
+            "",
+            "a rocket of no parts would be finished before it started",
+        ),
+    ];
+
+    for (rocket_silo, extra_fields, reason) in cases {
+        let error = rocket_silo_catalog("RocketSilo", rocket_silo, extra_fields)
+            .err()
+            .unwrap_or_else(|| panic!("{reason}"));
+        assert!(
+            matches!(
+                error,
+                PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. }
+                    if entity == "rocket_silo"
+            ),
+            "{reason}"
+        );
+    }
+}
+
+#[test]
+fn rocket_silo_metadata_on_another_kind_fails() {
+    let error = rocket_silo_catalog("AssemblingMachine", VALID_ROCKET_SILO, "")
+        .expect_err("only a rocket silo builds rockets");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. } if entity == "rocket_silo")
+    );
+}
+
+/// The fixed recipe must fit all of its ingredients at once because crafting
+/// checks and consumes them atomically. This covers both distinct item stacks
+/// and a single ingredient whose amount spans multiple stacks.
+#[test]
+fn undersized_rocket_silo_input_inventory_fails() {
+    let catalog = |input_slot_count, ingredients: &str| {
+        PrototypeCatalog::from_ron_str(&format!(
+            r#"(
+                items: [
+                    (id: 0, name: "rocket_part", stack_size: 1),
+                    (id: 1, name: "steel_plate", stack_size: 100),
+                    (id: 2, name: "processing_unit", stack_size: 100),
+                ],
+                recipes: [(
+                    id: 0, name: "rocket_part", category: RocketBuilding,
+                    crafting_time_ticks: 180, ingredients: [{ingredients}],
+                    products: [(item: "rocket_part", amount: 1)],
+                )],
+                entities: [(
+                    id: 0, name: "rocket_silo", entity_kind: RocketSilo,
+                    size: (x: 9, y: 9), collision_mask: (layers: ["building"]),
+                    electric_energy_source: Some((
+                        energy_usage_watts: 4000000, drain_watts: 250000,
+                    )),
+                    rocket_silo: Some((
+                        crafting_speed_numerator: 1, crafting_speed_denominator: 1,
+                        input_slot_count: {input_slot_count}, parts_per_rocket: 100,
+                    )),
+                )],
+                tiles: [],
+            )"#
+        ))
+    };
+
+    let two_items = r#"(item: "steel_plate", amount: 1),
+                       (item: "processing_unit", amount: 1)"#;
+    let oversized_stack = r#"(item: "steel_plate", amount: 101)"#;
+    for ingredients in [two_items, oversized_stack] {
+        let error = catalog(1, ingredients).expect_err("one slot cannot hold this recipe");
+        assert!(
+            matches!(error, PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. } if entity == "rocket_silo")
+        );
+        catalog(2, ingredients).expect("two slots can hold this recipe");
+    }
+}
+
+/// Builds a catalog whose single rocket-building recipe can be overridden, so
+/// each check below differs only in the recipe shape it is about.
+fn rocket_building_recipe_catalog(
+    recipe_body: &str,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    PrototypeCatalog::from_ron_str(&format!(
+        r#"(
+            items: [
+                (id: 0, name: "rocket_part", stack_size: 1),
+                (id: 1, name: "steel_plate", stack_size: 100),
+            ],
+            fluids: [(id: 0, name: "water")],
+            recipes: [(
+                id: 0,
+                name: "rocket_part",
+                category: RocketBuilding,
+                crafting_time_ticks: 180,
+                ingredients: [(item: "steel_plate", amount: 1)],
+                {recipe_body}
+            )],
+            entities: [],
+            tiles: [],
+        )"#
+    ))
+}
+
+#[test]
+fn unit_output_rocket_building_recipe_loads() {
+    let catalog =
+        rocket_building_recipe_catalog(r#"products: [(item: "rocket_part", amount: 1)],"#)
+            .expect("one part a craft is what a silo counts");
+
+    assert_eq!(catalog.recipes[0].products[0].amount, 1);
+}
+
+/// A silo has no fluid boxes and counts whole crafts, so each of these shapes
+/// would be quietly mishandled: fluid amounts never drawn or emitted, or a part
+/// counter disagreeing with the production recorded beside it.
+#[test]
+fn rocket_building_recipes_a_silo_cannot_build_fail() {
+    let cases = [
+        (
+            r#"products: [(item: "rocket_part", amount: 2)],"#,
+            "two parts a craft would outrun the counter",
+        ),
+        (
+            "products: [],",
+            "a craft that yields no part would never fill a rocket",
+        ),
+        (
+            r#"products: [(item: "rocket_part", amount: 1), (item: "steel_plate", amount: 1)],"#,
+            "a second product has nowhere to go in a silo",
+        ),
+        (
+            r#"products: [(item: "rocket_part", amount: 1)], fluid_ingredients: [(fluid: "water", amount: 10)],"#,
+            "a fluid ingredient a silo cannot hold would be drawn for free",
+        ),
+        (
+            r#"products: [(item: "rocket_part", amount: 1)], fluid_products: [(fluid: "water", amount: 10)],"#,
+            "a fluid product a silo cannot hold would vanish",
+        ),
+    ];
+
+    for (recipe_body, reason) in cases {
+        let error = rocket_building_recipe_catalog(recipe_body)
+            .err()
+            .unwrap_or_else(|| panic!("{reason}"));
+        assert!(
+            matches!(
+                error,
+                PrototypeLoadError::InvalidRocketBuildingRecipe { recipe, .. }
+                    if recipe == "rocket_part"
+            ),
+            "{reason}"
+        );
+    }
+}
+
+/// A silo has nowhere to record which recipe it is building, so two candidates
+/// would mean a later research silently switching every silo mid-build.
+#[test]
+fn a_second_rocket_building_recipe_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"(
+            items: [
+                (id: 0, name: "rocket_part", stack_size: 1),
+                (id: 1, name: "steel_plate", stack_size: 100),
+            ],
+            recipes: [
+                (id: 0, name: "rocket_part", category: RocketBuilding, crafting_time_ticks: 180,
+                 ingredients: [(item: "steel_plate", amount: 1)],
+                 products: [(item: "rocket_part", amount: 1)]),
+                (id: 1, name: "cheap_rocket_part", category: RocketBuilding, crafting_time_ticks: 60,
+                 ingredients: [(item: "steel_plate", amount: 1)],
+                 products: [(item: "rocket_part", amount: 1)]),
+            ],
+            entities: [],
+            tiles: [],
+        )"#,
+    )
+    .expect_err("a silo builds one recipe, so the category holds one");
+    assert!(
+        matches!(error, PrototypeLoadError::InvalidRocketBuildingRecipe { recipe, .. } if recipe == "cheap_rocket_part")
+    );
+}

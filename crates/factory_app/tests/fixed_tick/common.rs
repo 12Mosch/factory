@@ -396,6 +396,27 @@ pub fn complete_research_by_name(sim: &mut Simulation, technology_name: &str) {
         .unwrap_or_else(|_| panic!("{technology_name} should complete"));
 }
 
+/// Researches `technology_name` and everything it depends on, so whatever it
+/// unlocks is reached through the same gate a player passes rather than around
+/// it. Prerequisites are followed rather than listed: the chain is a property of
+/// the catalog, and a hand-written list is one catalog edit away from wrong.
+pub fn unlock_with_prerequisites(sim: &mut Simulation, technology_name: &str) {
+    let technology_id = technology_id_by_name(sim.catalog(), technology_name);
+    if sim.is_technology_unlocked(technology_id) {
+        return;
+    }
+    let prerequisites = sim.catalog().technologies[technology_id.index()]
+        .prerequisites
+        .clone();
+    for prerequisite in prerequisites {
+        let name = sim.catalog().technologies[prerequisite.index()]
+            .name
+            .clone();
+        unlock_with_prerequisites(sim, &name);
+    }
+    complete_research_by_name(sim, technology_name);
+}
+
 pub fn technology_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data::TechnologyId {
     factory_data::technology_id_by_name(catalog, name)
 }

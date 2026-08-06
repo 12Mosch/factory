@@ -5,11 +5,11 @@ use factory_sim::EntityId;
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::placement::build::entity_display_name as prototype_display_name;
 use crate::resources::SimResource;
-use crate::ui::assembler_panel::spawn_assembler_panel;
 use crate::ui::circuit::panel::{
     spawn_arithmetic_combinator_panel, spawn_circuit_control_panel,
     spawn_constant_combinator_panel, spawn_decider_combinator_panel,
 };
+use crate::ui::crafting_panel::{CraftingPanelSlots, CraftingPanelSpec, spawn_crafting_panel};
 use crate::ui::formatting::format_recipe_display_name;
 use crate::ui::inventory_panel::{
     InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,
@@ -174,21 +174,31 @@ fn spawn_container_window_contents(
                 let title = prototype
                     .map(|prototype| format_recipe_display_name(&prototype.name))
                     .unwrap_or_else(|| "Assembling Machine".to_string());
-                spawn_assembler_panel(
+                spawn_crafting_panel(
                     machine_panel,
                     sim.catalog(),
-                    factory_sim::entity_access::inventory_panel_slot_count(
-                        sim,
-                        Some(entity_id),
-                        InventoryPanel::AssemblerInput,
-                    ),
-                    factory_sim::entity_access::inventory_panel_slot_count(
-                        sim,
-                        Some(entity_id),
-                        InventoryPanel::AssemblerOutput,
-                    ),
-                    machine_category,
-                    &title,
+                    CraftingPanelSpec {
+                        title: &title,
+                        input: panel_slots(sim, entity_id, InventoryPanel::AssemblerInput),
+                        output: Some(panel_slots(sim, entity_id, InventoryPanel::AssemblerOutput)),
+                        selectable_category: Some(machine_category),
+                    },
+                );
+            }
+            // The same panel minus the two things a silo has not got: a recipe
+            // to pick and an output slot to empty.
+            OpenMachineKind::RocketSilo => {
+                let title = entity_display_name(sim, entity_id)
+                    .unwrap_or_else(|| "Rocket Silo".to_string());
+                spawn_crafting_panel(
+                    machine_panel,
+                    sim.catalog(),
+                    CraftingPanelSpec {
+                        title: &title,
+                        input: panel_slots(sim, entity_id, InventoryPanel::RocketSiloInput),
+                        output: None,
+                        selectable_category: None,
+                    },
                 );
             }
         }
@@ -228,7 +238,7 @@ fn spawn_container_window_contents(
 
 fn machine_panel_width(kind: OpenMachineKind) -> f32 {
     match kind {
-        OpenMachineKind::Assembler => 420.0,
+        OpenMachineKind::Assembler | OpenMachineKind::RocketSilo => 420.0,
         // The combinator editors lay their operands out in one row, so they
         // need more width than an inventory grid.
         OpenMachineKind::ConstantCombinator
@@ -249,6 +259,17 @@ fn machine_panel_width(kind: OpenMachineKind) -> f32 {
         // The stop's rows carry a caption, a stepper, and a signal button.
         | OpenMachineKind::TrainStop
         | OpenMachineKind::Circuit => 260.0,
+    }
+}
+
+fn panel_slots(
+    sim: &factory_sim::Simulation,
+    entity_id: EntityId,
+    panel: InventoryPanel,
+) -> CraftingPanelSlots {
+    CraftingPanelSlots {
+        panel,
+        count: factory_sim::entity_access::inventory_panel_slot_count(sim, Some(entity_id), panel),
     }
 }
 

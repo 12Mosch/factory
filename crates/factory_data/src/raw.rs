@@ -8,9 +8,9 @@ use crate::model::{
     GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, LogisticChestPrototype,
     ModuleEffectPrototype, NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype,
     RadarPrototype, RailPiecePrototype, RepairToolPrototype, ResourceExtraction, RoboportPrototype,
-    RobotPrototype, RollingStockPrototype, SolarPanelPrototype, SplitterPrototype,
-    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
-    VirtualSignalKind,
+    RobotPrototype, RocketSiloPrototype, RollingStockPrototype, SolarPanelPrototype,
+    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype,
+    UnitPrototype, VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -200,6 +200,8 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) mining_drill: Option<RawMiningDrillPrototype>,
     pub(crate) furnace: Option<FurnacePrototype>,
     pub(crate) assembling_machine: Option<AssemblingMachinePrototype>,
+    #[serde(default)]
+    pub(crate) rocket_silo: Option<RocketSiloPrototype>,
     pub(crate) transport_belt: Option<TransportBeltPrototype>,
     pub(crate) splitter: Option<SplitterPrototype>,
     pub(crate) inserter: Option<RawInserterPrototype>,

@@ -250,6 +250,8 @@ pub struct EntityPrototype {
     pub mining_drill: Option<MiningDrillPrototype>,
     pub furnace: Option<FurnacePrototype>,
     pub assembling_machine: Option<AssemblingMachinePrototype>,
+    /// Present on rocket silos; see [`RocketSiloPrototype`].
+    pub rocket_silo: Option<RocketSiloPrototype>,
     pub transport_belt: Option<TransportBeltPrototype>,
     pub splitter: Option<SplitterPrototype>,
     pub inserter: Option<InserterPrototype>,
@@ -882,6 +884,25 @@ fn default_assembler_crafting_category() -> CraftingCategory {
     CraftingCategory::Crafting
 }
 
+/// Rocket silo crafting behaviour.
+///
+/// The silo crafts like an assembler — the same speed fraction over the same
+/// recipe times — and differs in two things, both declared here. Its recipe is
+/// not chosen but derived: the silo takes the one unlocked recipe in
+/// [`CraftingCategory::RocketBuilding`], so a player never selects it and can
+/// never clear it. And its product is not stored but counted: each finished part
+/// raises the silo's counter, and at `parts_per_rocket` the rocket is whole and
+/// the silo stops until it leaves.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct RocketSiloPrototype {
+    pub crafting_speed_numerator: u32,
+    pub crafting_speed_denominator: u32,
+    /// Slots holding the ingredients of the part being built.
+    pub input_slot_count: usize,
+    /// Parts that make one whole rocket.
+    pub parts_per_rocket: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct TransportBeltPrototype {
     pub speed_subtiles_per_tick: u16,
@@ -1043,6 +1064,11 @@ pub enum CraftingCategory {
     OilProcessing,
     Chemistry,
     Centrifuging,
+    /// Rocket parts. Only a [`EntityKind::RocketSilo`] serves this category, and
+    /// a silo serves no other, which is what keeps rocket parts out of every
+    /// assembler and off the hand-crafting panel without a rule anywhere saying
+    /// so: the category is the whole restriction.
+    RocketBuilding,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -1106,6 +1132,10 @@ pub enum EntityKind {
     /// A named stopping place beside the track: it carries the name a schedule
     /// asks for and marks where the train that serves it comes to rest.
     TrainStop,
+    /// Builds rockets a part at a time; see [`RocketSiloPrototype`]. Its recipe
+    /// is fixed rather than chosen, and a finished part raises a counter instead
+    /// of landing in an output slot.
+    RocketSilo,
 }
 
 impl EntityKind {

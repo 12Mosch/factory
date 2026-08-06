@@ -85,6 +85,10 @@ pub enum PrototypeLoadError {
         recipe: String,
         fluid: String,
     },
+    InvalidRocketBuildingRecipe {
+        recipe: String,
+        detail: &'static str,
+    },
     MissingPumpjackResourceItem {
         entity: String,
         item: String,
@@ -175,6 +179,10 @@ pub enum PrototypeLoadError {
         detail: &'static str,
     },
     InvalidLogisticChestMetadata {
+        entity: String,
+        detail: &'static str,
+    },
+    InvalidRocketSiloMetadata {
         entity: String,
         detail: &'static str,
     },
@@ -302,6 +310,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "recipe {recipe:?} requires a non-zero amount of fluid {fluid:?}"
+                )
+            }
+            Self::InvalidRocketBuildingRecipe { recipe, detail } => {
+                write!(
+                    formatter,
+                    "rocket-building recipe {recipe:?} is not a recipe that a silo can build: {detail}"
                 )
             }
             Self::MissingPumpjackResourceItem { entity, item } => {
@@ -437,6 +451,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "entity {entity:?} has invalid logistic chest metadata: {detail}"
+                )
+            }
+            Self::InvalidRocketSiloMetadata { entity, detail } => {
+                write!(
+                    formatter,
+                    "entity {entity:?} has invalid rocket silo metadata: {detail}"
                 )
             }
             Self::InvalidHeatConnection {

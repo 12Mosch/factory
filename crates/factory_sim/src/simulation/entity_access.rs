@@ -148,6 +148,13 @@ pub fn assembler_state(
     sim.entities.assembler_state(entity_id)
 }
 
+pub fn rocket_silo_state(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Result<&RocketSiloState, RocketSiloError> {
+    sim.entities.rocket_silo_state(entity_id)
+}
+
 pub fn module_slots(sim: &Simulation, entity_id: EntityId) -> Result<&ModuleSlots, ModuleError> {
     if let Some(slots) = sim.entities.module_slots(entity_id) {
         Ok(slots)
@@ -271,6 +278,9 @@ pub fn inventory_panel_slot(
         InventoryPanel::AssemblerOutput => entity_id
             .and_then(|id| sim.entities.assembler_state(id).ok())
             .and_then(|state| state.output_inventory.slot(slot_index)),
+        InventoryPanel::RocketSiloInput => entity_id
+            .and_then(|id| sim.entities.rocket_silo_state(id).ok())
+            .and_then(|state| state.input_inventory.slot(slot_index)),
         InventoryPanel::Modules => entity_id
             .and_then(|id| module_slots(sim, id).ok())
             .and_then(|slots| slots.slot(slot_index)),
@@ -322,6 +332,9 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::AssemblerOutput => entity_id
             .and_then(|id| sim.entities.assembler_state(id).ok())
             .map_or(0, |state| state.output_inventory.slots().len()),
+        InventoryPanel::RocketSiloInput => entity_id
+            .and_then(|id| sim.entities.rocket_silo_state(id).ok())
+            .map_or(0, |state| state.input_inventory.slots().len()),
         InventoryPanel::Modules => entity_id
             .and_then(|id| module_slots(sim, id).ok())
             .map_or(0, ModuleSlots::len),

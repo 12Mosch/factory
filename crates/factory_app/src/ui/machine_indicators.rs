@@ -782,6 +782,15 @@ pub(crate) fn update_machine_indicators(
                         state.crafting_required_ticks,
                     ))
                 }
+                OpenMachineKind::RocketSilo => {
+                    let state =
+                        factory_sim::entity_access::rocket_silo_state(&sim, entity_id).ok()?;
+                    Some((
+                        None,
+                        state.crafting_progress_ticks,
+                        state.crafting_required_ticks,
+                    ))
+                }
                 OpenMachineKind::Inserter => {
                     let energy =
                         factory_sim::entity_access::inserter_energy(&sim, entity_id).ok()?;

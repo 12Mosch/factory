@@ -278,6 +278,32 @@ impl EntityStore {
             .ok_or(AssemblerError::NotAssembler(entity_id))
     }
 
+    pub(super) fn rocket_silo_state(
+        &self,
+        entity_id: EntityId,
+    ) -> Result<&RocketSiloState, RocketSiloError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(RocketSiloError::MissingEntity(entity_id));
+        }
+
+        self.rocket_silos
+            .get(&entity_id)
+            .ok_or(RocketSiloError::NotRocketSilo(entity_id))
+    }
+
+    pub(super) fn rocket_silo_state_mut(
+        &mut self,
+        entity_id: EntityId,
+    ) -> Result<&mut RocketSiloState, RocketSiloError> {
+        if !self.placed_entities.contains_key(&entity_id) {
+            return Err(RocketSiloError::MissingEntity(entity_id));
+        }
+
+        self.rocket_silos
+            .get_mut(&entity_id)
+            .ok_or(RocketSiloError::NotRocketSilo(entity_id))
+    }
+
     pub(super) fn belt_segment(&self, entity_id: EntityId) -> Result<&BeltSegment, BeltError> {
         if !self.placed_entities.contains_key(&entity_id) {
             return Err(BeltError::MissingEntity(entity_id));

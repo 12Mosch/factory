@@ -42,6 +42,12 @@ pub(crate) fn pumpjack_color() -> Color {
     Color::srgb(0.35, 0.30, 0.28)
 }
 
+/// Pale concrete rather than another machine colour: the silo is a pad the
+/// factory is built around, and reads as structure instead of as equipment.
+pub(crate) fn rocket_silo_color() -> Color {
+    Color::srgb(0.62, 0.63, 0.60)
+}
+
 pub(crate) fn lab_color() -> Color {
     Color::srgb(0.48, 0.36, 0.66)
 }

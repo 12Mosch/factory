@@ -50,6 +50,10 @@ pub fn transfer_container_slot(
                     return player_slot_to_assembler_input(sim, entity_id, slot_index)
                         .map_err(SlotTransferError::Assembler);
                 }
+                Some(EntityKind::RocketSilo) => {
+                    return player_slot_to_rocket_silo_input(sim, entity_id, slot_index)
+                        .map_err(SlotTransferError::RocketSilo);
+                }
                 _ => {}
             }
             player_slot_to_entity(sim, entity_id, slot_index)
@@ -106,6 +110,10 @@ pub fn transfer_container_slot(
         InventoryPanel::AssemblerOutput => {
             return assembler_output_slot_to_player(sim, entity_id, slot_index)
                 .map_err(SlotTransferError::Assembler);
+        }
+        InventoryPanel::RocketSiloInput => {
+            return rocket_silo_input_slot_to_player(sim, entity_id, slot_index)
+                .map_err(SlotTransferError::RocketSilo);
         }
         InventoryPanel::Modules => {
             return module_slot_to_player(sim, entity_id, slot_index)

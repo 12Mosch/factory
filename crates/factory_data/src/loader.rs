@@ -13,7 +13,7 @@ use std::path::Path;
 
 use catalog::ValidatedRawCatalog;
 use circuits::{load_virtual_signals, validate_circuit_content};
-use entities::load_entities;
+use entities::{load_entities, validate_rocket_silo_recipe_capacity};
 use fluids::load_fluids;
 use items::load_items;
 use recipes::load_recipes;
@@ -69,6 +69,7 @@ impl PrototypeCatalog {
         let (recipes, recipe_ids_by_name) =
             load_recipes(raw.recipes, &item_ids_by_name, &fluid_ids_by_name)?;
         let entities = load_entities(raw.entities, &item_ids_by_name, &fluid_ids_by_name)?;
+        validate_rocket_silo_recipe_capacity(&entities, &recipes, &items)?;
         let technologies =
             load_technologies(raw.technologies, &item_ids_by_name, &recipe_ids_by_name)?;
         validate_technology_prerequisite_graph(&technologies)?;

@@ -82,7 +82,10 @@ use bincode::Options;
 // v42: a train records whether the player is driving it. The flag is durable
 // because a save that dropped it would hand every hand-parked train back to its
 // schedule on load and send it off again.
-pub const SAVE_VERSION: u32 = 42;
+// v43: rocket silo state was appended — the ingredients of the part being
+// built and the count of parts already standing as a rocket. The count is the
+// rocket: nothing else records that a silo is part-way through one.
+pub const SAVE_VERSION: u32 = 43;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -110,7 +113,9 @@ pub const SAVE_VERSION: u32 = 42;
 // braking force, top speed, and locomotive tractive force).
 // v27: rail signal and chain signal entity kinds, which partition the rail
 // graph into blocks.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 27;
+// v28: the rocket silo entity kind and its prototype section, and the
+// `RocketBuilding` crafting category the part recipe sits in.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 28;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

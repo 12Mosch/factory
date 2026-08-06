@@ -8,6 +8,10 @@ pub(crate) enum OpenMachineKind {
     Furnace,
     Boiler,
     Assembler,
+    /// A rocket silo: its ingredient slots, its progress, and how much of a
+    /// rocket stands in it. There is no recipe picker — the silo builds the one
+    /// thing it can build.
+    RocketSilo,
     Lab,
     Turret,
     Inserter,
@@ -53,6 +57,7 @@ pub(crate) fn open_machine_kind(sim: &Simulation, entity_id: EntityId) -> Option
             EntityKind::Furnace => Some(OpenMachineKind::Furnace),
             EntityKind::Boiler => Some(OpenMachineKind::Boiler),
             EntityKind::AssemblingMachine => Some(OpenMachineKind::Assembler),
+            EntityKind::RocketSilo => Some(OpenMachineKind::RocketSilo),
             EntityKind::Lab => Some(OpenMachineKind::Lab),
             EntityKind::Beacon => Some(OpenMachineKind::Beacon),
             EntityKind::NuclearReactor => Some(OpenMachineKind::NuclearReactor),

@@ -5,10 +5,10 @@ use glam::IVec2;
 use crate::error::PrototypeLoadError;
 use crate::ids::{EntityPrototypeId, FluidId, ItemId};
 use crate::model::{
-    ConnectionSide, EdgeConnectionPrototype, ElectricPolePrototype, EnemySpawnerPrototype,
-    EntityKind, EntityPrototype, FluidBoxPrototype, HeatBufferPrototype, InserterPrototype,
-    MiningDrillPrototype, POSITION_SCALE, PumpjackPrototype, RailCurvePrototype, RailHeading,
-    RailPiecePrototype, RailPointPrototype,
+    ConnectionSide, CraftingCategory, EdgeConnectionPrototype, ElectricPolePrototype,
+    EnemySpawnerPrototype, EntityKind, EntityPrototype, FluidBoxPrototype, HeatBufferPrototype,
+    InserterPrototype, ItemPrototype, MiningDrillPrototype, POSITION_SCALE, PumpjackPrototype,
+    RailCurvePrototype, RailHeading, RailPiecePrototype, RailPointPrototype, RecipePrototype,
 };
 use crate::raw::{
     RawEdgeConnectionPrototype, RawEntityPrototype, RawFluidBoxPrototype, RawHeatBufferPrototype,
@@ -31,6 +31,7 @@ pub(super) fn load_entities(
             validate_circuit_metadata(&entity.name, &entity)?;
             validate_roboport_metadata(&entity.name, &entity)?;
             validate_logistic_chest_metadata(&entity.name, &entity)?;
+            validate_rocket_silo_metadata(&entity.name, &entity)?;
             validate_rolling_stock_metadata(&entity.name, &entity)?;
             if entity.size.x <= 0 || entity.size.y <= 0 {
                 return Err(PrototypeLoadError::InvalidEntityMetadata {
@@ -123,6 +124,7 @@ pub(super) fn load_entities(
                         ticks_per_item: mining_drill.ticks_per_item,
                     }),
                 assembling_machine: entity.assembling_machine,
+                rocket_silo: entity.rocket_silo,
                 transport_belt: entity.transport_belt,
                 splitter: entity.splitter,
                 inserter: entity.inserter.map(|inserter| InserterPrototype {
@@ -176,6 +178,59 @@ pub(super) fn load_entities(
             })
         })
         .collect()
+}
+
+/// Ensures every silo can hold one complete set of its fixed recipe's ingredients.
+///
+/// This is a catalog-level check because entity metadata is loaded independently
+/// from recipes and item stack sizes. Each distinct ingredient needs enough
+/// slots for its full amount: crafting consumes all ingredients atomically, so
+/// accepting a silo with less capacity would create a machine that can never run.
+pub(super) fn validate_rocket_silo_recipe_capacity(
+    entities: &[EntityPrototype],
+    recipes: &[RecipePrototype],
+    items: &[ItemPrototype],
+) -> Result<(), PrototypeLoadError> {
+    let Some(recipe) = recipes
+        .iter()
+        .find(|recipe| recipe.category == CraftingCategory::RocketBuilding)
+    else {
+        return Ok(());
+    };
+
+    let mut amounts_by_item = HashMap::<ItemId, u32>::new();
+    for ingredient in &recipe.ingredients {
+        let amount = amounts_by_item.entry(ingredient.item).or_default();
+        *amount = amount.saturating_add(u32::from(ingredient.amount));
+    }
+    let required_slots =
+        amounts_by_item
+            .into_iter()
+            .try_fold(0_usize, |total, (item_id, amount)| {
+                let stack_size = items
+                    .iter()
+                    .find(|item| item.id == item_id)
+                    .expect("recipe item references were resolved while loading")
+                    .stack_size;
+                let stack_size = u32::from(stack_size);
+                let stacks = amount
+                    .checked_add(stack_size.checked_sub(1)?)?
+                    .checked_div(stack_size)?;
+                total.checked_add(usize::try_from(stacks).ok()?)
+            });
+
+    for entity in entities {
+        let Some(silo) = entity.rocket_silo else {
+            continue;
+        };
+        if required_slots.is_none_or(|required| required > silo.input_slot_count) {
+            return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
+                entity: entity.name.clone(),
+                detail: "ingredient slots cannot hold one complete rocket-building recipe",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Circuit metadata is only coherent when the entity kind, the connector
@@ -366,6 +421,52 @@ fn validate_logistic_chest_metadata(
     }
 }
 
+/// A silo's recipe is derived rather than declared, so everything the derivation
+/// needs has to be present before the simulation can lean on it: the silo
+/// section itself, an electric energy source to run on, ingredient slots to hold
+/// what a part is made of, and a positive rocket size to count toward.
+fn validate_rocket_silo_metadata(
+    name: &str,
+    entity: &RawEntityPrototype,
+) -> Result<(), PrototypeLoadError> {
+    use crate::model::EntityKind;
+
+    let invalid = |detail| {
+        Err(PrototypeLoadError::InvalidRocketSiloMetadata {
+            entity: name.to_string(),
+            detail,
+        })
+    };
+
+    if entity.entity_kind != EntityKind::RocketSilo {
+        return if entity.rocket_silo.is_some() {
+            invalid("rocket silo metadata is only valid on rocket silo entities")
+        } else {
+            Ok(())
+        };
+    }
+
+    let Some(rocket_silo) = entity.rocket_silo else {
+        return invalid("rocket silo entities require rocket silo metadata");
+    };
+    if entity.electric_energy_source.is_none() {
+        return invalid("rocket silos run on an electric energy source");
+    }
+    if entity.burner.is_some() {
+        return invalid("rocket silos cannot also declare a burner");
+    }
+    if rocket_silo.crafting_speed_numerator == 0 || rocket_silo.crafting_speed_denominator == 0 {
+        return invalid("crafting speed must be a positive fraction");
+    }
+    if rocket_silo.input_slot_count == 0 {
+        return invalid("rocket silos require ingredient slots");
+    }
+    if rocket_silo.parts_per_rocket == 0 {
+        return invalid("a rocket must take at least one part");
+    }
+    Ok(())
+}
+
 fn validate_module_and_beacon_metadata(
     name: &str,
     entity: &RawEntityPrototype,
@@ -379,6 +480,7 @@ fn validate_module_and_beacon_metadata(
             | EntityKind::MiningDrill
             | EntityKind::Lab
             | EntityKind::Beacon
+            | EntityKind::RocketSilo
     );
     if entity.module_slot_count > 0 && !supports_modules {
         return Err(PrototypeLoadError::InvalidModuleSlotMetadata {
