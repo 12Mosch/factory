@@ -142,6 +142,17 @@ pub(crate) fn renderable_entity_visual_style(
     {
         style.base_color = lamp_color(lit);
     }
+    if style.kind == EntityKind::RocketSilo
+        && let Ok(state) = factory_sim::entity_access::rocket_silo_state(sim, entity_id)
+    {
+        style.base_color = match state.launch_phase {
+            factory_sim::RocketLaunchPhase::Idle => rocket_silo_color(),
+            // Closed doors darken the pad; the rising phase becomes the warm
+            // exhaust colour. Both are direct projections of simulation state.
+            factory_sim::RocketLaunchPhase::Sealed { .. } => Color::srgb(0.38, 0.40, 0.43),
+            factory_sim::RocketLaunchPhase::Rising { .. } => Color::srgb(0.95, 0.48, 0.12),
+        };
+    }
     if style.kind.is_rail_signal()
         && let Some(aspect) = sim.rail_signal_aspect(entity_id)
     {

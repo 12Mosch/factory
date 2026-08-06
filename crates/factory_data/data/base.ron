@@ -337,6 +337,8 @@
         // that nothing about it invites being stockpiled.
         (id: 120, name: "rocket_part", stack_size: 1),
         (id: 121, name: "rocket_silo", stack_size: 1),
+        // The first launchable payload. Cargo slots accept one satellite only.
+        (id: 122, name: "satellite", stack_size: 1),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1736,6 +1738,18 @@
                 (item: "pipe", amount: 100),
             ],
             products: [(item: "rocket_silo", amount: 1)],
+        ),
+        (
+            id: 120,
+            name: "satellite",
+            category: Crafting,
+            crafting_time_ticks: 300,
+            ingredients: [
+                (item: "low_density_structure", amount: 100),
+                (item: "processing_unit", amount: 100),
+                (item: "rocket_fuel", amount: 50),
+            ],
+            products: [(item: "satellite", amount: 1)],
         ),
     ],
     entities: [
@@ -4124,7 +4138,7 @@
         (
             id: 49,
             name: "rocket_silo",
-            prerequisites: ["rocket_fuel", "utility_science_pack", "production_science_pack"],
+            prerequisites: ["rocket_fuel", "utility_science_pack", "production_science_pack", "concrete"],
             science_packs: [
                 (item: "automation_science_pack", amount: 1),
                 (item: "logistic_science_pack", amount: 1),
@@ -4137,6 +4151,7 @@
             effects: [
                 UnlockRecipe("rocket_silo"),
                 UnlockRecipe("rocket_part"),
+                UnlockRecipe("satellite"),
             ],
         ),
     ],

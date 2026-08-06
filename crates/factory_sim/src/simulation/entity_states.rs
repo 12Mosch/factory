@@ -97,6 +97,7 @@ impl EntityStateBehavior for RocketSiloState {
     /// half-built silo loses the rocket rather than refunding it in pieces.
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_inventory_stacks(stacks, &self.input_inventory);
+        push_inventory_stacks(stacks, &self.cargo_inventory);
         push_module_stacks(stacks, &self.modules.slots);
     }
 

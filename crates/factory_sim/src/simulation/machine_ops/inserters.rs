@@ -294,9 +294,23 @@ pub(in crate::simulation) fn inserter_target_can_accept(
             .can_insert(catalog, item.item_id(), item.count());
     }
 
-    // Only insertion: a silo's parts are counted rather than stored, so there
-    // is nothing on the other side for an inserter to take back out.
+    // A completed rocket routes its one launchable payload to the cargo slot;
+    // at every other time inserters continue stocking part ingredients.
     if let Some(silo) = entities.rocket_silos.get(&entity_id) {
+        if silo.rocket_ready()
+            && matches!(silo.launch_phase, crate::machines::RocketLaunchPhase::Idle)
+        {
+            return item_slot_policy_accepts(
+                catalog,
+                research,
+                entities,
+                ItemSlotPolicy::RocketCargo,
+                ItemSlotOperation::InserterInsert,
+                item.item_id(),
+            ) && silo
+                .cargo_inventory
+                .can_insert(catalog, item.item_id(), item.count());
+        }
         return item_slot_policy_accepts(
             catalog,
             research,
@@ -688,24 +702,35 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     }
 
     if entities.rocket_silos.contains_key(&entity_id) {
-        let accepts = item_slot_policy_accepts(
+        let cargo = entities.rocket_silos.get(&entity_id).is_some_and(|silo| {
+            silo.rocket_ready()
+                && matches!(silo.launch_phase, crate::machines::RocketLaunchPhase::Idle)
+        });
+        let policy = if cargo {
+            ItemSlotPolicy::RocketCargo
+        } else {
+            ItemSlotPolicy::RocketPartIngredient
+        };
+        if !item_slot_policy_accepts(
             catalog,
             research,
             entities,
-            ItemSlotPolicy::RocketPartIngredient,
+            policy,
             ItemSlotOperation::InserterInsert,
             item.item_id(),
-        );
-        if !accepts {
+        ) {
             return false;
         }
         let silo = entities
             .rocket_silos
             .get_mut(&entity_id)
             .expect("rocket silo presence was checked above");
-
-        return silo
-            .input_inventory
+        let inventory = if cargo {
+            &mut silo.cargo_inventory
+        } else {
+            &mut silo.input_inventory
+        };
+        return inventory
             .insert(catalog, item.item_id(), item.count())
             .is_ok();
     }

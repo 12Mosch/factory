@@ -1,6 +1,7 @@
 use super::super::*;
 use super::ids::*;
 use super::inventory::*;
+use crate::machines::RocketLaunchPhase;
 
 /// A machine's energy state must use the variant its prototype declares: a
 /// burner prototype owns burner fuel state, an electric prototype has none.
@@ -176,7 +177,6 @@ pub(in crate::simulation) fn validate_assembler(
             ItemSlotPolicy::AssemblerIngredient(entity_id),
         )?;
     }
-
     let Some(recipe_id) = state.selected_recipe else {
         if state.crafting_required_ticks != 0 {
             return Err(SimValidationError::InvalidEntityState { entity_id });
@@ -231,6 +231,24 @@ pub(in crate::simulation) fn validate_rocket_silo(
     validate_inventory(&sim.world.prototypes, &state.input_inventory)?;
     for slot in state.input_inventory.slots() {
         validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::RocketPartIngredient)?;
+    }
+
+    validate_inventory(&sim.world.prototypes, &state.cargo_inventory)?;
+    if state.cargo_inventory.slots().len() != 1 {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+    for slot in state.cargo_inventory.slots() {
+        validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::RocketCargo)?;
+    }
+    if !matches!(state.launch_phase, RocketLaunchPhase::Idle) && !state.rocket_ready() {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
+    }
+    if matches!(
+        state.launch_phase,
+        RocketLaunchPhase::Sealed { ticks_remaining: 0 }
+            | RocketLaunchPhase::Rising { ticks_remaining: 0 }
+    ) {
+        return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
     if state.parts_per_rocket == 0 || state.parts_completed > state.parts_per_rocket {

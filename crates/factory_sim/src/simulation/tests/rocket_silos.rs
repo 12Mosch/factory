@@ -1,5 +1,6 @@
 use super::super::*;
 use super::support::*;
+use crate::machines::RocketLaunchPhase;
 
 /// Ticks until the silo has built `parts`, or fails.
 ///
@@ -273,4 +274,55 @@ fn a_silo_stays_valid_on_the_tick_its_technology_lands() {
     );
     sim.validate()
         .expect("and the corrected world is valid too");
+}
+
+#[test]
+fn completed_rocket_launches_satellite_over_fixed_ticks() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    state
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+
+    sim.tick();
+    assert!(matches!(
+        sim.entities.rocket_silos[&silo_id].launch_phase,
+        RocketLaunchPhase::Sealed { .. }
+    ));
+    for _ in 0..180 {
+        sim.tick();
+    }
+
+    let state = &sim.entities.rocket_silos[&silo_id];
+    assert_eq!(state.launch_phase, RocketLaunchPhase::Idle);
+    assert_eq!(state.parts_completed, 0);
+    assert_eq!(state.cargo_inventory.count(satellite), 0);
+}
+
+#[test]
+fn mid_launch_save_round_trip_preserves_phase_and_finishes_headlessly() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    state
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    for _ in 0..80 {
+        sim.tick();
+    }
+
+    let bytes = crate::save_to_bytes(&sim).unwrap();
+    let mut loaded = crate::load_from_bytes(&bytes).unwrap();
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+    for _ in 0..101 {
+        loaded.tick();
+    }
+    assert_eq!(loaded.entities.rocket_silos[&silo_id].parts_completed, 0);
 }
