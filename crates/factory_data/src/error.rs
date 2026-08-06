@@ -315,7 +315,7 @@ impl fmt::Display for PrototypeLoadError {
             Self::InvalidRocketBuildingRecipe { recipe, detail } => {
                 write!(
                     formatter,
-                    "rocket-building recipe {recipe:?} is not one a silo can build: {detail}"
+                    "rocket-building recipe {recipe:?} is not a recipe that a silo can build: {detail}"
                 )
             }
             Self::MissingPumpjackResourceItem { entity, item } => {

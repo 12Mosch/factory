@@ -1954,6 +1954,52 @@ fn rocket_silo_metadata_on_another_kind_fails() {
     );
 }
 
+/// The fixed recipe must fit all of its ingredients at once because crafting
+/// checks and consumes them atomically. This covers both distinct item stacks
+/// and a single ingredient whose amount spans multiple stacks.
+#[test]
+fn undersized_rocket_silo_input_inventory_fails() {
+    let catalog = |input_slot_count, ingredients: &str| {
+        PrototypeCatalog::from_ron_str(&format!(
+            r#"(
+                items: [
+                    (id: 0, name: "rocket_part", stack_size: 1),
+                    (id: 1, name: "steel_plate", stack_size: 100),
+                    (id: 2, name: "processing_unit", stack_size: 100),
+                ],
+                recipes: [(
+                    id: 0, name: "rocket_part", category: RocketBuilding,
+                    crafting_time_ticks: 180, ingredients: [{ingredients}],
+                    products: [(item: "rocket_part", amount: 1)],
+                )],
+                entities: [(
+                    id: 0, name: "rocket_silo", entity_kind: RocketSilo,
+                    size: (x: 9, y: 9), collision_mask: (layers: ["building"]),
+                    electric_energy_source: Some((
+                        energy_usage_watts: 4000000, drain_watts: 250000,
+                    )),
+                    rocket_silo: Some((
+                        crafting_speed_numerator: 1, crafting_speed_denominator: 1,
+                        input_slot_count: {input_slot_count}, parts_per_rocket: 100,
+                    )),
+                )],
+                tiles: [],
+            )"#
+        ))
+    };
+
+    let two_items = r#"(item: "steel_plate", amount: 1),
+                       (item: "processing_unit", amount: 1)"#;
+    let oversized_stack = r#"(item: "steel_plate", amount: 101)"#;
+    for ingredients in [two_items, oversized_stack] {
+        let error = catalog(1, ingredients).expect_err("one slot cannot hold this recipe");
+        assert!(
+            matches!(error, PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. } if entity == "rocket_silo")
+        );
+        catalog(2, ingredients).expect("two slots can hold this recipe");
+    }
+}
+
 /// Builds a catalog whose single rocket-building recipe can be overridden, so
 /// each check below differs only in the recipe shape it is about.
 fn rocket_building_recipe_catalog(
