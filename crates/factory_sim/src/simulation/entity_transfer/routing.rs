@@ -51,6 +51,19 @@ pub fn transfer_container_slot(
                         .map_err(SlotTransferError::Assembler);
                 }
                 Some(EntityKind::RocketSilo) => {
+                    let is_launchable_cargo = sim
+                        .player_inventory
+                        .slot(slot_index)
+                        .and_then(|stack| sim.world.prototypes.item(stack.item_id()))
+                        .is_some_and(|item| item.name == "satellite")
+                        && sim
+                            .entities
+                            .rocket_silo_state(entity_id)
+                            .is_ok_and(|state| state.rocket_ready());
+                    if is_launchable_cargo {
+                        return player_slot_to_rocket_silo_cargo(sim, entity_id, slot_index)
+                            .map_err(SlotTransferError::RocketSilo);
+                    }
                     return player_slot_to_rocket_silo_input(sim, entity_id, slot_index)
                         .map_err(SlotTransferError::RocketSilo);
                 }
@@ -113,6 +126,10 @@ pub fn transfer_container_slot(
         }
         InventoryPanel::RocketSiloInput => {
             return rocket_silo_input_slot_to_player(sim, entity_id, slot_index)
+                .map_err(SlotTransferError::RocketSilo);
+        }
+        InventoryPanel::RocketSiloCargo => {
+            return rocket_silo_cargo_to_player(sim, entity_id)
                 .map_err(SlotTransferError::RocketSilo);
         }
         InventoryPanel::Modules => {

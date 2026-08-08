@@ -85,7 +85,8 @@ use bincode::Options;
 // v43: rocket silo state was appended — the ingredients of the part being
 // built and the count of parts already standing as a rocket. The count is the
 // rocket: nothing else records that a silo is part-way through one.
-pub const SAVE_VERSION: u32 = 43;
+// v44: rocket silos gained a cargo slot and durable fixed-tick launch phase.
+pub const SAVE_VERSION: u32 = 44;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

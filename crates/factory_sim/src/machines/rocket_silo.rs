@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 pub struct RocketSiloState {
     pub modules: MachineModuleState,
     pub input_inventory: Inventory,
+    /// The payload carried by the completed rocket. Launch cargo is deliberately
+    /// separate from part ingredients so every transfer path can route items to
+    /// the correct one-slot holder.
+    pub cargo_inventory: Inventory,
     pub crafting_progress_ticks: u32,
     pub crafting_required_ticks: u32,
     pub crafting_speed_numerator: u32,
@@ -28,6 +32,21 @@ pub struct RocketSiloState {
     /// so a silo already holding a half-built rocket keeps counting to the
     /// target it started against.
     pub parts_per_rocket: u32,
+    /// Durable launch progress, advanced by the fixed simulation tick.
+    pub launch_phase: RocketLaunchPhase,
+}
+
+/// Simulation-owned rocket launch animation state.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum RocketLaunchPhase {
+    #[default]
+    Idle,
+    Sealed {
+        ticks_remaining: u16,
+    },
+    Rising {
+        ticks_remaining: u16,
+    },
 }
 
 impl RocketSiloState {

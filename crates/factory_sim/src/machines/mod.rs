@@ -18,7 +18,7 @@ pub use self::modules::{
     BeaconState, MachineModuleState, ModuleError, ModuleSlots, ResolvedModuleEffects,
 };
 pub use self::pumpjack::PumpjackState;
-pub use self::rocket_silo::{RocketSiloError, RocketSiloState};
+pub use self::rocket_silo::{RocketLaunchPhase, RocketSiloError, RocketSiloState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MachineStatus {

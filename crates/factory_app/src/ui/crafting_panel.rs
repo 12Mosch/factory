@@ -27,6 +27,8 @@ pub(crate) struct CraftingPanelSpec<'a> {
     /// Slots finished products sit in, or `None` for a machine whose product is
     /// not an item in a slot.
     pub(crate) output: Option<CraftingPanelSlots>,
+    /// Label for the secondary slot group (normally output, cargo for silos).
+    pub(crate) output_label: &'a str,
     /// Category whose recipes the player may pick between, or `None` for a
     /// machine whose recipe is fixed.
     pub(crate) selectable_category: Option<CraftingCategory>,
@@ -171,7 +173,7 @@ pub(crate) fn spawn_crafting_panel(
             .with_children(|groups| {
                 spawn_slot_group(groups, "Input", spec.input);
                 if let Some(output) = spec.output {
-                    spawn_slot_group(groups, "Output", output);
+                    spawn_slot_group(groups, spec.output_label, output);
                 }
             });
     });
