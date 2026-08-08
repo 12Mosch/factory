@@ -297,17 +297,18 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     // A completed rocket routes its one launchable payload to the cargo slot;
     // at every other time inserters continue stocking part ingredients.
     if let Some(silo) = entities.rocket_silos.get(&entity_id) {
-        if silo.rocket_ready()
+        let is_cargo = silo.rocket_ready()
             && matches!(silo.launch_phase, crate::machines::RocketLaunchPhase::Idle)
-        {
-            return item_slot_policy_accepts(
+            && item_slot_policy_accepts(
                 catalog,
                 research,
                 entities,
                 ItemSlotPolicy::RocketCargo,
                 ItemSlotOperation::InserterInsert,
                 item.item_id(),
-            ) && silo
+            );
+        if is_cargo {
+            return silo
                 .cargo_inventory
                 .can_insert(catalog, item.item_id(), item.count());
         }
@@ -705,6 +706,14 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         let cargo = entities.rocket_silos.get(&entity_id).is_some_and(|silo| {
             silo.rocket_ready()
                 && matches!(silo.launch_phase, crate::machines::RocketLaunchPhase::Idle)
+                && item_slot_policy_accepts(
+                    catalog,
+                    research,
+                    entities,
+                    ItemSlotPolicy::RocketCargo,
+                    ItemSlotOperation::InserterInsert,
+                    item.item_id(),
+                )
         });
         let policy = if cargo {
             ItemSlotPolicy::RocketCargo

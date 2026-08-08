@@ -240,7 +240,11 @@ pub(in crate::simulation) fn validate_rocket_silo(
     for slot in state.cargo_inventory.slots() {
         validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::RocketCargo)?;
     }
-    if !matches!(state.launch_phase, RocketLaunchPhase::Idle) && !state.rocket_ready() {
+    let cargo_present = state.cargo_inventory.slots()[0].stack().is_some();
+    let launch_active = !matches!(state.launch_phase, RocketLaunchPhase::Idle);
+    if (cargo_present && !state.rocket_ready())
+        || (launch_active && (!state.rocket_ready() || !cargo_present))
+    {
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }
     if matches!(

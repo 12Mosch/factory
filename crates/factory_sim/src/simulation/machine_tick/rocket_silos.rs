@@ -49,10 +49,12 @@ impl MachineTickContext<'_> {
                     continue;
                 }
                 RocketLaunchPhase::Rising { ticks_remaining: 1 } => {
-                    state
+                    let cargo = state
                         .cargo_inventory
                         .take_slot(0)
                         .expect("a launching rocket retains its validated cargo");
+                    self.statistics
+                        .record_item_consumed(cargo.item_id(), u64::from(cargo.count()));
                     state.parts_completed = 0;
                     state.launch_phase = RocketLaunchPhase::Idle;
                     self.power_demand_cache.mark_dirty(entity_id);
