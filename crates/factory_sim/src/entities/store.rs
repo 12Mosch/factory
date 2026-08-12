@@ -309,7 +309,7 @@ mod tests {
         // fixture gained a populated stop afterwards, so those three fields are
         // pinned rather than only the map that holds them; the save format did
         // not change with it.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xa46e_0e9d_ffc9_b47e;
+        const EXPECTED_LAYOUT_HASH: u64 = 0x28a4_7fe3_ec0a_1a7f;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -648,12 +648,14 @@ mod tests {
             RocketSiloState {
                 modules: MachineModuleState::with_slot_count(0),
                 input_inventory: test_inventory(vec![Some(test_stack(iron, 6))]),
+                cargo_inventory: test_inventory(vec![None]),
                 crafting_progress_ticks: 45,
                 crafting_required_ticks: 180,
                 crafting_speed_numerator: 1,
                 crafting_speed_denominator: 1,
                 parts_completed: 17,
                 parts_per_rocket: 100,
+                launch_phase: crate::machines::RocketLaunchPhase::Idle,
             },
         );
 

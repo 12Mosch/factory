@@ -1,5 +1,6 @@
 use super::super::*;
 use super::support::*;
+use crate::machines::RocketLaunchPhase;
 
 /// Ticks until the silo has built `parts`, or fails.
 ///
@@ -273,4 +274,212 @@ fn a_silo_stays_valid_on_the_tick_its_technology_lands() {
     );
     sim.validate()
         .expect("and the corrected world is valid too");
+}
+
+#[test]
+fn silo_validation_rejects_cargo_without_a_rocket_and_launch_without_cargo() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    assert!(sim.validate().is_err());
+
+    {
+        let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+        state.cargo_inventory.take_slot(0).unwrap();
+        state.parts_completed = state.parts_per_rocket;
+        state.launch_phase = RocketLaunchPhase::Sealed { ticks_remaining: 1 };
+    }
+    assert!(sim.validate().is_err());
+
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    for invalid_phase in [
+        RocketLaunchPhase::Sealed { ticks_remaining: 0 },
+        RocketLaunchPhase::Sealed {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_SEAL_TICKS + 1,
+        },
+        RocketLaunchPhase::Rising { ticks_remaining: 0 },
+        RocketLaunchPhase::Rising {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_RISE_TICKS + 1,
+        },
+    ] {
+        sim.entities
+            .rocket_silos
+            .get_mut(&silo_id)
+            .unwrap()
+            .launch_phase = invalid_phase;
+        assert!(
+            crate::simulation::validation::machines::validate_rocket_silo(
+                &sim,
+                silo_id,
+                &sim.entities.rocket_silos[&silo_id],
+            )
+            .is_err(),
+            "accepted {invalid_phase:?}"
+        );
+    }
+    for valid_phase in [
+        RocketLaunchPhase::Sealed {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_SEAL_TICKS,
+        },
+        RocketLaunchPhase::Rising {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_RISE_TICKS,
+        },
+    ] {
+        sim.entities
+            .rocket_silos
+            .get_mut(&silo_id)
+            .unwrap()
+            .launch_phase = valid_phase;
+        crate::simulation::validation::machines::validate_rocket_silo(
+            &sim,
+            silo_id,
+            &sim.entities.rocket_silos[&silo_id],
+        )
+        .unwrap_or_else(|error| {
+            panic!("rejected reachable launch phase {valid_phase:?}: {error:?}")
+        });
+    }
+}
+
+#[test]
+fn standard_inventory_routing_loads_and_unloads_completed_rocket_cargo() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .parts_completed = sim.entities.rocket_silos[&silo_id].parts_per_rocket;
+    sim.player_inventory = Inventory::player();
+    set_inventory_slot(&mut sim.player_inventory, 0, satellite, 1);
+
+    crate::entity_transfer::transfer_container_slot(&mut sim, silo_id, InventoryPanel::Player, 0)
+        .expect("a player click should route a satellite to completed rocket cargo");
+    assert_eq!(
+        sim.entities.rocket_silos[&silo_id]
+            .cargo_inventory
+            .count(satellite),
+        1
+    );
+
+    crate::entity_transfer::transfer_container_slot(
+        &mut sim,
+        silo_id,
+        InventoryPanel::RocketSiloCargo,
+        0,
+    )
+    .expect("the visible cargo slot should return its satellite to the player");
+    assert_eq!(sim.player_inventory.count(satellite), 1);
+}
+
+#[test]
+fn completed_rocket_still_accepts_an_inserters_held_part_ingredient() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let ingredient = sim
+        .rocket_silo_recipe()
+        .expect("the part recipe should be unlocked")
+        .ingredients[0]
+        .item;
+    let held_item = ItemStack::new(&sim.world.prototypes, ingredient, 1)
+        .expect("a recipe ingredient should form a valid held stack");
+    let silo = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    silo.parts_completed = silo.parts_per_rocket;
+    let drop_tile = {
+        let footprint = sim.entities.placed_entity(silo_id).unwrap().footprint;
+        (footprint.x, footprint.y)
+    };
+
+    assert!(crate::simulation::inserter_target_can_accept(
+        &sim.world.prototypes,
+        &sim.research,
+        &sim.entities,
+        sim.stopped_stock(),
+        drop_tile,
+        held_item,
+    ));
+}
+
+#[test]
+fn completed_rocket_launches_satellite_over_fixed_ticks() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    state
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+
+    sim.tick();
+    assert!(matches!(
+        sim.entities.rocket_silos[&silo_id].launch_phase,
+        RocketLaunchPhase::Sealed { .. }
+    ));
+    for _ in 0..179 {
+        sim.tick();
+    }
+    assert!(matches!(
+        sim.entities.rocket_silos[&silo_id].launch_phase,
+        RocketLaunchPhase::Rising { .. }
+    ));
+    sim.tick();
+
+    let state = &sim.entities.rocket_silos[&silo_id];
+    assert_eq!(state.launch_phase, RocketLaunchPhase::Idle);
+    assert_eq!(state.parts_completed, 0);
+    assert_eq!(state.cargo_inventory.count(satellite), 0);
+    assert_eq!(
+        sim.item_statistics()
+            .rows
+            .iter()
+            .find(|row| row.item_id == satellite)
+            .map(|row| row.consumed_total),
+        Some(1)
+    );
+}
+
+#[test]
+fn mid_launch_save_round_trip_preserves_phase_and_finishes_headlessly() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    state
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    for _ in 0..80 {
+        sim.tick();
+    }
+    let saved_phase = sim.entities.rocket_silos[&silo_id].launch_phase;
+    assert!(!matches!(saved_phase, RocketLaunchPhase::Idle));
+
+    let bytes = crate::save_to_bytes(&sim).unwrap();
+    let mut loaded = crate::load_from_bytes(&bytes).unwrap();
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+    assert_eq!(
+        loaded.entities.rocket_silos[&silo_id].launch_phase,
+        saved_phase
+    );
+    for _ in 0..101 {
+        loaded.tick();
+    }
+    assert_eq!(loaded.entities.rocket_silos[&silo_id].parts_completed, 0);
 }

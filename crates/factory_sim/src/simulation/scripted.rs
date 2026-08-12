@@ -5,6 +5,55 @@ pub fn scripted_inputs_for_red_science_factory() -> Vec<SimCommand> {
 }
 
 impl Simulation {
+    /// World with a completed rocket and satellite waiting to launch.
+    ///
+    /// Presentation tests use this valid simulation-owned fixture to observe
+    /// the fixed-tick launch phases without reaching into private machine state.
+    pub fn new_rocket_launch_fixture() -> Self {
+        let mut sim = Self::new_seeded(123);
+        let rocket_silo =
+            factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "rocket_silo");
+        let (x, y) = sim
+            .all_tile_coords()
+            .into_iter()
+            .find(|&(x, y)| {
+                crate::placement::validate(
+                    &sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: rocket_silo,
+                        x,
+                        y,
+                        direction: Direction::North,
+                    },
+                )
+                .is_ok()
+            })
+            .expect("rocket launch fixture should contain a buildable silo footprint");
+        let silo_id = crate::placement::place(
+            &mut sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: rocket_silo,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("validated rocket launch fixture silo should be placeable");
+        let satellite = factory_data::item_id_by_name(&sim.world.prototypes, "satellite");
+        let silo = sim
+            .entities
+            .rocket_silos
+            .get_mut(&silo_id)
+            .expect("placed rocket silo should own silo state");
+        silo.parts_completed = silo.parts_per_rocket;
+        silo.cargo_inventory
+            .insert(&sim.world.prototypes, satellite, 1)
+            .expect("rocket cargo should accept the fixture satellite");
+        sim.validate()
+            .expect("scripted rocket launch fixture should be valid");
+        sim
+    }
+
     /// World with `robot_count` robots in flight around stocked roboports.
     ///
     /// Used by the presentation and performance suites, which need a sky full

@@ -290,6 +290,8 @@ pub enum InventoryPanel {
     /// A rocket silo's ingredient slots. There is no output counterpart: a
     /// finished part becomes part of the rocket rather than an item in a slot.
     RocketSiloInput,
+    /// The single launch payload carried by a completed rocket.
+    RocketSiloCargo,
     Modules,
     /// A cargo wagon's own inventory.
     RollingStockCargo,

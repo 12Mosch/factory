@@ -181,6 +181,7 @@ fn spawn_container_window_contents(
                         title: &title,
                         input: panel_slots(sim, entity_id, InventoryPanel::AssemblerInput),
                         output: Some(panel_slots(sim, entity_id, InventoryPanel::AssemblerOutput)),
+                        output_label: "Output",
                         selectable_category: Some(machine_category),
                     },
                 );
@@ -196,7 +197,8 @@ fn spawn_container_window_contents(
                     CraftingPanelSpec {
                         title: &title,
                         input: panel_slots(sim, entity_id, InventoryPanel::RocketSiloInput),
-                        output: None,
+                        output: Some(panel_slots(sim, entity_id, InventoryPanel::RocketSiloCargo)),
+                        output_label: "Cargo",
                         selectable_category: None,
                     },
                 );

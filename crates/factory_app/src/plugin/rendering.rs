@@ -14,7 +14,7 @@ use crate::rendering::circuits::{CircuitWireRenderState, sync_circuit_wire_rende
 use crate::rendering::day_night::{spawn_day_night_tint, sync_day_night_tint};
 use crate::rendering::enemies::sync_enemy_rendering;
 use crate::rendering::entities::{
-    measured_sync_placed_entity_rendering, update_visible_entity_ids,
+    measured_sync_placed_entity_rendering, sync_rocket_silo_rendering, update_visible_entity_ids,
 };
 use crate::rendering::manual_mining::{
     spawn_cursor_tile_highlight, spawn_manual_mining_progress_bar, update_cursor_tile_highlight,
@@ -93,6 +93,7 @@ impl Plugin for RenderingPlugin {
                     measured_sync_visible_world_tiles,
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
+                    sync_rocket_silo_rendering,
                     sync_enemy_rendering,
                     sync_robot_rendering,
                     sync_rolling_stock_rendering,

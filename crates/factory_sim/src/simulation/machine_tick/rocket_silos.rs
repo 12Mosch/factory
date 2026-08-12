@@ -1,6 +1,7 @@
 use super::crafting::{CraftProducts, ItemCraft, record_item_craft};
 use super::progress::{ProgressAdvance, advance_electric_progress};
 use super::*;
+use crate::machines::rocket_silo::{LAUNCH_RISE_TICKS, LAUNCH_SEAL_TICKS, RocketLaunchPhase};
 use crate::simulation::module_ops::rescale_progress;
 
 impl MachineTickContext<'_> {
@@ -18,6 +19,51 @@ impl MachineTickContext<'_> {
         for (&entity_id, state) in &mut rocket_silos {
             if self.entities.placed_entity(entity_id).is_none() {
                 continue;
+            }
+
+            match state.launch_phase {
+                RocketLaunchPhase::Idle
+                    if state.rocket_ready()
+                        && state.cargo_inventory.slots()[0]
+                            .stack()
+                            .is_some_and(|stack| stack.count() == 1) =>
+                {
+                    state.launch_phase = RocketLaunchPhase::Sealed {
+                        ticks_remaining: LAUNCH_SEAL_TICKS,
+                    };
+                    continue;
+                }
+                RocketLaunchPhase::Sealed { ticks_remaining: 1 } => {
+                    state.launch_phase = RocketLaunchPhase::Rising {
+                        ticks_remaining: LAUNCH_RISE_TICKS,
+                    };
+                    continue;
+                }
+                RocketLaunchPhase::Sealed { ticks_remaining } => {
+                    state.launch_phase = RocketLaunchPhase::Sealed {
+                        ticks_remaining: ticks_remaining - 1,
+                    };
+                    continue;
+                }
+                RocketLaunchPhase::Rising { ticks_remaining: 1 } => {
+                    let cargo = state
+                        .cargo_inventory
+                        .take_slot(0)
+                        .expect("a launching rocket retains its validated cargo");
+                    self.statistics
+                        .record_item_consumed(cargo.item_id(), u64::from(cargo.count()));
+                    state.parts_completed = 0;
+                    state.launch_phase = RocketLaunchPhase::Idle;
+                    self.power_demand_cache.mark_dirty(entity_id);
+                    continue;
+                }
+                RocketLaunchPhase::Rising { ticks_remaining } => {
+                    state.launch_phase = RocketLaunchPhase::Rising {
+                        ticks_remaining: ticks_remaining - 1,
+                    };
+                    continue;
+                }
+                RocketLaunchPhase::Idle => {}
             }
 
             let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, self.research) else {
