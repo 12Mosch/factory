@@ -11,7 +11,8 @@ use crate::rendering::belts::{
 };
 use crate::rendering::colors::{RenderPrototypeIds, TileColorTable, tile_color};
 use crate::rendering::entities::{
-    PlacedEntitySprite, measured_sync_placed_entity_rendering, update_visible_entity_ids,
+    PlacedEntitySprite, RocketSiloSprite, RocketSiloVisualPhase,
+    measured_sync_placed_entity_rendering, sync_rocket_silo_rendering, update_visible_entity_ids,
 };
 use crate::rendering::resource_cells::{
     ResourceAmountLabel, ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
@@ -479,6 +480,47 @@ fn resource_visibility_changes_reuse_overlapping_sprites_and_labels() {
 }
 
 #[test]
+fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_entities(&mut sim, "rocket_silo", 1, Direction::North)[0];
+    let footprint = sim
+        .entities()
+        .placed_entity(silo_id)
+        .expect("placed silo should remain present")
+        .footprint;
+    let visible = visible_for_chunks([ChunkCoord::from_tile(footprint.x, footprint.y)
+        .expect("placed silo should be inside the chunk plane")]);
+    let mut app = render_sync_app(sim, visible);
+
+    app.update();
+    assert_eq!(
+        rocket_silo_render_state(&mut app, silo_id),
+        (
+            RocketSiloVisualPhase::Idle,
+            crate::rendering::colors::rocket_silo_color(),
+        )
+    );
+
+    // Reproduce the stale-render condition directly: the cached sprite says it
+    // last rendered a rising launch while the simulation is idle, and neither
+    // entity topology nor visibility changes before the next render sync.
+    set_rocket_silo_render_state(
+        &mut app,
+        silo_id,
+        RocketSiloVisualPhase::Rising,
+        Color::srgb(0.95, 0.48, 0.12),
+    );
+    app.update();
+    assert_eq!(
+        rocket_silo_render_state(&mut app, silo_id),
+        (
+            RocketSiloVisualPhase::Idle,
+            crate::rendering::colors::rocket_silo_color(),
+        )
+    );
+}
+
+#[test]
 #[ignore]
 fn render_sync_small_visual_load_budget() {
     let sim = small_render_sync_fixture();
@@ -661,6 +703,7 @@ fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
                 measured_sync_resource_debug_rendering,
                 update_visible_entity_ids,
                 measured_sync_placed_entity_rendering,
+                sync_rocket_silo_rendering,
                 measured_sync_belt_direction_rendering,
                 measured_sync_belt_item_rendering,
             )
@@ -1057,6 +1100,33 @@ fn placed_entity_sprite_count(app: &mut App) -> usize {
         .query_filtered::<Entity, With<PlacedEntitySprite>>()
         .iter(app.world())
         .count()
+}
+
+fn rocket_silo_render_state(app: &mut App, entity_id: EntityId) -> (RocketSiloVisualPhase, Color) {
+    let world = app.world_mut();
+    let mut query = world.query::<(&PlacedEntitySprite, &RocketSiloSprite, &Sprite)>();
+    query
+        .iter(world)
+        .find_map(|(placed, silo, sprite)| {
+            (placed.entity_id == entity_id).then_some((silo.visual_phase, sprite.color))
+        })
+        .expect("visible silo should have a rendered sprite")
+}
+
+fn set_rocket_silo_render_state(
+    app: &mut App,
+    entity_id: EntityId,
+    visual_phase: RocketSiloVisualPhase,
+    color: Color,
+) {
+    let world = app.world_mut();
+    let mut query = world.query::<(&PlacedEntitySprite, &mut RocketSiloSprite, &mut Sprite)>();
+    let (_, mut silo, mut sprite) = query
+        .iter_mut(world)
+        .find(|(placed, _, _)| placed.entity_id == entity_id)
+        .expect("visible silo should have a rendered sprite");
+    silo.visual_phase = visual_phase;
+    sprite.color = color;
 }
 
 fn belt_direction_sprite_count(app: &mut App) -> usize {

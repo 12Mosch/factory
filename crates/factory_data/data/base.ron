@@ -4138,7 +4138,12 @@
         (
             id: 49,
             name: "rocket_silo",
-            prerequisites: ["rocket_fuel", "utility_science_pack", "production_science_pack", "concrete"],
+            prerequisites: [
+                "rocket_fuel",
+                "utility_science_pack",
+                "production_science_pack",
+                "concrete",
+            ],
             science_packs: [
                 (item: "automation_science_pack", amount: 1),
                 (item: "logistic_science_pack", amount: 1),

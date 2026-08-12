@@ -29,7 +29,29 @@ use crate::resources::SimResource;
 
 #[derive(Component)]
 pub(crate) struct PlacedEntitySprite {
-    entity_id: EntityId,
+    pub(crate) entity_id: EntityId,
+}
+
+#[derive(Component)]
+pub(crate) struct RocketSiloSprite {
+    pub(crate) visual_phase: RocketSiloVisualPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RocketSiloVisualPhase {
+    Idle,
+    Sealed,
+    Rising,
+}
+
+impl From<factory_sim::RocketLaunchPhase> for RocketSiloVisualPhase {
+    fn from(phase: factory_sim::RocketLaunchPhase) -> Self {
+        match phase {
+            factory_sim::RocketLaunchPhase::Idle => Self::Idle,
+            factory_sim::RocketLaunchPhase::Sealed { .. } => Self::Sealed,
+            factory_sim::RocketLaunchPhase::Rising { .. } => Self::Rising,
+        }
+    }
 }
 
 pub(crate) fn update_visible_entity_ids(
@@ -91,7 +113,7 @@ pub(crate) fn sync_placed_entity_rendering(
             continue;
         }
 
-        spawn_entity_visual(
+        let render_entity = spawn_entity_visual(
             &mut commands,
             &mut visual_assets,
             style,
@@ -100,6 +122,43 @@ pub(crate) fn sync_placed_entity_rendering(
                 entity_id: placed.id,
             },
         );
+        if style.kind == EntityKind::RocketSilo
+            && let Ok(state) = factory_sim::entity_access::rocket_silo_state(&sim, placed.id)
+        {
+            commands.entity(render_entity).insert(RocketSiloSprite {
+                visual_phase: state.launch_phase.into(),
+            });
+        }
+    }
+}
+
+/// Refreshes visible rocket silos when their fixed-tick launch phase changes.
+///
+/// Visibility and entity topology remain stable during a launch, so the general
+/// placed-entity sync intentionally stays asleep. Keeping the last rendered
+/// phase on just the silo sprites makes this path proportional to the number of
+/// visible silos and avoids rebuilding their cached visual on unchanged frames.
+pub(crate) fn sync_rocket_silo_rendering(
+    sim: Res<SimResource>,
+    mut visual_assets: VisualAssets,
+    mut sprites: Query<(&PlacedEntitySprite, &mut RocketSiloSprite, &mut Sprite)>,
+) {
+    let sim = sim.read();
+    for (placed, mut rendered, mut sprite) in &mut sprites {
+        let Ok(state) = factory_sim::entity_access::rocket_silo_state(&sim, placed.entity_id)
+        else {
+            continue;
+        };
+        let visual_phase = state.launch_phase.into();
+        if visual_phase == rendered.visual_phase {
+            continue;
+        }
+        let Some(style) = renderable_entity_visual_style(&sim, placed.entity_id) else {
+            continue;
+        };
+
+        *sprite = visual_assets.entity_sprite(style);
+        rendered.visual_phase = visual_phase;
     }
 }
 

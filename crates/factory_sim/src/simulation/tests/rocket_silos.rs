@@ -330,6 +330,34 @@ fn standard_inventory_routing_loads_and_unloads_completed_rocket_cargo() {
 }
 
 #[test]
+fn completed_rocket_still_accepts_an_inserters_held_part_ingredient() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let ingredient = sim
+        .rocket_silo_recipe()
+        .expect("the part recipe should be unlocked")
+        .ingredients[0]
+        .item;
+    let held_item = ItemStack::new(&sim.world.prototypes, ingredient, 1)
+        .expect("a recipe ingredient should form a valid held stack");
+    let silo = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    silo.parts_completed = silo.parts_per_rocket;
+    let drop_tile = {
+        let footprint = sim.entities.placed_entity(silo_id).unwrap().footprint;
+        (footprint.x, footprint.y)
+    };
+
+    assert!(crate::simulation::inserter_target_can_accept(
+        &sim.world.prototypes,
+        &sim.research,
+        &sim.entities,
+        sim.stopped_stock(),
+        drop_tile,
+        held_item,
+    ));
+}
+
+#[test]
 fn completed_rocket_launches_satellite_over_fixed_ticks() {
     let mut sim = Simulation::new_test_world(123);
     let silo_id = place_powered_rocket_silo(&mut sim);
