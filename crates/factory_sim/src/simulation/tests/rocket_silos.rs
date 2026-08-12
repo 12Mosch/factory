@@ -290,11 +290,68 @@ fn silo_validation_rejects_cargo_without_a_rocket_and_launch_without_cargo() {
         .unwrap();
     assert!(sim.validate().is_err());
 
-    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
-    state.cargo_inventory.take_slot(0).unwrap();
-    state.parts_completed = state.parts_per_rocket;
-    state.launch_phase = RocketLaunchPhase::Sealed { ticks_remaining: 1 };
+    {
+        let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+        state.cargo_inventory.take_slot(0).unwrap();
+        state.parts_completed = state.parts_per_rocket;
+        state.launch_phase = RocketLaunchPhase::Sealed { ticks_remaining: 1 };
+    }
     assert!(sim.validate().is_err());
+
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    for invalid_phase in [
+        RocketLaunchPhase::Sealed { ticks_remaining: 0 },
+        RocketLaunchPhase::Sealed {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_SEAL_TICKS + 1,
+        },
+        RocketLaunchPhase::Rising { ticks_remaining: 0 },
+        RocketLaunchPhase::Rising {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_RISE_TICKS + 1,
+        },
+    ] {
+        sim.entities
+            .rocket_silos
+            .get_mut(&silo_id)
+            .unwrap()
+            .launch_phase = invalid_phase;
+        assert!(
+            crate::simulation::validation::machines::validate_rocket_silo(
+                &sim,
+                silo_id,
+                &sim.entities.rocket_silos[&silo_id],
+            )
+            .is_err(),
+            "accepted {invalid_phase:?}"
+        );
+    }
+    for valid_phase in [
+        RocketLaunchPhase::Sealed {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_SEAL_TICKS,
+        },
+        RocketLaunchPhase::Rising {
+            ticks_remaining: crate::machines::rocket_silo::LAUNCH_RISE_TICKS,
+        },
+    ] {
+        sim.entities
+            .rocket_silos
+            .get_mut(&silo_id)
+            .unwrap()
+            .launch_phase = valid_phase;
+        crate::simulation::validation::machines::validate_rocket_silo(
+            &sim,
+            silo_id,
+            &sim.entities.rocket_silos[&silo_id],
+        )
+        .unwrap_or_else(|error| {
+            panic!("rejected reachable launch phase {valid_phase:?}: {error:?}")
+        });
+    }
 }
 
 #[test]

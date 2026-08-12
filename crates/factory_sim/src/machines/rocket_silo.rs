@@ -4,6 +4,9 @@ use crate::inventory::Inventory;
 use factory_data::ItemId;
 use serde::{Deserialize, Serialize};
 
+pub(crate) const LAUNCH_SEAL_TICKS: u16 = 60;
+pub(crate) const LAUNCH_RISE_TICKS: u16 = 120;
+
 /// A rocket silo mid-build.
 ///
 /// The crafting half is an assembler's — ingredients in an input inventory,

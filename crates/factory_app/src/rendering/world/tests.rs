@@ -481,8 +481,16 @@ fn resource_visibility_changes_reuse_overlapping_sprites_and_labels() {
 
 #[test]
 fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
-    let mut sim = Simulation::new_test_world(123);
-    let silo_id = place_entities(&mut sim, "rocket_silo", 1, Direction::North)[0];
+    let sim = Simulation::new_rocket_launch_fixture();
+    let silo_id = sim
+        .entities()
+        .placed_entities()
+        .find(|placed| {
+            factory_sim::entity_access::machine_kind(&sim, placed.id)
+                == Some(factory_data::EntityKind::RocketSilo)
+        })
+        .expect("launch fixture should contain a rocket silo")
+        .id;
     let footprint = sim
         .entities()
         .placed_entity(silo_id)
@@ -501,15 +509,28 @@ fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
         )
     );
 
-    // Reproduce the stale-render condition directly: the cached sprite says it
-    // last rendered a rising launch while the simulation is idle, and neither
-    // entity topology nor visibility changes before the next render sync.
-    set_rocket_silo_render_state(
-        &mut app,
-        silo_id,
-        RocketSiloVisualPhase::Rising,
-        Color::srgb(0.95, 0.48, 0.12),
+    tick_sim_resource(&mut app);
+    app.update();
+    assert_eq!(
+        rocket_silo_render_state(&mut app, silo_id),
+        (RocketSiloVisualPhase::Sealed, Color::srgb(0.38, 0.40, 0.43),)
     );
+
+    for _ in 0..60 {
+        tick_sim_resource(&mut app);
+    }
+    app.update();
+    assert_eq!(
+        rocket_silo_render_state(&mut app, silo_id),
+        (RocketSiloVisualPhase::Rising, Color::srgb(0.95, 0.48, 0.12),)
+    );
+
+    // Let the simulation return to idle without rendering intermediate ticks.
+    // The next update must replace the now-stale rising visual even though
+    // visibility and entity topology remained unchanged throughout.
+    for _ in 0..120 {
+        tick_sim_resource(&mut app);
+    }
     app.update();
     assert_eq!(
         rocket_silo_render_state(&mut app, silo_id),
@@ -1111,22 +1132,6 @@ fn rocket_silo_render_state(app: &mut App, entity_id: EntityId) -> (RocketSiloVi
             (placed.entity_id == entity_id).then_some((silo.visual_phase, sprite.color))
         })
         .expect("visible silo should have a rendered sprite")
-}
-
-fn set_rocket_silo_render_state(
-    app: &mut App,
-    entity_id: EntityId,
-    visual_phase: RocketSiloVisualPhase,
-    color: Color,
-) {
-    let world = app.world_mut();
-    let mut query = world.query::<(&PlacedEntitySprite, &mut RocketSiloSprite, &mut Sprite)>();
-    let (_, mut silo, mut sprite) = query
-        .iter_mut(world)
-        .find(|(placed, _, _)| placed.entity_id == entity_id)
-        .expect("visible silo should have a rendered sprite");
-    silo.visual_phase = visual_phase;
-    sprite.color = color;
 }
 
 fn belt_direction_sprite_count(app: &mut App) -> usize {

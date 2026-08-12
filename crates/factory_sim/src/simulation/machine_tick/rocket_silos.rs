@@ -1,11 +1,8 @@
 use super::crafting::{CraftProducts, ItemCraft, record_item_craft};
 use super::progress::{ProgressAdvance, advance_electric_progress};
 use super::*;
-use crate::machines::RocketLaunchPhase;
+use crate::machines::rocket_silo::{LAUNCH_RISE_TICKS, LAUNCH_SEAL_TICKS, RocketLaunchPhase};
 use crate::simulation::module_ops::rescale_progress;
-
-const LAUNCH_SEAL_TICKS: u16 = 60;
-const LAUNCH_RISE_TICKS: u16 = 120;
 
 impl MachineTickContext<'_> {
     /// Advances every rocket silo by one tick.

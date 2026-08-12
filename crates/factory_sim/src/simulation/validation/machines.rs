@@ -1,7 +1,7 @@
 use super::super::*;
 use super::ids::*;
 use super::inventory::*;
-use crate::machines::RocketLaunchPhase;
+use crate::machines::rocket_silo::{LAUNCH_RISE_TICKS, LAUNCH_SEAL_TICKS, RocketLaunchPhase};
 
 /// A machine's energy state must use the variant its prototype declares: a
 /// burner prototype owns burner fuel state, an electric prototype has none.
@@ -247,11 +247,16 @@ pub(in crate::simulation) fn validate_rocket_silo(
     {
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }
-    if matches!(
-        state.launch_phase,
-        RocketLaunchPhase::Sealed { ticks_remaining: 0 }
-            | RocketLaunchPhase::Rising { ticks_remaining: 0 }
-    ) {
+    let launch_timer_valid = match state.launch_phase {
+        RocketLaunchPhase::Idle => true,
+        RocketLaunchPhase::Sealed { ticks_remaining } => {
+            (1..=LAUNCH_SEAL_TICKS).contains(&ticks_remaining)
+        }
+        RocketLaunchPhase::Rising { ticks_remaining } => {
+            (1..=LAUNCH_RISE_TICKS).contains(&ticks_remaining)
+        }
+    };
+    if !launch_timer_valid {
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }
 
