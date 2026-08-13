@@ -36,6 +36,16 @@ fn catalog_loads_rocket_silo_metadata() {
     assert!(prototype.electric_energy_source.is_some());
     assert!(metadata.parts_per_rocket > 1);
     assert!(metadata.input_slot_count > 0);
+    assert_eq!(
+        metadata.launch_payload,
+        item_id(&sim.world.prototypes, "satellite")
+    );
+    assert_eq!(
+        metadata.launch_product.item,
+        item_id(&sim.world.prototypes, "space_science_pack")
+    );
+    assert_eq!(metadata.launch_product.amount, 1_000);
+    assert_eq!(metadata.output_slot_count, 5);
 }
 
 /// The part recipe is reachable only through the silo, and only the silo can
@@ -223,8 +233,7 @@ fn destroying_a_silo_recovers_ingredients_but_not_parts() {
     let ingredient = sim
         .rocket_silo_recipe()
         .expect("the part recipe should be unlocked")
-        .ingredients[0]
-        .clone();
+        .ingredients[0];
     sim.entities
         .rocket_silos
         .get_mut(&silo_id)
@@ -384,6 +393,23 @@ fn standard_inventory_routing_loads_and_unloads_completed_rocket_cargo() {
     )
     .expect("the visible cargo slot should return its satellite to the player");
     assert_eq!(sim.player_inventory.count(satellite), 1);
+
+    let space_science = item_id(&sim.world.prototypes, "space_science_pack");
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .output_inventory
+        .insert(&sim.world.prototypes, space_science, 200)
+        .unwrap();
+    crate::entity_transfer::transfer_container_slot(
+        &mut sim,
+        silo_id,
+        InventoryPanel::RocketSiloOutput,
+        0,
+    )
+    .expect("the visible output slot should return space science to the player");
+    assert_eq!(sim.player_inventory.count(space_science), 200);
 }
 
 #[test]
@@ -419,6 +445,7 @@ fn completed_rocket_launches_satellite_over_fixed_ticks() {
     let mut sim = Simulation::new_test_world(123);
     let silo_id = place_powered_rocket_silo(&mut sim);
     let satellite = item_id(&sim.world.prototypes, "satellite");
+    let space_science = item_id(&sim.world.prototypes, "space_science_pack");
     let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
     state.parts_completed = state.parts_per_rocket;
     state
@@ -444,6 +471,7 @@ fn completed_rocket_launches_satellite_over_fixed_ticks() {
     assert_eq!(state.launch_phase, RocketLaunchPhase::Idle);
     assert_eq!(state.parts_completed, 0);
     assert_eq!(state.cargo_inventory.count(satellite), 0);
+    assert_eq!(state.output_inventory.count(space_science), 1_000);
     assert_eq!(
         sim.item_statistics()
             .rows
@@ -451,6 +479,115 @@ fn completed_rocket_launches_satellite_over_fixed_ticks() {
             .find(|row| row.item_id == satellite)
             .map(|row| row.consumed_total),
         Some(1)
+    );
+    assert_eq!(
+        sim.item_statistics()
+            .rows
+            .iter()
+            .find(|row| row.item_id == space_science)
+            .map(|row| row.produced_total),
+        Some(1_000)
+    );
+}
+
+#[test]
+fn launch_waits_until_the_full_reward_fits() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let space_science = item_id(&sim.world.prototypes, "space_science_pack");
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    state
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    state
+        .output_inventory
+        .insert(&sim.world.prototypes, space_science, 1)
+        .unwrap();
+
+    sim.tick();
+    assert_eq!(
+        sim.entities.rocket_silos[&silo_id].launch_phase,
+        RocketLaunchPhase::Idle
+    );
+
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .output_inventory
+        .remove(space_science, 1)
+        .unwrap();
+    sim.tick();
+    assert!(matches!(
+        sim.entities.rocket_silos[&silo_id].launch_phase,
+        RocketLaunchPhase::Sealed { .. }
+    ));
+}
+
+#[test]
+fn inserter_extracts_space_science_from_the_launch_output() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "rocket_silo");
+    let silo = entity_id_by_name(&sim.world.prototypes, "rocket_silo");
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let space_science = item_id(&sim.world.prototypes, "space_science_pack");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 9, 11, (3, 1));
+    let silo_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: silo,
+            x,
+            y: y + 2,
+            direction: Direction::North,
+        },
+    )
+    .expect("rocket silo should be placeable");
+    let inserter_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x: x + 4,
+            y: y + 1,
+            direction: Direction::South,
+        },
+    )
+    .expect("output inserter should be placeable");
+    let chest_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x: x + 4,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("output chest should be placeable");
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .output_inventory
+        .insert(&sim.world.prototypes, space_science, 1)
+        .unwrap();
+
+    run_inserter_until_holding(&mut sim, inserter_id);
+    run_inserter_until_idle(&mut sim, inserter_id);
+
+    assert_eq!(
+        sim.entities.rocket_silos[&silo_id]
+            .output_inventory
+            .count(space_science),
+        0
+    );
+    assert_eq!(
+        crate::entity_access::inventory(&sim, chest_id)
+            .unwrap()
+            .count(space_science),
+        1
     );
 }
 
@@ -482,4 +619,10 @@ fn mid_launch_save_round_trip_preserves_phase_and_finishes_headlessly() {
         loaded.tick();
     }
     assert_eq!(loaded.entities.rocket_silos[&silo_id].parts_completed, 0);
+    assert_eq!(
+        loaded.entities.rocket_silos[&silo_id]
+            .output_inventory
+            .count(item_id(&loaded.world.prototypes, "space_science_pack")),
+        1_000
+    );
 }

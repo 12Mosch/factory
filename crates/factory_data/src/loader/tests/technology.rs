@@ -155,12 +155,12 @@ fn production_and_utility_science_technologies_form_parallel_rgb_branches() {
     assert!(!production.prerequisites.contains(&utility.id));
     assert!(!utility.prerequisites.contains(&production.id));
 
-    // The capstone joins both parallel branches and consumes every non-military
-    // pack type at once, so it can only be researched once both the production
-    // and utility branches are complete.
+    // The pre-launch capstone follows the silo and consumes every non-military
+    // ground-made pack. Its satellite unlock is what turns a completed rocket
+    // into the acquisition path for space science.
     let space = technology("space_science_pack");
     assert_eq!(space.id.index(), 28);
-    assert_eq!(space.prerequisites, vec![production.id, utility.id]);
+    assert_eq!(space.prerequisites, vec![technology("rocket_silo").id]);
     assert_eq!(
         space.science_packs,
         expected_item_amounts(
@@ -195,8 +195,14 @@ fn production_and_utility_science_technologies_form_parallel_rgb_branches() {
     assert_eq!(space.research_time_ticks, 600);
     assert_eq!(
         space.effects,
-        vec![TechnologyEffect::UnlockRecipe(recipe("space_science_pack"))]
+        vec![TechnologyEffect::UnlockRecipe(recipe("satellite"))]
     );
+
+    let modules_3 = technology("modules_3");
+    assert!(modules_3.prerequisites.contains(&space.id));
+    assert!(modules_3.science_packs.iter().any(|pack| {
+        pack.item == crate::item_id_by_name(&catalog, "space_science_pack") && pack.amount == 1
+    }));
 
     assert_eq!(
         researchable_technology_ids(&catalog).len(),

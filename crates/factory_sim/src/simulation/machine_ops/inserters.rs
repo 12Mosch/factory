@@ -150,6 +150,16 @@ pub(in crate::simulation) fn peek_inserter_source_item(
             .next();
     }
 
+    if let Some(silo) = entities.rocket_silos.get(&entity_id) {
+        return silo
+            .output_inventory
+            .slots()
+            .iter()
+            .filter_map(|slot| slot.stack())
+            .map(|stack| stack.item_id())
+            .next();
+    }
+
     entities
         .transport_belts
         .get(&entity_id)
@@ -303,7 +313,7 @@ pub(in crate::simulation) fn inserter_target_can_accept(
                 catalog,
                 research,
                 entities,
-                ItemSlotPolicy::RocketCargo,
+                ItemSlotPolicy::RocketCargo(entity_id),
                 ItemSlotOperation::InserterInsert,
                 item.item_id(),
             );
@@ -419,6 +429,20 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
             return None;
         }
         assembler.output_inventory.remove(item_id, 1).ok()?;
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
+    }
+
+    if let Some(silo) = entities.rocket_silos.get_mut(&entity_id) {
+        if !item_slot_policy_allows_operation(
+            ItemSlotPolicy::OutputOnly,
+            ItemSlotOperation::InserterExtract,
+        ) {
+            return None;
+        }
+        silo.output_inventory.remove(item_id, 1).ok()?;
         return Some(
             ItemStack::new(catalog, item_id, 1)
                 .expect("a removed inserter source item should form a valid stack"),
@@ -710,13 +734,13 @@ pub(in crate::simulation) fn try_drop_inserter_item(
                     catalog,
                     research,
                     entities,
-                    ItemSlotPolicy::RocketCargo,
+                    ItemSlotPolicy::RocketCargo(entity_id),
                     ItemSlotOperation::InserterInsert,
                     item.item_id(),
                 )
         });
         let policy = if cargo {
-            ItemSlotPolicy::RocketCargo
+            ItemSlotPolicy::RocketCargo(entity_id)
         } else {
             ItemSlotPolicy::RocketPartIngredient
         };

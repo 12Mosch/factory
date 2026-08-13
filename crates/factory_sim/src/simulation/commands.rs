@@ -287,11 +287,13 @@ pub enum InventoryPanel {
     InserterFuel,
     AssemblerInput,
     AssemblerOutput,
-    /// A rocket silo's ingredient slots. There is no output counterpart: a
-    /// finished part becomes part of the rocket rather than an item in a slot.
+    /// A rocket silo's ingredient slots. Finished parts become part of the
+    /// rocket; launch products use the separate output panel below.
     RocketSiloInput,
     /// The single launch payload carried by a completed rocket.
     RocketSiloCargo,
+    /// Products returned by completed rocket launches.
+    RocketSiloOutput,
     Modules,
     /// A cargo wagon's own inventory.
     RollingStockCargo,

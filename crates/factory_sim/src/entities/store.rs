@@ -304,12 +304,14 @@ mod tests {
         // something).
         // v43: rocket silo state was appended — ingredient slots and the part
         // counter that is the rocket under construction.
+        // v44: rocket silo cargo and launch-phase state were appended.
+        // v45: rocket silo launch-product output was appended.
         // v41: train stop state was appended — the name a schedule asks for,
         // the train limit, and the channel that limit may be read from. The
         // fixture gained a populated stop afterwards, so those three fields are
         // pinned rather than only the map that holds them; the save format did
         // not change with it.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x28a4_7fe3_ec0a_1a7f;
+        const EXPECTED_LAYOUT_HASH: u64 = 0xf4f7_99de_4987_9d9c;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -649,6 +651,7 @@ mod tests {
                 modules: MachineModuleState::with_slot_count(0),
                 input_inventory: test_inventory(vec![Some(test_stack(iron, 6))]),
                 cargo_inventory: test_inventory(vec![None]),
+                output_inventory: test_inventory(vec![None]),
                 crafting_progress_ticks: 45,
                 crafting_required_ticks: 180,
                 crafting_speed_numerator: 1,

@@ -182,12 +182,13 @@ fn spawn_container_window_contents(
                         input: panel_slots(sim, entity_id, InventoryPanel::AssemblerInput),
                         output: Some(panel_slots(sim, entity_id, InventoryPanel::AssemblerOutput)),
                         output_label: "Output",
+                        additional_output: None,
                         selectable_category: Some(machine_category),
                     },
                 );
             }
-            // The same panel minus the two things a silo has not got: a recipe
-            // to pick and an output slot to empty.
+            // The same panel without a recipe picker, plus separate cargo and
+            // launch-product groups.
             OpenMachineKind::RocketSilo => {
                 let title = entity_display_name(sim, entity_id)
                     .unwrap_or_else(|| "Rocket Silo".to_string());
@@ -199,6 +200,10 @@ fn spawn_container_window_contents(
                         input: panel_slots(sim, entity_id, InventoryPanel::RocketSiloInput),
                         output: Some(panel_slots(sim, entity_id, InventoryPanel::RocketSiloCargo)),
                         output_label: "Cargo",
+                        additional_output: Some((
+                            "Space science",
+                            panel_slots(sim, entity_id, InventoryPanel::RocketSiloOutput),
+                        )),
                         selectable_category: None,
                     },
                 );

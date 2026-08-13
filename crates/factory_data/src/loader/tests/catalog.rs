@@ -142,7 +142,6 @@ const RECIPE_NAMES: &[&str] = &[
     "flying_robot_frame",
     "production_science_pack",
     "utility_science_pack",
-    "space_science_pack",
     "radar",
     "passive_provider_chest",
     "active_provider_chest",
@@ -243,7 +242,7 @@ fn base_catalog_loads_from_ron() {
 
     assert_eq!(catalog.items.len(), 123);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 121);
+    assert_eq!(catalog.recipes.len(), 120);
     assert_eq!(catalog.entities.len(), 78);
     assert_eq!(catalog.tiles.len(), 11);
     assert_eq!(catalog.technologies.len(), 50);

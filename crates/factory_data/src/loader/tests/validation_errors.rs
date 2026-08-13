@@ -1858,7 +1858,11 @@ fn rocket_silo_catalog(
     };
     PrototypeCatalog::from_ron_str(&format!(
         r#"(
-            items: [(id: 0, name: "rocket_silo", stack_size: 1)],
+            items: [
+                (id: 0, name: "rocket_silo", stack_size: 1),
+                (id: 1, name: "satellite", stack_size: 1),
+                (id: 2, name: "space_science_pack", stack_size: 200),
+            ],
             recipes: [],
             entities: [(
                 id: 0,
@@ -1883,6 +1887,9 @@ const VALID_ROCKET_SILO: &str = r#"Some((
     crafting_speed_denominator: 1,
     input_slot_count: 4,
     parts_per_rocket: 100,
+    launch_payload: "satellite",
+    launch_product: (item: "space_science_pack", amount: 1000),
+    output_slot_count: 5,
 ))"#;
 
 #[test]
@@ -1894,7 +1901,43 @@ fn valid_rocket_silo_loads_with_module_slots() {
         .expect("rocket silo metadata should survive loading");
 
     assert_eq!(rocket_silo.parts_per_rocket, 100);
+    assert_eq!(rocket_silo.launch_product.amount, 1_000);
+    assert_eq!(rocket_silo.output_slot_count, 5);
     assert_eq!(catalog.entities[0].module_slot_count, 4);
+}
+
+#[test]
+fn rocket_silo_launch_items_resolve_and_output_capacity_is_validated() {
+    for (metadata, expected_role) in [
+        (
+            VALID_ROCKET_SILO.replace(
+                "launch_payload: \"satellite\"",
+                "launch_payload: \"missing\"",
+            ),
+            "payload",
+        ),
+        (
+            VALID_ROCKET_SILO.replace("item: \"space_science_pack\"", "item: \"missing\""),
+            "product",
+        ),
+    ] {
+        let error = rocket_silo_catalog("RocketSilo", &metadata, "")
+            .expect_err("missing launch items should fail");
+        assert!(matches!(
+            error,
+            PrototypeLoadError::MissingRocketSiloLaunchItem { role, .. }
+                if role == expected_role
+        ));
+    }
+
+    let undersized = VALID_ROCKET_SILO.replace("output_slot_count: 5", "output_slot_count: 4");
+    let error = rocket_silo_catalog("RocketSilo", &undersized, "")
+        .expect_err("four stacks cannot hold one thousand packs of stack size two hundred");
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. }
+            if entity == "rocket_silo"
+    ));
 }
 
 /// Each of these leaves the silo unable to derive the thing the simulation asks
@@ -1914,17 +1957,17 @@ fn incoherent_rocket_silo_metadata_fails() {
             "a silo with no energy source could never work",
         ),
         (
-            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 0, input_slot_count: 4, parts_per_rocket: 100))"#,
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 0, input_slot_count: 4, parts_per_rocket: 100, launch_payload: "satellite", launch_product: (item: "space_science_pack", amount: 1000), output_slot_count: 5))"#,
             "",
             "a zero crafting-speed denominator is not a fraction",
         ),
         (
-            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 0, parts_per_rocket: 100))"#,
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 0, parts_per_rocket: 100, launch_payload: "satellite", launch_product: (item: "space_science_pack", amount: 1000), output_slot_count: 5))"#,
             "",
             "a silo with no ingredient slots could never be fed",
         ),
         (
-            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 4, parts_per_rocket: 0))"#,
+            r#"Some((crafting_speed_numerator: 1, crafting_speed_denominator: 1, input_slot_count: 4, parts_per_rocket: 0, launch_payload: "satellite", launch_product: (item: "space_science_pack", amount: 1000), output_slot_count: 5))"#,
             "",
             "a rocket of no parts would be finished before it started",
         ),
@@ -1966,6 +2009,8 @@ fn undersized_rocket_silo_input_inventory_fails() {
                     (id: 0, name: "rocket_part", stack_size: 1),
                     (id: 1, name: "steel_plate", stack_size: 100),
                     (id: 2, name: "processing_unit", stack_size: 100),
+                    (id: 3, name: "satellite", stack_size: 1),
+                    (id: 4, name: "space_science_pack", stack_size: 200),
                 ],
                 recipes: [(
                     id: 0, name: "rocket_part", category: RocketBuilding,
@@ -1981,6 +2026,9 @@ fn undersized_rocket_silo_input_inventory_fails() {
                     rocket_silo: Some((
                         crafting_speed_numerator: 1, crafting_speed_denominator: 1,
                         input_slot_count: {input_slot_count}, parts_per_rocket: 100,
+                        launch_payload: "satellite",
+                        launch_product: (item: "space_science_pack", amount: 1000),
+                        output_slot_count: 5,
                     )),
                 )],
                 tiles: [],

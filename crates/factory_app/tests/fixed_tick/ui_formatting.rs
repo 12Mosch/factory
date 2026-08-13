@@ -458,8 +458,7 @@ fn rocket_silo_detail_formatting_reports_ingredients_and_rocket_progress() {
     let ingredient = sim
         .rocket_silo_recipe()
         .expect("the part recipe should be unlocked")
-        .ingredients[0]
-        .clone();
+        .ingredients[0];
     *sim.player_inventory_mut() = Inventory::player();
     set_player_inventory_slot(&mut sim, 2, ingredient.item, 1);
     factory_sim::entity_transfer::player_slot_to_rocket_silo_input(&mut sim, entity_id, 2)

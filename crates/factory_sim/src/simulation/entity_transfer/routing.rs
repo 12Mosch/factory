@@ -132,6 +132,10 @@ pub fn transfer_container_slot(
             return rocket_silo_cargo_to_player(sim, entity_id)
                 .map_err(SlotTransferError::RocketSilo);
         }
+        InventoryPanel::RocketSiloOutput => {
+            return rocket_silo_output_slot_to_player(sim, entity_id, slot_index)
+                .map_err(SlotTransferError::RocketSilo);
+        }
         InventoryPanel::Modules => {
             return module_slot_to_player(sim, entity_id, slot_index)
                 .map_err(SlotTransferError::Module);

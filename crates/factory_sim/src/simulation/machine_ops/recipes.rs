@@ -59,11 +59,11 @@ pub(in crate::simulation) fn furnace_work_selection(
 )> {
     let input_stack = input_slot.stack()?;
     let recipe = first_matching_unlocked_smelting_recipe(catalog, research, input_stack.item_id())?;
-    let ingredient = recipe.ingredients[0].clone();
+    let ingredient = recipe.ingredients[0];
     if input_stack.count() < ingredient.amount {
         return None;
     }
-    let product = recipe.products[0].clone();
+    let product = recipe.products[0];
 
     Some((recipe.id, recipe.crafting_time_ticks, ingredient, product))
 }
@@ -110,6 +110,18 @@ pub(in crate::simulation) fn rocket_silo_input_accepts_item(
             .iter()
             .any(|ingredient| ingredient.item == item_id)
     })
+}
+
+/// Resolved launch rules for one placed silo.
+pub(in crate::simulation) fn rocket_silo_prototype(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    entity_id: EntityId,
+) -> Option<factory_data::RocketSiloPrototype> {
+    entities
+        .placed_entity(entity_id)
+        .and_then(|placed| catalog.entity(placed.prototype_id))
+        .and_then(|prototype| prototype.rocket_silo)
 }
 
 pub(in crate::simulation) fn assembler_is_empty_for_recipe_change(
