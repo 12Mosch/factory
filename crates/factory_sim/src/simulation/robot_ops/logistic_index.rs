@@ -30,11 +30,11 @@ use crate::robots::LogisticItemTotals;
 use crate::simulation::*;
 use factory_data::LogisticChestMode;
 
-/// One chest's contribution, in ascending item order.
+/// One endpoint's contribution, in ascending item order.
 ///
 /// A `Vec` rather than a map because it is only ever built once and replayed
-/// twice — subtracted when it goes stale, added when it is fresh — and a chest
-/// holds at most a few distinct items.
+/// twice — subtracted when it goes stale, added when it is fresh — and an
+/// endpoint holds or requests at most a few distinct items.
 type EndpointContribution = Vec<(ItemId, LogisticItemTotals)>;
 
 /// Order supply is drawn in when several chests could serve one request.
@@ -69,9 +69,9 @@ enum EndpointRole {
     Machine,
 }
 
-/// One chest's place in the index, as it was last counted.
+/// One endpoint's place in the index, as it was last counted.
 ///
-/// The chest id travels inside the entry rather than beside it so `add` and
+/// The entity id travels inside the entry rather than beside it so `add` and
 /// `remove` cannot be handed an entry and a mismatched id.
 #[derive(Clone, Debug)]
 struct PublishedEndpoint {
@@ -119,11 +119,11 @@ struct NetworkIndex {
 pub(in crate::simulation) struct LogisticIndex {
     /// Per network, in `topology_networks` order.
     networks: Vec<NetworkIndex>,
-    /// What each indexed chest last contributed and which network it was
+    /// What each indexed endpoint last contributed and which network it was
     /// counted into, so an update is a subtract followed by an add rather than
     /// a rescan of the network.
     published: BTreeMap<EntityId, PublishedEndpoint>,
-    /// Chests whose contribution is stale.
+    /// Endpoints whose contribution is stale.
     dirty: BTreeSet<EntityId>,
     /// Set when the topology changed underneath the index: network ids are
     /// positional and a rebuild can renumber them, so every chest has to be
@@ -150,7 +150,7 @@ impl LogisticIndex {
             .map(|network| &network.contents)
     }
 
-    /// Network a chest is currently counted into, or `None` when no roboport
+    /// Network an endpoint is currently counted into, or `None` when no roboport
     /// reaches it.
     pub(in crate::simulation) fn network_of(&self, entity_id: EntityId) -> Option<u32> {
         self.published
@@ -158,9 +158,9 @@ impl LogisticIndex {
             .map(|published| published.network_id)
     }
 
-    /// What one chest last contributed of a single item.
+    /// What one endpoint last contributed of a single item.
     ///
-    /// Read by the matcher instead of the chest's inventory: the totals are at
+    /// Read by the matcher instead of rescanning endpoint state: the totals are at
     /// most one refresh old, and every path that acts on them clamps against
     /// the real inventory when it commits.
     pub(in crate::simulation) fn endpoint_totals(
@@ -391,9 +391,9 @@ fn demand_priority(role: EndpointRole) -> Option<DemandPriority> {
 }
 
 impl Simulation {
-    /// Brings the logistic index back in step with the chests that changed.
+    /// Brings the logistic index back in step with the endpoints that changed.
     ///
-    /// Runs inside the robot pass, after the topology has settled, so a chest
+    /// Runs inside the robot pass, after topology has settled, so an endpoint
     /// is always placed into a network that currently exists.
     pub(in crate::simulation) fn refresh_logistic_index(&mut self) {
         let changed = self.entities.drain_changed_logistic_endpoints();

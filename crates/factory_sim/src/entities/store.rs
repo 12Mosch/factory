@@ -88,8 +88,8 @@ macro_rules! define_entity_store {
             /// the index last drained this set. Derived bookkeeping, not
             /// simulation state: it is left out of the save, the hash, and
             /// equality, and a loaded world rebuilds its index from scratch.
-            /// Chests with no logistic role never enter it, so ordinary
-            /// inserter traffic costs nothing to record.
+            /// Ordinary chests and machines with no logistic role never enter
+            /// it, so their inserter traffic costs nothing to record.
             #[serde(skip, default)]
             pub(crate) changed_logistic_endpoints: BTreeSet<EntityId>,
         }

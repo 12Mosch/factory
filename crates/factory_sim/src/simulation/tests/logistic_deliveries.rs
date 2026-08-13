@@ -110,7 +110,10 @@ fn a_logistic_robot_delivers_one_satellite_to_a_ready_silo() {
 
 #[test]
 fn a_machine_slot_has_only_one_in_flight_delivery() {
-    let (mut sim, silo, _, _, _) = machine_delivery_fixture(8);
+    let (mut sim, silo, provider, _, satellite) = machine_delivery_fixture(8);
+    // Two source items make the inbound reservation the only thing preventing
+    // a second robot from claiming the one-slot destination.
+    insert_into_chest(&mut sim, provider, satellite, 1);
 
     tick_until(&mut sim, DELIVERY_TICKS, |sim| {
         sim.robots().any(|robot| {
@@ -119,6 +122,7 @@ fn a_machine_slot_has_only_one_in_flight_delivery() {
                 .is_some_and(|delivery| delivery.destination == silo)
         })
     });
+    tick_validated(&mut sim, 8);
 
     assert_eq!(
         sim.robots()
