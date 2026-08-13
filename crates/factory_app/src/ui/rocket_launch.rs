@@ -7,9 +7,11 @@ use crate::save_load::PresentationReloadToken;
 
 const NOTIFICATION_LIFETIME_TICKS: u64 = 12 * SIM_TICKS_PER_SECOND as u64;
 
+/// Marker for the non-interactive first-launch notification overlay.
 #[derive(Component)]
 pub struct RocketLaunchNotificationRoot;
 
+/// Presentation-only state used to detect and time the world's first launch.
 #[derive(Resource, Default)]
 pub(crate) struct RocketLaunchUiState {
     observed_launches: u64,
@@ -18,6 +20,7 @@ pub(crate) struct RocketLaunchUiState {
 }
 
 impl RocketLaunchUiState {
+    /// Observes the durable launch count and reports whether the banner should be visible.
     fn observe(&mut self, launches: u64, tick: u64, reload_token: u64) -> bool {
         if reload_token != self.reload_token {
             self.reload_token = reload_token;
@@ -32,7 +35,7 @@ impl RocketLaunchUiState {
 
         if self
             .expires_at_tick
-            .is_some_and(|expires_at| tick <= expires_at)
+            .is_some_and(|expires_at| tick < expires_at)
         {
             true
         } else {
@@ -42,6 +45,7 @@ impl RocketLaunchUiState {
     }
 }
 
+/// Initializes the first-launch observer and hidden notification hierarchy.
 pub(crate) fn setup_rocket_launch_ui(
     mut commands: Commands,
     sim: Res<SimResource>,
@@ -97,6 +101,7 @@ pub(crate) fn setup_rocket_launch_ui(
         });
 }
 
+/// Shows the banner for the configured lifetime after the world's first launch.
 pub(crate) fn sync_rocket_launch_ui(
     sim: Res<SimResource>,
     reload: Option<Res<PresentationReloadToken>>,
@@ -127,7 +132,8 @@ mod tests {
         let mut state = RocketLaunchUiState::default();
 
         assert!(state.observe(1, 10, 0));
-        assert!(!state.observe(1, 10 + NOTIFICATION_LIFETIME_TICKS + 1, 0));
+        assert!(state.observe(1, 10 + NOTIFICATION_LIFETIME_TICKS - 1, 0));
+        assert!(!state.observe(1, 10 + NOTIFICATION_LIFETIME_TICKS, 0));
         assert!(!state.observe(2, 20 + NOTIFICATION_LIFETIME_TICKS, 0));
     }
 

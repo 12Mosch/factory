@@ -119,6 +119,7 @@ impl<'a> StatisticsContext<'a> {
         };
     }
 
+    /// Records one successfully completed launch in durable statistics.
     pub(super) fn record_rocket_launched(&mut self) {
         self.statistics.rockets_launched = self.statistics.rockets_launched.saturating_add(1);
     }
