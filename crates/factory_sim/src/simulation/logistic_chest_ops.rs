@@ -62,7 +62,7 @@ impl Simulation {
             .get_mut(slot_index)
             .ok_or(LogisticChestError::InvalidSlot { slot_index })?;
         *slot = request;
-        self.entities.note_logistic_chest_changed(entity_id);
+        self.entities.note_logistic_endpoint_changed(entity_id);
         Ok(())
     }
 

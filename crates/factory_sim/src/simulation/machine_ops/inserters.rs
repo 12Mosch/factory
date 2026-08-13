@@ -733,18 +733,24 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         ) {
             return false;
         }
-        let silo = entities
-            .rocket_silos
-            .get_mut(&entity_id)
-            .expect("rocket silo presence was checked above");
-        let inventory = if cargo {
-            &mut silo.cargo_inventory
-        } else {
-            &mut silo.input_inventory
+        let inserted = {
+            let silo = entities
+                .rocket_silos
+                .get_mut(&entity_id)
+                .expect("rocket silo presence was checked above");
+            let inventory = if cargo {
+                &mut silo.cargo_inventory
+            } else {
+                &mut silo.input_inventory
+            };
+            inventory
+                .insert(catalog, item.item_id(), item.count())
+                .is_ok()
         };
-        return inventory
-            .insert(catalog, item.item_id(), item.count())
-            .is_ok();
+        if inserted && cargo {
+            entities.note_logistic_endpoint_changed(entity_id);
+        }
+        return inserted;
     }
 
     if let Some(segment) = entities.transport_belts.get_mut(&entity_id) {

@@ -114,6 +114,9 @@ impl Simulation {
     /// totals were actually built from — including `None` for a chest that has
     /// been placed but not yet indexed.
     pub fn logistic_network_id_for_chest(&self, entity_id: EntityId) -> Option<u32> {
+        if !self.entities.logistic_chests.contains_key(&entity_id) {
+            return None;
+        }
         self.robots.logistic.network_of(entity_id)
     }
 

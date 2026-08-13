@@ -159,6 +159,7 @@ impl MachineTickContext<'_> {
             let bonus_copies = state.modules.complete_productive_cycle();
             debug_assert_eq!(output_copies, 1 + bonus_copies);
 
+            let was_rocket_ready = state.rocket_ready();
             let parts_built = profiler.measure(ProfilePhase::InventoryTransfers, || {
                 ItemCraft {
                     input_inventory: &mut state.input_inventory,
@@ -169,6 +170,11 @@ impl MachineTickContext<'_> {
                 }
                 .complete(&self.world.prototypes, recipe, output_copies)
             });
+            if !was_rocket_ready && state.rocket_ready() {
+                // The silo map is temporarily moved out of the entity store in
+                // this pass, so record the endpoint transition directly.
+                self.entities.changed_logistic_endpoints.insert(entity_id);
+            }
 
             // Recipe slices borrow prototypes here, so record through the fields
             // instead of taking a mutable borrow of the whole tick context. Only
