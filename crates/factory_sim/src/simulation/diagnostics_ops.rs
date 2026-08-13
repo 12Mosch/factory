@@ -386,6 +386,9 @@ impl Simulation {
     }
 
     fn mining_drill_status(&self, entity_id: EntityId, state: &MiningDrillState) -> MachineStatus {
+        if state.pending_output.is_some() {
+            return MachineStatus::OutputFull;
+        }
         let Some(placed) = self.entities.placed_entity(entity_id) else {
             return MachineStatus::Idle;
         };

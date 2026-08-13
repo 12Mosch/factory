@@ -61,15 +61,11 @@ pub(crate) fn technology_progress_text(
     technology_id: TechnologyId,
 ) -> String {
     let progress = sim.technology_progress(technology_id).unwrap_or(0);
-    let required = sim
-        .technology_next_required_units(technology_id)
-        .or_else(|| {
-            sim.catalog()
-                .technology(technology_id)
-                .map(|technology| technology.required_units)
-        })
-        .unwrap_or(0);
-    format!("{progress}/{required}")
+    sim.technology_next_required_units(technology_id)
+        .map_or_else(
+            || "Complete".to_string(),
+            |required| format!("{progress}/{required}"),
+        )
 }
 
 pub(crate) fn technology_ui_state(
@@ -154,6 +150,9 @@ pub(crate) fn next_science_cost_text(
     sim: &factory_sim::Simulation,
     technology: &factory_data::TechnologyPrototype,
 ) -> String {
+    let Some(required) = sim.technology_next_required_units(technology.id) else {
+        return "<complete>".to_string();
+    };
     let packs = technology
         .science_packs
         .iter()
@@ -166,10 +165,16 @@ pub(crate) fn next_science_cost_text(
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let required = sim
-        .technology_next_required_units(technology.id)
-        .unwrap_or(technology.required_units);
     format!("{packs}; {required} units")
+}
+
+fn format_permyriad_percent(value: u64) -> String {
+    let whole = value / 100;
+    match value % 100 {
+        0 => whole.to_string(),
+        hundredths if hundredths % 10 == 0 => format!("{whole}.{}", hundredths / 10),
+        hundredths => format!("{whole}.{hundredths:02}"),
+    }
 }
 
 #[cfg(test)]
@@ -192,7 +197,7 @@ pub(crate) fn unlock_text(
             TechnologyEffect::MiningDrillProductivity { bonus_permyriad } => {
                 format!(
                     "+{}% mining-drill productivity per level",
-                    bonus_permyriad / 100
+                    format_permyriad_percent(u64::from(bonus_permyriad))
                 )
             }
         })
@@ -217,12 +222,26 @@ pub(crate) fn technology_effect_text(
                 .recipe(recipe_id)
                 .map(|recipe| format_recipe_display_name(&recipe.name))
                 .unwrap_or_else(|| "Unknown".to_string()),
-            TechnologyEffect::MiningDrillProductivity { bonus_permyriad } => format!(
-                "+{}% mining-drill productivity per level; current +{}%, next +{}%",
-                bonus_permyriad / 100,
-                u64::from(bonus_permyriad) * u64::from(completed_levels) / 100,
-                u64::from(bonus_permyriad) * u64::from(completed_levels.saturating_add(1)) / 100,
-            ),
+            TechnologyEffect::MiningDrillProductivity { bonus_permyriad } => {
+                let bonus_permyriad = u64::from(bonus_permyriad);
+                let current = bonus_permyriad.saturating_mul(u64::from(completed_levels));
+                let summary = format!(
+                    "+{}% mining-drill productivity per level; current +{}%",
+                    format_permyriad_percent(bonus_permyriad),
+                    format_permyriad_percent(current),
+                );
+                if sim.technology_next_required_units(technology.id).is_some() {
+                    format!(
+                        "{summary}, next +{}%",
+                        format_permyriad_percent(
+                            bonus_permyriad
+                                .saturating_mul(u64::from(completed_levels.saturating_add(1)))
+                        )
+                    )
+                } else {
+                    summary
+                }
+            }
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -356,5 +375,37 @@ mod tests {
             next_science_cost_text(&sim, &technology),
             "Automation Science Pack x1, Logistic Science Pack x1, Chemical Science Pack x1, Production Science Pack x1, Utility Science Pack x1, Space Science Pack x1; 1500 units"
         );
+    }
+
+    #[test]
+    fn completed_finite_technology_has_no_next_level_cost() {
+        let mut sim = factory_sim::Simulation::new_test_world(123);
+        let technology_id = factory_data::technology_id_by_name(sim.catalog(), "automation");
+        let mut technology = sim
+            .catalog()
+            .technology(technology_id)
+            .expect("automation science technology should exist")
+            .clone();
+        sim.research
+            .technology_state_mut(technology_id)
+            .expect("technology state should exist")
+            .completed_levels = 1;
+
+        assert_eq!(technology_progress_text(&sim, technology_id), "Complete");
+        assert_eq!(next_science_cost_text(&sim, &technology), "<complete>");
+        technology.effects = vec![TechnologyEffect::MiningDrillProductivity {
+            bonus_permyriad: 50,
+        }];
+        assert_eq!(
+            technology_effect_text(&sim, &technology),
+            "+0.5% mining-drill productivity per level; current +0.5%"
+        );
+    }
+
+    #[test]
+    fn productivity_percentages_preserve_fractional_values() {
+        assert_eq!(format_permyriad_percent(50), "0.5");
+        assert_eq!(format_permyriad_percent(525), "5.25");
+        assert_eq!(format_permyriad_percent(1_000), "10");
     }
 }

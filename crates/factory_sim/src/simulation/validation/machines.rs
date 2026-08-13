@@ -86,6 +86,29 @@ pub(in crate::simulation) fn validate_mining_drill(
             });
         }
     }
+    if let Some(pending) = state.pending_output {
+        let is_solid_resource = pending.count > 0
+            && sim
+                .world
+                .prototypes
+                .world_generation
+                .resources
+                .iter()
+                .any(|resource| {
+                    resource.resource_item == pending.item_id
+                        && resource.extraction == ResourceExtraction::Solid
+                });
+        if !is_solid_resource {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+        if state
+            .output_slot
+            .stack()
+            .is_some_and(|stack| stack.item_id() != pending.item_id)
+        {
+            return Err(SimValidationError::InvalidEntityState { entity_id });
+        }
+    }
 
     Ok(())
 }

@@ -13,6 +13,14 @@ pub struct MiningDrillState {
     pub mining_required_ticks: u32,
     pub resource_target: Option<ManualMiningTarget>,
     pub output_slot: ItemSlot,
+    /// Completed-cycle output waiting for bounded inventories or transport.
+    pub pending_output: Option<PendingMiningOutput>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PendingMiningOutput {
+    pub item_id: ItemId,
+    pub count: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

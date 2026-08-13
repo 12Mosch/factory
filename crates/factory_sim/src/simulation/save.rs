@@ -89,7 +89,9 @@ use bincode::Options;
 // v45: rocket silos gained a launch-product output inventory.
 // v46: the durable rockets-launched statistic joined the snapshot.
 // v47: research completion became level-based so repeatable technology levels
-// and their in-level progress are durable.
+// and their in-level progress are durable. Mining drills also gained durable
+// pending output so unbounded productivity bonuses can drain through bounded
+// inventories without truncation or stalling.
 pub const SAVE_VERSION: u32 = 47;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.

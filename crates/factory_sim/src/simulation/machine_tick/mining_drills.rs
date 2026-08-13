@@ -1,5 +1,6 @@
 use super::progress::{MachineEnergyContext, ProgressAdvance, advance_machine_progress};
 use super::*;
+use crate::machines::PendingMiningOutput;
 
 impl MachineTickContext<'_> {
     pub(super) fn advance_mining_drills<P: TickProfiler>(&mut self, profiler: &mut P) {
@@ -23,6 +24,23 @@ impl MachineTickContext<'_> {
                     &self.world.prototypes,
                 );
             });
+            if state.pending_output.is_some() {
+                profiler.measure(ProfilePhase::InventoryTransfers, || {
+                    flush_pending_drill_output(
+                        self.entities,
+                        self.transport,
+                        state,
+                        output_target,
+                        &self.world.prototypes,
+                    );
+                });
+                if state.pending_output.is_none() {
+                    self.power_demand_cache.mark_dirty(entity_id);
+                }
+                // Pending output drains without power. Even if this tick emptied
+                // it, defer the next cycle so electric demand and work agree.
+                continue;
+            }
 
             let target = first_resource_in_mining_area_profiled(
                 self.world,
@@ -36,17 +54,13 @@ impl MachineTickContext<'_> {
                 continue;
             };
 
-            let output_copies = state
-                .modules
-                .output_copies_due_with_productivity(self.mining_drill_productivity_permyriad);
             let output_can_accept = profiler.measure(ProfilePhase::InventoryTransfers, || {
-                drill_productivity_output_can_fit(
+                drill_output_can_accept_cycle(
                     &self.world.prototypes,
                     self.entities,
                     output_target,
                     state.output_slot,
                     resource_item,
-                    output_copies,
                 )
             });
             if !output_can_accept {
@@ -81,6 +95,9 @@ impl MachineTickContext<'_> {
             if !matches!(advance.result, ProgressAdvance::Completed) {
                 continue;
             }
+            let output_copies = state
+                .modules
+                .output_copies_due_with_productivity(self.mining_drill_productivity_permyriad);
             state.modules.complete_productive_cycle_with_productivity(
                 self.mining_drill_productivity_permyriad,
             );
@@ -91,17 +108,22 @@ impl MachineTickContext<'_> {
                 .expect("selected drill target should contain a resource");
             debug_assert_eq!(mined.resource_item, resource_item);
             debug_assert_eq!(mined.amount, 1);
+            state.pending_output = Some(PendingMiningOutput {
+                item_id: mined.resource_item,
+                count: output_copies,
+            });
             profiler.measure(ProfilePhase::InventoryTransfers, || {
-                insert_productive_drill_output(
+                flush_pending_drill_output(
                     self.entities,
                     self.transport,
                     state,
                     output_target,
-                    mined.resource_item,
-                    output_copies as u16,
                     &self.world.prototypes,
                 );
             });
+            if state.pending_output.is_some() {
+                self.power_demand_cache.mark_dirty(entity_id);
+            }
             self.record_item_produced(mined.resource_item, output_copies);
             if mined.resource_item == self.base.items.iron_ore {
                 self.onboarding_progress
@@ -113,48 +135,113 @@ impl MachineTickContext<'_> {
     }
 }
 
-fn insert_productive_drill_output(
+fn flush_pending_drill_output(
     entities: &mut EntityStore,
     transport: &mut TransportLaneCache,
     state: &mut MiningDrillState,
     output_target: DrillOutputTarget,
-    item_id: ItemId,
-    copies: u16,
     catalog: &PrototypeCatalog,
 ) {
+    let Some(pending) = state.pending_output else {
+        return;
+    };
+    let item_id = pending.item_id;
+    let mut emitted = 0_u64;
+
     match output_target {
-        DrillOutputTarget::InternalSlot | DrillOutputTarget::Inventory(_) => {
-            insert_drill_output_from_state(
-                entities,
-                transport,
-                state,
-                output_target,
-                item_id,
-                copies,
-                catalog,
-            );
+        DrillOutputTarget::InternalSlot => {
+            let capacity = state
+                .output_slot
+                .insert_capacity(catalog, item_id)
+                .unwrap_or(0);
+            let count = pending.count.min(u64::from(capacity)) as u16;
+            if count > 0 {
+                insert_drill_output_from_state(
+                    entities,
+                    transport,
+                    state,
+                    output_target,
+                    item_id,
+                    count,
+                    catalog,
+                );
+                emitted = u64::from(count);
+            }
+        }
+        DrillOutputTarget::Inventory(entity_id) => {
+            let stack_size = catalog
+                .item(item_id)
+                .expect("pending drill output should be a catalog item")
+                .stack_size;
+            let capacity = entities
+                .entity_inventories
+                .get(&entity_id)
+                .map_or(0, |inventory| {
+                    inventory.insert_capacity(item_id, stack_size)
+                });
+            let count = pending
+                .count
+                .min(u64::from(capacity))
+                .min(u64::from(u16::MAX)) as u16;
+            if count > 0 {
+                insert_drill_output_from_state(
+                    entities,
+                    transport,
+                    state,
+                    output_target,
+                    item_id,
+                    count,
+                    catalog,
+                );
+                emitted = u64::from(count);
+            }
         }
         DrillOutputTarget::Belt(_) | DrillOutputTarget::Splitter { .. } => {
-            insert_drill_output_from_state(
+            if drill_output_target_can_accept(
+                catalog,
                 entities,
-                transport,
-                state,
                 output_target,
+                state.output_slot,
                 item_id,
                 1,
-                catalog,
-            );
-            let surplus = copies.saturating_sub(1);
+            ) {
+                insert_drill_output_from_state(
+                    entities,
+                    transport,
+                    state,
+                    output_target,
+                    item_id,
+                    1,
+                    catalog,
+                );
+                emitted = 1;
+            }
+            let capacity = state
+                .output_slot
+                .insert_capacity(catalog, item_id)
+                .unwrap_or(0);
+            let surplus = pending
+                .count
+                .saturating_sub(emitted)
+                .min(u64::from(capacity)) as u16;
             if surplus > 0 {
                 state
                     .output_slot
                     .insert(catalog, item_id, surplus)
-                    .expect("productive drill surplus capacity was checked");
+                    .expect("pending drill output capacity was checked");
+                emitted += u64::from(surplus);
             }
         }
-        DrillOutputTarget::Blocked => {
-            unreachable!("blocked drill output is checked before mining");
-        }
+        DrillOutputTarget::Blocked => {}
+    }
+
+    let remaining = pending.count - emitted;
+    state.pending_output = (remaining > 0).then_some(PendingMiningOutput {
+        item_id,
+        count: remaining,
+    });
+    if emitted > 0 {
+        debug_assert!(remaining < pending.count);
     }
 }
 

@@ -78,6 +78,52 @@ fn mining_productivity_adds_output_without_depleting_extra_resource() {
 }
 
 #[test]
+fn large_mining_productivity_bonus_drains_without_truncation_or_extra_depletion() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "space_science_pack");
+    let productivity = technology_id(&sim.world.prototypes, "mining_productivity");
+    sim.research
+        .technology_state_mut(productivity)
+        .expect("mining productivity state should exist")
+        .completed_levels = 1_310_720;
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    add_fuel_to_burner_drill(&mut sim, entity_id, coal, 1);
+
+    for _ in 0..240 {
+        sim.tick();
+    }
+
+    let state = crate::entity_access::mining_drill_state(&sim, entity_id)
+        .expect("burner drill should expose state");
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_ore, 100)));
+    assert_eq!(
+        state.pending_output,
+        Some(crate::machines::PendingMiningOutput {
+            item_id: iron_ore,
+            count: 65_437,
+        })
+    );
+    assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 1));
+
+    sim.entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state")
+        .output_slot = ItemSlot::default();
+    sim.tick();
+
+    let state = crate::entity_access::mining_drill_state(&sim, entity_id)
+        .expect("burner drill should expose state");
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_ore, 100)));
+    assert_eq!(
+        state.pending_output.map(|pending| pending.count),
+        Some(65_337)
+    );
+    assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 1));
+}
+
+#[test]
 fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
     let mut sim = Simulation::new_test_world(123);
     let coal = item_id(&sim.world.prototypes, "coal");

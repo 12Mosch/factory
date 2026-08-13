@@ -204,10 +204,6 @@ impl Simulation {
             .topology
             .reset_network_accumulators(&mut scratch.networks);
 
-        let mining_drill_productivity_permyriad = self
-            .research
-            .bonuses(&self.world.prototypes)
-            .mining_drill_productivity_permyriad;
         refresh_consumer_demand_cache(
             ConsumerDemandInputs {
                 world: &self.world,
@@ -216,7 +212,6 @@ impl Simulation {
                 fluid_boxes: FluidBoxes::new(&self.entities, &self.rolling_stock),
                 fluids: &self.fluids,
                 research: &self.research,
-                mining_drill_productivity_permyriad,
             },
             &self.power.topology,
             &mut self.power.entity_statuses,

@@ -307,12 +307,13 @@ mod tests {
         // counter that is the rocket under construction.
         // v44: rocket silo cargo and launch-phase state were appended.
         // v45: rocket silo launch-product output was appended.
+        // v47: mining drills gained durable pending productivity output.
         // v41: train stop state was appended — the name a schedule asks for,
         // the train limit, and the channel that limit may be read from. The
         // fixture gained a populated stop afterwards, so those three fields are
         // pinned rather than only the map that holds them; the save format did
         // not change with it.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xf4f7_99de_4987_9d9c;
+        const EXPECTED_LAYOUT_HASH: u64 = 0x64b1_fd1c_0751_b974;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -397,6 +398,7 @@ mod tests {
                 mining_required_ticks: 60,
                 resource_target: Some(ManualMiningTarget { x: 2, y: 3 }),
                 output_slot: test_slot(test_stack(copper, 2)),
+                pending_output: None,
             },
         );
         store.furnaces.insert(
