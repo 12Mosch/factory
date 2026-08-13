@@ -124,6 +124,40 @@ fn large_mining_productivity_bonus_drains_without_truncation_or_extra_depletion(
 }
 
 #[test]
+fn deconstructing_drill_recovers_pending_productivity_output_in_valid_stacks() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    let state = sim
+        .entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state");
+    state.pending_output = Some(crate::machines::PendingMiningOutput {
+        item_id: iron_ore,
+        count: 250,
+    });
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .expect("placed drill should exist")
+        .clone();
+
+    let recovery = crate::simulation::entity_recovery_ops::entity_recovery_stacks(&sim, &placed)
+        .expect("drill recovery should be valid");
+    let recovered_ore = recovery
+        .iter()
+        .filter(|stack| stack.item_id() == iron_ore)
+        .map(|stack| stack.count())
+        .collect::<Vec<_>>();
+    assert_eq!(recovered_ore, vec![100, 100, 50]);
+
+    sim.player_inventory = Inventory::player();
+    crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id)
+        .expect("player should have room for pending drill output");
+    assert_eq!(sim.player_inventory.count(iron_ore), 250);
+}
+
+#[test]
 fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
     let mut sim = Simulation::new_test_world(123);
     let coal = item_id(&sim.world.prototypes, "coal");
