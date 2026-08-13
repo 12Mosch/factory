@@ -264,8 +264,10 @@ pub(in crate::simulation) fn validate_rocket_silo(
         }
     }
     let cargo_present = state.cargo_inventory.slots()[0].stack().is_some();
+    let cargo_valid = !cargo_present || state.has_launch_payload(silo_prototype.launch_payload);
     let launch_active = !matches!(state.launch_phase, RocketLaunchPhase::Idle);
-    if (cargo_present && !state.rocket_ready())
+    if !cargo_valid
+        || (cargo_present && !state.rocket_ready())
         || (launch_active && (!state.rocket_ready() || !cargo_present))
         || (launch_active
             && !state.output_inventory.can_insert(

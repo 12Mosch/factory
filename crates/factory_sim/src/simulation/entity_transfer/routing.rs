@@ -52,14 +52,19 @@ pub fn transfer_container_slot(
                 }
                 Some(EntityKind::RocketSilo) => {
                     let is_launchable_cargo = sim
-                        .player_inventory
-                        .slot(slot_index)
-                        .and_then(|stack| sim.world.prototypes.item(stack.item_id()))
-                        .is_some_and(|item| item.name == "satellite")
-                        && sim
-                            .entities
-                            .rocket_silo_state(entity_id)
-                            .is_ok_and(|state| state.rocket_ready());
+                        .entities
+                        .rocket_silo_state(entity_id)
+                        .is_ok_and(|state| state.rocket_ready())
+                        && sim.player_inventory.slot(slot_index).is_some_and(|stack| {
+                            item_slot_policy_accepts(
+                                sim.catalog(),
+                                &sim.research,
+                                &sim.entities,
+                                ItemSlotPolicy::RocketCargo(entity_id),
+                                ItemSlotOperation::PlayerInsert,
+                                stack.item_id(),
+                            )
+                        });
                     if is_launchable_cargo {
                         return player_slot_to_rocket_silo_cargo(sim, entity_id, slot_index)
                             .map_err(SlotTransferError::RocketSilo);

@@ -30,12 +30,7 @@ impl MachineTickContext<'_> {
             match state.launch_phase {
                 RocketLaunchPhase::Idle
                     if state.rocket_ready()
-                        && state.cargo_inventory.slots()[0]
-                            .stack()
-                            .is_some_and(|stack| {
-                                stack.item_id() == silo_prototype.launch_payload
-                                    && stack.count() == 1
-                            })
+                        && state.has_launch_payload(silo_prototype.launch_payload)
                         && state.output_inventory.can_insert(
                             &self.world.prototypes,
                             launch_product.item,
@@ -60,6 +55,12 @@ impl MachineTickContext<'_> {
                     continue;
                 }
                 RocketLaunchPhase::Rising { ticks_remaining: 1 } => {
+                    if !state.has_launch_payload(silo_prototype.launch_payload) {
+                        // Launch state is externally constructible through
+                        // saves. Never mint a reward unless the payload that
+                        // justified this launch is still present and exact.
+                        continue;
+                    }
                     if state
                         .output_inventory
                         .insert(

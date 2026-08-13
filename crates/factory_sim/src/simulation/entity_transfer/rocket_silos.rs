@@ -105,13 +105,22 @@ pub fn player_slot_to_rocket_silo_cargo(
     if !state.rocket_ready() || !matches!(state.launch_phase, RocketLaunchPhase::Idle) {
         return Err(RocketSiloError::InsufficientSpace);
     }
-    let plan = plan_transfer(
+    if !state
+        .cargo_inventory
+        .slots()
+        .first()
+        .is_some_and(|slot| slot.is_empty())
+    {
+        return Err(RocketSiloError::InsufficientSpace);
+    }
+    let plan = plan_transfer_limited(
         &sim.world.prototypes,
         TransferSource {
             slot: sim.player_inventory.item_slot(player_slot_index),
             slot_index: player_slot_index,
         },
         TransferDestination::Inventory(&state.cargo_inventory),
+        1,
         |item_id| {
             item_slot_policy_accepts(
                 &sim.world.prototypes,

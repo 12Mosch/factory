@@ -63,6 +63,15 @@ impl RocketSiloState {
     pub fn rocket_ready(&self) -> bool {
         self.parts_completed >= self.parts_per_rocket
     }
+
+    /// Whether the cargo holder contains exactly the configured single payload.
+    pub(crate) fn has_launch_payload(&self, launch_payload: ItemId) -> bool {
+        self.cargo_inventory
+            .slots()
+            .first()
+            .and_then(|slot| slot.stack())
+            .is_some_and(|stack| stack.item_id() == launch_payload && stack.count() == 1)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

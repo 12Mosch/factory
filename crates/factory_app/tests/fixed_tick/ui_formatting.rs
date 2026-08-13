@@ -9,6 +9,7 @@ use factory_app::resources::SimProfileStats;
 use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_crafting_detail_text,
+    format_rocket_silo_launch_product_label,
 };
 use factory_app::ui::production_stats::{
     bottleneck_lines, diagnostic_lines, fluid_consumption_rows, fluid_production_rows,
@@ -479,4 +480,35 @@ fn rocket_silo_detail_formatting_reports_ingredients_and_rocket_progress() {
     );
     assert_eq!(details.products, "Output: Rocket 0/100");
     assert_eq!(details.progress, "Progress: 0/180");
+}
+
+#[test]
+fn rocket_silo_launch_product_label_follows_the_prototype() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototypes should load");
+    let silo = entity_id_by_name(&catalog, "rocket_silo");
+    let iron_plate = item_id_by_name(&catalog, "iron_plate");
+    catalog.entities[silo.index()]
+        .rocket_silo
+        .as_mut()
+        .expect("the silo should have launch metadata")
+        .launch_product
+        .item = iron_plate;
+    let mut sim = Simulation::new(123, catalog);
+    unlock_with_prerequisites(&mut sim, "rocket_silo");
+    let (x, y) = place_powered_fixture_origin(&mut sim, 9, 9, (-1, 4));
+    let entity_id = factory_sim::placement::place(
+        &mut sim,
+        factory_sim::placement::EntityPlacementRequest {
+            prototype_id: silo,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("rocket silo should be placeable");
+
+    assert_eq!(
+        format_rocket_silo_launch_product_label(&sim, entity_id).as_deref(),
+        Some("Iron Plate")
+    );
 }

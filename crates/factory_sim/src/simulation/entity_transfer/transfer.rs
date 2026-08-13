@@ -69,6 +69,16 @@ pub(super) fn plan_transfer(
     destination: TransferDestination<'_>,
     accepts_item: impl FnOnce(ItemId) -> bool,
 ) -> Result<TransferPlan, TransferPlanError> {
+    plan_transfer_limited(catalog, source, destination, u16::MAX, accepts_item)
+}
+
+pub(super) fn plan_transfer_limited(
+    catalog: &PrototypeCatalog,
+    source: TransferSource<'_>,
+    destination: TransferDestination<'_>,
+    quantity_limit: u16,
+    accepts_item: impl FnOnce(ItemId) -> bool,
+) -> Result<TransferPlan, TransferPlanError> {
     let stack = source.stack()?;
     crate::inventory::validate_stack(catalog, stack)
         .map_err(|_| TransferPlanError::UnknownItem(stack.item_id()))?;
@@ -80,7 +90,9 @@ pub(super) fn plan_transfer(
     let stack_size = item_stack_size(catalog, stack.item_id())
         .ok_or(TransferPlanError::UnknownItem(stack.item_id()))?;
     let capacity = destination.capacity(stack.item_id(), stack_size);
-    let moved_quantity = u32::from(stack.count()).min(capacity) as u16;
+    let moved_quantity = u32::from(stack.count())
+        .min(capacity)
+        .min(u32::from(quantity_limit)) as u16;
     if moved_quantity == 0 {
         return Err(TransferPlanError::InsufficientSpace);
     }
