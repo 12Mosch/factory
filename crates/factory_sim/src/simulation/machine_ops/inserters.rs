@@ -150,6 +150,16 @@ pub(in crate::simulation) fn peek_inserter_source_item(
             .next();
     }
 
+    if let Some(silo) = entities.rocket_silos.get(&entity_id) {
+        return silo
+            .output_inventory
+            .slots()
+            .iter()
+            .filter_map(|slot| slot.stack())
+            .map(|stack| stack.item_id())
+            .next();
+    }
+
     entities
         .transport_belts
         .get(&entity_id)
@@ -297,20 +307,10 @@ pub(in crate::simulation) fn inserter_target_can_accept(
     // A completed rocket routes its one launchable payload to the cargo slot;
     // at every other time inserters continue stocking part ingredients.
     if let Some(silo) = entities.rocket_silos.get(&entity_id) {
-        let is_cargo = silo.rocket_ready()
-            && matches!(silo.launch_phase, crate::machines::RocketLaunchPhase::Idle)
-            && item_slot_policy_accepts(
-                catalog,
-                research,
-                entities,
-                ItemSlotPolicy::RocketCargo,
-                ItemSlotOperation::InserterInsert,
-                item.item_id(),
-            );
+        let is_cargo =
+            rocket_silo_cargo_target_accepts(catalog, research, entities, entity_id, item);
         if is_cargo {
-            return silo
-                .cargo_inventory
-                .can_insert(catalog, item.item_id(), item.count());
+            return true;
         }
         return item_slot_policy_accepts(
             catalog,
@@ -419,6 +419,20 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
             return None;
         }
         assembler.output_inventory.remove(item_id, 1).ok()?;
+        return Some(
+            ItemStack::new(catalog, item_id, 1)
+                .expect("a removed inserter source item should form a valid stack"),
+        );
+    }
+
+    if let Some(silo) = entities.rocket_silos.get_mut(&entity_id) {
+        if !item_slot_policy_allows_operation(
+            ItemSlotPolicy::OutputOnly,
+            ItemSlotOperation::InserterExtract,
+        ) {
+            return None;
+        }
+        silo.output_inventory.remove(item_id, 1).ok()?;
         return Some(
             ItemStack::new(catalog, item_id, 1)
                 .expect("a removed inserter source item should form a valid stack"),
@@ -703,20 +717,9 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     }
 
     if entities.rocket_silos.contains_key(&entity_id) {
-        let cargo = entities.rocket_silos.get(&entity_id).is_some_and(|silo| {
-            silo.rocket_ready()
-                && matches!(silo.launch_phase, crate::machines::RocketLaunchPhase::Idle)
-                && item_slot_policy_accepts(
-                    catalog,
-                    research,
-                    entities,
-                    ItemSlotPolicy::RocketCargo,
-                    ItemSlotOperation::InserterInsert,
-                    item.item_id(),
-                )
-        });
+        let cargo = rocket_silo_cargo_target_accepts(catalog, research, entities, entity_id, item);
         let policy = if cargo {
-            ItemSlotPolicy::RocketCargo
+            ItemSlotPolicy::RocketCargo(entity_id)
         } else {
             ItemSlotPolicy::RocketPartIngredient
         };
@@ -794,4 +797,40 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     }
 
     false
+}
+
+/// Whether an inserter may commit its held stack to a completed rocket.
+///
+/// Cargo is a single payload, not a normal one-slot stack. Keeping this rule in
+/// the shared target predicate makes both the planning and commit checks reject
+/// a second inserter in the same tick.
+fn rocket_silo_cargo_target_accepts(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    entities: &EntityStore,
+    entity_id: EntityId,
+    item: ItemStack,
+) -> bool {
+    let Some(silo) = entities.rocket_silos.get(&entity_id) else {
+        return false;
+    };
+    item.count() == 1
+        && silo.rocket_ready()
+        && matches!(silo.launch_phase, crate::machines::RocketLaunchPhase::Idle)
+        && silo
+            .cargo_inventory
+            .slots()
+            .first()
+            .is_some_and(|slot| slot.is_empty())
+        && item_slot_policy_accepts(
+            catalog,
+            research,
+            entities,
+            ItemSlotPolicy::RocketCargo(entity_id),
+            ItemSlotOperation::InserterInsert,
+            item.item_id(),
+        )
+        && silo
+            .cargo_inventory
+            .can_insert(catalog, item.item_id(), item.count())
 }

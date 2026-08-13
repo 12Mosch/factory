@@ -227,6 +227,20 @@ fn production_and_utility_science_items_and_recipes_load_exactly() {
 }
 
 #[test]
+fn space_science_has_no_crafting_recipe() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let space_science = crate::item_id_by_name(&catalog, "space_science_pack");
+
+    assert!(
+        catalog.recipes.iter().all(|recipe| !recipe
+            .products
+            .iter()
+            .any(|product| product.item == space_science)),
+        "space science should only be produced by a satellite launch"
+    );
+}
+
+#[test]
 fn radar_item_and_recipe_load_exactly() {
     let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
     let radar = catalog

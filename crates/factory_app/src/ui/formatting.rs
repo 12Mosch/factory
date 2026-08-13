@@ -11,6 +11,23 @@ pub(crate) fn format_item_stack(stack: ItemStack, catalog: &PrototypeCatalog) ->
     format!("{}\n{}", compact_item_name(name), stack.count())
 }
 
+/// Display label for the product returned by this placed rocket silo.
+pub fn format_rocket_silo_launch_product_label(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<String> {
+    let placed = sim.entities().placed_entity(entity_id)?;
+    let silo = sim
+        .catalog()
+        .entity(placed.prototype_id)?
+        .rocket_silo
+        .as_ref()?;
+    Some(format_item_display_name(
+        sim.catalog(),
+        silo.launch_product.item,
+    ))
+}
+
 /// The four lines a crafting machine's window shows about what it is making.
 ///
 /// Shared by assembling machines and rocket silos: both answer "which recipe,

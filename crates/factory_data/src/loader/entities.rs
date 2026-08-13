@@ -7,12 +7,13 @@ use crate::ids::{EntityPrototypeId, FluidId, ItemId};
 use crate::model::{
     ConnectionSide, CraftingCategory, EdgeConnectionPrototype, ElectricPolePrototype,
     EnemySpawnerPrototype, EntityKind, EntityPrototype, FluidBoxPrototype, HeatBufferPrototype,
-    InserterPrototype, ItemPrototype, MiningDrillPrototype, POSITION_SCALE, PumpjackPrototype,
-    RailCurvePrototype, RailHeading, RailPiecePrototype, RailPointPrototype, RecipePrototype,
+    InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype, POSITION_SCALE,
+    PumpjackPrototype, RailCurvePrototype, RailHeading, RailPiecePrototype, RailPointPrototype,
+    RecipePrototype, RocketSiloPrototype,
 };
 use crate::raw::{
     RawEdgeConnectionPrototype, RawEntityPrototype, RawFluidBoxPrototype, RawHeatBufferPrototype,
-    RawPumpjackPrototype,
+    RawPumpjackPrototype, RawRocketSiloPrototype,
 };
 use crate::validation::resolve_collision_mask;
 
@@ -23,7 +24,7 @@ pub(super) fn load_entities(
 ) -> Result<Vec<EntityPrototype>, PrototypeLoadError> {
     entities
         .into_iter()
-        .map(|entity| {
+        .map(|mut entity| {
             validate_laser_turret_metadata(&entity.name, &entity)?;
             validate_module_and_beacon_metadata(&entity.name, &entity)?;
             validate_solar_and_storage_metadata(&entity.name, &entity)?;
@@ -84,6 +85,8 @@ pub(super) fn load_entities(
             )?;
             let pumpjack =
                 resolve_pumpjack(&name, entity.pumpjack, item_ids_by_name, fluid_ids_by_name)?;
+            let rocket_silo =
+                resolve_rocket_silo(&name, entity.rocket_silo.take(), item_ids_by_name)?;
             validate_machine_energy_source(
                 &name,
                 entity.entity_kind,
@@ -124,7 +127,7 @@ pub(super) fn load_entities(
                         ticks_per_item: mining_drill.ticks_per_item,
                     }),
                 assembling_machine: entity.assembling_machine,
-                rocket_silo: entity.rocket_silo,
+                rocket_silo,
                 transport_belt: entity.transport_belt,
                 splitter: entity.splitter,
                 inserter: entity.inserter.map(|inserter| InserterPrototype {
@@ -191,19 +194,16 @@ pub(super) fn validate_rocket_silo_recipe_capacity(
     recipes: &[RecipePrototype],
     items: &[ItemPrototype],
 ) -> Result<(), PrototypeLoadError> {
-    let Some(recipe) = recipes
+    let recipe = recipes
         .iter()
-        .find(|recipe| recipe.category == CraftingCategory::RocketBuilding)
-    else {
-        return Ok(());
-    };
+        .find(|recipe| recipe.category == CraftingCategory::RocketBuilding);
 
-    let mut amounts_by_item = HashMap::<ItemId, u32>::new();
-    for ingredient in &recipe.ingredients {
-        let amount = amounts_by_item.entry(ingredient.item).or_default();
-        *amount = amount.saturating_add(u32::from(ingredient.amount));
-    }
-    let required_slots =
+    let required_input_slots = recipe.map(|recipe| {
+        let mut amounts_by_item = HashMap::<ItemId, u32>::new();
+        for ingredient in &recipe.ingredients {
+            let amount = amounts_by_item.entry(ingredient.item).or_default();
+            *amount = amount.saturating_add(u32::from(ingredient.amount));
+        }
         amounts_by_item
             .into_iter()
             .try_fold(0_usize, |total, (item_id, amount)| {
@@ -217,20 +217,78 @@ pub(super) fn validate_rocket_silo_recipe_capacity(
                     .checked_add(stack_size.checked_sub(1)?)?
                     .checked_div(stack_size)?;
                 total.checked_add(usize::try_from(stacks).ok()?)
-            });
+            })
+    });
 
     for entity in entities {
         let Some(silo) = entity.rocket_silo else {
             continue;
         };
-        if required_slots.is_none_or(|required| required > silo.input_slot_count) {
+        if required_input_slots.is_some_and(|required| {
+            required.is_none_or(|required| required > silo.input_slot_count)
+        }) {
             return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
                 entity: entity.name.clone(),
                 detail: "ingredient slots cannot hold one complete rocket-building recipe",
             });
         }
+
+        let Some(product) = items
+            .iter()
+            .find(|item| item.id == silo.launch_product.item)
+        else {
+            return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
+                entity: entity.name.clone(),
+                detail: "launch product does not resolve to an item",
+            });
+        };
+        let required_output_slots =
+            usize::from(silo.launch_product.amount).div_ceil(usize::from(product.stack_size));
+        if required_output_slots > silo.output_slot_count {
+            return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
+                entity: entity.name.clone(),
+                detail: "output slots cannot hold one complete launch product batch",
+            });
+        }
     }
     Ok(())
+}
+
+fn resolve_rocket_silo(
+    entity: &str,
+    rocket_silo: Option<RawRocketSiloPrototype>,
+    item_ids_by_name: &HashMap<String, ItemId>,
+) -> Result<Option<RocketSiloPrototype>, PrototypeLoadError> {
+    rocket_silo
+        .map(|rocket_silo| {
+            let launch_payload = *item_ids_by_name
+                .get(&rocket_silo.launch_payload)
+                .ok_or_else(|| PrototypeLoadError::MissingRocketSiloLaunchItem {
+                    entity: entity.to_string(),
+                    item: rocket_silo.launch_payload.clone(),
+                    role: "payload",
+                })?;
+            let launch_product = *item_ids_by_name
+                .get(&rocket_silo.launch_product.item)
+                .ok_or_else(|| PrototypeLoadError::MissingRocketSiloLaunchItem {
+                    entity: entity.to_string(),
+                    item: rocket_silo.launch_product.item.clone(),
+                    role: "product",
+                })?;
+            Ok(RocketSiloPrototype {
+                crafting_speed_numerator: rocket_silo.crafting_speed_numerator,
+                crafting_speed_denominator: rocket_silo.crafting_speed_denominator,
+                input_slot_count: rocket_silo.input_slot_count,
+                parts_per_rocket: rocket_silo.parts_per_rocket,
+                launch_payload,
+                launch_product: ItemAmount {
+                    item: launch_product,
+                    amount: rocket_silo.launch_product.amount,
+                },
+                output_slot_count: rocket_silo.output_slot_count,
+            })
+        })
+        .transpose()
 }
 
 /// Circuit metadata is only coherent when the entity kind, the connector
@@ -446,7 +504,7 @@ fn validate_rocket_silo_metadata(
         };
     }
 
-    let Some(rocket_silo) = entity.rocket_silo else {
+    let Some(rocket_silo) = &entity.rocket_silo else {
         return invalid("rocket silo entities require rocket silo metadata");
     };
     if entity.electric_energy_source.is_none() {
@@ -463,6 +521,12 @@ fn validate_rocket_silo_metadata(
     }
     if rocket_silo.parts_per_rocket == 0 {
         return invalid("a rocket must take at least one part");
+    }
+    if rocket_silo.launch_product.amount == 0 {
+        return invalid("launch product amount must be positive");
+    }
+    if rocket_silo.output_slot_count == 0 {
+        return invalid("rocket silos require launch product output slots");
     }
     Ok(())
 }

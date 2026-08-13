@@ -92,12 +92,14 @@ impl EntityStateBehavior for AssemblingMachineState {
 }
 
 impl EntityStateBehavior for RocketSiloState {
-    /// Only the ingredients and modules come back. A part already counted
-    /// toward the rocket is not an item and was never in a slot, so mining a
-    /// half-built silo loses the rocket rather than refunding it in pieces.
+    /// Every slotted item comes back: ingredients, waiting cargo, launch
+    /// products, and modules. A part already counted toward the rocket is not
+    /// an item and was never in a slot, so mining a half-built silo loses the
+    /// rocket rather than refunding it in pieces.
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         push_inventory_stacks(stacks, &self.input_inventory);
         push_inventory_stacks(stacks, &self.cargo_inventory);
+        push_inventory_stacks(stacks, &self.output_inventory);
         push_module_stacks(stacks, &self.modules.slots);
     }
 

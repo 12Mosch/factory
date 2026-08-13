@@ -12,9 +12,9 @@ pub(crate) const LAUNCH_RISE_TICKS: u16 = 120;
 /// The crafting half is an assembler's — ingredients in an input inventory,
 /// progress against a required tick count, a speed fraction scaled by modules —
 /// and the silo shares that machinery rather than restating it. What is its own
-/// is the two fields below the inventory: a silo has no output slot, so a
-/// finished part raises `parts_completed`, and at `parts_per_rocket` the rocket
-/// is whole. There is no separate "rocket ready" flag because there is nothing
+/// is the part counter: a finished part is not an output item, so it raises
+/// `parts_completed`, and at `parts_per_rocket` the rocket is whole. There is no
+/// separate "rocket ready" flag because there is nothing
 /// it could disagree with: the counter reaching the target *is* the rocket.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RocketSiloState {
@@ -24,6 +24,9 @@ pub struct RocketSiloState {
     /// separate from part ingredients so every transfer path can route items to
     /// the correct one-slot holder.
     pub cargo_inventory: Inventory,
+    /// Products returned by completed launches. This is output-only so launch
+    /// rewards cannot be confused with either part ingredients or cargo.
+    pub output_inventory: Inventory,
     pub crafting_progress_ticks: u32,
     pub crafting_required_ticks: u32,
     pub crafting_speed_numerator: u32,
@@ -59,6 +62,15 @@ impl RocketSiloState {
     /// pad, and the parts for the next one have nowhere to go until it leaves.
     pub fn rocket_ready(&self) -> bool {
         self.parts_completed >= self.parts_per_rocket
+    }
+
+    /// Whether the cargo holder contains exactly the configured single payload.
+    pub(crate) fn has_launch_payload(&self, launch_payload: ItemId) -> bool {
+        self.cargo_inventory
+            .slots()
+            .first()
+            .and_then(|slot| slot.stack())
+            .is_some_and(|stack| stack.item_id() == launch_payload && stack.count() == 1)
     }
 }
 

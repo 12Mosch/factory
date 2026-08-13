@@ -1140,18 +1140,6 @@
         ),
         (
             id: 71,
-            name: "space_science_pack",
-            category: Crafting,
-            crafting_time_ticks: 1260,
-            ingredients: [
-                (item: "low_density_structure", amount: 1),
-                (item: "processing_unit", amount: 1),
-                (item: "flying_robot_frame", amount: 1),
-            ],
-            products: [(item: "space_science_pack", amount: 1)],
-        ),
-        (
-            id: 72,
             name: "speed_module_1",
             category: Crafting,
             crafting_time_ticks: 900,
@@ -1162,7 +1150,7 @@
             products: [(item: "speed_module_1", amount: 1)],
         ),
         (
-            id: 73,
+            id: 72,
             name: "speed_module_2",
             category: Crafting,
             crafting_time_ticks: 1800,
@@ -1174,7 +1162,7 @@
             products: [(item: "speed_module_2", amount: 1)],
         ),
         (
-            id: 74,
+            id: 73,
             name: "speed_module_3",
             category: Crafting,
             crafting_time_ticks: 3600,
@@ -1186,7 +1174,7 @@
             products: [(item: "speed_module_3", amount: 1)],
         ),
         (
-            id: 75,
+            id: 74,
             name: "productivity_module_1",
             category: Crafting,
             crafting_time_ticks: 900,
@@ -1197,7 +1185,7 @@
             products: [(item: "productivity_module_1", amount: 1)],
         ),
         (
-            id: 76,
+            id: 75,
             name: "productivity_module_2",
             category: Crafting,
             crafting_time_ticks: 1800,
@@ -1209,7 +1197,7 @@
             products: [(item: "productivity_module_2", amount: 1)],
         ),
         (
-            id: 77,
+            id: 76,
             name: "productivity_module_3",
             category: Crafting,
             crafting_time_ticks: 3600,
@@ -1221,7 +1209,7 @@
             products: [(item: "productivity_module_3", amount: 1)],
         ),
         (
-            id: 78,
+            id: 77,
             name: "efficiency_module_1",
             category: Crafting,
             crafting_time_ticks: 900,
@@ -1232,7 +1220,7 @@
             products: [(item: "efficiency_module_1", amount: 1)],
         ),
         (
-            id: 79,
+            id: 78,
             name: "efficiency_module_2",
             category: Crafting,
             crafting_time_ticks: 1800,
@@ -1244,7 +1232,7 @@
             products: [(item: "efficiency_module_2", amount: 1)],
         ),
         (
-            id: 80,
+            id: 79,
             name: "efficiency_module_3",
             category: Crafting,
             crafting_time_ticks: 3600,
@@ -1256,7 +1244,7 @@
             products: [(item: "efficiency_module_3", amount: 1)],
         ),
         (
-            id: 81,
+            id: 80,
             name: "beacon",
             category: Crafting,
             crafting_time_ticks: 900,
@@ -1269,7 +1257,7 @@
             products: [(item: "beacon", amount: 1)],
         ),
         (
-            id: 82,
+            id: 81,
             name: "solar_panel",
             category: Crafting,
             crafting_time_ticks: 600,
@@ -1281,7 +1269,7 @@
             products: [(item: "solar_panel", amount: 1)],
         ),
         (
-            id: 83,
+            id: 82,
             name: "accumulator",
             category: Crafting,
             crafting_time_ticks: 600,
@@ -1293,7 +1281,7 @@
             products: [(item: "accumulator", amount: 1)],
         ),
         (
-            id: 84,
+            id: 83,
             name: "radar",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1305,7 +1293,7 @@
             products: [(item: "radar", amount: 1)],
         ),
         (
-            id: 85,
+            id: 84,
             name: "landfill",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1313,7 +1301,7 @@
             products: [(item: "landfill", amount: 1)],
         ),
         (
-            id: 87,
+            id: 86,
             name: "red_wire",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1324,7 +1312,7 @@
             products: [(item: "red_wire", amount: 1)],
         ),
         (
-            id: 88,
+            id: 87,
             name: "green_wire",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1335,7 +1323,7 @@
             products: [(item: "green_wire", amount: 1)],
         ),
         (
-            id: 89,
+            id: 88,
             name: "constant_combinator",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1346,7 +1334,7 @@
             products: [(item: "constant_combinator", amount: 1)],
         ),
         (
-            id: 90,
+            id: 89,
             name: "arithmetic_combinator",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1357,7 +1345,7 @@
             products: [(item: "arithmetic_combinator", amount: 1)],
         ),
         (
-            id: 91,
+            id: 90,
             name: "decider_combinator",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1368,7 +1356,7 @@
             products: [(item: "decider_combinator", amount: 1)],
         ),
         (
-            id: 92,
+            id: 91,
             name: "lamp",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1382,7 +1370,7 @@
         // Concrete needs water, and the assembling machine has no fluid boxes,
         // so it is mixed in a chemical plant.
         (
-            id: 86,
+            id: 85,
             name: "concrete",
             category: Chemistry,
             crafting_time_ticks: 60,
@@ -1397,7 +1385,7 @@
         // splits ore into a little fissile U-235 and a lot of U-238, and a fuel
         // cell needs both, so the ratio is what paces reactor fuel.
         (
-            id: 93,
+            id: 92,
             name: "uranium_processing",
             category: Centrifuging,
             crafting_time_ticks: 720,
@@ -1408,7 +1396,7 @@
             ],
         ),
         (
-            id: 94,
+            id: 93,
             name: "uranium_fuel_cell",
             category: Crafting,
             crafting_time_ticks: 600,
@@ -1422,7 +1410,7 @@
         // Closes the loop: spent cells go back to the centrifuge instead of
         // piling up, returning part of their U-238.
         (
-            id: 95,
+            id: 94,
             name: "nuclear_fuel_reprocessing",
             category: Centrifuging,
             crafting_time_ticks: 3600,
@@ -1430,7 +1418,7 @@
             products: [(item: "uranium_238", amount: 3)],
         ),
         (
-            id: 96,
+            id: 95,
             name: "centrifuge",
             category: Crafting,
             crafting_time_ticks: 240,
@@ -1443,7 +1431,7 @@
             products: [(item: "centrifuge", amount: 1)],
         ),
         (
-            id: 97,
+            id: 96,
             name: "nuclear_reactor",
             category: Crafting,
             crafting_time_ticks: 480,
@@ -1456,7 +1444,7 @@
             products: [(item: "nuclear_reactor", amount: 1)],
         ),
         (
-            id: 98,
+            id: 97,
             name: "heat_pipe",
             category: Crafting,
             crafting_time_ticks: 60,
@@ -1467,7 +1455,7 @@
             products: [(item: "heat_pipe", amount: 1)],
         ),
         (
-            id: 99,
+            id: 98,
             name: "heat_exchanger",
             category: Crafting,
             crafting_time_ticks: 180,
@@ -1479,7 +1467,7 @@
             products: [(item: "heat_exchanger", amount: 1)],
         ),
         (
-            id: 100,
+            id: 99,
             name: "steam_turbine",
             category: Crafting,
             crafting_time_ticks: 180,
@@ -1491,7 +1479,7 @@
             products: [(item: "steam_turbine", amount: 1)],
         ),
         (
-            id: 101,
+            id: 100,
             name: "roboport",
             category: Crafting,
             crafting_time_ticks: 300,
@@ -1503,7 +1491,7 @@
             products: [(item: "roboport", amount: 1)],
         ),
         (
-            id: 102,
+            id: 101,
             name: "construction_robot",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1518,7 +1506,7 @@
         // role. Requester and buffer chests reason about amounts rather than
         // just offering contents, which is what makes them the expensive pair.
         (
-            id: 103,
+            id: 102,
             name: "passive_provider_chest",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1530,7 +1518,7 @@
             products: [(item: "passive_provider_chest", amount: 1)],
         ),
         (
-            id: 104,
+            id: 103,
             name: "active_provider_chest",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1542,7 +1530,7 @@
             products: [(item: "active_provider_chest", amount: 1)],
         ),
         (
-            id: 105,
+            id: 104,
             name: "storage_chest",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1554,7 +1542,7 @@
             products: [(item: "storage_chest", amount: 1)],
         ),
         (
-            id: 106,
+            id: 105,
             name: "buffer_chest",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1566,7 +1554,7 @@
             products: [(item: "buffer_chest", amount: 1)],
         ),
         (
-            id: 107,
+            id: 106,
             name: "requester_chest",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1580,7 +1568,7 @@
         // Same frame as a construction robot, with the circuitry that lets it
         // reason about a network's item index rather than about one job.
         (
-            id: 108,
+            id: 107,
             name: "logistic_robot",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1593,7 +1581,7 @@
         // Two pieces of track per craft, the way sleepers and rail come in
         // pairs: a two-tile straight is the shortest thing worth laying.
         (
-            id: 109,
+            id: 108,
             name: "rail",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1608,7 +1596,7 @@
         // circuitry for the locomotive, a steel body for the cargo wagon, and
         // tankage for the fluid wagon.
         (
-            id: 110,
+            id: 109,
             name: "locomotive",
             category: Crafting,
             crafting_time_ticks: 240,
@@ -1620,7 +1608,7 @@
             products: [(item: "locomotive", amount: 1)],
         ),
         (
-            id: 111,
+            id: 110,
             name: "cargo_wagon",
             category: Crafting,
             crafting_time_ticks: 60,
@@ -1632,7 +1620,7 @@
             products: [(item: "cargo_wagon", amount: 1)],
         ),
         (
-            id: 112,
+            id: 111,
             name: "fluid_wagon",
             category: Crafting,
             crafting_time_ticks: 90,
@@ -1647,7 +1635,7 @@
         // Both signals cost the same: the difference between them is the rule
         // they follow at a block boundary, not the hardware.
         (
-            id: 113,
+            id: 112,
             name: "rail_signal",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1658,7 +1646,7 @@
             products: [(item: "rail_signal", amount: 1)],
         ),
         (
-            id: 114,
+            id: 113,
             name: "chain_signal",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1671,7 +1659,7 @@
         // A stop is a signpost with a lamp and a little logic in it: cheaper
         // than the stock it directs, and dearer than the signal beside it.
         (
-            id: 115,
+            id: 114,
             name: "train_stop",
             category: Crafting,
             crafting_time_ticks: 30,
@@ -1686,7 +1674,7 @@
         // into petroleum gas, which is the chain eating its own output; this
         // turns it into something every burner in the game can eat.
         (
-            id: 116,
+            id: 115,
             name: "solid_fuel",
             category: Chemistry,
             crafting_time_ticks: 120,
@@ -1698,7 +1686,7 @@
         // bought, so this is worth running for the fuel slots that are
         // refilled by hand or by train rather than for a furnace column.
         (
-            id: 117,
+            id: 116,
             name: "rocket_fuel",
             category: Chemistry,
             crafting_time_ticks: 1800,
@@ -1714,7 +1702,7 @@
         // so five minutes of silo time per launch, and the ingredients are the
         // three chains the tech tree ends in.
         (
-            id: 118,
+            id: 117,
             name: "rocket_part",
             category: RocketBuilding,
             crafting_time_ticks: 180,
@@ -1726,7 +1714,7 @@
             products: [(item: "rocket_part", amount: 1)],
         ),
         (
-            id: 119,
+            id: 118,
             name: "rocket_silo",
             category: Crafting,
             crafting_time_ticks: 1800,
@@ -1740,7 +1728,7 @@
             products: [(item: "rocket_silo", amount: 1)],
         ),
         (
-            id: 120,
+            id: 119,
             name: "satellite",
             category: Crafting,
             crafting_time_ticks: 300,
@@ -3327,6 +3315,9 @@
                 crafting_speed_denominator: 1,
                 input_slot_count: 4,
                 parts_per_rocket: 100,
+                launch_payload: "satellite",
+                launch_product: (item: "space_science_pack", amount: 1000),
+                output_slot_count: 5,
             )),
             electric_energy_source: Some((energy_usage_watts: 4000000, drain_watts: 250000)),
             max_health: Some(5000),
@@ -3786,7 +3777,7 @@
         (
             id: 28,
             name: "space_science_pack",
-            prerequisites: ["production_science_pack", "utility_science_pack"],
+            prerequisites: ["rocket_silo"],
             science_packs: [
                 (item: "automation_science_pack", amount: 1),
                 (item: "logistic_science_pack", amount: 1),
@@ -3796,7 +3787,7 @@
             ],
             required_units: 150,
             research_time_ticks: 600,
-            effects: [UnlockRecipe("space_science_pack")],
+            effects: [UnlockRecipe("satellite")],
         ),
         (
             id: 29,
@@ -3835,13 +3826,14 @@
         (
             id: 31,
             name: "modules_3",
-            prerequisites: ["modules_2", "production_science_pack"],
+            prerequisites: ["modules_2", "space_science_pack"],
             science_packs: [
                 (item: "automation_science_pack", amount: 1),
                 (item: "logistic_science_pack", amount: 1),
                 (item: "chemical_science_pack", amount: 1),
                 (item: "production_science_pack", amount: 1),
                 (item: "utility_science_pack", amount: 1),
+                (item: "space_science_pack", amount: 1),
             ],
             required_units: 150,
             research_time_ticks: 600,
@@ -4156,7 +4148,6 @@
             effects: [
                 UnlockRecipe("rocket_silo"),
                 UnlockRecipe("rocket_part"),
-                UnlockRecipe("satellite"),
             ],
         ),
     ],

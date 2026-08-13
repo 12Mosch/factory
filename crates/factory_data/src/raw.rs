@@ -8,9 +8,9 @@ use crate::model::{
     GunTurretPrototype, HeatEnergySourcePrototype, LaserTurretPrototype, LogisticChestPrototype,
     ModuleEffectPrototype, NuclearReactorPrototype, OffshorePumpPrototype, PumpPrototype,
     RadarPrototype, RailPiecePrototype, RepairToolPrototype, ResourceExtraction, RoboportPrototype,
-    RobotPrototype, RocketSiloPrototype, RollingStockPrototype, SolarPanelPrototype,
-    SplitterPrototype, SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype,
-    UnitPrototype, VirtualSignalKind,
+    RobotPrototype, RollingStockPrototype, SolarPanelPrototype, SplitterPrototype,
+    SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
+    VirtualSignalKind,
 };
 use crate::validation::RawPrototype;
 
@@ -201,7 +201,7 @@ pub(crate) struct RawEntityPrototype {
     pub(crate) furnace: Option<FurnacePrototype>,
     pub(crate) assembling_machine: Option<AssemblingMachinePrototype>,
     #[serde(default)]
-    pub(crate) rocket_silo: Option<RocketSiloPrototype>,
+    pub(crate) rocket_silo: Option<RawRocketSiloPrototype>,
     pub(crate) transport_belt: Option<TransportBeltPrototype>,
     pub(crate) splitter: Option<SplitterPrototype>,
     pub(crate) inserter: Option<RawInserterPrototype>,
@@ -300,6 +300,17 @@ pub(crate) struct RawHeatBufferPrototype {
 pub(crate) struct RawMiningDrillPrototype {
     pub(crate) mining_area: RawIVec2,
     pub(crate) ticks_per_item: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawRocketSiloPrototype {
+    pub(crate) crafting_speed_numerator: u32,
+    pub(crate) crafting_speed_denominator: u32,
+    pub(crate) input_slot_count: usize,
+    pub(crate) parts_per_rocket: u32,
+    pub(crate) launch_payload: String,
+    pub(crate) launch_product: RawItemAmount,
+    pub(crate) output_slot_count: usize,
 }
 
 #[derive(Debug, Deserialize)]

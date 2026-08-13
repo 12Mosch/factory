@@ -10,7 +10,7 @@ use crate::ui::circuit::panel::{
     spawn_constant_combinator_panel, spawn_decider_combinator_panel,
 };
 use crate::ui::crafting_panel::{CraftingPanelSlots, CraftingPanelSpec, spawn_crafting_panel};
-use crate::ui::formatting::format_recipe_display_name;
+use crate::ui::formatting::{format_recipe_display_name, format_rocket_silo_launch_product_label};
 use crate::ui::inventory_panel::{
     InventoryPanel, spawn_inventory_transfer_feedback, spawn_player_inventory_panel,
     spawn_slot_button,
@@ -182,15 +182,18 @@ fn spawn_container_window_contents(
                         input: panel_slots(sim, entity_id, InventoryPanel::AssemblerInput),
                         output: Some(panel_slots(sim, entity_id, InventoryPanel::AssemblerOutput)),
                         output_label: "Output",
+                        additional_output: None,
                         selectable_category: Some(machine_category),
                     },
                 );
             }
-            // The same panel minus the two things a silo has not got: a recipe
-            // to pick and an output slot to empty.
+            // The same panel without a recipe picker, plus separate cargo and
+            // launch-product groups.
             OpenMachineKind::RocketSilo => {
                 let title = entity_display_name(sim, entity_id)
                     .unwrap_or_else(|| "Rocket Silo".to_string());
+                let launch_product_label = format_rocket_silo_launch_product_label(sim, entity_id)
+                    .unwrap_or_else(|| "Launch product".to_string());
                 spawn_crafting_panel(
                     machine_panel,
                     sim.catalog(),
@@ -199,6 +202,10 @@ fn spawn_container_window_contents(
                         input: panel_slots(sim, entity_id, InventoryPanel::RocketSiloInput),
                         output: Some(panel_slots(sim, entity_id, InventoryPanel::RocketSiloCargo)),
                         output_label: "Cargo",
+                        additional_output: Some((
+                            &launch_product_label,
+                            panel_slots(sim, entity_id, InventoryPanel::RocketSiloOutput),
+                        )),
                         selectable_category: None,
                     },
                 );

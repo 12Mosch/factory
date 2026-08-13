@@ -284,6 +284,9 @@ pub fn inventory_panel_slot(
         InventoryPanel::RocketSiloCargo => entity_id
             .and_then(|id| sim.entities.rocket_silo_state(id).ok())
             .and_then(|state| state.cargo_inventory.slot(slot_index)),
+        InventoryPanel::RocketSiloOutput => entity_id
+            .and_then(|id| sim.entities.rocket_silo_state(id).ok())
+            .and_then(|state| state.output_inventory.slot(slot_index)),
         InventoryPanel::Modules => entity_id
             .and_then(|id| module_slots(sim, id).ok())
             .and_then(|slots| slots.slot(slot_index)),
@@ -341,6 +344,9 @@ pub fn inventory_panel_slot_count(
         InventoryPanel::RocketSiloCargo => entity_id
             .and_then(|id| sim.entities.rocket_silo_state(id).ok())
             .map_or(0, |state| state.cargo_inventory.slots().len()),
+        InventoryPanel::RocketSiloOutput => entity_id
+            .and_then(|id| sim.entities.rocket_silo_state(id).ok())
+            .map_or(0, |state| state.output_inventory.slots().len()),
         InventoryPanel::Modules => entity_id
             .and_then(|id| module_slots(sim, id).ok())
             .map_or(0, ModuleSlots::len),

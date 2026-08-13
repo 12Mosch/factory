@@ -86,7 +86,8 @@ use bincode::Options;
 // built and the count of parts already standing as a rocket. The count is the
 // rocket: nothing else records that a silo is part-way through one.
 // v44: rocket silos gained a cargo slot and durable fixed-tick launch phase.
-pub const SAVE_VERSION: u32 = 44;
+// v45: rocket silos gained a launch-product output inventory.
+pub const SAVE_VERSION: u32 = 45;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -116,7 +117,9 @@ pub const SAVE_VERSION: u32 = 44;
 // graph into blocks.
 // v28: the rocket silo entity kind and its prototype section, and the
 // `RocketBuilding` crafting category the part recipe sits in.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 28;
+// v29: rocket silo prototypes gained launch payload, product, and output
+// capacity metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 29;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

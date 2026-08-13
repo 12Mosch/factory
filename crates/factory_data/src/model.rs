@@ -884,7 +884,7 @@ fn default_assembler_crafting_category() -> CraftingCategory {
     CraftingCategory::Crafting
 }
 
-/// Rocket silo crafting behaviour.
+/// Rocket silo crafting and launch behaviour.
 ///
 /// The silo crafts like an assembler — the same speed fraction over the same
 /// recipe times — and differs in two things, both declared here. Its recipe is
@@ -892,7 +892,8 @@ fn default_assembler_crafting_category() -> CraftingCategory {
 /// [`CraftingCategory::RocketBuilding`], so a player never selects it and can
 /// never clear it. And its product is not stored but counted: each finished part
 /// raises the silo's counter, and at `parts_per_rocket` the rocket is whole and
-/// the silo stops until it leaves.
+/// the silo stops until it leaves. Launch metadata names the one accepted
+/// payload and the item batch produced when that payload reaches space.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RocketSiloPrototype {
     pub crafting_speed_numerator: u32,
@@ -901,6 +902,12 @@ pub struct RocketSiloPrototype {
     pub input_slot_count: usize,
     /// Parts that make one whole rocket.
     pub parts_per_rocket: u32,
+    /// The one item a completed rocket accepts as launch cargo.
+    pub launch_payload: ItemId,
+    /// Items deposited in the silo output when the launch completes.
+    pub launch_product: ItemAmount,
+    /// Slots reserved for launch products.
+    pub output_slot_count: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
@@ -1044,7 +1051,7 @@ pub enum TechnologyEffect {
     UnlockRecipe(RecipeId),
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct ItemAmount {
     pub item: ItemId,
     pub amount: u16,

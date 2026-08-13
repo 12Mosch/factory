@@ -18,8 +18,8 @@ use crate::ui::resources::OpenContainer;
 ///
 /// Assembling machines and rocket silos share this panel because they share the
 /// thing it is a window onto: ingredients going in, a recipe, progress toward
-/// the next one. The two fields that are optional are exactly the two things a
-/// silo does not have — a recipe to choose and an output slot to empty.
+/// the next one. Optional slot groups let the fixed-recipe silo expose both its
+/// launch cargo and its launch-product output without a separate panel system.
 pub(crate) struct CraftingPanelSpec<'a> {
     pub(crate) title: &'a str,
     /// Slots the machine's ingredients sit in.
@@ -29,6 +29,9 @@ pub(crate) struct CraftingPanelSpec<'a> {
     pub(crate) output: Option<CraftingPanelSlots>,
     /// Label for the secondary slot group (normally output, cargo for silos).
     pub(crate) output_label: &'a str,
+    /// An optional third slot group for machines with distinct cargo and
+    /// product outputs.
+    pub(crate) additional_output: Option<(&'a str, CraftingPanelSlots)>,
     /// Category whose recipes the player may pick between, or `None` for a
     /// machine whose recipe is fixed.
     pub(crate) selectable_category: Option<CraftingCategory>,
@@ -174,6 +177,9 @@ pub(crate) fn spawn_crafting_panel(
                 spawn_slot_group(groups, "Input", spec.input);
                 if let Some(output) = spec.output {
                     spawn_slot_group(groups, spec.output_label, output);
+                }
+                if let Some((label, output)) = spec.additional_output {
+                    spawn_slot_group(groups, label, output);
                 }
             });
     });

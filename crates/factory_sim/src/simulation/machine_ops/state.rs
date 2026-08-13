@@ -80,6 +80,7 @@ fn rocket_silo_state_for_prototype(
         modules: MachineModuleState::with_slot_count(prototype.module_slot_count),
         input_inventory: Inventory::with_slot_count(rocket_silo.input_slot_count),
         cargo_inventory: Inventory::with_slot_count(1),
+        output_inventory: Inventory::with_slot_count(rocket_silo.output_slot_count),
         crafting_progress_ticks: 0,
         crafting_required_ticks: 0,
         crafting_speed_numerator: rocket_silo.crafting_speed_numerator,

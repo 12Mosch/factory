@@ -17,16 +17,25 @@ impl MachineTickContext<'_> {
         let mut rocket_silos = std::mem::take(&mut self.entities.rocket_silos);
 
         for (&entity_id, state) in &mut rocket_silos {
-            if self.entities.placed_entity(entity_id).is_none() {
+            let Some(silo_prototype) = self
+                .entities
+                .placed_entity(entity_id)
+                .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+                .and_then(|prototype| prototype.rocket_silo)
+            else {
                 continue;
-            }
+            };
+            let launch_product = silo_prototype.launch_product;
 
             match state.launch_phase {
                 RocketLaunchPhase::Idle
                     if state.rocket_ready()
-                        && state.cargo_inventory.slots()[0]
-                            .stack()
-                            .is_some_and(|stack| stack.count() == 1) =>
+                        && state.has_launch_payload(silo_prototype.launch_payload)
+                        && state.output_inventory.can_insert(
+                            &self.world.prototypes,
+                            launch_product.item,
+                            launch_product.amount,
+                        ) =>
                 {
                     state.launch_phase = RocketLaunchPhase::Sealed {
                         ticks_remaining: LAUNCH_SEAL_TICKS,
@@ -46,10 +55,34 @@ impl MachineTickContext<'_> {
                     continue;
                 }
                 RocketLaunchPhase::Rising { ticks_remaining: 1 } => {
+                    if !state.has_launch_payload(silo_prototype.launch_payload) {
+                        // Launch state is externally constructible through
+                        // saves. Never mint a reward unless the payload that
+                        // justified this launch is still present and exact.
+                        continue;
+                    }
+                    if state
+                        .output_inventory
+                        .insert(
+                            &self.world.prototypes,
+                            launch_product.item,
+                            launch_product.amount,
+                        )
+                        .is_err()
+                    {
+                        // Output can only become emptier after launch starts,
+                        // but a malformed externally-constructed state should
+                        // stall safely rather than destroy its launch reward.
+                        continue;
+                    }
                     let cargo = state
                         .cargo_inventory
                         .take_slot(0)
                         .expect("a launching rocket retains its validated cargo");
+                    self.record_item_produced(
+                        launch_product.item,
+                        u64::from(launch_product.amount),
+                    );
                     self.statistics
                         .record_item_consumed(cargo.item_id(), u64::from(cargo.count()));
                     state.parts_completed = 0;
