@@ -515,6 +515,7 @@ fn inserters_do_not_stack_a_second_configured_payload() {
 #[test]
 fn completed_rocket_launches_satellite_over_fixed_ticks() {
     let mut sim = Simulation::new_test_world(123);
+    assert_eq!(sim.rockets_launched(), 0);
     let silo_id = place_powered_rocket_silo(&mut sim);
     let satellite = item_id(&sim.world.prototypes, "satellite");
     let space_science = item_id(&sim.world.prototypes, "space_science_pack");
@@ -533,6 +534,7 @@ fn completed_rocket_launches_satellite_over_fixed_ticks() {
     for _ in 0..179 {
         sim.tick();
     }
+    assert_eq!(sim.rockets_launched(), 0);
     assert!(matches!(
         sim.entities.rocket_silos[&silo_id].launch_phase,
         RocketLaunchPhase::Rising { .. }
@@ -544,6 +546,7 @@ fn completed_rocket_launches_satellite_over_fixed_ticks() {
     assert_eq!(state.parts_completed, 0);
     assert_eq!(state.cargo_inventory.count(satellite), 0);
     assert_eq!(state.output_inventory.count(space_science), 1_000);
+    assert_eq!(sim.rockets_launched(), 1);
     assert_eq!(
         sim.item_statistics()
             .rows
@@ -717,6 +720,7 @@ fn mid_launch_save_round_trip_preserves_phase_and_finishes_headlessly() {
     for _ in 0..101 {
         loaded.tick();
     }
+    assert_eq!(loaded.rockets_launched(), 1);
     assert_eq!(loaded.entities.rocket_silos[&silo_id].parts_completed, 0);
     assert_eq!(
         loaded.entities.rocket_silos[&silo_id]
@@ -724,4 +728,9 @@ fn mid_launch_save_round_trip_preserves_phase_and_finishes_headlessly() {
             .count(item_id(&loaded.world.prototypes, "space_science_pack")),
         1_000
     );
+
+    let finished_bytes = crate::save_to_bytes(&loaded).unwrap();
+    let restored = crate::load_from_bytes(&finished_bytes).unwrap();
+    assert_eq!(restored.rockets_launched(), 1);
+    assert_eq!(restored.state_hash(), loaded.state_hash());
 }

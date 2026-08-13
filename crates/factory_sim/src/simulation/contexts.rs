@@ -119,6 +119,11 @@ impl<'a> StatisticsContext<'a> {
         };
     }
 
+    /// Records one successfully completed launch in durable statistics.
+    pub(super) fn record_rocket_launched(&mut self) {
+        self.statistics.rockets_launched = self.statistics.rockets_launched.saturating_add(1);
+    }
+
     fn ensure_current_item_statistics_bucket(&mut self) {
         let index = self.current_statistics_bucket_index();
         if self.statistics.items.buckets[index].tick != self.tick {

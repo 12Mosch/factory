@@ -5,6 +5,7 @@ use crate::ui::resources::StatsTab;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProductionStatsSnapshot {
     pub(super) selected_tab: StatsTab,
+    pub(super) rockets_launched: u64,
     pub(super) item_rows: Vec<ItemStatDisplayRow>,
     pub(super) fluid_rows: Vec<ItemStatDisplayRow>,
     pub(super) power_lines: Vec<String>,

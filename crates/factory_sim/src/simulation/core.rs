@@ -270,6 +270,7 @@ impl Simulation {
         self.statistics.items.hash(&mut hasher);
         self.statistics.fluids.hash(&mut hasher);
         self.statistics.power.hash(&mut hasher);
+        self.statistics.rockets_launched.hash(&mut hasher);
         self.entities.hash(&mut hasher);
         self.construction.hash(&mut hasher);
         self.player.hash(&mut hasher);

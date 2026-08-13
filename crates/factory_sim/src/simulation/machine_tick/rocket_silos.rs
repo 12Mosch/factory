@@ -85,6 +85,7 @@ impl MachineTickContext<'_> {
                     );
                     self.statistics
                         .record_item_consumed(cargo.item_id(), u64::from(cargo.count()));
+                    self.statistics.record_rocket_launched();
                     state.parts_completed = 0;
                     state.launch_phase = RocketLaunchPhase::Idle;
                     self.power_demand_cache.mark_dirty(entity_id);
