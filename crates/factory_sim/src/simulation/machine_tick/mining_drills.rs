@@ -36,7 +36,9 @@ impl MachineTickContext<'_> {
                 continue;
             };
 
-            let output_copies = state.modules.output_copies_due();
+            let output_copies = state
+                .modules
+                .output_copies_due_with_productivity(self.mining_drill_productivity_permyriad);
             let output_can_accept = profiler.measure(ProfilePhase::InventoryTransfers, || {
                 drill_productivity_output_can_fit(
                     &self.world.prototypes,
@@ -79,7 +81,9 @@ impl MachineTickContext<'_> {
             if !matches!(advance.result, ProgressAdvance::Completed) {
                 continue;
             }
-            state.modules.complete_productive_cycle();
+            state.modules.complete_productive_cycle_with_productivity(
+                self.mining_drill_productivity_permyriad,
+            );
 
             let mined = self
                 .world

@@ -57,6 +57,27 @@ fn burner_drill_with_coal_mines_output() {
 }
 
 #[test]
+fn mining_productivity_adds_output_without_depleting_extra_resource() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "space_science_pack");
+    complete_research_by_name(&mut sim, "mining_productivity");
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    add_fuel_to_burner_drill(&mut sim, entity_id, coal, 3);
+
+    for _ in 0..4_800 {
+        sim.tick();
+    }
+
+    let state = crate::entity_access::mining_drill_state(&sim, entity_id)
+        .expect("burner drill should expose state");
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_ore, 21)));
+    assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 20));
+    assert_eq!(state.modules.productivity_progress_permyriad, 0);
+}
+
+#[test]
 fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
     let mut sim = Simulation::new_test_world(123);
     let coal = item_id(&sim.world.prototypes, "coal");

@@ -13,21 +13,50 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
         return Err(SimValidationError::InvalidResearchTechnologyNames);
     }
 
-    for technology in &sim.world.prototypes.technologies {
+    if sim.research.technologies.len() != sim.world.prototypes.technologies.len() {
+        return Err(SimValidationError::InvalidResearchTechnologyNames);
+    }
+
+    for (index, technology) in sim.world.prototypes.technologies.iter().enumerate() {
         let state = sim.research.technology_state(technology.id).ok_or(
             SimValidationError::InvalidResearchTechnology {
                 technology_id: technology.id,
             },
         )?;
 
-        if state.progress_units > technology.required_units {
+        if state.technology_id.index() != index {
+            return Err(SimValidationError::InvalidResearchTechnology {
+                technology_id: state.technology_id,
+            });
+        }
+
+        if !technology.level_model.is_repeatable() && state.completed_levels > 1 {
+            return Err(SimValidationError::InvalidResearchTechnology {
+                technology_id: technology.id,
+            });
+        }
+
+        let required_units = match state.completed_levels.checked_add(1) {
+            Some(next_level) => technology.required_units_for_level(next_level),
+            None => None,
+        };
+        let valid_progress = if let Some(required_units) = required_units {
+            state.progress_units < required_units
+        } else {
+            if technology.level_model.is_repeatable() {
+                state.completed_levels == u32::MAX && state.progress_units == 0
+            } else {
+                state.completed_levels == 1 && state.progress_units == technology.required_units
+            }
+        };
+        if !valid_progress {
             return Err(SimValidationError::InvalidResearchProgress {
                 technology_id: technology.id,
                 progress_units: state.progress_units,
-                required_units: technology.required_units,
+                required_units: required_units.unwrap_or(technology.required_units),
             });
         }
-        if state.unlocked
+        if state.completed_levels > 0
             && technology
                 .prerequisites
                 .iter()
@@ -62,7 +91,12 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
             .research
             .technology_state(technology_id)
             .ok_or(SimValidationError::InvalidActiveResearch { technology_id })?;
-        if state.unlocked {
+        let has_next_level = state
+            .completed_levels
+            .checked_add(1)
+            .and_then(|level| technology.required_units_for_level(level))
+            .is_some();
+        if !has_next_level {
             return Err(SimValidationError::InvalidActiveResearch { technology_id });
         }
         for prerequisite_id in &technology.prerequisites {
@@ -76,7 +110,7 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
         .research
         .technologies
         .iter()
-        .filter(|state| state.unlocked)
+        .filter(|state| state.completed_levels > 0)
         .map(|state| state.technology_id)
         .collect::<BTreeSet<_>>();
     if let Some(technology_id) = sim.research.active {
@@ -95,7 +129,12 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
             },
         )?;
 
-        if state.unlocked
+        let has_next_level = state
+            .completed_levels
+            .checked_add(1)
+            .and_then(|level| technology.required_units_for_level(level))
+            .is_some();
+        if !has_next_level
             || Some(*technology_id) == sim.research.active
             || !queued.insert(*technology_id)
         {

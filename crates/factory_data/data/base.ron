@@ -4150,6 +4150,29 @@
                 UnlockRecipe("rocket_part"),
             ],
         ),
+        // The durable post-launch sink. Its additive productivity applies to
+        // mining drills without consuming additional resource richness. A
+        // linear cost keeps early levels attainable while making sustained
+        // gains demand an increasingly capable launch and science factory.
+        (
+            id: 50,
+            name: "mining_productivity",
+            prerequisites: ["space_science_pack"],
+            science_packs: [
+                (item: "automation_science_pack", amount: 1),
+                (item: "logistic_science_pack", amount: 1),
+                (item: "chemical_science_pack", amount: 1),
+                (item: "production_science_pack", amount: 1),
+                (item: "utility_science_pack", amount: 1),
+                (item: "space_science_pack", amount: 1),
+            ],
+            required_units: 500,
+            level_model: Repeatable(
+                cost_curve: Linear(additional_units_per_level: 500),
+            ),
+            research_time_ticks: 600,
+            effects: [MiningDrillProductivity(bonus_permyriad: 500)],
+        ),
     ],
     // Signal channels with no item or fluid identity. The three
     // wildcards are combinator operands rather than values a network can

@@ -2,8 +2,12 @@ use std::collections::HashMap;
 
 use crate::error::PrototypeLoadError;
 use crate::ids::{ItemId, RecipeId, TechnologyId};
-use crate::model::{ItemAmount, TechnologyEffect, TechnologyPrototype};
-use crate::raw::{RawTechnologyEffect, RawTechnologyPrototype};
+use crate::model::{
+    ItemAmount, TechnologyCostCurve, TechnologyEffect, TechnologyLevelModel, TechnologyPrototype,
+};
+use crate::raw::{
+    RawTechnologyCostCurve, RawTechnologyEffect, RawTechnologyLevelModel, RawTechnologyPrototype,
+};
 
 pub(super) fn load_technologies(
     technologies: Vec<RawTechnologyPrototype>,
@@ -29,6 +33,8 @@ pub(super) fn load_technologies(
                 });
             }
 
+            let level_model = resolve_level_model(&technology)?;
+
             let id = TechnologyId::new(technology.id);
             let prerequisites =
                 resolve_technology_prerequisites(&technology, id, &technology_ids_by_name)?;
@@ -41,6 +47,7 @@ pub(super) fn load_technologies(
                 prerequisites,
                 science_packs,
                 required_units: technology.required_units,
+                level_model,
                 research_time_ticks: technology.research_time_ticks,
                 effects,
             })
@@ -112,6 +119,52 @@ fn resolve_technology_effects(
                 })?;
                 Ok(TechnologyEffect::UnlockRecipe(recipe_id))
             }
+            RawTechnologyEffect::MiningDrillProductivity { bonus_permyriad } => {
+                if *bonus_permyriad == 0 {
+                    return Err(PrototypeLoadError::InvalidTechnologyEffect {
+                        technology: technology.name.clone(),
+                    });
+                }
+                Ok(TechnologyEffect::MiningDrillProductivity {
+                    bonus_permyriad: *bonus_permyriad,
+                })
+            }
         })
         .collect()
+}
+
+fn resolve_level_model(
+    technology: &RawTechnologyPrototype,
+) -> Result<TechnologyLevelModel, PrototypeLoadError> {
+    let model = match technology.level_model {
+        RawTechnologyLevelModel::Finite => TechnologyLevelModel::Finite,
+        RawTechnologyLevelModel::Repeatable {
+            cost_curve:
+                RawTechnologyCostCurve::Linear {
+                    additional_units_per_level,
+                },
+        } => TechnologyLevelModel::Repeatable {
+            cost_curve: TechnologyCostCurve::Linear {
+                additional_units_per_level,
+            },
+        },
+    };
+    let max_cost_is_valid = match model {
+        TechnologyLevelModel::Finite => true,
+        TechnologyLevelModel::Repeatable {
+            cost_curve:
+                TechnologyCostCurve::Linear {
+                    additional_units_per_level,
+                },
+        } => additional_units_per_level
+            .checked_mul(u64::from(u32::MAX - 1))
+            .and_then(|additional| technology.required_units.checked_add(additional))
+            .is_some(),
+    };
+    if !max_cost_is_valid {
+        return Err(PrototypeLoadError::InvalidTechnologyCostCurve {
+            technology: technology.name.clone(),
+        });
+    }
+    Ok(model)
 }

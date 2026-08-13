@@ -97,7 +97,7 @@ pub use crate::rail::{
     RailPieceGeometry, RailPoint, RailSignalAspect, RailSignalSnapshot,
 };
 pub use crate::research::{
-    ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
+    ResearchBonuses, ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
 pub use crate::robots::{
     EntityRoboportStatus, RoboportChargingState, RoboportError, RoboportState, Robot,
@@ -794,8 +794,8 @@ pub enum SimValidationError {
     InvalidResearchTechnologyNames,
     InvalidResearchProgress {
         technology_id: TechnologyId,
-        progress_units: u32,
-        required_units: u32,
+        progress_units: u64,
+        required_units: u64,
     },
     InvalidActiveResearch {
         technology_id: TechnologyId,

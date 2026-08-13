@@ -192,6 +192,7 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) stopped_stock: &'a rolling_stock_ops::StoppedStockIndex,
     pub(super) transport: &'a mut TransportLaneCache,
     pub(super) research: &'a mut ResearchState,
+    pub(super) mining_drill_productivity_permyriad: u64,
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) power_demand_cache: &'a mut PowerDemandCache,
     pub(super) fluids: &'a mut FluidSubsystem,
@@ -234,13 +235,13 @@ impl<'a> MachineTickContext<'a> {
 
     pub(super) fn add_research_units(
         &mut self,
-        units: u32,
+        units: u64,
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result = add_research_units_to_state(&self.world.prototypes, self.research, units)?;
         if matches!(result, ResearchProgressResult::Completed { .. }) {
             self.power_demand_cache.invalidate();
         }
-        if let ResearchProgressResult::Completed { technology_id } = result
+        if let ResearchProgressResult::Completed { technology_id, .. } = result
             && let Some(technology) = self.world.prototypes.technology(technology_id)
         {
             self.onboarding_progress

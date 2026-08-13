@@ -182,8 +182,9 @@ fn placeable_items_have_acquisition_paths() {
         .technologies
         .iter()
         .flat_map(|technology| technology.effects.iter())
-        .map(|effect| match effect {
-            TechnologyEffect::UnlockRecipe(recipe_id) => *recipe_id,
+        .filter_map(|effect| match effect {
+            TechnologyEffect::UnlockRecipe(recipe_id) => Some(*recipe_id),
+            TechnologyEffect::MiningDrillProductivity { .. } => None,
         })
         .collect::<BTreeSet<_>>();
     let starting_inventory_items = ["burner_mining_drill", "stone_furnace"]
@@ -233,7 +234,9 @@ fn placeable_items_have_acquisition_paths() {
         );
 
         for effect in &technology.effects {
-            let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
+            let TechnologyEffect::UnlockRecipe(recipe_id) = *effect else {
+                continue;
+            };
             let recipe = recipe_by_id(&catalog, recipe_id);
 
             assert!(

@@ -1041,7 +1041,10 @@ pub struct TechnologyPrototype {
     pub name: String,
     pub prerequisites: Vec<TechnologyId>,
     pub science_packs: Vec<ItemAmount>,
-    pub required_units: u32,
+    /// Cost of level one. Repeatable levels apply [`Self::level_model`]'s
+    /// curve to this base cost.
+    pub required_units: u64,
+    pub level_model: TechnologyLevelModel,
     pub research_time_ticks: u32,
     pub effects: Vec<TechnologyEffect>,
 }
@@ -1049,6 +1052,59 @@ pub struct TechnologyPrototype {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum TechnologyEffect {
     UnlockRecipe(RecipeId),
+    /// Additive productivity granted to every mining drill per completed
+    /// technology level. 10,000 is one additional output item per cycle.
+    MiningDrillProductivity {
+        bonus_permyriad: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum TechnologyLevelModel {
+    #[default]
+    Finite,
+    Repeatable {
+        cost_curve: TechnologyCostCurve,
+    },
+}
+
+impl TechnologyLevelModel {
+    pub const fn is_repeatable(self) -> bool {
+        matches!(self, Self::Repeatable { .. })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum TechnologyCostCurve {
+    Linear { additional_units_per_level: u64 },
+}
+
+impl TechnologyPrototype {
+    /// Returns the research-unit cost for a one-based level, or `None` when
+    /// the finite technology has no such level or the declared curve would
+    /// overflow.
+    pub fn required_units_for_level(&self, level: u32) -> Option<u64> {
+        if level == 0 {
+            return None;
+        }
+        match self.level_model {
+            TechnologyLevelModel::Finite => (level == 1).then_some(self.required_units),
+            TechnologyLevelModel::Repeatable {
+                cost_curve:
+                    TechnologyCostCurve::Linear {
+                        additional_units_per_level,
+                    },
+            } => additional_units_per_level
+                .checked_mul(u64::from(level - 1))
+                .and_then(|additional| self.required_units.checked_add(additional)),
+        }
+    }
+
+    pub fn required_units_after(&self, completed_levels: u32) -> Option<u64> {
+        completed_levels
+            .checked_add(1)
+            .and_then(|level| self.required_units_for_level(level))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

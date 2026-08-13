@@ -9,9 +9,9 @@ use super::components::{
     TechnologyQueueButton, TechnologySelectButton, TechnologyStartQueueButton,
 };
 use super::helpers::{
-    active_research_text, can_enqueue_for_ui, prerequisite_text, queue_text, science_cost_text,
-    start_queue_label, technology_name, technology_progress_text, technology_state_color,
-    technology_state_label, technology_ui_state, unlock_text,
+    active_research_text, can_enqueue_for_ui, next_science_cost_text, prerequisite_text,
+    queue_text, start_queue_label, technology_effect_text, technology_name,
+    technology_progress_text, technology_state_color, technology_state_label, technology_ui_state,
 };
 
 pub(crate) fn technology_panel_root() -> impl Bundle {
@@ -164,7 +164,15 @@ fn spawn_technology_button(
                 TextColor(Color::WHITE),
             ));
             button.spawn((
-                Text::new(technology_state_label(state)),
+                Text::new(if technology.level_model.is_repeatable() {
+                    format!(
+                        "{} · Level {}",
+                        technology_state_label(state),
+                        sim.technology_level(technology_id).unwrap_or(0)
+                    )
+                } else {
+                    technology_state_label(state).to_string()
+                }),
                 TextFont::from_font_size(10.0),
                 TextColor(Color::srgb(0.76, 0.78, 0.74)),
             ));
@@ -217,6 +225,19 @@ fn spawn_technology_detail(
             ));
             detail.spawn((
                 Text::new(format!(
+                    "Current level: {} · {}",
+                    sim.technology_level(technology_id).unwrap_or(0),
+                    if technology.level_model.is_repeatable() {
+                        "Repeatable"
+                    } else {
+                        "Finite"
+                    }
+                )),
+                TextFont::from_font_size(12.0),
+                TextColor(Color::srgb(0.84, 0.86, 0.80)),
+            ));
+            detail.spawn((
+                Text::new(format!(
                     "Progress: {}",
                     technology_progress_text(sim, technology_id)
                 )),
@@ -232,17 +253,14 @@ fn spawn_technology_detail(
                 TextColor(Color::srgb(0.84, 0.86, 0.80)),
             ));
             detail.spawn((
-                Text::new(format!(
-                    "Cost: {}",
-                    science_cost_text(sim.catalog(), technology)
-                )),
+                Text::new(format!("Cost: {}", next_science_cost_text(sim, technology))),
                 TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.84, 0.86, 0.80)),
             ));
             detail.spawn((
                 Text::new(format!(
-                    "Unlocks: {}",
-                    unlock_text(sim.catalog(), technology)
+                    "Effects: {}",
+                    technology_effect_text(sim, technology)
                 )),
                 TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.84, 0.86, 0.80)),

@@ -14,6 +14,7 @@ pub(super) struct ConsumerDemandInputs<'a> {
     pub(super) fluid_boxes: crate::simulation::fluid_ops::FluidBoxes<'a>,
     pub(super) fluids: &'a FluidSubsystem,
     pub(super) research: &'a ResearchState,
+    pub(super) mining_drill_productivity_permyriad: u64,
 }
 
 pub(super) fn refresh_consumer_demand_cache(
@@ -207,6 +208,7 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         fluid_boxes,
         fluids,
         research,
+        mining_drill_productivity_permyriad,
     } = inputs;
     let catalog = &world.prototypes;
     if entities.radars.contains_key(&entity_id) {
@@ -222,7 +224,13 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         return furnace_can_work(catalog, research, state);
     }
     if let Some(state) = entities.mining_drills.get(&entity_id) {
-        return mining_drill_can_work(world, entities, entity_id, state);
+        return mining_drill_can_work(
+            world,
+            entities,
+            entity_id,
+            state,
+            mining_drill_productivity_permyriad,
+        );
     }
     if let Some(state) = entities.labs.get(&entity_id) {
         return lab_can_work(catalog, research, state);
@@ -290,6 +298,7 @@ fn mining_drill_can_work(
     entities: &EntityStore,
     entity_id: EntityId,
     state: &MiningDrillState,
+    mining_drill_productivity_permyriad: u64,
 ) -> bool {
     let Some(placed) = entities.placed_entity(entity_id) else {
         return false;
@@ -313,7 +322,9 @@ fn mining_drill_can_work(
         output_target,
         state.output_slot,
         resource_item,
-        state.modules.output_copies_due(),
+        state
+            .modules
+            .output_copies_due_with_productivity(mining_drill_productivity_permyriad),
     )
 }
 

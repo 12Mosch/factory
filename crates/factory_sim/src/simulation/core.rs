@@ -259,7 +259,7 @@ impl Simulation {
 
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
-        "factory-sim-state-v2".hash(&mut hasher);
+        "factory-sim-state-v3".hash(&mut hasher);
         self.tick.hash(&mut hasher);
         self.day_night_cycle.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
@@ -376,13 +376,25 @@ impl Simulation {
     pub fn is_technology_unlocked(&self, technology_id: TechnologyId) -> bool {
         self.research
             .technology_state(technology_id)
-            .is_some_and(|state| state.unlocked)
+            .is_some_and(|state| state.completed_levels > 0)
     }
 
-    pub fn technology_progress(&self, technology_id: TechnologyId) -> Option<u32> {
+    pub fn technology_level(&self, technology_id: TechnologyId) -> Option<u32> {
+        self.research
+            .technology_state(technology_id)
+            .map(|state| state.completed_levels)
+    }
+
+    pub fn technology_progress(&self, technology_id: TechnologyId) -> Option<u64> {
         self.research
             .technology_state(technology_id)
             .map(|state| state.progress_units)
+    }
+
+    pub fn technology_next_required_units(&self, technology_id: TechnologyId) -> Option<u64> {
+        let technology = self.world.prototypes.technology(technology_id)?;
+        let state = self.research.technology_state(technology_id)?;
+        technology.required_units_after(state.completed_levels)
     }
 
     pub fn active_research(&self) -> Option<TechnologyId> {
@@ -467,14 +479,14 @@ impl Simulation {
 
     pub fn add_research_units(
         &mut self,
-        units: u32,
+        units: u64,
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result =
             add_research_units_to_state(&self.world.prototypes, &mut self.research, units)?;
         if matches!(result, ResearchProgressResult::Completed { .. }) {
             self.power_demand_cache.invalidate();
         }
-        if let ResearchProgressResult::Completed { technology_id } = result
+        if let ResearchProgressResult::Completed { technology_id, .. } = result
             && let Some(technology) = self.world.prototypes.technology(technology_id)
         {
             self.onboarding_progress
@@ -580,7 +592,9 @@ impl Simulation {
         let Ok(state) = self.technology_research_state(technology_id) else {
             return false;
         };
-        !state.unlocked
+        technology
+            .required_units_after(state.completed_levels)
+            .is_some()
             && self.research.active != Some(technology_id)
             && technology
                 .prerequisites
@@ -592,7 +606,7 @@ impl Simulation {
         self.research
             .technologies
             .iter()
-            .filter(|state| state.unlocked)
+            .filter(|state| state.completed_levels > 0)
             .map(|state| state.technology_id)
             .collect()
     }
