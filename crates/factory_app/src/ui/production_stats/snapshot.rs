@@ -17,6 +17,7 @@ pub(crate) fn production_stats_snapshot(
     match selected_tab {
         StatsTab::Production => ProductionStatsSnapshot {
             selected_tab,
+            rockets_launched: sim.rockets_launched(),
             item_rows: production_rows(sim),
             fluid_rows: fluid_production_rows(sim),
             power_lines: Vec::new(),
@@ -26,6 +27,7 @@ pub(crate) fn production_stats_snapshot(
         },
         StatsTab::Consumption => ProductionStatsSnapshot {
             selected_tab,
+            rockets_launched: sim.rockets_launched(),
             item_rows: consumption_rows(sim),
             fluid_rows: fluid_consumption_rows(sim),
             power_lines: Vec::new(),
@@ -35,6 +37,7 @@ pub(crate) fn production_stats_snapshot(
         },
         StatsTab::Power => ProductionStatsSnapshot {
             selected_tab,
+            rockets_launched: sim.rockets_launched(),
             item_rows: Vec::new(),
             fluid_rows: Vec::new(),
             power_lines: power_summary_lines(sim.power_summary(), sim.power_networks()),
@@ -47,6 +50,7 @@ pub(crate) fn production_stats_snapshot(
         },
         StatsTab::Diagnostics => ProductionStatsSnapshot {
             selected_tab,
+            rockets_launched: sim.rockets_launched(),
             item_rows: Vec::new(),
             fluid_rows: Vec::new(),
             power_lines: Vec::new(),

@@ -1,0 +1,139 @@
+use bevy::prelude::*;
+use bevy::ui::FocusPolicy;
+
+use crate::constants::SIM_TICKS_PER_SECOND;
+use crate::resources::SimResource;
+use crate::save_load::PresentationReloadToken;
+
+const NOTIFICATION_LIFETIME_TICKS: u64 = 12 * SIM_TICKS_PER_SECOND as u64;
+
+#[derive(Component)]
+pub struct RocketLaunchNotificationRoot;
+
+#[derive(Resource, Default)]
+pub(crate) struct RocketLaunchUiState {
+    observed_launches: u64,
+    reload_token: u64,
+    expires_at_tick: Option<u64>,
+}
+
+impl RocketLaunchUiState {
+    fn observe(&mut self, launches: u64, tick: u64, reload_token: u64) -> bool {
+        if reload_token != self.reload_token {
+            self.reload_token = reload_token;
+            self.observed_launches = launches;
+            self.expires_at_tick = None;
+        } else {
+            if self.observed_launches == 0 && launches > 0 {
+                self.expires_at_tick = Some(tick.saturating_add(NOTIFICATION_LIFETIME_TICKS));
+            }
+            self.observed_launches = launches;
+        }
+
+        if self
+            .expires_at_tick
+            .is_some_and(|expires_at| tick <= expires_at)
+        {
+            true
+        } else {
+            self.expires_at_tick = None;
+            false
+        }
+    }
+}
+
+pub(crate) fn setup_rocket_launch_ui(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    reload: Option<Res<PresentationReloadToken>>,
+    mut state: ResMut<RocketLaunchUiState>,
+) {
+    state.observed_launches = sim.read().rockets_launched();
+    state.reload_token = reload.as_deref().map_or(0, |token| token.value);
+    state.expires_at_tick = None;
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(72.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            GlobalZIndex(3300),
+            Visibility::Hidden,
+            Pickable::IGNORE,
+            FocusPolicy::Pass,
+            RocketLaunchNotificationRoot,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: Val::Px(430.0),
+                    min_height: Val::Px(92.0),
+                    padding: UiRect::all(Val::Px(16.0)),
+                    border: UiRect::all(Val::Px(2.0)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.035, 0.055, 0.07, 0.97)),
+                BorderColor::all(Color::srgb(0.45, 0.82, 1.0)),
+                Pickable::IGNORE,
+                FocusPolicy::Pass,
+            ))
+            .with_child((
+                Text::new(
+                    "ROCKET LAUNCHED\nA satellite has reached orbit. Your factory keeps running.",
+                ),
+                TextFont::from_font_size(16.0),
+                TextColor(Color::srgb(0.82, 0.94, 1.0)),
+                TextLayout::justify(Justify::Center),
+                Pickable::IGNORE,
+                FocusPolicy::Pass,
+            ));
+        });
+}
+
+pub(crate) fn sync_rocket_launch_ui(
+    sim: Res<SimResource>,
+    reload: Option<Res<PresentationReloadToken>>,
+    mut state: ResMut<RocketLaunchUiState>,
+    mut roots: Query<&mut Visibility, With<RocketLaunchNotificationRoot>>,
+) {
+    let simulation = sim.read();
+    let launches = simulation.rockets_launched();
+    let tick = simulation.tick_count();
+    let reload_token = reload.as_deref().map_or(0, |token| token.value);
+
+    let visibility = if state.observe(launches, tick, reload_token) {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for mut root in &mut roots {
+        *root = visibility;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_first_launch_opens_the_notification() {
+        let mut state = RocketLaunchUiState::default();
+
+        assert!(state.observe(1, 10, 0));
+        assert!(!state.observe(1, 10 + NOTIFICATION_LIFETIME_TICKS + 1, 0));
+        assert!(!state.observe(2, 20 + NOTIFICATION_LIFETIME_TICKS, 0));
+    }
+
+    #[test]
+    fn loading_a_world_with_launches_does_not_replay_the_notification() {
+        let mut state = RocketLaunchUiState::default();
+        assert!(!state.observe(4, 100, 1));
+    }
+}

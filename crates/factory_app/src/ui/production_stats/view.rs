@@ -30,6 +30,11 @@ pub(crate) fn spawn_production_stats_contents(
     snapshot: &ProductionStatsSnapshot,
 ) {
     spawn_tabs(root, snapshot.selected_tab);
+    root.spawn((
+        Text::new(format!("Rockets launched: {}", snapshot.rockets_launched)),
+        TextFont::from_font_size(14.0),
+        TextColor(Color::srgb(0.92, 0.82, 0.45)),
+    ));
     match snapshot.selected_tab {
         StatsTab::Production | StatsTab::Consumption => {
             spawn_item_rows(root, &snapshot.item_rows, "Items", "/min", "Total");

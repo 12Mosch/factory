@@ -46,6 +46,11 @@ impl Default for PowerStatistics {
 }
 
 impl Simulation {
+    /// Number of completed rocket launches in this world.
+    pub fn rockets_launched(&self) -> u64 {
+        self.statistics.rockets_launched
+    }
+
     pub fn revealed_chunks(&self) -> &BTreeSet<ChunkCoord> {
         &self.chart.revealed_chunks
     }

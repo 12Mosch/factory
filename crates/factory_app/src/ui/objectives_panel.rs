@@ -4,7 +4,7 @@ use factory_sim::OnboardingProgress;
 use crate::resources::SimResource;
 use crate::ui::map_view::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET, MINIMAP_TOP_OFFSET};
 
-const OBJECTIVE_COUNT: usize = 17;
+const OBJECTIVE_COUNT: usize = 18;
 const VISIBLE_ROW_COUNT: usize = 5;
 const MINIMAP_PANEL_GAP: f32 = 12.0;
 const OBJECTIVES_PANEL_RIGHT: f32 = MINIMAP_RIGHT_OFFSET + MINIMAP_FRAME_SIZE + MINIMAP_PANEL_GAP;
@@ -99,7 +99,12 @@ const OBJECTIVES: [ObjectiveDefinition; OBJECTIVE_COUNT] = [
     },
     ObjectiveDefinition {
         title: "Deploy a loaded gun turret",
-        hint: "Place a gun turret and load it with usable ammunition. Onboarding complete: expand and defend your factory!",
+        hint: "Place a gun turret and load it with usable ammunition.",
+        target: 1,
+    },
+    ObjectiveDefinition {
+        title: "Launch a rocket",
+        hint: "Research Rocket Silo and Space Science Pack, build a rocket and satellite, then launch it.",
         target: 1,
     },
 ];
@@ -146,6 +151,7 @@ impl ObjectivesSnapshot {
 pub(crate) struct ObjectivesPanelState {
     snapshot: ObjectivesSnapshot,
     progress_revision: u64,
+    rockets_launched: u64,
 }
 #[derive(Component)]
 pub struct ObjectivesPanelRoot;
@@ -165,9 +171,13 @@ pub(crate) fn setup_objectives_panel(
     sim: Res<SimResource>,
     mut state: ResMut<ObjectivesPanelState>,
 ) {
-    let progress = sim.read().onboarding_progress();
-    state.snapshot = objectives_snapshot(progress);
+    let simulation = sim.read();
+    let progress = simulation.onboarding_progress();
+    let rockets_launched = simulation.rockets_launched();
+    drop(simulation);
+    state.snapshot = objectives_snapshot(progress, rockets_launched);
     state.progress_revision = progress.revision;
+    state.rockets_launched = rockets_launched;
     let snapshot = state.snapshot.clone();
     let visible = snapshot.visible_indices();
     commands
@@ -254,12 +264,16 @@ pub(crate) fn sync_objectives_panel(
     mut hints: Query<&mut Text, (With<ObjectiveHintText>, Without<ObjectiveRowText>)>,
     mut roots: Query<&mut Visibility, With<ObjectivesPanelRoot>>,
 ) {
-    let progress = sim.read().onboarding_progress();
-    if progress.revision == state.progress_revision {
+    let simulation = sim.read();
+    let progress = simulation.onboarding_progress();
+    let rockets_launched = simulation.rockets_launched();
+    drop(simulation);
+    if progress.revision == state.progress_revision && rockets_launched == state.rockets_launched {
         return;
     }
     state.progress_revision = progress.revision;
-    let next = objectives_snapshot(progress);
+    state.rockets_launched = rockets_launched;
+    let next = objectives_snapshot(progress, rockets_launched);
     if next == state.snapshot {
         return;
     }
@@ -287,7 +301,7 @@ pub(crate) fn sync_objectives_panel(
     }
 }
 
-fn objectives_snapshot(p: OnboardingProgress) -> ObjectivesSnapshot {
+fn objectives_snapshot(p: OnboardingProgress, rockets_launched: u64) -> ObjectivesSnapshot {
     let values = [
         p.iron_ore_manually_mined,
         p.stone_furnaces_placed,
@@ -306,6 +320,7 @@ fn objectives_snapshot(p: OnboardingProgress) -> ObjectivesSnapshot {
         p.petroleum_gas_produced,
         u64::from(p.turrets_researched),
         p.loaded_gun_turrets,
+        rockets_launched,
     ];
     ObjectivesSnapshot {
         progress: std::array::from_fn(|i| ObjectiveProgress {
@@ -329,7 +344,7 @@ fn row_text(index: usize, p: ObjectiveProgress) -> String {
 }
 fn hint_text(s: &ObjectivesSnapshot) -> String {
     s.active_index().map_or_else(
-        || "Onboarding complete. Expand and defend your factory!".to_string(),
+        || "Rocket launched. Keep expanding: the factory must grow!".to_string(),
         |i| format!("NEXT: {}", OBJECTIVES[i].hint),
     )
 }
@@ -375,35 +390,41 @@ mod tests {
     fn windows_track_active_objective() {
         let first = ObjectivesSnapshot::default();
         assert_eq!(first.visible_indices(), [0, 1, 2, 3, 4]);
-        let middle = objectives_snapshot(OnboardingProgress {
-            iron_ore_manually_mined: 10,
-            stone_furnaces_placed: 1,
-            iron_plates_smelted: 10,
-            burner_mining_drills_placed: 1,
-            iron_ore_drill_mined: 25,
-            transport_belts_manually_crafted: 10,
-            electricity_generated: true,
-            labs_placed: 1,
-            ..default()
-        });
+        let middle = objectives_snapshot(
+            OnboardingProgress {
+                iron_ore_manually_mined: 10,
+                stone_furnaces_placed: 1,
+                iron_plates_smelted: 10,
+                burner_mining_drills_placed: 1,
+                iron_ore_drill_mined: 25,
+                transport_belts_manually_crafted: 10,
+                electricity_generated: true,
+                labs_placed: 1,
+                ..default()
+            },
+            0,
+        );
         assert_eq!(middle.active_index(), Some(8));
         assert_eq!(middle.visible_indices(), [6, 7, 8, 9, 10]);
     }
     #[test]
-    fn end_window_is_thirteen_through_seventeen() {
+    fn end_window_is_fourteen_through_eighteen() {
         let mut s = ObjectivesSnapshot::default();
-        for p in &mut s.progress[..16] {
+        for p in &mut s.progress[..17] {
             p.current = p.target;
         }
-        assert_eq!(s.visible_indices(), [12, 13, 14, 15, 16]);
+        assert_eq!(s.visible_indices(), [13, 14, 15, 16, 17]);
     }
     #[test]
     fn later_progress_does_not_skip_sequence() {
-        let s = objectives_snapshot(OnboardingProgress {
-            turrets_researched: true,
-            loaded_gun_turrets: 1,
-            ..default()
-        });
+        let s = objectives_snapshot(
+            OnboardingProgress {
+                turrets_researched: true,
+                loaded_gun_turrets: 1,
+                ..default()
+            },
+            1,
+        );
         assert_eq!(s.active_index(), Some(0));
     }
     #[test]

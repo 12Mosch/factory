@@ -53,6 +53,9 @@ use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, InventoryTransferFeedback, OpenContainer,
     ProductionStatsWindowState, TechnologyWindowState,
 };
+use crate::ui::rocket_launch::{
+    RocketLaunchUiState, setup_rocket_launch_ui, sync_rocket_launch_ui,
+};
 use crate::ui::rolling_stock_window::{sync_rolling_stock_window, update_rolling_stock_fluid_text};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
@@ -117,12 +120,18 @@ impl Plugin for UiPlugin {
             .init_resource::<EnemySettingsWindowState>()
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
+            .init_resource::<RocketLaunchUiState>()
             .init_resource::<CircuitEditorState>()
             .init_resource::<TrainScheduleEditorState>()
             .init_resource::<TrainStopRenameState>()
             .add_systems(
                 Startup,
-                (setup_debug_overlay, setup_objectives_panel, setup_threat_ui),
+                (
+                    setup_debug_overlay,
+                    setup_objectives_panel,
+                    setup_threat_ui,
+                    setup_rocket_launch_ui,
+                ),
             )
             .add_systems(
                 Update,
@@ -180,6 +189,7 @@ impl Plugin for UiPlugin {
                 )
                     .in_set(InGameSet),
             )
+            .add_systems(Update, sync_rocket_launch_ui.in_set(InGameSet))
             .add_systems(
                 Update,
                 update_module_panel

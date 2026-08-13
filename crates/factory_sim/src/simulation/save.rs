@@ -87,7 +87,8 @@ use bincode::Options;
 // rocket: nothing else records that a silo is part-way through one.
 // v44: rocket silos gained a cargo slot and durable fixed-tick launch phase.
 // v45: rocket silos gained a launch-product output inventory.
-pub const SAVE_VERSION: u32 = 45;
+// v46: the durable rockets-launched statistic joined the snapshot.
+pub const SAVE_VERSION: u32 = 46;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -168,6 +169,7 @@ struct SimulationSnapshotOwned {
     item_statistics: ItemStatistics,
     fluid_statistics: FluidStatistics,
     power_statistics: PowerStatistics,
+    rockets_launched: u64,
     entities: EntityStore,
     construction: ConstructionState,
     player: PlayerState,
@@ -318,6 +320,7 @@ struct SimulationSnapshotRef<'a> {
     item_statistics: &'a ItemStatistics,
     fluid_statistics: &'a FluidStatistics,
     power_statistics: &'a PowerStatistics,
+    rockets_launched: u64,
     entities: &'a EntityStore,
     construction: &'a ConstructionState,
     player: PlayerState,
@@ -353,6 +356,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             item_statistics: &sim.statistics.items,
             fluid_statistics: &sim.statistics.fluids,
             power_statistics: &sim.statistics.power,
+            rockets_launched: sim.statistics.rockets_launched,
             entities: &sim.entities,
             construction: &sim.construction,
             player: sim.player,
@@ -427,6 +431,7 @@ impl SimulationSnapshotOwned {
                 items: self.item_statistics,
                 fluids: self.fluid_statistics,
                 power: self.power_statistics,
+                rockets_launched: self.rockets_launched,
             },
             pollution: self.pollution,
             capacity_overflows: CapacityOverflowCounters::default(),
