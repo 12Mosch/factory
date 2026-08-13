@@ -1,4 +1,4 @@
-//! Per-network item index for logistic chests.
+//! Per-network item index for logistic supply and demand endpoints.
 //!
 //! The index answers "what can this network supply, and what does it want" in
 //! one lookup keyed by item, which is what a logistic dispatcher needs and what
@@ -35,7 +35,7 @@ use factory_data::LogisticChestMode;
 /// A `Vec` rather than a map because it is only ever built once and replayed
 /// twice — subtracted when it goes stale, added when it is fresh — and a chest
 /// holds at most a few distinct items.
-type ChestContribution = Vec<(ItemId, LogisticItemTotals)>;
+type EndpointContribution = Vec<(ItemId, LogisticItemTotals)>;
 
 /// Order supply is drawn in when several chests could serve one request.
 ///
@@ -57,7 +57,16 @@ pub(in crate::simulation) enum SupplyPriority {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::simulation) enum DemandPriority {
     Requester,
+    Machine,
     Buffer,
+}
+
+/// Runtime role of an indexed endpoint. Chests may contribute supply, demand,
+/// and network contents; machines contribute demand only.
+#[derive(Clone, Copy, Debug)]
+enum EndpointRole {
+    Chest(LogisticChestMode),
+    Machine,
 }
 
 /// One chest's place in the index, as it was last counted.
@@ -65,11 +74,11 @@ pub(in crate::simulation) enum DemandPriority {
 /// The chest id travels inside the entry rather than beside it so `add` and
 /// `remove` cannot be handed an entry and a mismatched id.
 #[derive(Clone, Debug)]
-struct PublishedChest {
+struct PublishedEndpoint {
     entity_id: EntityId,
     network_id: u32,
-    mode: LogisticChestMode,
-    contribution: ChestContribution,
+    role: EndpointRole,
+    contribution: EndpointContribution,
 }
 
 /// Candidate sets and totals of one network.
@@ -113,7 +122,7 @@ pub(in crate::simulation) struct LogisticIndex {
     /// What each indexed chest last contributed and which network it was
     /// counted into, so an update is a subtract followed by an add rather than
     /// a rescan of the network.
-    published: BTreeMap<EntityId, PublishedChest>,
+    published: BTreeMap<EntityId, PublishedEndpoint>,
     /// Chests whose contribution is stale.
     dirty: BTreeSet<EntityId>,
     /// Set when the topology changed underneath the index: network ids are
@@ -154,7 +163,7 @@ impl LogisticIndex {
     /// Read by the matcher instead of the chest's inventory: the totals are at
     /// most one refresh old, and every path that acts on them clamps against
     /// the real inventory when it commits.
-    pub(in crate::simulation) fn chest_totals(
+    pub(in crate::simulation) fn endpoint_totals(
         &self,
         entity_id: EntityId,
         item_id: ItemId,
@@ -172,9 +181,10 @@ impl LogisticIndex {
     }
 
     pub(in crate::simulation) fn mode_of(&self, entity_id: EntityId) -> Option<LogisticChestMode> {
-        self.published
-            .get(&entity_id)
-            .map(|published| published.mode)
+        match self.published.get(&entity_id)?.role {
+            EndpointRole::Chest(mode) => Some(mode),
+            EndpointRole::Machine => None,
+        }
     }
 
     /// Unmet demand of one network, from `cursor` onward in serving order.
@@ -293,37 +303,41 @@ impl LogisticIndex {
         }
     }
 
-    fn add(&mut self, published: &PublishedChest) {
+    fn add(&mut self, published: &PublishedEndpoint) {
         let Some(network) = self.networks.get_mut(published.network_id as usize) else {
             return;
         };
         let entity_id = published.entity_id;
-        if published.mode == LogisticChestMode::Storage {
+        if matches!(
+            published.role,
+            EndpointRole::Chest(LogisticChestMode::Storage)
+        ) {
             network.storage_chests.insert(entity_id);
         }
         for &(item_id, totals) in &published.contribution {
             network.contents.entry(item_id).or_default().add(totals);
             if totals.available > 0
-                && let Some(priority) = supply_priority(published.mode)
+                && let EndpointRole::Chest(mode) = published.role
+                && let Some(priority) = supply_priority(mode)
             {
                 network
                     .supply
                     .entry(item_id)
                     .or_default()
                     .insert((priority, entity_id));
-                if published.mode == LogisticChestMode::ActiveProvider {
+                if mode == LogisticChestMode::ActiveProvider {
                     network.surplus.insert((item_id, entity_id));
                 }
             }
             if totals.requested > 0
-                && let Some(priority) = demand_priority(published.mode)
+                && let Some(priority) = demand_priority(published.role)
             {
                 network.demand.insert((priority, item_id, entity_id));
             }
         }
     }
 
-    fn remove(&mut self, published: &PublishedChest) {
+    fn remove(&mut self, published: &PublishedEndpoint) {
         let Some(network) = self.networks.get_mut(published.network_id as usize) else {
             return;
         };
@@ -336,7 +350,8 @@ impl LogisticIndex {
                     network.contents.remove(&item_id);
                 }
             }
-            if let Some(priority) = supply_priority(published.mode)
+            if let EndpointRole::Chest(mode) = published.role
+                && let Some(priority) = supply_priority(mode)
                 && let Some(candidates) = network.supply.get_mut(&item_id)
             {
                 candidates.remove(&(priority, entity_id));
@@ -345,7 +360,7 @@ impl LogisticIndex {
                 }
             }
             network.surplus.remove(&(item_id, entity_id));
-            if let Some(priority) = demand_priority(published.mode) {
+            if let Some(priority) = demand_priority(published.role) {
                 network.demand.remove(&(priority, item_id, entity_id));
             }
         }
@@ -362,13 +377,16 @@ fn supply_priority(mode: LogisticChestMode) -> Option<SupplyPriority> {
     }
 }
 
-fn demand_priority(mode: LogisticChestMode) -> Option<DemandPriority> {
-    match mode {
-        LogisticChestMode::Requester => Some(DemandPriority::Requester),
-        LogisticChestMode::Buffer => Some(DemandPriority::Buffer),
-        LogisticChestMode::PassiveProvider
-        | LogisticChestMode::ActiveProvider
-        | LogisticChestMode::Storage => None,
+fn demand_priority(role: EndpointRole) -> Option<DemandPriority> {
+    match role {
+        EndpointRole::Machine => Some(DemandPriority::Machine),
+        EndpointRole::Chest(LogisticChestMode::Requester) => Some(DemandPriority::Requester),
+        EndpointRole::Chest(LogisticChestMode::Buffer) => Some(DemandPriority::Buffer),
+        EndpointRole::Chest(
+            LogisticChestMode::PassiveProvider
+            | LogisticChestMode::ActiveProvider
+            | LogisticChestMode::Storage,
+        ) => None,
     }
 }
 
@@ -378,7 +396,7 @@ impl Simulation {
     /// Runs inside the robot pass, after the topology has settled, so a chest
     /// is always placed into a network that currently exists.
     pub(in crate::simulation) fn refresh_logistic_index(&mut self) {
-        let changed = self.entities.drain_changed_logistic_chests();
+        let changed = self.entities.drain_changed_logistic_endpoints();
         if changed.is_empty() && !self.robots.logistic.rebuild_all {
             return;
         }
@@ -388,6 +406,9 @@ impl Simulation {
             index
                 .dirty
                 .extend(self.entities.logistic_chests.keys().copied());
+            index
+                .dirty
+                .extend(self.entities.rocket_silos.keys().copied());
         }
         index.dirty.extend(changed);
 
@@ -395,16 +416,16 @@ impl Simulation {
             if let Some(published) = index.published.remove(&entity_id) {
                 index.remove(&published);
             }
-            let Some((mode, contribution)) = self.logistic_chest_contribution(entity_id) else {
+            let Some((role, contribution)) = self.logistic_endpoint_contribution(entity_id) else {
                 continue;
             };
             let Some(network_id) = self.logistic_network_covering_entity(entity_id) else {
                 continue;
             };
-            let published = PublishedChest {
+            let published = PublishedEndpoint {
                 entity_id,
                 network_id,
-                mode,
+                role,
                 contribution,
             };
             index.add(&published);
@@ -414,12 +435,42 @@ impl Simulation {
         self.robots.logistic = index;
     }
 
+    /// What one supply or demand endpoint contributes to its network.
+    fn logistic_endpoint_contribution(
+        &self,
+        entity_id: EntityId,
+    ) -> Option<(EndpointRole, EndpointContribution)> {
+        self.logistic_chest_contribution(entity_id)
+            .map(|(mode, contribution)| (EndpointRole::Chest(mode), contribution))
+            .or_else(|| {
+                self.logistic_machine_contribution(entity_id)
+                    .map(|contribution| (EndpointRole::Machine, contribution))
+            })
+    }
+
+    /// Demand advertised by a machine inventory. This is the reusable opt-in
+    /// point for machines that can accept logistic deliveries.
+    fn logistic_machine_contribution(&self, entity_id: EntityId) -> Option<EndpointContribution> {
+        let prototype = rocket_silo_prototype(&self.world.prototypes, &self.entities, entity_id)?;
+        let requested = self.machine_delivery_capacity(entity_id, prototype.launch_payload)?;
+        let contribution = (requested > 0)
+            .then_some(vec![(
+                prototype.launch_payload,
+                LogisticItemTotals {
+                    requested,
+                    ..LogisticItemTotals::default()
+                },
+            )])
+            .unwrap_or_default();
+        Some(contribution)
+    }
+
     /// What one chest offers and asks of its network, or `None` when it is not
     /// a logistic chest at all.
     fn logistic_chest_contribution(
         &self,
         entity_id: EntityId,
-    ) -> Option<(LogisticChestMode, ChestContribution)> {
+    ) -> Option<(LogisticChestMode, EndpointContribution)> {
         let state = self.entities.logistic_chests.get(&entity_id)?;
         let inventory = self.entities.entity_inventories.get(&entity_id)?;
         let mode = self
@@ -429,7 +480,7 @@ impl Simulation {
             .and_then(|prototype| prototype.logistic_chest)?
             .mode;
 
-        let mut contribution = ChestContribution::new();
+        let mut contribution = EndpointContribution::new();
         for stack in inventory.slots().iter().filter_map(|slot| slot.stack()) {
             let index = totals_index(&mut contribution, stack.item_id());
             let totals = &mut contribution[index].1;
@@ -463,7 +514,7 @@ impl Simulation {
 
 /// Index of `item_id` in an ascending contribution list, inserting an empty
 /// entry when the item is not present yet.
-fn totals_index(contribution: &mut ChestContribution, item_id: ItemId) -> usize {
+fn totals_index(contribution: &mut EndpointContribution, item_id: ItemId) -> usize {
     match contribution.binary_search_by_key(&item_id, |(item, _)| *item) {
         Ok(index) => index,
         Err(index) => {

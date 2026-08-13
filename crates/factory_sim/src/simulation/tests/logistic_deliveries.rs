@@ -41,6 +41,151 @@ fn tick_validated(sim: &mut Simulation, count: usize) {
     }
 }
 
+/// Places the first machine delivery endpoint inside logistic coverage and
+/// makes its rocket ready without spending hundreds of fixture ticks crafting.
+fn place_ready_covered_rocket_silo(
+    sim: &mut Simulation,
+    near: (WorldTileCoord, WorldTileCoord),
+) -> EntityId {
+    unlock_with_prerequisites(sim, "rocket_silo");
+    let prototype_id = entity_id_by_name(&sim.world.prototypes, "rocket_silo");
+    let (x, y) = all_tile_coords(&sim.world)
+        .into_iter()
+        .filter(|(x, y)| {
+            sim.logistic_network_covering_tile(*x + 4, *y + 4).is_some()
+                && crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id,
+                        x: *x,
+                        y: *y,
+                        direction: Direction::North,
+                    },
+                )
+                .is_ok()
+        })
+        .min_by_key(|(x, y)| (x + 4 - near.0).pow(2) + (y + 4 - near.1).pow(2))
+        .expect("a roboport's logistic square should fit a rocket silo");
+    let entity_id = place_at(sim, prototype_id, x, y, Direction::North);
+    let silo = sim.entities.rocket_silos.get_mut(&entity_id).unwrap();
+    silo.parts_completed = silo.parts_per_rocket;
+    sim.entities.note_logistic_endpoint_changed(entity_id);
+    entity_id
+}
+
+fn machine_delivery_fixture(
+    robot_count: u16,
+) -> (Simulation, EntityId, EntityId, EntityId, ItemId) {
+    let mut sim = Simulation::new_test_world(123);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let (_, origin) = logistic_roboport(&mut sim, robot_count);
+    let silo = place_ready_covered_rocket_silo(&mut sim, origin);
+    let provider = place_covered_chest(&mut sim, "passive_provider_chest", origin);
+    let storage = place_covered_chest(&mut sim, "storage_chest", origin);
+    insert_into_chest(&mut sim, provider, satellite, 1);
+    (sim, silo, provider, storage, satellite)
+}
+
+#[test]
+fn a_logistic_robot_delivers_one_satellite_to_a_ready_silo() {
+    let (mut sim, silo, provider, _, satellite) = machine_delivery_fixture(4);
+
+    tick_until(&mut sim, DELIVERY_TICKS, |sim| {
+        sim.entities.rocket_silos[&silo]
+            .cargo_inventory
+            .count(satellite)
+            == 1
+    });
+
+    assert_eq!(chest_count(&sim, provider, satellite), 0);
+    assert_eq!(
+        sim.entities.rocket_silos[&silo]
+            .cargo_inventory
+            .count(satellite),
+        1
+    );
+    sim.validate()
+        .expect("a machine delivery leaves valid state");
+}
+
+#[test]
+fn a_machine_slot_has_only_one_in_flight_delivery() {
+    let (mut sim, silo, _, _, _) = machine_delivery_fixture(8);
+
+    tick_until(&mut sim, DELIVERY_TICKS, |sim| {
+        sim.robots().any(|robot| {
+            robot
+                .delivery
+                .is_some_and(|delivery| delivery.destination == silo)
+        })
+    });
+
+    assert_eq!(
+        sim.robots()
+            .filter(|robot| {
+                robot
+                    .delivery
+                    .is_some_and(|delivery| delivery.destination == silo)
+            })
+            .count(),
+        1,
+        "one cargo slot must reserve only one delivery"
+    );
+}
+
+#[test]
+fn cargo_for_a_machine_that_stops_accepting_is_diverted_without_loss() {
+    let (mut sim, silo, _, storage, satellite) = machine_delivery_fixture(1);
+    tick_until(&mut sim, DELIVERY_TICKS, |sim| {
+        sim.robots().any(|robot| !robot.cargo.is_empty())
+    });
+
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo)
+        .unwrap()
+        .parts_completed = 0;
+    tick_until(&mut sim, DELIVERY_TICKS, |sim| {
+        chest_count(sim, storage, satellite) == 1
+    });
+
+    assert_eq!(chest_count(&sim, storage, satellite), 1);
+    assert_eq!(
+        sim.entities.rocket_silos[&silo]
+            .cargo_inventory
+            .count(satellite),
+        0
+    );
+    sim.validate()
+        .expect("a diverted machine delivery leaves valid state");
+}
+
+#[test]
+fn an_in_flight_machine_delivery_round_trips_deterministically() {
+    let (mut sim, silo, _, _, satellite) = machine_delivery_fixture(1);
+    tick_until(&mut sim, DELIVERY_TICKS, |sim| {
+        sim.robots().any(|robot| !robot.cargo.is_empty())
+    });
+
+    let snapshot = save_to_bytes(&sim).expect("an in-flight machine delivery should save");
+    let mut loaded = load_from_bytes(&snapshot).expect("the machine delivery should load");
+    assert_eq!(loaded.state_hash(), sim.state_hash());
+
+    for _ in 0..DELIVERY_TICKS {
+        sim.tick();
+        loaded.tick();
+        assert_eq!(loaded.state_hash(), sim.state_hash());
+        if sim.entities.rocket_silos[&silo]
+            .cargo_inventory
+            .count(satellite)
+            == 1
+        {
+            return;
+        }
+    }
+    panic!("the reloaded robot did not deliver its machine cargo");
+}
+
 #[test]
 fn a_requester_is_filled_from_a_provider_chest() {
     let mut sim = Simulation::new_test_world(123);

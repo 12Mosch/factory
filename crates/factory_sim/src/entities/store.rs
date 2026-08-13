@@ -83,17 +83,18 @@ macro_rules! define_entity_store {
             $(pub(crate) $field: entity_state_map_type!($field, $ty),)*
             pub(crate) occupancy: OccupancyGrid,
             pub(crate) next_entity_id: u64,
-            /// Logistic chests whose inventory or configuration changed since
+            /// Logistic endpoints whose inventory, configuration, or machine
+            /// acceptance state changed since
             /// the index last drained this set. Derived bookkeeping, not
             /// simulation state: it is left out of the save, the hash, and
             /// equality, and a loaded world rebuilds its index from scratch.
             /// Chests with no logistic role never enter it, so ordinary
             /// inserter traffic costs nothing to record.
             #[serde(skip, default)]
-            pub(crate) changed_logistic_chests: BTreeSet<EntityId>,
+            pub(crate) changed_logistic_endpoints: BTreeSet<EntityId>,
         }
 
-        // Hand-written rather than derived so `changed_logistic_chests` cannot
+        // Hand-written rather than derived so `changed_logistic_endpoints` cannot
         // leak into simulation identity: two worlds that differ only in what
         // has been observed are the same world.
         impl std::hash::Hash for EntityStore {
@@ -125,7 +126,7 @@ macro_rules! define_entity_store {
                     $($field: Default::default(),)*
                     occupancy: OccupancyGrid::default(),
                     next_entity_id,
-                    changed_logistic_chests: BTreeSet::new(),
+                    changed_logistic_endpoints: BTreeSet::new(),
                 }
             }
 

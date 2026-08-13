@@ -112,12 +112,20 @@ impl Simulation {
             .iter()
             .filter_map(|(robot_id, robot)| {
                 let delivery = robot.delivery?;
-                let chest = match delivery.stage {
-                    LogisticDeliveryStage::Pickup => delivery.source,
-                    LogisticDeliveryStage::Dropoff => delivery.destination,
+                let usable = match delivery.stage {
+                    LogisticDeliveryStage::Pickup => {
+                        self.delivery_robot_network_covers(robot, delivery.source)
+                            && self.delivery_source_is_usable(delivery.source)
+                    }
+                    LogisticDeliveryStage::Dropoff => {
+                        self.delivery_robot_network_covers(robot, delivery.destination)
+                            && self.delivery_destination_is_usable(
+                                delivery.destination,
+                                delivery.item_id,
+                            )
+                    }
                 };
-                (!self.delivery_chest_is_usable(chest, delivery.item_id, delivery.stage))
-                    .then_some(*robot_id)
+                (!usable).then_some(*robot_id)
             })
             .collect::<Vec<_>>();
         for robot_id in stale {
@@ -303,7 +311,7 @@ impl Simulation {
         let requested = self
             .robots
             .logistic
-            .chest_totals(destination, item_id)
+            .endpoint_totals(destination, item_id)
             .requested
             .saturating_sub(
                 self.robots
@@ -337,7 +345,7 @@ impl Simulation {
         let available = self
             .robots
             .logistic
-            .chest_totals(source, item_id)
+            .endpoint_totals(source, item_id)
             .available
             .saturating_sub(self.robots.delivery_reservations.outbound(source, item_id));
         if available == 0 {
@@ -435,7 +443,7 @@ impl Simulation {
             let available = self
                 .robots
                 .logistic
-                .chest_totals(source, item_id)
+                .endpoint_totals(source, item_id)
                 .available
                 .saturating_sub(self.robots.delivery_reservations.outbound(source, item_id));
             if available == 0 {
@@ -528,26 +536,69 @@ impl Simulation {
         best.map(|(_, _, chest)| chest)
     }
 
-    /// How much more of `item_id` a chest could take in, after the deliveries
-    /// already flying toward it. `None` when the chest cannot take the item at
-    /// all.
-    fn delivery_intake(&self, chest: EntityId, item_id: ItemId) -> Option<u32> {
-        let stack_size = self.world.prototypes.item(item_id)?.stack_size;
+    /// How much more of `item_id` an endpoint could take, after reservations.
+    fn delivery_intake(&self, destination: EntityId, item_id: ItemId) -> Option<u32> {
         let capacity = self
-            .entities
-            .entity_inventories
-            .get(&chest)?
-            .insert_capacity(item_id, stack_size);
-        Some(capacity.saturating_sub(self.robots.delivery_reservations.inbound(chest, item_id)))
+            .machine_delivery_capacity(destination, item_id)
+            .or_else(|| self.chest_delivery_capacity(destination, item_id))?;
+        Some(
+            capacity.saturating_sub(
+                self.robots
+                    .delivery_reservations
+                    .inbound(destination, item_id),
+            ),
+        )
     }
 
-    /// Whether a chest is still a sensible endpoint for a delivery leg.
-    fn delivery_chest_is_usable(
+    fn chest_delivery_capacity(&self, chest: EntityId, item_id: ItemId) -> Option<u32> {
+        let stack_size = self.world.prototypes.item(item_id)?.stack_size;
+        Some(
+            self.entities
+                .entity_inventories
+                .get(&chest)?
+                .insert_capacity(item_id, stack_size),
+        )
+    }
+
+    /// Capacity exposed by a machine delivery endpoint before reservations.
+    pub(super) fn machine_delivery_capacity(
         &self,
-        chest: EntityId,
+        entity_id: EntityId,
         item_id: ItemId,
-        stage: LogisticDeliveryStage,
-    ) -> bool {
+    ) -> Option<u32> {
+        let silo = self.entities.rocket_silos.get(&entity_id)?;
+        let accepts = silo.rocket_ready()
+            && matches!(silo.launch_phase, RocketLaunchPhase::Idle)
+            && silo
+                .cargo_inventory
+                .slots()
+                .first()
+                .is_some_and(|slot| slot.is_empty())
+            && item_slot_policy_accepts(
+                &self.world.prototypes,
+                &self.research,
+                &self.entities,
+                ItemSlotPolicy::RocketCargo(entity_id),
+                ItemSlotOperation::InserterInsert,
+                item_id,
+            )
+            && silo
+                .cargo_inventory
+                .can_insert(&self.world.prototypes, item_id, 1);
+        Some(u32::from(accepts))
+    }
+
+    fn delivery_robot_network_covers(&self, robot: &Robot, endpoint: EntityId) -> bool {
+        let Some(network_id) = robot
+            .home_roboport
+            .and_then(|home| self.robots.network_ids_by_entity.get(&home).copied())
+        else {
+            return false;
+        };
+        self.logistic_network_covering_entity(endpoint) == Some(network_id)
+    }
+
+    fn delivery_source_is_usable(&self, chest: EntityId) -> bool {
         let Some(mode) = self
             .entities
             .placed_entity(chest)
@@ -557,21 +608,32 @@ impl Simulation {
         else {
             return false;
         };
-        match stage {
-            LogisticDeliveryStage::Pickup => mode.supplies_network(),
-            // A storage chest's filter can be retargeted while a robot is on
-            // its way; anything else it could take, it can still take.
-            LogisticDeliveryStage::Dropoff => self
-                .entities
-                .logistic_chests
-                .get(&chest)
-                .is_some_and(|state| {
-                    mode != LogisticChestMode::Storage
-                        || state
-                            .storage_filter()
-                            .is_none_or(|filter| filter == item_id)
-                }),
+        mode.supplies_network()
+    }
+
+    /// Machine acceptance and mutable storage filters are rechecked in flight.
+    fn delivery_destination_is_usable(&self, destination: EntityId, item_id: ItemId) -> bool {
+        if self.machine_delivery_capacity(destination, item_id) == Some(1) {
+            return true;
         }
+        let Some(mode) = self
+            .entities
+            .placed_entity(destination)
+            .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.logistic_chest)
+            .map(|logistic_chest| logistic_chest.mode)
+        else {
+            return false;
+        };
+        self.entities
+            .logistic_chests
+            .get(&destination)
+            .is_some_and(|state| {
+                mode != LogisticChestMode::Storage
+                    || state
+                        .storage_filter()
+                        .is_none_or(|filter| filter == item_id)
+            })
     }
 
     fn collect_delivery(&mut self, robot_id: RobotId, delivery: LogisticDelivery) {
@@ -623,7 +685,7 @@ impl Simulation {
         let Some(mut robot) = self.robot_flights.robots.remove(&robot_id) else {
             return;
         };
-        self.deposit_cargo_into_chest(&mut robot, delivery.destination, delivery.item_id);
+        self.deposit_cargo_into_destination(&mut robot, delivery.destination, delivery.item_id);
         let carried_on = !robot.cargo.is_empty();
         robot.delivery = None;
         robot.errand = None;
@@ -635,6 +697,66 @@ impl Simulation {
         if carried_on {
             self.divert_cargo_to_storage(robot_id, delivery.source);
         }
+    }
+
+    fn deposit_cargo_into_destination(
+        &mut self,
+        robot: &mut Robot,
+        destination: EntityId,
+        item_id: ItemId,
+    ) {
+        if self.entities.rocket_silos.contains_key(&destination) {
+            self.deposit_cargo_into_machine(robot, destination, item_id);
+        } else {
+            self.deposit_cargo_into_chest(robot, destination, item_id);
+        }
+    }
+
+    /// Deposits through the same cargo-slot policy used by player and inserter
+    /// transfers. Rejected or excess cargo remains aboard for diversion.
+    fn deposit_cargo_into_machine(
+        &mut self,
+        robot: &mut Robot,
+        entity_id: EntityId,
+        item_id: ItemId,
+    ) {
+        if self.machine_delivery_capacity(entity_id, item_id) != Some(1) {
+            return;
+        }
+        let mut remaining_cargo = Vec::new();
+        let mut room = 1_u16;
+        for stack in robot.cargo.drain(..) {
+            if stack.item_id() != item_id || room == 0 {
+                remaining_cargo.push(stack);
+                continue;
+            }
+            let accepted = stack.count().min(room);
+            let inserted = self
+                .entities
+                .rocket_silo_state_mut(entity_id)
+                .ok()
+                .is_some_and(|silo| {
+                    silo.cargo_inventory
+                        .insert(&self.world.prototypes, item_id, accepted)
+                        .is_ok()
+                });
+            if !inserted {
+                remaining_cargo.push(stack);
+                continue;
+            }
+            room -= accepted;
+            if let Some(leftover) = stack
+                .count()
+                .checked_sub(accepted)
+                .filter(|count| *count > 0)
+            {
+                remaining_cargo.push(
+                    ItemStack::new(&self.world.prototypes, item_id, leftover)
+                        .expect("a leftover preserves a validated stack"),
+                );
+            }
+        }
+        robot.cargo = remaining_cargo;
     }
 
     /// Inserts the robot's cargo of `item_id` into `chest`, keeping whatever

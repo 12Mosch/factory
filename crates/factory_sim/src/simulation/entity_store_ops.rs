@@ -66,7 +66,7 @@ impl EntityStore {
         if !self.entity_inventories.contains_key(&entity_id) {
             return None;
         }
-        self.note_logistic_chest_changed(entity_id);
+        self.note_logistic_endpoint_changed(entity_id);
         self.entity_inventories.get_mut(&entity_id)
     }
 
@@ -76,14 +76,16 @@ impl EntityStore {
     ///
     /// Chests with no logistic role are filtered out here rather than by every
     /// caller, so a factory full of ordinary chests never grows the set.
-    pub(in crate::simulation) fn note_logistic_chest_changed(&mut self, entity_id: EntityId) {
-        if self.logistic_chests.contains_key(&entity_id) {
-            self.changed_logistic_chests.insert(entity_id);
+    pub(in crate::simulation) fn note_logistic_endpoint_changed(&mut self, entity_id: EntityId) {
+        if self.logistic_chests.contains_key(&entity_id)
+            || self.rocket_silos.contains_key(&entity_id)
+        {
+            self.changed_logistic_endpoints.insert(entity_id);
         }
     }
 
-    pub(in crate::simulation) fn drain_changed_logistic_chests(&mut self) -> BTreeSet<EntityId> {
-        std::mem::take(&mut self.changed_logistic_chests)
+    pub(in crate::simulation) fn drain_changed_logistic_endpoints(&mut self) -> BTreeSet<EntityId> {
+        std::mem::take(&mut self.changed_logistic_endpoints)
     }
 
     pub(super) fn entity_inventory_mut(
@@ -94,7 +96,7 @@ impl EntityStore {
             return Err(ContainerError::MissingEntity(entity_id));
         }
 
-        self.note_logistic_chest_changed(entity_id);
+        self.note_logistic_endpoint_changed(entity_id);
         self.entity_inventories
             .get_mut(&entity_id)
             .or_else(|| self.labs.get_mut(&entity_id).map(|lab| &mut lab.inventory))
@@ -299,6 +301,7 @@ impl EntityStore {
             return Err(RocketSiloError::MissingEntity(entity_id));
         }
 
+        self.note_logistic_endpoint_changed(entity_id);
         self.rocket_silos
             .get_mut(&entity_id)
             .ok_or(RocketSiloError::NotRocketSilo(entity_id))
@@ -414,7 +417,7 @@ impl EntityStore {
             },
         );
         self.insert_reserved_states(id, reservation);
-        self.note_logistic_chest_changed(id);
+        self.note_logistic_endpoint_changed(id);
         id
     }
 
@@ -449,7 +452,7 @@ impl EntityStore {
         let entity = self.placed_entities.remove(&entity_id)?;
         // Recorded before the state is dropped, so the index still learns that
         // this chest's contribution has to come back out.
-        self.note_logistic_chest_changed(entity_id);
+        self.note_logistic_endpoint_changed(entity_id);
         self.remove_entity_states(entity_id);
         self.occupancy
             .release_footprint(entity_id, &entity.footprint);
