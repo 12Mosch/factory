@@ -90,6 +90,12 @@ fn machine_delivery_fixture(
 fn a_logistic_robot_delivers_one_satellite_to_a_ready_silo() {
     let (mut sim, silo, provider, _, satellite) = machine_delivery_fixture(4);
 
+    assert_eq!(
+        sim.logistic_network_id_for_chest(silo),
+        None,
+        "a machine endpoint must not change the chest-only public accessor"
+    );
+
     tick_until(&mut sim, DELIVERY_TICKS, |sim| {
         sim.entities.rocket_silos[&silo]
             .cargo_inventory
