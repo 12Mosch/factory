@@ -101,13 +101,6 @@ pub(in crate::simulation) fn validate_mining_drill(
         if !is_solid_resource {
             return Err(SimValidationError::InvalidEntityState { entity_id });
         }
-        if state
-            .output_slot
-            .stack()
-            .is_some_and(|stack| stack.item_id() != pending.item_id)
-        {
-            return Err(SimValidationError::InvalidEntityState { entity_id });
-        }
     }
 
     Ok(())

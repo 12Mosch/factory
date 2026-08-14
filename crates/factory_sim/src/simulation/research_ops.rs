@@ -132,9 +132,9 @@ pub(super) fn can_select_research_in_state(
     }
 
     for prerequisite_id in &technology.prerequisites {
-        if !research
+        if research
             .technology_state(*prerequisite_id)
-            .is_some_and(|state| state.completed_levels > 0)
+            .is_none_or(|state| state.completed_levels == 0)
         {
             return Err(ResearchError::PrerequisiteLocked {
                 technology_id,

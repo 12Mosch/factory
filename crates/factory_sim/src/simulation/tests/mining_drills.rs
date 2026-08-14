@@ -187,6 +187,27 @@ fn deconstructing_drill_rejects_unbounded_pending_output_without_expanding_it() 
 }
 
 #[test]
+fn mining_drill_validation_allows_stored_and_pending_output_to_differ() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+    let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    let state = sim
+        .entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state");
+    state.output_slot = test_slot(test_stack(iron_ore, 1));
+    state.pending_output = Some(crate::machines::PendingMiningOutput {
+        item_id: copper_ore,
+        count: 65_537,
+    });
+
+    sim.validate().expect(
+        "stored output and pending output drain independently and may name different resources",
+    );
+}
+
+#[test]
 fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
     let mut sim = Simulation::new_test_world(123);
     let coal = item_id(&sim.world.prototypes, "coal");
