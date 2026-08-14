@@ -138,8 +138,8 @@ fn silo_builds_parts_and_counts_them_toward_a_rocket() {
     assert_eq!(sim.player_inventory.count(rocket_part), 0);
 }
 
-/// A full rocket blocks the silo the way a full output blocks an assembler: no
-/// progress, no ingredients drawn, and a status that says so.
+/// A full rocket stops part construction while it waits for launch cargo: no
+/// progress, no ingredients drawn, and a status that says what is missing.
 #[test]
 fn silo_stops_at_a_whole_rocket() {
     let mut sim = Simulation::new_test_world(123);
@@ -169,7 +169,11 @@ fn silo_stops_at_a_whole_rocket() {
     );
     assert_eq!(
         sim.machine_status_for_entity(silo_id),
-        Some(MachineStatus::OutputFull)
+        Some(MachineStatus::NoInput)
+    );
+    assert_eq!(
+        sim.rocket_silo_status_for_entity(silo_id).unwrap().state,
+        RocketSiloOperationalState::AwaitingPayload
     );
 
     // And it resumes the moment the rocket leaves, which is what #199 will do.
@@ -196,6 +200,98 @@ fn silo_without_ingredients_reports_missing_input_and_makes_no_progress() {
     assert_eq!(
         sim.machine_status_for_entity(silo_id),
         Some(MachineStatus::NoInput)
+    );
+    assert_eq!(
+        sim.rocket_silo_status_for_entity(silo_id).unwrap().state,
+        RocketSiloOperationalState::MissingIngredients
+    );
+}
+
+#[test]
+fn silo_diagnostics_distinguish_build_cargo_output_and_launch_phases() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let space_science = item_id(&sim.world.prototypes, "space_science_pack");
+    stock_rocket_silo(&mut sim, silo_id, 2);
+    sim.tick();
+
+    let detail = sim.rocket_silo_status_for_entity(silo_id).unwrap();
+    assert_eq!(detail.state, RocketSiloOperationalState::BuildingParts);
+    assert_eq!(detail.machine_status(), MachineStatus::Working);
+
+    sim.power
+        .entity_statuses
+        .get_mut(&silo_id)
+        .expect("the powered silo should have a power status")
+        .satisfaction_permyriad = 0;
+    let detail = sim.rocket_silo_status_for_entity(silo_id).unwrap();
+    assert_eq!(detail.state, RocketSiloOperationalState::NoPower);
+    assert_eq!(detail.machine_status(), MachineStatus::NoPower);
+    sim.power
+        .entity_statuses
+        .get_mut(&silo_id)
+        .unwrap()
+        .satisfaction_permyriad = 10_000;
+
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    let detail = sim.rocket_silo_status_for_entity(silo_id).unwrap();
+    assert_eq!(detail.state, RocketSiloOperationalState::AwaitingPayload);
+    assert_eq!(detail.machine_status(), MachineStatus::NoInput);
+
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    let detail = sim.rocket_silo_status_for_entity(silo_id).unwrap();
+    assert_eq!(detail.state, RocketSiloOperationalState::ReadyToLaunch);
+
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .output_inventory
+        .insert(&sim.world.prototypes, space_science, 1)
+        .unwrap();
+    let detail = sim.rocket_silo_status_for_entity(silo_id).unwrap();
+    assert_eq!(
+        detail.state,
+        RocketSiloOperationalState::LaunchOutputBlocked
+    );
+    assert_eq!(detail.machine_status(), MachineStatus::OutputFull);
+
+    sim.entities
+        .rocket_silos
+        .get_mut(&silo_id)
+        .unwrap()
+        .output_inventory
+        .remove(space_science, 1)
+        .unwrap();
+    sim.tick();
+    let detail = sim.rocket_silo_status_for_entity(silo_id).unwrap();
+    assert_eq!(detail.state, RocketSiloOperationalState::Sealing);
+    assert_eq!(detail.machine_status(), MachineStatus::Working);
+    assert_eq!(detail.progress_ticks, 0);
+    assert_eq!(detail.ticks_remaining, Some(detail.required_ticks));
+
+    for _ in 0..60 {
+        sim.tick();
+    }
+    let detail = sim.rocket_silo_status_for_entity(silo_id).unwrap();
+    assert_eq!(detail.state, RocketSiloOperationalState::Launching);
+    assert_eq!(detail.machine_status(), MachineStatus::Working);
+    assert_eq!(detail.progress_ticks, 0);
+    assert_eq!(detail.ticks_remaining, Some(detail.required_ticks));
+
+    let loaded = crate::load_from_bytes(&crate::save_to_bytes(&sim).unwrap()).unwrap();
+    assert_eq!(
+        loaded.rocket_silo_status_for_entity(silo_id),
+        Some(detail),
+        "the projection should follow durable phase progress after save/load"
     );
 }
 
@@ -283,6 +379,13 @@ fn a_silo_stays_valid_on_the_tick_its_technology_lands() {
 
     sim.validate()
         .expect("a silo whose recipe has not reached it yet is a valid world");
+    assert!(
+        sim.rocket_silo_status_for_entity(silo_id)
+            .unwrap()
+            .required_ticks
+            > 0,
+        "diagnostics should derive the unlocked duration before the next silo tick"
+    );
 
     sim.tick();
 

@@ -1,4 +1,5 @@
 use super::MachineModuleState;
+use super::MachineStatus;
 use crate::ids::EntityId;
 use crate::inventory::Inventory;
 use factory_data::ItemId;
@@ -53,6 +54,59 @@ pub enum RocketLaunchPhase {
     Rising {
         ticks_remaining: u16,
     },
+}
+
+/// Player-facing operating state derived from a rocket silo's durable state.
+///
+/// This stays separate from [`MachineStatus`]: cargo and launch phases only
+/// make sense for a silo, while the generic status remains useful for shared
+/// diagnostics, audio, and production-problem overlays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RocketSiloOperationalState {
+    RecipeLocked,
+    BuildingParts,
+    MissingIngredients,
+    NoPower,
+    AwaitingPayload,
+    ReadyToLaunch,
+    Sealing,
+    Launching,
+    LaunchOutputBlocked,
+}
+
+impl RocketSiloOperationalState {
+    /// Projection used by diagnostics that apply to every machine kind.
+    pub const fn machine_status(self) -> MachineStatus {
+        match self {
+            Self::RecipeLocked => MachineStatus::NoRecipe,
+            Self::BuildingParts | Self::ReadyToLaunch | Self::Sealing | Self::Launching => {
+                MachineStatus::Working
+            }
+            Self::MissingIngredients | Self::AwaitingPayload => MachineStatus::NoInput,
+            Self::NoPower => MachineStatus::NoPower,
+            Self::LaunchOutputBlocked => MachineStatus::OutputFull,
+        }
+    }
+}
+
+/// Read-only diagnostic projection for a rocket silo.
+///
+/// Progress is simulation-tick based. During part construction it is the
+/// current part craft; during sealing and launch it is the active phase. This
+/// makes UI progress independent of render-frame cadence and naturally durable
+/// across save/load because all source fields live in [`RocketSiloState`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RocketSiloStatusDetail {
+    pub state: RocketSiloOperationalState,
+    pub progress_ticks: u32,
+    pub required_ticks: u32,
+    pub ticks_remaining: Option<u32>,
+}
+
+impl RocketSiloStatusDetail {
+    pub const fn machine_status(self) -> MachineStatus {
+        self.state.machine_status()
+    }
 }
 
 impl RocketSiloState {

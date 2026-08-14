@@ -1,5 +1,7 @@
 use factory_data::{CraftingCategory, FluidId, ItemId, PrototypeCatalog};
-use factory_sim::{EntityId, ItemStack, Simulation};
+use factory_sim::{
+    EntityId, ItemStack, RocketSiloOperationalState, RocketSiloStatusDetail, Simulation,
+};
 
 use crate::utils::compact_item_name;
 
@@ -93,10 +95,8 @@ fn format_rocket_silo_detail_text(
         "Output: Rocket {}/{}",
         state.parts_completed, state.parts_per_rocket
     );
-    let progress = format!(
-        "Progress: {}/{}",
-        state.crafting_progress_ticks, state.crafting_required_ticks
-    );
+    let status = sim.rocket_silo_status_for_entity(entity_id)?;
+    let progress = format_rocket_silo_progress(status);
     let Some(recipe) = sim.rocket_silo_recipe() else {
         return Some(CraftingDetailText {
             recipe: "Recipe: <locked>".to_string(),
@@ -132,6 +132,74 @@ fn format_rocket_silo_detail_text(
         products: rocket,
         progress,
     })
+}
+
+/// Current silo state shown in the machine panel.
+pub fn format_rocket_silo_operational_status(
+    sim: &Simulation,
+    entity_id: EntityId,
+) -> Option<String> {
+    let detail = sim.rocket_silo_status_for_entity(entity_id)?;
+    let silo_state = factory_sim::entity_access::rocket_silo_state(sim, entity_id).ok()?;
+    let placed = sim.entities().placed_entity(entity_id)?;
+    let prototype = sim.catalog().entity(placed.prototype_id)?.rocket_silo?;
+
+    Some(match detail.state {
+        RocketSiloOperationalState::RecipeLocked => {
+            "Rocket parts locked — research Rocket Silo to begin.".to_string()
+        }
+        RocketSiloOperationalState::BuildingParts => format!(
+            "Building rocket parts — {}/{} complete.",
+            silo_state.parts_completed, silo_state.parts_per_rocket
+        ),
+        RocketSiloOperationalState::MissingIngredients => {
+            "Missing ingredients — add the rocket-part ingredients listed above.".to_string()
+        }
+        RocketSiloOperationalState::NoPower => {
+            "No power — connect the silo to a powered electric network.".to_string()
+        }
+        RocketSiloOperationalState::AwaitingPayload => format!(
+            "Awaiting payload — add 1 {} to the Cargo slot.",
+            format_item_display_name(sim.catalog(), prototype.launch_payload)
+        ),
+        RocketSiloOperationalState::ReadyToLaunch => {
+            "Ready to launch — sequence starts on the next simulation tick.".to_string()
+        }
+        RocketSiloOperationalState::Sealing => format_launch_state("Sealing rocket", detail),
+        RocketSiloOperationalState::Launching => format_launch_state("Launching rocket", detail),
+        RocketSiloOperationalState::LaunchOutputBlocked => format!(
+            "Launch output blocked — clear room for {} {} in the launch-product slots.",
+            prototype.launch_product.amount,
+            format_item_display_name(sim.catalog(), prototype.launch_product.item),
+        ),
+    })
+}
+
+fn format_rocket_silo_progress(detail: RocketSiloStatusDetail) -> String {
+    match detail.state {
+        RocketSiloOperationalState::Sealing => {
+            format!("Progress: {}", format_launch_state("Sealing", detail))
+        }
+        RocketSiloOperationalState::Launching => {
+            format!("Progress: {}", format_launch_state("Launching", detail))
+        }
+        _ => format!(
+            "Progress: {}/{}",
+            detail.progress_ticks, detail.required_ticks
+        ),
+    }
+}
+
+fn format_launch_state(label: &str, detail: RocketSiloStatusDetail) -> String {
+    let percent = detail
+        .progress_ticks
+        .saturating_mul(100)
+        .checked_div(detail.required_ticks)
+        .unwrap_or(0);
+    format!(
+        "{label} — {percent}% ({} ticks remaining)",
+        detail.ticks_remaining.unwrap_or(0)
+    )
 }
 
 fn format_assembler_detail_text(

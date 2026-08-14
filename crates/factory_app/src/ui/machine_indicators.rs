@@ -9,6 +9,7 @@ use factory_sim::{
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
+use crate::ui::formatting::format_rocket_silo_operational_status;
 use crate::ui::inventory_panel::{InventoryPanel, spawn_labeled_slot, spawn_slot_button};
 use crate::ui::resources::OpenContainer;
 
@@ -60,10 +61,13 @@ pub(crate) struct MachineGuidanceText;
 
 pub(crate) fn spawn_machine_guidance(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    status: MachineStatus,
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
 ) {
+    let (guidance, status) = machine_guidance_for_entity(sim, entity_id)
+        .expect("machine guidance is only spawned for a diagnosed machine");
     root.spawn((
-        Text::new(format_machine_guidance(status)),
+        Text::new(guidance),
         TextFont::from_font_size(11.0),
         TextColor(machine_guidance_color(status)),
         TextLayout::justify(Justify::Left),
@@ -116,17 +120,27 @@ pub(crate) fn update_machine_guidance(
     open_container: Res<OpenContainer>,
     mut guidance: Query<(&mut Text, &mut TextColor), With<MachineGuidanceText>>,
 ) {
-    let status = open_container
+    let guidance_state = open_container
         .entity_id
-        .and_then(|entity_id| sim.read().machine_status_for_entity(entity_id));
-    let Some(status) = status else {
+        .and_then(|entity_id| machine_guidance_for_entity(&sim.read(), entity_id));
+    let Some((guidance_text, status)) = guidance_state else {
         return;
     };
 
     for (mut text, mut color) in &mut guidance {
-        text.0 = format_machine_guidance(status).to_string();
+        text.0.clone_from(&guidance_text);
         color.0 = machine_guidance_color(status);
     }
+}
+
+fn machine_guidance_for_entity(
+    sim: &factory_sim::Simulation,
+    entity_id: factory_sim::EntityId,
+) -> Option<(String, MachineStatus)> {
+    let status = sim.machine_status_for_entity(entity_id)?;
+    let guidance = format_rocket_silo_operational_status(sim, entity_id)
+        .unwrap_or_else(|| format_machine_guidance(status).to_string());
+    Some((guidance, status))
 }
 
 pub(crate) fn spawn_mining_drill_panel(
@@ -783,13 +797,8 @@ pub(crate) fn update_machine_indicators(
                     ))
                 }
                 OpenMachineKind::RocketSilo => {
-                    let state =
-                        factory_sim::entity_access::rocket_silo_state(&sim, entity_id).ok()?;
-                    Some((
-                        None,
-                        state.crafting_progress_ticks,
-                        state.crafting_required_ticks,
-                    ))
+                    let detail = sim.rocket_silo_status_for_entity(entity_id)?;
+                    Some((None, detail.progress_ticks, detail.required_ticks))
                 }
                 OpenMachineKind::Inserter => {
                     let energy =
