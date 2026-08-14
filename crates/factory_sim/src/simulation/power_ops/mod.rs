@@ -317,6 +317,16 @@ impl Simulation {
                 }
             }
         }
+        if self.entities.rocket_silos.keys().any(|entity_id| {
+            self.power
+                .entity_statuses
+                .get(entity_id)
+                .is_some_and(|status| {
+                    status.network_id.is_some() && status.satisfaction_permyriad > 0
+                })
+        }) {
+            self.onboarding_progress.record_rocket_silo_powered();
+        }
         self.record_power_sample();
     }
 

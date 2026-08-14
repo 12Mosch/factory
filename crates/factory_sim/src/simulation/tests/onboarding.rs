@@ -41,6 +41,8 @@ fn onboarding_progress_survives_v14_save_round_trip() {
         petroleum_gas_produced: 45,
         turrets_researched: true,
         loaded_gun_turrets: 1,
+        rocket_silo_powered: true,
+        rocket_parts_completed: true,
     };
 
     let bytes = save_to_bytes(&sim).expect("v14 save should serialize");

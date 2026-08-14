@@ -86,6 +86,8 @@ impl MachineTickContext<'_> {
                     self.statistics
                         .record_item_consumed(cargo.item_id(), u64::from(cargo.count()));
                     self.statistics.record_rocket_launched();
+                    self.onboarding_progress.record_rocket_silo_powered();
+                    self.onboarding_progress.record_rocket_parts_completed();
                     state.parts_completed = 0;
                     state.launch_phase = RocketLaunchPhase::Idle;
                     self.power_demand_cache.mark_dirty(entity_id);
@@ -174,6 +176,7 @@ impl MachineTickContext<'_> {
                 // The silo map is temporarily moved out of the entity store in
                 // this pass, so record the endpoint transition directly.
                 self.entities.changed_logistic_endpoints.insert(entity_id);
+                self.onboarding_progress.record_rocket_parts_completed();
             }
 
             // Recipe slices borrow prototypes here, so record through the fields
