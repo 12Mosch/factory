@@ -11,7 +11,7 @@ use crate::rendering::belts::{
 };
 use crate::rendering::colors::{RenderPrototypeIds, TileColorTable, tile_color};
 use crate::rendering::entities::{
-    PlacedEntitySprite, RocketSiloSprite, RocketSiloVisualPhase,
+    PlacedEntitySprite, RocketSiloSprite, RocketSiloStatusIndicator, RocketSiloVisualPhase,
     measured_sync_placed_entity_rendering, sync_rocket_silo_rendering, update_visible_entity_ids,
 };
 use crate::rendering::resource_cells::{
@@ -508,12 +508,23 @@ fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
             crate::rendering::colors::rocket_silo_color(),
         )
     );
+    assert_eq!(
+        rocket_silo_indicator_state(&mut app, silo_id),
+        (
+            factory_sim::RocketSiloOperationalState::ReadyToLaunch,
+            "Ready to launch".to_string(),
+        )
+    );
 
     tick_sim_resource(&mut app);
     app.update();
     assert_eq!(
         rocket_silo_render_state(&mut app, silo_id),
         (RocketSiloVisualPhase::Sealed, Color::srgb(0.38, 0.40, 0.43),)
+    );
+    assert_eq!(
+        rocket_silo_indicator_state(&mut app, silo_id).0,
+        factory_sim::RocketSiloOperationalState::Sealing
     );
 
     for _ in 0..60 {
@@ -523,6 +534,14 @@ fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
     assert_eq!(
         rocket_silo_render_state(&mut app, silo_id),
         (RocketSiloVisualPhase::Rising, Color::srgb(0.95, 0.48, 0.12),)
+    );
+    assert_eq!(
+        rocket_silo_indicator_state(&mut app, silo_id),
+        (
+            factory_sim::RocketSiloOperationalState::Launching,
+            "Launching".to_string(),
+        ),
+        "the world indicator should project the latest fixed-step phase after skipped frames"
     );
 
     // Let the simulation return to idle without rendering intermediate ticks.
@@ -538,6 +557,10 @@ fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
             RocketSiloVisualPhase::Idle,
             crate::rendering::colors::rocket_silo_color(),
         )
+    );
+    assert_eq!(
+        rocket_silo_indicator_state(&mut app, silo_id).0,
+        factory_sim::RocketSiloOperationalState::RecipeLocked
     );
 }
 
@@ -1132,6 +1155,30 @@ fn rocket_silo_render_state(app: &mut App, entity_id: EntityId) -> (RocketSiloVi
             (placed.entity_id == entity_id).then_some((silo.visual_phase, sprite.color))
         })
         .expect("visible silo should have a rendered sprite")
+}
+
+fn rocket_silo_indicator_state(
+    app: &mut App,
+    entity_id: EntityId,
+) -> (factory_sim::RocketSiloOperationalState, String) {
+    let indicator_entity = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&PlacedEntitySprite, &RocketSiloSprite)>();
+        query
+            .iter(world)
+            .find_map(|(placed, silo)| {
+                (placed.entity_id == entity_id).then_some(silo.status_indicator)
+            })
+            .expect("visible silo should have a status indicator")
+    };
+    let world = app.world();
+    let indicator = world
+        .get::<RocketSiloStatusIndicator>(indicator_entity)
+        .expect("silo indicator should retain its typed state");
+    let text = world
+        .get::<Text2d>(indicator_entity)
+        .expect("silo indicator should have world text");
+    (indicator.operational_state, text.0.clone())
 }
 
 fn belt_direction_sprite_count(app: &mut App) -> usize {

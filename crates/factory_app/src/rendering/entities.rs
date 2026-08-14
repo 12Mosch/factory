@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::sprite::{Anchor, Text2dShadow};
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, PrototypeCatalog};
 use factory_sim::{
     Direction, EntityFootprint, EntityId, PlacedEntity, RailSignalAspect, Simulation,
@@ -35,6 +36,12 @@ pub(crate) struct PlacedEntitySprite {
 #[derive(Component)]
 pub(crate) struct RocketSiloSprite {
     pub(crate) visual_phase: RocketSiloVisualPhase,
+    pub(crate) status_indicator: Entity,
+}
+
+#[derive(Component)]
+pub(crate) struct RocketSiloStatusIndicator {
+    pub(crate) operational_state: factory_sim::RocketSiloOperationalState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,9 +131,17 @@ pub(crate) fn sync_placed_entity_rendering(
         );
         if style.kind == EntityKind::RocketSilo
             && let Ok(state) = factory_sim::entity_access::rocket_silo_state(&sim, placed.id)
+            && let Some(status) = sim.rocket_silo_status_for_entity(placed.id)
         {
+            let indicator = spawn_rocket_silo_status_indicator(
+                &mut commands,
+                status.state,
+                placed.footprint.height,
+            );
+            commands.entity(render_entity).add_child(indicator);
             commands.entity(render_entity).insert(RocketSiloSprite {
                 visual_phase: state.launch_phase.into(),
+                status_indicator: indicator,
             });
         }
     }
@@ -142,6 +157,10 @@ pub(crate) fn sync_rocket_silo_rendering(
     sim: Res<SimResource>,
     mut visual_assets: VisualAssets,
     mut sprites: Query<(&PlacedEntitySprite, &mut RocketSiloSprite, &mut Sprite)>,
+    mut indicators: Query<
+        (&mut Text2d, &mut TextColor, &mut RocketSiloStatusIndicator),
+        Without<RocketSiloSprite>,
+    >,
 ) {
     let sim = sim.read();
     for (placed, mut rendered, mut sprite) in &mut sprites {
@@ -149,6 +168,15 @@ pub(crate) fn sync_rocket_silo_rendering(
         else {
             continue;
         };
+        if let Some(status) = sim.rocket_silo_status_for_entity(placed.entity_id)
+            && let Ok((mut text, mut color, mut indicator)) =
+                indicators.get_mut(rendered.status_indicator)
+            && indicator.operational_state != status.state
+        {
+            text.0 = rocket_silo_world_status_label(status.state).to_string();
+            color.0 = rocket_silo_world_status_color(status.state);
+            indicator.operational_state = status.state;
+        }
         let visual_phase = state.launch_phase.into();
         if visual_phase == rendered.visual_phase {
             continue;
@@ -159,6 +187,55 @@ pub(crate) fn sync_rocket_silo_rendering(
 
         *sprite = visual_assets.entity_sprite(style);
         rendered.visual_phase = visual_phase;
+    }
+}
+
+fn spawn_rocket_silo_status_indicator(
+    commands: &mut Commands,
+    operational_state: factory_sim::RocketSiloOperationalState,
+    footprint_height: i32,
+) -> Entity {
+    commands
+        .spawn((
+            Text2d::new(rocket_silo_world_status_label(operational_state)),
+            TextFont::from_font_size(6.0),
+            TextColor(rocket_silo_world_status_color(operational_state)),
+            TextLayout::justify(Justify::Center),
+            Transform::from_xyz(0.0, footprint_height as f32 * TILE_SIZE * 0.5 + 7.0, 0.2),
+            Anchor::CENTER,
+            Text2dShadow::default(),
+            RocketSiloStatusIndicator { operational_state },
+        ))
+        .id()
+}
+
+pub(crate) const fn rocket_silo_world_status_label(
+    status: factory_sim::RocketSiloOperationalState,
+) -> &'static str {
+    use factory_sim::RocketSiloOperationalState as State;
+    match status {
+        State::RecipeLocked => "Recipe locked",
+        State::BuildingParts => "Building parts",
+        State::MissingIngredients => "Missing ingredients",
+        State::NoPower => "No power",
+        State::AwaitingPayload => "Awaiting payload",
+        State::ReadyToLaunch => "Ready to launch",
+        State::Sealing => "Sealing",
+        State::Launching => "Launching",
+        State::LaunchOutputBlocked => "Launch output blocked",
+    }
+}
+
+fn rocket_silo_world_status_color(status: factory_sim::RocketSiloOperationalState) -> Color {
+    use factory_sim::RocketSiloOperationalState as State;
+    match status {
+        State::RecipeLocked => Color::srgb(0.72, 0.74, 0.72),
+        State::BuildingParts | State::ReadyToLaunch => Color::srgb(0.42, 0.84, 0.55),
+        State::MissingIngredients | State::AwaitingPayload => Color::srgb(1.0, 0.72, 0.30),
+        State::NoPower => Color::srgb(1.0, 0.30, 0.24),
+        State::Sealing => Color::srgb(0.45, 0.72, 1.0),
+        State::Launching => Color::srgb(1.0, 0.52, 0.20),
+        State::LaunchOutputBlocked => Color::srgb(1.0, 0.40, 0.20),
     }
 }
 

@@ -79,7 +79,8 @@ pub use crate::machines::{
     AssemblerError, AssemblerIngredientStatus, AssemblingMachineState, BeaconState, BurnerEnergy,
     FurnaceError, FurnaceState, LabError, LabState, MachineEnergy, MachineModuleState,
     MachineStatus, MiningDrillError, MiningDrillState, ModuleError, ModuleSlots, PumpjackState,
-    ResolvedModuleEffects, RocketLaunchPhase, RocketSiloError, RocketSiloState,
+    ResolvedModuleEffects, RocketLaunchPhase, RocketSiloError, RocketSiloOperationalState,
+    RocketSiloState, RocketSiloStatusDetail,
 };
 pub use crate::player::{ManualMiningProgress, ManualMiningTarget, PlayerState};
 pub use crate::pollution::{

@@ -238,8 +238,8 @@ fn spawn_container_window_contents(
                 sim.entity_reports_scalar(entity_id),
             );
         }
-        if let Some(status) = sim.machine_status_for_entity(entity_id) {
-            spawn_machine_guidance(machine_panel, status);
+        if sim.machine_status_for_entity(entity_id).is_some() {
+            spawn_machine_guidance(machine_panel, sim, entity_id);
         }
         spawn_inventory_transfer_feedback(machine_panel);
     });

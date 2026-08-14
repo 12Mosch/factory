@@ -9,7 +9,7 @@ use factory_app::resources::SimProfileStats;
 use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_crafting_detail_text,
-    format_rocket_silo_launch_product_label,
+    format_rocket_silo_launch_product_label, format_rocket_silo_operational_status,
 };
 use factory_app::ui::production_stats::{
     bottleneck_lines, diagnostic_lines, fluid_consumption_rows, fluid_production_rows,
@@ -510,5 +510,46 @@ fn rocket_silo_launch_product_label_follows_the_prototype() {
     assert_eq!(
         format_rocket_silo_launch_product_label(&sim, entity_id).as_deref(),
         Some("Iron Plate")
+    );
+}
+
+#[test]
+fn rocket_silo_launch_progress_uses_fixed_tick_phase_after_save_load() {
+    let mut sim = Simulation::new_rocket_launch_fixture();
+    let entity_id = sim
+        .entities()
+        .placed_entities()
+        .find(|placed| {
+            factory_sim::entity_access::machine_kind(&sim, placed.id)
+                == Some(factory_data::EntityKind::RocketSilo)
+        })
+        .expect("launch fixture should contain a silo")
+        .id;
+
+    assert_eq!(
+        format_rocket_silo_operational_status(&sim, entity_id).as_deref(),
+        Some("Ready to launch — sequence starts on the next simulation tick.")
+    );
+
+    sim.tick();
+    let details = format_crafting_detail_text(&sim, entity_id).unwrap();
+    assert_eq!(
+        details.progress,
+        "Progress: Sealing — 0% (60 ticks remaining)"
+    );
+    for _ in 0..30 {
+        sim.tick();
+    }
+    let before_save = format_crafting_detail_text(&sim, entity_id).unwrap();
+    assert_eq!(
+        before_save.progress,
+        "Progress: Sealing — 50% (30 ticks remaining)"
+    );
+
+    let loaded = factory_sim::load_from_bytes(&factory_sim::save_to_bytes(&sim).unwrap()).unwrap();
+    assert_eq!(
+        format_crafting_detail_text(&loaded, entity_id),
+        Some(before_save),
+        "the panel should derive progress from the restored fixed-step phase"
     );
 }

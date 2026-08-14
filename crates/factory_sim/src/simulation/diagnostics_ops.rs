@@ -459,19 +459,71 @@ impl Simulation {
         }
     }
 
-    /// A silo reports `NoRecipe` until its technology is researched, because
-    /// that is the same fix the player has to make — there is just no dropdown
-    /// to make it in. `OutputFull` is the finished rocket: the silo is blocked
-    /// by its own product exactly the way a full assembler is.
+    /// Generic projection of [`Self::rocket_silo_status_detail`].
     fn rocket_silo_status(&self, entity_id: EntityId, state: &RocketSiloState) -> MachineStatus {
-        let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, &self.research) else {
-            return MachineStatus::NoRecipe;
-        };
-        if state.rocket_ready() {
-            return MachineStatus::OutputFull;
+        self.rocket_silo_status_detail(entity_id, state)
+            .machine_status()
+    }
+
+    /// Silo-only operating detail for UI and diagnostics.
+    ///
+    /// Launch phases take precedence because they no longer depend on power or
+    /// part ingredients. Before a launch starts, cargo is checked separately
+    /// from output capacity so the two blockers cannot be conflated.
+    fn rocket_silo_status_detail(
+        &self,
+        entity_id: EntityId,
+        state: &RocketSiloState,
+    ) -> RocketSiloStatusDetail {
+        match state.launch_phase {
+            RocketLaunchPhase::Sealed { ticks_remaining } => {
+                return launch_phase_status_detail(
+                    RocketSiloOperationalState::Sealing,
+                    ticks_remaining,
+                    crate::machines::rocket_silo::LAUNCH_SEAL_TICKS,
+                );
+            }
+            RocketLaunchPhase::Rising { ticks_remaining } => {
+                return launch_phase_status_detail(
+                    RocketSiloOperationalState::Launching,
+                    ticks_remaining,
+                    crate::machines::rocket_silo::LAUNCH_RISE_TICKS,
+                );
+            }
+            RocketLaunchPhase::Idle => {}
         }
+
+        if state.rocket_ready() {
+            let Some(silo_prototype) = self
+                .entities
+                .placed_entity(entity_id)
+                .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+                .and_then(|prototype| prototype.rocket_silo)
+            else {
+                return ready_rocket_status_detail(RocketSiloOperationalState::AwaitingPayload);
+            };
+            if !state.has_launch_payload(silo_prototype.launch_payload) {
+                return ready_rocket_status_detail(RocketSiloOperationalState::AwaitingPayload);
+            }
+            if !state.output_inventory.can_insert(
+                &self.world.prototypes,
+                silo_prototype.launch_product.item,
+                silo_prototype.launch_product.amount,
+            ) {
+                return ready_rocket_status_detail(RocketSiloOperationalState::LaunchOutputBlocked);
+            }
+            return ready_rocket_status_detail(RocketSiloOperationalState::ReadyToLaunch);
+        }
+        let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, &self.research) else {
+            return RocketSiloStatusDetail {
+                state: RocketSiloOperationalState::RecipeLocked,
+                progress_ticks: state.crafting_progress_ticks,
+                required_ticks: state.crafting_required_ticks,
+                ticks_remaining: None,
+            };
+        };
         if !assembler_has_ingredients(&state.input_inventory, &recipe.ingredients) {
-            return MachineStatus::NoInput;
+            return crafting_status_detail(state, RocketSiloOperationalState::MissingIngredients);
         }
         if self
             .power
@@ -481,9 +533,20 @@ impl Simulation {
             .unwrap_or(0)
             == 0
         {
-            return MachineStatus::NoPower;
+            return crafting_status_detail(state, RocketSiloOperationalState::NoPower);
         }
-        MachineStatus::Working
+        crafting_status_detail(state, RocketSiloOperationalState::BuildingParts)
+    }
+
+    /// Typed status for a placed rocket silo, or `None` for another entity.
+    pub fn rocket_silo_status_for_entity(
+        &self,
+        entity_id: EntityId,
+    ) -> Option<RocketSiloStatusDetail> {
+        self.entities
+            .rocket_silos
+            .get(&entity_id)
+            .map(|state| self.rocket_silo_status_detail(entity_id, state))
     }
 
     fn assembler_status(
@@ -850,6 +913,42 @@ impl Simulation {
             let required = per_tick_milliunits(engine.steam_consumption_per_second_milliunits);
             self.fluid_network_total_for_fluid(network_id, steam) < required
         })
+    }
+}
+
+fn crafting_status_detail(
+    state: &RocketSiloState,
+    operational_state: RocketSiloOperationalState,
+) -> RocketSiloStatusDetail {
+    RocketSiloStatusDetail {
+        state: operational_state,
+        progress_ticks: state.crafting_progress_ticks,
+        required_ticks: state.crafting_required_ticks,
+        ticks_remaining: None,
+    }
+}
+
+fn ready_rocket_status_detail(
+    operational_state: RocketSiloOperationalState,
+) -> RocketSiloStatusDetail {
+    RocketSiloStatusDetail {
+        state: operational_state,
+        progress_ticks: 1,
+        required_ticks: 1,
+        ticks_remaining: None,
+    }
+}
+
+fn launch_phase_status_detail(
+    operational_state: RocketSiloOperationalState,
+    ticks_remaining: u16,
+    required_ticks: u16,
+) -> RocketSiloStatusDetail {
+    RocketSiloStatusDetail {
+        state: operational_state,
+        progress_ticks: u32::from(required_ticks.saturating_sub(ticks_remaining)),
+        required_ticks: u32::from(required_ticks),
+        ticks_remaining: Some(u32::from(ticks_remaining)),
     }
 }
 
