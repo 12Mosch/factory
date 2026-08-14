@@ -179,13 +179,14 @@ impl Simulation {
         let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
             return;
         };
-        let Ok(stacks) = entity_recovery_ops::entity_recovery_stacks(self, &placed) else {
+        let Ok(recovery) = entity_recovery_ops::entity_recovery(self, &placed) else {
             return;
         };
         if entity_mutation::remove(self, entity_id).is_none() {
             return;
         }
-        robot.cargo.extend(stacks);
+        robot.cargo.extend(recovery.stacks);
+        robot.bulk_cargo.extend(recovery.bulk_items);
     }
 
     fn complete_robot_repair(&mut self, robot: &mut Robot, entity_id: EntityId) {

@@ -1158,6 +1158,55 @@ fn construction_robot_deconstructs_and_deposits_recovery() {
 }
 
 #[test]
+fn construction_robot_keeps_unbounded_recovery_compact_after_bounded_deposit() {
+    let mut sim = Simulation::new_test_world(123);
+    let roboport = stocked_roboport(&mut sim, 1);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let stack_size = sim.world.prototypes.item(iron_ore).unwrap().stack_size;
+    let storage_capacity = sim
+        .entities
+        .roboport_state(roboport)
+        .unwrap()
+        .materials
+        .insert_capacity(iron_ore, stack_size);
+    let (x, y) = roboport_tile(&sim, roboport);
+    let robot_id = sim.dispatch_robot(roboport, x, y).unwrap();
+    let robot = sim
+        .robot_flights
+        .robots
+        .get_mut(&robot_id)
+        .expect("dispatched robot should be in flight");
+    robot.errand = None;
+    robot.bulk_cargo.push(
+        ItemAmount::new(&sim.world.prototypes, iron_ore, u64::MAX)
+            .expect("catalog item should form valid bulk cargo"),
+    );
+
+    sim.tick();
+
+    assert_eq!(
+        sim.entities
+            .roboport_state(roboport)
+            .unwrap()
+            .materials
+            .count(iron_ore),
+        storage_capacity
+    );
+    let robot = sim
+        .robot(robot_id)
+        .expect("robot should hover while compact cargo remains");
+    assert!(robot.cargo.is_empty());
+    assert_eq!(robot.bulk_cargo.len(), 1);
+    assert_eq!(robot.bulk_cargo[0].item_id(), iron_ore);
+    assert_eq!(
+        robot.bulk_cargo[0].count(),
+        u64::MAX - u64::from(storage_capacity)
+    );
+    sim.validate()
+        .expect("bounded bulk deposit should preserve valid robot state");
+}
+
+#[test]
 fn deconstruction_robot_hovers_with_cargo_until_storage_frees() {
     let mut sim = Simulation::new_test_world(123);
     let roboport = stocked_roboport(&mut sim, 1);

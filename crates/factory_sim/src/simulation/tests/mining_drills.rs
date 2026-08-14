@@ -124,7 +124,7 @@ fn large_mining_productivity_bonus_drains_without_truncation_or_extra_depletion(
 }
 
 #[test]
-fn deconstructing_drill_recovers_pending_productivity_output_in_valid_stacks() {
+fn deconstructing_drill_recovers_pending_productivity_output_from_compact_count() {
     let mut sim = Simulation::new_test_world(123);
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
@@ -142,19 +142,48 @@ fn deconstructing_drill_recovers_pending_productivity_output_in_valid_stacks() {
         .expect("placed drill should exist")
         .clone();
 
-    let recovery = crate::simulation::entity_recovery_ops::entity_recovery_stacks(&sim, &placed)
+    let recovery = crate::simulation::entity_recovery_ops::entity_recovery(&sim, &placed)
         .expect("drill recovery should be valid");
-    let recovered_ore = recovery
-        .iter()
-        .filter(|stack| stack.item_id() == iron_ore)
-        .map(|stack| stack.count())
-        .collect::<Vec<_>>();
-    assert_eq!(recovered_ore, vec![100, 100, 50]);
+    assert_eq!(recovery.bulk_items.len(), 1);
+    assert_eq!(recovery.bulk_items[0].item_id(), iron_ore);
+    assert_eq!(recovery.bulk_items[0].count(), 250);
 
     sim.player_inventory = Inventory::player();
     crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id)
         .expect("player should have room for pending drill output");
     assert_eq!(sim.player_inventory.count(iron_ore), 250);
+}
+
+#[test]
+fn deconstructing_drill_rejects_unbounded_pending_output_without_expanding_it() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    let state = sim
+        .entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state");
+    state.pending_output = Some(crate::machines::PendingMiningOutput {
+        item_id: iron_ore,
+        count: u64::MAX,
+    });
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .expect("placed drill should exist")
+        .clone();
+    let recovery = crate::simulation::entity_recovery_ops::entity_recovery(&sim, &placed)
+        .expect("even unbounded drill recovery should stay compact");
+    assert_eq!(recovery.bulk_items.len(), 1);
+    assert_eq!(recovery.bulk_items[0].item_id(), iron_ore);
+    assert_eq!(recovery.bulk_items[0].count(), u64::MAX);
+    sim.player_inventory = Inventory::player();
+
+    assert_eq!(
+        crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id),
+        Err(EntityDestroyError::InsufficientInventory { item_id: iron_ore })
+    );
+    assert!(sim.entities.placed_entity(entity_id).is_some());
 }
 
 #[test]

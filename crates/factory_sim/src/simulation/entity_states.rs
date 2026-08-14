@@ -39,14 +39,11 @@ impl EntityStateBehavior for Inventory {
 }
 
 impl EntityStateBehavior for MiningDrillState {
-    fn push_recovery_stacks(&self, catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
+    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, stacks: &mut Vec<ItemStack>) {
         if let Some(fuel_slot) = self.energy.fuel_slot() {
             push_item_slot(stacks, fuel_slot);
         }
         push_item_slot(stacks, self.output_slot);
-        if let Some(pending) = self.pending_output {
-            push_item_count_stacks(catalog, stacks, pending.item_id, pending.count);
-        }
         push_module_stacks(stacks, &self.modules.slots);
     }
 
@@ -754,30 +751,5 @@ fn push_inventory_stacks(stacks: &mut Vec<ItemStack>, inventory: &Inventory) {
 fn push_item_slot(stacks: &mut Vec<ItemStack>, slot: ItemSlot) {
     if let Some(stack) = slot.stack() {
         stacks.push(stack);
-    }
-}
-
-fn push_item_count_stacks(
-    catalog: &PrototypeCatalog,
-    stacks: &mut Vec<ItemStack>,
-    item_id: ItemId,
-    mut count: u64,
-) {
-    let stack_size = catalog
-        .item(item_id)
-        .expect("validated recovery item should exist in the catalog")
-        .stack_size;
-    assert!(
-        stack_size > 0,
-        "validated recovery item should have a stack size"
-    );
-
-    while count > 0 {
-        let stack_count = count.min(u64::from(stack_size)) as u16;
-        stacks.push(
-            ItemStack::new(catalog, item_id, stack_count)
-                .expect("bounded recovery item count should form a valid stack"),
-        );
-        count -= u64::from(stack_count);
     }
 }

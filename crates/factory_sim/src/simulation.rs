@@ -66,7 +66,7 @@ pub use crate::heat::{
     HeatNetworkSnapshot, HeatPipeState, NuclearReactorError, NuclearReactorState,
 };
 pub use crate::ids::{EntityId, Tick};
-pub use crate::inventory::{Inventory, InventoryError, ItemSlot, ItemStack};
+pub use crate::inventory::{Inventory, InventoryError, ItemAmount, ItemSlot, ItemStack};
 #[cfg(test)]
 pub(crate) use crate::inventory::{test_inventory, test_slot, test_stack};
 pub use crate::logistics::{

@@ -29,7 +29,7 @@
 
 use crate::construction::ConstructionJob;
 use crate::ids::EntityId;
-use crate::inventory::{Inventory, ItemStack};
+use crate::inventory::{Inventory, ItemAmount, ItemStack};
 use crate::prototypes::ItemId;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -322,6 +322,9 @@ pub struct Robot {
     /// Items recovered by deconstruction, or unused payload returning after an
     /// abort. Cargo may be deposited partially when network storage is tight.
     pub cargo: Vec<ItemStack>,
+    /// Large deconstruction yields retained as compact counts until network
+    /// storage accepts bounded chunks.
+    pub bulk_cargo: Vec<ItemAmount>,
 }
 
 impl Robot {

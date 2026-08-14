@@ -91,7 +91,8 @@ use bincode::Options;
 // v47: research completion became level-based so repeatable technology levels
 // and their in-level progress are durable. Mining drills also gained durable
 // pending output so unbounded productivity bonuses can drain through bounded
-// inventories without truncation or stalling.
+// inventories without truncation or stalling. Construction robots retain such
+// deconstruction yields as compact bulk cargo until storage can accept them.
 pub const SAVE_VERSION: u32 = 47;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
