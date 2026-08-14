@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::catalog::PrototypeCatalog;
-use crate::model::{ItemAmount, TechnologyEffect};
+use crate::model::{ItemAmount, TechnologyCostCurve, TechnologyEffect, TechnologyLevelModel};
 
 use super::common::{expected_item_amounts, researchable_technology_ids};
 
@@ -208,6 +208,51 @@ fn production_and_utility_science_technologies_form_parallel_rgb_branches() {
         researchable_technology_ids(&catalog).len(),
         catalog.technologies.len()
     );
+}
+
+#[test]
+fn mining_productivity_is_repeatable_with_a_checked_linear_cost() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let technology = |name: &str| {
+        catalog
+            .technologies
+            .iter()
+            .find(|technology| technology.name == name)
+            .unwrap_or_else(|| panic!("base catalog should contain {name} technology"))
+    };
+    let mining_productivity = technology("mining_productivity");
+
+    assert_eq!(mining_productivity.id.index(), 50);
+    assert_eq!(
+        mining_productivity.prerequisites,
+        vec![technology("space_science_pack").id]
+    );
+    assert_eq!(
+        mining_productivity.level_model,
+        TechnologyLevelModel::Repeatable {
+            cost_curve: TechnologyCostCurve::Linear {
+                additional_units_per_level: 500,
+            },
+        }
+    );
+    assert_eq!(mining_productivity.required_units_for_level(1), Some(500));
+    assert_eq!(mining_productivity.required_units_for_level(2), Some(1_000));
+    assert_eq!(mining_productivity.required_units_for_level(3), Some(1_500));
+    assert!(
+        mining_productivity
+            .required_units_for_level(u32::MAX)
+            .is_some()
+    );
+    assert_eq!(
+        mining_productivity.effects,
+        vec![TechnologyEffect::MiningDrillProductivity {
+            bonus_permyriad: 500,
+        }]
+    );
+    assert_eq!(mining_productivity.science_packs.len(), 6);
+    assert!(mining_productivity.science_packs.iter().any(|pack| {
+        pack.item == crate::item_id_by_name(&catalog, "space_science_pack") && pack.amount == 1
+    }));
 }
 
 #[test]
@@ -520,8 +565,9 @@ fn technology_science_pack_recipes_are_unlocked_before_they_are_required() {
         }
 
         for effect in &technology.effects {
-            let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
-            unlocked_recipes.insert(recipe_id);
+            if let TechnologyEffect::UnlockRecipe(recipe_id) = *effect {
+                unlocked_recipes.insert(recipe_id);
+            }
         }
     }
 }
@@ -540,9 +586,12 @@ fn unlocked_recipes_only_ask_for_ingredients_their_prerequisites_reach() {
         technology
             .effects
             .iter()
-            .map(|effect| {
-                let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
-                recipe_id
+            .filter_map(|effect| {
+                if let TechnologyEffect::UnlockRecipe(recipe_id) = *effect {
+                    Some(recipe_id)
+                } else {
+                    None
+                }
             })
             .collect::<BTreeSet<_>>()
     };

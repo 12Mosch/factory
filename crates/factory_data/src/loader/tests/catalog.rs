@@ -234,6 +234,7 @@ const TECHNOLOGY_NAMES: &[&str] = &[
     "solid_fuel",
     "rocket_fuel",
     "rocket_silo",
+    "mining_productivity",
 ];
 
 #[test]
@@ -245,7 +246,7 @@ fn base_catalog_loads_from_ron() {
     assert_eq!(catalog.recipes.len(), 120);
     assert_eq!(catalog.entities.len(), 78);
     assert_eq!(catalog.tiles.len(), 11);
-    assert_eq!(catalog.technologies.len(), 50);
+    assert_eq!(catalog.technologies.len(), 51);
     assert_eq!(catalog.virtual_signals.len(), 38);
 }
 

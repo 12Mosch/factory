@@ -264,6 +264,11 @@ pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidati
                 return Err(invalid());
             }
         }
+        for amount in &robot.bulk_cargo {
+            if ItemAmount::new(&sim.world.prototypes, amount.item_id(), amount.count()).is_err() {
+                return Err(invalid());
+            }
+        }
         // A delivery and a construction job are two claims on the same robot,
         // and the two dispatchers draw from disjoint robot kinds, so holding
         // both is a state neither of them could have produced.

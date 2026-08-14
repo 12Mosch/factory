@@ -95,6 +95,15 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                 technology_id: technology.id,
             });
         }
+        if technology.required_units == 0
+            || technology.required_units_for_level(1).is_none()
+            || (technology.level_model.is_repeatable()
+                && technology.required_units_for_level(u32::MAX).is_none())
+        {
+            return Err(SimValidationError::InvalidResearchTechnology {
+                technology_id: technology.id,
+            });
+        }
 
         for science_pack in &technology.science_packs {
             if !item_exists(catalog, science_pack.item) {
@@ -113,12 +122,22 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
             }
         }
         for effect in &technology.effects {
-            let TechnologyEffect::UnlockRecipe(recipe_id) = *effect;
-            if catalog.recipe(recipe_id).is_none() {
-                return Err(SimValidationError::InvalidTechnologyRecipe {
-                    technology_id: technology.id,
-                    recipe_id,
-                });
+            match *effect {
+                TechnologyEffect::UnlockRecipe(recipe_id) => {
+                    if catalog.recipe(recipe_id).is_none() {
+                        return Err(SimValidationError::InvalidTechnologyRecipe {
+                            technology_id: technology.id,
+                            recipe_id,
+                        });
+                    }
+                }
+                TechnologyEffect::MiningDrillProductivity { bonus_permyriad } => {
+                    if bonus_permyriad == 0 {
+                        return Err(SimValidationError::InvalidResearchTechnology {
+                            technology_id: technology.id,
+                        });
+                    }
+                }
             }
         }
     }

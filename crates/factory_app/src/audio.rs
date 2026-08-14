@@ -114,7 +114,7 @@ pub struct CraftingAudioObserver {
 #[derive(Resource, Default)]
 pub struct ResearchAudioObserver {
     initialized: bool,
-    unlocked: HashSet<factory_data::TechnologyId>,
+    completed_levels: Vec<u32>,
 }
 
 #[derive(Resource, Default)]
@@ -332,21 +332,25 @@ pub(crate) fn observe_research_audio(
     mut observer: ResMut<ResearchAudioObserver>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
-    let unlocked = sim
+    let completed_levels = sim
         .read()
         .catalog()
         .technologies
         .iter()
-        .filter(|technology| sim.read().is_technology_unlocked(technology.id))
-        .map(|technology| technology.id)
-        .collect::<HashSet<_>>();
+        .map(|technology| sim.read().technology_level(technology.id).unwrap_or(0))
+        .collect::<Vec<_>>();
 
-    if observer.initialized && unlocked.iter().any(|id| !observer.unlocked.contains(id)) {
+    if observer.initialized
+        && completed_levels
+            .iter()
+            .zip(&observer.completed_levels)
+            .any(|(current, previous)| current > previous)
+    {
         sounds.write(SoundEvent::ResearchComplete);
     }
 
     observer.initialized = true;
-    observer.unlocked = unlocked;
+    observer.completed_levels = completed_levels;
 }
 
 pub(crate) fn observe_threat_audio(

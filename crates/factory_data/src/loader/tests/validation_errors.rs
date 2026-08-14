@@ -735,6 +735,69 @@ fn invalid_technology_required_units_fail() {
 }
 
 #[test]
+fn overflowing_repeatable_technology_cost_curve_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            recipes: [],
+            entities: [],
+            tiles: [],
+            technologies: [(
+                id: 0,
+                name: "overflowing",
+                prerequisites: [],
+                science_packs: [],
+                required_units: 18446744073709551615,
+                level_model: Repeatable(
+                    cost_curve: Linear(additional_units_per_level: 1),
+                ),
+                research_time_ticks: 1,
+                effects: [],
+            )],
+        )
+        "#,
+    )
+    .expect_err("overflowing repeatable cost curve should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidTechnologyCostCurve { technology }
+            if technology == "overflowing"
+    ));
+}
+
+#[test]
+fn zero_mining_productivity_effect_fails() {
+    let error = PrototypeCatalog::from_ron_str(
+        r#"
+        (
+            items: [],
+            recipes: [],
+            entities: [],
+            tiles: [],
+            technologies: [(
+                id: 0,
+                name: "zero_bonus",
+                prerequisites: [],
+                science_packs: [],
+                required_units: 1,
+                research_time_ticks: 1,
+                effects: [MiningDrillProductivity(bonus_permyriad: 0)],
+            )],
+        )
+        "#,
+    )
+    .expect_err("zero mining productivity should fail");
+
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidTechnologyEffect { technology }
+            if technology == "zero_bonus"
+    ));
+}
+
+#[test]
 fn invalid_technology_research_time_fail() {
     let error = PrototypeCatalog::from_ron_str(
         r#"

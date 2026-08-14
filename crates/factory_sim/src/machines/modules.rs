@@ -134,15 +134,31 @@ impl MachineModuleState {
 
     /// Returns the number of output copies due for the next successful cycle.
     pub fn output_copies_due(&self) -> u64 {
+        self.output_copies_due_with_productivity(0)
+    }
+
+    pub fn output_copies_due_with_productivity(
+        &self,
+        additional_productivity_permyriad: u64,
+    ) -> u64 {
         1 + (u64::from(self.productivity_progress_permyriad)
             .saturating_add(self.resolved_effects.productivity_permyriad())
+            .saturating_add(additional_productivity_permyriad)
             / PERMYRIAD as u64)
     }
 
     /// Commits productivity after a successful cycle and returns bonus copies.
     pub fn complete_productive_cycle(&mut self) -> u64 {
+        self.complete_productive_cycle_with_productivity(0)
+    }
+
+    pub fn complete_productive_cycle_with_productivity(
+        &mut self,
+        additional_productivity_permyriad: u64,
+    ) -> u64 {
         let accumulated = u64::from(self.productivity_progress_permyriad)
-            .saturating_add(self.resolved_effects.productivity_permyriad());
+            .saturating_add(self.resolved_effects.productivity_permyriad())
+            .saturating_add(additional_productivity_permyriad);
         self.productivity_progress_permyriad = (accumulated % PERMYRIAD as u64) as u32;
         accumulated / PERMYRIAD as u64
     }

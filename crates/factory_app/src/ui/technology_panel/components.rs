@@ -36,8 +36,8 @@ pub(crate) struct TechnologyPanelSnapshot {
     pub(crate) selected: Option<TechnologyId>,
     pub(crate) active: Option<TechnologyId>,
     pub(crate) queue: Vec<TechnologyId>,
-    pub(crate) progress_units: Vec<u32>,
-    pub(crate) unlocked: Vec<bool>,
+    pub(crate) progress_units: Vec<u64>,
+    pub(crate) completed_levels: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

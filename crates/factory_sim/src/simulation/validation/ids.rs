@@ -20,5 +20,5 @@ pub(super) fn smelting_recipe_by_id(
 pub(super) fn technology_researched(research: &ResearchState, technology_id: TechnologyId) -> bool {
     research
         .technology_state(technology_id)
-        .is_some_and(|state| state.unlocked)
+        .is_some_and(|state| state.completed_levels > 0)
 }

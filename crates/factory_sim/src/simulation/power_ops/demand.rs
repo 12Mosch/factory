@@ -291,6 +291,9 @@ fn mining_drill_can_work(
     entity_id: EntityId,
     state: &MiningDrillState,
 ) -> bool {
+    if state.pending_output.is_some() {
+        return false;
+    }
     let Some(placed) = entities.placed_entity(entity_id) else {
         return false;
     };
@@ -307,13 +310,12 @@ fn mining_drill_can_work(
         return false;
     };
     let output_target = drill_output_target(entities, placed);
-    drill_productivity_output_can_fit(
+    drill_output_can_accept_cycle(
         &world.prototypes,
         entities,
         output_target,
         state.output_slot,
         resource_item,
-        state.modules.output_copies_due(),
     )
 }
 

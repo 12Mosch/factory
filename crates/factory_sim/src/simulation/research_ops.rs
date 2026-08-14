@@ -15,8 +15,8 @@ impl ResearchState {
                 .iter()
                 .map(|technology| TechnologyResearchState {
                     technology_id: technology.id,
+                    completed_levels: 0,
                     progress_units: 0,
-                    unlocked: false,
                 })
                 .collect(),
         }
@@ -32,19 +32,36 @@ impl ResearchState {
             .iter()
             .position(|name| name == technology_name)
             .and_then(|index| self.technologies.get(index))
-            .is_some_and(|state| state.unlocked)
+            .is_some_and(|state| state.completed_levels > 0)
     }
 }
 
 pub(super) fn add_research_units_to_state(
     catalog: &PrototypeCatalog,
     research: &mut ResearchState,
-    units: u32,
+    units: u64,
 ) -> Result<ResearchProgressResult, ResearchError> {
     let technology_id = research.active.ok_or(ResearchError::NoActiveResearch)?;
     let technology = catalog
         .technology(technology_id)
         .ok_or(ResearchError::MissingTechnology(technology_id))?;
+    let current_level = research
+        .technology_state(technology_id)
+        .ok_or(ResearchError::MissingTechnology(technology_id))?
+        .completed_levels;
+    let next_level = current_level
+        .checked_add(1)
+        .ok_or(ResearchError::MaxLevelReached(technology_id))?;
+    let required_units = technology
+        .required_units_for_level(next_level)
+        .ok_or(match technology.level_model {
+            factory_data::TechnologyLevelModel::Finite => {
+                ResearchError::AlreadyResearched(technology_id)
+            }
+            factory_data::TechnologyLevelModel::Repeatable { .. } => {
+                ResearchError::MaxLevelReached(technology_id)
+            }
+        })?;
     let state = research
         .technology_state_mut(technology_id)
         .ok_or(ResearchError::MissingTechnology(technology_id))?;
@@ -52,18 +69,24 @@ pub(super) fn add_research_units_to_state(
     state.progress_units = state
         .progress_units
         .saturating_add(units)
-        .min(technology.required_units);
+        .min(required_units);
 
-    if state.progress_units >= technology.required_units {
-        state.unlocked = true;
+    if state.progress_units >= required_units {
+        state.completed_levels = next_level;
+        if technology.level_model.is_repeatable() {
+            state.progress_units = 0;
+        }
         research.active = None;
         promote_next_queued_research_in_state(catalog, research)?;
-        Ok(ResearchProgressResult::Completed { technology_id })
+        Ok(ResearchProgressResult::Completed {
+            technology_id,
+            completed_level: next_level,
+        })
     } else {
         Ok(ResearchProgressResult::InProgress {
             technology_id,
             progress_units: state.progress_units,
-            required_units: technology.required_units,
+            required_units,
         })
     }
 }
@@ -97,14 +120,21 @@ pub(super) fn can_select_research_in_state(
     let state = research
         .technology_state(technology_id)
         .ok_or(ResearchError::MissingTechnology(technology_id))?;
-    if state.unlocked {
-        return Err(ResearchError::AlreadyResearched(technology_id));
+    if technology
+        .required_units_after(state.completed_levels)
+        .is_none()
+    {
+        return Err(if technology.level_model.is_repeatable() {
+            ResearchError::MaxLevelReached(technology_id)
+        } else {
+            ResearchError::AlreadyResearched(technology_id)
+        });
     }
 
     for prerequisite_id in &technology.prerequisites {
-        if !research
+        if research
             .technology_state(*prerequisite_id)
-            .is_some_and(|state| state.unlocked)
+            .is_none_or(|state| state.completed_levels == 0)
         {
             return Err(ResearchError::PrerequisiteLocked {
                 technology_id,
@@ -153,14 +183,18 @@ pub(super) fn validate_research_queue_order_in_state(
     let mut available = research
         .technologies
         .iter()
-        .filter(|state| state.unlocked)
+        .filter(|state| state.completed_levels > 0)
         .map(|state| state.technology_id)
         .collect::<Vec<_>>();
     if let Some(active_id) = research.active {
         let state = research
             .technology_state(active_id)
             .ok_or(ResearchError::MissingTechnology(active_id))?;
-        if state.unlocked {
+        if catalog
+            .technology(active_id)
+            .and_then(|technology| technology.required_units_after(state.completed_levels))
+            .is_none()
+        {
             return Err(ResearchError::AlreadyResearched(active_id));
         }
         available.push(active_id);
@@ -181,8 +215,15 @@ pub(super) fn validate_research_queue_order_in_state(
         let state = research
             .technology_state(technology_id)
             .ok_or(ResearchError::MissingTechnology(technology_id))?;
-        if state.unlocked {
-            return Err(ResearchError::AlreadyResearched(technology_id));
+        if technology
+            .required_units_after(state.completed_levels)
+            .is_none()
+        {
+            return Err(if technology.level_model.is_repeatable() {
+                ResearchError::MaxLevelReached(technology_id)
+            } else {
+                ResearchError::AlreadyResearched(technology_id)
+            });
         }
 
         for prerequisite_id in &technology.prerequisites {

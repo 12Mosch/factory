@@ -143,6 +143,7 @@ impl Simulation {
                 delivery: None,
                 payload: None,
                 cargo: Vec::new(),
+                bulk_cargo: Vec::new(),
             },
         );
         Ok(id)
@@ -374,9 +375,9 @@ fn arrive_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
     let Some(roboport) = robot.home_roboport else {
         return true;
     };
-    if !robot.cargo.is_empty() {
+    if !robot.cargo.is_empty() || !robot.bulk_cargo.is_empty() {
         deposit_robot_cargo(context, robot, roboport);
-        if !robot.cargo.is_empty() {
+        if !robot.cargo.is_empty() || !robot.bulk_cargo.is_empty() {
             return true;
         }
     }
@@ -457,6 +458,51 @@ fn deposit_robot_cargo(context: &mut RobotStepContext<'_>, robot: &mut Robot, ho
         }
     }
     robot.cargo = remaining_cargo;
+
+    let mut remaining_bulk_cargo = Vec::new();
+    for amount in robot.bulk_cargo.drain(..) {
+        let item_id = amount.item_id();
+        let Some(item) = context.catalog.item(item_id) else {
+            remaining_bulk_cargo.push(amount);
+            continue;
+        };
+        let mut remaining = amount.count();
+        for member in &members {
+            let Some(state) = context.entities.roboports.get_mut(member) else {
+                continue;
+            };
+            let inventory = if item.robot.is_some() {
+                &mut state.robots
+            } else {
+                &mut state.materials
+            };
+            let accepted =
+                u64::from(inventory.insert_capacity(item_id, item.stack_size)).min(remaining);
+            if accepted == 0 {
+                continue;
+            }
+            let mut to_insert = accepted;
+            while to_insert > 0 {
+                let chunk = to_insert.min(u64::from(u16::MAX)) as u16;
+                inventory
+                    .insert(context.catalog, item_id, chunk)
+                    .expect("bulk cargo insertion was bounded by inventory capacity");
+                to_insert -= u64::from(chunk);
+            }
+            remaining -= accepted;
+            context.networks.mark_roboport_dirty(*member);
+            if remaining == 0 {
+                break;
+            }
+        }
+        if remaining > 0 {
+            remaining_bulk_cargo.push(
+                ItemAmount::new(context.catalog, item_id, remaining)
+                    .expect("remaining bulk cargo preserves a validated item amount"),
+            );
+        }
+    }
+    robot.bulk_cargo = remaining_bulk_cargo;
 }
 
 /// Joins the charging queue of `roboport`, or takes a pad directly when one is

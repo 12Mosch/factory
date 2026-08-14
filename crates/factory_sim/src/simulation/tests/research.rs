@@ -101,7 +101,8 @@ fn research_progress_unlocks_automation_recipe_effects() {
     assert_eq!(
         sim.add_research_units(1),
         Ok(ResearchProgressResult::Completed {
-            technology_id: automation
+            technology_id: automation,
+            completed_level: 1,
         })
     );
 
@@ -805,4 +806,132 @@ fn completing_research_unlocks_recipe_and_derived_entity() {
 
     assert!(sim.is_recipe_unlocked(assembler_recipe));
     assert!(sim.is_entity_unlocked(assembler_entity));
+}
+
+#[test]
+fn repeatable_research_advances_levels_with_linear_costs_and_derived_bonuses() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "space_science_pack");
+    let mining_productivity = technology_id(&sim.world.prototypes, "mining_productivity");
+
+    sim.select_research(mining_productivity)
+        .expect("first mining-productivity level should be selectable");
+    assert_eq!(
+        sim.technology_next_required_units(mining_productivity),
+        Some(500)
+    );
+    assert_eq!(
+        sim.add_research_units(500),
+        Ok(ResearchProgressResult::Completed {
+            technology_id: mining_productivity,
+            completed_level: 1,
+        })
+    );
+    assert_eq!(sim.technology_level(mining_productivity), Some(1));
+    assert_eq!(sim.technology_progress(mining_productivity), Some(0));
+    assert_eq!(
+        sim.research
+            .bonuses(&sim.world.prototypes)
+            .mining_drill_productivity_permyriad,
+        500
+    );
+
+    sim.select_research(mining_productivity)
+        .expect("second mining-productivity level should be selectable");
+    assert_eq!(
+        sim.technology_next_required_units(mining_productivity),
+        Some(1_000)
+    );
+    assert_eq!(
+        sim.add_research_units(999),
+        Ok(ResearchProgressResult::InProgress {
+            technology_id: mining_productivity,
+            progress_units: 999,
+            required_units: 1_000,
+        })
+    );
+    assert_eq!(
+        sim.add_research_units(1),
+        Ok(ResearchProgressResult::Completed {
+            technology_id: mining_productivity,
+            completed_level: 2,
+        })
+    );
+    assert_eq!(sim.technology_level(mining_productivity), Some(2));
+    assert_eq!(
+        sim.technology_next_required_units(mining_productivity),
+        Some(1_500)
+    );
+    assert_eq!(
+        sim.research
+            .bonuses(&sim.world.prototypes)
+            .mining_drill_productivity_permyriad,
+        1_000
+    );
+}
+
+#[test]
+fn switching_research_preserves_repeatable_level_progress() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "space_science_pack");
+    let mining_productivity = technology_id(&sim.world.prototypes, "mining_productivity");
+    let stone_walls = technology_id(&sim.world.prototypes, "stone_walls");
+
+    sim.select_research(mining_productivity).unwrap();
+    sim.add_research_units(200).unwrap();
+    sim.select_research(stone_walls)
+        .expect("switching to another available technology should succeed");
+    sim.select_research(mining_productivity)
+        .expect("repeatable research should remain selectable after a switch");
+
+    assert_eq!(sim.technology_progress(mining_productivity), Some(200));
+    assert_eq!(
+        sim.technology_next_required_units(mining_productivity),
+        Some(500)
+    );
+}
+
+#[test]
+fn repeatable_levels_and_bonus_survive_save_load() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "space_science_pack");
+    let mining_productivity = technology_id(&sim.world.prototypes, "mining_productivity");
+    sim.select_research(mining_productivity).unwrap();
+    sim.add_research_units(500).unwrap();
+    sim.select_research(mining_productivity).unwrap();
+    sim.add_research_units(400).unwrap();
+    let before_hash = sim.state_hash();
+
+    let loaded = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+
+    assert_eq!(loaded.technology_level(mining_productivity), Some(1));
+    assert_eq!(loaded.technology_progress(mining_productivity), Some(400));
+    assert_eq!(
+        loaded
+            .research
+            .bonuses(&loaded.world.prototypes)
+            .mining_drill_productivity_permyriad,
+        500
+    );
+    assert_eq!(loaded.state_hash(), before_hash);
+}
+
+#[test]
+fn load_rejects_invalid_finite_research_level() {
+    let mut sim = Simulation::new_test_world(123);
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    sim.research
+        .technology_state_mut(logistics)
+        .expect("logistics state should exist")
+        .completed_levels = 2;
+
+    let error = load_from_bytes(&save_to_bytes(&sim).unwrap())
+        .expect_err("finite technology level above one should be invalid");
+
+    assert!(matches!(
+        error,
+        SaveLoadError::InvalidSimulationState(
+            SimulationValidationError::InvalidResearchTechnology { technology_id }
+        ) if technology_id == logistics
+    ));
 }

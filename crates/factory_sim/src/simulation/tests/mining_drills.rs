@@ -57,6 +57,157 @@ fn burner_drill_with_coal_mines_output() {
 }
 
 #[test]
+fn mining_productivity_adds_output_without_depleting_extra_resource() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "space_science_pack");
+    complete_research_by_name(&mut sim, "mining_productivity");
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    add_fuel_to_burner_drill(&mut sim, entity_id, coal, 3);
+
+    for _ in 0..4_800 {
+        sim.tick();
+    }
+
+    let state = crate::entity_access::mining_drill_state(&sim, entity_id)
+        .expect("burner drill should expose state");
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_ore, 21)));
+    assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 20));
+    assert_eq!(state.modules.productivity_progress_permyriad, 0);
+}
+
+#[test]
+fn large_mining_productivity_bonus_drains_without_truncation_or_extra_depletion() {
+    let mut sim = Simulation::new_test_world(123);
+    unlock_with_prerequisites(&mut sim, "space_science_pack");
+    let productivity = technology_id(&sim.world.prototypes, "mining_productivity");
+    sim.research
+        .technology_state_mut(productivity)
+        .expect("mining productivity state should exist")
+        .completed_levels = 1_310_720;
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let coal = item_id(&sim.world.prototypes, "coal");
+    let (entity_id, x, y, before) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    add_fuel_to_burner_drill(&mut sim, entity_id, coal, 1);
+
+    for _ in 0..240 {
+        sim.tick();
+    }
+
+    let state = crate::entity_access::mining_drill_state(&sim, entity_id)
+        .expect("burner drill should expose state");
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_ore, 100)));
+    assert_eq!(
+        state.pending_output,
+        Some(crate::machines::PendingMiningOutput {
+            item_id: iron_ore,
+            count: 65_437,
+        })
+    );
+    assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 1));
+
+    sim.entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state")
+        .output_slot = ItemSlot::default();
+    sim.tick();
+
+    let state = crate::entity_access::mining_drill_state(&sim, entity_id)
+        .expect("burner drill should expose state");
+    assert_eq!(state.output_slot.stack(), Some(test_stack(iron_ore, 100)));
+    assert_eq!(
+        state.pending_output.map(|pending| pending.count),
+        Some(65_337)
+    );
+    assert_eq!(resource_amount_at(&sim.world, x, y), Some(before - 1));
+}
+
+#[test]
+fn deconstructing_drill_recovers_pending_productivity_output_from_compact_count() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    let state = sim
+        .entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state");
+    state.pending_output = Some(crate::machines::PendingMiningOutput {
+        item_id: iron_ore,
+        count: 250,
+    });
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .expect("placed drill should exist")
+        .clone();
+
+    let recovery = crate::simulation::entity_recovery_ops::entity_recovery(&sim, &placed)
+        .expect("drill recovery should be valid");
+    assert_eq!(recovery.bulk_items.len(), 1);
+    assert_eq!(recovery.bulk_items[0].item_id(), iron_ore);
+    assert_eq!(recovery.bulk_items[0].count(), 250);
+
+    sim.player_inventory = Inventory::player();
+    crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id)
+        .expect("player should have room for pending drill output");
+    assert_eq!(sim.player_inventory.count(iron_ore), 250);
+}
+
+#[test]
+fn deconstructing_drill_rejects_unbounded_pending_output_without_expanding_it() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    let state = sim
+        .entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state");
+    state.pending_output = Some(crate::machines::PendingMiningOutput {
+        item_id: iron_ore,
+        count: u64::MAX,
+    });
+    let placed = sim
+        .entities
+        .placed_entity(entity_id)
+        .expect("placed drill should exist")
+        .clone();
+    let recovery = crate::simulation::entity_recovery_ops::entity_recovery(&sim, &placed)
+        .expect("even unbounded drill recovery should stay compact");
+    assert_eq!(recovery.bulk_items.len(), 1);
+    assert_eq!(recovery.bulk_items[0].item_id(), iron_ore);
+    assert_eq!(recovery.bulk_items[0].count(), u64::MAX);
+    sim.player_inventory = Inventory::player();
+
+    assert_eq!(
+        crate::entity_mutation::destroy_to_player_inventory(&mut sim, entity_id),
+        Err(EntityDestroyError::InsufficientInventory { item_id: iron_ore })
+    );
+    assert!(sim.entities.placed_entity(entity_id).is_some());
+}
+
+#[test]
+fn mining_drill_validation_allows_stored_and_pending_output_to_differ() {
+    let mut sim = Simulation::new_test_world(123);
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
+    let (entity_id, _, _, _) = place_burner_drill_on_resource(&mut sim, iron_ore);
+    let state = sim
+        .entities
+        .mining_drill_state_mut(entity_id)
+        .expect("burner drill should expose mutable state");
+    state.output_slot = test_slot(test_stack(iron_ore, 1));
+    state.pending_output = Some(crate::machines::PendingMiningOutput {
+        item_id: copper_ore,
+        count: 65_537,
+    });
+
+    sim.validate().expect(
+        "stored output and pending output drain independently and may name different resources",
+    );
+}
+
+#[test]
 fn one_coal_powers_burner_drill_for_exactly_1600_ticks() {
     let mut sim = Simulation::new_test_world(123);
     let coal = item_id(&sim.world.prototypes, "coal");

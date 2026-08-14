@@ -266,6 +266,7 @@ fn mining_drill_state_for_prototype(
         mining_required_ticks: mining_drill.ticks_per_item,
         resource_target: None,
         output_slot: ItemSlot::default(),
+        pending_output: None,
     })
 }
 

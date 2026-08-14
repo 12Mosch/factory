@@ -26,7 +26,7 @@ pub(in crate::simulation) fn recipe_is_unlocked(
     catalog.technologies.iter().any(|technology| {
         research
             .technology_state(technology.id)
-            .is_some_and(|state| state.unlocked)
+            .is_some_and(|state| state.completed_levels > 0)
             && technology.effects.iter().any(|effect| {
                 matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
             })

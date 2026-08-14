@@ -88,7 +88,12 @@ use bincode::Options;
 // v44: rocket silos gained a cargo slot and durable fixed-tick launch phase.
 // v45: rocket silos gained a launch-product output inventory.
 // v46: the durable rockets-launched statistic joined the snapshot.
-pub const SAVE_VERSION: u32 = 46;
+// v47: research completion became level-based so repeatable technology levels
+// and their in-level progress are durable. Mining drills also gained durable
+// pending output so unbounded productivity bonuses can drain through bounded
+// inventories without truncation or stalling. Construction robots retain such
+// deconstruction yields as compact bulk cargo until storage can accept them.
+pub const SAVE_VERSION: u32 = 47;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -120,7 +125,9 @@ pub const SAVE_VERSION: u32 = 46;
 // `RocketBuilding` crafting category the part recipe sits in.
 // v29: rocket silo prototypes gained launch payload, product, and output
 // capacity metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 29;
+// v30: technologies gained level models, cost curves, and typed simulation
+// bonus effects.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 30;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

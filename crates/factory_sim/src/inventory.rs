@@ -22,6 +22,16 @@ pub struct ItemStack {
     count: u16,
 }
 
+/// A validated item quantity that is not constrained to one inventory stack.
+///
+/// Used for durable, potentially very large quantities that must stay compact
+/// until a bounded inventory accepts them in stack-sized chunks.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ItemAmount {
+    item_id: ItemId,
+    count: u64,
+}
+
 /// One persistent item-storage slot.
 ///
 /// The transparent representation intentionally matches the legacy
@@ -84,6 +94,30 @@ impl ItemStack {
     }
 
     pub fn count(self) -> u16 {
+        self.count
+    }
+}
+
+impl ItemAmount {
+    pub fn new(
+        catalog: &PrototypeCatalog,
+        item_id: ItemId,
+        count: u64,
+    ) -> Result<Self, InventoryError> {
+        if catalog.item(item_id).is_none() {
+            return Err(InventoryError::UnknownItem(item_id));
+        }
+        if count == 0 {
+            return Err(InventoryError::EmptyItemStack(item_id));
+        }
+        Ok(Self { item_id, count })
+    }
+
+    pub fn item_id(self) -> ItemId {
+        self.item_id
+    }
+
+    pub fn count(self) -> u64 {
         self.count
     }
 }

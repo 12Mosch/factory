@@ -122,6 +122,12 @@ pub enum PrototypeLoadError {
     InvalidTechnologyRequiredUnits {
         technology: String,
     },
+    InvalidTechnologyCostCurve {
+        technology: String,
+    },
+    InvalidTechnologyEffect {
+        technology: String,
+    },
     InvalidTechnologyResearchTime {
         technology: String,
     },
@@ -366,6 +372,13 @@ impl fmt::Display for PrototypeLoadError {
                 formatter,
                 "technology {technology:?} must require at least one research unit"
             ),
+            Self::InvalidTechnologyCostCurve { technology } => write!(
+                formatter,
+                "technology {technology:?} has a research cost curve that can overflow"
+            ),
+            Self::InvalidTechnologyEffect { technology } => {
+                write!(formatter, "technology {technology:?} has an invalid effect")
+            }
             Self::InvalidTechnologyResearchTime { technology } => write!(
                 formatter,
                 "technology {technology:?} must require at least one research tick per unit"

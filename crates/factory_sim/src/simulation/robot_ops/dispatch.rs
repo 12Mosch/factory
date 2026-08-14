@@ -151,6 +151,7 @@ pub(super) fn commit_robot_dispatch(
         delivery: None,
         payload: None,
         cargo: Vec::new(),
+        bulk_cargo: Vec::new(),
     };
     configure(&mut robot);
     sim.robot_flights.robots.insert(id, robot);

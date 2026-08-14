@@ -357,7 +357,9 @@ pub(crate) struct RawTechnologyPrototype {
     pub(crate) name: String,
     pub(crate) prerequisites: Vec<String>,
     pub(crate) science_packs: Vec<RawItemAmount>,
-    pub(crate) required_units: u32,
+    pub(crate) required_units: u64,
+    #[serde(default)]
+    pub(crate) level_model: RawTechnologyLevelModel,
     pub(crate) research_time_ticks: u32,
     pub(crate) effects: Vec<RawTechnologyEffect>,
 }
@@ -365,6 +367,21 @@ pub(crate) struct RawTechnologyPrototype {
 #[derive(Debug, Deserialize)]
 pub(crate) enum RawTechnologyEffect {
     UnlockRecipe(String),
+    MiningDrillProductivity { bonus_permyriad: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+pub(crate) enum RawTechnologyLevelModel {
+    #[default]
+    Finite,
+    Repeatable {
+        cost_curve: RawTechnologyCostCurve,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub(crate) enum RawTechnologyCostCurve {
+    Linear { additional_units_per_level: u64 },
 }
 
 #[derive(Debug, Deserialize)]

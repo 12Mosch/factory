@@ -13,7 +13,7 @@ pub use self::assembler::{AssemblerError, AssemblerIngredientStatus, AssemblingM
 pub use self::burner_energy::{BurnerEnergy, MachineEnergy};
 pub use self::furnace::{FurnaceError, FurnaceState};
 pub use self::lab::{LabError, LabState};
-pub use self::mining_drill::{MiningDrillError, MiningDrillState};
+pub use self::mining_drill::{MiningDrillError, MiningDrillState, PendingMiningOutput};
 pub use self::modules::{
     BeaconState, MachineModuleState, ModuleError, ModuleSlots, ResolvedModuleEffects,
 };

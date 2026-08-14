@@ -1,6 +1,11 @@
 use super::topology_invalidation_ops::{apply_entity_topology_change, impact_for_prototype};
 use super::*;
 
+pub(crate) struct EntityRecovery {
+    pub(crate) stacks: Vec<ItemStack>,
+    pub(crate) bulk_items: Vec<ItemAmount>,
+}
+
 pub(crate) fn destroy_to_player_inventory(
     sim: &mut Simulation,
     entity_id: EntityId,
@@ -10,26 +15,16 @@ pub(crate) fn destroy_to_player_inventory(
         .placed_entity(entity_id)
         .cloned()
         .ok_or(EntityDestroyError::MissingEntity(entity_id))?;
-    let recovery_stacks = entity_recovery_stacks(sim, &placed)?;
+    let recovery = entity_recovery(sim, &placed)?;
     let mut player_inventory = sim.player_inventory.clone();
 
-    for stack in recovery_stacks {
+    for stack in recovery.stacks {
         player_inventory
             .insert_stack(&sim.world.prototypes, stack)
-            .map_err(|error| match error {
-                InventoryError::InsufficientSpace => EntityDestroyError::InsufficientInventory {
-                    item_id: stack.item_id(),
-                },
-                InventoryError::UnknownItem(item_id) => EntityDestroyError::UnknownItem(item_id),
-                InventoryError::InsufficientItems
-                | InventoryError::EmptyItemStack(_)
-                | InventoryError::StackExceedsLimit { .. }
-                | InventoryError::InvalidSlot { .. }
-                | InventoryError::EmptySlot { .. }
-                | InventoryError::FilterMismatch { .. } => {
-                    unreachable!("destroy recovery only inserts items")
-                }
-            })?;
+            .map_err(|error| recovery_insert_error(error, stack.item_id()))?;
+    }
+    for amount in recovery.bulk_items {
+        insert_bulk_recovery(&sim.world.prototypes, &mut player_inventory, amount)?;
     }
 
     // Unlink before removal: the reverse links live on the neighbors, and
@@ -52,10 +47,10 @@ pub(crate) fn destroy_to_player_inventory(
     Ok(removed)
 }
 
-pub(crate) fn entity_recovery_stacks(
+pub(crate) fn entity_recovery(
     sim: &Simulation,
     placed: &PlacedEntity,
-) -> Result<Vec<ItemStack>, EntityDestroyError> {
+) -> Result<EntityRecovery, EntityDestroyError> {
     let mut stacks = Vec::new();
     stacks.push(
         ItemStack::new(
@@ -68,7 +63,59 @@ pub(crate) fn entity_recovery_stacks(
     push_entity_state_recovery_stacks(&sim.world.prototypes, &sim.entities, placed.id, &mut stacks);
     sim.circuit_wire_recovery_stacks(placed.id, &mut stacks);
 
-    Ok(stacks)
+    let bulk_items = sim
+        .entities
+        .mining_drill_state(placed.id)
+        .ok()
+        .and_then(|state| state.pending_output)
+        .map(|pending| {
+            ItemAmount::new(&sim.world.prototypes, pending.item_id, pending.count)
+                .expect("validated pending drill output should form an item amount")
+        })
+        .into_iter()
+        .collect();
+
+    Ok(EntityRecovery { stacks, bulk_items })
+}
+
+fn insert_bulk_recovery(
+    catalog: &PrototypeCatalog,
+    inventory: &mut Inventory,
+    amount: ItemAmount,
+) -> Result<(), EntityDestroyError> {
+    let item_id = amount.item_id();
+    let stack_size = catalog
+        .item(item_id)
+        .ok_or(EntityDestroyError::UnknownItem(item_id))?
+        .stack_size;
+    if u64::from(inventory.insert_capacity(item_id, stack_size)) < amount.count() {
+        return Err(EntityDestroyError::InsufficientInventory { item_id });
+    }
+
+    let mut remaining = amount.count();
+    while remaining > 0 {
+        let chunk = remaining.min(u64::from(u16::MAX)) as u16;
+        inventory
+            .insert(catalog, item_id, chunk)
+            .map_err(|error| recovery_insert_error(error, item_id))?;
+        remaining -= u64::from(chunk);
+    }
+    Ok(())
+}
+
+fn recovery_insert_error(error: InventoryError, item_id: ItemId) -> EntityDestroyError {
+    match error {
+        InventoryError::InsufficientSpace => EntityDestroyError::InsufficientInventory { item_id },
+        InventoryError::UnknownItem(item_id) => EntityDestroyError::UnknownItem(item_id),
+        InventoryError::InsufficientItems
+        | InventoryError::EmptyItemStack(_)
+        | InventoryError::StackExceedsLimit { .. }
+        | InventoryError::InvalidSlot { .. }
+        | InventoryError::EmptySlot { .. }
+        | InventoryError::FilterMismatch { .. } => {
+            unreachable!("destroy recovery only inserts items")
+        }
+    }
 }
 
 pub(crate) fn build_item_for_entity(
