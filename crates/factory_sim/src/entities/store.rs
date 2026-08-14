@@ -313,7 +313,7 @@ mod tests {
         // fixture gained a populated stop afterwards, so those three fields are
         // pinned rather than only the map that holds them; the save format did
         // not change with it.
-        const EXPECTED_LAYOUT_HASH: u64 = 0x64b1_fd1c_0751_b974;
+        const EXPECTED_LAYOUT_HASH: u64 = 0xc881_62a9_5db9_f17f;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -388,7 +388,8 @@ mod tests {
             test_inventory(vec![Some(test_stack(iron, 5))]),
         );
         // The drill uses the electric variant and the furnace the burner
-        // variant so the golden layout covers both `MachineEnergy` arms.
+        // variant so the golden layout covers both `MachineEnergy` arms. Its
+        // pending output also pins both the `Option` tag and payload layout.
         store.mining_drills.insert(
             EntityId::new(2),
             MiningDrillState {
@@ -398,7 +399,10 @@ mod tests {
                 mining_required_ticks: 60,
                 resource_target: Some(ManualMiningTarget { x: 2, y: 3 }),
                 output_slot: test_slot(test_stack(copper, 2)),
-                pending_output: None,
+                pending_output: Some(crate::machines::PendingMiningOutput {
+                    item_id: copper,
+                    count: 65_537,
+                }),
             },
         );
         store.furnaces.insert(
