@@ -371,6 +371,27 @@ pub struct OnboardingProgress {
     pub petroleum_gas_produced: u64,
     pub turrets_researched: bool,
     pub loaded_gun_turrets: u64,
+    pub rocket_silo_powered: bool,
+    pub rocket_parts_completed: bool,
+}
+
+/// Durable progress through the production chain that culminates in a rocket
+/// launch.
+///
+/// This is a read-only projection rather than separately saved onboarding
+/// state. Production totals, research, placed silo state, and launch totals are
+/// already authoritative and durable, so keeping another set of counters would
+/// allow the two views of the same factory to disagree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RocketProgramProgress {
+    pub production_science_packs_produced: u64,
+    pub utility_science_packs_produced: u64,
+    pub rocket_silo_researched: bool,
+    pub powered_rocket_silo: bool,
+    pub rocket_parts_completed: u32,
+    pub rocket_parts_required: u32,
+    pub satellite_prepared: bool,
+    pub rockets_launched: u64,
 }
 
 impl OnboardingProgress {
@@ -401,6 +422,14 @@ impl OnboardingProgress {
 
     fn record_electricity_generated(&mut self) {
         self.record_flag(|progress| &mut progress.electricity_generated);
+    }
+
+    fn record_rocket_silo_powered(&mut self) {
+        self.record_flag(|progress| &mut progress.rocket_silo_powered);
+    }
+
+    fn record_rocket_parts_completed(&mut self) {
+        self.record_flag(|progress| &mut progress.rocket_parts_completed);
     }
 
     fn record_item_produced(

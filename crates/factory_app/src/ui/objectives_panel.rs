@@ -1,10 +1,9 @@
 use bevy::prelude::*;
-use factory_sim::OnboardingProgress;
+use factory_sim::{OnboardingProgress, RocketProgramProgress, Simulation};
 
 use crate::resources::SimResource;
 use crate::ui::map_view::{MINIMAP_FRAME_SIZE, MINIMAP_RIGHT_OFFSET, MINIMAP_TOP_OFFSET};
 
-const OBJECTIVE_COUNT: usize = 18;
 const VISIBLE_ROW_COUNT: usize = 5;
 const MINIMAP_PANEL_GAP: f32 = 12.0;
 const OBJECTIVES_PANEL_RIGHT: f32 = MINIMAP_RIGHT_OFFSET + MINIMAP_FRAME_SIZE + MINIMAP_PANEL_GAP;
@@ -13,101 +12,167 @@ const OBJECTIVES_PANEL_RIGHT: f32 = MINIMAP_RIGHT_OFFSET + MINIMAP_FRAME_SIZE + 
 struct ObjectiveDefinition {
     title: &'static str,
     hint: &'static str,
-    target: u64,
+    progress: fn(ObjectiveFacts) -> ObjectiveProgress,
 }
 
-const OBJECTIVES: [ObjectiveDefinition; OBJECTIVE_COUNT] = [
+const OBJECTIVES: &[ObjectiveDefinition] = &[
     ObjectiveDefinition {
         title: "Mine iron ore",
         hint: "Hold right mouse over an iron ore patch.",
-        target: 10,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.iron_ore_manually_mined, 10),
     },
     ObjectiveDefinition {
         title: "Place the stone furnace",
         hint: "Select the furnace in the hotbar, then left-click to place it.",
-        target: 1,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.stone_furnaces_placed, 1),
     },
     ObjectiveDefinition {
         title: "Smelt iron plates",
         hint: "Open the furnace and add iron ore plus coal.",
-        target: 10,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.iron_plates_smelted, 10),
     },
     ObjectiveDefinition {
         title: "Place the burner mining drill",
         hint: "Place the drill over ore, then fuel it with coal.",
-        target: 1,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.burner_mining_drills_placed, 1),
     },
     ObjectiveDefinition {
         title: "Build an iron ore stockpile",
         hint: "Keep the fueled drill's output clear until 25 ore are produced in total.",
-        target: 25,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.iron_ore_drill_mined, 25),
     },
     ObjectiveDefinition {
         title: "Craft transport belts",
         hint: "Press C and craft 10 transport belts for your first production line.",
-        target: 10,
+        progress: |facts| {
+            ObjectiveProgress::new(facts.onboarding.transport_belts_manually_crafted, 10)
+        },
     },
     ObjectiveDefinition {
         title: "Generate electricity",
         hint: "Connect an offshore pump, boiler, steam engine, and small electric pole; fuel the boiler.",
-        target: 1,
+        progress: |facts| {
+            ObjectiveProgress::new(u64::from(facts.onboarding.electricity_generated), 1)
+        },
     },
     ObjectiveDefinition {
         title: "Place a lab",
         hint: "Place a lab within the coverage of a small electric pole.",
-        target: 1,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.labs_placed, 1),
     },
     ObjectiveDefinition {
         title: "Produce automation science",
         hint: "Craft 10 red science packs and insert them into the powered lab.",
-        target: 10,
+        progress: |facts| {
+            ObjectiveProgress::new(facts.onboarding.automation_science_packs_produced, 10)
+        },
     },
     ObjectiveDefinition {
         title: "Research Logistics",
         hint: "Press T to open technologies and research Logistics.",
-        target: 1,
+        progress: |facts| {
+            ObjectiveProgress::new(u64::from(facts.onboarding.logistics_researched), 1)
+        },
     },
     ObjectiveDefinition {
         title: "Research Automation",
         hint: "Research Automation to unlock assembling machines.",
-        target: 1,
+        progress: |facts| {
+            ObjectiveProgress::new(u64::from(facts.onboarding.automation_researched), 1)
+        },
     },
     ObjectiveDefinition {
         title: "Automate an item",
         hint: "Power and supply an assembling machine, select a recipe, and let it finish one item.",
-        target: 1,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.assembler_items_produced, 1),
     },
     ObjectiveDefinition {
         title: "Produce logistic science",
         hint: "Research electric power and logistic science packs, then automate 10 green science packs.",
-        target: 10,
+        progress: |facts| {
+            ObjectiveProgress::new(facts.onboarding.logistic_science_packs_produced, 10)
+        },
     },
     ObjectiveDefinition {
         title: "Research Oil Processing",
         hint: "Press T and queue the Logistics 2, Fluid Handling, and Oil Processing prerequisite chain.",
-        target: 1,
+        progress: |facts| {
+            ObjectiveProgress::new(u64::from(facts.onboarding.oil_processing_researched), 1)
+        },
     },
     ObjectiveDefinition {
         title: "Refine petroleum gas",
         hint: "Power a pumpjack over crude oil, pipe it to a refinery, and select Basic Oil Processing.",
-        target: 45,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.petroleum_gas_produced, 45),
     },
     ObjectiveDefinition {
         title: "Research Turrets",
         hint: "Research Stone Walls followed by Turrets.",
-        target: 1,
+        progress: |facts| ObjectiveProgress::new(u64::from(facts.onboarding.turrets_researched), 1),
     },
     ObjectiveDefinition {
         title: "Deploy a loaded gun turret",
         hint: "Place a gun turret and load it with usable ammunition.",
-        target: 1,
+        progress: |facts| ObjectiveProgress::new(facts.onboarding.loaded_gun_turrets, 1),
     },
     ObjectiveDefinition {
-        title: "Launch a rocket",
-        hint: "Research Rocket Silo and Space Science Pack, build a rocket and satellite, then launch it.",
-        target: 1,
+        title: "Produce production science",
+        hint: "Research Production Science Pack, then automate 10 purple science packs.",
+        progress: |facts| {
+            ObjectiveProgress::new(facts.rocket.production_science_packs_produced, 10)
+        },
+    },
+    ObjectiveDefinition {
+        title: "Produce utility science",
+        hint: "Research Utility Science Pack, then automate 10 yellow science packs.",
+        progress: |facts| ObjectiveProgress::new(facts.rocket.utility_science_packs_produced, 10),
+    },
+    ObjectiveDefinition {
+        title: "Research Rocket Silo",
+        hint: "Research Rocket Silo after producing both late-game science packs.",
+        progress: |facts| ObjectiveProgress::new(u64::from(facts.rocket.rocket_silo_researched), 1),
+    },
+    ObjectiveDefinition {
+        title: "Place and power a rocket silo",
+        hint: "Build a rocket silo inside a powered electric network.",
+        progress: |facts| ObjectiveProgress::new(u64::from(facts.rocket.powered_rocket_silo), 1),
+    },
+    ObjectiveDefinition {
+        title: "Complete the rocket's parts",
+        hint: "Supply low density structures, rocket fuel, and processing units until all rocket parts are built.",
+        progress: |facts| {
+            ObjectiveProgress::new(
+                u64::from(facts.rocket.rocket_parts_completed),
+                u64::from(facts.rocket.rocket_parts_required.max(1)),
+            )
+        },
+    },
+    ObjectiveDefinition {
+        title: "Craft or load a satellite",
+        hint: "Research Space Science Pack, craft a satellite, and load it into the completed rocket.",
+        progress: |facts| ObjectiveProgress::new(u64::from(facts.rocket.satellite_prepared), 1),
+    },
+    ObjectiveDefinition {
+        title: "Launch the first rocket",
+        hint: "Keep the silo's launch output clear; a completed rocket with a satellite launches automatically.",
+        progress: |facts| ObjectiveProgress::new(facts.rocket.rockets_launched, 1),
     },
 ];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ObjectiveFacts {
+    onboarding: OnboardingProgress,
+    rocket: RocketProgramProgress,
+}
+
+impl ObjectiveFacts {
+    fn from_simulation(simulation: &Simulation) -> Self {
+        Self {
+            onboarding: simulation.onboarding_progress(),
+            rocket: simulation.rocket_program_progress(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ObjectiveProgress {
@@ -115,6 +180,10 @@ struct ObjectiveProgress {
     target: u64,
 }
 impl ObjectiveProgress {
+    const fn new(current: u64, target: u64) -> Self {
+        Self { current, target }
+    }
+
     fn is_complete(self) -> bool {
         self.current >= self.target
     }
@@ -122,27 +191,28 @@ impl ObjectiveProgress {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ObjectivesSnapshot {
-    progress: [ObjectiveProgress; OBJECTIVE_COUNT],
+    progress: [ObjectiveProgress; OBJECTIVES.len()],
 }
 impl Default for ObjectivesSnapshot {
     fn default() -> Self {
-        Self {
-            progress: std::array::from_fn(|i| ObjectiveProgress {
-                current: 0,
-                target: OBJECTIVES[i].target,
-            }),
-        }
+        Self::from_facts(ObjectiveFacts::default())
     }
 }
 impl ObjectivesSnapshot {
+    fn from_facts(facts: ObjectiveFacts) -> Self {
+        Self {
+            progress: std::array::from_fn(|index| (OBJECTIVES[index].progress)(facts)),
+        }
+    }
+
     fn active_index(&self) -> Option<usize> {
         self.progress.iter().position(|p| !p.is_complete())
     }
     fn visible_indices(&self) -> [usize; VISIBLE_ROW_COUNT] {
-        let active = self.active_index().unwrap_or(OBJECTIVE_COUNT - 1);
+        let active = self.active_index().unwrap_or(OBJECTIVES.len() - 1);
         let start = active
             .saturating_sub(2)
-            .min(OBJECTIVE_COUNT - VISIBLE_ROW_COUNT);
+            .min(OBJECTIVES.len() - VISIBLE_ROW_COUNT);
         std::array::from_fn(|offset| start + offset)
     }
 }
@@ -150,8 +220,6 @@ impl ObjectivesSnapshot {
 #[derive(Resource, Default)]
 pub(crate) struct ObjectivesPanelState {
     snapshot: ObjectivesSnapshot,
-    progress_revision: u64,
-    rockets_launched: u64,
 }
 #[derive(Component)]
 pub struct ObjectivesPanelRoot;
@@ -172,12 +240,8 @@ pub(crate) fn setup_objectives_panel(
     mut state: ResMut<ObjectivesPanelState>,
 ) {
     let simulation = sim.read();
-    let progress = simulation.onboarding_progress();
-    let rockets_launched = simulation.rockets_launched();
+    state.snapshot = objectives_snapshot(&simulation);
     drop(simulation);
-    state.snapshot = objectives_snapshot(progress, rockets_launched);
-    state.progress_revision = progress.revision;
-    state.rockets_launched = rockets_launched;
     let snapshot = state.snapshot.clone();
     let visible = snapshot.visible_indices();
     commands
@@ -265,15 +329,8 @@ pub(crate) fn sync_objectives_panel(
     mut roots: Query<&mut Visibility, With<ObjectivesPanelRoot>>,
 ) {
     let simulation = sim.read();
-    let progress = simulation.onboarding_progress();
-    let rockets_launched = simulation.rockets_launched();
+    let next = objectives_snapshot(&simulation);
     drop(simulation);
-    if progress.revision == state.progress_revision && rockets_launched == state.rockets_launched {
-        return;
-    }
-    state.progress_revision = progress.revision;
-    state.rockets_launched = rockets_launched;
-    let next = objectives_snapshot(progress, rockets_launched);
     if next == state.snapshot {
         return;
     }
@@ -301,33 +358,8 @@ pub(crate) fn sync_objectives_panel(
     }
 }
 
-fn objectives_snapshot(p: OnboardingProgress, rockets_launched: u64) -> ObjectivesSnapshot {
-    let values = [
-        p.iron_ore_manually_mined,
-        p.stone_furnaces_placed,
-        p.iron_plates_smelted,
-        p.burner_mining_drills_placed,
-        p.iron_ore_drill_mined,
-        p.transport_belts_manually_crafted,
-        u64::from(p.electricity_generated),
-        p.labs_placed,
-        p.automation_science_packs_produced,
-        u64::from(p.logistics_researched),
-        u64::from(p.automation_researched),
-        p.assembler_items_produced,
-        p.logistic_science_packs_produced,
-        u64::from(p.oil_processing_researched),
-        p.petroleum_gas_produced,
-        u64::from(p.turrets_researched),
-        p.loaded_gun_turrets,
-        rockets_launched,
-    ];
-    ObjectivesSnapshot {
-        progress: std::array::from_fn(|i| ObjectiveProgress {
-            current: values[i],
-            target: OBJECTIVES[i].target,
-        }),
-    }
+fn objectives_snapshot(simulation: &Simulation) -> ObjectivesSnapshot {
+    ObjectivesSnapshot::from_facts(ObjectiveFacts::from_simulation(simulation))
 }
 fn row_text(index: usize, p: ObjectiveProgress) -> String {
     if p.is_complete() {
@@ -386,12 +418,36 @@ fn row_text_color(p: ObjectiveProgress, active: bool) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn completed_onboarding() -> OnboardingProgress {
+        OnboardingProgress {
+            iron_ore_manually_mined: 10,
+            stone_furnaces_placed: 1,
+            iron_plates_smelted: 10,
+            burner_mining_drills_placed: 1,
+            iron_ore_drill_mined: 25,
+            transport_belts_manually_crafted: 10,
+            electricity_generated: true,
+            labs_placed: 1,
+            automation_science_packs_produced: 10,
+            logistics_researched: true,
+            automation_researched: true,
+            assembler_items_produced: 1,
+            logistic_science_packs_produced: 10,
+            oil_processing_researched: true,
+            petroleum_gas_produced: 45,
+            turrets_researched: true,
+            loaded_gun_turrets: 1,
+            ..default()
+        }
+    }
+
     #[test]
     fn windows_track_active_objective() {
         let first = ObjectivesSnapshot::default();
         assert_eq!(first.visible_indices(), [0, 1, 2, 3, 4]);
-        let middle = objectives_snapshot(
-            OnboardingProgress {
+        let middle = ObjectivesSnapshot::from_facts(ObjectiveFacts {
+            onboarding: OnboardingProgress {
                 iron_ore_manually_mined: 10,
                 stone_furnaces_placed: 1,
                 iron_plates_smelted: 10,
@@ -402,31 +458,72 @@ mod tests {
                 labs_placed: 1,
                 ..default()
             },
-            0,
-        );
+            ..default()
+        });
         assert_eq!(middle.active_index(), Some(8));
         assert_eq!(middle.visible_indices(), [6, 7, 8, 9, 10]);
     }
+
     #[test]
-    fn end_window_is_fourteen_through_eighteen() {
+    fn visible_window_follows_each_late_game_milestone() {
         let mut s = ObjectivesSnapshot::default();
         for p in &mut s.progress[..17] {
             p.current = p.target;
         }
-        assert_eq!(s.visible_indices(), [13, 14, 15, 16, 17]);
+        assert_eq!(s.active_index(), Some(17));
+        assert_eq!(s.visible_indices(), [15, 16, 17, 18, 19]);
+
+        for p in &mut s.progress[17..20] {
+            p.current = p.target;
+        }
+        assert_eq!(s.active_index(), Some(20));
+        assert_eq!(s.visible_indices(), [18, 19, 20, 21, 22]);
+
+        for p in &mut s.progress[20..23] {
+            p.current = p.target;
+        }
+        assert_eq!(s.active_index(), Some(23));
+        assert_eq!(s.visible_indices(), [19, 20, 21, 22, 23]);
     }
+
     #[test]
     fn later_progress_does_not_skip_sequence() {
-        let s = objectives_snapshot(
-            OnboardingProgress {
-                turrets_researched: true,
-                loaded_gun_turrets: 1,
-                ..default()
+        let s = ObjectivesSnapshot::from_facts(ObjectiveFacts {
+            rocket: RocketProgramProgress {
+                production_science_packs_produced: 10,
+                utility_science_packs_produced: 10,
+                rocket_silo_researched: true,
+                powered_rocket_silo: true,
+                rocket_parts_completed: 100,
+                rocket_parts_required: 100,
+                satellite_prepared: true,
+                rockets_launched: 1,
             },
-            1,
-        );
+            ..default()
+        });
         assert_eq!(s.active_index(), Some(0));
     }
+
+    #[test]
+    fn completed_launch_finishes_the_guided_path() {
+        let s = ObjectivesSnapshot::from_facts(ObjectiveFacts {
+            onboarding: completed_onboarding(),
+            rocket: RocketProgramProgress {
+                production_science_packs_produced: 10,
+                utility_science_packs_produced: 10,
+                rocket_silo_researched: true,
+                powered_rocket_silo: true,
+                rocket_parts_completed: 100,
+                rocket_parts_required: 100,
+                satellite_prepared: true,
+                rockets_launched: 1,
+            },
+        });
+
+        assert_eq!(s.active_index(), None);
+        assert_eq!(panel_visibility(&s), Visibility::Hidden);
+    }
+
     #[test]
     fn labels_use_absolute_numbers_and_cap_progress() {
         assert_eq!(

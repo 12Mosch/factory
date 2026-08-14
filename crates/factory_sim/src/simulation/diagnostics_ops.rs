@@ -567,6 +567,84 @@ impl Simulation {
             .map(|state| self.rocket_silo_status_detail(entity_id, state))
     }
 
+    /// Progress through the late-game production and launch chain.
+    ///
+    /// Every field is derived from state that already survives save/load. The
+    /// silo scan is limited to silo state rather than all placed entities, so
+    /// polling this for the objectives panel stays independent of factory size.
+    pub fn rocket_program_progress(&self) -> RocketProgramProgress {
+        let produced_total = |item_name| {
+            factory_data::try_item_id_by_name(&self.world.prototypes, item_name)
+                .ok()
+                .and_then(|item_id| self.statistics.items.total_produced.get(&item_id).copied())
+                .unwrap_or(0)
+        };
+        let technology_researched = |technology_name| {
+            factory_data::try_technology_id_by_name(&self.world.prototypes, technology_name)
+                .ok()
+                .is_some_and(|technology_id| self.is_technology_unlocked(technology_id))
+        };
+        let satellite = factory_data::try_item_id_by_name(&self.world.prototypes, "satellite").ok();
+        let mut rocket_parts_completed = 0;
+        let mut rocket_parts_required = self
+            .world
+            .prototypes
+            .entities
+            .iter()
+            .find_map(|prototype| prototype.rocket_silo)
+            .map_or(1, |silo| silo.parts_per_rocket);
+        let mut saw_rocket_silo = false;
+        let mut powered_rocket_silo = self.onboarding_progress.rocket_silo_powered;
+        let rocket_parts_milestone = self.onboarding_progress.rocket_parts_completed;
+        let mut satellite_loaded = false;
+
+        for (&entity_id, silo) in &self.entities.rocket_silos {
+            powered_rocket_silo |=
+                self.power
+                    .entity_statuses
+                    .get(&entity_id)
+                    .is_some_and(|status| {
+                        status.network_id.is_some() && status.satisfaction_permyriad > 0
+                    });
+            satellite_loaded |=
+                satellite.is_some_and(|item_id| silo.cargo_inventory.count(item_id) > 0);
+
+            // Pick the silo furthest through its own target. Keeping the target
+            // paired with the winning counter also makes this projection sound
+            // for catalogs whose silo prototypes require different part counts.
+            if !saw_rocket_silo
+                || u64::from(silo.parts_completed) * u64::from(rocket_parts_required)
+                    > u64::from(rocket_parts_completed) * u64::from(silo.parts_per_rocket)
+            {
+                rocket_parts_completed = silo.parts_completed;
+                rocket_parts_required = silo.parts_per_rocket;
+            }
+            saw_rocket_silo = true;
+        }
+
+        let rockets_launched = self.statistics.rockets_launched;
+        if rocket_parts_milestone || rockets_launched > 0 {
+            rocket_parts_completed = rocket_parts_required;
+        }
+        if rockets_launched > 0 {
+            // A launch consumes and resets the two silo states below, but is
+            // durable proof that those milestones were reached.
+            powered_rocket_silo = true;
+            satellite_loaded = true;
+        }
+
+        RocketProgramProgress {
+            production_science_packs_produced: produced_total("production_science_pack"),
+            utility_science_packs_produced: produced_total("utility_science_pack"),
+            rocket_silo_researched: technology_researched("rocket_silo"),
+            powered_rocket_silo,
+            rocket_parts_completed,
+            rocket_parts_required,
+            satellite_prepared: satellite_loaded || produced_total("satellite") > 0,
+            rockets_launched,
+        }
+    }
+
     fn assembler_status(
         &self,
         entity_id: EntityId,

@@ -295,6 +295,68 @@ fn silo_diagnostics_distinguish_build_cargo_output_and_launch_phases() {
     );
 }
 
+#[test]
+fn rocket_program_progress_is_derived_and_survives_save_load() {
+    let mut sim = Simulation::new_test_world(123);
+    let production_science = item_id(&sim.world.prototypes, "production_science_pack");
+    let utility_science = item_id(&sim.world.prototypes, "utility_science_pack");
+    sim.record_item_produced(production_science, 12);
+    sim.record_item_produced(utility_science, 15);
+
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    for _ in 0..600 {
+        sim.tick();
+        if sim
+            .entity_power_status(silo_id)
+            .is_some_and(|status| status.satisfaction_permyriad > 0)
+        {
+            break;
+        }
+    }
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let silo = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    silo.parts_completed = silo.parts_per_rocket;
+    silo.cargo_inventory
+        .insert(&sim.world.prototypes, satellite, 1)
+        .unwrap();
+    sim.onboarding_progress.record_rocket_parts_completed();
+
+    let progress = sim.rocket_program_progress();
+    assert_eq!(progress.production_science_packs_produced, 12);
+    assert_eq!(progress.utility_science_packs_produced, 15);
+    assert!(progress.rocket_silo_researched);
+    assert!(progress.powered_rocket_silo);
+    assert_eq!(
+        progress.rocket_parts_completed,
+        progress.rocket_parts_required
+    );
+    assert!(progress.satellite_prepared);
+    assert_eq!(progress.rockets_launched, 0);
+    assert!(sim.onboarding_progress().rocket_silo_powered);
+    assert!(sim.onboarding_progress().rocket_parts_completed);
+
+    let satisfaction = {
+        let status = sim
+            .power
+            .entity_statuses
+            .get_mut(&silo_id)
+            .expect("the silo should retain a power status");
+        std::mem::replace(&mut status.satisfaction_permyriad, 0)
+    };
+    assert_eq!(sim.rocket_program_progress(), progress);
+    sim.power
+        .entity_statuses
+        .get_mut(&silo_id)
+        .unwrap()
+        .satisfaction_permyriad = satisfaction;
+
+    let bytes = crate::save_to_bytes(&sim).expect("late-game progress should save");
+    let loaded = crate::load_from_bytes(&bytes).expect("late-game progress should load");
+    assert_eq!(loaded.rocket_program_progress(), progress);
+    assert!(loaded.onboarding_progress().rocket_silo_powered);
+    assert!(loaded.onboarding_progress().rocket_parts_completed);
+}
+
 /// The silo takes what its recipe asks for and nothing else, on every route in:
 /// a player's click and an inserter's arm answer the same question.
 #[test]

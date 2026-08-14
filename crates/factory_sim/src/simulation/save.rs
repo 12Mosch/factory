@@ -93,7 +93,11 @@ use bincode::Options;
 // pending output so unbounded productivity bonuses can drain through bounded
 // inventories without truncation or stalling. Construction robots retain such
 // deconstruction yields as compact bulk cargo until storage can accept them.
-pub const SAVE_VERSION: u32 = 47;
+// v48: the powered-silo and completed-rocket-parts onboarding milestones joined
+// the snapshot. Unlike the surrounding production, research, and launch totals,
+// these historical transitions cannot be reconstructed after a silo loses
+// power, launches, or is removed.
+pub const SAVE_VERSION: u32 = 48;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
