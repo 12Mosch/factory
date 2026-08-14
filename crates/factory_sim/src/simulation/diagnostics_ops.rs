@@ -522,8 +522,18 @@ impl Simulation {
                 ticks_remaining: None,
             };
         };
+        let required_ticks = required_ticks_with_modules(
+            recipe.crafting_time_ticks,
+            state.crafting_speed_numerator,
+            state.crafting_speed_denominator,
+            state.modules.resolved_effects,
+        );
         if !assembler_has_ingredients(&state.input_inventory, &recipe.ingredients) {
-            return crafting_status_detail(state, RocketSiloOperationalState::MissingIngredients);
+            return crafting_status_detail(
+                state,
+                required_ticks,
+                RocketSiloOperationalState::MissingIngredients,
+            );
         }
         if self
             .power
@@ -533,9 +543,17 @@ impl Simulation {
             .unwrap_or(0)
             == 0
         {
-            return crafting_status_detail(state, RocketSiloOperationalState::NoPower);
+            return crafting_status_detail(
+                state,
+                required_ticks,
+                RocketSiloOperationalState::NoPower,
+            );
         }
-        crafting_status_detail(state, RocketSiloOperationalState::BuildingParts)
+        crafting_status_detail(
+            state,
+            required_ticks,
+            RocketSiloOperationalState::BuildingParts,
+        )
     }
 
     /// Typed status for a placed rocket silo, or `None` for another entity.
@@ -918,12 +936,13 @@ impl Simulation {
 
 fn crafting_status_detail(
     state: &RocketSiloState,
+    required_ticks: u32,
     operational_state: RocketSiloOperationalState,
 ) -> RocketSiloStatusDetail {
     RocketSiloStatusDetail {
         state: operational_state,
         progress_ticks: state.crafting_progress_ticks,
-        required_ticks: state.crafting_required_ticks,
+        required_ticks,
         ticks_remaining: None,
     }
 }

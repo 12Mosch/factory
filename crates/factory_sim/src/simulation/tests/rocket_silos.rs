@@ -379,6 +379,13 @@ fn a_silo_stays_valid_on_the_tick_its_technology_lands() {
 
     sim.validate()
         .expect("a silo whose recipe has not reached it yet is a valid world");
+    assert!(
+        sim.rocket_silo_status_for_entity(silo_id)
+            .unwrap()
+            .required_ticks
+            > 0,
+        "diagnostics should derive the unlocked duration before the next silo tick"
+    );
 
     sim.tick();
 
