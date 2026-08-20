@@ -7,9 +7,9 @@ use crate::ids::{EntityPrototypeId, FluidId, ItemId};
 use crate::model::{
     ConnectionSide, CraftingCategory, EdgeConnectionPrototype, ElectricPolePrototype,
     EnemySpawnerPrototype, EntityKind, EntityPrototype, FluidBoxPrototype, HeatBufferPrototype,
-    InserterPrototype, ItemAmount, ItemPrototype, MiningDrillPrototype, POSITION_SCALE,
-    PumpjackPrototype, RailCurvePrototype, RailHeading, RailPiecePrototype, RailPointPrototype,
-    RecipePrototype, RocketSiloPrototype,
+    InserterPrototype, ItemPrototype, MiningDrillPrototype, POSITION_SCALE, PumpjackPrototype,
+    RailCurvePrototype, RailHeading, RailPiecePrototype, RailPointPrototype, RecipePrototype,
+    RocketSiloPrototype,
 };
 use crate::raw::{
     RawEdgeConnectionPrototype, RawEntityPrototype, RawFluidBoxPrototype, RawHeatBufferPrototype,
@@ -85,8 +85,7 @@ pub(super) fn load_entities(
             )?;
             let pumpjack =
                 resolve_pumpjack(&name, entity.pumpjack, item_ids_by_name, fluid_ids_by_name)?;
-            let rocket_silo =
-                resolve_rocket_silo(&name, entity.rocket_silo.take(), item_ids_by_name)?;
+            let rocket_silo = resolve_rocket_silo(entity.rocket_silo.take());
             validate_machine_energy_source(
                 &name,
                 entity.entity_kind,
@@ -233,62 +232,47 @@ pub(super) fn validate_rocket_silo_recipe_capacity(
             });
         }
 
-        let Some(product) = items
-            .iter()
-            .find(|item| item.id == silo.launch_product.item)
-        else {
+        if !items.iter().any(|item| !item.launch_products.is_empty()) {
             return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
                 entity: entity.name.clone(),
-                detail: "launch product does not resolve to an item",
+                detail: "rocket silos require at least one launchable payload",
             });
-        };
-        let required_output_slots =
-            usize::from(silo.launch_product.amount).div_ceil(usize::from(product.stack_size));
-        if required_output_slots > silo.output_slot_count {
-            return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
-                entity: entity.name.clone(),
-                detail: "output slots cannot hold one complete launch product batch",
-            });
+        }
+        for payload in items.iter().filter(|item| !item.launch_products.is_empty()) {
+            let required_output_slots =
+                payload
+                    .launch_products
+                    .iter()
+                    .try_fold(0_usize, |total, product| {
+                        let stack_size = items
+                            .get(product.item.index())
+                            .filter(|item| item.id == product.item)?
+                            .stack_size;
+                        let stack_size = usize::from(stack_size);
+                        let stacks = usize::from(product.amount)
+                            .checked_add(stack_size.checked_sub(1)?)?
+                            .checked_div(stack_size)?;
+                        total.checked_add(stacks)
+                    });
+            if required_output_slots.is_none_or(|required| required > silo.output_slot_count) {
+                return Err(PrototypeLoadError::InvalidRocketSiloMetadata {
+                    entity: entity.name.clone(),
+                    detail: "output slots cannot hold one complete atomic launch reward",
+                });
+            }
         }
     }
     Ok(())
 }
 
-fn resolve_rocket_silo(
-    entity: &str,
-    rocket_silo: Option<RawRocketSiloPrototype>,
-    item_ids_by_name: &HashMap<String, ItemId>,
-) -> Result<Option<RocketSiloPrototype>, PrototypeLoadError> {
-    rocket_silo
-        .map(|rocket_silo| {
-            let launch_payload = *item_ids_by_name
-                .get(&rocket_silo.launch_payload)
-                .ok_or_else(|| PrototypeLoadError::MissingRocketSiloLaunchItem {
-                    entity: entity.to_string(),
-                    item: rocket_silo.launch_payload.clone(),
-                    role: "payload",
-                })?;
-            let launch_product = *item_ids_by_name
-                .get(&rocket_silo.launch_product.item)
-                .ok_or_else(|| PrototypeLoadError::MissingRocketSiloLaunchItem {
-                    entity: entity.to_string(),
-                    item: rocket_silo.launch_product.item.clone(),
-                    role: "product",
-                })?;
-            Ok(RocketSiloPrototype {
-                crafting_speed_numerator: rocket_silo.crafting_speed_numerator,
-                crafting_speed_denominator: rocket_silo.crafting_speed_denominator,
-                input_slot_count: rocket_silo.input_slot_count,
-                parts_per_rocket: rocket_silo.parts_per_rocket,
-                launch_payload,
-                launch_product: ItemAmount {
-                    item: launch_product,
-                    amount: rocket_silo.launch_product.amount,
-                },
-                output_slot_count: rocket_silo.output_slot_count,
-            })
-        })
-        .transpose()
+fn resolve_rocket_silo(rocket_silo: Option<RawRocketSiloPrototype>) -> Option<RocketSiloPrototype> {
+    rocket_silo.map(|rocket_silo| RocketSiloPrototype {
+        crafting_speed_numerator: rocket_silo.crafting_speed_numerator,
+        crafting_speed_denominator: rocket_silo.crafting_speed_denominator,
+        input_slot_count: rocket_silo.input_slot_count,
+        parts_per_rocket: rocket_silo.parts_per_rocket,
+        output_slot_count: rocket_silo.output_slot_count,
+    })
 }
 
 /// Circuit metadata is only coherent when the entity kind, the connector
@@ -521,9 +505,6 @@ fn validate_rocket_silo_metadata(
     }
     if rocket_silo.parts_per_rocket == 0 {
         return invalid("a rocket must take at least one part");
-    }
-    if rocket_silo.launch_product.amount == 0 {
-        return invalid("launch product amount must be positive");
     }
     if rocket_silo.output_slot_count == 0 {
         return invalid("rocket silos require launch product output slots");

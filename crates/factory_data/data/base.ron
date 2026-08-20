@@ -337,8 +337,17 @@
         // that nothing about it invites being stockpiled.
         (id: 120, name: "rocket_part", stack_size: 1),
         (id: 121, name: "rocket_silo", stack_size: 1),
-        // The first launchable payload. Cargo slots accept one satellite only.
-        (id: 122, name: "satellite", stack_size: 1),
+        // Launch behavior belongs to the payload: silos accept any item that
+        // declares a complete atomic reward here.
+        (
+            id: 122,
+            name: "satellite",
+            stack_size: 1,
+            launch_products: Some([(
+                item: "space_science_pack",
+                amount: 1000,
+            )]),
+        ),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -3315,8 +3324,6 @@
                 crafting_speed_denominator: 1,
                 input_slot_count: 4,
                 parts_per_rocket: 100,
-                launch_payload: "satellite",
-                launch_product: (item: "space_science_pack", amount: 1000),
                 output_slot_count: 5,
             )),
             electric_energy_source: Some((energy_usage_watts: 4000000, drain_watts: 250000)),

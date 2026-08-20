@@ -126,7 +126,7 @@ pub fn player_slot_to_rocket_silo_cargo(
                 &sim.world.prototypes,
                 &sim.research,
                 &sim.entities,
-                ItemSlotPolicy::RocketCargo(entity_id),
+                ItemSlotPolicy::RocketCargo,
                 ItemSlotOperation::PlayerInsert,
                 item_id,
             )

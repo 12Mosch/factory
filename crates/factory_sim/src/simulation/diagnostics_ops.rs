@@ -494,22 +494,17 @@ impl Simulation {
         }
 
         if state.rocket_ready() {
-            let Some(silo_prototype) = self
-                .entities
-                .placed_entity(entity_id)
-                .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
-                .and_then(|prototype| prototype.rocket_silo)
+            let Some(launch_products) = state.launch_products_for_cargo(&self.world.prototypes)
             else {
                 return ready_rocket_status_detail(RocketSiloOperationalState::AwaitingPayload);
             };
-            if !state.has_launch_payload(silo_prototype.launch_payload) {
-                return ready_rocket_status_detail(RocketSiloOperationalState::AwaitingPayload);
-            }
-            if !state.output_inventory.can_insert(
+            if crate::machines::rocket_silo::output_with_launch_products(
                 &self.world.prototypes,
-                silo_prototype.launch_product.item,
-                silo_prototype.launch_product.amount,
-            ) {
+                &state.output_inventory,
+                launch_products,
+            )
+            .is_none()
+            {
                 return ready_rocket_status_detail(RocketSiloOperationalState::LaunchOutputBlocked);
             }
             return ready_rocket_status_detail(RocketSiloOperationalState::ReadyToLaunch);

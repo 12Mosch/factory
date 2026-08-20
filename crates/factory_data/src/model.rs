@@ -75,6 +75,9 @@ pub struct ItemPrototype {
     /// Present when placing the item rewrites the targeted terrain tile
     /// instead of building an entity (landfill, stone path, concrete).
     pub place_as_tile: Option<TilePlacementPrototype>,
+    /// Complete atomic reward returned when one unit of this item is launched.
+    /// Empty means the item is not valid rocket cargo.
+    pub launch_products: Vec<ItemAmount>,
 }
 
 /// How an item mutates terrain when placed.
@@ -892,8 +895,9 @@ fn default_assembler_crafting_category() -> CraftingCategory {
 /// [`CraftingCategory::RocketBuilding`], so a player never selects it and can
 /// never clear it. And its product is not stored but counted: each finished part
 /// raises the silo's counter, and at `parts_per_rocket` the rocket is whole and
-/// the silo stops until it leaves. Launch metadata names the one accepted
-/// payload and the item batch produced when that payload reaches space.
+/// the silo stops until it leaves. Accepted payloads and their rewards belong
+/// to [`ItemPrototype::launch_products`], leaving this prototype responsible
+/// only for silo machinery and storage capacity.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct RocketSiloPrototype {
     pub crafting_speed_numerator: u32,
@@ -902,10 +906,6 @@ pub struct RocketSiloPrototype {
     pub input_slot_count: usize,
     /// Parts that make one whole rocket.
     pub parts_per_rocket: u32,
-    /// The one item a completed rocket accepts as launch cargo.
-    pub launch_payload: ItemId,
-    /// Items deposited in the silo output when the launch completes.
-    pub launch_product: ItemAmount,
     /// Slots reserved for launch products.
     pub output_slot_count: usize,
 }

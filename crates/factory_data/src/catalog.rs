@@ -42,6 +42,19 @@ impl PrototypeCatalog {
         self.items.len()
     }
 
+    /// Atomic launch reward for `payload`, or `None` when it is not launchable.
+    pub fn rocket_launch_products(&self, payload: ItemId) -> Option<&[crate::model::ItemAmount]> {
+        let products = &self.item(payload)?.launch_products;
+        (!products.is_empty()).then_some(products)
+    }
+
+    /// Items that can be used as rocket cargo, in stable catalog order.
+    pub fn rocket_launch_payloads(&self) -> impl Iterator<Item = &ItemPrototype> {
+        self.items
+            .iter()
+            .filter(|item| !item.launch_products.is_empty())
+    }
+
     pub fn max_beacon_effect_radius_tiles(&self) -> u16 {
         self.entities
             .iter()

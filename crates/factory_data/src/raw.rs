@@ -141,6 +141,11 @@ pub(crate) struct RawItemPrototype {
     pub(crate) place_as_tile: Option<RawTilePlacement>,
     #[serde(default)]
     pub(crate) robot: Option<RobotPrototype>,
+    /// Products returned when one unit of this item is launched as rocket
+    /// cargo. `None` means the item is not launchable; an explicitly empty
+    /// definition is rejected during catalog loading.
+    #[serde(default)]
+    pub(crate) launch_products: Option<Vec<RawItemAmount>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -308,8 +313,6 @@ pub(crate) struct RawRocketSiloPrototype {
     pub(crate) crafting_speed_denominator: u32,
     pub(crate) input_slot_count: usize,
     pub(crate) parts_per_rocket: u32,
-    pub(crate) launch_payload: String,
-    pub(crate) launch_product: RawItemAmount,
     pub(crate) output_slot_count: usize,
 }
 

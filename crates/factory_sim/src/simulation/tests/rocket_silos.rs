@@ -22,12 +22,18 @@ fn tick_until_parts_built(sim: &mut Simulation, entity_id: EntityId, parts: u32)
 }
 
 fn set_launch_payload(sim: &mut Simulation, payload: ItemId) {
-    let silo = entity_id_by_name(&sim.world.prototypes, "rocket_silo");
-    sim.world.prototypes.entities[silo.index()]
-        .rocket_silo
-        .as_mut()
-        .expect("the rocket silo should have launch metadata")
-        .launch_payload = payload;
+    let satellite = item_id(&sim.world.prototypes, "satellite");
+    let products =
+        std::mem::take(&mut sim.world.prototypes.items[satellite.index()].launch_products);
+    sim.world.prototypes.items[payload.index()].launch_products = products;
+}
+
+fn set_launch_products(
+    sim: &mut Simulation,
+    payload: ItemId,
+    products: Vec<factory_data::ItemAmount>,
+) {
+    sim.world.prototypes.items[payload.index()].launch_products = products;
 }
 
 #[test]
@@ -45,15 +51,17 @@ fn catalog_loads_rocket_silo_metadata() {
     assert!(prototype.electric_energy_source.is_some());
     assert!(metadata.parts_per_rocket > 1);
     assert!(metadata.input_slot_count > 0);
+    let satellite = sim
+        .world
+        .prototypes
+        .item(item_id(&sim.world.prototypes, "satellite"))
+        .expect("satellite should be catalog content");
+    assert_eq!(satellite.launch_products.len(), 1);
     assert_eq!(
-        metadata.launch_payload,
-        item_id(&sim.world.prototypes, "satellite")
-    );
-    assert_eq!(
-        metadata.launch_product.item,
+        satellite.launch_products[0].item,
         item_id(&sim.world.prototypes, "space_science_pack")
     );
-    assert_eq!(metadata.launch_product.amount, 1_000);
+    assert_eq!(satellite.launch_products[0].amount, 1_000);
     assert_eq!(metadata.output_slot_count, 5);
 }
 
@@ -728,6 +736,115 @@ fn completed_rocket_launches_satellite_over_fixed_ticks() {
             .map(|row| row.produced_total),
         Some(1_000)
     );
+}
+
+#[test]
+fn a_second_payload_launches_its_own_multi_product_reward() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let payload = item_id(&sim.world.prototypes, "iron_plate");
+    let copper = item_id(&sim.world.prototypes, "copper_plate");
+    let steel = item_id(&sim.world.prototypes, "steel_plate");
+    set_launch_products(
+        &mut sim,
+        payload,
+        vec![
+            factory_data::ItemAmount {
+                item: copper,
+                amount: 125,
+            },
+            factory_data::ItemAmount {
+                item: steel,
+                amount: 40,
+            },
+        ],
+    );
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    let held_payload = ItemStack::new(&sim.world.prototypes, payload, 1).unwrap();
+    let footprint = sim.entities.placed_entity(silo_id).unwrap().footprint;
+    assert!(crate::simulation::inserter_target_can_accept(
+        &sim.world.prototypes,
+        &sim.research,
+        &sim.entities,
+        sim.stopped_stock(),
+        (footprint.x, footprint.y),
+        held_payload,
+    ));
+    sim.player_inventory = Inventory::player();
+    set_inventory_slot(&mut sim.player_inventory, 0, payload, 1);
+    crate::entity_transfer::player_slot_to_rocket_silo_cargo(&mut sim, silo_id, 0)
+        .expect("the second data-defined payload should route to cargo");
+
+    for _ in 0..181 {
+        sim.tick();
+    }
+
+    let state = &sim.entities.rocket_silos[&silo_id];
+    assert_eq!(state.output_inventory.count(copper), 125);
+    assert_eq!(state.output_inventory.count(steel), 40);
+    assert_eq!(state.cargo_inventory.count(payload), 0);
+    assert_eq!(sim.rockets_launched(), 1);
+    sim.validate()
+        .expect("heterogeneous launch output should remain valid save state");
+    for (product, expected) in [(copper, 125), (steel, 40)] {
+        assert_eq!(
+            sim.item_statistics()
+                .rows
+                .iter()
+                .find(|row| row.item_id == product)
+                .map(|row| row.produced_total),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn multi_product_launch_reward_is_atomic_when_the_output_is_fragmented() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let payload = item_id(&sim.world.prototypes, "iron_plate");
+    let copper = item_id(&sim.world.prototypes, "copper_plate");
+    let steel = item_id(&sim.world.prototypes, "steel_plate");
+    set_launch_products(
+        &mut sim,
+        payload,
+        vec![
+            factory_data::ItemAmount {
+                item: copper,
+                amount: 1,
+            },
+            factory_data::ItemAmount {
+                item: steel,
+                amount: 1,
+            },
+        ],
+    );
+    let state = sim.entities.rocket_silos.get_mut(&silo_id).unwrap();
+    state.parts_completed = state.parts_per_rocket;
+    state.launch_phase = RocketLaunchPhase::Rising { ticks_remaining: 1 };
+    state
+        .cargo_inventory
+        .insert(&sim.world.prototypes, payload, 1)
+        .unwrap();
+    for _ in 0..4 {
+        state
+            .output_inventory
+            .insert(&sim.world.prototypes, copper, 100)
+            .unwrap();
+    }
+    let before = state.output_inventory.clone();
+
+    sim.advance_one_tick(&mut NoopTickProfiler);
+
+    let state = &sim.entities.rocket_silos[&silo_id];
+    assert_eq!(state.output_inventory, before);
+    assert_eq!(
+        state.launch_phase,
+        RocketLaunchPhase::Rising { ticks_remaining: 1 }
+    );
+    assert_eq!(state.cargo_inventory.count(payload), 1);
+    assert_eq!(sim.rockets_launched(), 0);
 }
 
 #[test]

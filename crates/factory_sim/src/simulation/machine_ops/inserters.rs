@@ -719,7 +719,7 @@ pub(in crate::simulation) fn try_drop_inserter_item(
     if entities.rocket_silos.contains_key(&entity_id) {
         let cargo = rocket_silo_cargo_target_accepts(catalog, research, entities, entity_id, item);
         let policy = if cargo {
-            ItemSlotPolicy::RocketCargo(entity_id)
+            ItemSlotPolicy::RocketCargo
         } else {
             ItemSlotPolicy::RocketPartIngredient
         };
@@ -832,7 +832,7 @@ fn rocket_silo_cargo_target_accepts(
             catalog,
             research,
             entities,
-            ItemSlotPolicy::RocketCargo(entity_id),
+            ItemSlotPolicy::RocketCargo,
             ItemSlotOperation::InserterInsert,
             item.item_id(),
         )
