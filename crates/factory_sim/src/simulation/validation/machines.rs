@@ -259,12 +259,7 @@ pub(in crate::simulation) fn validate_rocket_silo(
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }
     for slot in state.cargo_inventory.slots() {
-        validate_slot_policy(
-            sim,
-            entity_id,
-            *slot,
-            ItemSlotPolicy::RocketCargo(entity_id),
-        )?;
+        validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::RocketCargo)?;
     }
     validate_inventory(&sim.world.prototypes, &state.output_inventory)?;
     if state.output_inventory.slots().len() != silo_prototype.output_slot_count {
@@ -272,25 +267,32 @@ pub(in crate::simulation) fn validate_rocket_silo(
     }
     for slot in state.output_inventory.slots() {
         validate_slot_policy(sim, entity_id, *slot, ItemSlotPolicy::OutputOnly)?;
-        if slot
-            .stack()
-            .is_some_and(|stack| stack.item_id() != silo_prototype.launch_product.item)
-        {
+        if slot.stack().is_some_and(|stack| {
+            !sim.world
+                .prototypes
+                .rocket_launch_payloads()
+                .flat_map(|payload| &payload.launch_products)
+                .any(|product| product.item == stack.item_id())
+        }) {
             return Err(SimValidationError::InvalidEntityState { entity_id });
         }
     }
     let cargo_present = state.cargo_inventory.slots()[0].stack().is_some();
-    let cargo_valid = !cargo_present || state.has_launch_payload(silo_prototype.launch_payload);
+    let launch_products = state.launch_products_for_cargo(&sim.world.prototypes);
+    let cargo_valid = !cargo_present || launch_products.is_some();
     let launch_active = !matches!(state.launch_phase, RocketLaunchPhase::Idle);
     if !cargo_valid
         || (cargo_present && !state.rocket_ready())
         || (launch_active && (!state.rocket_ready() || !cargo_present))
         || (launch_active
-            && !state.output_inventory.can_insert(
-                &sim.world.prototypes,
-                silo_prototype.launch_product.item,
-                silo_prototype.launch_product.amount,
-            ))
+            && launch_products.is_none_or(|products| {
+                crate::machines::rocket_silo::output_with_launch_products(
+                    &sim.world.prototypes,
+                    &state.output_inventory,
+                    products,
+                )
+                .is_none()
+            }))
     {
         return Err(SimValidationError::InvalidEntityState { entity_id });
     }

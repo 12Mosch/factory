@@ -15,7 +15,7 @@ pub(in crate::simulation) enum ItemSlotPolicy {
     /// entity id: every silo builds the same part from the same recipe, so what
     /// they accept is a question about the catalog rather than about the machine.
     RocketPartIngredient,
-    RocketCargo(EntityId),
+    RocketCargo,
     SciencePack,
     Ammunition,
     /// A roboport's robot slots, which take any item declaring a flight
@@ -71,10 +71,7 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
             ItemSlotPolicy::RocketPartIngredient => {
                 rocket_silo_input_accepts_item(catalog, research, item_id)
             }
-            ItemSlotPolicy::RocketCargo(entity_id) => {
-                rocket_silo_prototype(catalog, entities, entity_id)
-                    .is_some_and(|silo| silo.launch_payload == item_id)
-            }
+            ItemSlotPolicy::RocketCargo => catalog.rocket_launch_products(item_id).is_some(),
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
             ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
             ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),
@@ -110,10 +107,7 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
             ItemSlotPolicy::RocketPartIngredient => {
                 rocket_silo_input_accepts_item(catalog, research, item_id)
             }
-            ItemSlotPolicy::RocketCargo(entity_id) => {
-                rocket_silo_prototype(catalog, entities, entity_id)
-                    .is_some_and(|silo| silo.launch_payload == item_id)
-            }
+            ItemSlotPolicy::RocketCargo => catalog.rocket_launch_products(item_id).is_some(),
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
             ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
             ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),

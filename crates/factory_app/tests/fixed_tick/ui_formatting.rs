@@ -486,13 +486,19 @@ fn rocket_silo_detail_formatting_reports_ingredients_and_rocket_progress() {
 fn rocket_silo_launch_product_label_follows_the_prototype() {
     let mut catalog = PrototypeCatalog::load_base().expect("base prototypes should load");
     let silo = entity_id_by_name(&catalog, "rocket_silo");
+    let satellite = item_id_by_name(&catalog, "satellite");
     let iron_plate = item_id_by_name(&catalog, "iron_plate");
-    catalog.entities[silo.index()]
-        .rocket_silo
-        .as_mut()
-        .expect("the silo should have launch metadata")
-        .launch_product
-        .item = iron_plate;
+    let copper_plate = item_id_by_name(&catalog, "copper_plate");
+    catalog.items[satellite.index()].launch_products = vec![
+        factory_data::ItemAmount {
+            item: iron_plate,
+            amount: 1,
+        },
+        factory_data::ItemAmount {
+            item: copper_plate,
+            amount: 1,
+        },
+    ];
     let mut sim = Simulation::new(123, catalog);
     unlock_with_prerequisites(&mut sim, "rocket_silo");
     let (x, y) = place_powered_fixture_origin(&mut sim, 9, 9, (-1, 4));
@@ -509,7 +515,7 @@ fn rocket_silo_launch_product_label_follows_the_prototype() {
 
     assert_eq!(
         format_rocket_silo_launch_product_label(&sim, entity_id).as_deref(),
-        Some("Iron Plate")
+        Some("Iron Plate / Copper Plate")
     );
 }
 

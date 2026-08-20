@@ -19,15 +19,36 @@ pub fn format_rocket_silo_launch_product_label(
     entity_id: EntityId,
 ) -> Option<String> {
     let placed = sim.entities().placed_entity(entity_id)?;
-    let silo = sim
-        .catalog()
-        .entity(placed.prototype_id)?
-        .rocket_silo
-        .as_ref()?;
-    Some(format_item_display_name(
-        sim.catalog(),
-        silo.launch_product.item,
-    ))
+    sim.catalog().entity(placed.prototype_id)?.rocket_silo?;
+    let state = factory_sim::entity_access::rocket_silo_state(sim, entity_id).ok()?;
+    let selected = state
+        .cargo_inventory
+        .slots()
+        .first()
+        .and_then(|slot| slot.stack())
+        .filter(|stack| stack.count() == 1)
+        .and_then(|stack| sim.catalog().rocket_launch_products(stack.item_id()));
+    let products = selected
+        .map(|products| products.iter().collect::<Vec<_>>())
+        .unwrap_or_else(|| {
+            sim.catalog()
+                .rocket_launch_payloads()
+                .flat_map(|payload| &payload.launch_products)
+                .collect()
+        });
+    let mut product_items = Vec::new();
+    for product in products {
+        if !product_items.contains(&product.item) {
+            product_items.push(product.item);
+        }
+    }
+    (!product_items.is_empty()).then(|| {
+        product_items
+            .into_iter()
+            .map(|item| format_item_display_name(sim.catalog(), item))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    })
 }
 
 /// The four lines a crafting machine's window shows about what it is making.
@@ -142,7 +163,7 @@ pub fn format_rocket_silo_operational_status(
     let detail = sim.rocket_silo_status_for_entity(entity_id)?;
     let silo_state = factory_sim::entity_access::rocket_silo_state(sim, entity_id).ok()?;
     let placed = sim.entities().placed_entity(entity_id)?;
-    let prototype = sim.catalog().entity(placed.prototype_id)?.rocket_silo?;
+    sim.catalog().entity(placed.prototype_id)?.rocket_silo?;
 
     Some(match detail.state {
         RocketSiloOperationalState::RecipeLocked => {
@@ -158,20 +179,45 @@ pub fn format_rocket_silo_operational_status(
         RocketSiloOperationalState::NoPower => {
             "No power — connect the silo to a powered electric network.".to_string()
         }
-        RocketSiloOperationalState::AwaitingPayload => format!(
-            "Awaiting payload — add 1 {} to the Cargo slot.",
-            format_item_display_name(sim.catalog(), prototype.launch_payload)
-        ),
+        RocketSiloOperationalState::AwaitingPayload => {
+            let payloads = sim
+                .catalog()
+                .rocket_launch_payloads()
+                .map(|payload| format_item_display_name(sim.catalog(), payload.id))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            format!("Awaiting payload — add 1 {payloads} to the Cargo slot.")
+        }
         RocketSiloOperationalState::ReadyToLaunch => {
             "Ready to launch — sequence starts on the next simulation tick.".to_string()
         }
         RocketSiloOperationalState::Sealing => format_launch_state("Sealing rocket", detail),
         RocketSiloOperationalState::Launching => format_launch_state("Launching rocket", detail),
-        RocketSiloOperationalState::LaunchOutputBlocked => format!(
-            "Launch output blocked — clear room for {} {} in the launch-product slots.",
-            prototype.launch_product.amount,
-            format_item_display_name(sim.catalog(), prototype.launch_product.item),
-        ),
+        RocketSiloOperationalState::LaunchOutputBlocked => {
+            let products = silo_state
+                .cargo_inventory
+                .slots()
+                .first()
+                .and_then(|slot| slot.stack())
+                .and_then(|stack| sim.catalog().rocket_launch_products(stack.item_id()))
+                .map(|products| {
+                    products
+                        .iter()
+                        .map(|product| {
+                            format!(
+                                "{} {}",
+                                product.amount,
+                                format_item_display_name(sim.catalog(), product.item)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                })
+                .unwrap_or_else(|| "the complete launch reward".to_string());
+            format!(
+                "Launch output blocked — clear room for {products} in the launch-product slots."
+            )
+        }
     })
 }
 

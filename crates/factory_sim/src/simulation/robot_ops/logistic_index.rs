@@ -451,17 +451,26 @@ impl Simulation {
     /// Demand advertised by a machine inventory. This is the reusable opt-in
     /// point for machines that can accept logistic deliveries.
     fn logistic_machine_contribution(&self, entity_id: EntityId) -> Option<EndpointContribution> {
-        let prototype = rocket_silo_prototype(&self.world.prototypes, &self.entities, entity_id)?;
-        let requested = self.machine_delivery_capacity(entity_id, prototype.launch_payload)?;
-        let contribution = (requested > 0)
-            .then_some(vec![(
-                prototype.launch_payload,
-                LogisticItemTotals {
-                    requested,
-                    ..LogisticItemTotals::default()
-                },
-            )])
-            .unwrap_or_default();
+        rocket_silo_prototype(&self.world.prototypes, &self.entities, entity_id)?;
+        let payloads = self
+            .world
+            .prototypes
+            .rocket_launch_payloads()
+            .map(|payload| payload.id)
+            .collect::<Vec<_>>();
+        let contribution = payloads
+            .into_iter()
+            .filter_map(|payload| {
+                let requested = self.machine_delivery_capacity(entity_id, payload)?;
+                (requested > 0).then_some((
+                    payload,
+                    LogisticItemTotals {
+                        requested,
+                        ..LogisticItemTotals::default()
+                    },
+                ))
+            })
+            .collect();
         Some(contribution)
     }
 

@@ -1,7 +1,9 @@
 use super::crafting::{CraftProducts, ItemCraft, record_item_craft};
 use super::progress::{ProgressAdvance, advance_electric_progress};
 use super::*;
-use crate::machines::rocket_silo::{LAUNCH_RISE_TICKS, LAUNCH_SEAL_TICKS, RocketLaunchPhase};
+use crate::machines::rocket_silo::{
+    LAUNCH_RISE_TICKS, LAUNCH_SEAL_TICKS, RocketLaunchPhase, output_with_launch_products,
+};
 use crate::simulation::module_ops::rescale_progress;
 
 impl MachineTickContext<'_> {
@@ -17,25 +19,28 @@ impl MachineTickContext<'_> {
         let mut rocket_silos = std::mem::take(&mut self.entities.rocket_silos);
 
         for (&entity_id, state) in &mut rocket_silos {
-            let Some(silo_prototype) = self
+            if self
                 .entities
                 .placed_entity(entity_id)
                 .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
                 .and_then(|prototype| prototype.rocket_silo)
-            else {
+                .is_none()
+            {
                 continue;
-            };
-            let launch_product = silo_prototype.launch_product;
-
+            }
             match state.launch_phase {
                 RocketLaunchPhase::Idle
                     if state.rocket_ready()
-                        && state.has_launch_payload(silo_prototype.launch_payload)
-                        && state.output_inventory.can_insert(
-                            &self.world.prototypes,
-                            launch_product.item,
-                            launch_product.amount,
-                        ) =>
+                        && state
+                            .launch_products_for_cargo(&self.world.prototypes)
+                            .and_then(|products| {
+                                output_with_launch_products(
+                                    &self.world.prototypes,
+                                    &state.output_inventory,
+                                    products,
+                                )
+                            })
+                            .is_some() =>
                 {
                     state.launch_phase = RocketLaunchPhase::Sealed {
                         ticks_remaining: LAUNCH_SEAL_TICKS,
@@ -55,34 +60,33 @@ impl MachineTickContext<'_> {
                     continue;
                 }
                 RocketLaunchPhase::Rising { ticks_remaining: 1 } => {
-                    if !state.has_launch_payload(silo_prototype.launch_payload) {
+                    let Some(launch_products) = state
+                        .launch_products_for_cargo(&self.world.prototypes)
+                        .map(<[factory_data::ItemAmount]>::to_vec)
+                    else {
                         // Launch state is externally constructible through
                         // saves. Never mint a reward unless the payload that
                         // justified this launch is still present and exact.
                         continue;
-                    }
-                    if state
-                        .output_inventory
-                        .insert(
-                            &self.world.prototypes,
-                            launch_product.item,
-                            launch_product.amount,
-                        )
-                        .is_err()
-                    {
+                    };
+                    let Some(next_output) = output_with_launch_products(
+                        &self.world.prototypes,
+                        &state.output_inventory,
+                        &launch_products,
+                    ) else {
                         // Output can only become emptier after launch starts,
                         // but a malformed externally-constructed state should
                         // stall safely rather than destroy its launch reward.
                         continue;
-                    }
+                    };
+                    state.output_inventory = next_output;
                     let cargo = state
                         .cargo_inventory
                         .take_slot(0)
                         .expect("a launching rocket retains its validated cargo");
-                    self.record_item_produced(
-                        launch_product.item,
-                        u64::from(launch_product.amount),
-                    );
+                    for product in launch_products {
+                        self.record_item_produced(product.item, u64::from(product.amount));
+                    }
                     self.statistics
                         .record_item_consumed(cargo.item_id(), u64::from(cargo.count()));
                     self.statistics.record_rocket_launched();

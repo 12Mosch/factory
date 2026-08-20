@@ -578,7 +578,7 @@ impl Simulation {
                 &self.world.prototypes,
                 &self.research,
                 &self.entities,
-                ItemSlotPolicy::RocketCargo(entity_id),
+                ItemSlotPolicy::RocketCargo,
                 ItemSlotOperation::InserterInsert,
                 item_id,
             )
