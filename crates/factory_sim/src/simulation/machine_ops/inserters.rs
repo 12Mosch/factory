@@ -172,10 +172,31 @@ pub(in crate::simulation) fn peek_inserter_source_item(
         })
 }
 
+#[cfg(test)]
 pub(in crate::simulation) fn inserter_target_can_accept(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     entities: &EntityStore,
+    stopped_stock: StoppedStock<'_>,
+    drop_tile: (WorldTileCoord, WorldTileCoord),
+    item: ItemStack,
+) -> bool {
+    inserter_target_can_accept_with_rocket_recipe(
+        catalog,
+        research,
+        entities,
+        ResolvedRocketSiloRecipe::new(catalog, research),
+        stopped_stock,
+        drop_tile,
+        item,
+    )
+}
+
+pub(in crate::simulation) fn inserter_target_can_accept_with_rocket_recipe(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    entities: &EntityStore,
+    rocket_silo_recipe: ResolvedRocketSiloRecipe,
     stopped_stock: StoppedStock<'_>,
     drop_tile: (WorldTileCoord, WorldTileCoord),
     item: ItemStack,
@@ -312,10 +333,11 @@ pub(in crate::simulation) fn inserter_target_can_accept(
         if is_cargo {
             return true;
         }
-        return item_slot_policy_accepts(
+        return item_slot_policy_accepts_with_rocket_recipe(
             catalog,
             research,
             entities,
+            rocket_silo_recipe,
             ItemSlotPolicy::RocketPartIngredient,
             ItemSlotOperation::InserterInsert,
             item.item_id(),
@@ -472,14 +494,18 @@ pub(in crate::simulation) fn try_take_inserter_source_item(
 }
 
 pub(in crate::simulation) fn try_drop_inserter_item(
-    catalog: &PrototypeCatalog,
-    research: &ResearchState,
+    policy_context: ItemPolicyContext<'_>,
     entities: &mut EntityStore,
     stopped_stock: &mut StoppedStockMut<'_>,
     transport: &mut TransportLaneCache,
     drop_tile: (WorldTileCoord, WorldTileCoord),
     item: ItemStack,
 ) -> bool {
+    let ItemPolicyContext {
+        catalog,
+        research,
+        rocket_silo_recipe,
+    } = policy_context;
     if let Some(stock) = stopped_stock.at_mut(drop_tile.0, drop_tile.1) {
         return drop_stock_item(catalog, research, entities, stock, item);
     }
@@ -723,10 +749,11 @@ pub(in crate::simulation) fn try_drop_inserter_item(
         } else {
             ItemSlotPolicy::RocketPartIngredient
         };
-        if !item_slot_policy_accepts(
+        if !item_slot_policy_accepts_with_rocket_recipe(
             catalog,
             research,
             entities,
+            rocket_silo_recipe,
             policy,
             ItemSlotOperation::InserterInsert,
             item.item_id(),

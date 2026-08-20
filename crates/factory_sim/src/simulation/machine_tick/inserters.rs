@@ -37,10 +37,11 @@ impl MachineTickContext<'_> {
                     let item = ItemStack::new(&self.world.prototypes, item_id, 1)
                         .expect("a source item should exist in the prototype catalog");
                     if !profiler.measure(ProfilePhase::InventoryTransfers, || {
-                        inserter_target_can_accept(
+                        inserter_target_can_accept_with_rocket_recipe(
                             &self.world.prototypes,
                             self.research,
                             self.entities,
+                            self.rocket_silo_recipe,
                             StoppedStock::new(self.stopped_stock, self.rolling_stock),
                             drop_tile,
                             item,
@@ -77,10 +78,11 @@ impl MachineTickContext<'_> {
                         let item = ItemStack::new(&self.world.prototypes, item_id, 1)
                             .expect("a source item should exist in the prototype catalog");
                         if !profiler.measure(ProfilePhase::InventoryTransfers, || {
-                            inserter_target_can_accept(
+                            inserter_target_can_accept_with_rocket_recipe(
                                 &self.world.prototypes,
                                 self.research,
                                 self.entities,
+                                self.rocket_silo_recipe,
                                 StoppedStock::new(self.stopped_stock, self.rolling_stock),
                                 drop_tile,
                                 item,
@@ -113,10 +115,11 @@ impl MachineTickContext<'_> {
                 InserterState::Holding { item } => {
                     let target_can_accept =
                         profiler.measure(ProfilePhase::InventoryTransfers, || {
-                            inserter_target_can_accept(
+                            inserter_target_can_accept_with_rocket_recipe(
                                 &self.world.prototypes,
                                 self.research,
                                 self.entities,
+                                self.rocket_silo_recipe,
                                 StoppedStock::new(self.stopped_stock, self.rolling_stock),
                                 drop_tile,
                                 item,
@@ -128,8 +131,11 @@ impl MachineTickContext<'_> {
                         InserterState::Holding { item }
                     } else if profiler.measure(ProfilePhase::InventoryTransfers, || {
                         try_drop_inserter_item(
-                            &self.world.prototypes,
-                            self.research,
+                            ItemPolicyContext::with_rocket_recipe(
+                                &self.world.prototypes,
+                                self.research,
+                                self.rocket_silo_recipe,
+                            ),
                             self.entities,
                             &mut StoppedStockMut::new(self.stopped_stock, self.rolling_stock),
                             self.transport,

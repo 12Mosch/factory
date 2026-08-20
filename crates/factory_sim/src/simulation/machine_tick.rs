@@ -13,6 +13,11 @@ mod rocket_silos;
 impl Simulation {
     fn machine_tick_context(&mut self) -> MachineTickContext<'_> {
         let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
         let mining_drill_productivity_permyriad = self
             .research
             .bonuses(&self.world.prototypes)
@@ -24,6 +29,7 @@ impl Simulation {
             stopped_stock: &self.stopped_stock_index,
             transport: &mut self.transport,
             research: &mut self.research,
+            rocket_silo_recipe,
             mining_drill_productivity_permyriad,
             power: &mut self.power,
             power_demand_cache: &mut self.power_demand_cache,

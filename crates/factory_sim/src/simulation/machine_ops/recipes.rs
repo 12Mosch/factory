@@ -97,14 +97,48 @@ pub(in crate::simulation) fn rocket_silo_recipe<'a>(
     })
 }
 
+/// One research-aware resolution of the fixed recipe shared by every silo.
+///
+/// Bulk systems carry this copyable value through their silo loops so catalog
+/// and technology discovery is paid once per pass. Keeping only the id also
+/// avoids a long-lived borrow of the catalog and makes the snapshot explicit:
+/// a later pass may resolve again after research completes in the same tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::simulation) struct ResolvedRocketSiloRecipe(Option<RecipeId>);
+
+impl ResolvedRocketSiloRecipe {
+    pub(in crate::simulation) fn new(catalog: &PrototypeCatalog, research: &ResearchState) -> Self {
+        Self(rocket_silo_recipe(catalog, research).map(|recipe| recipe.id))
+    }
+
+    pub(in crate::simulation) fn get(
+        self,
+        catalog: &PrototypeCatalog,
+    ) -> Option<&factory_data::RecipePrototype> {
+        self.0.and_then(|recipe_id| catalog.recipe(recipe_id))
+    }
+
+    pub(in crate::simulation) fn for_entities(
+        catalog: &PrototypeCatalog,
+        research: &ResearchState,
+        entities: &EntityStore,
+    ) -> Self {
+        if entities.rocket_silos.is_empty() {
+            Self::default()
+        } else {
+            Self::new(catalog, research)
+        }
+    }
+}
+
 /// Whether a silo has any use for `item_id`: it is an ingredient of the part
 /// recipe the silo is currently able to build.
-pub(in crate::simulation) fn rocket_silo_input_accepts_item(
+pub(in crate::simulation) fn resolved_rocket_silo_input_accepts_item(
     catalog: &PrototypeCatalog,
-    research: &ResearchState,
+    resolved_recipe: ResolvedRocketSiloRecipe,
     item_id: ItemId,
 ) -> bool {
-    rocket_silo_recipe(catalog, research).is_some_and(|recipe| {
+    resolved_recipe.get(catalog).is_some_and(|recipe| {
         recipe
             .ingredients
             .iter()
