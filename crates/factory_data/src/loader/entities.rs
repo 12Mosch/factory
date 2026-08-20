@@ -248,9 +248,11 @@ pub(super) fn validate_rocket_silo_recipe_capacity(
                             .get(product.item.index())
                             .filter(|item| item.id == product.item)?
                             .stack_size;
-                        total.checked_add(
-                            usize::from(product.amount).div_ceil(usize::from(stack_size)),
-                        )
+                        let stack_size = usize::from(stack_size);
+                        let stacks = usize::from(product.amount)
+                            .checked_add(stack_size.checked_sub(1)?)?
+                            .checked_div(stack_size)?;
+                        total.checked_add(stacks)
                     });
             if required_output_slots.is_none_or(|required| required > silo.output_slot_count) {
                 return Err(PrototypeLoadError::InvalidRocketSiloMetadata {

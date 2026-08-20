@@ -1926,6 +1926,22 @@ fn rocket_silo_catalog_with_launch_products(
     extra_fields: &str,
     launch_products: &str,
 ) -> Result<PrototypeCatalog, PrototypeLoadError> {
+    rocket_silo_catalog_with_product_stack_size(
+        entity_kind,
+        rocket_silo,
+        extra_fields,
+        launch_products,
+        200,
+    )
+}
+
+fn rocket_silo_catalog_with_product_stack_size(
+    entity_kind: &str,
+    rocket_silo: &str,
+    extra_fields: &str,
+    launch_products: &str,
+    product_stack_size: u16,
+) -> Result<PrototypeCatalog, PrototypeLoadError> {
     const ELECTRIC: &str =
         "electric_energy_source: Some((energy_usage_watts: 4000000, drain_watts: 250000)),";
     let extra_fields = if extra_fields.contains("electric_energy_source") {
@@ -1943,7 +1959,7 @@ fn rocket_silo_catalog_with_launch_products(
                     stack_size: 1,
                     launch_products: {launch_products},
                 ),
-                (id: 2, name: "space_science_pack", stack_size: 200),
+                (id: 2, name: "space_science_pack", stack_size: {product_stack_size}),
             ],
             recipes: [],
             entities: [(
@@ -1993,6 +2009,23 @@ fn rocket_silo_output_capacity_is_validated() {
     let undersized = VALID_ROCKET_SILO.replace("output_slot_count: 5", "output_slot_count: 4");
     let error = rocket_silo_catalog("RocketSilo", &undersized, "")
         .expect_err("four stacks cannot hold one thousand packs of stack size two hundred");
+    assert!(matches!(
+        error,
+        PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. }
+            if entity == "rocket_silo"
+    ));
+}
+
+#[test]
+fn zero_sized_launch_product_stacks_fail_catalog_loading() {
+    let error = rocket_silo_catalog_with_product_stack_size(
+        "RocketSilo",
+        VALID_ROCKET_SILO,
+        "",
+        r#"Some([(item: "space_science_pack", amount: 1000)])"#,
+        0,
+    )
+    .expect_err("a zero-sized launch product stack cannot be assigned output slots");
     assert!(matches!(
         error,
         PrototypeLoadError::InvalidRocketSiloMetadata { entity, .. }
