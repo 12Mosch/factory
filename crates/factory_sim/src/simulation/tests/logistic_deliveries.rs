@@ -144,6 +144,39 @@ fn a_machine_slot_has_only_one_in_flight_delivery() {
 }
 
 #[test]
+fn alternative_payloads_share_one_machine_delivery_reservation() {
+    let (mut sim, silo, provider, _, satellite) = machine_delivery_fixture(8);
+    let iron = item_id(&sim.world.prototypes, "iron_plate");
+    let satellite_products = sim.world.prototypes.items[satellite.index()]
+        .launch_products
+        .clone();
+    sim.world.prototypes.items[iron.index()].launch_products = satellite_products;
+    insert_into_chest(&mut sim, provider, iron, 1);
+    sim.entities.note_logistic_endpoint_changed(silo);
+
+    tick_until(&mut sim, DELIVERY_TICKS, |sim| {
+        sim.robots().any(|robot| {
+            robot
+                .delivery
+                .is_some_and(|delivery| delivery.destination == silo)
+        })
+    });
+    tick_validated(&mut sim, 8);
+
+    assert_eq!(
+        sim.robots()
+            .filter(|robot| {
+                robot
+                    .delivery
+                    .is_some_and(|delivery| delivery.destination == silo)
+            })
+            .count(),
+        1,
+        "alternative payload ids must reserve the same one-slot cargo holder"
+    );
+}
+
+#[test]
 fn cargo_for_a_machine_that_stops_accepting_is_diverted_without_loss() {
     let (mut sim, silo, _, storage, satellite) = machine_delivery_fixture(1);
     tick_until(&mut sim, DELIVERY_TICKS, |sim| {

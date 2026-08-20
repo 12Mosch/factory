@@ -62,12 +62,16 @@ pub(in crate::simulation) struct LogisticReservations {
     outbound: BTreeMap<(EntityId, ItemId), u32>,
     /// Promised into a chest, not yet delivered.
     inbound: BTreeMap<(EntityId, ItemId), u32>,
+    /// Promised into each destination across every item id. Machine endpoints
+    /// use this to reserve shared physical slots without scanning all flights.
+    inbound_totals: BTreeMap<EntityId, u32>,
 }
 
 impl LogisticReservations {
     fn clear(&mut self) {
         self.outbound.clear();
         self.inbound.clear();
+        self.inbound_totals.clear();
     }
 
     fn outbound(&self, chest: EntityId, item_id: ItemId) -> u32 {
@@ -76,6 +80,16 @@ impl LogisticReservations {
 
     fn inbound(&self, chest: EntityId, item_id: ItemId) -> u32 {
         self.inbound.get(&(chest, item_id)).copied().unwrap_or(0)
+    }
+
+    /// All items promised to one destination.
+    ///
+    /// Most inventories reserve capacity per item, but a rocket cargo slot
+    /// accepts several alternative payload ids while still holding only one
+    /// item total. Summing here keeps those alternatives from each reserving
+    /// the same physical slot.
+    fn total_inbound(&self, destination: EntityId) -> u32 {
+        self.inbound_totals.get(&destination).copied().unwrap_or(0)
     }
 
     fn reserve(&mut self, delivery: &LogisticDelivery) {
@@ -90,6 +104,7 @@ impl LogisticReservations {
             .inbound
             .entry((delivery.destination, delivery.item_id))
             .or_default() += count;
+        *self.inbound_totals.entry(delivery.destination).or_default() += count;
     }
 }
 
@@ -538,9 +553,13 @@ impl Simulation {
 
     /// How much more of `item_id` an endpoint could take, after reservations.
     fn delivery_intake(&self, destination: EntityId, item_id: ItemId) -> Option<u32> {
-        let capacity = self
-            .machine_delivery_capacity(destination, item_id)
-            .or_else(|| self.chest_delivery_capacity(destination, item_id))?;
+        if let Some(capacity) = self.machine_delivery_capacity(destination, item_id) {
+            return Some(
+                capacity
+                    .saturating_sub(self.robots.delivery_reservations.total_inbound(destination)),
+            );
+        }
+        let capacity = self.chest_delivery_capacity(destination, item_id)?;
         Some(
             capacity.saturating_sub(
                 self.robots
