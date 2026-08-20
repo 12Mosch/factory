@@ -1,8 +1,11 @@
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::SAVE_HEADER_SIZE;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, str};
+
+static SAVE_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const CONTAINER_MAGIC: [u8; 8] = *b"FACTSAVE";
 pub const CONTAINER_VERSION: u32 = 1;
@@ -141,33 +144,173 @@ pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temp_path = sibling_with_suffix(path, "tmp");
-    let backup_path = sibling_with_suffix(path, "bak");
-    let _ = fs::remove_file(&temp_path);
-    fs::write(&temp_path, bytes)?;
+    let counter = SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let nonce = format!("{}-{timestamp:x}-{counter:x}", std::process::id());
+    let temp_path = sibling_with_suffix(path, "tmp", &nonce);
+    let backup_path = sibling_with_suffix(path, "bak", &nonce);
+    let mut temp = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)?;
+    temp.write_all(bytes)?;
+    temp.sync_all()?;
+    drop(temp);
+    sync_parent_directory(path)?;
+
     if !path.exists() {
-        return fs::rename(&temp_path, path);
+        install_new_file(&temp_path, path)?;
+        return sync_parent_directory(path);
     }
-    let _ = fs::remove_file(&backup_path);
-    fs::rename(path, &backup_path)?;
-    match fs::rename(&temp_path, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(&backup_path);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = fs::rename(&backup_path, path);
-            Err(error)
-        }
-    }
+
+    replace_file(path, &temp_path, &backup_path)?;
+    sync_parent_directory(path)?;
+    fs::remove_file(&backup_path)?;
+    sync_parent_directory(path)
 }
 
-fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn promote_backup(backup_path: &Path, path: &Path) -> io::Result<()> {
+    if path.exists() {
+        replace_with_existing_file(path, backup_path)?;
+    } else {
+        install_new_file(backup_path, path)?;
+    }
+    sync_parent_directory(path)
+}
+
+fn sibling_with_suffix(path: &Path, suffix: &str, nonce: &str) -> PathBuf {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("save.factsim");
-    path.with_file_name(format!("{file_name}.{suffix}-{}", std::process::id()))
+    path.with_file_name(format!("{file_name}.{suffix}-{nonce}"))
+}
+
+#[cfg(unix)]
+fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
+    if fs::hard_link(path, backup_path).is_err() {
+        fs::copy(path, backup_path)?;
+        fs::File::open(backup_path)?.sync_all()?;
+    }
+    sync_parent_directory(path)?;
+    fs::rename(temp_path, path)
+}
+
+#[cfg(windows)]
+fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
+    replace_file_windows(path, temp_path, Some(backup_path))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
+    fs::copy(path, backup_path)?;
+    fs::File::open(backup_path)?.sync_all()?;
+    sync_parent_directory(path)?;
+    fs::rename(temp_path, path)
+}
+
+#[cfg(windows)]
+fn replace_with_existing_file(path: &Path, replacement_path: &Path) -> io::Result<()> {
+    replace_file_windows(path, replacement_path, None)
+}
+
+#[cfg(not(windows))]
+fn replace_with_existing_file(path: &Path, replacement_path: &Path) -> io::Result<()> {
+    fs::rename(replacement_path, path)
+}
+
+#[cfg(windows)]
+fn replace_file_windows(
+    path: &Path,
+    replacement_path: &Path,
+    backup_path: Option<&Path>,
+) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
+
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let replacement_path = replacement_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let backup_path = backup_path.map(|path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>()
+    });
+    let backup_ptr = backup_path
+        .as_ref()
+        .map_or(std::ptr::null(), |path| path.as_ptr());
+    // SAFETY: all pointers reference NUL-terminated UTF-16 buffers that remain
+    // alive for the duration of the call, and the reserved pointers are null.
+    let replaced = unsafe {
+        ReplaceFileW(
+            path.as_ptr(),
+            replacement_path.as_ptr(),
+            backup_ptr,
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+
+    let temp_path = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both pointers reference NUL-terminated UTF-16 buffers that stay
+    // alive until the call returns.
+    let moved = unsafe { MoveFileExW(temp_path.as_ptr(), path.as_ptr(), MOVEFILE_WRITE_THROUGH) };
+    if moved == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    fs::rename(temp_path, path)
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    match path.parent() {
+        Some(parent) => fs::File::open(parent)?.sync_all(),
+        None => Ok(()),
+    }
+}
+
+// ReplaceFileW and MoveFileExW use write-through flags. Rust does not expose a
+// portable way to open and flush a Windows directory handle.
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 pub(crate) fn fallback_metadata(

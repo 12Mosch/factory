@@ -6,7 +6,7 @@ use factory_app::resources::SimResource;
 use factory_app::save_load::{
     PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveCompatibility, SaveKind,
     SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState, decode_container,
-    encode_container,
+    encode_container, scan_catalog,
 };
 use factory_app::ui::resources::OpenContainer;
 use factory_app::ui::save_load::{
@@ -243,6 +243,129 @@ fn catalog_ignores_old_slots_temps_backups_and_old_autosave() {
 }
 
 #[test]
+fn interrupted_replacement_phases_keep_a_valid_save_discoverable() {
+    let mut app = test_app(Duration::ZERO, "interrupted_replacement");
+    app.update();
+    let old_state = sim_tick_and_hash(&app);
+    create_named_save(&mut app, "Crash Test");
+    drain_save_jobs(&mut app);
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let old_bytes = fs::read(&path).unwrap();
+    let (mut metadata, _) = decode_container(&old_bytes).unwrap();
+
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, old_state.0 + 1);
+    freeze_time(&mut app);
+    let new_state = sim_tick_and_hash(&app);
+    metadata.completed_at_unix_ms = metadata.completed_at_unix_ms.saturating_add(1);
+    let new_payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    let new_bytes = encode_container(&metadata, &new_payload).unwrap();
+
+    let temp = path.with_file_name(format!(
+        "{}.tmp-4242-0",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    let backup = path.with_file_name(format!(
+        "{}.bak-4242-0",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+
+    // New contents have been flushed, but installation has not begun.
+    fs::write(&temp, &new_bytes).unwrap();
+    assert_catalog_loads(&config, old_state);
+
+    // The rollback copy exists while the intact primary remains canonical.
+    fs::copy(&path, &backup).unwrap();
+    assert_catalog_loads(&config, old_state);
+
+    // This is the vulnerable phase used by the previous writer: startup must
+    // recover the one fully valid backup, not expose the temporary new file.
+    fs::remove_file(&path).unwrap();
+    assert_catalog_loads(&config, old_state);
+    assert!(path.is_file());
+
+    // After atomic installation, the new primary wins over an older backup.
+    fs::write(&path, &new_bytes).unwrap();
+    fs::write(&backup, &old_bytes).unwrap();
+    assert_catalog_loads(&config, new_state);
+}
+
+#[test]
+fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
+    let mut app = test_app(Duration::ZERO, "safe_recovery_selection");
+    app.update();
+    let expected = sim_tick_and_hash(&app);
+    create_named_save(&mut app, "Recovery Selection");
+    drain_save_jobs(&mut app);
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let valid_bytes = fs::read(&path).unwrap();
+    let backup_one = path.with_file_name(format!(
+        "{}.bak-4242-1",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    let backup_two = path.with_file_name(format!(
+        "{}.bak-4242-2",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+
+    fs::write(&backup_one, b"invalid backup").unwrap();
+    assert_catalog_loads(&config, expected);
+    assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+
+    let (metadata, payload) = decode_container(&valid_bytes).unwrap();
+    let mut older_payload = payload.to_vec();
+    older_payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
+    let incompatible_bytes = encode_container(&metadata, &older_payload).unwrap();
+    fs::write(&path, &incompatible_bytes).unwrap();
+    fs::write(&backup_one, &valid_bytes).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(matches!(
+        entries[0].compatibility,
+        SaveCompatibility::SaveFormatOlder { .. }
+    ));
+    assert_eq!(fs::read(&path).unwrap(), incompatible_bytes);
+
+    let mut truncated_backup = valid_bytes.clone();
+    truncated_backup.truncate(truncated_backup.len() - 8);
+    fs::write(&path, b"corrupt primary").unwrap();
+    fs::write(&backup_one, truncated_backup).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
+
+    let mut wrong_metadata = metadata.clone();
+    wrong_metadata.kind = SaveKind::Quicksave;
+    fs::write(
+        &backup_one,
+        encode_container(&wrong_metadata, payload).unwrap(),
+    )
+    .unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
+
+    fs::write(&backup_one, &valid_bytes).unwrap();
+    fs::write(&backup_two, &valid_bytes).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
+
+    fs::remove_file(&backup_two).unwrap();
+    assert_catalog_loads(&config, expected);
+    assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+}
+
+#[test]
 fn background_submission_remains_non_blocking_and_metrics_populate() {
     let mut app = test_app(Duration::ZERO, "metrics");
     press_key(&mut app, KeyCode::F5);
@@ -384,4 +507,14 @@ fn press_key(app: &mut App, key: KeyCode) {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(key);
+}
+
+fn assert_catalog_loads(config: &SaveLoadConfig, expected: (u64, u64)) {
+    let entries = scan_catalog(config).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].compatibility.can_load());
+    let bytes = fs::read(entries[0].path()).unwrap();
+    let (_, payload) = decode_container(&bytes).unwrap();
+    let loaded = load_from_bytes(payload).unwrap();
+    assert_eq!((loaded.tick_count(), loaded.state_hash()), expected);
 }

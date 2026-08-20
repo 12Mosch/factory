@@ -1,8 +1,14 @@
 use super::compatibility::classify_header;
-use super::container::{CONTAINER_VERSION, ContainerError, fallback_metadata, inspect_container};
+use super::container::{
+    CONTAINER_VERSION, ContainerError, METADATA_SCHEMA_VERSION, decode_container,
+    fallback_metadata, inspect_container, promote_backup, read_simulation_payload,
+};
 use super::{SaveCatalog, SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig};
 use factory_data::PrototypeCatalog;
-use factory_sim::{SAVE_HEADER_SIZE, SaveLoadError, inspect_save_header, prototype_hash};
+use factory_sim::{
+    SAVE_HEADER_SIZE, SaveLoadError, inspect_save_header, load_from_bytes, prototype_hash,
+};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -22,6 +28,7 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
         &PrototypeCatalog::load_base()
             .map_err(|error| format!("failed to load prototype data: {error}"))?,
     );
+    recover_interrupted_saves(config, current_hash)?;
     let directory = fs::read_dir(&config.root_dir)
         .map_err(|error| format!("failed to scan save directory: {error}"))?;
     let mut entries = Vec::new();
@@ -52,6 +59,158 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
             })
     });
     Ok(entries)
+}
+
+#[derive(Debug)]
+struct RecoveryTarget {
+    id: SaveId,
+    kind: SaveKind,
+    backups: Vec<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrimaryState {
+    Valid,
+    IntactButIncompatible,
+    Corrupt,
+}
+
+fn recover_interrupted_saves(config: &SaveLoadConfig, current_hash: u64) -> Result<(), String> {
+    let directory = fs::read_dir(&config.root_dir)
+        .map_err(|error| format!("failed to scan save recovery files: {error}"))?;
+    let mut targets = BTreeMap::<PathBuf, RecoveryTarget>::new();
+    for item in directory {
+        let item = item.map_err(|error| format!("failed to scan save recovery files: {error}"))?;
+        let backup = item.path();
+        if !backup.is_file() {
+            continue;
+        }
+        let Some((primary, id, kind)) = recognized_backup(&backup, config.autosave_slot_count)
+        else {
+            continue;
+        };
+        targets
+            .entry(primary)
+            .or_insert_with(|| RecoveryTarget {
+                id,
+                kind,
+                backups: Vec::new(),
+            })
+            .backups
+            .push(backup);
+    }
+
+    for (primary, target) in targets {
+        let primary_needs_recovery = if primary.exists() {
+            primary_state(&primary, &target.kind, current_hash) == PrimaryState::Corrupt
+        } else {
+            true
+        };
+        if !primary_needs_recovery {
+            continue;
+        }
+        let mut valid_backups = target.backups.into_iter().filter(|backup| {
+            is_valid_recovery_backup(backup, &target.id, &target.kind, current_hash)
+        });
+        let Some(backup) = valid_backups.next() else {
+            continue;
+        };
+        if valid_backups.next().is_some() {
+            continue;
+        }
+        promote_backup(&backup, &primary).map_err(|error| {
+            format!(
+                "failed to recover save {} from {}: {error}",
+                primary.display(),
+                backup.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn recognized_backup(path: &Path, autosave_count: usize) -> Option<(PathBuf, SaveId, SaveKind)> {
+    let file_name = path.file_name()?.to_str()?;
+    let (base, suffix) = file_name.rsplit_once(".factsim.bak-")?;
+    if suffix.is_empty()
+        || !suffix
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return None;
+    }
+    let primary = path.with_file_name(format!("{base}.factsim"));
+    let (id, kind, _) = recognized_file(&primary, autosave_count)?;
+    Some((primary, id, kind))
+}
+
+fn primary_state(path: &Path, kind: &SaveKind, current_hash: u64) -> PrimaryState {
+    match inspect_container(path) {
+        Ok(container) if container.version != CONTAINER_VERSION => {
+            PrimaryState::IntactButIncompatible
+        }
+        Ok(container) => match classify_inspection(&container.simulation_header, current_hash) {
+            SaveCompatibility::Compatible => match read_simulation_payload(path) {
+                Ok(payload) => simulation_payload_state(&payload),
+                Err(ContainerError::Io(_)) => PrimaryState::IntactButIncompatible,
+                Err(_) => PrimaryState::Corrupt,
+            },
+            SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
+                PrimaryState::Corrupt
+            }
+            _ => PrimaryState::IntactButIncompatible,
+        },
+        Err(ContainerError::InvalidContainerMagic) if kind == &SaveKind::Quicksave => {
+            match fs::read(path) {
+                Ok(payload) => match classify_inspection(&payload, current_hash) {
+                    SaveCompatibility::Compatible => simulation_payload_state(&payload),
+                    SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
+                        PrimaryState::Corrupt
+                    }
+                    _ => PrimaryState::IntactButIncompatible,
+                },
+                Err(_) => PrimaryState::IntactButIncompatible,
+            }
+        }
+        Err(ContainerError::Io(_)) => PrimaryState::IntactButIncompatible,
+        Err(_) => PrimaryState::Corrupt,
+    }
+}
+
+fn simulation_payload_state(payload: &[u8]) -> PrimaryState {
+    match load_from_bytes(payload) {
+        Ok(_) => PrimaryState::Valid,
+        Err(
+            SaveLoadError::UnsupportedSaveVersion { .. }
+            | SaveLoadError::UnsupportedPrototypeFormatVersion { .. },
+        ) => PrimaryState::IntactButIncompatible,
+        Err(
+            SaveLoadError::InvalidMagic { .. }
+            | SaveLoadError::PrototypeHashMismatch { .. }
+            | SaveLoadError::InvalidSimulationState(_)
+            | SaveLoadError::Codec(_),
+        ) => PrimaryState::Corrupt,
+    }
+}
+
+fn is_valid_recovery_backup(path: &Path, id: &SaveId, kind: &SaveKind, current_hash: u64) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let Ok(container) = inspect_container(path) else {
+        return false;
+    };
+    if container.version != CONTAINER_VERSION {
+        return false;
+    }
+    let Ok((metadata, payload)) = decode_container(&bytes) else {
+        return false;
+    };
+    metadata.schema_version == METADATA_SCHEMA_VERSION
+        && &metadata.id == id
+        && &metadata.kind == kind
+        && classify_inspection(payload, current_hash) == SaveCompatibility::Compatible
+        && load_from_bytes(payload).is_ok()
 }
 
 fn recognized_file(path: &Path, autosave_count: usize) -> Option<(SaveId, SaveKind, String)> {

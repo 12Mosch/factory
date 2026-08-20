@@ -2502,6 +2502,7 @@ dependencies = [
  "factory_sim",
  "ron",
  "serde",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
