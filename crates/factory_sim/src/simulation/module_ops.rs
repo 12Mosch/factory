@@ -25,6 +25,11 @@ pub(in crate::simulation) fn required_ticks_with_modules(
 
 impl Simulation {
     pub(super) fn rebuild_all_module_effects(&mut self) {
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
         let machine_ids = self
             .entities
             .mining_drills
@@ -36,11 +41,24 @@ impl Simulation {
             .copied()
             .collect::<BTreeSet<_>>();
         for entity_id in machine_ids {
-            self.refresh_module_effects(entity_id);
+            self.refresh_module_effects_with_rocket_recipe(entity_id, rocket_silo_recipe);
         }
     }
 
     pub(super) fn refresh_module_effects(&mut self, entity_id: EntityId) {
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
+        self.refresh_module_effects_with_rocket_recipe(entity_id, rocket_silo_recipe);
+    }
+
+    fn refresh_module_effects_with_rocket_recipe(
+        &mut self,
+        entity_id: EntityId,
+        rocket_silo_recipe: ResolvedRocketSiloRecipe,
+    ) {
         let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
             return;
         };
@@ -102,8 +120,9 @@ impl Simulation {
             // The silo's recipe is derived rather than stored, so the effect
             // refresh derives it too — the same recipe the tick loop will time
             // the next part against.
-            let new_required =
-                rocket_silo_recipe(&self.world.prototypes, &self.research).map(|recipe| {
+            let new_required = rocket_silo_recipe
+                .get(&self.world.prototypes)
+                .map(|recipe| {
                     required_ticks_with_modules(
                         recipe.crafting_time_ticks,
                         state.crafting_speed_numerator,
@@ -163,8 +182,13 @@ impl Simulation {
 
     pub(super) fn refresh_machines_covered_by_beacon(&mut self, beacon_id: EntityId) {
         let targets = beacon_target_ids(self, beacon_id);
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
         for entity_id in targets {
-            self.refresh_module_effects(entity_id);
+            self.refresh_module_effects_with_rocket_recipe(entity_id, rocket_silo_recipe);
         }
     }
 
@@ -175,8 +199,13 @@ impl Simulation {
     ) {
         let rect = beacon_effect_rect_for_footprint(&footprint, radius);
         let targets = machine_ids_in_effect_rect(self, rect);
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
         for entity_id in targets {
-            self.refresh_module_effects(entity_id);
+            self.refresh_module_effects_with_rocket_recipe(entity_id, rocket_silo_recipe);
         }
     }
 }

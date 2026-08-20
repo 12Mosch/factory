@@ -468,6 +468,85 @@ fn a_silo_stays_valid_on_the_tick_its_technology_lands() {
 }
 
 #[test]
+fn lab_unlock_is_visible_after_but_not_before_the_silo_pass() {
+    let mut sim = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut sim);
+    let lab_id = place_lab(&mut sim);
+    stock_rocket_silo(&mut sim, silo_id, 1);
+    sim.tick();
+
+    let technology_id = technology_id(&sim.world.prototypes, "rocket_silo");
+    let technology = sim
+        .world
+        .prototypes
+        .technology(technology_id)
+        .expect("rocket silo technology should exist")
+        .clone();
+    let research = sim
+        .research
+        .technology_state_mut(technology_id)
+        .expect("rocket silo research state should exist");
+    research.completed_levels = 0;
+    research.progress_units = technology.required_units - 1;
+    sim.research.active = Some(technology_id);
+
+    let lab = sim.entities.labs.get_mut(&lab_id).expect("lab was placed");
+    lab.active_technology = Some(technology_id);
+    lab.required_ticks = technology.research_time_ticks;
+    lab.progress_ticks = lab.required_ticks - 1;
+    for (slot_index, science_pack) in technology.science_packs.iter().enumerate() {
+        set_inventory_slot(
+            &mut lab.inventory,
+            slot_index,
+            science_pack.item,
+            science_pack.amount,
+        );
+    }
+    sim.power_demand_cache.invalidate();
+
+    sim.tick();
+
+    assert!(sim.is_technology_unlocked(technology_id));
+    assert_eq!(
+        sim.entities.rocket_silos[&silo_id].crafting_required_ticks, 0,
+        "the silo pass must retain the recipe snapshot from before labs complete"
+    );
+    assert!(
+        sim.rocket_silo_status_for_entity(silo_id)
+            .expect("silo status should exist")
+            .required_ticks
+            > 0,
+        "post-lab diagnostics must resolve the newly unlocked recipe"
+    );
+    sim.validate()
+        .expect("the research-completion tick should remain valid");
+
+    sim.tick();
+    assert!(sim.entities.rocket_silos[&silo_id].crafting_required_ticks > 0);
+}
+
+#[test]
+fn recipe_resolution_snapshots_do_not_affect_deterministic_state() {
+    let mut observed = Simulation::new_test_world(123);
+    let silo_id = place_powered_rocket_silo(&mut observed);
+    stock_rocket_silo(&mut observed, silo_id, 1);
+    let mut unobserved = observed.clone();
+    observed.tick();
+    unobserved.tick();
+
+    for _ in 0..32 {
+        let _ = observed.rocket_silo_recipe();
+        let _ = observed.rocket_silo_status_for_entity(silo_id);
+        let _ = observed.machine_statuses();
+        let _ = observed.counts();
+        observed.tick();
+        unobserved.tick();
+    }
+
+    assert_eq!(observed.state_hash(), unobserved.state_hash());
+}
+
+#[test]
 fn silo_validation_rejects_cargo_without_a_rocket_and_launch_without_cargo() {
     let mut sim = Simulation::new_test_world(123);
     let silo_id = place_powered_rocket_silo(&mut sim);

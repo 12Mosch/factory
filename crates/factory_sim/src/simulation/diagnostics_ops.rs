@@ -5,6 +5,11 @@ impl Simulation {
         let mut next = std::mem::take(&mut self.production_map_status_scratch);
         next.clear();
         let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
 
         for (entity_id, state) in &self.entities.mining_drills {
             push_production_map_status(
@@ -31,7 +36,7 @@ impl Simulation {
             push_production_map_status(
                 &mut next,
                 *entity_id,
-                self.rocket_silo_status(*entity_id, state),
+                self.rocket_silo_status_with_recipe(*entity_id, state, rocket_silo_recipe),
             );
         }
         for (entity_id, state) in &self.entities.labs {
@@ -90,6 +95,11 @@ impl Simulation {
         let mut groups = Vec::new();
         let mut total_by_status = BTreeMap::<MachineStatus, usize>::new();
         let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
 
         self.push_status_group(
             &mut groups,
@@ -122,10 +132,9 @@ impl Simulation {
             &mut groups,
             &mut total_by_status,
             EntityKind::RocketSilo,
-            self.entities
-                .rocket_silos
-                .iter()
-                .map(|(entity_id, state)| self.rocket_silo_status(*entity_id, state)),
+            self.entities.rocket_silos.iter().map(|(entity_id, state)| {
+                self.rocket_silo_status_with_recipe(*entity_id, state, rocket_silo_recipe)
+            }),
         );
         self.push_status_group(
             &mut groups,
@@ -461,7 +470,20 @@ impl Simulation {
 
     /// Generic projection of [`Self::rocket_silo_status_detail`].
     fn rocket_silo_status(&self, entity_id: EntityId, state: &RocketSiloState) -> MachineStatus {
-        self.rocket_silo_status_detail(entity_id, state)
+        self.rocket_silo_status_with_recipe(
+            entity_id,
+            state,
+            ResolvedRocketSiloRecipe::new(&self.world.prototypes, &self.research),
+        )
+    }
+
+    fn rocket_silo_status_with_recipe(
+        &self,
+        entity_id: EntityId,
+        state: &RocketSiloState,
+        rocket_silo_recipe: ResolvedRocketSiloRecipe,
+    ) -> MachineStatus {
+        self.rocket_silo_status_detail_with_recipe(entity_id, state, rocket_silo_recipe)
             .machine_status()
     }
 
@@ -474,6 +496,19 @@ impl Simulation {
         &self,
         entity_id: EntityId,
         state: &RocketSiloState,
+    ) -> RocketSiloStatusDetail {
+        self.rocket_silo_status_detail_with_recipe(
+            entity_id,
+            state,
+            ResolvedRocketSiloRecipe::new(&self.world.prototypes, &self.research),
+        )
+    }
+
+    fn rocket_silo_status_detail_with_recipe(
+        &self,
+        entity_id: EntityId,
+        state: &RocketSiloState,
+        resolved_recipe: ResolvedRocketSiloRecipe,
     ) -> RocketSiloStatusDetail {
         match state.launch_phase {
             RocketLaunchPhase::Sealed { ticks_remaining } => {
@@ -509,7 +544,7 @@ impl Simulation {
             }
             return ready_rocket_status_detail(RocketSiloOperationalState::ReadyToLaunch);
         }
-        let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, &self.research) else {
+        let Some(recipe) = resolved_recipe.get(&self.world.prototypes) else {
             return RocketSiloStatusDetail {
                 state: RocketSiloOperationalState::RecipeLocked,
                 progress_ticks: state.crafting_progress_ticks,

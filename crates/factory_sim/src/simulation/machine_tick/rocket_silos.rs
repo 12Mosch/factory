@@ -106,7 +106,7 @@ impl MachineTickContext<'_> {
                 RocketLaunchPhase::Idle => {}
             }
 
-            let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, self.research) else {
+            let Some(recipe) = self.rocket_silo_recipe.get(&self.world.prototypes) else {
                 state.crafting_progress_ticks = 0;
                 state.crafting_required_ticks = 0;
                 continue;

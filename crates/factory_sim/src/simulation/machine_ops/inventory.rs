@@ -45,6 +45,53 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
     operation: ItemSlotOperation,
     item_id: ItemId,
 ) -> bool {
+    let rocket_silo_recipe = if policy == ItemSlotPolicy::RocketPartIngredient {
+        ResolvedRocketSiloRecipe::new(catalog, research)
+    } else {
+        ResolvedRocketSiloRecipe::default()
+    };
+    item_slot_policy_accepts_with_rocket_recipe(
+        catalog,
+        research,
+        entities,
+        rocket_silo_recipe,
+        policy,
+        operation,
+        item_id,
+    )
+}
+
+/// Shared immutable inputs for a bulk item-acceptance pass.
+#[derive(Clone, Copy)]
+pub(in crate::simulation) struct ItemPolicyContext<'a> {
+    pub(in crate::simulation) catalog: &'a PrototypeCatalog,
+    pub(in crate::simulation) research: &'a ResearchState,
+    pub(in crate::simulation) rocket_silo_recipe: ResolvedRocketSiloRecipe,
+}
+
+impl<'a> ItemPolicyContext<'a> {
+    pub(in crate::simulation) fn with_rocket_recipe(
+        catalog: &'a PrototypeCatalog,
+        research: &'a ResearchState,
+        rocket_silo_recipe: ResolvedRocketSiloRecipe,
+    ) -> Self {
+        Self {
+            catalog,
+            research,
+            rocket_silo_recipe,
+        }
+    }
+}
+
+pub(in crate::simulation) fn item_slot_policy_accepts_with_rocket_recipe(
+    catalog: &PrototypeCatalog,
+    research: &ResearchState,
+    entities: &EntityStore,
+    rocket_silo_recipe: ResolvedRocketSiloRecipe,
+    policy: ItemSlotPolicy,
+    operation: ItemSlotOperation,
+    item_id: ItemId,
+) -> bool {
     if !item_slot_policy_allows_operation(policy, operation) {
         return false;
     }
@@ -69,7 +116,7 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
                 )
             }
             ItemSlotPolicy::RocketPartIngredient => {
-                rocket_silo_input_accepts_item(catalog, research, item_id)
+                resolved_rocket_silo_input_accepts_item(catalog, rocket_silo_recipe, item_id)
             }
             ItemSlotPolicy::RocketCargo => catalog.rocket_launch_products(item_id).is_some(),
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
@@ -105,7 +152,7 @@ pub(in crate::simulation) fn item_slot_policy_accepts(
                     })
             }
             ItemSlotPolicy::RocketPartIngredient => {
-                rocket_silo_input_accepts_item(catalog, research, item_id)
+                resolved_rocket_silo_input_accepts_item(catalog, rocket_silo_recipe, item_id)
             }
             ItemSlotPolicy::RocketCargo => catalog.rocket_launch_products(item_id).is_some(),
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
@@ -163,10 +210,16 @@ pub(in crate::simulation) fn item_slot_can_accept(
     slot: ItemSlot,
     stack: ItemStack,
 ) -> bool {
-    item_slot_policy_accepts(
+    let rocket_silo_recipe = if policy == ItemSlotPolicy::RocketPartIngredient {
+        ResolvedRocketSiloRecipe::new(catalog, research)
+    } else {
+        ResolvedRocketSiloRecipe::default()
+    };
+    item_slot_policy_accepts_with_rocket_recipe(
         catalog,
         research,
         entities,
+        rocket_silo_recipe,
         policy,
         operation,
         stack.item_id(),
