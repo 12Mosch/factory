@@ -70,6 +70,7 @@ pub struct PresentationReloadToken {
     pub value: u64,
 }
 
+/// Initializes autosave timing when a world exists and refreshes the disk catalog in all modes.
 pub(crate) fn initialize_save_state(
     sim: Res<SimResource>,
     config: Res<SaveLoadConfig>,
@@ -77,7 +78,11 @@ pub(crate) fn initialize_save_state(
     mut catalog: ResMut<SaveCatalog>,
     mut status: ResMut<SaveLoadStatus>,
 ) {
-    autosave.last_autosave_tick = sim.read().tick_count();
+    autosave.last_autosave_tick = if sim.is_initialized() {
+        sim.read().tick_count()
+    } else {
+        0
+    };
     refresh_with_status(&config, &mut catalog, &mut status);
 }
 

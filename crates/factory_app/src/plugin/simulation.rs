@@ -9,19 +9,25 @@ use crate::resources::{SimProfileStats, SimResource};
 use crate::simulation::{
     SimCommandBacklog, SimCommandRequest, SimCommandResult, collect_sim_commands, tick_sim,
 };
+use crate::world_setup::StartInWorldSetup;
 
 /// Owns the simulation state and runs the fixed-timestep tick.
 pub(super) struct SimulationPlugin;
 
 impl Plugin for SimulationPlugin {
+    /// Installs either the explicit pre-game state or the legacy direct-start world.
     fn build(&self, app: &mut App) {
-        let sim = Simulation::new(
-            123,
-            PrototypeCatalog::load_base().expect("base prototype catalog should load"),
-        );
+        let sim = if app.world().contains_resource::<StartInWorldSetup>() {
+            SimResource::empty()
+        } else {
+            SimResource::new(Simulation::new(
+                123,
+                PrototypeCatalog::load_base().expect("base prototype catalog should load"),
+            ))
+        };
 
         app.insert_resource(Time::<Fixed>::from_hz(SIM_TICKS_PER_SECOND))
-            .insert_resource(SimResource::new(sim))
+            .insert_resource(sim)
             .init_resource::<SimProfileStats>()
             .init_resource::<SimCommandBacklog>()
             .add_message::<SimCommandRequest>()

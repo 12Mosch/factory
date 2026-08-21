@@ -69,6 +69,7 @@ pub(crate) struct InGameSet;
 pub struct FactoryAppPlugin;
 
 impl Plugin for FactoryAppPlugin {
+    /// Registers application state, global scheduling gates, and feature plugins.
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<StatesPlugin>() {
             app.add_plugins(StatesPlugin);
@@ -109,10 +110,15 @@ impl Plugin for FactoryAppPlugin {
                     .in_set(InGameSet),
             )
             .configure_sets(Update, AppSet::UiInteraction.in_set(InGameSet))
-            .configure_sets(Update, (AppSet::MapTexture, AppSet::RenderSync).chain());
+            .configure_sets(
+                Update,
+                (AppSet::MapTexture, AppSet::RenderSync)
+                    .chain()
+                    .in_set(InGameSet),
+            );
 
-        // SimulationPlugin must come first: BuildPlugin reads the prototype
-        // catalog from `SimResource` to build the default hotbar.
+        // SimulationPlugin must come first so world-entry systems can use the
+        // explicit empty or initialized `SimResource` it installs.
         app.add_plugins((
             simulation::SimulationPlugin,
             input::InputPlugin,

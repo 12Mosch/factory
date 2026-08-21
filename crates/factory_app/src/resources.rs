@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Resource)]
 pub struct SimResource {
-    inner: Arc<RwLock<Simulation>>,
+    inner: Option<Arc<RwLock<Simulation>>>,
     replacement_revision: u64,
 }
 
@@ -18,42 +18,81 @@ pub enum SimAccessError {
 }
 
 impl SimResource {
-    pub fn new(sim: Simulation) -> Self {
+    /// Creates the explicit pre-game state, before a world has been started or loaded.
+    pub fn empty() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(sim)),
+            inner: None,
             replacement_revision: 0,
         }
     }
 
+    /// Creates an initialized resource containing an active simulation.
+    pub fn new(sim: Simulation) -> Self {
+        Self {
+            inner: Some(Arc::new(RwLock::new(sim))),
+            replacement_revision: 0,
+        }
+    }
+
+    /// Returns whether a world has been started or loaded.
+    pub fn is_initialized(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    /// Locks the active simulation for reading.
+    ///
+    /// Panics when called before world entry or after lock poisoning.
     pub fn read(&self) -> SimReadGuard<'_> {
-        self.inner.read().expect("simulation lock poisoned")
+        self.inner
+            .as_ref()
+            .expect("simulation accessed before a world was started or loaded")
+            .read()
+            .expect("simulation lock poisoned")
     }
 
+    /// Tries to lock the active simulation without blocking.
+    ///
+    /// Returns `None` when no world exists or the lock is unavailable.
     pub fn try_write(&self) -> Option<SimWriteGuard<'_>> {
-        self.inner.try_write().ok()
+        self.inner.as_ref()?.try_write().ok()
     }
 
+    /// Locks the active simulation for test setup, blocking until it is available.
     pub fn write_for_tests(&mut self) -> SimWriteGuard<'_> {
-        self.inner.write().expect("simulation lock poisoned")
+        self.inner
+            .as_ref()
+            .expect("simulation accessed before a world was started or loaded")
+            .write()
+            .expect("simulation lock poisoned")
     }
 
+    /// Installs the first world or replaces the active world without blocking a save reader.
     pub fn replace(&mut self, sim: Simulation) -> Result<(), SimAccessError> {
-        let mut guard = self.inner.try_write().map_err(|error| match error {
-            std::sync::TryLockError::Poisoned(_) => SimAccessError::Poisoned,
-            std::sync::TryLockError::WouldBlock => SimAccessError::Busy,
-        })?;
-        *guard = sim;
-        drop(guard);
+        if let Some(inner) = &self.inner {
+            let mut guard = inner.try_write().map_err(|error| match error {
+                std::sync::TryLockError::Poisoned(_) => SimAccessError::Poisoned,
+                std::sync::TryLockError::WouldBlock => SimAccessError::Busy,
+            })?;
+            *guard = sim;
+        } else {
+            self.inner = Some(Arc::new(RwLock::new(sim)));
+        }
         self.replacement_revision = self.replacement_revision.wrapping_add(1);
         Ok(())
     }
 
+    /// Returns the wrapping revision incremented after every successful world installation.
     pub(crate) fn replacement_revision(&self) -> u64 {
         self.replacement_revision
     }
 
+    /// Clones the active simulation handle for background save serialization.
     pub(crate) fn clone_handle(&self) -> Arc<RwLock<Simulation>> {
-        Arc::clone(&self.inner)
+        Arc::clone(
+            self.inner
+                .as_ref()
+                .expect("simulation accessed before a world was started or loaded"),
+        )
     }
 }
 

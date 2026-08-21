@@ -105,6 +105,7 @@ fn install_default_ui_font(app: &mut App) {
 }
 
 impl Plugin for UiPlugin {
+    /// Registers global UI and defers simulation-backed panels until world entry.
     fn build(&self, app: &mut App) {
         install_default_ui_font(app);
 
@@ -124,14 +125,10 @@ impl Plugin for UiPlugin {
             .init_resource::<CircuitEditorState>()
             .init_resource::<TrainScheduleEditorState>()
             .init_resource::<TrainStopRenameState>()
+            .add_systems(Startup, (setup_debug_overlay, setup_threat_ui))
             .add_systems(
-                Startup,
-                (
-                    setup_debug_overlay,
-                    setup_objectives_panel,
-                    setup_threat_ui,
-                    setup_rocket_launch_ui,
-                ),
+                OnEnter(crate::world_setup::AppMode::InGame),
+                (setup_objectives_panel, setup_rocket_launch_ui),
             )
             .add_systems(
                 Update,

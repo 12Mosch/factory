@@ -321,6 +321,7 @@ type SetupButtons<'w, 's> = Query<
     (Changed<Interaction>, With<Button>),
 >;
 
+/// Applies world-configuration actions and installs the requested world before game entry.
 pub(crate) fn handle_world_setup_buttons(
     mut buttons: SetupButtons,
     mut setup: ResMut<WorldSetupState>,
@@ -426,6 +427,10 @@ pub(crate) fn handle_world_setup_buttons(
                 enter_swapped_world(&mut load_state, tick, player_tile);
             }
             WorldSetupAction::Cancel => {
+                if !load_state.sim.is_initialized() {
+                    setup.validation_error = Some("No running world to return to".into());
+                    continue;
+                }
                 setup.validation_error = None;
                 load_state.next_mode.set(AppMode::InGame);
             }
@@ -671,7 +676,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn world_setup_mode_blocks_fixed_simulation_ticks() {
+    fn initial_world_generation_is_deferred_in_world_setup() {
         let mut app = App::new();
         app.insert_resource(StartInWorldSetup)
             .add_plugins(MinimalPlugins)
@@ -686,7 +691,39 @@ mod tests {
             app.world().resource::<State<AppMode>>().get(),
             &AppMode::WorldSetup
         );
-        assert_eq!(app.world().resource::<SimResource>().read().tick_count(), 0);
+        assert!(
+            !app.world().resource::<SimResource>().is_initialized(),
+            "world setup must not construct a disposable default simulation"
+        );
+    }
+
+    #[test]
+    fn start_constructs_only_the_requested_world() {
+        let mut app = App::new();
+        app.insert_resource(StartInWorldSetup)
+            .add_plugins(MinimalPlugins)
+            .add_plugins(crate::FactoryAppPlugin);
+        app.update();
+
+        app.world_mut().resource_mut::<WorldSetupState>().seed_text = "987654321".into();
+        let start_button = app
+            .world_mut()
+            .query::<(Entity, &WorldSetupAction)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| {
+                matches!(action, WorldSetupAction::Start).then_some(entity)
+            })
+            .expect("world setup should contain a Start button");
+        app.world_mut()
+            .entity_mut(start_button)
+            .insert(Interaction::Pressed);
+
+        app.update();
+
+        let sim = app.world().resource::<SimResource>();
+        assert!(sim.is_initialized());
+        assert_eq!(sim.read().seed(), 987654321);
+        assert_eq!(sim.replacement_revision(), 1);
     }
 
     #[test]
