@@ -234,18 +234,22 @@ pub(crate) struct ObjectiveRowText {
 #[derive(Component)]
 pub(crate) struct ObjectiveHintText;
 
+/// Creates the objectives hierarchy for the first world while retaining it across world swaps.
 pub(crate) fn setup_objectives_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
     mut state: ResMut<ObjectivesPanelState>,
     existing: Query<(), With<ObjectivesPanelRoot>>,
 ) {
-    let simulation = sim.read();
-    state.snapshot = objectives_snapshot(&simulation);
-    drop(simulation);
+    // Retain the previous world's cached snapshot when the hierarchy already
+    // exists. The regular sync system will then observe the new simulation as
+    // a change and refresh every retained row during this frame's Update.
     if !existing.is_empty() {
         return;
     }
+    let simulation = sim.read();
+    state.snapshot = objectives_snapshot(&simulation);
+    drop(simulation);
     let snapshot = state.snapshot.clone();
     let visible = snapshot.visible_indices();
     commands
@@ -444,6 +448,61 @@ mod tests {
             loaded_gun_turrets: 1,
             ..default()
         }
+    }
+
+    #[test]
+    fn reentering_game_refreshes_retained_objective_rows() {
+        let previous_snapshot = ObjectivesSnapshot::from_facts(ObjectiveFacts {
+            onboarding: OnboardingProgress {
+                iron_ore_manually_mined: 10,
+                ..default()
+            },
+            ..default()
+        });
+        let simulation = Simulation::new_test_world(123);
+        let expected = objectives_snapshot(&simulation);
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(simulation))
+            .insert_resource(ObjectivesPanelState {
+                snapshot: previous_snapshot,
+            })
+            .add_systems(
+                Update,
+                (setup_objectives_panel, sync_objectives_panel).chain(),
+            );
+        app.world_mut()
+            .spawn((ObjectivesPanelRoot, Visibility::Visible));
+        app.world_mut().spawn((
+            ObjectiveRow { slot: 0 },
+            BackgroundColor(Color::BLACK),
+            BorderColor::all(Color::BLACK),
+        ));
+        app.world_mut().spawn((
+            ObjectiveRowText { slot: 0 },
+            Text::new("stale objective"),
+            TextColor(Color::BLACK),
+        ));
+        app.world_mut()
+            .spawn((ObjectiveHintText, Text::new("stale hint")));
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ObjectivesPanelState>().snapshot,
+            expected
+        );
+        let label = app
+            .world_mut()
+            .query_filtered::<&Text, With<ObjectiveRowText>>()
+            .single(app.world())
+            .expect("the retained row should still exist");
+        assert_eq!(label.0, row_text(0, expected.progress[0]));
+        let hint = app
+            .world_mut()
+            .query_filtered::<&Text, (With<ObjectiveHintText>, Without<ObjectiveRowText>)>()
+            .single(app.world())
+            .expect("the retained hint should still exist");
+        assert_eq!(hint.0, hint_text(&expected));
     }
 
     #[test]

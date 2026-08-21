@@ -15,6 +15,7 @@ use crate::world_setup::StartInWorldSetup;
 pub(super) struct SimulationPlugin;
 
 impl Plugin for SimulationPlugin {
+    /// Installs either the explicit pre-game state or the legacy direct-start world.
     fn build(&self, app: &mut App) {
         let sim = if app.world().contains_resource::<StartInWorldSetup>() {
             SimResource::empty()

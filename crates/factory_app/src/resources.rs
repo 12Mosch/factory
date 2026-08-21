@@ -26,6 +26,7 @@ impl SimResource {
         }
     }
 
+    /// Creates an initialized resource containing an active simulation.
     pub fn new(sim: Simulation) -> Self {
         Self {
             inner: Some(Arc::new(RwLock::new(sim))),
@@ -33,10 +34,14 @@ impl SimResource {
         }
     }
 
+    /// Returns whether a world has been started or loaded.
     pub fn is_initialized(&self) -> bool {
         self.inner.is_some()
     }
 
+    /// Locks the active simulation for reading.
+    ///
+    /// Panics when called before world entry or after lock poisoning.
     pub fn read(&self) -> SimReadGuard<'_> {
         self.inner
             .as_ref()
@@ -45,10 +50,14 @@ impl SimResource {
             .expect("simulation lock poisoned")
     }
 
+    /// Tries to lock the active simulation without blocking.
+    ///
+    /// Returns `None` when no world exists or the lock is unavailable.
     pub fn try_write(&self) -> Option<SimWriteGuard<'_>> {
         self.inner.as_ref()?.try_write().ok()
     }
 
+    /// Locks the active simulation for test setup, blocking until it is available.
     pub fn write_for_tests(&mut self) -> SimWriteGuard<'_> {
         self.inner
             .as_ref()
@@ -57,6 +66,7 @@ impl SimResource {
             .expect("simulation lock poisoned")
     }
 
+    /// Installs the first world or replaces the active world without blocking a save reader.
     pub fn replace(&mut self, sim: Simulation) -> Result<(), SimAccessError> {
         if let Some(inner) = &self.inner {
             let mut guard = inner.try_write().map_err(|error| match error {
@@ -71,10 +81,12 @@ impl SimResource {
         Ok(())
     }
 
+    /// Returns the wrapping revision incremented after every successful world installation.
     pub(crate) fn replacement_revision(&self) -> u64 {
         self.replacement_revision
     }
 
+    /// Clones the active simulation handle for background save serialization.
     pub(crate) fn clone_handle(&self) -> Arc<RwLock<Simulation>> {
         Arc::clone(
             self.inner

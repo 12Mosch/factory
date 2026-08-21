@@ -69,6 +69,7 @@ pub(crate) struct InGameSet;
 pub struct FactoryAppPlugin;
 
 impl Plugin for FactoryAppPlugin {
+    /// Registers application state, global scheduling gates, and feature plugins.
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<StatesPlugin>() {
             app.add_plugins(StatesPlugin);

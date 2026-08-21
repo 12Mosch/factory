@@ -321,6 +321,7 @@ type SetupButtons<'w, 's> = Query<
     (Changed<Interaction>, With<Button>),
 >;
 
+/// Applies world-configuration actions and installs the requested world before game entry.
 pub(crate) fn handle_world_setup_buttons(
     mut buttons: SetupButtons,
     mut setup: ResMut<WorldSetupState>,

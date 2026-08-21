@@ -105,6 +105,7 @@ fn install_default_ui_font(app: &mut App) {
 }
 
 impl Plugin for UiPlugin {
+    /// Registers global UI and defers simulation-backed panels until world entry.
     fn build(&self, app: &mut App) {
         install_default_ui_font(app);
 

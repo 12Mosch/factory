@@ -43,6 +43,7 @@ use crate::rendering::world::measured_sync_visible_world_tiles;
 pub(super) struct RenderingPlugin;
 
 impl Plugin for RenderingPlugin {
+    /// Registers world presentation, deferring simulation-backed entities until world entry.
     fn build(&self, app: &mut App) {
         app.init_resource::<RenderSyncStats>()
             .insert_resource(ResourceRenderSettings {

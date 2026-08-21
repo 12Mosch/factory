@@ -24,6 +24,7 @@ use crate::ui::build_menu::{handle_build_menu_buttons, sync_build_menu};
 pub(super) struct BuildPlugin;
 
 impl Plugin for BuildPlugin {
+    /// Registers build interaction and defers catalog-backed hotbar defaults until world entry.
     fn build(&self, app: &mut App) {
         app.init_resource::<HotbarState>()
             .init_resource::<BuildPlacementState>()
@@ -62,6 +63,7 @@ impl Plugin for BuildPlugin {
     }
 }
 
+/// Fills a new session's empty hotbar from the active world's prototype catalog.
 fn initialize_hotbar(mut hotbar: ResMut<HotbarState>, sim: Res<SimResource>) {
     if hotbar.slots.iter().all(Option::is_none) {
         hotbar.slots = default_hotbar_slots(sim.read().catalog());
