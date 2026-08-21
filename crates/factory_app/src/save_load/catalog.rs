@@ -1,9 +1,14 @@
 use super::compatibility::classify_header;
 use super::container::{
-    CONTAINER_VERSION, ContainerError, METADATA_SCHEMA_VERSION, decode_container,
-    fallback_metadata, inspect_container, promote_backup, read_simulation_payload,
+    CONTAINER_VERSION, ContainerError, METADATA_SCHEMA_VERSION, SaveArtifactKind, decode_container,
+    discard_save_artifact, fallback_metadata, inspect_container, parse_save_artifact,
+    promote_backup, read_simulation_payload, retired_save_artifact_primary,
+    with_save_artifact_lock,
 };
-use super::{SaveCatalog, SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig};
+use super::{
+    SaveCatalog, SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig, SaveMetadata,
+};
+use bevy::log::warn;
 use factory_data::PrototypeCatalog;
 use factory_sim::{
     SAVE_HEADER_SIZE, SaveLoadError, inspect_save_header, load_from_bytes, prototype_hash,
@@ -14,12 +19,14 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Replaces the in-memory catalog with a freshly recovered and inspected scan.
 pub fn refresh_catalog(config: &SaveLoadConfig, catalog: &mut SaveCatalog) -> Result<(), String> {
     let entries = scan_catalog(config)?;
     catalog.replace(entries);
     Ok(())
 }
 
+/// Recovers interrupted saves and returns all recognized canonical entries.
 pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
     if !config.root_dir.exists() {
         return Ok(Vec::new());
@@ -28,12 +35,18 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
         &PrototypeCatalog::load_base()
             .map_err(|error| format!("failed to load prototype data: {error}"))?,
     );
-    recover_interrupted_saves(config, current_hash)?;
+    with_save_artifact_lock(|| recover_interrupted_saves(config, current_hash));
     let directory = fs::read_dir(&config.root_dir)
         .map_err(|error| format!("failed to scan save directory: {error}"))?;
     let mut entries = Vec::new();
     for item in directory {
-        let item = item.map_err(|error| format!("failed to scan save directory: {error}"))?;
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                warn!("failed to inspect a save-directory entry: {error}");
+                continue;
+            }
+        };
         let path = item.path();
         if !path.is_file() {
             continue;
@@ -66,6 +79,7 @@ struct RecoveryTarget {
     id: SaveId,
     kind: SaveKind,
     backups: Vec<PathBuf>,
+    temporaries: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,108 +89,137 @@ enum PrimaryState {
     Corrupt,
 }
 
-fn recover_interrupted_saves(config: &SaveLoadConfig, current_hash: u64) -> Result<(), String> {
-    let directory = fs::read_dir(&config.root_dir)
-        .map_err(|error| format!("failed to scan save recovery files: {error}"))?;
+struct FileInspection {
+    metadata: Option<SaveMetadata>,
+    compatibility: SaveCompatibility,
+    safe_to_replace: bool,
+}
+
+/// Best-effort recovery never prevents the ordinary catalog from listing saves.
+fn recover_interrupted_saves(config: &SaveLoadConfig, current_hash: u64) {
+    let directory = match fs::read_dir(&config.root_dir) {
+        Ok(directory) => directory,
+        Err(error) => {
+            warn!("failed to scan save recovery files: {error}");
+            return;
+        }
+    };
     let mut targets = BTreeMap::<PathBuf, RecoveryTarget>::new();
     for item in directory {
-        let item = item.map_err(|error| format!("failed to scan save recovery files: {error}"))?;
-        let backup = item.path();
-        if !backup.is_file() {
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                warn!("failed to inspect a save recovery entry: {error}");
+                continue;
+            }
+        };
+        let artifact = item.path();
+        if !artifact.is_file() {
             continue;
         }
-        let Some((primary, id, kind)) = recognized_backup(&backup, config.autosave_slot_count)
-        else {
+        if retired_save_artifact_primary(&artifact).is_some() {
+            remove_recovery_artifact(&artifact);
+            continue;
+        }
+        let Some((primary, artifact_kind)) = parse_save_artifact(&artifact) else {
             continue;
         };
-        targets
-            .entry(primary)
-            .or_insert_with(|| RecoveryTarget {
-                id,
-                kind,
-                backups: Vec::new(),
-            })
-            .backups
-            .push(backup);
+        let Some((id, kind, _)) = recognized_file(&primary, config.autosave_slot_count) else {
+            continue;
+        };
+        let target = targets.entry(primary).or_insert_with(|| RecoveryTarget {
+            id,
+            kind,
+            backups: Vec::new(),
+            temporaries: Vec::new(),
+        });
+        match artifact_kind {
+            SaveArtifactKind::Temporary => target.temporaries.push(artifact),
+            SaveArtifactKind::Backup => target.backups.push(artifact),
+        }
     }
 
     for (primary, target) in targets {
-        let primary_needs_recovery = if primary.exists() {
-            primary_state(&primary, &target.kind, current_hash) == PrimaryState::Corrupt
-        } else {
-            true
+        for temporary in target.temporaries {
+            remove_recovery_artifact(&temporary);
+        }
+        let primary_exists = match primary.try_exists() {
+            Ok(exists) => exists,
+            Err(error) => {
+                warn!(
+                    "cannot inspect save {} for recovery: {error}",
+                    primary.display()
+                );
+                continue;
+            }
         };
-        if !primary_needs_recovery {
+        let state = primary_exists.then(|| primary_state(&primary, &target.kind, current_hash));
+        if state.is_some_and(|state| state != PrimaryState::Corrupt) {
+            for backup in target.backups {
+                remove_recovery_artifact(&backup);
+            }
             continue;
         }
-        let mut valid_backups = target.backups.into_iter().filter(|backup| {
-            is_valid_recovery_backup(backup, &target.id, &target.kind, current_hash)
-        });
-        let Some(backup) = valid_backups.next() else {
-            continue;
-        };
-        if valid_backups.next().is_some() {
+
+        let mut valid_backups: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        for backup in target.backups {
+            let Some(bytes) =
+                validate_recovery_backup(&backup, &target.id, &target.kind, current_hash)
+            else {
+                remove_recovery_artifact(&backup);
+                continue;
+            };
+            if valid_backups.iter().any(|(_, existing)| existing == &bytes) {
+                remove_recovery_artifact(&backup);
+            } else {
+                valid_backups.push((backup, bytes));
+            }
+        }
+        if valid_backups.len() != 1 {
             continue;
         }
-        promote_backup(&backup, &primary).map_err(|error| {
-            format!(
+        let (backup, _) = valid_backups.pop().expect("length checked");
+        if let Err(error) = promote_backup(&backup, &primary, primary_exists) {
+            warn!(
                 "failed to recover save {} from {}: {error}",
                 primary.display(),
                 backup.display()
-            )
-        })?;
+            );
+        }
     }
-    Ok(())
 }
 
-fn recognized_backup(path: &Path, autosave_count: usize) -> Option<(PathBuf, SaveId, SaveKind)> {
-    let file_name = path.file_name()?.to_str()?;
-    let (base, suffix) = file_name.rsplit_once(".factsim.bak-")?;
-    if suffix.is_empty()
-        || !suffix
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-')
-    {
-        return None;
+/// Removes one stale artifact without aborting catalog availability on failure.
+fn remove_recovery_artifact(path: &Path) {
+    if let Err(error) = discard_save_artifact(path) {
+        warn!(
+            "failed to remove stale save artifact {}: {error}",
+            path.display()
+        );
     }
-    let primary = path.with_file_name(format!("{base}.factsim"));
-    let (id, kind, _) = recognized_file(&primary, autosave_count)?;
-    Some((primary, id, kind))
 }
 
+/// Fully classifies a primary only when lightweight inspection says it is compatible.
 fn primary_state(path: &Path, kind: &SaveKind, current_hash: u64) -> PrimaryState {
-    match inspect_container(path) {
-        Ok(container) if container.version != CONTAINER_VERSION => {
-            PrimaryState::IntactButIncompatible
-        }
-        Ok(container) => match classify_inspection(&container.simulation_header, current_hash) {
-            SaveCompatibility::Compatible => match read_simulation_payload(path) {
-                Ok(payload) => simulation_payload_state(&payload),
-                Err(ContainerError::Io(_)) => PrimaryState::IntactButIncompatible,
-                Err(_) => PrimaryState::Corrupt,
-            },
-            SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
-                PrimaryState::Corrupt
-            }
-            _ => PrimaryState::IntactButIncompatible,
+    let inspection = inspect_file(path, kind, current_hash);
+    match inspection.compatibility {
+        SaveCompatibility::Compatible => match read_simulation_payload(path) {
+            Ok(payload) => simulation_payload_state(&payload),
+            Err(ContainerError::Io(_)) => PrimaryState::IntactButIncompatible,
+            Err(_) => PrimaryState::Corrupt,
         },
-        Err(ContainerError::InvalidContainerMagic) if kind == &SaveKind::Quicksave => {
-            match fs::read(path) {
-                Ok(payload) => match classify_inspection(&payload, current_hash) {
-                    SaveCompatibility::Compatible => simulation_payload_state(&payload),
-                    SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
-                        PrimaryState::Corrupt
-                    }
-                    _ => PrimaryState::IntactButIncompatible,
-                },
-                Err(_) => PrimaryState::IntactButIncompatible,
+        SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
+            if inspection.safe_to_replace {
+                PrimaryState::Corrupt
+            } else {
+                PrimaryState::IntactButIncompatible
             }
         }
-        Err(ContainerError::Io(_)) => PrimaryState::IntactButIncompatible,
-        Err(_) => PrimaryState::Corrupt,
+        _ => PrimaryState::IntactButIncompatible,
     }
 }
 
+/// Distinguishes corruption from an intact payload requiring another game version.
 fn simulation_payload_state(payload: &[u8]) -> PrimaryState {
     match load_from_bytes(payload) {
         Ok(_) => PrimaryState::Valid,
@@ -193,26 +236,34 @@ fn simulation_payload_state(payload: &[u8]) -> PrimaryState {
     }
 }
 
-fn is_valid_recovery_backup(path: &Path, id: &SaveId, kind: &SaveKind, current_hash: u64) -> bool {
+/// Returns the payload bytes only for a current, compatible, fully loadable backup.
+fn validate_recovery_backup(
+    path: &Path,
+    id: &SaveId,
+    kind: &SaveKind,
+    current_hash: u64,
+) -> Option<Vec<u8>> {
     let Ok(bytes) = fs::read(path) else {
-        return false;
+        return None;
     };
-    let Ok(container) = inspect_container(path) else {
-        return false;
-    };
-    if container.version != CONTAINER_VERSION {
-        return false;
-    }
     let Ok((metadata, payload)) = decode_container(&bytes) else {
-        return false;
+        return None;
     };
-    metadata.schema_version == METADATA_SCHEMA_VERSION
+    let version = u32::from_le_bytes(bytes[8..12].try_into().expect("decoded container prefix"));
+    if version == CONTAINER_VERSION
+        && metadata.schema_version == METADATA_SCHEMA_VERSION
         && &metadata.id == id
         && &metadata.kind == kind
         && classify_inspection(payload, current_hash) == SaveCompatibility::Compatible
         && load_from_bytes(payload).is_ok()
+    {
+        Some(payload.to_vec())
+    } else {
+        None
+    }
 }
 
+/// Maps canonical file names to stable save identities and kinds.
 fn recognized_file(path: &Path, autosave_count: usize) -> Option<(SaveId, SaveKind, String)> {
     let file_name = path.file_name()?.to_str()?;
     if file_name == "quicksave.factsim" {
@@ -250,6 +301,7 @@ fn recognized_file(path: &Path, autosave_count: usize) -> Option<(SaveId, SaveKi
     Some((id, SaveKind::Named, format!("Named Save {opaque}")))
 }
 
+/// Builds one catalog entry using the shared lightweight file inspection.
 fn inspect_entry(
     path: PathBuf,
     id: SaveId,
@@ -259,13 +311,26 @@ fn inspect_entry(
 ) -> SaveEntry {
     let timestamp = file_timestamp_ms(&path);
     let fallback = || fallback_metadata(id.clone(), kind.clone(), fallback_name.clone(), timestamp);
-    let mut metadata_available = false;
-    let (metadata, compatibility) = match inspect_container(&path) {
+    let inspection = inspect_file(&path, &kind, current_hash);
+    let metadata = inspection
+        .metadata
+        .filter(|metadata| metadata.id == id && metadata.kind == kind);
+    let metadata_available = metadata.is_some();
+    let metadata = metadata.unwrap_or_else(fallback);
+    SaveEntry {
+        id,
+        metadata,
+        compatibility: inspection.compatibility,
+        metadata_available,
+        path,
+    }
+}
+
+/// Performs the shared lightweight container/header classification used by
+/// both catalog display and full recovery safety checks.
+fn inspect_file(path: &Path, kind: &SaveKind, current_hash: u64) -> FileInspection {
+    match inspect_container(path) {
         Ok(container) => {
-            let metadata = container
-                .metadata
-                .filter(|metadata| metadata.id == id && metadata.kind == kind);
-            metadata_available = metadata.is_some();
             let compatibility = if container.version != CONTAINER_VERSION {
                 SaveCompatibility::UnsupportedContainerVersion {
                     found: container.version,
@@ -274,31 +339,55 @@ fn inspect_entry(
             } else {
                 classify_inspection(&container.simulation_header, current_hash)
             };
-            (metadata.unwrap_or_else(fallback), compatibility)
+            FileInspection {
+                metadata: container.metadata,
+                safe_to_replace: matches!(
+                    compatibility,
+                    SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave
+                ),
+                compatibility,
+            }
         }
-        Err(ContainerError::InvalidContainerMagic) if kind == SaveKind::Quicksave => {
+        Err(ContainerError::InvalidContainerMagic) if kind == &SaveKind::Quicksave => {
             let mut header = vec![0; SAVE_HEADER_SIZE];
-            let compatibility =
-                match fs::File::open(&path).and_then(|mut file| file.read_exact(&mut header)) {
-                    Ok(()) => classify_inspection(&header, current_hash),
-                    Err(_) => SaveCompatibility::CorruptOrTruncated,
-                };
-            (fallback(), compatibility)
+            let (compatibility, safe_to_replace) = match fs::File::open(path)
+                .and_then(|mut file| file.read_exact(&mut header))
+            {
+                Ok(()) => {
+                    let compatibility = classify_inspection(&header, current_hash);
+                    let safe_to_replace = matches!(
+                        compatibility,
+                        SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave
+                    );
+                    (compatibility, safe_to_replace)
+                }
+                Err(_) => (SaveCompatibility::CorruptOrTruncated, false),
+            };
+            FileInspection {
+                metadata: None,
+                safe_to_replace,
+                compatibility,
+            }
         }
-        Err(ContainerError::InvalidContainerMagic) => {
-            (fallback(), SaveCompatibility::NotFactorySave)
-        }
-        Err(_) => (fallback(), SaveCompatibility::CorruptOrTruncated),
-    };
-    SaveEntry {
-        id,
-        metadata,
-        compatibility,
-        metadata_available,
-        path,
+        Err(ContainerError::InvalidContainerMagic) => FileInspection {
+            metadata: None,
+            compatibility: SaveCompatibility::NotFactorySave,
+            safe_to_replace: true,
+        },
+        Err(ContainerError::Io(_)) => FileInspection {
+            metadata: None,
+            compatibility: SaveCompatibility::CorruptOrTruncated,
+            safe_to_replace: false,
+        },
+        Err(_) => FileInspection {
+            metadata: None,
+            compatibility: SaveCompatibility::CorruptOrTruncated,
+            safe_to_replace: true,
+        },
     }
 }
 
+/// Maps a simulation header parse into user-facing compatibility.
 fn classify_inspection(header: &[u8], current_hash: u64) -> SaveCompatibility {
     match inspect_save_header(header) {
         Ok(header) => classify_header(header, current_hash),
@@ -307,6 +396,7 @@ fn classify_inspection(header: &[u8], current_hash: u64) -> SaveCompatibility {
     }
 }
 
+/// Returns a best-effort file modification timestamp for fallback metadata.
 fn file_timestamp_ms(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -315,6 +405,7 @@ fn file_timestamp_ms(path: &Path) -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
+/// Assigns stable catalog groups for sorting.
 fn group_order(kind: &SaveKind) -> u8 {
     match kind {
         SaveKind::Named => 0,
@@ -323,6 +414,7 @@ fn group_order(kind: &SaveKind) -> u8 {
     }
 }
 
+/// Extracts an autosave generation for deterministic tie-breaking.
 fn autosave_generation(kind: &SaveKind) -> usize {
     match kind {
         SaveKind::Autosave { generation } => *generation,
@@ -330,6 +422,7 @@ fn autosave_generation(kind: &SaveKind) -> usize {
     }
 }
 
+/// Returns the current wall-clock timestamp used in save metadata.
 pub(crate) fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

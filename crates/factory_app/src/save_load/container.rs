@@ -2,17 +2,34 @@ use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::SAVE_HEADER_SIZE;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, str};
 
 static SAVE_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
+static SAVE_ARTIFACT_LOCK: Mutex<()> = Mutex::new(());
 
+/// Magic bytes at the start of a Factory save container.
 pub const CONTAINER_MAGIC: [u8; 8] = *b"FACTSAVE";
+/// Current Factory save-container format version.
 pub const CONTAINER_VERSION: u32 = 1;
 pub const METADATA_SCHEMA_VERSION: u32 = 1;
+/// Maximum serialized metadata size accepted by the container parser.
 pub const MAX_METADATA_BYTES: usize = 16 * 1024;
+/// Marker separating a canonical save name from a temporary artifact nonce.
+pub const TEMP_ARTIFACT_MARKER: &str = ".tmp-";
+/// Marker separating a canonical save name from a backup artifact nonce.
+pub const BACKUP_ARTIFACT_MARKER: &str = ".bak-";
 const PREFIX_SIZE: usize = 16;
+const RETIRED_ARTIFACT_SUFFIX: &str = ".retired";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SaveArtifactKind {
+    Temporary,
+    Backup,
+}
+
+/// Error produced while encoding, inspecting, or decoding a save container.
 #[derive(Debug)]
 pub enum ContainerError {
     Io(io::Error),
@@ -50,6 +67,7 @@ pub(crate) struct InspectedContainer {
     pub simulation_header: Vec<u8>,
 }
 
+/// Encodes metadata and a simulation payload into the current container format.
 pub fn encode_container(
     metadata: &SaveMetadata,
     payload: &[u8],
@@ -71,6 +89,7 @@ pub fn encode_container(
     Ok(bytes)
 }
 
+/// Decodes container metadata and returns a borrowed simulation payload.
 pub fn decode_container(bytes: &[u8]) -> Result<(SaveMetadata, &[u8]), ContainerError> {
     let payload_offset = container_payload_offset(bytes)?;
     let metadata = ron::de::from_bytes(&bytes[PREFIX_SIZE..payload_offset])
@@ -78,6 +97,7 @@ pub fn decode_container(bytes: &[u8]) -> Result<(SaveMetadata, &[u8]), Container
     Ok((metadata, &bytes[payload_offset..]))
 }
 
+/// Validates the fixed prefix and computes the first payload byte.
 fn container_payload_offset(bytes: &[u8]) -> Result<usize, ContainerError> {
     if bytes.len() < PREFIX_SIZE {
         return Err(ContainerError::Truncated);
@@ -98,6 +118,7 @@ fn container_payload_offset(bytes: &[u8]) -> Result<usize, ContainerError> {
     Ok(payload_offset)
 }
 
+/// Reads only the container metadata and simulation header needed by the catalog.
 pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, ContainerError> {
     let mut file = fs::File::open(path)?;
     let mut prefix = [0; PREFIX_SIZE];
@@ -130,6 +151,7 @@ pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, Conta
     })
 }
 
+/// Reads a container payload, retaining support for legacy raw quicksaves.
 pub(crate) fn read_simulation_payload(path: &Path) -> Result<Vec<u8>, ContainerError> {
     let bytes = fs::read(path)?;
     if bytes.starts_with(&CONTAINER_MAGIC) {
@@ -140,7 +162,21 @@ pub(crate) fn read_simulation_payload(path: &Path) -> Result<Vec<u8>, ContainerE
     }
 }
 
+/// Serializes save-directory mutations across the catalog and background writer.
+pub(crate) fn with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> T {
+    let _guard = SAVE_ARTIFACT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    operation()
+}
+
+/// Writes and durably installs a complete save without exposing partial contents.
 pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    with_save_artifact_lock(|| write_save_bytes_locked(path, bytes))
+}
+
+/// Implements save installation while the process-wide artifact lock is held.
+fn write_save_bytes_locked(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -149,45 +185,192 @@ pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let nonce = format!("{}-{timestamp:x}-{counter:x}", std::process::id());
-    let temp_path = sibling_with_suffix(path, "tmp", &nonce);
-    let backup_path = sibling_with_suffix(path, "bak", &nonce);
-    let mut temp = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)?;
-    temp.write_all(bytes)?;
-    temp.sync_all()?;
-    drop(temp);
-    sync_parent_directory(path)?;
+    let temp_path = save_artifact_path(path, SaveArtifactKind::Temporary, &nonce);
+    let backup_path = save_artifact_path(path, SaveArtifactKind::Backup, &nonce);
+    let mut installed = false;
 
-    if !path.exists() {
-        install_new_file(&temp_path, path)?;
-        return sync_parent_directory(path);
+    let result = (|| {
+        let mut temp = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        temp.write_all(bytes)?;
+        temp.sync_all()?;
+        drop(temp);
+        sync_parent_directory(path)?;
+
+        let replaced = commit_temporary_file(path, &temp_path, &backup_path)?;
+        installed = true;
+        sync_installed_file(path)?;
+
+        if replaced {
+            // The new primary is committed. Cleanup cannot turn that successful
+            // save into an error; catalog refresh retries any leftover backup.
+            let _ = discard_save_artifact(&backup_path);
+            let _ = sync_parent_directory(path);
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+        if !installed {
+            let _ = fs::remove_file(&backup_path);
+        }
+        let _ = sync_parent_directory(path);
     }
-
-    replace_file(path, &temp_path, &backup_path)?;
-    sync_parent_directory(path)?;
-    fs::remove_file(&backup_path)?;
-    sync_parent_directory(path)
+    result
 }
 
-pub(crate) fn promote_backup(backup_path: &Path, path: &Path) -> io::Result<()> {
-    if path.exists() {
-        replace_with_existing_file(path, backup_path)?;
+/// Atomically installs a validated backup while preserving a concurrently
+/// created primary when recovery originally observed the path as missing.
+pub(crate) fn promote_backup(
+    backup_path: &Path,
+    path: &Path,
+    replace_corrupt_primary: bool,
+) -> io::Result<()> {
+    if replace_corrupt_primary {
+        match replace_with_existing_file(path, backup_path) {
+            Ok(()) => {}
+            Err(_) if !path.try_exists()? => install_new_file(backup_path, path)?,
+            Err(error) => return Err(error),
+        }
     } else {
         install_new_file(backup_path, path)?;
     }
-    sync_parent_directory(path)
+    sync_installed_file(path)
 }
 
-fn sibling_with_suffix(path: &Path, suffix: &str, nonce: &str) -> PathBuf {
+/// Removes a canonical save and all of its recovery artifacts as one serialized
+/// operation so an intentional deletion cannot be mistaken for a crashed write.
+pub(crate) fn remove_save_and_artifacts(path: &Path) -> io::Result<()> {
+    with_save_artifact_lock(|| {
+        for artifact in save_artifacts_for(path)? {
+            discard_save_artifact(&artifact)?;
+        }
+        sync_parent_directory(path)?;
+        fs::remove_file(path)?;
+        sync_parent_directory(path)
+    })
+}
+
+/// Durably removes an artifact, first retiring a backup so cleanup failure can
+/// never leave an old snapshot eligible for automatic recovery.
+pub(crate) fn discard_save_artifact(path: &Path) -> io::Result<()> {
+    if parse_save_artifact(path).is_some_and(|(_, kind)| kind == SaveArtifactKind::Backup) {
+        retire_recovery_artifact(path)
+    } else if path.try_exists()? {
+        fs::remove_file(path)?;
+        sync_parent_directory(path)
+    } else {
+        Ok(())
+    }
+}
+
+/// Parses a temporary or backup artifact and returns its canonical save path.
+pub(crate) fn parse_save_artifact(path: &Path) -> Option<(PathBuf, SaveArtifactKind)> {
+    let file_name = path.file_name()?.to_str()?;
+    for (marker, kind) in [
+        (TEMP_ARTIFACT_MARKER, SaveArtifactKind::Temporary),
+        (BACKUP_ARTIFACT_MARKER, SaveArtifactKind::Backup),
+    ] {
+        let Some((primary_name, nonce)) = file_name.rsplit_once(marker) else {
+            continue;
+        };
+        if !primary_name.ends_with(".factsim")
+            || nonce.is_empty()
+            || !nonce
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        {
+            return None;
+        }
+        return Some((path.with_file_name(primary_name), kind));
+    }
+    None
+}
+
+/// Returns the canonical path for a post-commit artifact that has already been
+/// made ineligible for recovery.
+pub(crate) fn retired_save_artifact_primary(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_str()?;
+    let original_name = file_name.strip_suffix(RETIRED_ARTIFACT_SUFFIX)?;
+    let original = path.with_file_name(original_name);
+    parse_save_artifact(&original).map(|(primary, _)| primary)
+}
+
+/// Builds a sibling artifact path from the shared naming contract.
+fn save_artifact_path(path: &Path, kind: SaveArtifactKind, nonce: &str) -> PathBuf {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("save.factsim");
-    path.with_file_name(format!("{file_name}.{suffix}-{nonce}"))
+    let marker = match kind {
+        SaveArtifactKind::Temporary => TEMP_ARTIFACT_MARKER,
+        SaveArtifactKind::Backup => BACKUP_ARTIFACT_MARKER,
+    };
+    path.with_file_name(format!("{file_name}{marker}{nonce}"))
 }
 
+/// Finds active and retired artifacts belonging to one canonical save.
+fn save_artifacts_for(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let Some(parent) = path.parent() else {
+        return Ok(Vec::new());
+    };
+    let mut artifacts = Vec::new();
+    for item in fs::read_dir(parent)? {
+        let candidate = item?.path();
+        let primary = parse_save_artifact(&candidate)
+            .map(|(primary, _)| primary)
+            .or_else(|| retired_save_artifact_primary(&candidate));
+        if primary.as_deref() == Some(path) {
+            artifacts.push(candidate);
+        }
+    }
+    Ok(artifacts)
+}
+
+/// Atomically makes a committed backup ineligible before best-effort deletion.
+fn retire_recovery_artifact(path: &Path) -> io::Result<()> {
+    if !path.try_exists()? {
+        return Ok(());
+    }
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        fs::remove_file(path)?;
+        return sync_parent_directory(path);
+    };
+    let retired = path.with_file_name(format!("{file_name}{RETIRED_ARTIFACT_SUFFIX}"));
+    match rename_file_no_replace(path, &retired) {
+        Ok(()) => {
+            sync_parent_directory(path)?;
+            let _ = fs::remove_file(retired);
+            let _ = sync_parent_directory(path);
+            Ok(())
+        }
+        Err(rename_error) => match fs::remove_file(path) {
+            Ok(()) => sync_parent_directory(path),
+            Err(_) => Err(rename_error),
+        },
+    }
+}
+
+/// Installs a temporary file without a check-then-overwrite window.
+fn commit_temporary_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<bool> {
+    if path.try_exists()? {
+        replace_file(path, temp_path, backup_path)?;
+        return Ok(true);
+    }
+    match install_new_file(temp_path, path) {
+        Ok(()) => Ok(false),
+        Err(_) if path.try_exists()? => {
+            replace_file(path, temp_path, backup_path)?;
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Creates a durable rollback link before atomically replacing the primary.
 #[cfg(unix)]
 fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
     if fs::hard_link(path, backup_path).is_err() {
@@ -198,11 +381,13 @@ fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result
     fs::rename(temp_path, path)
 }
 
+/// Atomically replaces the primary and asks Windows to retain its old contents.
 #[cfg(windows)]
 fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
     replace_file_windows(path, temp_path, Some(backup_path))
 }
 
+/// Portable fallback that copies the rollback snapshot before replacement.
 #[cfg(not(any(unix, windows)))]
 fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
     fs::copy(path, backup_path)?;
@@ -211,16 +396,19 @@ fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result
     fs::rename(temp_path, path)
 }
 
+/// Replaces a corrupt primary with an already validated backup on Windows.
 #[cfg(windows)]
 fn replace_with_existing_file(path: &Path, replacement_path: &Path) -> io::Result<()> {
     replace_file_windows(path, replacement_path, None)
 }
 
+/// Replaces a corrupt primary with an already validated backup via atomic rename.
 #[cfg(not(windows))]
 fn replace_with_existing_file(path: &Path, replacement_path: &Path) -> io::Result<()> {
     fs::rename(replacement_path, path)
 }
 
+/// Calls the native Windows replacement primitive with stable UTF-16 buffers.
 #[cfg(windows)]
 fn replace_file_windows(
     path: &Path,
@@ -228,7 +416,7 @@ fn replace_file_windows(
     backup_path: Option<&Path>,
 ) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
 
     let path = path
         .as_os_str()
@@ -256,7 +444,7 @@ fn replace_file_windows(
             path.as_ptr(),
             replacement_path.as_ptr(),
             backup_ptr,
-            REPLACEFILE_WRITE_THROUGH,
+            0,
             std::ptr::null(),
             std::ptr::null(),
         )
@@ -268,6 +456,7 @@ fn replace_file_windows(
     }
 }
 
+/// Installs a new Windows file without replacing a destination that appeared.
 #[cfg(windows)]
 fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -293,11 +482,28 @@ fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(windows))]
-fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
-    fs::rename(temp_path, path)
+/// Renames an artifact on Windows without replacing an existing destination.
+#[cfg(windows)]
+fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    install_new_file(source, destination)
 }
 
+/// Renames an artifact to its nonce-derived retired destination.
+#[cfg(not(windows))]
+fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination)
+}
+
+/// Installs a new file through a no-clobber hard link on non-Windows systems.
+#[cfg(not(windows))]
+fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    fs::hard_link(temp_path, path)?;
+    let _ = fs::remove_file(temp_path);
+    Ok(())
+}
+
+/// Flushes containing-directory metadata on platforms that support directory
+/// fsync. Windows installation is flushed through the destination file instead.
 #[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
     match path.parent() {
@@ -306,13 +512,27 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
     }
 }
 
-// ReplaceFileW and MoveFileExW use write-through flags. Rust does not expose a
-// portable way to open and flush a Windows directory handle.
+/// No-op where portable directory fsync is unavailable.
 #[cfg(not(unix))]
 fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Flushes the writable canonical file handle and its metadata on Windows.
+#[cfg(windows)]
+fn sync_installed_file(path: &Path) -> io::Result<()> {
+    // FlushFileBuffers requires a writable file handle. Win32 directory handles
+    // do not support that operation, so flush the installed file and its metadata.
+    fs::OpenOptions::new().write(true).open(path)?.sync_all()
+}
+
+/// Uses directory fsync as the installation durability barrier elsewhere.
+#[cfg(not(windows))]
+fn sync_installed_file(path: &Path) -> io::Result<()> {
+    sync_parent_directory(path)
+}
+
+/// Builds catalog metadata when legacy or malformed metadata is unavailable.
 pub(crate) fn fallback_metadata(
     id: SaveId,
     kind: SaveKind,
@@ -382,5 +602,25 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"second");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_naming_round_trips_active_and_retired_paths() {
+        let primary = Path::new("manual-test.factsim");
+        let backup = save_artifact_path(primary, SaveArtifactKind::Backup, "12-ab");
+        assert_eq!(
+            parse_save_artifact(&backup),
+            Some((primary.to_path_buf(), SaveArtifactKind::Backup))
+        );
+        let retired = backup.with_file_name(format!(
+            "{}{}",
+            backup.file_name().unwrap().to_string_lossy(),
+            RETIRED_ARTIFACT_SUFFIX
+        ));
+        assert_eq!(
+            retired_save_artifact_primary(&retired),
+            Some(primary.to_path_buf())
+        );
+        assert!(parse_save_artifact(Path::new("manual-test.factsim.bak-12.bad")).is_none());
     }
 }

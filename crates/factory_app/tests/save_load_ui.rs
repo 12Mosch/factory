@@ -4,9 +4,9 @@ use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
-    PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveCompatibility, SaveKind,
-    SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState, decode_container,
-    encode_container, scan_catalog,
+    BACKUP_ARTIFACT_MARKER, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog,
+    SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState,
+    TEMP_ARTIFACT_MARKER, decode_container, encode_container, scan_catalog,
 };
 use factory_app::ui::resources::OpenContainer;
 use factory_app::ui::save_load::{
@@ -240,6 +240,8 @@ fn catalog_ignores_old_slots_temps_backups_and_old_autosave() {
     }
     app.update();
     assert!(app.world().resource::<SaveCatalog>().entries().is_empty());
+    assert!(!root.join("manual-x.factsim.tmp-1").exists());
+    assert!(!root.join("quicksave.factsim.bak-1").exists());
 }
 
 #[test]
@@ -267,33 +269,33 @@ fn interrupted_replacement_phases_keep_a_valid_save_discoverable() {
     let new_payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
     let new_bytes = encode_container(&metadata, &new_payload).unwrap();
 
-    let temp = path.with_file_name(format!(
-        "{}.tmp-4242-0",
-        path.file_name().unwrap().to_string_lossy()
-    ));
-    let backup = path.with_file_name(format!(
-        "{}.bak-4242-0",
-        path.file_name().unwrap().to_string_lossy()
-    ));
+    let temp = test_artifact_path(&path, TEMP_ARTIFACT_MARKER, "4242-0");
+    let backup = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "4242-0");
 
     // New contents have been flushed, but installation has not begun.
     fs::write(&temp, &new_bytes).unwrap();
     assert_catalog_loads(&config, old_state);
+    assert!(!temp.exists());
 
     // The rollback copy exists while the intact primary remains canonical.
     fs::copy(&path, &backup).unwrap();
     assert_catalog_loads(&config, old_state);
+    assert!(!backup.exists());
 
     // This is the vulnerable phase used by the previous writer: startup must
     // recover the one fully valid backup, not expose the temporary new file.
+    fs::write(&temp, &new_bytes).unwrap();
+    fs::copy(&path, &backup).unwrap();
     fs::remove_file(&path).unwrap();
     assert_catalog_loads(&config, old_state);
     assert!(path.is_file());
+    assert!(!temp.exists());
 
     // After atomic installation, the new primary wins over an older backup.
     fs::write(&path, &new_bytes).unwrap();
     fs::write(&backup, &old_bytes).unwrap();
     assert_catalog_loads(&config, new_state);
+    assert!(!backup.exists());
 }
 
 #[test]
@@ -308,20 +310,22 @@ fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
         .path()
         .to_path_buf();
     let valid_bytes = fs::read(&path).unwrap();
-    let backup_one = path.with_file_name(format!(
-        "{}.bak-4242-1",
-        path.file_name().unwrap().to_string_lossy()
-    ));
-    let backup_two = path.with_file_name(format!(
-        "{}.bak-4242-2",
-        path.file_name().unwrap().to_string_lossy()
-    ));
+    let backup_one = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "4242-1");
+    let backup_two = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "4242-2");
 
     fs::write(&backup_one, b"invalid backup").unwrap();
     assert_catalog_loads(&config, expected);
     assert_eq!(fs::read(&path).unwrap(), valid_bytes);
 
     let (metadata, payload) = decode_container(&valid_bytes).unwrap();
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, expected.0 + 1);
+    freeze_time(&mut app);
+    let different_payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    let different_bytes = encode_container(&metadata, &different_payload).unwrap();
     let mut older_payload = payload.to_vec();
     older_payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
     let incompatible_bytes = encode_container(&metadata, &older_payload).unwrap();
@@ -354,7 +358,7 @@ fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
     assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
 
     fs::write(&backup_one, &valid_bytes).unwrap();
-    fs::write(&backup_two, &valid_bytes).unwrap();
+    fs::write(&backup_two, &different_bytes).unwrap();
     let entries = scan_catalog(&config).unwrap();
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].compatibility.can_load());
@@ -363,6 +367,29 @@ fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
     fs::remove_file(&backup_two).unwrap();
     assert_catalog_loads(&config, expected);
     assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+}
+
+#[test]
+fn deleting_a_save_removes_recovery_artifacts_without_resurrection() {
+    let mut app = test_app(Duration::ZERO, "delete_recovery_artifacts");
+    app.update();
+    create_named_save(&mut app, "Delete Completely");
+    drain_save_jobs(&mut app);
+    let entry = app.world().resource::<SaveCatalog>().entries()[0].clone();
+    let backup = test_artifact_path(entry.path(), BACKUP_ARTIFACT_MARKER, "delete-test");
+    let temporary = test_artifact_path(entry.path(), TEMP_ARTIFACT_MARKER, "delete-test");
+    fs::copy(entry.path(), &backup).unwrap();
+    fs::copy(entry.path(), &temporary).unwrap();
+
+    press_entry(&mut app, &entry.id, SaveEntryAction::Delete);
+    app.update();
+    press_confirmation(&mut app, true);
+    app.update();
+
+    assert!(!entry.path().exists());
+    assert!(!backup.exists());
+    assert!(!temporary.exists());
+    assert!(app.world().resource::<SaveCatalog>().entries().is_empty());
 }
 
 #[test]
@@ -517,4 +544,11 @@ fn assert_catalog_loads(config: &SaveLoadConfig, expected: (u64, u64)) {
     let (_, payload) = decode_container(&bytes).unwrap();
     let loaded = load_from_bytes(payload).unwrap();
     assert_eq!((loaded.tick_count(), loaded.state_hash()), expected);
+}
+
+fn test_artifact_path(path: &std::path::Path, marker: &str, nonce: &str) -> PathBuf {
+    path.with_file_name(format!(
+        "{}{marker}{nonce}",
+        path.file_name().unwrap().to_string_lossy()
+    ))
 }
