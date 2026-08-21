@@ -1,9 +1,8 @@
 use super::compatibility::classify_header;
 use super::container::{
-    CONTAINER_VERSION, ContainerError, METADATA_SCHEMA_VERSION, SaveArtifactKind, decode_container,
-    discard_save_artifact, fallback_metadata, inspect_container, parse_save_artifact,
-    promote_backup, read_simulation_payload, retired_save_artifact_primary,
-    with_save_artifact_lock,
+    CONTAINER_VERSION, ContainerError, SaveArtifactKind, discard_save_artifact, fallback_metadata,
+    inspect_container, parse_save_artifact, promote_backup, read_simulation_payload,
+    retired_save_artifact_primary, with_save_artifact_lock,
 };
 use super::{
     SaveCatalog, SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig, SaveMetadata,
@@ -15,7 +14,7 @@ use factory_sim::{
 };
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -89,6 +88,12 @@ enum PrimaryState {
     Corrupt,
 }
 
+enum RecoveryBackup {
+    Candidate(Vec<u8>),
+    Corrupt,
+    Inaccessible(io::Error),
+}
+
 struct FileInspection {
     metadata: Option<SaveMetadata>,
     compatibility: SaveCompatibility,
@@ -154,31 +159,42 @@ fn recover_interrupted_saves(config: &SaveLoadConfig, current_hash: u64) {
             }
         };
         let state = primary_exists.then(|| primary_state(&primary, &target.kind, current_hash));
-        if state.is_some_and(|state| state != PrimaryState::Corrupt) {
-            for backup in target.backups {
-                remove_recovery_artifact(&backup);
+        match state {
+            Some(PrimaryState::Valid) => {
+                for backup in target.backups {
+                    remove_recovery_artifact(&backup);
+                }
+                continue;
             }
-            continue;
+            Some(PrimaryState::IntactButIncompatible) => continue,
+            Some(PrimaryState::Corrupt) | None => {}
         }
 
-        let mut valid_backups: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        let mut candidates: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        let mut validation_deferred = false;
         for backup in target.backups {
-            let Some(bytes) =
-                validate_recovery_backup(&backup, &target.id, &target.kind, current_hash)
-            else {
-                remove_recovery_artifact(&backup);
-                continue;
-            };
-            if valid_backups.iter().any(|(_, existing)| existing == &bytes) {
-                remove_recovery_artifact(&backup);
-            } else {
-                valid_backups.push((backup, bytes));
+            match validate_recovery_backup(&backup, &target.id, &target.kind, current_hash) {
+                RecoveryBackup::Candidate(bytes) => {
+                    if candidates.iter().any(|(_, existing)| existing == &bytes) {
+                        remove_recovery_artifact(&backup);
+                    } else {
+                        candidates.push((backup, bytes));
+                    }
+                }
+                RecoveryBackup::Corrupt => remove_recovery_artifact(&backup),
+                RecoveryBackup::Inaccessible(error) => {
+                    validation_deferred = true;
+                    warn!(
+                        "cannot validate recovery backup {}: {error}",
+                        backup.display()
+                    );
+                }
             }
         }
-        if valid_backups.len() != 1 {
+        if validation_deferred || candidates.len() != 1 {
             continue;
         }
-        let (backup, _) = valid_backups.pop().expect("length checked");
+        let (backup, _) = candidates.pop().expect("length checked");
         if let Err(error) = promote_backup(&backup, &primary, primary_exists) {
             warn!(
                 "failed to recover save {} from {}: {error}",
@@ -236,30 +252,62 @@ fn simulation_payload_state(payload: &[u8]) -> PrimaryState {
     }
 }
 
-/// Returns the payload bytes only for a current, compatible, fully loadable backup.
+/// Classifies a backup without deleting data that is merely incompatible or
+/// temporarily unreadable. Candidate bytes are retained for duplicate checks.
 fn validate_recovery_backup(
     path: &Path,
     id: &SaveId,
     kind: &SaveKind,
     current_hash: u64,
-) -> Option<Vec<u8>> {
-    let Ok(bytes) = fs::read(path) else {
-        return None;
+) -> RecoveryBackup {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => return RecoveryBackup::Inaccessible(error),
     };
-    let Ok((metadata, payload)) = decode_container(&bytes) else {
-        return None;
+
+    if !bytes.starts_with(&super::container::CONTAINER_MAGIC) {
+        if kind != &SaveKind::Quicksave {
+            return RecoveryBackup::Corrupt;
+        }
+        return match classify_inspection(&bytes, current_hash) {
+            SaveCompatibility::Compatible => match load_from_bytes(&bytes) {
+                Ok(_) => RecoveryBackup::Candidate(bytes),
+                Err(_) => RecoveryBackup::Corrupt,
+            },
+            SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
+                RecoveryBackup::Corrupt
+            }
+            _ => RecoveryBackup::Candidate(bytes),
+        };
+    }
+
+    let container = match inspect_container(path) {
+        Ok(container) => container,
+        Err(ContainerError::Io(error)) => return RecoveryBackup::Inaccessible(error),
+        Err(_) => return RecoveryBackup::Corrupt,
     };
-    let version = u32::from_le_bytes(bytes[8..12].try_into().expect("decoded container prefix"));
-    if version == CONTAINER_VERSION
-        && metadata.schema_version == METADATA_SCHEMA_VERSION
-        && &metadata.id == id
-        && &metadata.kind == kind
-        && classify_inspection(payload, current_hash) == SaveCompatibility::Compatible
-        && load_from_bytes(payload).is_ok()
+    if container
+        .metadata
+        .as_ref()
+        .is_some_and(|metadata| &metadata.id != id || &metadata.kind != kind)
     {
-        Some(payload.to_vec())
-    } else {
-        None
+        return RecoveryBackup::Corrupt;
+    }
+    if container.version != CONTAINER_VERSION {
+        return RecoveryBackup::Candidate(bytes);
+    }
+
+    match classify_inspection(&container.simulation_header, current_hash) {
+        SaveCompatibility::Compatible => match read_simulation_payload(path) {
+            Ok(payload) if load_from_bytes(&payload).is_ok() => RecoveryBackup::Candidate(bytes),
+            Ok(_) => RecoveryBackup::Corrupt,
+            Err(ContainerError::Io(error)) => RecoveryBackup::Inaccessible(error),
+            Err(_) => RecoveryBackup::Corrupt,
+        },
+        SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
+            RecoveryBackup::Corrupt
+        }
+        _ => RecoveryBackup::Candidate(bytes),
     }
 }
 

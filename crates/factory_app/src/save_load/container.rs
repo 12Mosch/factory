@@ -201,7 +201,9 @@ fn write_save_bytes_locked(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
         let replaced = commit_temporary_file(path, &temp_path, &backup_path)?;
         installed = true;
-        sync_installed_file(path)?;
+        // Installation has committed. A durability-barrier failure must not be
+        // reported as a failed save because retrying could overwrite success.
+        let _ = sync_installed_file(path);
 
         if replaced {
             // The new primary is committed. Cleanup cannot turn that successful
@@ -238,7 +240,10 @@ pub(crate) fn promote_backup(
     } else {
         install_new_file(backup_path, path)?;
     }
-    sync_installed_file(path)
+    // Promotion has committed even if a post-rename durability barrier is not
+    // available on this filesystem or is temporarily blocked by another handle.
+    let _ = sync_installed_file(path);
+    Ok(())
 }
 
 /// Removes a canonical save and all of its recovery artifacts as one serialized
@@ -488,22 +493,105 @@ fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     install_new_file(source, destination)
 }
 
-/// Renames an artifact to its nonce-derived retired destination.
-#[cfg(not(windows))]
+/// Uses Linux's atomic no-replace rename when hard links are unavailable.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination)
+    use std::os::unix::ffi::OsStrExt;
+
+    let source = std::ffi::CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source path contains NUL"))?;
+    let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "target path contains NUL"))?;
+    // SAFETY: both paths are NUL-terminated and valid for the duration of the
+    // call; AT_FDCWD makes them relative to the process working directory.
+    let renamed = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
-/// Installs a new file through a no-clobber hard link on non-Windows systems.
-#[cfg(not(windows))]
+/// Uses Apple's atomic exclusive rename when hard links are unavailable.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let source = std::ffi::CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source path contains NUL"))?;
+    let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "target path contains NUL"))?;
+    // SAFETY: both paths are NUL-terminated and valid for the duration of the
+    // call; AT_FDCWD makes them relative to the process working directory.
+    let renamed = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if renamed == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Moves an artifact through a no-clobber hard link where exclusive rename is unavailable.
+#[cfg(all(
+    not(windows),
+    not(target_os = "linux"),
+    not(target_os = "android"),
+    not(target_os = "macos"),
+    not(target_os = "ios")
+))]
+fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::hard_link(source, destination)?;
+    fs::remove_file(source)
+}
+
+/// Installs a new file through a hard link or an atomic no-replace rename.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
+fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    match fs::hard_link(temp_path, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(temp_path);
+            Ok(())
+        }
+        Err(_) => rename_file_no_replace(temp_path, path),
+    }
+}
+
+/// Installs through a no-clobber hard link where no exclusive rename API is available.
+#[cfg(all(
+    not(windows),
+    not(target_os = "linux"),
+    not(target_os = "android"),
+    not(target_os = "macos"),
+    not(target_os = "ios")
+))]
 fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
     fs::hard_link(temp_path, path)?;
     let _ = fs::remove_file(temp_path);
     Ok(())
 }
 
-/// Flushes containing-directory metadata on platforms that support directory
-/// fsync. Windows installation is flushed through the destination file instead.
+/// Flushes containing-directory metadata with a directory fsync on Unix.
 #[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
     match path.parent() {
@@ -512,8 +600,27 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Flushes Windows directory metadata through a backup-semantics handle.
+#[cfg(windows)]
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    fs::OpenOptions::new()
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(parent)?
+        .sync_all()
+}
+
 /// No-op where portable directory fsync is unavailable.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -521,9 +628,14 @@ fn sync_parent_directory(_path: &Path) -> io::Result<()> {
 /// Flushes the writable canonical file handle and its metadata on Windows.
 #[cfg(windows)]
 fn sync_installed_file(path: &Path) -> io::Result<()> {
-    // FlushFileBuffers requires a writable file handle. Win32 directory handles
-    // do not support that operation, so flush the installed file and its metadata.
-    fs::OpenOptions::new().write(true).open(path)?.sync_all()
+    // std::fs cannot open a Windows directory without BACKUP_SEMANTICS, so use
+    // the specialized parent-directory path after flushing the canonical file.
+    let file_result = fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all());
+    let directory_result = sync_parent_directory(path);
+    file_result.and(directory_result)
 }
 
 /// Uses directory fsync as the installation durability barrier elsewhere.

@@ -75,6 +75,27 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
 }
 
 #[test]
+fn recovery_restores_a_legacy_raw_quicksave_backup() {
+    let app = test_app(Duration::ZERO, "raw_quicksave_recovery");
+    let expected = sim_tick_and_hash(&app);
+    write_raw_quicksave(&app);
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    let path = config.root_dir.join("quicksave.factsim");
+    let original = fs::read(&path).unwrap();
+    let backup = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "legacy-writer");
+    fs::rename(&path, &backup).unwrap();
+
+    let entries = scan_catalog(&config).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert!(!backup.exists());
+    let loaded = load_from_bytes(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!((loaded.tick_count(), loaded.state_hash()), expected);
+}
+
+#[test]
 fn named_save_creation_and_duplicate_require_confirmation() {
     let mut app = test_app(Duration::ZERO, "named_duplicate");
     app.update();
@@ -337,6 +358,19 @@ fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
         SaveCompatibility::SaveFormatOlder { .. }
     ));
     assert_eq!(fs::read(&path).unwrap(), incompatible_bytes);
+    assert!(backup_one.exists());
+
+    // An incompatible backup is still intact user data. If it is the only
+    // remaining copy, recovery restores it for a compatible game version.
+    fs::remove_file(&path).unwrap();
+    fs::write(&backup_one, &incompatible_bytes).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(matches!(
+        entries[0].compatibility,
+        SaveCompatibility::SaveFormatOlder { .. }
+    ));
+    assert_eq!(fs::read(&path).unwrap(), incompatible_bytes);
+    assert!(!backup_one.exists());
 
     let mut truncated_backup = valid_bytes.clone();
     truncated_backup.truncate(truncated_backup.len() - 8);
