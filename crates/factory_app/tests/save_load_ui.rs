@@ -4,9 +4,9 @@ use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
-    PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveCompatibility, SaveKind,
-    SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState, decode_container,
-    encode_container,
+    BACKUP_ARTIFACT_MARKER, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog,
+    SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState,
+    TEMP_ARTIFACT_MARKER, decode_container, encode_container, scan_catalog,
 };
 use factory_app::ui::resources::OpenContainer;
 use factory_app::ui::save_load::{
@@ -72,6 +72,27 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
             .is_none()
     );
     assert!(app.world().resource::<OpenContainer>().entity_id.is_none());
+}
+
+#[test]
+fn recovery_restores_a_legacy_raw_quicksave_backup() {
+    let app = test_app(Duration::ZERO, "raw_quicksave_recovery");
+    let expected = sim_tick_and_hash(&app);
+    write_raw_quicksave(&app);
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    let path = config.root_dir.join("quicksave.factsim");
+    let original = fs::read(&path).unwrap();
+    let backup = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "legacy-writer");
+    fs::rename(&path, &backup).unwrap();
+
+    let entries = scan_catalog(&config).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert!(!backup.exists());
+    let loaded = load_from_bytes(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!((loaded.tick_count(), loaded.state_hash()), expected);
 }
 
 #[test]
@@ -240,6 +261,169 @@ fn catalog_ignores_old_slots_temps_backups_and_old_autosave() {
     }
     app.update();
     assert!(app.world().resource::<SaveCatalog>().entries().is_empty());
+    assert!(!root.join("manual-x.factsim.tmp-1").exists());
+    assert!(!root.join("quicksave.factsim.bak-1").exists());
+}
+
+#[test]
+fn interrupted_replacement_phases_keep_a_valid_save_discoverable() {
+    let mut app = test_app(Duration::ZERO, "interrupted_replacement");
+    app.update();
+    let old_state = sim_tick_and_hash(&app);
+    create_named_save(&mut app, "Crash Test");
+    drain_save_jobs(&mut app);
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let old_bytes = fs::read(&path).unwrap();
+    let (mut metadata, _) = decode_container(&old_bytes).unwrap();
+
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, old_state.0 + 1);
+    freeze_time(&mut app);
+    let new_state = sim_tick_and_hash(&app);
+    metadata.completed_at_unix_ms = metadata.completed_at_unix_ms.saturating_add(1);
+    let new_payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    let new_bytes = encode_container(&metadata, &new_payload).unwrap();
+
+    let temp = test_artifact_path(&path, TEMP_ARTIFACT_MARKER, "4242-0");
+    let backup = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "4242-0");
+
+    // New contents have been flushed, but installation has not begun.
+    fs::write(&temp, &new_bytes).unwrap();
+    assert_catalog_loads(&config, old_state);
+    assert!(!temp.exists());
+
+    // The rollback copy exists while the intact primary remains canonical.
+    fs::copy(&path, &backup).unwrap();
+    assert_catalog_loads(&config, old_state);
+    assert!(!backup.exists());
+
+    // This is the vulnerable phase used by the previous writer: startup must
+    // recover the one fully valid backup, not expose the temporary new file.
+    fs::write(&temp, &new_bytes).unwrap();
+    fs::copy(&path, &backup).unwrap();
+    fs::remove_file(&path).unwrap();
+    assert_catalog_loads(&config, old_state);
+    assert!(path.is_file());
+    assert!(!temp.exists());
+
+    // After atomic installation, the new primary wins over an older backup.
+    fs::write(&path, &new_bytes).unwrap();
+    fs::write(&backup, &old_bytes).unwrap();
+    assert_catalog_loads(&config, new_state);
+    assert!(!backup.exists());
+}
+
+#[test]
+fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
+    let mut app = test_app(Duration::ZERO, "safe_recovery_selection");
+    app.update();
+    let expected = sim_tick_and_hash(&app);
+    create_named_save(&mut app, "Recovery Selection");
+    drain_save_jobs(&mut app);
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let valid_bytes = fs::read(&path).unwrap();
+    let backup_one = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "4242-1");
+    let backup_two = test_artifact_path(&path, BACKUP_ARTIFACT_MARKER, "4242-2");
+
+    fs::write(&backup_one, b"invalid backup").unwrap();
+    assert_catalog_loads(&config, expected);
+    assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+
+    let (metadata, payload) = decode_container(&valid_bytes).unwrap();
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, expected.0 + 1);
+    freeze_time(&mut app);
+    let different_payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    let different_bytes = encode_container(&metadata, &different_payload).unwrap();
+    let mut older_payload = payload.to_vec();
+    older_payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
+    let incompatible_bytes = encode_container(&metadata, &older_payload).unwrap();
+    fs::write(&path, &incompatible_bytes).unwrap();
+    fs::write(&backup_one, &valid_bytes).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(matches!(
+        entries[0].compatibility,
+        SaveCompatibility::SaveFormatOlder { .. }
+    ));
+    assert_eq!(fs::read(&path).unwrap(), incompatible_bytes);
+    assert!(backup_one.exists());
+
+    // An incompatible backup is still intact user data. If it is the only
+    // remaining copy, recovery restores it for a compatible game version.
+    fs::remove_file(&path).unwrap();
+    fs::write(&backup_one, &incompatible_bytes).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(matches!(
+        entries[0].compatibility,
+        SaveCompatibility::SaveFormatOlder { .. }
+    ));
+    assert_eq!(fs::read(&path).unwrap(), incompatible_bytes);
+    assert!(!backup_one.exists());
+
+    let mut truncated_backup = valid_bytes.clone();
+    truncated_backup.truncate(truncated_backup.len() - 8);
+    fs::write(&path, b"corrupt primary").unwrap();
+    fs::write(&backup_one, truncated_backup).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
+
+    let mut wrong_metadata = metadata.clone();
+    wrong_metadata.kind = SaveKind::Quicksave;
+    fs::write(
+        &backup_one,
+        encode_container(&wrong_metadata, payload).unwrap(),
+    )
+    .unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
+
+    fs::write(&backup_one, &valid_bytes).unwrap();
+    fs::write(&backup_two, &different_bytes).unwrap();
+    let entries = scan_catalog(&config).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
+
+    fs::remove_file(&backup_two).unwrap();
+    assert_catalog_loads(&config, expected);
+    assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+}
+
+#[test]
+fn deleting_a_save_removes_recovery_artifacts_without_resurrection() {
+    let mut app = test_app(Duration::ZERO, "delete_recovery_artifacts");
+    app.update();
+    create_named_save(&mut app, "Delete Completely");
+    drain_save_jobs(&mut app);
+    let entry = app.world().resource::<SaveCatalog>().entries()[0].clone();
+    let backup = test_artifact_path(entry.path(), BACKUP_ARTIFACT_MARKER, "delete-test");
+    let temporary = test_artifact_path(entry.path(), TEMP_ARTIFACT_MARKER, "delete-test");
+    fs::copy(entry.path(), &backup).unwrap();
+    fs::copy(entry.path(), &temporary).unwrap();
+
+    press_entry(&mut app, &entry.id, SaveEntryAction::Delete);
+    app.update();
+    press_confirmation(&mut app, true);
+    app.update();
+
+    assert!(!entry.path().exists());
+    assert!(!backup.exists());
+    assert!(!temporary.exists());
+    assert!(app.world().resource::<SaveCatalog>().entries().is_empty());
 }
 
 #[test]
@@ -384,4 +568,21 @@ fn press_key(app: &mut App, key: KeyCode) {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(key);
+}
+
+fn assert_catalog_loads(config: &SaveLoadConfig, expected: (u64, u64)) {
+    let entries = scan_catalog(config).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].compatibility.can_load());
+    let bytes = fs::read(entries[0].path()).unwrap();
+    let (_, payload) = decode_container(&bytes).unwrap();
+    let loaded = load_from_bytes(payload).unwrap();
+    assert_eq!((loaded.tick_count(), loaded.state_hash()), expected);
+}
+
+fn test_artifact_path(path: &std::path::Path, marker: &str, nonce: &str) -> PathBuf {
+    path.with_file_name(format!(
+        "{}{marker}{nonce}",
+        path.file_name().unwrap().to_string_lossy()
+    ))
 }
