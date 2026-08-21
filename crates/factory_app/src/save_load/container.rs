@@ -122,13 +122,7 @@ fn container_payload_offset(bytes: &[u8]) -> Result<usize, ContainerError> {
 pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, ContainerError> {
     let mut file = fs::File::open(path)?;
     let mut prefix = [0; PREFIX_SIZE];
-    file.read_exact(&mut prefix).map_err(|error| {
-        if error.kind() == io::ErrorKind::UnexpectedEof {
-            ContainerError::Truncated
-        } else {
-            error.into()
-        }
-    })?;
+    read_inspection_bytes(&mut file, &mut prefix)?;
     if prefix[..8] != CONTAINER_MAGIC {
         return Err(ContainerError::InvalidContainerMagic);
     }
@@ -138,16 +132,26 @@ pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, Conta
         return Err(ContainerError::MetadataTooLarge(metadata_len));
     }
     let mut metadata_bytes = vec![0; metadata_len];
-    file.read_exact(&mut metadata_bytes)
-        .map_err(|_| ContainerError::Truncated)?;
+    read_inspection_bytes(&mut file, &mut metadata_bytes)?;
     let metadata = ron::de::from_bytes(&metadata_bytes).ok();
     let mut simulation_header = vec![0; SAVE_HEADER_SIZE];
-    file.read_exact(&mut simulation_header)
-        .map_err(|_| ContainerError::Truncated)?;
+    read_inspection_bytes(&mut file, &mut simulation_header)?;
     Ok(InspectedContainer {
         version,
         metadata,
         simulation_header,
+    })
+}
+
+/// Treats a short file as corruption while retaining every other read failure
+/// as an I/O error so recovery cannot replace a primary it could not inspect.
+fn read_inspection_bytes(reader: &mut impl Read, buffer: &mut [u8]) -> Result<(), ContainerError> {
+    reader.read_exact(buffer).map_err(|error| {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            ContainerError::Truncated
+        } else {
+            ContainerError::Io(error)
+        }
     })
 }
 
@@ -666,6 +670,14 @@ mod tests {
     use super::*;
     use factory_sim::{Simulation, load_from_bytes, save_to_bytes};
 
+    struct FailingReader(io::ErrorKind);
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(self.0))
+        }
+    }
+
     fn metadata(name: &str) -> SaveMetadata {
         fallback_metadata(SaveId::new("test"), SaveKind::Named, name.into(), 42)
     }
@@ -684,6 +696,25 @@ mod tests {
         let error =
             encode_container(&metadata(&"x".repeat(MAX_METADATA_BYTES)), b"payload").unwrap_err();
         assert!(matches!(error, ContainerError::MetadataTooLarge(_)));
+    }
+
+    #[test]
+    fn inspection_distinguishes_short_files_from_transient_read_failures() {
+        let mut buffer = [0; 1];
+        assert!(matches!(
+            read_inspection_bytes(&mut io::Cursor::new([]), &mut buffer),
+            Err(ContainerError::Truncated)
+        ));
+
+        let error = read_inspection_bytes(
+            &mut FailingReader(io::ErrorKind::PermissionDenied),
+            &mut buffer,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ContainerError::Io(error) if error.kind() == io::ErrorKind::PermissionDenied
+        ));
     }
 
     #[test]
