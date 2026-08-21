@@ -77,7 +77,11 @@ pub(crate) fn initialize_save_state(
     mut catalog: ResMut<SaveCatalog>,
     mut status: ResMut<SaveLoadStatus>,
 ) {
-    autosave.last_autosave_tick = sim.read().tick_count();
+    autosave.last_autosave_tick = if sim.is_initialized() {
+        sim.read().tick_count()
+    } else {
+        0
+    };
     refresh_with_status(&config, &mut catalog, &mut status);
 }
 

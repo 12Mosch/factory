@@ -25,15 +25,15 @@ pub(super) struct BuildPlugin;
 
 impl Plugin for BuildPlugin {
     fn build(&self, app: &mut App) {
-        let hotbar = HotbarState {
-            slots: default_hotbar_slots(app.world().resource::<SimResource>().read().catalog()),
-        };
-
-        app.insert_resource(hotbar)
+        app.init_resource::<HotbarState>()
             .init_resource::<BuildPlacementState>()
             .init_resource::<BuildPlacementPreviewState>()
             .init_resource::<BuildMenuState>()
             .add_systems(Startup, (setup_build_bar, spawn_build_preview))
+            .add_systems(
+                OnEnter(crate::world_setup::AppMode::InGame),
+                initialize_hotbar,
+            )
             .add_systems(
                 Update,
                 (
@@ -59,5 +59,11 @@ impl Plugin for BuildPlugin {
                 )
                     .in_set(InGameSet),
             );
+    }
+}
+
+fn initialize_hotbar(mut hotbar: ResMut<HotbarState>, sim: Res<SimResource>) {
+    if hotbar.slots.iter().all(Option::is_none) {
+        hotbar.slots = default_hotbar_slots(sim.read().catalog());
     }
 }

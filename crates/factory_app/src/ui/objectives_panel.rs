@@ -238,10 +238,14 @@ pub(crate) fn setup_objectives_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
     mut state: ResMut<ObjectivesPanelState>,
+    existing: Query<(), With<ObjectivesPanelRoot>>,
 ) {
     let simulation = sim.read();
     state.snapshot = objectives_snapshot(&simulation);
     drop(simulation);
+    if !existing.is_empty() {
+        return;
+    }
     let snapshot = state.snapshot.clone();
     let visible = snapshot.visible_indices();
     commands

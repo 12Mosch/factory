@@ -51,10 +51,15 @@ pub(crate) fn setup_rocket_launch_ui(
     sim: Res<SimResource>,
     reload: Option<Res<PresentationReloadToken>>,
     mut state: ResMut<RocketLaunchUiState>,
+    existing: Query<(), With<RocketLaunchNotificationRoot>>,
 ) {
     state.observed_launches = sim.read().rockets_launched();
     state.reload_token = reload.as_deref().map_or(0, |token| token.value);
     state.expires_at_tick = None;
+
+    if !existing.is_empty() {
+        return;
+    }
 
     commands
         .spawn((
