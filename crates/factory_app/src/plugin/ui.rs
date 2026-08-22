@@ -1,6 +1,5 @@
 use bevy::asset::{AssetId, Assets};
 use bevy::prelude::*;
-use bevy::text::EditableTextSystems;
 
 use super::{AppSet, InGameSet};
 use crate::input::build::handle_build_world_click;
@@ -62,6 +61,7 @@ use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
 };
+use crate::ui::text_input::TextInputSanitization;
 use crate::ui::threat::{
     ThreatUiState, handle_threat_alert_clicks, setup_threat_ui, sync_threat_ui,
 };
@@ -256,7 +256,7 @@ impl Plugin for UiPlugin {
                 PostUpdate,
                 (sync_train_stop_rename_to_state, submit_train_stop_rename)
                     .chain()
-                    .after(EditableTextSystems)
+                    .after(TextInputSanitization)
                     .in_set(InGameSet),
             )
             .add_systems(

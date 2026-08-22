@@ -19,6 +19,8 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy::text::EditableTextSystems;
 
+use crate::ui::text_input::{TextInputSanitization, sanitize_editable_text};
+
 /// Shared ordering labels for systems whose ordering constraints cross plugin
 /// boundaries. Plugin-internal ordering uses direct `.before`/`.after` edges
 /// instead.
@@ -117,6 +119,12 @@ impl Plugin for FactoryAppPlugin {
                 (AppSet::MapTexture, AppSet::RenderSync)
                     .chain()
                     .in_set(InGameSet),
+            )
+            .add_systems(
+                PostUpdate,
+                sanitize_editable_text
+                    .after(EditableTextSystems)
+                    .in_set(TextInputSanitization),
             );
 
         // SimulationPlugin must come first so world-entry systems can use the
@@ -150,7 +158,7 @@ impl Plugin for FactoryAppPlugin {
         .add_systems(
             PostUpdate,
             sync_world_setup_seed_input
-                .after(EditableTextSystems)
+                .after(TextInputSanitization)
                 .run_if(in_state(AppMode::WorldSetup)),
         );
     }

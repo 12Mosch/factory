@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::text::EditableTextSystems;
 
 use super::{AppSet, InGameSet};
 use crate::save_load::{
@@ -9,10 +8,11 @@ use crate::save_load::{
     refresh_catalog_on_manager_open, run_autosave,
 };
 use crate::ui::save_load::{
-    NewWorldConfirmation, handle_new_world_button, handle_save_load_buttons,
-    submit_save_name_input, sync_save_load_window, sync_save_name_from_state,
-    sync_save_name_to_state,
+    NewWorldConfirmation, SaveCreateRequested, handle_new_world_button, handle_save_load_buttons,
+    submit_save_create_requests, submit_save_name_input, sync_save_load_window,
+    sync_save_name_from_state, sync_save_name_to_state,
 };
+use crate::ui::text_input::TextInputSanitization;
 
 /// Manual and automatic save/load, plus the save/load window.
 pub(super) struct SaveLoadPlugin;
@@ -29,6 +29,7 @@ impl Plugin for SaveLoadPlugin {
             .init_resource::<AutosaveState>()
             .init_resource::<PresentationReloadToken>()
             .init_resource::<NewWorldConfirmation>()
+            .add_message::<SaveCreateRequested>()
             .add_systems(Startup, initialize_save_state)
             .add_systems(
                 Update,
@@ -51,9 +52,13 @@ impl Plugin for SaveLoadPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (sync_save_name_to_state, submit_save_name_input)
+                (
+                    sync_save_name_to_state,
+                    submit_save_create_requests,
+                    submit_save_name_input,
+                )
                     .chain()
-                    .after(EditableTextSystems)
+                    .after(TextInputSanitization)
                     .in_set(InGameSet),
             );
     }

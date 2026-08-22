@@ -1,6 +1,6 @@
 use bevy::input_focus::{AutoFocus, InputFocus};
 use bevy::prelude::*;
-use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
+use bevy::text::{EditableText, TextCursorStyle};
 use chrono::{DateTime, Local};
 
 use crate::audio::SoundEvent;
@@ -25,6 +25,10 @@ pub struct SaveEntryButton {
 }
 #[derive(Component)]
 pub struct SaveCreateButton;
+/// Defers a create-button press until the current editor value has been
+/// synchronized in `PostUpdate`.
+#[derive(Message)]
+pub(crate) struct SaveCreateRequested;
 #[derive(Component)]
 pub struct SaveConfirmationButton(pub bool);
 #[derive(Component)]
@@ -97,6 +101,7 @@ pub(crate) fn handle_save_load_buttons(
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
     mut sounds: MessageWriter<SoundEvent>,
+    mut create_requests: MessageWriter<SaveCreateRequested>,
 ) {
     if !load_state.window.open {
         return;
@@ -110,16 +115,7 @@ pub(crate) fn handle_save_load_buttons(
     for interaction in &mut create {
         if *interaction == Interaction::Pressed {
             sounds.write(SoundEvent::UiClick);
-            request_named_save(
-                &load_state.window.name_buffer,
-                &load_state.sim,
-                &config,
-                &catalog,
-                &mut pending,
-                &mut confirmation,
-                &mut status,
-                &mut load_state.metrics,
-            );
+            create_requests.write(SaveCreateRequested);
         }
     }
     for (interaction, button) in &mut entries {
@@ -165,6 +161,35 @@ pub(crate) fn handle_save_load_buttons(
             PendingSaveConfirmation::None => {}
         }
     }
+}
+
+/// Processes create-button requests after editor-to-state synchronization so
+/// a click uses text entered during the same frame.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_save_create_requests(
+    mut requests: MessageReader<SaveCreateRequested>,
+    config: Res<SaveLoadConfig>,
+    catalog: Res<SaveCatalog>,
+    mut pending: ResMut<PendingSaveJobs>,
+    mut confirmation: ResMut<PendingSaveConfirmation>,
+    mut status: ResMut<SaveLoadStatus>,
+    state: Res<SaveLoadWindowState>,
+    sim: Res<crate::resources::SimResource>,
+    mut metrics: ResMut<crate::save_load::SaveLoadMetrics>,
+) {
+    if requests.read().count() == 0 {
+        return;
+    }
+    request_named_save(
+        &state.name_buffer,
+        &sim,
+        &config,
+        &catalog,
+        &mut pending,
+        &mut confirmation,
+        &mut status,
+        &mut metrics,
+    );
 }
 
 pub(crate) fn sync_save_name_from_state(
@@ -404,8 +429,7 @@ fn spawn_name_input(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, val
                     overflow: Overflow::clip_x(),
                     ..default()
                 },
-                single_line_editor(value, Some(65)),
-                EditableTextFilter::new(is_non_control),
+                single_line_editor(value, Some(65), is_non_control),
                 TextLayout::no_wrap(),
                 TextCursorStyle::default(),
                 TextFont::from_font_size(13.0),

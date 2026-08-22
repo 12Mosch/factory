@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::text::EditableTextSystems;
 
 use super::{AppSet, InGameSet};
 use crate::build::resources::{
@@ -23,6 +22,7 @@ use crate::ui::build_menu::{
     handle_build_menu_buttons, sync_build_menu, sync_build_menu_search_from_state,
     sync_build_menu_search_to_state,
 };
+use crate::ui::text_input::TextInputSanitization;
 
 /// Build placement input, preview, hotbar, build bar, and build menu.
 pub(super) struct BuildPlugin;
@@ -70,7 +70,7 @@ impl Plugin for BuildPlugin {
             .add_systems(
                 PostUpdate,
                 sync_build_menu_search_to_state
-                    .after(EditableTextSystems)
+                    .after(TextInputSanitization)
                     .in_set(InGameSet),
             );
     }

@@ -1,7 +1,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::AutoFocus;
 use bevy::prelude::*;
-use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
+use bevy::text::{EditableText, TextCursorStyle};
 use bevy::ui_widgets::ScrollArea;
 use factory_data::{BuildingCategory, PrototypeCatalog};
 use factory_sim::Simulation;
@@ -200,7 +200,7 @@ pub(crate) fn sync_build_menu(
         sort_buildables(&mut buildables);
         buildables
     });
-    let snapshot = build_menu_snapshot(&sim.read(), &hotbar, &state, buildables);
+    let mut snapshot = None;
     sync_window(
         &mut commands,
         &mut shell_roots,
@@ -208,9 +208,16 @@ pub(crate) fn sync_build_menu(
         false,
         || BuildMenuShellSnapshot,
         build_menu_root,
-        |root, _| spawn_contents(root, &snapshot),
+        |root, _| {
+            let snapshot = snapshot.get_or_insert_with(|| {
+                build_menu_snapshot(&sim.read(), &hotbar, &state, buildables)
+            });
+            spawn_contents(root, snapshot);
+        },
     );
     if state.open && (sim.is_changed() || hotbar.is_changed() || state.is_changed()) {
+        let snapshot = snapshot
+            .unwrap_or_else(|| build_menu_snapshot(&sim.read(), &hotbar, &state, buildables));
         sync_contents(
             &mut commands,
             &mut contents_roots,
@@ -570,8 +577,7 @@ fn spawn_header(panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, search_q
                     overflow: Overflow::clip_x(),
                     ..default()
                 },
-                single_line_editor(search_query, None),
-                EditableTextFilter::new(is_non_control),
+                single_line_editor(search_query, None, is_non_control),
                 TextLayout::no_wrap(),
                 TextCursorStyle::default(),
                 TextFont::from_font_size(12.0),

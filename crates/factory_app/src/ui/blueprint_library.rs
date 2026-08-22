@@ -2,7 +2,7 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::{AutoFocus, InputFocus};
 use bevy::prelude::*;
-use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
+use bevy::text::{EditableText, TextCursorStyle};
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{Blueprint, Inventory, SimCommand};
 use std::collections::BTreeMap;
@@ -439,8 +439,7 @@ fn spawn_blueprint_library_modal(
                                         overflow: Overflow::clip_x(),
                                         ..default()
                                     },
-                                    single_line_editor(buffer, None),
-                                    EditableTextFilter::new(is_non_control),
+                                    single_line_editor(buffer, None, is_non_control),
                                     TextLayout::no_wrap(),
                                     TextCursorStyle::default(),
                                     TextFont::from_font_size(13.0),

@@ -14,7 +14,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
-use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
+use bevy::text::{EditableText, TextCursorStyle};
 use factory_sim::{EntityId, SimCommand, Simulation};
 
 use crate::audio::SoundEvent;
@@ -127,8 +127,7 @@ pub(crate) fn spawn_train_stop_panel(parent: &mut bevy::ecs::hierarchy::ChildSpa
                         overflow: Overflow::clip_x(),
                         ..default()
                     },
-                    single_line_editor("", Some(MAX_STOP_NAME_LENGTH)),
-                    EditableTextFilter::new(is_non_control),
+                    single_line_editor("", Some(MAX_STOP_NAME_LENGTH), is_non_control),
                     TextLayout::no_wrap(),
                     TextCursorStyle::default(),
                     TextFont::from_font_size(12.0),

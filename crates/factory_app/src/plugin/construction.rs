@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::text::EditableTextSystems;
 
 use super::{AppSet, InGameSet};
 use crate::build::resources::{
@@ -18,6 +17,7 @@ use crate::ui::blueprint_library::{
     handle_blueprint_library_buttons, submit_blueprint_rename, sync_blueprint_library_window,
     sync_blueprint_rename_from_state, sync_blueprint_rename_to_state,
 };
+use crate::ui::text_input::TextInputSanitization;
 
 /// Construction planning: ghost placement, the deconstruction planner,
 /// copy/paste, the blueprint library, and their world rendering.
@@ -66,7 +66,7 @@ impl Plugin for ConstructionPlugin {
                 PostUpdate,
                 (sync_blueprint_rename_to_state, submit_blueprint_rename)
                     .chain()
-                    .after(EditableTextSystems)
+                    .after(TextInputSanitization)
                     .in_set(InGameSet),
             );
     }

@@ -1,6 +1,6 @@
 use bevy::input_focus::AutoFocus;
 use bevy::prelude::*;
-use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
+use bevy::text::{EditableText, TextCursorStyle};
 use factory_data::PrototypeCatalog;
 use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 
@@ -166,8 +166,9 @@ pub fn build_world_setup_ui(
                                 overflow: Overflow::clip_x(),
                                 ..default()
                             },
-                            single_line_editor(&setup.seed_text, Some(20)),
-                            EditableTextFilter::new(|character| character.is_ascii_digit()),
+                            single_line_editor(&setup.seed_text, Some(20), |character| {
+                                character.is_ascii_digit()
+                            }),
                             TextLayout::no_wrap(),
                             TextCursorStyle::default(),
                             TextFont::from_font_size(16.0),
