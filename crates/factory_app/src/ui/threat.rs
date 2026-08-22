@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::scene::ScenePatch;
 use factory_sim::{CHUNK_SIZE, ThreatEvent, ThreatEventKind, ThreatLocation, ThreatSnapshot};
 use std::collections::VecDeque;
 
@@ -12,14 +13,54 @@ const TICKS_PER_SECOND: u64 = SIM_TICKS_PER_SECOND as u64;
 /// How long an alert card stays on screen before it expires.
 const ALERT_LIFETIME_TICKS: u64 = 10 * TICKS_PER_SECOND;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct ThreatPanelText;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct ThreatAlertRoot;
 #[derive(Component, Clone, Copy)]
 pub struct ThreatAlertCard {
     pub location: ThreatLocation,
     pub kind: ThreatEventKind,
+}
+
+/// Static retained hierarchy for the threat summary HUD.
+fn threat_panel_scene() -> impl Scene {
+    bsn! {
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(14.0),
+            top: Val::Px(204.0),
+            width: Val::Px(184.0),
+            min_height: Val::Px(92.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            border: UiRect::all(Val::Px(1.0)),
+        }
+        BackgroundColor(Color::srgba(0.02, 0.025, 0.027, 0.9))
+        BorderColor::all(Color::srgba(0.36, 0.38, 0.34, 0.82))
+        GlobalZIndex(1800)
+        Children [(
+            Text("THREAT: LOW")
+            TextFont { font_size: FontSize::Px(11.0) }
+            TextColor(Color::srgb(0.76, 0.86, 0.7))
+            ThreatPanelText
+        )]
+    }
+}
+
+/// Static retained root for dynamic threat alert cards.
+fn threat_alert_root_scene() -> impl Scene {
+    bsn! {
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(50.0),
+            top: Val::Px(18.0),
+            width: Val::Px(360.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(7.0),
+        }
+        GlobalZIndex(3200)
+        ThreatAlertRoot
+    }
 }
 
 #[derive(Resource, Default)]
@@ -33,42 +74,17 @@ pub struct ThreatUiState {
     rendered_panel: Option<ThreatSnapshot>,
 }
 
-pub fn setup_threat_ui(mut commands: Commands) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(14.0),
-                top: Val::Px(204.0),
-                width: Val::Px(184.0),
-                min_height: Val::Px(92.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.02, 0.025, 0.027, 0.9)),
-            BorderColor::all(Color::srgba(0.36, 0.38, 0.34, 0.82)),
-            GlobalZIndex(1800),
-        ))
-        .with_child((
-            Text::new("THREAT: LOW"),
-            TextFont::from_font_size(11.0),
-            TextColor(Color::srgb(0.76, 0.86, 0.7)),
-            ThreatPanelText,
-        ));
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(50.0),
-            top: Val::Px(18.0),
-            width: Val::Px(360.0),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(7.0),
-            ..default()
-        },
-        GlobalZIndex(3200),
-        ThreatAlertRoot,
-    ));
+pub fn setup_threat_ui(
+    mut commands: Commands,
+    asset_server: Option<Res<AssetServer>>,
+    scene_patches: Option<Res<Assets<ScenePatch>>>,
+) {
+    if asset_server.is_none() || scene_patches.is_none() {
+        return;
+    }
+
+    commands.spawn_scene(threat_panel_scene());
+    commands.spawn_scene(threat_alert_root_scene());
 }
 
 pub fn sync_threat_ui(
@@ -191,5 +207,55 @@ fn event_style(kind: ThreatEventKind) -> (&'static str, Color) {
             ("Enemy expansion spotted", Color::srgb(0.95, 0.48, 0.15))
         }
         ThreatEventKind::BaseDestroyed => ("Enemy colony destroyed", Color::srgb(0.5, 0.9, 0.45)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::{asset::AssetPlugin, scene::ScenePlugin};
+
+    fn scene_test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((AssetPlugin::default(), ScenePlugin));
+        app
+    }
+
+    #[test]
+    fn threat_scenes_have_the_expected_retained_roots_and_text_marker() {
+        let mut app = scene_test_app();
+        app.add_systems(Update, setup_threat_ui);
+        app.update();
+
+        let (alert_root, panel_text) = {
+            let world = app.world_mut();
+            let mut alert_roots = world.query_filtered::<Entity, With<ThreatAlertRoot>>();
+            let alert_root = alert_roots
+                .single(world)
+                .expect("setup should spawn one threat alert root");
+            let mut panel_texts = world.query_filtered::<Entity, With<ThreatPanelText>>();
+            let panel_text = panel_texts
+                .single(world)
+                .expect("setup should spawn one threat panel text entity");
+            (alert_root, panel_text)
+        };
+
+        let world = app.world();
+        assert!(world.entity(alert_root).contains::<Node>());
+        assert!(world.entity(alert_root).contains::<GlobalZIndex>());
+        assert!(world.entity(alert_root).get::<Children>().is_none());
+
+        assert!(world.entity(panel_text).contains::<Text>());
+        assert!(world.entity(panel_text).contains::<TextFont>());
+        assert!(world.entity(panel_text).contains::<TextColor>());
+        let panel_root = world
+            .entity(panel_text)
+            .get::<ChildOf>()
+            .expect("threat panel text should belong to the panel root")
+            .parent();
+        assert!(world.entity(panel_root).contains::<Node>());
+        assert!(world.entity(panel_root).contains::<BackgroundColor>());
+        assert!(world.entity(panel_root).contains::<BorderColor>());
+        assert!(world.entity(panel_root).contains::<GlobalZIndex>());
     }
 }
