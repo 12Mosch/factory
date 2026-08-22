@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::text::EditableText;
 use bevy::time::TimeUpdateStrategy;
 use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
@@ -144,6 +145,77 @@ fn named_save_creation_and_duplicate_require_confirmation() {
     app.update();
     drain_save_jobs(&mut app);
     assert_ne!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn create_button_uses_editor_text_changed_in_the_same_frame() {
+    let mut app = test_app(Duration::ZERO, "same_frame_save_name");
+    {
+        let mut window = app.world_mut().resource_mut::<SaveLoadWindowState>();
+        window.open = true;
+        window.tab = SaveLoadTab::Save;
+        window.name_buffer = "Previous Name".into();
+    }
+    app.update();
+
+    let mut found_input = false;
+    let mut inputs = app.world_mut().query::<&mut EditableText>();
+    for mut input in inputs.iter_mut(app.world_mut()) {
+        if input.value() == "Previous Name" {
+            input.editor_mut().set_text("Current Name");
+            found_input = true;
+        }
+    }
+    assert!(found_input);
+
+    let mut buttons = app
+        .world_mut()
+        .query_filtered::<&mut Interaction, With<SaveCreateButton>>();
+    *buttons.single_mut(app.world_mut()).unwrap() = Interaction::Pressed;
+    app.update();
+    drain_save_jobs(&mut app);
+
+    assert!(
+        app.world()
+            .resource::<SaveCatalog>()
+            .entries()
+            .iter()
+            .any(|entry| entry.metadata.display_name == "Current Name")
+    );
+}
+
+#[test]
+fn status_refresh_preserves_the_save_editor_and_same_frame_edit() {
+    let mut app = test_app(Duration::ZERO, "stable_save_editor");
+    {
+        let mut window = app.world_mut().resource_mut::<SaveLoadWindowState>();
+        window.open = true;
+        window.tab = SaveLoadTab::Save;
+        window.name_buffer = "Stable Name".into();
+    }
+    app.update();
+
+    let mut input_entity = None;
+    let mut inputs = app.world_mut().query::<(Entity, &mut EditableText)>();
+    for (entity, mut input) in inputs.iter_mut(app.world_mut()) {
+        if input.value() == "Stable Name" {
+            input.editor_mut().set_text("Stable NameX");
+            input_entity = Some(entity);
+        }
+    }
+    let input_entity = input_entity.expect("save-name editor should exist");
+    app.world_mut()
+        .resource_mut::<factory_app::save_load::SaveLoadStatus>()
+        .message = Some("Autosave completed".into());
+
+    app.update();
+
+    let input = app
+        .world()
+        .entity(input_entity)
+        .get::<EditableText>()
+        .expect("status refresh must preserve the save-name editor entity");
+    assert_eq!(input.value(), "Stable NameX");
 }
 
 #[test]

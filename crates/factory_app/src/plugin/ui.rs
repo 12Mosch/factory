@@ -61,6 +61,7 @@ use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
 };
+use crate::ui::text_input::TextInputSanitization;
 use crate::ui::threat::{
     ThreatUiState, handle_threat_alert_clicks, setup_threat_ui, sync_threat_ui,
 };
@@ -75,8 +76,10 @@ use crate::ui::train_schedule_edit::{
 };
 use crate::ui::train_schedule_panel::update_train_schedule_status;
 use crate::ui::train_stop_panel::{
-    TrainStopRenameState, handle_train_stop_limit_buttons, handle_train_stop_limit_signal_button,
-    handle_train_stop_rename_button, handle_train_stop_rename_input, update_train_stop_panel,
+    TrainStopRenameCommitRequested, TrainStopRenameState, handle_train_stop_limit_buttons,
+    handle_train_stop_limit_signal_button, handle_train_stop_rename_button,
+    submit_train_stop_rename, submit_train_stop_rename_button, sync_train_stop_rename_to_state,
+    update_train_stop_panel,
 };
 
 /// General UI: debug overlay, containers and inventory, technology window,
@@ -125,6 +128,7 @@ impl Plugin for UiPlugin {
             .init_resource::<CircuitEditorState>()
             .init_resource::<TrainScheduleEditorState>()
             .init_resource::<TrainStopRenameState>()
+            .add_message::<TrainStopRenameCommitRequested>()
             .add_systems(Startup, (setup_debug_overlay, setup_threat_ui))
             .add_systems(
                 OnEnter(crate::world_setup::AppMode::InGame),
@@ -241,17 +245,24 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
-                    // Typing a station name reads the keyboard directly, so it
-                    // runs with the other window input rather than in the
-                    // button-interaction set.
-                    handle_train_stop_rename_input.in_set(AppSet::WorldInput),
                     handle_train_stop_rename_button.in_set(AppSet::UiInteraction),
                     handle_train_stop_limit_buttons.in_set(AppSet::UiInteraction),
                     handle_train_stop_limit_signal_button.in_set(AppSet::UiInteraction),
                     update_train_stop_panel
                         .after(sync_container_window)
-                        .after(handle_train_stop_rename_input),
+                        .after(handle_train_stop_rename_button),
                 )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    sync_train_stop_rename_to_state,
+                    submit_train_stop_rename_button,
+                    submit_train_stop_rename,
+                )
+                    .chain()
+                    .after(TextInputSanitization)
                     .in_set(InGameSet),
             )
             .add_systems(

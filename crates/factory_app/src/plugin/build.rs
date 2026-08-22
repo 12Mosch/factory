@@ -18,7 +18,11 @@ use crate::ui::build_bar::{
     handle_build_bar_button_clicks, setup_build_bar, update_build_bar_action_visuals,
     update_build_bar_visuals, update_build_status_text,
 };
-use crate::ui::build_menu::{handle_build_menu_buttons, sync_build_menu};
+use crate::ui::build_menu::{
+    handle_build_menu_buttons, sync_build_menu, sync_build_menu_search_from_state,
+    sync_build_menu_search_to_state,
+};
+use crate::ui::text_input::TextInputSanitization;
 
 /// Build placement input, preview, hotbar, build bar, and build menu.
 pub(super) struct BuildPlugin;
@@ -56,8 +60,17 @@ impl Plugin for BuildPlugin {
                         .after(update_build_placement_preview_state)
                         .after(update_paste_preview),
                     handle_build_menu_buttons.in_set(AppSet::UiInteraction),
-                    sync_build_menu.after(handle_build_menu_buttons),
+                    sync_build_menu_search_from_state.after(handle_build_menu_buttons),
+                    sync_build_menu
+                        .after(handle_build_menu_buttons)
+                        .after(sync_build_menu_search_from_state),
                 )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                PostUpdate,
+                sync_build_menu_search_to_state
+                    .after(TextInputSanitization)
                     .in_set(InGameSet),
             );
     }

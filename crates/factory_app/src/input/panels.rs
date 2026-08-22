@@ -1,8 +1,8 @@
 use bevy::ecs::system::SystemParam;
-use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
+use bevy::text::EditableText;
 use bevy::window::PrimaryWindow;
 
 use crate::audio::AudioSettingsWindowState;
@@ -13,7 +13,6 @@ use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapOverlay, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::{PendingSaveConfirmation, SaveLoadWindowState};
-use crate::simulation::SimCommandRequest;
 use crate::ui::enemy_settings::EnemySettingsWindowState;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
@@ -23,11 +22,9 @@ use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, OpenContainer, ProductionStatsWindowState,
     TechnologyWindowState,
 };
-use crate::utils::remove_previous_word;
-use factory_sim::SimCommand;
 
 #[derive(SystemParam)]
-pub(crate) struct WorldBlockingWindows<'w> {
+pub(crate) struct WorldBlockingWindows<'w, 's> {
     map: Res<'w, MapViewState>,
     stats: Res<'w, ProductionStatsWindowState>,
     crafting: Res<'w, CraftingWindowState>,
@@ -37,6 +34,8 @@ pub(crate) struct WorldBlockingWindows<'w> {
     build_menu: Res<'w, BuildMenuState>,
     blueprint_library: Res<'w, BlueprintLibraryWindowState>,
     equipment: Res<'w, EquipmentWindowState>,
+    input_focus: Option<Res<'w, InputFocus>>,
+    editable_texts: Query<'w, 's, Entity, With<EditableText>>,
 }
 
 /// Open/closed state of every window that blocks world interaction.
@@ -52,7 +51,7 @@ struct WindowOpenFlags {
     equipment: bool,
 }
 
-impl WorldBlockingWindows<'_> {
+impl WorldBlockingWindows<'_, '_> {
     fn any_open(&self) -> bool {
         world_blocking_windows_open(WindowOpenFlags {
             map: self.map.open,
@@ -64,7 +63,11 @@ impl WorldBlockingWindows<'_> {
             build_menu: self.build_menu.open,
             blueprint_library: self.blueprint_library.open,
             equipment: self.equipment.open,
-        })
+        }) || self
+            .input_focus
+            .as_deref()
+            .and_then(InputFocus::get)
+            .is_some_and(|focused| self.editable_texts.contains(focused))
     }
 }
 
@@ -89,7 +92,7 @@ pub(crate) fn reset_app_input_state(
 }
 
 #[derive(SystemParam)]
-pub(crate) struct PanelInputResources<'w> {
+pub(crate) struct PanelInputResources<'w, 's> {
     input_state: ResMut<'w, AppInputState>,
     sim: Res<'w, SimResource>,
     map: ResMut<'w, MapViewState>,
@@ -107,6 +110,8 @@ pub(crate) struct PanelInputResources<'w> {
     planner: ResMut<'w, PlannerState>,
     blueprint_library: ResMut<'w, BlueprintLibraryWindowState>,
     equipment: ResMut<'w, EquipmentWindowState>,
+    input_focus: Option<Res<'w, InputFocus>>,
+    editable_texts: Query<'w, 's, Entity, With<EditableText>>,
 }
 
 pub(crate) fn handle_panel_input(
@@ -116,6 +121,16 @@ pub(crate) fn handle_panel_input(
     let Some(keyboard) = keyboard else {
         return;
     };
+
+    let editable_text_focused = resources
+        .input_focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .is_some_and(|focused| resources.editable_texts.contains(focused));
+    if editable_text_focused && !keyboard.just_pressed(KeyCode::Escape) {
+        resources.input_state.world_blocked = true;
+        return;
+    }
 
     if resources.build_menu.open {
         if keyboard.just_pressed(KeyCode::Escape) {
@@ -292,106 +307,6 @@ pub(crate) fn handle_panel_input(
         blueprint_library: resources.blueprint_library.open,
         equipment: resources.equipment.open,
     });
-}
-
-pub(crate) fn handle_build_menu_search_input(
-    mut inputs: MessageReader<KeyboardInput>,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mut menu: ResMut<BuildMenuState>,
-) {
-    if !menu.open {
-        return;
-    }
-    let control_held = keyboard.as_deref().is_some_and(|keys| {
-        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
-    });
-    for input in inputs.read() {
-        if input.state != ButtonState::Pressed || input.key_code == KeyCode::Escape {
-            continue;
-        }
-        if input.key_code == KeyCode::Backspace {
-            if control_held {
-                remove_previous_word(&mut menu.search_query);
-            } else {
-                menu.search_query.pop();
-            }
-            menu.message = None;
-            continue;
-        }
-        if control_held {
-            continue;
-        }
-        if let Some(text) = &input.text {
-            menu.search_query
-                .extend(text.chars().filter(|character| !character.is_control()));
-            menu.message = None;
-        }
-    }
-}
-
-/// Text entry for the blueprint library's in-progress rename. Escape is left
-/// unhandled here; it is handled by [`handle_panel_input`]'s escape chain so
-/// cancelling a rename cooperates with the rest of the window priorities.
-pub(crate) fn handle_blueprint_rename_input(
-    mut inputs: MessageReader<KeyboardInput>,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mut window: ResMut<BlueprintLibraryWindowState>,
-    mut commands: MessageWriter<SimCommandRequest>,
-) {
-    let Some(index) = window.editing_index else {
-        return;
-    };
-    let control_held = keyboard.as_deref().is_some_and(|keys| {
-        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
-    });
-    for input in inputs.read() {
-        if input.state != ButtonState::Pressed || input.key_code == KeyCode::Escape {
-            continue;
-        }
-        match input.key_code {
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                let name = window.rename_buffer.trim().to_string();
-                if !name.is_empty() {
-                    commands.write(SimCommandRequest(SimCommand::RenameBlueprint {
-                        index,
-                        name,
-                    }));
-                }
-                window.cancel_rename();
-            }
-            KeyCode::Backspace if control_held => remove_previous_word(&mut window.rename_buffer),
-            KeyCode::Backspace => {
-                window.rename_buffer.pop();
-            }
-            _ if !control_held => {
-                if let Some(text) = &input.text {
-                    window
-                        .rename_buffer
-                        .extend(text.chars().filter(|character| !character.is_control()));
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-#[cfg(test)]
-mod build_menu_input_tests {
-    use crate::utils::remove_previous_word;
-
-    #[test]
-    fn control_backspace_removes_trailing_space_and_previous_word() {
-        let mut query = "fast belt   ".to_string();
-        remove_previous_word(&mut query);
-        assert_eq!(query, "fast ");
-    }
-
-    #[test]
-    fn unicode_backspace_removes_one_scalar() {
-        let mut query = "belt 🏭".to_string();
-        query.pop();
-        assert_eq!(query, "belt ");
-    }
 }
 
 #[derive(SystemParam)]
