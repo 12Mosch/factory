@@ -237,19 +237,21 @@ pub(crate) fn play_sound_events(
         return;
     }
 
-    let tick = sim.read().tick_count();
+    let tick = sim.is_initialized().then(|| sim.read().tick_count());
     for event in events.read() {
-        if dedupe
-            .last_played_tick
-            .get(event)
-            .is_some_and(|last_tick| tick.saturating_sub(*last_tick) < sound_cooldown_ticks(*event))
-        {
+        if tick.is_some_and(|tick| {
+            dedupe.last_played_tick.get(event).is_some_and(|last_tick| {
+                tick.saturating_sub(*last_tick) < sound_cooldown_ticks(*event)
+            })
+        }) {
             continue;
         }
         let Some(handle) = sound_handle(&assets, *event).cloned() else {
             continue;
         };
-        dedupe.last_played_tick.insert(*event, tick);
+        if let Some(tick) = tick {
+            dedupe.last_played_tick.insert(*event, tick);
+        }
         commands.spawn((
             AudioPlayer::new(handle),
             PlaybackSettings::DESPAWN
