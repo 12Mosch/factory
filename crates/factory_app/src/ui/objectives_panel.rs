@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::scene::ScenePatch;
 use factory_sim::{OnboardingProgress, RocketProgramProgress, Simulation};
 
 use crate::resources::SimResource;
@@ -221,18 +222,97 @@ impl ObjectivesSnapshot {
 pub(crate) struct ObjectivesPanelState {
     snapshot: ObjectivesSnapshot,
 }
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct ObjectivesPanelRoot;
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct ObjectiveRow {
     slot: usize,
 }
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct ObjectiveRowText {
     slot: usize,
 }
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct ObjectiveHintText;
+
+/// Retained objectives panel shell with snapshot-backed initial presentation state.
+fn objectives_panel_scene(snapshot: &ObjectivesSnapshot) -> impl Scene {
+    let rows = snapshot
+        .visible_indices()
+        .into_iter()
+        .enumerate()
+        .map(|(slot, index)| objective_row_scene(slot, index, snapshot))
+        .collect::<Vec<_>>();
+    let visibility = panel_visibility(snapshot);
+    let hint = hint_text(snapshot);
+
+    bsn! {
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(MINIMAP_TOP_OFFSET),
+            right: Val::Px(OBJECTIVES_PANEL_RIGHT),
+            width: Val::Px(330.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(7.0),
+            padding: UiRect::all(Val::Px(12.0)),
+            border: UiRect::all(Val::Px(1.0)),
+        }
+        BackgroundColor(Color::srgba(0.025, 0.030, 0.028, 0.92))
+        BorderColor::all(Color::srgba(0.34, 0.43, 0.34, 0.92))
+        GlobalZIndex(1100)
+        template_value(visibility)
+        ObjectivesPanelRoot
+        Children [
+            (
+                Text("OBJECTIVES")
+                TextFont { font_size: FontSize::Px(16.0) }
+                TextColor(Color::srgb(0.92, 0.82, 0.45))
+            ),
+            {rows},
+            (
+                Node {
+                    margin: UiRect::top(Val::Px(3.0)),
+                    padding: UiRect::top(Val::Px(8.0)),
+                    border: UiRect::top(Val::Px(1.0)),
+                }
+                BorderColor::all(Color::srgba(0.28, 0.34, 0.29, 0.8))
+                Children [(
+                    Text(hint)
+                    TextFont { font_size: FontSize::Px(12.0) }
+                    TextColor(Color::srgb(0.74, 0.78, 0.70))
+                    ObjectiveHintText
+                )]
+            ),
+        ]
+    }
+}
+
+fn objective_row_scene(slot: usize, index: usize, snapshot: &ObjectivesSnapshot) -> impl Scene {
+    let progress = snapshot.progress[index];
+    let active = snapshot.active_index() == Some(index);
+    let background = row_background(progress, active);
+    let accent = row_accent(progress, active);
+    let text = row_text(index, progress);
+    let text_color = row_text_color(progress, active);
+
+    bsn! {
+        Node {
+            min_height: Val::Px(31.0),
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+            border: UiRect::left(Val::Px(3.0)),
+        }
+        BackgroundColor(background)
+        BorderColor::all(accent)
+        ObjectiveRow { slot }
+        Children [(
+            Text(text)
+            TextFont { font_size: FontSize::Px(13.0) }
+            TextColor(text_color)
+            ObjectiveRowText { slot }
+        )]
+    }
+}
 
 /// Creates the objectives hierarchy for the first world while retaining it across world swaps.
 pub(crate) fn setup_objectives_panel(
@@ -240,6 +320,8 @@ pub(crate) fn setup_objectives_panel(
     sim: Res<SimResource>,
     mut state: ResMut<ObjectivesPanelState>,
     existing: Query<(), With<ObjectivesPanelRoot>>,
+    asset_server: Option<Res<AssetServer>>,
+    scene_patches: Option<Res<Assets<ScenePatch>>>,
 ) {
     // Retain the previous world's cached snapshot when the hierarchy already
     // exists. The regular sync system will then observe the new simulation as
@@ -251,81 +333,12 @@ pub(crate) fn setup_objectives_panel(
     state.snapshot = objectives_snapshot(&simulation);
     drop(simulation);
     let snapshot = state.snapshot.clone();
-    let visible = snapshot.visible_indices();
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(MINIMAP_TOP_OFFSET),
-                right: Val::Px(OBJECTIVES_PANEL_RIGHT),
-                width: Val::Px(330.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(7.0),
-                padding: UiRect::all(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.030, 0.028, 0.92)),
-            BorderColor::all(Color::srgba(0.34, 0.43, 0.34, 0.92)),
-            GlobalZIndex(1100),
-            panel_visibility(&snapshot),
-            ObjectivesPanelRoot,
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                Text::new("OBJECTIVES"),
-                TextFont::from_font_size(16.0),
-                TextColor(Color::srgb(0.92, 0.82, 0.45)),
-            ));
-            for (slot, index) in visible.into_iter().enumerate() {
-                spawn_objective_row(panel, slot, index, &snapshot);
-            }
-            panel
-                .spawn((
-                    Node {
-                        margin: UiRect::top(Val::Px(3.0)),
-                        padding: UiRect::top(Val::Px(8.0)),
-                        border: UiRect::top(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::srgba(0.28, 0.34, 0.29, 0.8)),
-                ))
-                .with_child((
-                    Text::new(hint_text(&snapshot)),
-                    TextFont::from_font_size(12.0),
-                    TextColor(Color::srgb(0.74, 0.78, 0.70)),
-                    ObjectiveHintText,
-                ));
-        });
-}
 
-fn spawn_objective_row(
-    panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    slot: usize,
-    index: usize,
-    snapshot: &ObjectivesSnapshot,
-) {
-    let progress = snapshot.progress[index];
-    let active = snapshot.active_index() == Some(index);
-    panel
-        .spawn((
-            Node {
-                min_height: Val::Px(31.0),
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                border: UiRect::left(Val::Px(3.0)),
-                ..default()
-            },
-            BackgroundColor(row_background(progress, active)),
-            BorderColor::all(row_accent(progress, active)),
-            ObjectiveRow { slot },
-        ))
-        .with_child((
-            Text::new(row_text(index, progress)),
-            TextFont::from_font_size(13.0),
-            TextColor(row_text_color(progress, active)),
-            ObjectiveRowText { slot },
-        ));
+    if asset_server.is_none() || scene_patches.is_none() {
+        return;
+    }
+
+    commands.spawn_scene(objectives_panel_scene(&snapshot));
 }
 
 pub(crate) fn sync_objectives_panel(
@@ -426,6 +439,7 @@ fn row_text_color(p: ObjectiveProgress, active: bool) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::{asset::AssetPlugin, scene::ScenePlugin};
 
     fn completed_onboarding() -> OnboardingProgress {
         OnboardingProgress {
@@ -448,6 +462,62 @@ mod tests {
             loaded_gun_turrets: 1,
             ..default()
         }
+    }
+
+    #[test]
+    fn objectives_scene_keeps_the_retained_rows_and_hint_hierarchy() {
+        let mut app = App::new();
+        app.add_plugins((AssetPlugin::default(), ScenePlugin))
+            .insert_resource(SimResource::new(Simulation::new_test_world(0)))
+            .init_resource::<ObjectivesPanelState>()
+            .add_systems(Update, setup_objectives_panel);
+        app.update();
+
+        let world = app.world_mut();
+        let root = world
+            .query_filtered::<Entity, With<ObjectivesPanelRoot>>()
+            .single(world)
+            .expect("setup should spawn one objectives panel root");
+        assert_eq!(
+            world.entity(root).get::<Visibility>(),
+            Some(&Visibility::Visible)
+        );
+        assert_eq!(
+            world
+                .entity(root)
+                .get::<Children>()
+                .expect("objectives panel should have retained children")
+                .len(),
+            VISIBLE_ROW_COUNT + 2
+        );
+
+        let mut rows = world
+            .query::<(&ObjectiveRow, &Children)>()
+            .iter(world)
+            .map(|(row, children)| (row.slot, children.len()))
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        assert_eq!(
+            rows,
+            (0..VISIBLE_ROW_COUNT)
+                .map(|slot| (slot, 1))
+                .collect::<Vec<_>>()
+        );
+
+        let mut labels = world
+            .query::<&ObjectiveRowText>()
+            .iter(world)
+            .map(|label| label.slot)
+            .collect::<Vec<_>>();
+        labels.sort_unstable();
+        assert_eq!(labels, (0..VISIBLE_ROW_COUNT).collect::<Vec<_>>());
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<ObjectiveHintText>>()
+                .iter(world)
+                .count(),
+            1
+        );
     }
 
     #[test]
