@@ -1,35 +1,35 @@
 use bevy::prelude::*;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildBarRoot;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildSlotButton {
     pub(crate) slot_index: usize,
 }
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildSlotCountText {
     pub(crate) slot_index: usize,
 }
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildSlotLabelText {
     pub(crate) slot_index: usize,
 }
 
 /// Button on the build bar that toggles the buildings menu.
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildMenuButton;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildRotateButton;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildRotateButtonText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildCancelButton;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub(crate) struct BuildStatusText;
