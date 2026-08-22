@@ -80,6 +80,10 @@ pub enum WorldSetupAction {
     Cancel,
 }
 
+/// Defers world creation until the current seed editor value is synchronized.
+#[derive(Message)]
+pub(crate) struct WorldSetupStartRequested;
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_world_setup_ui(
     mut commands: Commands,
@@ -346,6 +350,7 @@ pub(crate) fn handle_world_setup_buttons(
     mut buttons: SetupButtons,
     mut setup: ResMut<WorldSetupState>,
     mut load_state: LoadState,
+    mut start_requests: MessageWriter<WorldSetupStartRequested>,
 ) {
     for (interaction, action) in &mut buttons {
         if *interaction != Interaction::Pressed {
@@ -426,25 +431,7 @@ pub(crate) fn handle_world_setup_buttons(
             | WorldSetupAction::DeleteSave(_)
             | WorldSetupAction::ConfirmSaveAction(_) => {}
             WorldSetupAction::Start => {
-                let Ok(seed) = setup.seed_text.parse::<u64>() else {
-                    setup.validation_error = Some("Seed must be a decimal u64".into());
-                    continue;
-                };
-                if !setup.config.is_valid() {
-                    setup.validation_error =
-                        Some("Enemy settings are outside the supported ranges".into());
-                    continue;
-                }
-                let catalog =
-                    PrototypeCatalog::load_base().expect("base prototype catalog should load");
-                let new_world = Simulation::new_with_config(seed, catalog, setup.config);
-                let tick = new_world.tick_count();
-                let player_tile = new_world.player().position_tiles();
-                if load_state.sim.replace(new_world).is_err() {
-                    setup.validation_error = Some("Simulation is busy; try Start again".into());
-                    continue;
-                }
-                enter_swapped_world(&mut load_state, tick, player_tile);
+                start_requests.write(WorldSetupStartRequested);
             }
             WorldSetupAction::Cancel => {
                 if !load_state.sim.is_initialized() {
@@ -456,6 +443,35 @@ pub(crate) fn handle_world_setup_buttons(
             }
         }
     }
+}
+
+/// Creates the requested world after the seed editor has been sanitized and
+/// copied into [`WorldSetupState`].
+pub(crate) fn start_world_from_setup(
+    mut requests: MessageReader<WorldSetupStartRequested>,
+    mut setup: ResMut<WorldSetupState>,
+    mut load_state: LoadState,
+) {
+    if requests.read().count() == 0 {
+        return;
+    }
+    let Ok(seed) = setup.seed_text.parse::<u64>() else {
+        setup.validation_error = Some("Seed must be a decimal u64".into());
+        return;
+    };
+    if !setup.config.is_valid() {
+        setup.validation_error = Some("Enemy settings are outside the supported ranges".into());
+        return;
+    }
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let new_world = Simulation::new_with_config(seed, catalog, setup.config);
+    let tick = new_world.tick_count();
+    let player_tile = new_world.player().position_tiles();
+    if load_state.sim.replace(new_world).is_err() {
+        setup.validation_error = Some("Simulation is busy; try Start again".into());
+        return;
+    }
+    enter_swapped_world(&mut load_state, tick, player_tile);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -744,6 +760,42 @@ mod tests {
         assert!(sim.is_initialized());
         assert_eq!(sim.read().seed(), 987654321);
         assert_eq!(sim.replacement_revision(), 1);
+    }
+
+    #[test]
+    fn start_uses_seed_edited_in_the_same_frame() {
+        let mut app = App::new();
+        app.insert_resource(StartInWorldSetup)
+            .add_plugins(MinimalPlugins)
+            .add_plugins(crate::FactoryAppPlugin);
+        app.update();
+
+        let mut seeds = app
+            .world_mut()
+            .query_filtered::<&mut EditableText, With<WorldSetupSeedText>>();
+        seeds
+            .single_mut(app.world_mut())
+            .unwrap()
+            .editor_mut()
+            .set_text("246813579");
+        let start_button = app
+            .world_mut()
+            .query::<(Entity, &WorldSetupAction)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| {
+                matches!(action, WorldSetupAction::Start).then_some(entity)
+            })
+            .expect("world setup should contain a Start button");
+        app.world_mut()
+            .entity_mut(start_button)
+            .insert(Interaction::Pressed);
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SimResource>().read().seed(),
+            246813579
+        );
     }
 
     #[test]

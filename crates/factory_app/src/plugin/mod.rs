@@ -9,8 +9,9 @@ mod simulation;
 mod ui;
 
 use crate::world_setup::{
-    AppMode, StartInWorldSetup, WorldSetupSaveListState, build_world_setup_ui, cleanup_world_setup,
-    handle_world_setup_buttons, handle_world_setup_load_buttons, sync_world_setup_save_list,
+    AppMode, StartInWorldSetup, WorldSetupSaveListState, WorldSetupStartRequested,
+    build_world_setup_ui, cleanup_world_setup, handle_world_setup_buttons,
+    handle_world_setup_load_buttons, start_world_from_setup, sync_world_setup_save_list,
     sync_world_setup_seed_input, sync_world_setup_text,
 };
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
@@ -19,7 +20,9 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy::text::EditableTextSystems;
 
-use crate::ui::text_input::{TextInputSanitization, sanitize_editable_text};
+use crate::ui::text_input::{
+    TextInputSanitization, capture_editable_text_composition, sanitize_editable_text,
+};
 
 /// Shared ordering labels for systems whose ordering constraints cross plugin
 /// boundaries. Plugin-internal ordering uses direct `.before`/`.after` edges
@@ -125,6 +128,10 @@ impl Plugin for FactoryAppPlugin {
                 sanitize_editable_text
                     .after(EditableTextSystems)
                     .in_set(TextInputSanitization),
+            )
+            .add_systems(
+                PostUpdate,
+                capture_editable_text_composition.before(EditableTextSystems),
             );
 
         // SimulationPlugin must come first so world-entry systems can use the
@@ -142,6 +149,7 @@ impl Plugin for FactoryAppPlugin {
         ))
         .init_resource::<crate::world_setup::WorldSetupState>()
         .init_resource::<WorldSetupSaveListState>()
+        .add_message::<WorldSetupStartRequested>()
         .add_systems(OnEnter(AppMode::WorldSetup), build_world_setup_ui)
         .add_systems(OnExit(AppMode::WorldSetup), cleanup_world_setup)
         .add_systems(
@@ -157,7 +165,8 @@ impl Plugin for FactoryAppPlugin {
         )
         .add_systems(
             PostUpdate,
-            sync_world_setup_seed_input
+            (sync_world_setup_seed_input, start_world_from_setup)
+                .chain()
                 .after(TextInputSanitization)
                 .run_if(in_state(AppMode::WorldSetup)),
         );

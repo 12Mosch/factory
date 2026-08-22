@@ -185,6 +185,40 @@ fn create_button_uses_editor_text_changed_in_the_same_frame() {
 }
 
 #[test]
+fn status_refresh_preserves_the_save_editor_and_same_frame_edit() {
+    let mut app = test_app(Duration::ZERO, "stable_save_editor");
+    {
+        let mut window = app.world_mut().resource_mut::<SaveLoadWindowState>();
+        window.open = true;
+        window.tab = SaveLoadTab::Save;
+        window.name_buffer = "Stable Name".into();
+    }
+    app.update();
+
+    let mut input_entity = None;
+    let mut inputs = app.world_mut().query::<(Entity, &mut EditableText)>();
+    for (entity, mut input) in inputs.iter_mut(app.world_mut()) {
+        if input.value() == "Stable Name" {
+            input.editor_mut().set_text("Stable NameX");
+            input_entity = Some(entity);
+        }
+    }
+    let input_entity = input_entity.expect("save-name editor should exist");
+    app.world_mut()
+        .resource_mut::<factory_app::save_load::SaveLoadStatus>()
+        .message = Some("Autosave completed".into());
+
+    app.update();
+
+    let input = app
+        .world()
+        .entity(input_entity)
+        .get::<EditableText>()
+        .expect("status refresh must preserve the save-name editor entity");
+    assert_eq!(input.value(), "Stable NameX");
+}
+
+#[test]
 fn incompatible_named_save_stays_visible_and_deletable() {
     let mut app = test_app(Duration::ZERO, "incompatible_delete");
     app.update();

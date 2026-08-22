@@ -14,6 +14,7 @@ pub(crate) struct EditableTextSanitizer {
     filter: fn(char) -> bool,
     max_characters: Option<usize>,
     last_valid: String,
+    was_composing: bool,
 }
 
 impl EditableTextSanitizer {
@@ -28,6 +29,7 @@ impl EditableTextSanitizer {
             filter,
             max_characters,
             last_valid,
+            was_composing: false,
         }
     }
 }
@@ -65,6 +67,22 @@ pub(crate) fn set_editor_value(editor: &mut EditableText, value: &str) {
 /// field.
 pub(crate) fn is_non_control(character: char) -> bool {
     !character.is_control()
+}
+
+/// Records composition state before Bevy applies an IME commit, allowing a
+/// subsequent Enter handler to distinguish candidate acceptance from submit.
+pub(crate) fn capture_editable_text_composition(
+    mut editors: Query<(&EditableText, &mut EditableTextSanitizer)>,
+) {
+    for (editor, mut sanitizer) in &mut editors {
+        sanitizer.was_composing = editor.is_composing();
+    }
+}
+
+/// Returns whether an Enter press may submit this editor rather than merely
+/// accepting an active IME composition.
+pub(crate) fn can_submit(editor: &EditableText, sanitizer: &EditableTextSanitizer) -> bool {
+    !editor.is_composing() && !sanitizer.was_composing
 }
 
 /// Strips invalid characters from changed editors before their values are
@@ -158,5 +176,14 @@ mod tests {
 
         let editor = app.world().entity(entity).get::<EditableText>().unwrap();
         assert_eq!(editor.value(), "1234");
+    }
+
+    #[test]
+    fn submission_is_suppressed_when_the_frame_started_in_composition() {
+        let editor = EditableText::new("Factory");
+        let mut sanitizer = EditableTextSanitizer::new("Factory", is_non_control, None);
+        sanitizer.was_composing = true;
+
+        assert!(!can_submit(&editor, &sanitizer));
     }
 }

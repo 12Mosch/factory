@@ -16,7 +16,10 @@ use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::format_item_display_name;
 use crate::ui::resources::OpenContainer;
-use crate::ui::text_input::{editor_value, is_non_control, set_editor_value, single_line_editor};
+use crate::ui::text_input::{
+    EditableTextSanitizer, can_submit, editor_value, is_non_control, set_editor_value,
+    single_line_editor,
+};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 #[derive(Component)]
@@ -222,7 +225,7 @@ pub(crate) fn sync_blueprint_rename_to_state(
 pub(crate) fn submit_blueprint_rename(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     input_focus: Option<Res<InputFocus>>,
-    inputs: Query<&EditableText, With<BlueprintRenameInput>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<BlueprintRenameInput>>,
     mut window: ResMut<BlueprintLibraryWindowState>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
@@ -238,10 +241,10 @@ pub(crate) fn submit_blueprint_rename(
     let Some(focused) = input_focus.as_deref().and_then(InputFocus::get) else {
         return;
     };
-    let Ok(input) = inputs.get(focused) else {
+    let Ok((input, sanitizer)) = inputs.get(focused) else {
         return;
     };
-    if input.is_composing() {
+    if !can_submit(input, sanitizer) {
         return;
     }
     let name = editor_value(input).trim().to_string();

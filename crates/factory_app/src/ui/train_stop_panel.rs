@@ -26,7 +26,10 @@ use crate::ui::circuit::widgets::{
     LABEL_COLOR, spawn_button, spawn_caption, spawn_heading, spawn_row,
 };
 use crate::ui::resources::OpenContainer;
-use crate::ui::text_input::{editor_value, is_non_control, set_editor_value, single_line_editor};
+use crate::ui::text_input::{
+    EditableTextSanitizer, can_submit, editor_value, is_non_control, set_editor_value,
+    single_line_editor,
+};
 
 /// Longest station name a player may type. Long enough for "Iron ore unload
 /// west", short enough that the schedule rows it appears in stay readable.
@@ -325,7 +328,7 @@ pub(crate) fn sync_train_stop_rename_to_state(
 pub(crate) fn submit_train_stop_rename(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mut input_focus: Option<ResMut<InputFocus>>,
-    inputs: Query<&EditableText, With<TrainStopNameInput>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<TrainStopNameInput>>,
     open_container: Res<OpenContainer>,
     mut rename: ResMut<TrainStopRenameState>,
     mut commands: MessageWriter<SimCommandRequest>,
@@ -349,10 +352,10 @@ pub(crate) fn submit_train_stop_rename(
     let Some(focused) = input_focus.as_deref().and_then(InputFocus::get) else {
         return;
     };
-    let Ok(input) = inputs.get(focused) else {
+    let Ok((input, sanitizer)) = inputs.get(focused) else {
         return;
     };
-    if input.is_composing() {
+    if !can_submit(input, sanitizer) {
         return;
     }
     commit_rename(&mut rename, entity_id, editor_value(input), &mut commands);
