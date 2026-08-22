@@ -1,5 +1,6 @@
 use bevy::asset::{AssetId, Assets};
 use bevy::prelude::*;
+use bevy::text::EditableTextSystems;
 
 use super::{AppSet, InGameSet};
 use crate::input::build::handle_build_world_click;
@@ -76,7 +77,8 @@ use crate::ui::train_schedule_edit::{
 use crate::ui::train_schedule_panel::update_train_schedule_status;
 use crate::ui::train_stop_panel::{
     TrainStopRenameState, handle_train_stop_limit_buttons, handle_train_stop_limit_signal_button,
-    handle_train_stop_rename_button, handle_train_stop_rename_input, update_train_stop_panel,
+    handle_train_stop_rename_button, submit_train_stop_rename, sync_train_stop_rename_to_state,
+    update_train_stop_panel,
 };
 
 /// General UI: debug overlay, containers and inventory, technology window,
@@ -241,17 +243,20 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
-                    // Typing a station name reads the keyboard directly, so it
-                    // runs with the other window input rather than in the
-                    // button-interaction set.
-                    handle_train_stop_rename_input.in_set(AppSet::WorldInput),
                     handle_train_stop_rename_button.in_set(AppSet::UiInteraction),
                     handle_train_stop_limit_buttons.in_set(AppSet::UiInteraction),
                     handle_train_stop_limit_signal_button.in_set(AppSet::UiInteraction),
                     update_train_stop_panel
                         .after(sync_container_window)
-                        .after(handle_train_stop_rename_input),
+                        .after(handle_train_stop_rename_button),
                 )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                PostUpdate,
+                (sync_train_stop_rename_to_state, submit_train_stop_rename)
+                    .chain()
+                    .after(EditableTextSystems)
                     .in_set(InGameSet),
             )
             .add_systems(

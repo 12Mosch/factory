@@ -1,6 +1,6 @@
-use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input_focus::AutoFocus;
 use bevy::prelude::*;
+use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
 use factory_data::PrototypeCatalog;
 use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 
@@ -10,6 +10,7 @@ use crate::save_load::{
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::save_load::format_timestamp;
+use crate::ui::text_input::{editor_value, set_editor_value, single_line_editor};
 
 #[derive(States, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AppMode {
@@ -145,11 +146,38 @@ pub fn build_world_setup_ui(
                 panel
                     .spawn((save_list, WorldSetupSaveList))
                     .with_children(|list| spawn_world_setup_catalog(list, &catalog, &confirmation));
-                panel.spawn((
-                    Text::new("Seed: 123"),
-                    WorldSetupSeedText,
-                    TextFont::from_font_size(16.0),
-                ));
+                panel
+                    .spawn(Node {
+                        height: Val::Px(36.0),
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn((Text::new("Seed"), TextFont::from_font_size(16.0)));
+                        row.spawn((
+                            Node {
+                                width: Val::Px(260.0),
+                                height: Val::Px(32.0),
+                                align_items: AlignItems::Center,
+                                padding: UiRect::horizontal(Val::Px(8.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                overflow: Overflow::clip_x(),
+                                ..default()
+                            },
+                            single_line_editor(&setup.seed_text, Some(20)),
+                            EditableTextFilter::new(|character| character.is_ascii_digit()),
+                            TextLayout::no_wrap(),
+                            TextCursorStyle::default(),
+                            TextFont::from_font_size(16.0),
+                            TextColor(Color::WHITE),
+                            BackgroundColor(Color::srgb(0.035, 0.045, 0.040)),
+                            BorderColor::all(Color::srgb(0.38, 0.48, 0.38)),
+                            AutoFocus,
+                            WorldSetupSeedText,
+                        ));
+                    });
                 spawn_button(panel, "Randomize", WorldSetupAction::Randomize);
                 panel.spawn((
                     Text::new("Enemy difficulty"),
@@ -292,23 +320,14 @@ fn spawn_button(
         .with_child((Text::new(label), TextFont::from_font_size(14.0)));
 }
 
-pub fn handle_world_setup_seed_input(
-    mut inputs: MessageReader<KeyboardInput>,
+pub fn sync_world_setup_seed_input(
+    seed: Query<&EditableText, (With<WorldSetupSeedText>, Changed<EditableText>)>,
     mut setup: ResMut<WorldSetupState>,
 ) {
-    for input in inputs.read() {
-        if input.state != ButtonState::Pressed {
-            continue;
-        }
-        if input.key_code == KeyCode::Backspace {
-            setup.seed_text.pop();
-            setup.validation_error = None;
-            continue;
-        }
-        if let Some(text) = &input.text {
-            setup
-                .seed_text
-                .extend(text.chars().filter(char::is_ascii_digit));
+    for editor in &seed {
+        let value = editor_value(editor);
+        if setup.seed_text != value {
+            setup.seed_text = value;
             setup.validation_error = None;
         }
     }
@@ -622,15 +641,15 @@ type SettingsTextQuery<'w, 's> = Query<
 
 pub fn sync_world_setup_text(
     setup: Res<WorldSetupState>,
-    mut seed: Query<&mut Text, (With<WorldSetupSeedText>, Without<WorldSetupErrorText>)>,
+    mut seed: Query<&mut EditableText, With<WorldSetupSeedText>>,
     mut error: Query<&mut Text, With<WorldSetupErrorText>>,
     mut settings: SettingsTextQuery,
 ) {
     if !setup.is_changed() {
         return;
     }
-    for mut text in &mut seed {
-        **text = format!("Seed: {}", setup.seed_text);
+    for mut editor in &mut seed {
+        set_editor_value(&mut editor, &setup.seed_text);
     }
     for mut text in &mut error {
         **text = setup.validation_error.clone().unwrap_or_default();

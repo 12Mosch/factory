@@ -11,7 +11,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-bevy = { version = "0.19.1", features = ["dynamic_linking", "wav", "wayland"] }
+bevy = { version = "0.19.1", features = ["dynamic_linking", "system_clipboard", "wav", "wayland"] }
 factory_data = { path = "crates/factory_data" }
 factory_sim = { path = "crates/factory_sim" }
 

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::text::EditableTextSystems;
 
 use super::{AppSet, InGameSet};
 use crate::save_load::{
@@ -9,7 +10,8 @@ use crate::save_load::{
 };
 use crate::ui::save_load::{
     NewWorldConfirmation, handle_new_world_button, handle_save_load_buttons,
-    handle_save_name_input, sync_save_load_window,
+    submit_save_name_input, sync_save_load_window, sync_save_name_from_state,
+    sync_save_name_to_state,
 };
 
 /// Manual and automatic save/load, plus the save/load window.
@@ -32,8 +34,8 @@ impl Plugin for SaveLoadPlugin {
                 Update,
                 (
                     handle_save_load_shortcuts.in_set(InGameSet),
+                    sync_save_name_from_state.in_set(InGameSet),
                     handle_save_load_buttons.in_set(AppSet::UiInteraction),
-                    handle_save_name_input.in_set(InGameSet),
                     handle_new_world_button.in_set(AppSet::UiInteraction),
                     run_autosave.in_set(InGameSet),
                     // Save workers finish on their own thread; keep joining
@@ -46,6 +48,13 @@ impl Plugin for SaveLoadPlugin {
                     // A load applied by `poll_save_jobs` must be reflected by
                     // this frame's map texture and render sync.
                     .before(AppSet::MapTexture),
+            )
+            .add_systems(
+                PostUpdate,
+                (sync_save_name_to_state, submit_save_name_input)
+                    .chain()
+                    .after(EditableTextSystems)
+                    .in_set(InGameSet),
             );
     }
 }

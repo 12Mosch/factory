@@ -6,9 +6,7 @@ use super::AppSet;
 use crate::input::camera::zoom_camera;
 use crate::input::mining::update_manual_mining_from_input;
 use crate::input::movement::move_player_from_input;
-use crate::input::panels::{
-    handle_build_menu_search_input, handle_panel_input, reset_app_input_state,
-};
+use crate::input::panels::{handle_panel_input, reset_app_input_state};
 use crate::input::rail_debug::toggle_rail_overlay_from_input;
 use crate::input::repair::update_repair_from_input;
 use crate::input::resources::{AppInputState, RailGraphOverlay, TrainManualInput};
@@ -30,11 +28,7 @@ impl Plugin for InputPlugin {
             .init_resource::<TrainManualInput>()
             .add_systems(
                 PreUpdate,
-                (
-                    reset_app_input_state,
-                    handle_panel_input,
-                    handle_build_menu_search_input,
-                )
+                (reset_app_input_state, handle_panel_input)
                     .chain()
                     .in_set(AppSet::PanelInput),
             )

@@ -10,13 +10,14 @@ mod ui;
 
 use crate::world_setup::{
     AppMode, StartInWorldSetup, WorldSetupSaveListState, build_world_setup_ui, cleanup_world_setup,
-    handle_world_setup_buttons, handle_world_setup_load_buttons, handle_world_setup_seed_input,
-    sync_world_setup_save_list, sync_world_setup_text,
+    handle_world_setup_buttons, handle_world_setup_load_buttons, sync_world_setup_save_list,
+    sync_world_setup_seed_input, sync_world_setup_text,
 };
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
+use bevy::text::EditableTextSystems;
 
 /// Shared ordering labels for systems whose ordering constraints cross plugin
 /// boundaries. Plugin-internal ordering uses direct `.before`/`.after` edges
@@ -93,6 +94,7 @@ impl Plugin for FactoryAppPlugin {
         app.configure_sets(PreUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
             .configure_sets(FixedUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
             .configure_sets(Update, InGameSet.run_if(in_state(AppMode::InGame)))
+            .configure_sets(PostUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
             .configure_sets(
                 PreUpdate,
                 AppSet::PanelInput.after(InputSystems).in_set(InGameSet),
@@ -137,13 +139,18 @@ impl Plugin for FactoryAppPlugin {
         .add_systems(
             Update,
             (
-                handle_world_setup_seed_input,
                 handle_world_setup_load_buttons,
                 handle_world_setup_buttons,
                 sync_world_setup_save_list,
                 sync_world_setup_text,
             )
                 .chain()
+                .run_if(in_state(AppMode::WorldSetup)),
+        )
+        .add_systems(
+            PostUpdate,
+            sync_world_setup_seed_input
+                .after(EditableTextSystems)
                 .run_if(in_state(AppMode::WorldSetup)),
         );
     }

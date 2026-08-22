@@ -1,6 +1,6 @@
-use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input_focus::{AutoFocus, InputFocus};
 use bevy::prelude::*;
+use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
 use chrono::{DateTime, Local};
 
 use crate::audio::SoundEvent;
@@ -10,8 +10,8 @@ use crate::save_load::{
     delete_save, load_save, request_named_save, request_overwrite,
 };
 use crate::ui::layout::scroll_column;
+use crate::ui::text_input::{editor_value, is_non_control, set_editor_value, single_line_editor};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
-use crate::utils::remove_previous_word;
 use crate::world_setup::{AppMode, WorldSetupState};
 
 #[derive(Component)]
@@ -33,6 +33,8 @@ pub struct SaveLoadModal;
 pub struct SaveLoadSlotList;
 #[derive(Component)]
 pub struct NewWorldButton;
+#[derive(Component)]
+pub(crate) struct SaveNameInput;
 #[derive(Resource, Default)]
 pub struct NewWorldConfirmation {
     pub awaiting_confirmation: bool,
@@ -45,7 +47,7 @@ pub enum SaveEntryAction {
     Delete,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SaveLoadSnapshot {
     window: SaveLoadWindowState,
     status: SaveLoadStatus,
@@ -54,6 +56,20 @@ pub(crate) struct SaveLoadSnapshot {
     confirmation: PendingSaveConfirmation,
     new_world_confirmation: bool,
 }
+
+impl PartialEq for SaveLoadSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.window.open == other.window.open
+            && self.window.tab == other.window.tab
+            && self.status == other.status
+            && self.entries == other.entries
+            && self.pending == other.pending
+            && self.confirmation == other.confirmation
+            && self.new_world_confirmation == other.new_world_confirmation
+    }
+}
+
+impl Eq for SaveLoadSnapshot {}
 
 type TabButtons<'w, 's> = Query<
     'w,
@@ -151,16 +167,41 @@ pub(crate) fn handle_save_load_buttons(
     }
 }
 
+pub(crate) fn sync_save_name_from_state(
+    state: Res<SaveLoadWindowState>,
+    mut inputs: Query<&mut EditableText, With<SaveNameInput>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    for mut input in &mut inputs {
+        set_editor_value(&mut input, &state.name_buffer);
+    }
+}
+
+pub(crate) fn sync_save_name_to_state(
+    inputs: Query<&EditableText, (With<SaveNameInput>, Changed<EditableText>)>,
+    mut state: ResMut<SaveLoadWindowState>,
+) {
+    for input in &inputs {
+        let value = editor_value(input);
+        if state.name_buffer != value {
+            state.name_buffer = value;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_save_name_input(
-    mut inputs: MessageReader<KeyboardInput>,
+pub(crate) fn submit_save_name_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    input_focus: Option<Res<InputFocus>>,
+    inputs: Query<&EditableText, With<SaveNameInput>>,
     config: Res<SaveLoadConfig>,
     catalog: Res<SaveCatalog>,
     mut pending: ResMut<PendingSaveJobs>,
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
-    mut state: ResMut<SaveLoadWindowState>,
+    state: Res<SaveLoadWindowState>,
     sim: Res<crate::resources::SimResource>,
     mut metrics: ResMut<crate::save_load::SaveLoadMetrics>,
 ) {
@@ -170,41 +211,31 @@ pub(crate) fn handle_save_name_input(
     {
         return;
     }
-    let control = keyboard.as_deref().is_some_and(|keys| {
-        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
-    });
-    for input in inputs.read() {
-        if input.state != ButtonState::Pressed || input.key_code == KeyCode::Escape {
-            continue;
-        }
-        match input.key_code {
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                request_named_save(
-                    &state.name_buffer,
-                    &sim,
-                    &config,
-                    &catalog,
-                    &mut pending,
-                    &mut confirmation,
-                    &mut status,
-                    &mut metrics,
-                );
-            }
-            KeyCode::Backspace if control => remove_previous_word(&mut state.name_buffer),
-            KeyCode::Backspace => {
-                state.name_buffer.pop();
-            }
-            _ if !control => {
-                if let Some(text) = &input.text {
-                    let remaining = 65usize.saturating_sub(state.name_buffer.chars().count());
-                    state
-                        .name_buffer
-                        .extend(text.chars().filter(|c| !c.is_control()).take(remaining));
-                }
-            }
-            _ => {}
-        }
+    let Some(keyboard) = keyboard else {
+        return;
+    };
+    if !keyboard.just_pressed(KeyCode::Enter) && !keyboard.just_pressed(KeyCode::NumpadEnter) {
+        return;
     }
+    let Some(focused) = input_focus.as_deref().and_then(InputFocus::get) else {
+        return;
+    };
+    let Ok(input) = inputs.get(focused) else {
+        return;
+    };
+    if input.is_composing() {
+        return;
+    }
+    request_named_save(
+        &editor_value(input),
+        &sim,
+        &config,
+        &catalog,
+        &mut pending,
+        &mut confirmation,
+        &mut status,
+        &mut metrics,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -370,23 +401,19 @@ fn spawn_name_input(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, val
                     padding: UiRect::horizontal(Val::Px(10.0)),
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(1.0)),
+                    overflow: Overflow::clip_x(),
                     ..default()
                 },
+                single_line_editor(value, Some(65)),
+                EditableTextFilter::new(is_non_control),
+                TextLayout::no_wrap(),
+                TextCursorStyle::default(),
+                TextFont::from_font_size(13.0),
+                TextColor(Color::WHITE),
                 BackgroundColor(Color::srgb(0.045, 0.055, 0.050)),
                 BorderColor::all(Color::srgb(0.34, 0.42, 0.31)),
-            ))
-            .with_child((
-                Text::new(if value.is_empty() {
-                    "Name your save…".to_string()
-                } else {
-                    value.to_string()
-                }),
-                TextFont::from_font_size(13.0),
-                TextColor(if value.is_empty() {
-                    Color::srgb(0.48, 0.52, 0.46)
-                } else {
-                    Color::WHITE
-                }),
+                AutoFocus,
+                SaveNameInput,
             ));
             spawn_plain_button(row, "Create Save", Some(SaveCreateButton));
         });

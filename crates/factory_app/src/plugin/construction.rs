@@ -1,11 +1,11 @@
 use bevy::prelude::*;
+use bevy::text::EditableTextSystems;
 
 use super::{AppSet, InGameSet};
 use crate::build::resources::{
     BlueprintLibraryWindowState, PastePlacementPreviewState, PlannerState,
 };
 use crate::input::build::handle_build_world_click;
-use crate::input::panels::handle_blueprint_rename_input;
 use crate::input::planner::{
     handle_ghost_click, handle_paste_click, handle_planner_drag, handle_planner_keys,
 };
@@ -15,7 +15,8 @@ use crate::rendering::construction::{
     update_paste_preview, update_planner_selection_rect,
 };
 use crate::ui::blueprint_library::{
-    handle_blueprint_library_buttons, sync_blueprint_library_window,
+    handle_blueprint_library_buttons, submit_blueprint_rename, sync_blueprint_library_window,
+    sync_blueprint_rename_from_state, sync_blueprint_rename_to_state,
 };
 
 /// Construction planning: ghost placement, the deconstruction planner,
@@ -52,15 +53,20 @@ impl Plugin for ConstructionPlugin {
             .add_systems(
                 Update,
                 (
+                    sync_blueprint_rename_from_state,
                     handle_blueprint_library_buttons.in_set(AppSet::UiInteraction),
-                    handle_blueprint_rename_input
-                        .in_set(AppSet::UiInteraction)
-                        .after(handle_blueprint_library_buttons),
-                    sync_blueprint_library_window.after(handle_blueprint_rename_input),
+                    sync_blueprint_library_window.after(handle_blueprint_library_buttons),
                     sync_construction_rendering
                         .in_set(AppSet::RenderSync)
                         .after(AppSet::VisibleEntities),
                 )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                PostUpdate,
+                (sync_blueprint_rename_to_state, submit_blueprint_rename)
+                    .chain()
+                    .after(EditableTextSystems)
                     .in_set(InGameSet),
             );
     }
