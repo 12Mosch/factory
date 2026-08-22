@@ -30,6 +30,10 @@ pub(crate) struct BlueprintLibraryButton {
 #[derive(Component)]
 pub(crate) struct BlueprintRenameInput;
 
+/// Defers a Save-button rename until queued editor changes have been applied.
+#[derive(Message)]
+pub(crate) struct BlueprintRenameCommitRequested;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlueprintLibraryAction {
     Close,
@@ -91,6 +95,7 @@ pub(crate) struct BlueprintLibraryButtonState<'w> {
     build_state: ResMut<'w, BuildPlacementState>,
     open_container: ResMut<'w, OpenContainer>,
     commands: MessageWriter<'w, SimCommandRequest>,
+    rename_requests: MessageWriter<'w, BlueprintRenameCommitRequested>,
     sounds: MessageWriter<'w, SoundEvent>,
 }
 
@@ -160,23 +165,35 @@ pub(crate) fn handle_blueprint_library_buttons(
                 state.window.rename_buffer = blueprint.name.clone();
             }
             BlueprintLibraryAction::ConfirmRename => {
-                if let Some(index) = state.window.editing_index {
-                    let name = state.window.rename_buffer.trim().to_string();
-                    if !name.is_empty() {
-                        state
-                            .commands
-                            .write(SimCommandRequest(SimCommand::RenameBlueprint {
-                                index,
-                                name,
-                            }));
-                    }
-                }
-                state.window.cancel_rename();
+                state.rename_requests.write(BlueprintRenameCommitRequested);
             }
             BlueprintLibraryAction::CancelRename => {
                 state.window.cancel_rename();
             }
         }
+    }
+}
+
+/// Commits Save-button requests after editor sanitization and state sync.
+pub(crate) fn submit_blueprint_rename_button(
+    mut requests: MessageReader<BlueprintRenameCommitRequested>,
+    mut input_focus: Option<ResMut<InputFocus>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<BlueprintRenameInput>>,
+    mut window: ResMut<BlueprintLibraryWindowState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    if requests.read().count() == 0 || window.editing_index.is_none() {
+        return;
+    }
+    let Ok((input, sanitizer)) = inputs.single() else {
+        return;
+    };
+    if !can_submit(input, sanitizer) {
+        return;
+    }
+    commit_blueprint_rename(&mut window, editor_value(input), &mut commands);
+    if let Some(focus) = input_focus.as_deref_mut() {
+        focus.clear();
     }
 }
 
@@ -247,7 +264,19 @@ pub(crate) fn submit_blueprint_rename(
     if !can_submit(input, sanitizer) {
         return;
     }
-    let name = editor_value(input).trim().to_string();
+    debug_assert_eq!(window.editing_index, Some(index));
+    commit_blueprint_rename(&mut window, editor_value(input), &mut commands);
+}
+
+fn commit_blueprint_rename(
+    window: &mut BlueprintLibraryWindowState,
+    value: String,
+    commands: &mut MessageWriter<SimCommandRequest>,
+) {
+    let Some(index) = window.editing_index else {
+        return;
+    };
+    let name = value.trim().to_string();
     if !name.is_empty() {
         commands.write(SimCommandRequest(SimCommand::RenameBlueprint {
             index,
@@ -543,4 +572,50 @@ fn spawn_library_button(
             TextFont::from_font_size(13.0),
             TextColor(Color::WHITE),
         ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::message::Messages;
+
+    #[test]
+    fn save_button_commit_uses_the_synchronized_editor_value() {
+        let mut app = App::new();
+        app.add_message::<BlueprintRenameCommitRequested>()
+            .add_message::<SimCommandRequest>()
+            .insert_resource(BlueprintLibraryWindowState {
+                open: true,
+                editing_index: Some(3),
+                rename_buffer: "Previous Name".into(),
+            })
+            .add_systems(
+                Update,
+                (
+                    sync_blueprint_rename_to_state,
+                    submit_blueprint_rename_button,
+                )
+                    .chain(),
+            );
+        app.world_mut().spawn((
+            EditableText::new("Current Name"),
+            EditableTextSanitizer::new("Current Name", is_non_control, None),
+            BlueprintRenameInput,
+        ));
+        app.world_mut()
+            .write_message(BlueprintRenameCommitRequested);
+
+        app.update();
+
+        let requests = app
+            .world_mut()
+            .resource_mut::<Messages<SimCommandRequest>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            requests.as_slice(),
+            [SimCommandRequest(SimCommand::RenameBlueprint { index: 3, name })]
+                if name == "Current Name"
+        ));
+    }
 }

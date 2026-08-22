@@ -76,8 +76,9 @@ use crate::ui::train_schedule_edit::{
 };
 use crate::ui::train_schedule_panel::update_train_schedule_status;
 use crate::ui::train_stop_panel::{
-    TrainStopRenameState, handle_train_stop_limit_buttons, handle_train_stop_limit_signal_button,
-    handle_train_stop_rename_button, submit_train_stop_rename, sync_train_stop_rename_to_state,
+    TrainStopRenameCommitRequested, TrainStopRenameState, handle_train_stop_limit_buttons,
+    handle_train_stop_limit_signal_button, handle_train_stop_rename_button,
+    submit_train_stop_rename, submit_train_stop_rename_button, sync_train_stop_rename_to_state,
     update_train_stop_panel,
 };
 
@@ -127,6 +128,7 @@ impl Plugin for UiPlugin {
             .init_resource::<CircuitEditorState>()
             .init_resource::<TrainScheduleEditorState>()
             .init_resource::<TrainStopRenameState>()
+            .add_message::<TrainStopRenameCommitRequested>()
             .add_systems(Startup, (setup_debug_overlay, setup_threat_ui))
             .add_systems(
                 OnEnter(crate::world_setup::AppMode::InGame),
@@ -254,7 +256,11 @@ impl Plugin for UiPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (sync_train_stop_rename_to_state, submit_train_stop_rename)
+                (
+                    sync_train_stop_rename_to_state,
+                    submit_train_stop_rename_button,
+                    submit_train_stop_rename,
+                )
                     .chain()
                     .after(TextInputSanitization)
                     .in_set(InGameSet),

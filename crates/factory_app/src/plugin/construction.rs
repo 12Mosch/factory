@@ -14,7 +14,8 @@ use crate::rendering::construction::{
     update_paste_preview, update_planner_selection_rect,
 };
 use crate::ui::blueprint_library::{
-    handle_blueprint_library_buttons, submit_blueprint_rename, sync_blueprint_library_window,
+    BlueprintRenameCommitRequested, handle_blueprint_library_buttons, submit_blueprint_rename,
+    submit_blueprint_rename_button, sync_blueprint_library_window,
     sync_blueprint_rename_from_state, sync_blueprint_rename_to_state,
 };
 use crate::ui::text_input::TextInputSanitization;
@@ -29,6 +30,7 @@ impl Plugin for ConstructionPlugin {
             .init_resource::<BlueprintLibraryWindowState>()
             .init_resource::<PastePlacementPreviewState>()
             .init_resource::<ConstructionRenderState>()
+            .add_message::<BlueprintRenameCommitRequested>()
             .add_systems(Startup, spawn_planner_selection_rect)
             .add_systems(
                 Update,
@@ -64,7 +66,11 @@ impl Plugin for ConstructionPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (sync_blueprint_rename_to_state, submit_blueprint_rename)
+                (
+                    sync_blueprint_rename_to_state,
+                    submit_blueprint_rename_button,
+                    submit_blueprint_rename,
+                )
                     .chain()
                     .after(TextInputSanitization)
                     .in_set(InGameSet),

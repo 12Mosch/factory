@@ -58,6 +58,10 @@ pub(crate) struct TrainStopRenameButton;
 #[derive(Component)]
 pub(crate) struct TrainStopNameInput;
 
+/// Defers a rename-button commit until queued text edits have been applied.
+#[derive(Message)]
+pub(crate) struct TrainStopRenameCommitRequested(EntityId);
+
 type StopLabelQuery<'w, 's> = Query<
     'w,
     's,
@@ -264,7 +268,7 @@ pub(crate) struct TrainStopRenameButtonState<'w, 's> {
     rename: ResMut<'w, TrainStopRenameState>,
     inputs: Query<'w, 's, (Entity, &'static mut EditableText), With<TrainStopNameInput>>,
     input_focus: Option<ResMut<'w, InputFocus>>,
-    commands: MessageWriter<'w, SimCommandRequest>,
+    commit_requests: MessageWriter<'w, TrainStopRenameCommitRequested>,
     sounds: MessageWriter<'w, SoundEvent>,
 }
 
@@ -283,15 +287,9 @@ pub(crate) fn handle_train_stop_rename_button(
         return;
     };
     if state.rename.editing == Some(entity_id) {
-        commit_rename(
-            &mut state.rename,
-            entity_id,
-            editor_value(&input),
-            &mut state.commands,
-        );
-        if let Some(focus) = state.input_focus.as_deref_mut() {
-            focus.clear();
-        }
+        state
+            .commit_requests
+            .write(TrainStopRenameCommitRequested(entity_id));
         return;
     }
     // Seeded with the current name, so a small correction is a small edit
@@ -306,6 +304,33 @@ pub(crate) fn handle_train_stop_rename_button(
     set_editor_value(&mut input, &state.rename.buffer);
     if let Some(focus) = state.input_focus.as_deref_mut() {
         focus.set(input_entity, FocusCause::Navigated);
+    }
+}
+
+/// Commits rename-button requests after editor sanitization and state sync.
+pub(crate) fn submit_train_stop_rename_button(
+    mut requests: MessageReader<TrainStopRenameCommitRequested>,
+    mut input_focus: Option<ResMut<InputFocus>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<TrainStopNameInput>>,
+    open_container: Res<OpenContainer>,
+    mut rename: ResMut<TrainStopRenameState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    let Some(entity_id) = requests.read().last().map(|request| request.0) else {
+        return;
+    };
+    if rename.editing != Some(entity_id) || open_container.entity_id != Some(entity_id) {
+        return;
+    }
+    let Ok((input, sanitizer)) = inputs.single() else {
+        return;
+    };
+    if !can_submit(input, sanitizer) {
+        return;
+    }
+    commit_rename(&mut rename, entity_id, editor_value(input), &mut commands);
+    if let Some(focus) = input_focus.as_deref_mut() {
+        focus.clear();
     }
 }
 
@@ -430,4 +455,54 @@ pub(crate) fn handle_train_stop_limit_signal_button(
     sounds.write(SoundEvent::UiClick);
     editor.picker =
         (editor.picker != Some(SignalSlot::TrainStopLimit)).then_some(SignalSlot::TrainStopLimit);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::message::Messages;
+
+    #[test]
+    fn rename_button_commit_uses_the_synchronized_editor_value() {
+        let stop = EntityId::new(17);
+        let mut app = App::new();
+        app.add_message::<TrainStopRenameCommitRequested>()
+            .add_message::<SimCommandRequest>()
+            .insert_resource(OpenContainer {
+                entity_id: Some(stop),
+                rolling_stock: None,
+            })
+            .insert_resource(TrainStopRenameState {
+                editing: Some(stop),
+                buffer: "Previous Name".into(),
+            })
+            .add_systems(
+                Update,
+                (
+                    sync_train_stop_rename_to_state,
+                    submit_train_stop_rename_button,
+                )
+                    .chain(),
+            );
+        app.world_mut().spawn((
+            EditableText::new("Current Name"),
+            EditableTextSanitizer::new("Current Name", is_non_control, Some(40)),
+            TrainStopNameInput,
+        ));
+        app.world_mut()
+            .write_message(TrainStopRenameCommitRequested(stop));
+
+        app.update();
+
+        let requests = app
+            .world_mut()
+            .resource_mut::<Messages<SimCommandRequest>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            requests.as_slice(),
+            [SimCommandRequest(SimCommand::RenameTrainStop { stop: actual, name })]
+                if *actual == stop && name == "Current Name"
+        ));
+    }
 }
