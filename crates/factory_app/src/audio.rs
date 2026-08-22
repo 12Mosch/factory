@@ -22,6 +22,7 @@ const MACHINE_LOOP_GAIN: f32 = 0.18;
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SoundEvent {
     UiClick,
+    AudioTest,
     Place,
     PlaceError,
     ManualMineTick,
@@ -481,6 +482,7 @@ fn machine_loop_candidate(
 fn sound_handle(assets: &AudioAssets, event: SoundEvent) -> Option<&Handle<AudioSource>> {
     match event {
         SoundEvent::UiClick => assets.ui_click.as_ref(),
+        SoundEvent::AudioTest => assets.craft_complete.as_ref(),
         SoundEvent::Place => assets.place.as_ref(),
         SoundEvent::PlaceError => assets.place_error.as_ref(),
         SoundEvent::ManualMineTick => assets.manual_mine_tick.as_ref(),
@@ -494,6 +496,7 @@ fn sound_handle(assets: &AudioAssets, event: SoundEvent) -> Option<&Handle<Audio
 fn one_shot_gain(event: SoundEvent) -> f32 {
     match event {
         SoundEvent::UiClick => 0.35,
+        SoundEvent::AudioTest => 0.75,
         SoundEvent::Place => 0.8,
         SoundEvent::PlaceError => 0.55,
         SoundEvent::ManualMineTick => 0.30,
