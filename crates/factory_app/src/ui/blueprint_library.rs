@@ -202,13 +202,15 @@ pub(crate) fn sync_blueprint_library_window(
     window: Res<BlueprintLibraryWindowState>,
     sim: Res<SimResource>,
     planner: Res<PlannerState>,
+    editors: Query<(), With<BlueprintRenameInput>>,
     mut roots: WindowRootQuery<BlueprintLibrarySnapshot>,
 ) {
+    let preserve_live_editor = window.editing_index.is_some() && !editors.is_empty();
     sync_window(
         &mut commands,
         &mut roots,
         window.open,
-        true,
+        !preserve_live_editor && (window.is_changed() || sim.is_changed() || planner.is_changed()),
         || blueprint_library_snapshot(&sim, &planner, &window),
         blueprint_library_root,
         spawn_blueprint_library_modal,

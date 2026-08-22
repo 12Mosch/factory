@@ -295,8 +295,7 @@ pub(crate) fn sync_save_load_window(
     if !state.open && new_world.awaiting_confirmation {
         new_world.awaiting_confirmation = false;
     }
-    let contents_changed = state.is_changed()
-        || catalog.is_changed()
+    let contents_changed = catalog.is_changed()
         || pending.is_changed()
         || status.is_changed()
         || confirmation.is_changed()
