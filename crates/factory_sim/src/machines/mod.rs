@@ -19,8 +19,8 @@ pub use self::modules::{
 };
 pub use self::pumpjack::PumpjackState;
 pub use self::rocket_silo::{
-    RocketLaunchPhase, RocketSiloError, RocketSiloOperationalState, RocketSiloState,
-    RocketSiloStatusDetail,
+    LAUNCH_RISE_TICKS, LAUNCH_SEAL_TICKS, RocketLaunchPhase, RocketSiloError,
+    RocketSiloOperationalState, RocketSiloState, RocketSiloStatusDetail,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

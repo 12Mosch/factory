@@ -3,7 +3,7 @@ use factory_sim::Direction;
 
 use crate::constants::TILE_SIZE;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct VisualLayer {
     pub(super) size: Vec2,
     pub(super) offset: Vec2,

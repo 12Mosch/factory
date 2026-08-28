@@ -15,6 +15,7 @@ pub mod resource_cells;
 pub mod resources;
 pub(crate) mod robot_coverage;
 pub(crate) mod robots;
+pub(crate) mod rocket_launch;
 pub(crate) mod rolling_stock;
 pub(crate) mod transforms;
 pub(crate) mod visuals;

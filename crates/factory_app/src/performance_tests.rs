@@ -288,7 +288,9 @@ fn audio_benchmark_app() -> App {
         machine_burner_loop: Some(handle.clone()),
         machine_electric_loop: Some(handle.clone()),
         research_complete: Some(handle.clone()),
-        enemy_warning: Some(handle),
+        enemy_warning: Some(handle.clone()),
+        rocket_seal: Some(handle.clone()),
+        rocket_launch: Some(handle),
     };
 
     let mut app = App::new();

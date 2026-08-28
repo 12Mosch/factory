@@ -1,6 +1,15 @@
 use factory_data::EntityKind;
 use factory_sim::{Direction, RailPieceGeometry};
 
+/// Pad/door drawing for a rocket silo. Non-silo templates keep [`Idle`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum RocketSiloVisualPhase {
+    #[default]
+    Idle,
+    Sealed,
+    Rising,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum VisualTemplate {
     Entity {
@@ -14,9 +23,11 @@ pub(super) enum VisualTemplate {
         /// placement-independent is what lets every rail of one kind share a
         /// single rasterized texture.
         rail: Option<RailPieceGeometry>,
+        rocket_silo_phase: RocketSiloVisualPhase,
     },
     BeltItem,
     Resource,
+    LaunchRocket,
 }
 
 /// Bit set of cardinal directions (indexed by [`Direction::index`]) in which an entity

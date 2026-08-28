@@ -34,6 +34,7 @@ use crate::rendering::robot_coverage::{
     RoboportCoverageRenderState, sync_roboport_coverage_rendering,
 };
 use crate::rendering::robots::sync_robot_rendering;
+use crate::rendering::rocket_launch::{RocketLaunchRenderPool, sync_rocket_launch_rendering};
 use crate::rendering::rolling_stock::sync_rolling_stock_rendering;
 use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
@@ -55,6 +56,7 @@ impl Plugin for RenderingPlugin {
             .init_resource::<VisualAssetCache>()
             .init_resource::<WorldRenderCache>()
             .init_resource::<BeltItemRenderPool>()
+            .init_resource::<RocketLaunchRenderPool>()
             .init_resource::<CircuitWireRenderState>()
             .init_resource::<RoboportCoverageRenderState>()
             .init_resource::<RailOverlayRenderState>()
@@ -94,6 +96,7 @@ impl Plugin for RenderingPlugin {
                     measured_sync_resource_debug_rendering,
                     measured_sync_placed_entity_rendering,
                     sync_rocket_silo_rendering,
+                    sync_rocket_launch_rendering,
                     sync_enemy_rendering,
                     sync_robot_rendering,
                     sync_rolling_stock_rendering,

@@ -1,8 +1,10 @@
 use crate::save_load::PresentationReloadToken;
-use bevy::audio::{AudioSink, AudioSinkPlayback, Volume};
+use bevy::audio::{AudioSink, AudioSinkPlayback, SpatialAudioSink, SpatialScale, Volume};
 use bevy::prelude::*;
 use factory_data::EntityKind;
-use factory_sim::{CraftingJob, EntityId, MachineStatus, ManualMiningProgress, ThreatEventKind};
+use factory_sim::{
+    CraftingJob, EntityId, MachineStatus, ManualMiningProgress, RocketLaunchPhase, ThreatEventKind,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -18,6 +20,7 @@ const DEFAULT_VOLUME: f32 = 0.65;
 const VOLUME_STEP: f32 = 0.10;
 const MAX_MACHINE_LOOPS: usize = 32;
 const MACHINE_LOOP_GAIN: f32 = 0.18;
+const ROCKET_AUDIO_DISTANCE_TILES: f32 = 8.0;
 
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SoundEvent {
@@ -29,6 +32,8 @@ pub enum SoundEvent {
     CraftComplete,
     ResearchComplete,
     EnemyWarning,
+    RocketSeal { entity_id: EntityId },
+    RocketLaunch { entity_id: EntityId },
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
@@ -87,6 +92,8 @@ pub struct AudioAssets {
     pub machine_electric_loop: Option<Handle<AudioSource>>,
     pub research_complete: Option<Handle<AudioSource>>,
     pub enemy_warning: Option<Handle<AudioSource>>,
+    pub rocket_seal: Option<Handle<AudioSource>>,
+    pub rocket_launch: Option<Handle<AudioSource>>,
 }
 
 #[derive(Resource, Default)]
@@ -123,6 +130,13 @@ pub struct ThreatAudioObserver {
 }
 
 #[derive(Resource, Default)]
+pub struct RocketLaunchAudioObserver {
+    initialized: bool,
+    reload_token: u64,
+    phases: HashMap<EntityId, RocketAudioPhase>,
+}
+
+#[derive(Resource, Default)]
 pub struct AudioSettingsPersistenceState {
     last_saved: Option<AudioSettingsFile>,
 }
@@ -130,6 +144,33 @@ pub struct AudioSettingsPersistenceState {
 #[derive(Component)]
 pub struct MachineLoopAudio {
     pub entity_id: EntityId,
+}
+
+#[derive(Component)]
+pub struct SoundEffectAudio {
+    gain: f32,
+}
+
+#[derive(Component)]
+pub struct RocketLaunchAudioPlayback {
+    reload_token: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RocketAudioPhase {
+    Idle,
+    Sealing,
+    Rising,
+}
+
+impl From<RocketLaunchPhase> for RocketAudioPhase {
+    fn from(phase: RocketLaunchPhase) -> Self {
+        match phase {
+            RocketLaunchPhase::Idle => Self::Idle,
+            RocketLaunchPhase::Sealed { .. } => Self::Sealing,
+            RocketLaunchPhase::Rising { .. } => Self::Rising,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -165,6 +206,17 @@ pub(crate) fn load_audio_assets(
     assets.machine_electric_loop = Some(asset_server.load("audio/machine_electric_loop.wav"));
     assets.research_complete = Some(asset_server.load("audio/research_complete.wav"));
     assets.enemy_warning = Some(asset_server.load("audio/enemy_warning.wav"));
+    assets.rocket_seal = Some(asset_server.load("audio/rocket_seal.wav"));
+    assets.rocket_launch = Some(asset_server.load("audio/rocket_launch.wav"));
+}
+
+pub(crate) fn initialize_rocket_launch_audio(
+    sim: Res<SimResource>,
+    reload: Option<Res<PresentationReloadToken>>,
+    mut observer: ResMut<RocketLaunchAudioObserver>,
+) {
+    let reload_token = reload.as_deref().map_or(0, |token| token.value);
+    observer.reset(&sim.read(), reload_token);
 }
 
 pub(crate) fn load_persisted_audio_settings(
@@ -228,6 +280,7 @@ pub(crate) fn play_sound_events(
     assets: Res<AudioAssets>,
     settings: Res<AudioSettings>,
     sim: Res<SimResource>,
+    reload: Option<Res<PresentationReloadToken>>,
     mut dedupe: ResMut<AudioEventDedupe>,
 ) {
     let effective_volume = settings.effective_volume();
@@ -238,41 +291,72 @@ pub(crate) fn play_sound_events(
 
     let tick = sim.read().tick_count();
     for event in events.read() {
-        if dedupe
-            .last_played_tick
-            .get(event)
-            .is_some_and(|last_tick| tick.saturating_sub(*last_tick) < sound_cooldown_ticks(*event))
-        {
-            continue;
+        let cooldown = sound_cooldown_ticks(*event);
+        if cooldown > 0 {
+            if dedupe
+                .last_played_tick
+                .get(event)
+                .is_some_and(|last_tick| tick.saturating_sub(*last_tick) < cooldown)
+            {
+                continue;
+            }
+            dedupe.last_played_tick.insert(*event, tick);
         }
         let Some(handle) = sound_handle(&assets, *event).cloned() else {
             continue;
         };
-        dedupe.last_played_tick.insert(*event, tick);
-        commands.spawn((
+        let gain = one_shot_gain(*event);
+        let translation = spatial_sound_translation(&sim.read(), *event);
+        let mut playback =
+            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(effective_volume * gain));
+        if translation.is_some() {
+            playback = playback
+                .with_spatial(true)
+                .with_spatial_scale(SpatialScale::new_2d(
+                    1.0 / (crate::constants::TILE_SIZE * ROCKET_AUDIO_DISTANCE_TILES),
+                ));
+        }
+        let mut audio_entity = commands.spawn((
             AudioPlayer::new(handle),
-            PlaybackSettings::DESPAWN
-                .with_volume(Volume::Linear(effective_volume * one_shot_gain(*event))),
+            playback,
+            SoundEffectAudio { gain },
         ));
+        if let Some(translation) = translation {
+            audio_entity.insert((
+                Transform::from_translation(translation),
+                GlobalTransform::default(),
+                RocketLaunchAudioPlayback {
+                    reload_token: reload.as_deref().map_or(0, |token| token.value),
+                },
+            ));
+        }
     }
 }
 
 pub(crate) fn apply_audio_settings_to_sinks(
     settings: Res<AudioSettings>,
-    mut sinks: Query<(&mut AudioSink, Option<&MachineLoopAudio>)>,
+    mut sinks: Query<(
+        &mut AudioSink,
+        Option<&MachineLoopAudio>,
+        Option<&SoundEffectAudio>,
+    )>,
+    mut spatial_sinks: Query<(&mut SpatialAudioSink, &SoundEffectAudio)>,
 ) {
     if !settings.is_changed() {
         return;
     }
 
     let effective_volume = settings.effective_volume();
-    for (mut sink, loop_marker) in &mut sinks {
+    for (mut sink, loop_marker, sound_effect) in &mut sinks {
         let gain = if loop_marker.is_some() {
             MACHINE_LOOP_GAIN
         } else {
-            1.0
+            sound_effect.map_or(1.0, |effect| effect.gain)
         };
         sink.set_volume(Volume::Linear(effective_volume * gain));
+    }
+    for (mut sink, sound_effect) in &mut spatial_sinks {
+        sink.set_volume(Volume::Linear(effective_volume * sound_effect.gain));
     }
 }
 
@@ -367,6 +451,31 @@ pub(crate) fn observe_threat_audio(
             ThreatEventKind::RaidLaunched | ThreatEventKind::StructureUnderAttack
         ) {
             sounds.write(SoundEvent::EnemyWarning);
+        }
+    }
+}
+
+pub(crate) fn observe_rocket_launch_audio(
+    sim: Res<SimResource>,
+    reload: Option<Res<PresentationReloadToken>>,
+    mut observer: ResMut<RocketLaunchAudioObserver>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    let reload_token = reload.as_deref().map_or(0, |token| token.value);
+    for sound in observer.poll(&sim.read(), reload_token) {
+        sounds.write(sound);
+    }
+}
+
+pub(crate) fn cleanup_reloaded_rocket_launch_audio(
+    mut commands: Commands,
+    reload: Option<Res<PresentationReloadToken>>,
+    playback: Query<(Entity, &RocketLaunchAudioPlayback)>,
+) {
+    let reload_token = reload.as_deref().map_or(0, |token| token.value);
+    for (entity, playback) in &playback {
+        if playback.reload_token != reload_token {
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -488,6 +597,8 @@ fn sound_handle(assets: &AudioAssets, event: SoundEvent) -> Option<&Handle<Audio
         SoundEvent::CraftComplete => assets.craft_complete.as_ref(),
         SoundEvent::ResearchComplete => assets.research_complete.as_ref(),
         SoundEvent::EnemyWarning => assets.enemy_warning.as_ref(),
+        SoundEvent::RocketSeal { .. } => assets.rocket_seal.as_ref(),
+        SoundEvent::RocketLaunch { .. } => assets.rocket_launch.as_ref(),
     }
 }
 
@@ -501,6 +612,8 @@ fn one_shot_gain(event: SoundEvent) -> f32 {
         SoundEvent::CraftComplete => 0.75,
         SoundEvent::ResearchComplete => 0.85,
         SoundEvent::EnemyWarning => 0.9,
+        SoundEvent::RocketSeal { .. } => 0.75,
+        SoundEvent::RocketLaunch { .. } => 1.0,
     }
 }
 
@@ -510,8 +623,58 @@ fn sound_cooldown_ticks(event: SoundEvent) -> u64 {
         SoundEvent::PlaceError => 4,
         SoundEvent::UiClick => 1,
         SoundEvent::EnemyWarning => 600,
-        _ => 0,
+        SoundEvent::RocketSeal { .. }
+        | SoundEvent::RocketLaunch { .. }
+        | SoundEvent::Place
+        | SoundEvent::ManualMineComplete
+        | SoundEvent::CraftComplete
+        | SoundEvent::ResearchComplete => 0,
     }
+}
+
+fn spatial_sound_translation(sim: &factory_sim::Simulation, event: SoundEvent) -> Option<Vec3> {
+    let entity_id = match event {
+        SoundEvent::RocketSeal { entity_id } | SoundEvent::RocketLaunch { entity_id } => entity_id,
+        _ => return None,
+    };
+    let placed = sim.entities().placed_entity(entity_id)?;
+    Some(entity_translation(&placed.footprint, 0.0))
+}
+
+impl RocketLaunchAudioObserver {
+    fn reset(&mut self, sim: &factory_sim::Simulation, reload_token: u64) {
+        self.initialized = true;
+        self.reload_token = reload_token;
+        self.phases = rocket_audio_phases(sim);
+    }
+
+    fn poll(&mut self, sim: &factory_sim::Simulation, reload_token: u64) -> Vec<SoundEvent> {
+        if !self.initialized || self.reload_token != reload_token {
+            self.reset(sim, reload_token);
+            return Vec::new();
+        }
+
+        let current = rocket_audio_phases(sim);
+        let mut sounds = Vec::new();
+        for (&entity_id, &phase) in &current {
+            if self.phases.get(&entity_id) == Some(&phase) {
+                continue;
+            }
+            match phase {
+                RocketAudioPhase::Sealing => sounds.push(SoundEvent::RocketSeal { entity_id }),
+                RocketAudioPhase::Rising => sounds.push(SoundEvent::RocketLaunch { entity_id }),
+                RocketAudioPhase::Idle => {}
+            }
+        }
+        self.phases = current;
+        sounds
+    }
+}
+
+fn rocket_audio_phases(sim: &factory_sim::Simulation) -> HashMap<EntityId, RocketAudioPhase> {
+    factory_sim::entity_access::rocket_silo_launch_phases(sim)
+        .map(|(entity_id, phase)| (entity_id, phase.into()))
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -555,6 +718,78 @@ mod tests {
         assert_eq!(settings.volume, 0.0);
         settings.adjust_volume_steps(20);
         assert_eq!(settings.volume, 1.0);
+    }
+
+    #[test]
+    fn rocket_audio_tracks_phase_transitions_and_resets_on_reload() {
+        let mut sim = factory_sim::Simulation::new_rocket_launch_fixture();
+        let silo_id = factory_sim::entity_access::rocket_silo_launch_phases(&sim)
+            .next()
+            .expect("launch fixture should contain a silo")
+            .0;
+        let mut observer = RocketLaunchAudioObserver::default();
+        observer.reset(&sim, 0);
+
+        sim.tick();
+        assert_eq!(
+            observer.poll(&sim, 0),
+            vec![SoundEvent::RocketSeal { entity_id: silo_id }]
+        );
+        for _ in 0..60 {
+            sim.tick();
+        }
+        assert_eq!(
+            observer.poll(&sim, 0),
+            vec![SoundEvent::RocketLaunch { entity_id: silo_id }]
+        );
+
+        let loaded = factory_sim::load_from_bytes(
+            &factory_sim::save_to_bytes(&sim).expect("mid-launch simulation should save"),
+        )
+        .expect("mid-launch simulation should load");
+        assert!(
+            observer.poll(&loaded, 1).is_empty(),
+            "reloading a running launch must not replay its transition sound"
+        );
+    }
+
+    #[test]
+    fn rocket_audio_uses_the_silo_world_position() {
+        let sim = factory_sim::Simulation::new_rocket_launch_fixture();
+        let silo_id = factory_sim::entity_access::rocket_silo_launch_phases(&sim)
+            .next()
+            .expect("launch fixture should contain a silo")
+            .0;
+        let footprint = &sim
+            .entities()
+            .placed_entity(silo_id)
+            .expect("launch fixture silo should be placed")
+            .footprint;
+
+        assert_eq!(
+            spatial_sound_translation(&sim, SoundEvent::RocketLaunch { entity_id: silo_id }),
+            Some(entity_translation(footprint, 0.0))
+        );
+        assert!(spatial_sound_translation(&sim, SoundEvent::CraftComplete).is_none());
+    }
+
+    #[test]
+    fn world_reload_despawns_old_rocket_audio_playback() {
+        let mut app = App::new();
+        app.insert_resource(PresentationReloadToken { value: 2 })
+            .add_systems(Update, cleanup_reloaded_rocket_launch_audio);
+        app.world_mut()
+            .spawn(RocketLaunchAudioPlayback { reload_token: 1 });
+
+        app.update();
+
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<RocketLaunchAudioPlayback>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
     }
 
     #[test]

@@ -21,6 +21,9 @@ use crate::rendering::resource_cells::{
 use crate::rendering::resources::{
     BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds, WorldRenderCache,
 };
+use crate::rendering::rocket_launch::{
+    RocketLaunchRenderPool, RocketLaunchSprite, sync_rocket_launch_rendering,
+};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 use crate::test_performance::{
@@ -565,6 +568,102 @@ fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
 }
 
 #[test]
+fn rising_rocket_catches_up_and_does_not_leak_across_reloads_or_relaunches() {
+    let sim = Simulation::new_rocket_launch_fixture();
+    let silo_id = rocket_silo_id(&sim);
+    let footprint = sim
+        .entities()
+        .placed_entity(silo_id)
+        .expect("launch fixture silo should remain placed")
+        .footprint;
+    let visible = visible_for_chunks([ChunkCoord::from_tile(footprint.x, footprint.y)
+        .expect("placed silo should be inside the chunk plane")]);
+    let mut app = render_sync_app(sim, visible);
+
+    app.update();
+    assert_eq!(rocket_launch_sprite_counts(&mut app), (0, 0));
+
+    tick_sim_resource(&mut app);
+    for _ in 0..60 {
+        tick_sim_resource(&mut app);
+    }
+    app.update();
+    let (first_entity, first_translation) = active_rocket_launch(&mut app, silo_id);
+    assert_eq!(rocket_launch_sprite_counts(&mut app), (1, 1));
+
+    for _ in 0..70 {
+        tick_sim_resource(&mut app);
+    }
+    app.update();
+    let (caught_up_entity, caught_up_translation) = active_rocket_launch(&mut app, silo_id);
+    assert_eq!(
+        caught_up_entity, first_entity,
+        "the active sprite should be reused"
+    );
+    assert!(
+        caught_up_translation.y > first_translation.y,
+        "the next rendered frame should derive the later fixed-tick height"
+    );
+
+    let saved = {
+        let sim = app.world().resource::<SimResource>().read();
+        factory_sim::save_to_bytes(&sim).expect("mid-launch fixture should save")
+    };
+    let loaded = factory_sim::load_from_bytes(&saved).expect("mid-launch fixture should load");
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(loaded)
+        .expect("test should have exclusive simulation access");
+    app.world_mut()
+        .resource_mut::<PresentationReloadToken>()
+        .value += 1;
+    app.update();
+    let (_, reloaded_translation) = active_rocket_launch(&mut app, silo_id);
+    assert_eq!(rocket_launch_sprite_counts(&mut app), (1, 1));
+    assert_eq!(
+        reloaded_translation, caught_up_translation,
+        "a mid-launch reload should reconstruct the simulation-owned height"
+    );
+
+    for _ in 0..50 {
+        tick_sim_resource(&mut app);
+    }
+    app.update();
+    assert_eq!(
+        rocket_launch_sprite_counts(&mut app),
+        (1, 0),
+        "a finished launch should leave one reusable hidden sprite"
+    );
+
+    let mut relaunched = Simulation::new_rocket_launch_fixture();
+    for _ in 0..61 {
+        relaunched.tick();
+    }
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(relaunched)
+        .expect("test should have exclusive simulation access");
+    app.update();
+    assert_eq!(
+        rocket_launch_sprite_counts(&mut app),
+        (1, 1),
+        "a later launch should reuse the pooled presentation entity"
+    );
+
+    for _ in 0..3 {
+        app.world_mut()
+            .resource_mut::<PresentationReloadToken>()
+            .value += 1;
+        app.update();
+        assert_eq!(
+            rocket_launch_sprite_counts(&mut app),
+            (1, 1),
+            "world reload cleanup must not accumulate transient rockets"
+        );
+    }
+}
+
+#[test]
 #[ignore]
 fn render_sync_small_visual_load_budget() {
     let sim = small_render_sync_fixture();
@@ -733,6 +832,7 @@ fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
         .init_resource::<VisibleEntityIds>()
         .init_resource::<RenderDetail>()
         .init_resource::<BeltItemRenderPool>()
+        .init_resource::<RocketLaunchRenderPool>()
         .insert_resource(ResourceRenderSettings {
             show_amount_labels: true,
         })
@@ -748,12 +848,50 @@ fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
                 update_visible_entity_ids,
                 measured_sync_placed_entity_rendering,
                 sync_rocket_silo_rendering,
+                sync_rocket_launch_rendering,
                 measured_sync_belt_direction_rendering,
                 measured_sync_belt_item_rendering,
             )
                 .chain(),
         );
     app
+}
+
+fn rocket_silo_id(sim: &Simulation) -> EntityId {
+    sim.entities()
+        .placed_entities()
+        .find(|placed| {
+            factory_sim::entity_access::machine_kind(sim, placed.id)
+                == Some(factory_data::EntityKind::RocketSilo)
+        })
+        .expect("launch fixture should contain a rocket silo")
+        .id
+}
+
+fn rocket_launch_sprite_counts(app: &mut App) -> (usize, usize) {
+    let world = app.world_mut();
+    let mut query = world.query::<(&RocketLaunchSprite, &Visibility)>();
+    let mut total = 0;
+    let mut active = 0;
+    for (_, visibility) in query.iter(world) {
+        total += 1;
+        if *visibility != Visibility::Hidden {
+            active += 1;
+        }
+    }
+    (total, active)
+}
+
+fn active_rocket_launch(app: &mut App, silo_id: EntityId) -> (Entity, Vec3) {
+    let world = app.world_mut();
+    let mut query = world.query::<(Entity, &RocketLaunchSprite, &Transform, &Visibility)>();
+    query
+        .iter(world)
+        .find_map(|(entity, rocket, transform, visibility)| {
+            (rocket.silo_id == silo_id && *visibility != Visibility::Hidden)
+                .then_some((entity, transform.translation))
+        })
+        .expect("rising silo should have one active rocket sprite")
 }
 
 fn dense_belt_item_render_sync_app(sim: Simulation, belt_ids: &[EntityId]) -> App {

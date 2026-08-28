@@ -12,8 +12,8 @@ use factory_sim::{Direction, RailPieceGeometry};
 pub(crate) use cache::VisualAssetCache;
 use cache::VisualCacheKey;
 use rasterizer::rasterize_visual;
-pub(crate) use templates::ConnectionMask;
 use templates::VisualTemplate;
+pub(crate) use templates::{ConnectionMask, RocketSiloVisualPhase};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EntityVisualStyle {
@@ -26,6 +26,7 @@ pub(crate) struct EntityVisualStyle {
     /// into this placement's frame. The drawn curve is this curve; the renderer
     /// authors no offsets of its own.
     pub(crate) rail: Option<RailPieceGeometry>,
+    pub(crate) rocket_silo_phase: RocketSiloVisualPhase,
 }
 
 #[derive(SystemParam)]
@@ -42,9 +43,18 @@ impl VisualAssets<'_> {
                 direction: style.direction,
                 connections: style.connections,
                 rail: style.rail,
+                rocket_silo_phase: style.rocket_silo_phase,
             },
             style.base_color,
             style.size,
+        )
+    }
+
+    pub(crate) fn launch_rocket_sprite(&mut self, size: Vec2) -> Sprite {
+        self.sprite_for(
+            VisualTemplate::LaunchRocket,
+            Color::srgb(0.90, 0.88, 0.82),
+            size,
         )
     }
 
