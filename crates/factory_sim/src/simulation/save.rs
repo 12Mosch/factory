@@ -244,6 +244,7 @@ pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
     encode_snapshot(prototype_hash, &snapshot)
 }
 
+/// Encodes either borrowed or owned durable state with the common save header.
 fn encode_snapshot(
     prototype_hash: u64,
     snapshot: &impl Serialize,
@@ -435,6 +436,7 @@ impl<'a> SimulationSnapshotRef<'a> {
 }
 
 impl SimulationSnapshotOwned {
+    /// Copies only durable save state, excluding all reconstructible runtime caches.
     fn from_simulation(sim: &Simulation) -> Self {
         Self {
             tick: sim.tick,
@@ -751,6 +753,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies an owned snapshot cannot drift as the live simulation advances.
     fn owned_save_snapshot_remains_at_its_captured_completed_tick() {
         let mut sim = Simulation::new_test_world(123);
         for _ in 0..3 {

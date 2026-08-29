@@ -20,6 +20,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET: Duration = Duration::from_millis(16);
+
 #[test]
 fn defaults_use_five_five_minute_autosaves() {
     let config = SaveLoadConfig::default();
@@ -520,6 +522,7 @@ fn background_submission_remains_non_blocking_and_metrics_populate() {
 }
 
 #[test]
+/// Verifies commands on both sides of a save boundary remain deterministic.
 fn commands_around_save_apply_once_and_continue_deterministically() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "command_ordering");
     run_until_tick(&mut app, 3);
@@ -567,6 +570,7 @@ fn commands_around_save_apply_once_and_continue_deterministically() {
 }
 
 #[test]
+/// Measures the bounded capture pause and tick progress during worker activity.
 fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
     let mut app = test_app(Duration::ZERO, "large_world_background_save");
     {
@@ -626,6 +630,11 @@ fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
         submission_update.as_secs_f64() * 1000.0
     );
     assert!(metrics.last_snapshot_capture_ms > 0.0);
+    let snapshot_capture = Duration::from_secs_f64(metrics.last_snapshot_capture_ms / 1000.0);
+    assert!(
+        snapshot_capture <= LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET,
+        "large-world snapshot capture {snapshot_capture:?} exceeded the one-frame budget {LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET:?}"
+    );
     assert!(metrics.last_request_submission_ms >= metrics.last_snapshot_capture_ms);
     assert!(
         submission_update.as_secs_f64() * 1000.0 >= metrics.last_request_submission_ms,

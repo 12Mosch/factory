@@ -69,6 +69,7 @@ mod tests {
     use crate::resources::{SimProfileStats, UpsStats};
 
     #[test]
+    /// Verifies that a fixed tick drains each queued command exactly once.
     fn fixed_tick_applies_collected_commands_exactly_once() {
         let mut app = App::new();
         app.insert_resource(SimResource::new(Simulation::new_test_world(123)))

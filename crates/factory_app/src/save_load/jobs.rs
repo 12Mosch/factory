@@ -62,6 +62,7 @@ pub(crate) struct SaveJobOutcome {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Captures the latest completed tick and starts its background save worker.
 pub(crate) fn queue_save(
     id: SaveId,
     kind: SaveKind,
@@ -90,13 +91,13 @@ pub(crate) fn queue_save(
     // therefore captures exactly the last completed tick. Only this copy is
     // performed while the live simulation is read-locked; encoding and I/O
     // receive the owned snapshot below.
-    let snapshot_start = Instant::now();
-    let snapshot = {
+    let (snapshot, snapshot_capture_ms) = {
         let sim = sim.read();
-        capture_save_snapshot(&sim)
+        let snapshot_start = Instant::now();
+        let snapshot = capture_save_snapshot(&sim);
+        (snapshot, snapshot_start.elapsed().as_secs_f64() * 1000.0)
     };
     let snapshot_tick = snapshot.tick_count();
-    let snapshot_capture_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
     let worker_id = id.clone();
     let worker_name = display_name.clone();
     let handle = thread::spawn(move || {
