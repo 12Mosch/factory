@@ -45,6 +45,19 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                     capacity_points,
                     max_recharge_watts,
                 } => capacity_points > 0 && max_recharge_watts > 0,
+                EquipmentEffectPrototype::PersonalRoboport {
+                    energy_capacity_joules,
+                    energy_input_watts,
+                    charging_pad_count,
+                    charging_pad_watts,
+                    construction_radius_tiles,
+                } => {
+                    energy_capacity_joules > 0
+                        && energy_input_watts > 0
+                        && charging_pad_count > 0
+                        && charging_pad_watts > 0
+                        && construction_radius_tiles > 0
+                }
             };
             if equipment.width == 0 || equipment.height == 0 || !valid_effect {
                 return Err(SimValidationError::UnknownItem(item.id));

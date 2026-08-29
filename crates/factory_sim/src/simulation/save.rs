@@ -97,7 +97,9 @@ use bincode::Options;
 // the snapshot. Unlike the surrounding production, research, and launch totals,
 // these historical transitions cannot be reconstructed after a silo loses
 // power, launches, or is removed.
-pub const SAVE_VERSION: u32 = 48;
+// v49: personal roboport buffer and charging-pad state joined powered equipment,
+// and flying robots gained durable personal ownership.
+pub const SAVE_VERSION: u32 = 49;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -133,7 +135,8 @@ pub const SAVE_VERSION: u32 = 48;
 // bonus effects.
 // v31: launch rewards moved from the rocket silo prototype to data-driven item
 // payload metadata and gained atomic multi-product support.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 31;
+// v32: powered equipment gained the personal-roboport effect metadata.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 32;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

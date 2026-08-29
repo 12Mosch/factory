@@ -1,5 +1,7 @@
 use super::super::*;
-use super::support::{item_id_by_name, set_inventory_slot};
+use super::support::{
+    all_tile_coords, entity_id_by_name, item_id_by_name, place_at, set_inventory_slot,
+};
 
 fn add_item(sim: &mut Simulation, slot: usize, name: &str) -> ItemId {
     let item_id = item_id_by_name(sim.catalog(), name);
@@ -11,6 +13,67 @@ fn equip_modular_armor(sim: &mut Simulation) -> ItemId {
     let armor = add_item(sim, 10, "modular_armor");
     sim.equip_armor(10).unwrap();
     armor
+}
+
+/// Installs the base personal roboport and seeds one construction robot.
+fn install_personal_roboport(sim: &mut Simulation) -> (ItemId, ItemId) {
+    equip_modular_armor(sim);
+    let equipment = add_item(sim, 11, "personal_roboport_equipment");
+    sim.install_equipment(11, 0, 0).unwrap();
+    let robot = item_id_by_name(sim.catalog(), "construction_robot");
+    set_inventory_slot(&mut sim.player_inventory, 20, robot, 1);
+    sim.player_equipment.personal_roboport_energy_joules = 3_000_000;
+    (equipment, robot)
+}
+
+/// Places a valid ghost inside personal coverage, optionally requiring an
+/// overlap with stationary construction coverage.
+fn place_personal_ghost(
+    sim: &mut Simulation,
+    prototype_id: EntityPrototypeId,
+    require_stationary_coverage: bool,
+) -> GhostId {
+    let bounds = sim
+        .personal_roboport_coverage()
+        .expect("fixture installs personal coverage");
+    for (x, y) in all_tile_coords(&sim.world) {
+        if !bounds.contains(x, y)
+            || (require_stationary_coverage
+                && sim.construction_network_covering_tile(x, y).is_none())
+        {
+            continue;
+        }
+        let request = construction_ops::GhostPlacementRequest {
+            prototype_id,
+            x,
+            y,
+            direction: Direction::East,
+            recipe: None,
+        };
+        let entity_request = placement::EntityPlacementRequest {
+            prototype_id,
+            x,
+            y,
+            direction: Direction::East,
+        };
+        if construction_ops::validate_ghost_placement(sim, request).is_ok()
+            && placement_validation_ops::validate_entity_placement(sim, entity_request).is_ok()
+        {
+            return construction_ops::place_ghost(sim, request).unwrap();
+        }
+    }
+    panic!("expected a buildable tile in personal roboport coverage");
+}
+
+/// Advances a fixture until a condition holds or fails with a bounded timeout.
+fn tick_until(sim: &mut Simulation, limit: usize, predicate: impl Fn(&Simulation) -> bool) {
+    for _ in 0..limit {
+        if predicate(sim) {
+            return;
+        }
+        sim.tick();
+    }
+    panic!("condition did not hold within {limit} ticks");
 }
 
 #[test]
@@ -179,4 +242,232 @@ fn validation_rejects_noncanonical_and_over_capacity_equipment_state() {
         sim.validate(),
         Err(SimValidationError::InvalidPlayerEquipment)
     );
+}
+
+#[test]
+/// Personal dispatch consumes player-owned inputs and returns the robot after
+/// completing its build.
+fn personal_roboport_dispatches_from_player_inventory_and_builds() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, robot_item) = install_personal_roboport(&mut sim);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
+    let material_before = sim.player_inventory.count(build_item);
+    let ghost_id = place_personal_ghost(&mut sim, furnace, false);
+
+    sim.tick();
+
+    let (_, robot_id) = sim
+        .construction
+        .reservations()
+        .find(|(job, _)| *job == ConstructionJob::BuildGhost(ghost_id))
+        .expect("personal roboport should reserve covered work");
+    let robot = sim.robot(robot_id).expect("dispatched robot should fly");
+    assert!(robot.personal);
+    assert_eq!(robot.home_roboport, None);
+    assert_eq!(sim.player_inventory.count(robot_item), 0);
+    assert_eq!(sim.player_inventory.count(build_item), material_before - 1);
+
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.construction.ghost(ghost_id).is_none() && sim.robot_count() == 0
+    });
+    assert_eq!(sim.player_inventory.count(robot_item), 1);
+    sim.validate()
+        .expect("personal construction should remain valid");
+}
+
+#[test]
+/// Dispatch waits below the prototype energy threshold without consuming any
+/// player-owned items, then resumes exactly at the threshold.
+fn personal_roboport_low_power_blocks_dispatch_without_consuming_items() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, robot_item) = install_personal_roboport(&mut sim);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    let robot_capacity = sim
+        .catalog()
+        .item(robot_item)
+        .and_then(|item| item.robot)
+        .expect("construction robot declares a flight profile")
+        .energy_capacity_joules;
+    set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
+    let material_before = sim.player_inventory.count(build_item);
+    let ghost_id = place_personal_ghost(&mut sim, furnace, false);
+    sim.player_equipment.personal_roboport_energy_joules = robot_capacity - 1;
+
+    sim.tick();
+
+    assert_eq!(sim.robot_count(), 0);
+    assert_eq!(sim.player_inventory.count(robot_item), 1);
+    assert_eq!(sim.player_inventory.count(build_item), material_before);
+    assert!(
+        sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::BuildGhost(ghost_id))
+    );
+
+    sim.player_equipment.personal_roboport_energy_joules = robot_capacity;
+    sim.tick();
+    assert_eq!(sim.robot_count(), 1);
+    assert_eq!(sim.player_inventory.count(robot_item), 0);
+    assert_eq!(sim.player_inventory.count(build_item), material_before - 1);
+
+    // Draining the equipment after dispatch cannot erase the unit. It waits on
+    // its personal pad with its exact remaining energy until power returns.
+    sim.player_equipment.personal_roboport_energy_joules = 0;
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.robots()
+            .any(|robot| robot.activity == RobotActivity::PersonalCharging)
+    });
+    assert_eq!(sim.robot_count(), 1);
+    assert_eq!(sim.player_inventory.count(robot_item), 0);
+    assert_eq!(sim.player_equipment.personal_roboport_energy_joules, 0);
+
+    sim.player_equipment.personal_roboport_energy_joules = 3_000_000;
+    tick_until(&mut sim, 1_000, |sim| sim.robot_count() == 0);
+    assert_eq!(sim.player_inventory.count(robot_item), 1);
+}
+
+#[test]
+/// Personal coverage wins deterministically when personal and stationary
+/// construction networks overlap.
+fn personal_roboport_precedes_stationary_network_in_overlapping_coverage() {
+    use super::support::{place_roboport, station_robots};
+
+    let mut sim = Simulation::new_test_world(123);
+    let (stationary, (x, y)) = place_roboport(&mut sim);
+    station_robots(&mut sim, stationary, "construction_robot", 1);
+    let player_tile = all_tile_coords(&sim.world)
+        .into_iter()
+        .filter(|(tile_x, tile_y)| sim.can_player_occupy_tile(*tile_x, *tile_y))
+        .min_by_key(|(tile_x, tile_y)| (tile_x - x).pow(2) + (tile_y - y).pow(2))
+        .expect("a walkable player tile should exist near the roboport");
+    sim.player.x = tile_center_fixed(player_tile.0);
+    sim.player.y = tile_center_fixed(player_tile.1);
+    let (_, personal_robot) = install_personal_roboport(&mut sim);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
+    sim.entities
+        .roboport_state_mut(stationary)
+        .unwrap()
+        .materials
+        .insert(&sim.world.prototypes.clone(), build_item, 1)
+        .unwrap();
+    let ghost_id = place_personal_ghost(&mut sim, furnace, true);
+
+    sim.tick();
+
+    let (_, robot_id) = sim
+        .construction
+        .reservations()
+        .find(|(job, _)| *job == ConstructionJob::BuildGhost(ghost_id))
+        .unwrap();
+    assert!(sim.robot(robot_id).unwrap().personal);
+    assert_eq!(sim.player_inventory.count(personal_robot), 0);
+    let stationary_state = sim.entities.roboport_state(stationary).unwrap();
+    assert_eq!(stationary_state.robots.count(personal_robot), 1);
+    assert_eq!(stationary_state.materials.count(build_item), 1);
+}
+
+#[test]
+/// Leaving personal coverage aborts the reservation and recovers the robot and
+/// its payload without loss.
+fn moving_out_of_range_recovers_owned_job_robot_and_payload() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, robot_item) = install_personal_roboport(&mut sim);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
+    let material_before = sim.player_inventory.count(build_item);
+    let ghost_id = place_personal_ghost(&mut sim, furnace, false);
+    sim.tick();
+    assert_eq!(sim.construction.reservations().count(), 1);
+
+    sim.player.x += 100 * POSITION_SCALE;
+    sim.tick();
+
+    assert_eq!(sim.construction.reservations().count(), 0);
+    assert!(
+        sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::BuildGhost(ghost_id))
+    );
+    assert!(sim.robots().all(|robot| robot.construction_job.is_none()));
+    tick_until(&mut sim, 3_000, |sim| sim.robot_count() == 0);
+    assert_eq!(sim.player_inventory.count(robot_item), 1);
+    assert_eq!(sim.player_inventory.count(build_item), material_before);
+}
+
+#[test]
+/// Personal robots use player repair materials and return deconstruction
+/// recoveries to the player inventory.
+fn personal_robot_repairs_and_deconstructs_with_player_owned_materials() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, robot_item) = install_personal_roboport(&mut sim);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let ghost_id = place_personal_ghost(&mut sim, furnace, false);
+    let ghost = sim.construction.ghost(ghost_id).cloned().unwrap();
+    construction_ops::cancel_ghost(&mut sim, ghost_id).unwrap();
+    let entity_id = place_at(&mut sim, furnace, ghost.x, ghost.y, Direction::North);
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    let material_before = sim.player_inventory.count(build_item);
+    let maximum = sim.entity_health(entity_id).unwrap().1;
+    assert!(!sim.damage_entity(entity_id, maximum / 2));
+    let repair_pack = item_id_by_name(sim.catalog(), "repair_pack");
+    set_inventory_slot(&mut sim.player_inventory, 21, repair_pack, 1);
+
+    sim.tick();
+    assert!(sim.robots().any(|robot| {
+        robot.personal && robot.construction_job == Some(ConstructionJob::Repair(entity_id))
+    }));
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entity_health(entity_id) == Some((maximum, maximum)) && sim.robot_count() == 0
+    });
+
+    construction_ops::mark_area_for_deconstruction(&mut sim, ghost.x, ghost.y, ghost.x, ghost.y);
+    sim.player_equipment.personal_roboport_energy_joules = 3_000_000;
+    sim.tick();
+    assert!(sim.robots().any(|robot| {
+        robot.personal && robot.construction_job == Some(ConstructionJob::Deconstruct(entity_id))
+    }));
+    tick_until(&mut sim, 2_000, |sim| {
+        sim.entities.placed_entity(entity_id).is_none() && sim.robot_count() == 0
+    });
+    assert_eq!(sim.player_inventory.count(robot_item), 1);
+    assert_eq!(sim.player_inventory.count(build_item), material_before + 1);
+}
+
+#[test]
+/// Personal robot flight, job, charging, and equipment state serialize and
+/// replay deterministically.
+fn deployed_personal_robot_energy_job_and_equipment_round_trip_deterministically() {
+    let mut sim = Simulation::new_test_world(123);
+    install_personal_roboport(&mut sim);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
+    let ghost_id = place_personal_ghost(&mut sim, furnace, false);
+    sim.tick();
+    let robot_before = sim.robots().next().cloned().unwrap();
+    let equipment_energy_before = sim.personal_roboport_energy();
+
+    let bytes = save_to_bytes(&sim).unwrap();
+    let mut loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded.robots().next(), Some(&robot_before));
+    assert_eq!(loaded.personal_roboport_energy(), equipment_energy_before);
+    assert!(
+        loaded
+            .construction
+            .reservations()
+            .any(|(job, _)| { job == ConstructionJob::BuildGhost(ghost_id) })
+    );
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+
+    for _ in 0..500 {
+        sim.tick();
+        loaded.tick();
+        assert_eq!(sim.state_hash(), loaded.state_hash());
+    }
 }
