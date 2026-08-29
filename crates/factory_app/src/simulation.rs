@@ -18,7 +18,7 @@ pub struct SimCommandResult {
     pub result: Result<SimCommandEffect, SimCommandError>,
 }
 
-/// FIFO commands retained while a save worker holds the simulation read lock.
+/// FIFO commands collected between fixed simulation ticks.
 #[derive(Resource, Default)]
 pub struct SimCommandBacklog(pub Vec<SimCommand>);
 
@@ -33,9 +33,7 @@ pub(crate) fn collect_sim_commands(
     }
 }
 
-/// Applies retained commands and ticks only when the simulation write lock is
-/// immediately available. A concurrent save therefore pauses simulation time
-/// without stalling frame-side systems.
+/// Applies retained commands in FIFO order, then completes one simulation tick.
 pub(crate) fn tick_sim(
     mut sim: ResMut<SimResource>,
     mut backlog: ResMut<SimCommandBacklog>,
@@ -43,10 +41,7 @@ pub(crate) fn tick_sim(
     mut ups: ResMut<UpsStats>,
     mut profile_stats: ResMut<SimProfileStats>,
 ) {
-    let Some(mut simulation) = sim.try_write() else {
-        profile_stats.save_blocked_fixed_ticks += 1;
-        return;
-    };
+    let mut simulation = sim.write();
 
     for command in backlog.0.drain(..) {
         let result = simulation.apply_command(&command);
@@ -70,13 +65,12 @@ pub(crate) fn tick_sim(
 mod tests {
     use super::*;
     use factory_sim::Simulation;
-    use std::sync::mpsc;
-    use std::thread;
 
     use crate::resources::{SimProfileStats, UpsStats};
 
     #[test]
-    fn save_read_lock_pauses_ticks_and_retains_commands() {
+    /// Verifies that a fixed tick drains each queued command exactly once.
+    fn fixed_tick_applies_collected_commands_exactly_once() {
         let mut app = App::new();
         app.insert_resource(SimResource::new(Simulation::new_test_world(123)))
             .init_resource::<SimCommandBacklog>()
@@ -100,36 +94,32 @@ mod tests {
                 delta_seconds: 1.0,
             }));
 
-        let handle = app.world().resource::<SimResource>().clone_handle();
-        let (locked_tx, locked_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let _guard = handle.read().expect("simulation lock should be readable");
-            locked_tx.send(()).expect("test should receive lock signal");
-            release_rx.recv().expect("test should release save lock");
-        });
-        locked_rx.recv().expect("save lock should be held");
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimResource>().read().tick_count(),
+            before_tick + 1
+        );
+        assert!(app.world().resource::<SimCommandBacklog>().0.is_empty());
+        let after_command_position = app
+            .world()
+            .resource::<SimResource>()
+            .read()
+            .player()
+            .position_tiles();
+        assert_ne!(after_command_position, before_position);
 
         app.update();
         assert_eq!(
             app.world().resource::<SimResource>().read().tick_count(),
-            before_tick
+            before_tick + 2
         );
-        assert_eq!(app.world().resource::<SimCommandBacklog>().0.len(), 1);
         assert_eq!(
             app.world()
-                .resource::<SimProfileStats>()
-                .save_blocked_fixed_ticks,
-            1
+                .resource::<SimResource>()
+                .read()
+                .player()
+                .position_tiles(),
+            after_command_position
         );
-
-        release_tx.send(()).expect("save worker should be waiting");
-        worker.join().expect("save worker should finish");
-        app.update();
-
-        let sim = app.world().resource::<SimResource>().read();
-        assert_eq!(sim.tick_count(), before_tick + 1);
-        assert_ne!(sim.player().position_tiles(), before_position);
-        assert!(app.world().resource::<SimCommandBacklog>().0.is_empty());
     }
 }

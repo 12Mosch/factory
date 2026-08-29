@@ -9,15 +9,18 @@ use factory_app::save_load::{
     SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState,
     TEMP_ARTIFACT_MARKER, decode_container, encode_container, scan_catalog,
 };
+use factory_app::simulation::SimCommandRequest;
 use factory_app::ui::resources::OpenContainer;
 use factory_app::ui::save_load::{
     SaveConfirmationButton, SaveCreateButton, SaveEntryAction, SaveEntryButton,
 };
 use factory_data::{EntityPrototypeId, ItemId};
-use factory_sim::{EntityId, SAVE_VERSION, load_from_bytes, save_to_bytes};
+use factory_sim::{ChunkCoord, EntityId, SAVE_VERSION, SimCommand, load_from_bytes, save_to_bytes};
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET: Duration = Duration::from_millis(16);
 
 #[test]
 fn defaults_use_five_five_minute_autosaves() {
@@ -501,6 +504,7 @@ fn deleting_a_save_removes_recovery_artifacts_without_resurrection() {
 #[test]
 fn background_submission_remains_non_blocking_and_metrics_populate() {
     let mut app = test_app(Duration::ZERO, "metrics");
+    let captured_tick = app.world().resource::<SimResource>().read().tick_count();
     press_key(&mut app, KeyCode::F5);
     app.update();
     assert!(
@@ -512,7 +516,152 @@ fn background_submission_remains_non_blocking_and_metrics_populate() {
     drain_save_jobs(&mut app);
     let metrics = app.world().resource::<SaveLoadMetrics>();
     assert!(metrics.last_bytes > 0);
+    assert_eq!(metrics.last_snapshot_tick, captured_tick);
+    assert!(metrics.last_request_submission_ms >= metrics.last_snapshot_capture_ms);
     assert!(metrics.last_total_ms >= metrics.last_write_ms);
+}
+
+#[test]
+/// Verifies commands on both sides of a save boundary remain deterministic.
+fn commands_around_save_apply_once_and_continue_deterministically() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "command_ordering");
+    run_until_tick(&mut app, 3);
+
+    let before_save = SimCommand::MovePlayer {
+        direction_x: 1.0,
+        direction_y: 0.0,
+        delta_seconds: 0.25,
+    };
+    app.world_mut()
+        .write_message(SimCommandRequest(before_save));
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    let snapshot_tick = app.world().resource::<SimResource>().read().tick_count();
+
+    let after_save = SimCommand::MovePlayer {
+        direction_x: 0.0,
+        direction_y: 1.0,
+        delta_seconds: 0.5,
+    };
+    app.world_mut()
+        .write_message(SimCommandRequest(after_save.clone()));
+    app.update();
+    freeze_time(&mut app);
+    assert_eq!(
+        app.world().resource::<SimResource>().read().tick_count(),
+        snapshot_tick + 1
+    );
+    let continued_hash = app.world().resource::<SimResource>().read().state_hash();
+
+    drain_save_jobs(&mut app);
+    let path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+    let bytes = fs::read(path).unwrap();
+    let (_, payload) = decode_container(&bytes).unwrap();
+    let mut loaded = load_from_bytes(payload).unwrap();
+    assert_eq!(loaded.tick_count(), snapshot_tick);
+    loaded.apply_command(&after_save).unwrap();
+    loaded.tick();
+
+    assert_eq!(loaded.state_hash(), continued_hash);
+}
+
+#[test]
+/// Measures the bounded capture pause and tick progress during worker activity.
+fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
+    let mut app = test_app(Duration::ZERO, "large_world_background_save");
+    generate_large_world(&mut app);
+
+    press_key(&mut app, KeyCode::F5);
+    let submission_update_started = Instant::now();
+    app.update();
+    let submission_update = submission_update_started.elapsed();
+    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+
+    let mut measured_ticks = 0;
+    let mut max_tick_update = Duration::ZERO;
+    for _ in 0..30 {
+        if app.world().resource::<PendingSaveJobs>().is_empty() {
+            break;
+        }
+        let before = app.world().resource::<SimResource>().read().tick_count();
+        let started = Instant::now();
+        app.update();
+        max_tick_update = max_tick_update.max(started.elapsed());
+        let after = app.world().resource::<SimResource>().read().tick_count();
+        if after > before {
+            measured_ticks += 1;
+            assert_eq!(after, before + 1);
+        }
+        std::thread::yield_now();
+    }
+
+    eprintln!(
+        "large-world save: {measured_ticks} fixed ticks observed, max update {:.3} ms",
+        max_tick_update.as_secs_f64() * 1000.0
+    );
+    assert!(measured_ticks > 0);
+    assert_eq!(
+        app.world()
+            .resource::<factory_app::resources::SimProfileStats>()
+            .save_blocked_fixed_ticks,
+        0
+    );
+    drain_save_jobs(&mut app);
+    let metrics = app.world().resource::<SaveLoadMetrics>();
+    eprintln!(
+        "large-world snapshot capture: {:.3} ms (submission update {:.3} ms)",
+        metrics.last_snapshot_capture_ms,
+        submission_update.as_secs_f64() * 1000.0
+    );
+    assert!(metrics.last_snapshot_capture_ms > 0.0);
+    assert!(metrics.last_request_submission_ms >= metrics.last_snapshot_capture_ms);
+    assert!(
+        submission_update.as_secs_f64() * 1000.0 >= metrics.last_request_submission_ms,
+        "the measured submission update must include synchronous snapshot capture"
+    );
+    assert!(metrics.last_serialize_ms > 0.0);
+    assert!(metrics.last_write_ms > 0.0);
+}
+
+#[test]
+#[ignore = "wall-clock performance budget; run on a controlled benchmark host"]
+/// Enforces the documented one-frame capture budget on controlled hardware.
+fn large_world_snapshot_capture_stays_within_one_frame_budget() {
+    let mut app = test_app(Duration::ZERO, "large_world_capture_budget");
+    generate_large_world(&mut app);
+
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    drain_save_jobs(&mut app);
+
+    let capture_ms = app
+        .world()
+        .resource::<SaveLoadMetrics>()
+        .last_snapshot_capture_ms;
+    let snapshot_capture = Duration::from_secs_f64(capture_ms / 1000.0);
+    assert!(
+        snapshot_capture <= LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET,
+        "large-world snapshot capture {snapshot_capture:?} exceeded the one-frame budget {LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET:?}"
+    );
+}
+
+/// Generates the shared 20x20-chunk fixture used by save performance coverage.
+fn generate_large_world(app: &mut App) {
+    let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+    let mut sim = sim_resource.write_for_tests();
+    for y in -10..10 {
+        for x in -10..10 {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
 }
 
 fn test_app(frame_duration: Duration, name: &str) -> App {

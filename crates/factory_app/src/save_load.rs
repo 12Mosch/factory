@@ -53,7 +53,8 @@ impl Default for SaveLoadConfig {
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct SaveLoadMetrics {
     pub last_request_submission_ms: f64,
-    pub last_worker_lock_wait_ms: f64,
+    pub last_snapshot_capture_ms: f64,
+    pub last_snapshot_tick: u64,
     pub last_serialize_ms: f64,
     pub last_write_ms: f64,
     pub last_total_ms: f64,
@@ -300,7 +301,8 @@ pub(crate) fn poll_save_jobs(
     for job in jobs::take_completed(&mut pending) {
         match job.result {
             Ok(outcome) => {
-                metrics.last_worker_lock_wait_ms = outcome.lock_wait_ms;
+                metrics.last_snapshot_capture_ms = outcome.snapshot_capture_ms;
+                metrics.last_snapshot_tick = outcome.snapshot_tick;
                 metrics.last_serialize_ms = outcome.serialize_ms;
                 metrics.last_write_ms = outcome.write_ms;
                 metrics.last_total_ms = outcome.total_ms;
