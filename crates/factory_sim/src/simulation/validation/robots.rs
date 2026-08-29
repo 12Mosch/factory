@@ -312,28 +312,27 @@ pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidati
                 {
                     return Err(invalid());
                 }
-                let payload_valid = match job {
-                    ConstructionJob::BuildGhost(ghost_id) => {
-                        let expected = sim.construction.ghosts.get(&ghost_id).and_then(|ghost| {
-                            crate::simulation::entity_recovery_ops::build_item_for_entity(
-                                sim,
-                                ghost.prototype_id,
-                            )
-                            .ok()
-                        });
-                        robot.payload.is_some_and(|payload| {
-                            Some(payload.item_id()) == expected && payload.count() == 1
-                        })
-                    }
-                    ConstructionJob::Deconstruct(_) => robot.payload.is_none(),
-                    ConstructionJob::Repair(_) => robot.payload.is_some_and(|payload| {
-                        payload.count() == 1
-                            && sim
-                                .world
-                                .prototypes
-                                .item(payload.item_id())
-                                .is_some_and(|item| item.repair.is_some())
+                let repair_item = matches!(job, ConstructionJob::Repair(_))
+                    .then(|| robot.payload.map(|payload| payload.item_id()))
+                    .flatten()
+                    .filter(|item_id| {
+                        sim.world
+                            .prototypes
+                            .item(*item_id)
+                            .is_some_and(|item| item.repair.is_some())
+                    });
+                let expected = crate::simulation::robot_ops::construction_job_payload_item(
+                    sim,
+                    job,
+                    repair_item,
+                );
+                let payload_valid = match expected {
+                    Some(item_id) => robot.payload.is_some_and(|payload| {
+                        payload.item_id() == item_id && payload.count() == 1
                     }),
+                    None => {
+                        matches!(job, ConstructionJob::Deconstruct(_)) && robot.payload.is_none()
+                    }
                 };
                 if !payload_valid {
                     return Err(invalid());

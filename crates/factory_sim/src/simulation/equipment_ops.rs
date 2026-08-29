@@ -12,8 +12,7 @@ struct EquipmentTotals {
     shield_recharge_watts: u64,
     personal_roboport_capacity_joules: u64,
     personal_roboport_input_watts: u64,
-    personal_roboport_charging_pad_count: u16,
-    personal_roboport_charging_pad_watts: u64,
+    personal_roboport_charging_pad_count: usize,
     personal_roboport_construction_radius_tiles: u16,
 }
 
@@ -202,6 +201,8 @@ impl Simulation {
         Ok(())
     }
 
+    /// Advances armor power generation and fills personal-roboport and shield
+    /// buffers in their deterministic priority order.
     pub(super) fn advance_player_equipment(&mut self) {
         let totals = equipment_totals(&self.world.prototypes, &self.player_equipment);
         let generated_watt_ticks = self
@@ -280,6 +281,7 @@ impl Simulation {
             .ok_or(PlayerEquipmentError::NoArmorEquipped)
     }
 
+    /// Clamps all durable energy stores after armor or equipment removal.
     fn clamp_personal_equipment_capacity(&mut self) {
         let totals = equipment_totals(&self.world.prototypes, &self.player_equipment);
         self.player_equipment.battery_energy_joules = self
@@ -299,16 +301,17 @@ impl Simulation {
         }
     }
 
-    pub(in crate::simulation) fn personal_roboport_totals(&self) -> (u16, u64) {
-        let totals = equipment_totals(&self.world.prototypes, &self.player_equipment);
-        (
-            totals.personal_roboport_charging_pad_count,
-            totals.personal_roboport_charging_pad_watts,
-        )
+    /// Charging rate of every installed personal-roboport pad, in stable
+    /// equipment-grid order. Keeping rates separate prevents a faster module
+    /// from increasing the throughput of slower modules in a mixed loadout.
+    pub(in crate::simulation) fn personal_roboport_charging_pad_rates(&self) -> Vec<u64> {
+        personal_roboport_charging_pad_rates(&self.world.prototypes, &self.player_equipment)
     }
 
+    /// Releases charging robots when removing equipment reduces pad capacity.
     fn reconcile_personal_charging_capacity(&mut self) {
-        let pad_count = usize::from(self.personal_roboport_totals().0);
+        let pad_count = equipment_totals(&self.world.prototypes, &self.player_equipment)
+            .personal_roboport_charging_pad_count;
         let mut released = Vec::new();
         while self
             .player_equipment
@@ -343,6 +346,8 @@ impl Simulation {
     }
 }
 
+/// Validates installed equipment geometry, bounded energy, charging ownership,
+/// fixed-point remainders, and armor-derived resistance state.
 pub(super) fn validate_player_equipment(sim: &Simulation) -> Result<(), SimValidationError> {
     let state = &sim.player_equipment;
     let armor = match state.equipped_armor {
@@ -399,7 +404,7 @@ pub(super) fn validate_player_equipment(sim: &Simulation) -> Result<(), SimValid
         || state.shield_energy_joules > totals.shield_capacity_joules
         || state.personal_roboport_energy_joules > totals.personal_roboport_capacity_joules
         || state.personal_roboport_charging.charging.len()
-            > usize::from(totals.personal_roboport_charging_pad_count)
+            > totals.personal_roboport_charging_pad_count
         || (totals.personal_roboport_charging_pad_count == 0
             && !state.personal_roboport_charging.is_empty())
     {
@@ -408,6 +413,7 @@ pub(super) fn validate_player_equipment(sim: &Simulation) -> Result<(), SimValid
     validate_equipment_remainders_and_resistance(sim)
 }
 
+/// Validates sub-joule power remainders and the active armor resistance copy.
 fn validate_equipment_remainders_and_resistance(
     sim: &Simulation,
 ) -> Result<(), SimValidationError> {
@@ -458,6 +464,8 @@ fn inventory_slot_error(inventory: &Inventory, slot_index: usize) -> PlayerEquip
     }
 }
 
+/// Aggregates installed equipment effects while retaining every personal
+/// charging pad's own rate.
 fn equipment_totals(catalog: &PrototypeCatalog, state: &PlayerEquipmentState) -> EquipmentTotals {
     let mut totals = EquipmentTotals::default();
     for installed in &state.installed {
@@ -485,7 +493,7 @@ fn equipment_totals(catalog: &PrototypeCatalog, state: &PlayerEquipmentState) ->
                 energy_capacity_joules,
                 energy_input_watts,
                 charging_pad_count,
-                charging_pad_watts,
+                charging_pad_watts: _,
                 construction_radius_tiles,
             } => {
                 totals.personal_roboport_capacity_joules = totals
@@ -496,10 +504,7 @@ fn equipment_totals(catalog: &PrototypeCatalog, state: &PlayerEquipmentState) ->
                     .saturating_add(energy_input_watts);
                 totals.personal_roboport_charging_pad_count = totals
                     .personal_roboport_charging_pad_count
-                    .saturating_add(u16::from(charging_pad_count));
-                totals.personal_roboport_charging_pad_watts = totals
-                    .personal_roboport_charging_pad_watts
-                    .max(charging_pad_watts);
+                    .saturating_add(usize::from(charging_pad_count));
                 totals.personal_roboport_construction_radius_tiles = totals
                     .personal_roboport_construction_radius_tiles
                     .max(construction_radius_tiles);
@@ -507,6 +512,33 @@ fn equipment_totals(catalog: &PrototypeCatalog, state: &PlayerEquipmentState) ->
         }
     }
     totals
+}
+
+/// Collects each installed personal-roboport pad rate without burdening the
+/// scalar equipment aggregation used by the per-tick power simulation.
+fn personal_roboport_charging_pad_rates(
+    catalog: &PrototypeCatalog,
+    state: &PlayerEquipmentState,
+) -> Vec<u64> {
+    let mut rates = Vec::new();
+    for installed in &state.installed {
+        let Some(EquipmentEffectPrototype::PersonalRoboport {
+            charging_pad_count,
+            charging_pad_watts,
+            ..
+        }) = catalog
+            .item(installed.item_id)
+            .and_then(|item| item.equipment)
+            .map(|equipment| equipment.effect)
+        else {
+            continue;
+        };
+        rates.extend(std::iter::repeat_n(
+            charging_pad_watts,
+            usize::from(charging_pad_count),
+        ));
+    }
+    rates
 }
 
 fn equipment_prototype(catalog: &PrototypeCatalog, item_id: ItemId) -> EquipmentPrototype {

@@ -261,6 +261,8 @@ pub(crate) fn handle_equipment_command_results(
     }
 }
 
+/// Refreshes inventory, armor, energy, shield, and feedback labels while the
+/// equipment window is visible.
 pub(crate) fn update_equipment_window_text(
     sim: Res<SimResource>,
     window: Res<EquipmentWindowState>,

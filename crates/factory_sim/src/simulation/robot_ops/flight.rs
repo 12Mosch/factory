@@ -37,11 +37,12 @@ impl Simulation {
     /// starts charging this tick rather than idling one tick per hop through
     /// the queue.
     pub(in crate::simulation) fn advance_robots(&mut self) {
-        self.assign_charging_pads();
+        let personal_pad_rates = self.personal_roboport_charging_pad_rates();
+        self.assign_charging_pads(&personal_pad_rates);
         self.ensure_robot_network_topology();
         self.reconcile_construction_jobs();
         self.reconcile_logistic_deliveries();
-        let arrivals = self.step_robots();
+        let arrivals = self.step_robots(&personal_pad_rates);
         for robot_id in arrivals {
             self.resolve_construction_arrival(robot_id);
             self.resolve_delivery_arrival(robot_id);
@@ -202,8 +203,8 @@ impl Simulation {
     }
 
     /// Moves queued robots onto free charging pads, oldest arrival first.
-    fn assign_charging_pads(&mut self) {
-        self.assign_personal_charging_pads();
+    fn assign_charging_pads(&mut self, personal_pad_rates: &[u64]) {
+        self.assign_personal_charging_pads(personal_pad_rates.len());
         if self.robot_flights.charging.is_empty() {
             return;
         }
@@ -250,8 +251,9 @@ impl Simulation {
         });
     }
 
-    fn assign_personal_charging_pads(&mut self) {
-        let pad_count = usize::from(self.personal_roboport_totals().0);
+    /// Removes stale charging registrations and promotes queued personal robots
+    /// into the currently installed pads in FIFO order.
+    fn assign_personal_charging_pads(&mut self, pad_count: usize) {
         let state = &mut self.player_equipment.personal_roboport_charging;
         state.charging.retain(|robot_id| {
             self.robot_flights
@@ -292,11 +294,17 @@ impl Simulation {
         }
     }
 
-    fn step_robots(&mut self) -> Vec<RobotId> {
+    /// Steps all flying robots and returns construction robots that reached
+    /// their job targets during this tick.
+    fn step_robots(&mut self, personal_pad_rates: &[u64]) -> Vec<RobotId> {
         if self.robot_flights.robots.is_empty() {
             return Vec::new();
         }
-        let (_, personal_pad_watts) = self.personal_roboport_totals();
+        let personal_roboport_installed = !personal_pad_rates.is_empty();
+        let personal_pad_watts = personal_charging_pad_assignments(
+            &self.player_equipment.personal_roboport_charging.charging,
+            personal_pad_rates,
+        );
         let Simulation {
             robot_flights,
             entities,
@@ -319,6 +327,7 @@ impl Simulation {
             player_equipment,
             player_inventory,
             personal_pad_watts,
+            personal_roboport_installed,
             arrivals: Vec::new(),
         };
         robots.retain(|_, robot| step_robot(&mut context, robot));
@@ -334,7 +343,8 @@ struct RobotStepContext<'a> {
     player_position: (i64, i64),
     player_equipment: &'a mut PlayerEquipmentState,
     player_inventory: &'a mut Inventory,
-    personal_pad_watts: u64,
+    personal_pad_watts: BTreeMap<RobotId, u64>,
+    personal_roboport_installed: bool,
     arrivals: Vec<RobotId>,
 }
 
@@ -485,6 +495,8 @@ fn arrive_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
     false
 }
 
+/// Deposits recovered cargo, queues an undercharged robot, and finally returns
+/// the robot item to the player when every owned item fits.
 fn arrive_personal_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
     if !robot.cargo.is_empty() || !robot.bulk_cargo.is_empty() {
         deposit_personal_cargo(context, robot);
@@ -497,8 +509,7 @@ fn arrive_personal_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -
         .item(robot.item_id)
         .and_then(|item| item.robot)
         .map_or(0, |profile| profile.energy_capacity_joules);
-    let personal_roboport_installed = context.personal_pad_watts > 0;
-    if personal_roboport_installed && robot.energy_joules < capacity {
+    if context.personal_roboport_installed && robot.energy_joules < capacity {
         enqueue_for_personal_charge(context, robot);
         return true;
     }
@@ -512,6 +523,8 @@ fn arrive_personal_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -
     false
 }
 
+/// Moves as much recovered cargo as possible into the player inventory while
+/// retaining every stack that does not fit on the flying robot.
 fn deposit_personal_cargo(context: &mut RobotStepContext<'_>, robot: &mut Robot) {
     let mut remaining_cargo = Vec::new();
     for stack in robot.cargo.drain(..) {
@@ -687,6 +700,7 @@ fn enqueue_for_charge(context: &mut RobotStepContext<'_>, robot: &mut Robot, rob
     }
 }
 
+/// Registers a personal robot once in the deterministic charging queue.
 fn enqueue_for_personal_charge(context: &mut RobotStepContext<'_>, robot: &mut Robot) {
     let state = &mut context.player_equipment.personal_roboport_charging;
     if state.charging.contains(&robot.id) || state.queue.contains(&robot.id) {
@@ -696,15 +710,17 @@ fn enqueue_for_personal_charge(context: &mut RobotStepContext<'_>, robot: &mut R
     robot.activity = RobotActivity::PersonalQueued;
 }
 
+/// Draws one tick from the assigned personal pad and returns whether the robot
+/// still needs energy.
 fn charge_personal_robot(
     context: &mut RobotStepContext<'_>,
     robot: &mut Robot,
     capacity_joules: u64,
 ) -> bool {
-    if context.personal_pad_watts == 0 {
+    let Some(pad_watts) = context.personal_pad_watts.get(&robot.id).copied() else {
         return false;
-    }
-    let transferred = joules_per_tick(context.personal_pad_watts)
+    };
+    let transferred = joules_per_tick(pad_watts)
         .min(context.player_equipment.personal_roboport_energy_joules)
         .min(capacity_joules.saturating_sub(robot.energy_joules));
     context.player_equipment.personal_roboport_energy_joules -= transferred;
@@ -712,6 +728,21 @@ fn charge_personal_robot(
     robot.energy_joules < capacity_joules
 }
 
+/// Pairs charging robots with individual personal-roboport pads in stable
+/// order. A robot can therefore draw only the rate of its assigned pad, even
+/// when the installed equipment provides heterogeneous pad rates.
+fn personal_charging_pad_assignments(
+    charging: &std::collections::BTreeSet<RobotId>,
+    pad_rates: &[u64],
+) -> BTreeMap<RobotId, u64> {
+    charging
+        .iter()
+        .copied()
+        .zip(pad_rates.iter().copied())
+        .collect()
+}
+
+/// Removes a personal charging registration and returns the robot to flight.
 fn release_personal_pad(context: &mut RobotStepContext<'_>, robot: &mut Robot) {
     context
         .player_equipment
@@ -969,5 +1000,17 @@ mod tests {
     fn an_empty_robot_still_crawls_at_least_one_unit() {
         assert_eq!(crawl_speed(60), 12);
         assert_eq!(crawl_speed(1), 1);
+    }
+
+    /// Heterogeneous personal pads retain their own rates and aggregate only by
+    /// summing those independent assignments.
+    #[test]
+    fn mixed_personal_charging_pads_keep_their_individual_rates() {
+        let charging = [RobotId::new(4), RobotId::new(9)].into_iter().collect();
+        let assignments = personal_charging_pad_assignments(&charging, &[40_000, 120_000]);
+
+        assert_eq!(assignments.get(&RobotId::new(4)), Some(&40_000));
+        assert_eq!(assignments.get(&RobotId::new(9)), Some(&120_000));
+        assert_eq!(assignments.values().copied().sum::<u64>(), 160_000);
     }
 }

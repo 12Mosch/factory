@@ -15,6 +15,7 @@ fn equip_modular_armor(sim: &mut Simulation) -> ItemId {
     armor
 }
 
+/// Installs the base personal roboport and seeds one construction robot.
 fn install_personal_roboport(sim: &mut Simulation) -> (ItemId, ItemId) {
     equip_modular_armor(sim);
     let equipment = add_item(sim, 11, "personal_roboport_equipment");
@@ -25,6 +26,8 @@ fn install_personal_roboport(sim: &mut Simulation) -> (ItemId, ItemId) {
     (equipment, robot)
 }
 
+/// Places a valid ghost inside personal coverage, optionally requiring an
+/// overlap with stationary construction coverage.
 fn place_personal_ghost(
     sim: &mut Simulation,
     prototype_id: EntityPrototypeId,
@@ -62,6 +65,7 @@ fn place_personal_ghost(
     panic!("expected a buildable tile in personal roboport coverage");
 }
 
+/// Advances a fixture until a condition holds or fails with a bounded timeout.
 fn tick_until(sim: &mut Simulation, limit: usize, predicate: impl Fn(&Simulation) -> bool) {
     for _ in 0..limit {
         if predicate(sim) {
@@ -241,6 +245,8 @@ fn validation_rejects_noncanonical_and_over_capacity_equipment_state() {
 }
 
 #[test]
+/// Personal dispatch consumes player-owned inputs and returns the robot after
+/// completing its build.
 fn personal_roboport_dispatches_from_player_inventory_and_builds() {
     let mut sim = Simulation::new_test_world(123);
     let (_, robot_item) = install_personal_roboport(&mut sim);
@@ -272,15 +278,23 @@ fn personal_roboport_dispatches_from_player_inventory_and_builds() {
 }
 
 #[test]
+/// Dispatch waits below the prototype energy threshold without consuming any
+/// player-owned items, then resumes exactly at the threshold.
 fn personal_roboport_low_power_blocks_dispatch_without_consuming_items() {
     let mut sim = Simulation::new_test_world(123);
     let (_, robot_item) = install_personal_roboport(&mut sim);
     let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
     let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    let robot_capacity = sim
+        .catalog()
+        .item(robot_item)
+        .and_then(|item| item.robot)
+        .expect("construction robot declares a flight profile")
+        .energy_capacity_joules;
     set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
     let material_before = sim.player_inventory.count(build_item);
     let ghost_id = place_personal_ghost(&mut sim, furnace, false);
-    sim.player_equipment.personal_roboport_energy_joules = 1_499_999;
+    sim.player_equipment.personal_roboport_energy_joules = robot_capacity - 1;
 
     sim.tick();
 
@@ -293,7 +307,7 @@ fn personal_roboport_low_power_blocks_dispatch_without_consuming_items() {
             .any(|job| job == ConstructionJob::BuildGhost(ghost_id))
     );
 
-    sim.player_equipment.personal_roboport_energy_joules = 1_500_000;
+    sim.player_equipment.personal_roboport_energy_joules = robot_capacity;
     sim.tick();
     assert_eq!(sim.robot_count(), 1);
     assert_eq!(sim.player_inventory.count(robot_item), 0);
@@ -316,6 +330,8 @@ fn personal_roboport_low_power_blocks_dispatch_without_consuming_items() {
 }
 
 #[test]
+/// Personal coverage wins deterministically when personal and stationary
+/// construction networks overlap.
 fn personal_roboport_precedes_stationary_network_in_overlapping_coverage() {
     use super::support::{place_roboport, station_robots};
 
@@ -356,6 +372,8 @@ fn personal_roboport_precedes_stationary_network_in_overlapping_coverage() {
 }
 
 #[test]
+/// Leaving personal coverage aborts the reservation and recovers the robot and
+/// its payload without loss.
 fn moving_out_of_range_recovers_owned_job_robot_and_payload() {
     let mut sim = Simulation::new_test_world(123);
     let (_, robot_item) = install_personal_roboport(&mut sim);
@@ -383,6 +401,8 @@ fn moving_out_of_range_recovers_owned_job_robot_and_payload() {
 }
 
 #[test]
+/// Personal robots use player repair materials and return deconstruction
+/// recoveries to the player inventory.
 fn personal_robot_repairs_and_deconstructs_with_player_owned_materials() {
     let mut sim = Simulation::new_test_world(123);
     let (_, robot_item) = install_personal_roboport(&mut sim);
@@ -420,6 +440,8 @@ fn personal_robot_repairs_and_deconstructs_with_player_owned_materials() {
 }
 
 #[test]
+/// Personal robot flight, job, charging, and equipment state serialize and
+/// replay deterministically.
 fn deployed_personal_robot_energy_job_and_equipment_round_trip_deterministically() {
     let mut sim = Simulation::new_test_world(123);
     install_personal_roboport(&mut sim);

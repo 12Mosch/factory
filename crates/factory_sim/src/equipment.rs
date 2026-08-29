@@ -49,6 +49,7 @@ impl PlayerEquipmentState {
         self.shield_energy_joules
     }
 
+    /// Energy currently buffered for dispatching and charging personal robots.
     pub fn personal_roboport_energy_joules(&self) -> u64 {
         self.personal_roboport_energy_joules
     }

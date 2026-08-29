@@ -75,6 +75,8 @@ struct CoverageSquare {
     border: Color,
 }
 
+/// Rebuilds coverage sprites when the held roboport, open network, or moving
+/// personal-roboport coverage changes.
 pub(crate) fn sync_roboport_coverage_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
@@ -126,6 +128,7 @@ pub(crate) fn sync_roboport_coverage_rendering(
     }
 }
 
+/// Creates the construction-only overlay used by a personal roboport.
 fn personal_coverage_square(bounds: TileBounds) -> CoverageSquare {
     CoverageSquare {
         bounds,

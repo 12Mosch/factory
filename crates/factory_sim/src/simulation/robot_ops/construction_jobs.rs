@@ -234,6 +234,8 @@ impl Simulation {
         dispatched
     }
 
+    /// Attempts to reserve and launch a covered job using only player-owned
+    /// robots, materials, and personal-roboport energy.
     fn try_dispatch_personal_construction_job(
         &mut self,
         job: ConstructionJob,
@@ -246,34 +248,12 @@ impl Simulation {
         {
             return false;
         }
-        if let ConstructionJob::BuildGhost(ghost_id) = job {
-            let Some(ghost) = self.construction.ghosts.get(&ghost_id) else {
-                return false;
-            };
-            if placement_validation_ops::validate_entity_placement(
-                self,
-                placement::EntityPlacementRequest {
-                    prototype_id: ghost.prototype_id,
-                    x: ghost.x,
-                    y: ghost.y,
-                    direction: ghost.direction,
-                },
-            )
-            .is_err()
-            {
-                return false;
-            }
+        if !self.construction_job_placement_is_valid(job) {
+            return false;
         }
 
-        let payload_item = match job {
-            ConstructionJob::BuildGhost(ghost_id) => {
-                self.construction.ghosts.get(&ghost_id).and_then(|ghost| {
-                    entity_recovery_ops::build_item_for_entity(self, ghost.prototype_id).ok()
-                })
-            }
-            ConstructionJob::Repair(_) => first_player_repair_item(self),
-            ConstructionJob::Deconstruct(_) => None,
-        };
+        let repair_item = first_player_repair_item(self);
+        let payload_item = construction_job_payload_item(self, job, repair_item);
         if !matches!(job, ConstructionJob::Deconstruct(_))
             && payload_item.is_none_or(|item_id| self.player_inventory.count(item_id) == 0)
         {
@@ -333,34 +313,12 @@ impl Simulation {
         target_y: WorldTileCoord,
         member_ids: &[EntityId],
     ) -> bool {
-        if let ConstructionJob::BuildGhost(ghost_id) = job {
-            let Some(ghost) = self.construction.ghosts.get(&ghost_id) else {
-                return false;
-            };
-            if placement_validation_ops::validate_entity_placement(
-                self,
-                placement::EntityPlacementRequest {
-                    prototype_id: ghost.prototype_id,
-                    x: ghost.x,
-                    y: ghost.y,
-                    direction: ghost.direction,
-                },
-            )
-            .is_err()
-            {
-                return false;
-            }
+        if !self.construction_job_placement_is_valid(job) {
+            return false;
         }
 
-        let payload_item = match job {
-            ConstructionJob::BuildGhost(ghost_id) => {
-                self.construction.ghosts.get(&ghost_id).and_then(|ghost| {
-                    entity_recovery_ops::build_item_for_entity(self, ghost.prototype_id).ok()
-                })
-            }
-            ConstructionJob::Repair(_) => first_network_repair_item(self, member_ids),
-            ConstructionJob::Deconstruct(_) => None,
-        };
+        let repair_item = first_network_repair_item(self, member_ids);
+        let payload_item = construction_job_payload_item(self, job, repair_item);
         if !matches!(job, ConstructionJob::Deconstruct(_)) && payload_item.is_none() {
             return false;
         }
@@ -400,6 +358,29 @@ impl Simulation {
         true
     }
 
+    /// Checks that a build ghost still exists and can be placed. Other job
+    /// kinds do not require placement validation at dispatch time.
+    fn construction_job_placement_is_valid(&self, job: ConstructionJob) -> bool {
+        let ConstructionJob::BuildGhost(ghost_id) = job else {
+            return true;
+        };
+        let Some(ghost) = self.construction.ghosts.get(&ghost_id) else {
+            return false;
+        };
+        placement_validation_ops::validate_entity_placement(
+            self,
+            placement::EntityPlacementRequest {
+                prototype_id: ghost.prototype_id,
+                x: ghost.x,
+                y: ghost.y,
+                direction: ghost.direction,
+            },
+        )
+        .is_ok()
+    }
+
+    /// Returns whether a queued or reserved construction target still exists
+    /// and remains eligible for its requested operation.
     pub(in crate::simulation) fn construction_job_is_valid(&self, job: ConstructionJob) -> bool {
         match job {
             ConstructionJob::BuildGhost(ghost_id) => {
@@ -443,6 +424,8 @@ impl Simulation {
         ))
     }
 
+    /// Checks coverage against the moving player for personal robots or the
+    /// robot's stationary home network otherwise.
     fn job_is_covered_by_robot_home(&self, job: ConstructionJob, robot: &Robot) -> bool {
         if robot.personal {
             let Some((x, y)) = self.construction_job_target_tile(job) else {
@@ -521,6 +504,28 @@ impl Simulation {
     }
 }
 
+/// Resolves the one-item payload required by a construction job.
+///
+/// Build payloads come from the ghost prototype, repair payloads are selected
+/// by the caller's inventory source, and deconstruction needs no payload. The
+/// same rules are shared by both dispatch paths and flight-state validation.
+pub(in crate::simulation) fn construction_job_payload_item(
+    sim: &Simulation,
+    job: ConstructionJob,
+    repair_item: Option<ItemId>,
+) -> Option<ItemId> {
+    match job {
+        ConstructionJob::BuildGhost(ghost_id) => {
+            sim.construction.ghosts.get(&ghost_id).and_then(|ghost| {
+                entity_recovery_ops::build_item_for_entity(sim, ghost.prototype_id).ok()
+            })
+        }
+        ConstructionJob::Repair(_) => repair_item,
+        ConstructionJob::Deconstruct(_) => None,
+    }
+}
+
+/// Finds the first construction robot in deterministic player-slot order.
 fn first_player_construction_robot(
     sim: &Simulation,
 ) -> Option<(ItemId, factory_data::RobotPrototype)> {
@@ -534,6 +539,7 @@ fn first_player_construction_robot(
         })
 }
 
+/// Finds the first repair item in deterministic player-slot order.
 fn first_player_repair_item(sim: &Simulation) -> Option<ItemId> {
     sim.player_inventory
         .slots()
