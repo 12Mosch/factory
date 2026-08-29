@@ -567,7 +567,7 @@ fn commands_around_save_apply_once_and_continue_deterministically() {
 }
 
 #[test]
-fn large_world_background_save_does_not_block_fixed_ticks() {
+fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
     let mut app = test_app(Duration::ZERO, "large_world_background_save");
     {
         let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
@@ -580,7 +580,9 @@ fn large_world_background_save_does_not_block_fixed_ticks() {
     }
 
     press_key(&mut app, KeyCode::F5);
+    let submission_update_started = Instant::now();
     app.update();
+    let submission_update = submission_update_started.elapsed();
     assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
     app.world_mut()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -618,7 +620,17 @@ fn large_world_background_save_does_not_block_fixed_ticks() {
     );
     drain_save_jobs(&mut app);
     let metrics = app.world().resource::<SaveLoadMetrics>();
+    eprintln!(
+        "large-world snapshot capture: {:.3} ms (submission update {:.3} ms)",
+        metrics.last_snapshot_capture_ms,
+        submission_update.as_secs_f64() * 1000.0
+    );
     assert!(metrics.last_snapshot_capture_ms > 0.0);
+    assert!(metrics.last_request_submission_ms >= metrics.last_snapshot_capture_ms);
+    assert!(
+        submission_update.as_secs_f64() * 1000.0 >= metrics.last_request_submission_ms,
+        "the measured submission update must include synchronous snapshot capture"
+    );
     assert!(metrics.last_serialize_ms > 0.0);
     assert!(metrics.last_write_ms > 0.0);
 }
