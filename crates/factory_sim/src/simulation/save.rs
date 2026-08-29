@@ -173,7 +173,7 @@ struct SaveHeader {
     prototype_hash: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct SimulationSnapshotOwned {
     tick: u64,
     day_night_cycle: Option<DayNightCycleState>,
@@ -208,17 +208,54 @@ struct SimulationSnapshotOwned {
     config: SimulationConfig,
 }
 
+/// An owned, immutable copy of the durable state for one completed simulation tick.
+///
+/// Capturing the snapshot performs the state copies needed to release the live
+/// simulation immediately. Encoding can then happen on another thread without
+/// borrowing or locking the simulation.
+pub struct SimulationSaveSnapshot {
+    prototype_hash: u64,
+    state: SimulationSnapshotOwned,
+}
+
+impl SimulationSaveSnapshot {
+    /// Returns the completed simulation tick represented by this snapshot.
+    pub fn tick_count(&self) -> u64 {
+        self.state.tick
+    }
+}
+
+/// Captures the durable state at the simulation's current completed-tick boundary.
+pub fn capture_save_snapshot(sim: &Simulation) -> SimulationSaveSnapshot {
+    SimulationSaveSnapshot {
+        prototype_hash: prototype_hash(&sim.world.prototypes),
+        state: SimulationSnapshotOwned::from_simulation(sim),
+    }
+}
+
+/// Serializes a previously captured snapshot without accessing the live simulation.
+pub fn save_snapshot_to_bytes(snapshot: &SimulationSaveSnapshot) -> Result<Vec<u8>, SaveLoadError> {
+    encode_snapshot(snapshot.prototype_hash, &snapshot.state)
+}
+
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
     let prototype_hash = prototype_hash(&sim.world.prototypes);
+    let snapshot = SimulationSnapshotRef::from_simulation(sim);
+    encode_snapshot(prototype_hash, &snapshot)
+}
+
+fn encode_snapshot(
+    prototype_hash: u64,
+    snapshot: &impl Serialize,
+) -> Result<Vec<u8>, SaveLoadError> {
     let mut bytes = Vec::with_capacity(SAVE_HEADER_SIZE);
     bytes.extend_from_slice(&SAVE_MAGIC);
     bytes.extend_from_slice(&SAVE_VERSION.to_le_bytes());
     bytes.extend_from_slice(&PROTOTYPE_FORMAT_VERSION.to_le_bytes());
     bytes.extend_from_slice(&prototype_hash.to_le_bytes());
-    let snapshot = SimulationSnapshotRef::from_simulation(sim);
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
-        .serialize_into(&mut bytes, &snapshot)
+        .serialize_into(&mut bytes, snapshot)
         .map_err(SaveLoadError::from)?;
     Ok(bytes)
 }
@@ -398,6 +435,42 @@ impl<'a> SimulationSnapshotRef<'a> {
 }
 
 impl SimulationSnapshotOwned {
+    fn from_simulation(sim: &Simulation) -> Self {
+        Self {
+            tick: sim.tick,
+            day_night_cycle: sim.day_night_cycle,
+            world_seed: sim.world.seed,
+            prototypes: sim.world.prototypes.clone(),
+            chunks: sim.world.chunks.clone(),
+            chunk_generation_queue: sim.chunk_generation_queue.clone(),
+            chart: sim.chart.clone(),
+            item_statistics: sim.statistics.items.clone(),
+            fluid_statistics: sim.statistics.fluids.clone(),
+            power_statistics: sim.statistics.power.clone(),
+            rockets_launched: sim.statistics.rockets_launched,
+            entities: sim.entities.clone(),
+            construction: sim.construction.clone(),
+            player: sim.player,
+            player_equipment: sim.player_equipment.clone(),
+            player_inventory: sim.player_inventory.clone(),
+            manual_mining_progress: sim.manual_mining_progress,
+            crafting_queue: sim.crafting_queue.clone(),
+            onboarding_progress: sim.onboarding_progress,
+            research: sim.research.clone(),
+            power_summary: sim.power.summary,
+            power_networks: sim.power.networks.clone(),
+            entity_power_statuses: sim.power.entity_statuses.clone(),
+            fluid_networks: sim.fluids.networks.clone(),
+            heat_networks: sim.heat.networks.clone(),
+            robot_networks: sim.robots.networks.clone(),
+            robot_flights: sim.robot_flights.clone(),
+            rolling_stock: sim.rolling_stock.clone(),
+            pollution: sim.pollution.clone(),
+            enemies: sim.enemies.clone(),
+            config: sim.config,
+        }
+    }
+
     fn into_simulation(self) -> Simulation {
         let mut sim = Simulation {
             tick: self.tick,
@@ -675,5 +748,24 @@ mod tests {
             sim.world.generated_chunk_count()
         );
         assert_eq!(hash, loaded.state_hash());
+    }
+
+    #[test]
+    fn owned_save_snapshot_remains_at_its_captured_completed_tick() {
+        let mut sim = Simulation::new_test_world(123);
+        for _ in 0..3 {
+            sim.tick();
+        }
+        let captured_tick = sim.tick_count();
+        let captured_hash = sim.state_hash();
+        let snapshot = capture_save_snapshot(&sim);
+
+        sim.tick();
+        let loaded = load_from_bytes(&save_snapshot_to_bytes(&snapshot).unwrap()).unwrap();
+
+        assert_eq!(snapshot.tick_count(), captured_tick);
+        assert_eq!(loaded.tick_count(), captured_tick);
+        assert_eq!(loaded.state_hash(), captured_hash);
+        assert_ne!(loaded.state_hash(), sim.state_hash());
     }
 }

@@ -971,7 +971,8 @@ use self::robot_state::RobotSubsystem;
 pub use self::rolling_stock_ops::braking_distance_fixed;
 pub use self::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo, SaveLoadError,
-    inspect_save_header, load_from_bytes, prototype_hash, save_to_bytes,
+    SimulationSaveSnapshot, capture_save_snapshot, inspect_save_header, load_from_bytes,
+    prototype_hash, save_snapshot_to_bytes, save_to_bytes,
 };
 pub use self::scripted::{
     scripted_inputs_for_chemical_science_factory, scripted_inputs_for_red_science_factory,

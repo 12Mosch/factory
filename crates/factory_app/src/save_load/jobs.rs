@@ -5,7 +5,7 @@ use super::{
     SaveMetadata,
 };
 use crate::resources::SimResource;
-use factory_sim::save_to_bytes;
+use factory_sim::{capture_save_snapshot, save_snapshot_to_bytes};
 use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -53,7 +53,8 @@ pub(crate) struct CompletedJob {
 
 #[derive(Debug)]
 pub(crate) struct SaveJobOutcome {
-    pub lock_wait_ms: f64,
+    pub snapshot_tick: u64,
+    pub snapshot_capture_ms: f64,
     pub serialize_ms: f64,
     pub write_ms: f64,
     pub total_ms: f64,
@@ -85,21 +86,25 @@ pub(crate) fn queue_save(
         return false;
     }
     let submission_start = Instant::now();
-    let sim = sim.clone_handle();
+    // Save requests run after FixedUpdate. Copying the durable state here
+    // therefore captures exactly the last completed tick. Only this copy is
+    // performed while the live simulation is read-locked; encoding and I/O
+    // receive the owned snapshot below.
+    let snapshot_start = Instant::now();
+    let snapshot = {
+        let sim = sim.read();
+        capture_save_snapshot(&sim)
+    };
+    let snapshot_tick = snapshot.tick_count();
+    let snapshot_capture_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
     let worker_id = id.clone();
     let worker_name = display_name.clone();
     let handle = thread::spawn(move || {
         let worker_start = Instant::now();
-        let lock_start = Instant::now();
-        let sim = sim
-            .read()
-            .map_err(|_| "simulation lock poisoned".to_string())?;
-        let lock_wait_ms = lock_start.elapsed().as_secs_f64() * 1000.0;
         let serialize_start = Instant::now();
-        let payload = save_to_bytes(&sim)
+        let payload = save_snapshot_to_bytes(&snapshot)
             .map_err(|error| format!("simulation serialization failed: {error:?}"))?;
         let serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
-        drop(sim);
         let metadata = SaveMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
             id: worker_id,
@@ -112,7 +117,8 @@ pub(crate) fn queue_save(
         let write_start = Instant::now();
         write_save_bytes(&path, &bytes).map_err(|error| error.to_string())?;
         Ok(SaveJobOutcome {
-            lock_wait_ms,
+            snapshot_tick,
+            snapshot_capture_ms,
             serialize_ms,
             write_ms: write_start.elapsed().as_secs_f64() * 1000.0,
             total_ms: worker_start.elapsed().as_secs_f64() * 1000.0,

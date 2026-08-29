@@ -57,6 +57,18 @@ impl SimResource {
         self.inner.as_ref()?.try_write().ok()
     }
 
+    /// Locks the active simulation for fixed-step mutation.
+    ///
+    /// Background work must never retain a simulation guard, so this only
+    /// synchronizes with short, in-process state access.
+    pub(crate) fn write(&self) -> SimWriteGuard<'_> {
+        self.inner
+            .as_ref()
+            .expect("simulation accessed before a world was started or loaded")
+            .write()
+            .expect("simulation lock poisoned")
+    }
+
     /// Locks the active simulation for test setup, blocking until it is available.
     pub fn write_for_tests(&mut self) -> SimWriteGuard<'_> {
         self.inner
@@ -84,15 +96,6 @@ impl SimResource {
     /// Returns the wrapping revision incremented after every successful world installation.
     pub(crate) fn replacement_revision(&self) -> u64 {
         self.replacement_revision
-    }
-
-    /// Clones the active simulation handle for background save serialization.
-    pub(crate) fn clone_handle(&self) -> Arc<RwLock<Simulation>> {
-        Arc::clone(
-            self.inner
-                .as_ref()
-                .expect("simulation accessed before a world was started or loaded"),
-        )
     }
 }
 
