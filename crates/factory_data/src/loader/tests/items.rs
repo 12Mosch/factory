@@ -123,6 +123,24 @@ fn military_items_load_typed_ammo_armor_and_powered_equipment() {
             },
         ]
     );
+
+    let personal = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "personal_roboport_equipment")
+        .and_then(|item| item.equipment)
+        .expect("base catalog should define personal roboport equipment");
+    assert_eq!((personal.width, personal.height), (2, 2));
+    assert_eq!(
+        personal.effect,
+        EquipmentEffectPrototype::PersonalRoboport {
+            energy_capacity_joules: 3_000_000,
+            energy_input_watts: 200_000,
+            charging_pad_count: 2,
+            charging_pad_watts: 100_000,
+            construction_radius_tiles: 15,
+        }
+    );
 }
 
 #[test]

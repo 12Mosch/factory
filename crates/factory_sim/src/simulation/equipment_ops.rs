@@ -10,6 +10,11 @@ struct EquipmentTotals {
     battery_capacity_joules: u64,
     shield_capacity_joules: u64,
     shield_recharge_watts: u64,
+    personal_roboport_capacity_joules: u64,
+    personal_roboport_input_watts: u64,
+    personal_roboport_charging_pad_count: u16,
+    personal_roboport_charging_pad_watts: u64,
+    personal_roboport_construction_radius_tiles: u16,
 }
 
 impl Simulation {
@@ -41,6 +46,33 @@ impl Simulation {
             u32::try_from(totals.shield_capacity_joules / JOULES_PER_SHIELD_POINT)
                 .unwrap_or(u32::MAX),
         )
+    }
+
+    /// Stored energy and capacity dedicated to personal robot dispatch and
+    /// charging.
+    pub fn personal_roboport_energy(&self) -> (u64, u64) {
+        let totals = equipment_totals(&self.world.prototypes, &self.player_equipment);
+        (
+            self.player_equipment.personal_roboport_energy_joules,
+            totals.personal_roboport_capacity_joules,
+        )
+    }
+
+    /// Inclusive construction coverage centered on the player's current tile.
+    pub fn personal_roboport_coverage(&self) -> Option<TileBounds> {
+        let radius = equipment_totals(&self.world.prototypes, &self.player_equipment)
+            .personal_roboport_construction_radius_tiles;
+        if radius == 0 {
+            return None;
+        }
+        let (x, y) = self.player.tile_position();
+        let radius = i64::from(radius);
+        Some(TileBounds {
+            min_x: x - radius,
+            min_y: y - radius,
+            max_x: x + radius,
+            max_y: y + radius,
+        })
     }
 
     pub fn equip_armor(&mut self, inventory_slot: usize) -> Result<(), PlayerEquipmentError> {
@@ -166,6 +198,7 @@ impl Simulation {
         self.player_inventory = inventory;
         self.player_equipment.installed.remove(index);
         self.clamp_personal_equipment_capacity();
+        self.reconcile_personal_charging_capacity();
         Ok(())
     }
 
@@ -191,6 +224,26 @@ impl Simulation {
             .player_equipment
             .battery_energy_joules
             .saturating_add(generated_joules);
+
+        // Personal roboports have their own bounded buffer and input rate. The
+        // buffer is filled before shields so dispatch behavior is stable and
+        // does not depend on whether damage happened earlier in the tick.
+        let personal_watt_ticks = self
+            .player_equipment
+            .personal_recharge_remainder_watt_ticks
+            .saturating_add(totals.personal_roboport_input_watts);
+        let personal_limit_joules = personal_watt_ticks / PERSONAL_POWER_TICKS_PER_SECOND;
+        self.player_equipment.personal_recharge_remainder_watt_ticks =
+            personal_watt_ticks % PERSONAL_POWER_TICKS_PER_SECOND;
+        let missing_personal = totals
+            .personal_roboport_capacity_joules
+            .saturating_sub(self.player_equipment.personal_roboport_energy_joules);
+        let personal_charged = available.min(personal_limit_joules).min(missing_personal);
+        self.player_equipment.personal_roboport_energy_joules = self
+            .player_equipment
+            .personal_roboport_energy_joules
+            .saturating_add(personal_charged);
+        let available = available.saturating_sub(personal_charged);
         let missing_shield = totals
             .shield_capacity_joules
             .saturating_sub(self.player_equipment.shield_energy_joules);
@@ -237,6 +290,56 @@ impl Simulation {
             .player_equipment
             .shield_energy_joules
             .min(totals.shield_capacity_joules);
+        self.player_equipment.personal_roboport_energy_joules = self
+            .player_equipment
+            .personal_roboport_energy_joules
+            .min(totals.personal_roboport_capacity_joules);
+        if totals.personal_roboport_capacity_joules == 0 {
+            self.player_equipment.personal_recharge_remainder_watt_ticks = 0;
+        }
+    }
+
+    pub(in crate::simulation) fn personal_roboport_totals(&self) -> (u16, u64) {
+        let totals = equipment_totals(&self.world.prototypes, &self.player_equipment);
+        (
+            totals.personal_roboport_charging_pad_count,
+            totals.personal_roboport_charging_pad_watts,
+        )
+    }
+
+    fn reconcile_personal_charging_capacity(&mut self) {
+        let pad_count = usize::from(self.personal_roboport_totals().0);
+        let mut released = Vec::new();
+        while self
+            .player_equipment
+            .personal_roboport_charging
+            .charging
+            .len()
+            > pad_count
+        {
+            let Some(robot_id) = self
+                .player_equipment
+                .personal_roboport_charging
+                .charging
+                .pop_last()
+            else {
+                break;
+            };
+            released.push(robot_id);
+        }
+        if pad_count == 0 {
+            released.extend(
+                self.player_equipment
+                    .personal_roboport_charging
+                    .queue
+                    .drain(..),
+            );
+        }
+        for robot_id in released {
+            if let Some(robot) = self.robot_flights.robots.get_mut(&robot_id) {
+                robot.activity = RobotActivity::Flying;
+            }
+        }
     }
 }
 
@@ -250,7 +353,11 @@ pub(super) fn validate_player_equipment(sim: &Simulation) -> Result<(), SimValid
             .and_then(|item| item.armor.as_ref())
             .ok_or(SimValidationError::InvalidPlayerEquipment)?,
         None if state.installed.is_empty() => {
-            if state.battery_energy_joules != 0 || state.shield_energy_joules != 0 {
+            if state.battery_energy_joules != 0
+                || state.shield_energy_joules != 0
+                || state.personal_roboport_energy_joules != 0
+                || !state.personal_roboport_charging.is_empty()
+            {
                 return Err(SimValidationError::InvalidPlayerEquipment);
             }
             return validate_equipment_remainders_and_resistance(sim);
@@ -290,6 +397,11 @@ pub(super) fn validate_player_equipment(sim: &Simulation) -> Result<(), SimValid
     let totals = equipment_totals(&sim.world.prototypes, state);
     if state.battery_energy_joules > totals.battery_capacity_joules
         || state.shield_energy_joules > totals.shield_capacity_joules
+        || state.personal_roboport_energy_joules > totals.personal_roboport_capacity_joules
+        || state.personal_roboport_charging.charging.len()
+            > usize::from(totals.personal_roboport_charging_pad_count)
+        || (totals.personal_roboport_charging_pad_count == 0
+            && !state.personal_roboport_charging.is_empty())
     {
         return Err(SimValidationError::InvalidPlayerEquipment);
     }
@@ -301,6 +413,8 @@ fn validate_equipment_remainders_and_resistance(
 ) -> Result<(), SimValidationError> {
     if sim.player_equipment.generation_remainder_watt_ticks >= PERSONAL_POWER_TICKS_PER_SECOND
         || sim.player_equipment.recharge_remainder_watt_ticks >= PERSONAL_POWER_TICKS_PER_SECOND
+        || sim.player_equipment.personal_recharge_remainder_watt_ticks
+            >= PERSONAL_POWER_TICKS_PER_SECOND
     {
         return Err(SimValidationError::InvalidPlayerEquipment);
     }
@@ -366,6 +480,29 @@ fn equipment_totals(catalog: &PrototypeCatalog, state: &PlayerEquipmentState) ->
                 totals.shield_recharge_watts = totals
                     .shield_recharge_watts
                     .saturating_add(max_recharge_watts);
+            }
+            EquipmentEffectPrototype::PersonalRoboport {
+                energy_capacity_joules,
+                energy_input_watts,
+                charging_pad_count,
+                charging_pad_watts,
+                construction_radius_tiles,
+            } => {
+                totals.personal_roboport_capacity_joules = totals
+                    .personal_roboport_capacity_joules
+                    .saturating_add(energy_capacity_joules);
+                totals.personal_roboport_input_watts = totals
+                    .personal_roboport_input_watts
+                    .saturating_add(energy_input_watts);
+                totals.personal_roboport_charging_pad_count = totals
+                    .personal_roboport_charging_pad_count
+                    .saturating_add(u16::from(charging_pad_count));
+                totals.personal_roboport_charging_pad_watts = totals
+                    .personal_roboport_charging_pad_watts
+                    .max(charging_pad_watts);
+                totals.personal_roboport_construction_radius_tiles = totals
+                    .personal_roboport_construction_radius_tiles
+                    .max(construction_radius_tiles);
             }
         }
     }

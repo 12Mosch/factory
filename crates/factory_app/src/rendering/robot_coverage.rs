@@ -14,7 +14,10 @@
 //!   already built.
 //! * **Opening** a placed roboport: every member of its network, because at
 //!   that point the question is what the network as a whole covers.
+//! * **Opening** the equipment window with a personal roboport installed: its
+//!   construction square follows the player's current tile.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use factory_data::EntityPrototypeId;
 use factory_sim::{EntityFootprint, EntityId, Simulation, TileBounds};
@@ -26,7 +29,7 @@ use crate::rendering::colors::{
     logistic_coverage_border_color, logistic_coverage_color,
 };
 use crate::resources::SimResource;
-use crate::ui::resources::OpenContainer;
+use crate::ui::resources::{EquipmentWindowState, OpenContainer};
 
 /// Below entity sprites so a roboport's own body still reads clearly, above the
 /// terrain and the build-preview footprint tiles.
@@ -49,11 +52,20 @@ struct CoverageKey {
     held: Option<(EntityPrototypeId, EntityFootprint)>,
     open: Option<EntityId>,
     entity_topology_revision: u64,
+    personal: Option<TileBounds>,
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct RoboportCoverageRenderState {
     synced: Option<CoverageKey>,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct RoboportCoverageInputs<'w> {
+    build_state: Res<'w, BuildPlacementState>,
+    preview_state: Res<'w, BuildPlacementPreviewState>,
+    open_container: Res<'w, OpenContainer>,
+    equipment_window: Res<'w, EquipmentWindowState>,
 }
 
 /// One coverage square to draw, in world tiles.
@@ -66,22 +78,26 @@ struct CoverageSquare {
 pub(crate) fn sync_roboport_coverage_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
-    build_state: Res<BuildPlacementState>,
-    preview_state: Res<BuildPlacementPreviewState>,
-    open_container: Res<OpenContainer>,
+    inputs: RoboportCoverageInputs,
     mut state: ResMut<RoboportCoverageRenderState>,
     existing: Query<Entity, With<RoboportCoverageSprite>>,
 ) {
     let sim = sim.read();
+    let personal = inputs
+        .equipment_window
+        .open
+        .then(|| sim.personal_roboport_coverage())
+        .flatten();
     let key = CoverageKey {
-        held: build_state.selected.and_then(|selection| {
+        held: inputs.build_state.selected.and_then(|selection| {
             Some((
                 selection.entity_prototype_id()?,
-                preview_state.preview.as_ref()?.footprint?,
+                inputs.preview_state.preview.as_ref()?.footprint?,
             ))
         }),
-        open: open_container.entity_id,
+        open: inputs.open_container.entity_id,
         entity_topology_revision: sim.entity_topology_revision(),
+        personal,
     };
     if state.synced == Some(key) {
         return;
@@ -95,11 +111,26 @@ pub(crate) fn sync_roboport_coverage_rendering(
         commands.entity(entity).despawn();
     }
 
-    let squares = held_roboport_squares(&sim, &build_state, &preview_state)
-        .unwrap_or_else(|| open_roboport_network_squares(&sim, &open_container));
+    let squares = held_roboport_squares(&sim, &inputs.build_state, &inputs.preview_state)
+        .unwrap_or_else(|| {
+            let stationary = open_roboport_network_squares(&sim, &inputs.open_container);
+            if stationary.is_empty() {
+                personal.into_iter().map(personal_coverage_square).collect()
+            } else {
+                stationary
+            }
+        });
 
     for square in squares {
         spawn_square(&mut commands, &square);
+    }
+}
+
+fn personal_coverage_square(bounds: TileBounds) -> CoverageSquare {
+    CoverageSquare {
+        bounds,
+        fill: construction_coverage_color(),
+        border: construction_coverage_border_color(),
     }
 }
 

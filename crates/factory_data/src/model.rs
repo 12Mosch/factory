@@ -149,6 +149,16 @@ pub enum EquipmentEffectPrototype {
         capacity_points: u32,
         max_recharge_watts: u64,
     },
+    /// A player-carried construction dock. Its buffer is filled from the
+    /// armor's shared battery, and only construction robots and materials in
+    /// the player inventory belong to it; it never joins a placed network.
+    PersonalRoboport {
+        energy_capacity_joules: u64,
+        energy_input_watts: u64,
+        charging_pad_count: u8,
+        charging_pad_watts: u64,
+        construction_radius_tiles: u16,
+    },
 }
 
 /// A signal that carries no item or fluid identity of its own. Concrete

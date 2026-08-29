@@ -211,6 +211,13 @@ impl Simulation {
         let Some((target_x, target_y)) = self.construction_job_target_tile(job) else {
             return false;
         };
+        // Personal coverage has deterministic precedence in overlaps. It owns
+        // only player inventory and never borrows robots or materials from the
+        // stationary network below, so either source commits the one shared
+        // reservation and the other never sees the job again.
+        if self.try_dispatch_personal_construction_job(job, target_x, target_y) {
+            return true;
+        }
         let Some(network_id) = self.construction_network_covering_tile(target_x, target_y) else {
             return false;
         };
@@ -225,6 +232,98 @@ impl Simulation {
             self.try_dispatch_construction_job_in_network(job, target_x, target_y, &member_ids);
         self.robots.charging_scratch = member_ids;
         dispatched
+    }
+
+    fn try_dispatch_personal_construction_job(
+        &mut self,
+        job: ConstructionJob,
+        target_x: WorldTileCoord,
+        target_y: WorldTileCoord,
+    ) -> bool {
+        if self
+            .personal_roboport_coverage()
+            .is_none_or(|bounds| !bounds.contains(target_x, target_y))
+        {
+            return false;
+        }
+        if let ConstructionJob::BuildGhost(ghost_id) = job {
+            let Some(ghost) = self.construction.ghosts.get(&ghost_id) else {
+                return false;
+            };
+            if placement_validation_ops::validate_entity_placement(
+                self,
+                placement::EntityPlacementRequest {
+                    prototype_id: ghost.prototype_id,
+                    x: ghost.x,
+                    y: ghost.y,
+                    direction: ghost.direction,
+                },
+            )
+            .is_err()
+            {
+                return false;
+            }
+        }
+
+        let payload_item = match job {
+            ConstructionJob::BuildGhost(ghost_id) => {
+                self.construction.ghosts.get(&ghost_id).and_then(|ghost| {
+                    entity_recovery_ops::build_item_for_entity(self, ghost.prototype_id).ok()
+                })
+            }
+            ConstructionJob::Repair(_) => first_player_repair_item(self),
+            ConstructionJob::Deconstruct(_) => None,
+        };
+        if !matches!(job, ConstructionJob::Deconstruct(_))
+            && payload_item.is_none_or(|item_id| self.player_inventory.count(item_id) == 0)
+        {
+            return false;
+        }
+
+        let Some((robot_item, profile)) = first_player_construction_robot(self) else {
+            return false;
+        };
+        if self.player_equipment.personal_roboport_energy_joules < profile.energy_capacity_joules {
+            return false;
+        }
+
+        if let Some(item_id) = payload_item {
+            self.player_inventory
+                .remove(item_id, 1)
+                .expect("the personal construction payload was just counted");
+        }
+        self.player_inventory
+            .remove(robot_item, 1)
+            .expect("the personal construction robot was just counted");
+        self.player_equipment.personal_roboport_energy_joules -= profile.energy_capacity_joules;
+
+        let id = self.robot_flights.allocate_id();
+        let target = (tile_center_fixed(target_x), tile_center_fixed(target_y));
+        let payload = payload_item.map(|item_id| {
+            ItemStack::new(&self.world.prototypes, item_id, 1)
+                .expect("catalog material forms a one-item personal payload")
+        });
+        self.robot_flights.robots.insert(
+            id,
+            Robot {
+                id,
+                item_id: robot_item,
+                x: self.player.x,
+                y: self.player.y,
+                energy_joules: profile.energy_capacity_joules,
+                personal: true,
+                home_roboport: None,
+                errand: Some(target),
+                activity: RobotActivity::Flying,
+                construction_job: Some(job),
+                delivery: None,
+                payload,
+                cargo: Vec::new(),
+                bulk_cargo: Vec::new(),
+            },
+        );
+        self.construction.reservations.insert(job, id);
+        true
     }
 
     fn try_dispatch_construction_job_in_network(
@@ -345,6 +444,14 @@ impl Simulation {
     }
 
     fn job_is_covered_by_robot_home(&self, job: ConstructionJob, robot: &Robot) -> bool {
+        if robot.personal {
+            let Some((x, y)) = self.construction_job_target_tile(job) else {
+                return false;
+            };
+            return self
+                .personal_roboport_coverage()
+                .is_some_and(|bounds| bounds.contains(x, y));
+        }
         let Some(home) = robot.home_roboport else {
             return false;
         };
@@ -412,6 +519,28 @@ impl Simulation {
             counts.remove(job);
         }
     }
+}
+
+fn first_player_construction_robot(
+    sim: &Simulation,
+) -> Option<(ItemId, factory_data::RobotPrototype)> {
+    sim.player_inventory
+        .slots()
+        .iter()
+        .filter_map(|slot| slot.stack())
+        .find_map(|stack| {
+            let profile = sim.world.prototypes.item(stack.item_id())?.robot?;
+            (profile.kind == RobotKind::Construction).then_some((stack.item_id(), profile))
+        })
+}
+
+fn first_player_repair_item(sim: &Simulation) -> Option<ItemId> {
+    sim.player_inventory
+        .slots()
+        .iter()
+        .filter_map(|slot| slot.stack())
+        .map(|stack| stack.item_id())
+        .find(|item_id| repair_restore_health(&sim.world.prototypes, *item_id).is_some())
 }
 
 pub(in crate::simulation) fn cancel_construction_job(sim: &mut Simulation, job: ConstructionJob) {

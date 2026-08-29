@@ -136,6 +136,7 @@ impl Simulation {
                 x: dock.0,
                 y: dock.1,
                 energy_joules: profile.energy_capacity_joules,
+                personal: false,
                 home_roboport: Some(roboport),
                 errand: Some((tile_center_fixed(x), tile_center_fixed(y))),
                 activity: RobotActivity::Flying,
@@ -202,6 +203,7 @@ impl Simulation {
 
     /// Moves queued robots onto free charging pads, oldest arrival first.
     fn assign_charging_pads(&mut self) {
+        self.assign_personal_charging_pads();
         if self.robot_flights.charging.is_empty() {
             return;
         }
@@ -248,15 +250,61 @@ impl Simulation {
         });
     }
 
+    fn assign_personal_charging_pads(&mut self) {
+        let pad_count = usize::from(self.personal_roboport_totals().0);
+        let state = &mut self.player_equipment.personal_roboport_charging;
+        state.charging.retain(|robot_id| {
+            self.robot_flights
+                .robots
+                .get(robot_id)
+                .is_some_and(|robot| robot.activity == RobotActivity::PersonalCharging)
+        });
+        state.queue.retain(|robot_id| {
+            self.robot_flights
+                .robots
+                .get(robot_id)
+                .is_some_and(|robot| robot.activity == RobotActivity::PersonalQueued)
+        });
+        if pad_count == 0 {
+            for robot_id in state
+                .charging
+                .iter()
+                .copied()
+                .chain(state.queue.iter().copied())
+            {
+                if let Some(robot) = self.robot_flights.robots.get_mut(&robot_id) {
+                    robot.activity = RobotActivity::Flying;
+                }
+            }
+            state.charging.clear();
+            state.queue.clear();
+            return;
+        }
+        while state.charging.len() < pad_count {
+            let Some(robot_id) = state.queue.pop_front() else {
+                break;
+            };
+            let Some(robot) = self.robot_flights.robots.get_mut(&robot_id) else {
+                continue;
+            };
+            robot.activity = RobotActivity::PersonalCharging;
+            state.charging.insert(robot_id);
+        }
+    }
+
     fn step_robots(&mut self) -> Vec<RobotId> {
         if self.robot_flights.robots.is_empty() {
             return Vec::new();
         }
+        let (_, personal_pad_watts) = self.personal_roboport_totals();
         let Simulation {
             robot_flights,
             entities,
             world,
             robots: networks,
+            player,
+            player_equipment,
+            player_inventory,
             ..
         } = self;
         let RobotFlightSubsystem {
@@ -267,6 +315,10 @@ impl Simulation {
             entities,
             networks,
             charging,
+            player_position: (player.x, player.y),
+            player_equipment,
+            player_inventory,
+            personal_pad_watts,
             arrivals: Vec::new(),
         };
         robots.retain(|_, robot| step_robot(&mut context, robot));
@@ -279,6 +331,10 @@ struct RobotStepContext<'a> {
     entities: &'a mut EntityStore,
     networks: &'a mut RobotSubsystem,
     charging: &'a mut BTreeMap<EntityId, RoboportChargingState>,
+    player_position: (i64, i64),
+    player_equipment: &'a mut PlayerEquipmentState,
+    player_inventory: &'a mut Inventory,
+    personal_pad_watts: u64,
     arrivals: Vec<RobotId>,
 }
 
@@ -295,7 +351,23 @@ fn step_robot(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
         return true;
     };
 
-    adopt_home_roboport(context, robot);
+    if !robot.personal {
+        adopt_home_roboport(context, robot);
+    }
+
+    if matches!(robot.activity, RobotActivity::PersonalCharging) {
+        robot.x = context.player_position.0;
+        robot.y = context.player_position.1;
+        if !charge_personal_robot(context, robot, profile.energy_capacity_joules) {
+            release_personal_pad(context, robot);
+        }
+        return true;
+    }
+    if matches!(robot.activity, RobotActivity::PersonalQueued) {
+        robot.x = context.player_position.0;
+        robot.y = context.player_position.1;
+        return true;
+    }
 
     if let RobotActivity::Charging(roboport) = robot.activity {
         if !charge_robot(context, robot, roboport, profile.energy_capacity_joules) {
@@ -311,7 +383,7 @@ fn step_robot(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
 
     let joules_per_tick = joules_per_tick(profile.flight_energy_usage_watts);
     let has_energy = robot.energy_joules >= joules_per_tick;
-    if !has_energy && matches!(robot.activity, RobotActivity::Flying) {
+    if !robot.personal && !has_energy && matches!(robot.activity, RobotActivity::Flying) {
         // Ran dry mid-errand: divert to the nearest roboport that can charge
         // it, before picking a target so this tick already crawls that way. The
         // errand is kept, so the robot resumes it once full.
@@ -366,12 +438,18 @@ fn fly(
             true
         }
         RobotActivity::Flying => arrive_home(context, robot),
-        RobotActivity::Queued(_) | RobotActivity::Charging(_) => true,
+        RobotActivity::Queued(_)
+        | RobotActivity::Charging(_)
+        | RobotActivity::PersonalQueued
+        | RobotActivity::PersonalCharging => true,
     }
 }
 
 /// Handles a robot that reached its home roboport: top up first, then dock.
 fn arrive_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
+    if robot.personal {
+        return arrive_personal_home(context, robot);
+    }
     let Some(roboport) = robot.home_roboport else {
         return true;
     };
@@ -405,6 +483,90 @@ fn arrive_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
     }
     context.networks.mark_roboport_dirty(roboport);
     false
+}
+
+fn arrive_personal_home(context: &mut RobotStepContext<'_>, robot: &mut Robot) -> bool {
+    if !robot.cargo.is_empty() || !robot.bulk_cargo.is_empty() {
+        deposit_personal_cargo(context, robot);
+        if !robot.cargo.is_empty() || !robot.bulk_cargo.is_empty() {
+            return true;
+        }
+    }
+    let capacity = context
+        .catalog
+        .item(robot.item_id)
+        .and_then(|item| item.robot)
+        .map_or(0, |profile| profile.energy_capacity_joules);
+    let personal_roboport_installed = context.personal_pad_watts > 0;
+    if personal_roboport_installed && robot.energy_joules < capacity {
+        enqueue_for_personal_charge(context, robot);
+        return true;
+    }
+    if context
+        .player_inventory
+        .insert(context.catalog, robot.item_id, 1)
+        .is_err()
+    {
+        return true;
+    }
+    false
+}
+
+fn deposit_personal_cargo(context: &mut RobotStepContext<'_>, robot: &mut Robot) {
+    let mut remaining_cargo = Vec::new();
+    for stack in robot.cargo.drain(..) {
+        let Some(item) = context.catalog.item(stack.item_id()) else {
+            remaining_cargo.push(stack);
+            continue;
+        };
+        let inserted = context
+            .player_inventory
+            .insert_capacity(stack.item_id(), item.stack_size)
+            .min(u32::from(stack.count())) as u16;
+        if inserted > 0 {
+            context
+                .player_inventory
+                .insert(context.catalog, stack.item_id(), inserted)
+                .expect("personal cargo insertion was bounded by inventory capacity");
+        }
+        if inserted < stack.count() {
+            remaining_cargo.push(
+                ItemStack::new(context.catalog, stack.item_id(), stack.count() - inserted)
+                    .expect("remaining personal cargo preserves a valid stack"),
+            );
+        }
+    }
+    robot.cargo = remaining_cargo;
+
+    let mut remaining_bulk = Vec::new();
+    for amount in robot.bulk_cargo.drain(..) {
+        let Some(item) = context.catalog.item(amount.item_id()) else {
+            remaining_bulk.push(amount);
+            continue;
+        };
+        let accepted = u64::from(
+            context
+                .player_inventory
+                .insert_capacity(amount.item_id(), item.stack_size),
+        )
+        .min(amount.count());
+        let mut to_insert = accepted;
+        while to_insert > 0 {
+            let chunk = to_insert.min(u64::from(u16::MAX)) as u16;
+            context
+                .player_inventory
+                .insert(context.catalog, amount.item_id(), chunk)
+                .expect("personal bulk insertion was bounded by inventory capacity");
+            to_insert -= u64::from(chunk);
+        }
+        if accepted < amount.count() {
+            remaining_bulk.push(
+                ItemAmount::new(context.catalog, amount.item_id(), amount.count() - accepted)
+                    .expect("remaining personal bulk cargo preserves a valid amount"),
+            );
+        }
+    }
+    robot.bulk_cargo = remaining_bulk;
 }
 
 /// Deposits as much cargo as the robot's current network can accept. Members
@@ -525,6 +687,40 @@ fn enqueue_for_charge(context: &mut RobotStepContext<'_>, robot: &mut Robot, rob
     }
 }
 
+fn enqueue_for_personal_charge(context: &mut RobotStepContext<'_>, robot: &mut Robot) {
+    let state = &mut context.player_equipment.personal_roboport_charging;
+    if state.charging.contains(&robot.id) || state.queue.contains(&robot.id) {
+        return;
+    }
+    state.queue.push_back(robot.id);
+    robot.activity = RobotActivity::PersonalQueued;
+}
+
+fn charge_personal_robot(
+    context: &mut RobotStepContext<'_>,
+    robot: &mut Robot,
+    capacity_joules: u64,
+) -> bool {
+    if context.personal_pad_watts == 0 {
+        return false;
+    }
+    let transferred = joules_per_tick(context.personal_pad_watts)
+        .min(context.player_equipment.personal_roboport_energy_joules)
+        .min(capacity_joules.saturating_sub(robot.energy_joules));
+    context.player_equipment.personal_roboport_energy_joules -= transferred;
+    robot.energy_joules += transferred;
+    robot.energy_joules < capacity_joules
+}
+
+fn release_personal_pad(context: &mut RobotStepContext<'_>, robot: &mut Robot) {
+    context
+        .player_equipment
+        .personal_roboport_charging
+        .charging
+        .remove(&robot.id);
+    robot.activity = RobotActivity::Flying;
+}
+
 /// Draws one tick of charge out of the roboport's buffer. Returns whether the
 /// robot is still charging afterwards.
 fn charge_robot(
@@ -576,6 +772,9 @@ fn adopt_home_roboport(context: &RobotStepContext<'_>, robot: &mut Robot) {
 
 /// Where the robot is flying: the errand target, otherwise its home dock.
 fn flight_target(context: &RobotStepContext<'_>, robot: &Robot) -> Option<(i64, i64)> {
+    if robot.personal {
+        return robot.errand.or(Some(context.player_position));
+    }
     match robot.activity {
         RobotActivity::SeekingCharge(roboport) => {
             footprint_center_fixed(context.entities, roboport)

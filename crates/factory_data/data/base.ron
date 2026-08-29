@@ -348,6 +348,26 @@
                 amount: 1000,
             )]),
         ),
+        // The personal roboport is deliberately a construction-only dock. It
+        // draws from the armor battery, dispatches construction robots and
+        // materials from the player inventory, and never joins a placed
+        // logistic network.
+        (
+            id: 123,
+            name: "personal_roboport_equipment",
+            stack_size: 20,
+            equipment: Some((
+                width: 2,
+                height: 2,
+                effect: PersonalRoboport(
+                    energy_capacity_joules: 3000000,
+                    energy_input_watts: 200000,
+                    charging_pad_count: 2,
+                    charging_pad_watts: 100000,
+                    construction_radius_tiles: 15,
+                ),
+            )),
+        ),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1747,6 +1767,18 @@
                 (item: "rocket_fuel", amount: 50),
             ],
             products: [(item: "satellite", amount: 1)],
+        ),
+        (
+            id: 120,
+            name: "personal_roboport_equipment",
+            category: Crafting,
+            crafting_time_ticks: 600,
+            ingredients: [
+                (item: "advanced_circuit", amount: 10),
+                (item: "copper_plate", amount: 20),
+                (item: "steel_plate", amount: 10),
+            ],
+            products: [(item: "personal_roboport_equipment", amount: 1)],
         ),
     ],
     entities: [
@@ -3989,6 +4021,7 @@
             effects: [
                 UnlockRecipe("roboport"),
                 UnlockRecipe("construction_robot"),
+                UnlockRecipe("personal_roboport_equipment"),
             ],
         ),
         // The chests are useless without a network to put them in, so this

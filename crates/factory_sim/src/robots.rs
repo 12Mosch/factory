@@ -241,6 +241,10 @@ pub enum RobotActivity {
     Queued(EntityId),
     /// Occupying one of `roboport`'s charging pads.
     Charging(EntityId),
+    /// Hovering at the player until a personal charging pad is free.
+    PersonalQueued,
+    /// Drawing energy from an installed personal roboport.
+    PersonalCharging,
 }
 
 impl RobotActivity {
@@ -251,6 +255,7 @@ impl RobotActivity {
             Self::SeekingCharge(entity_id)
             | Self::Queued(entity_id)
             | Self::Charging(entity_id) => Some(entity_id),
+            Self::PersonalQueued | Self::PersonalCharging => None,
         }
     }
 }
@@ -303,6 +308,10 @@ pub struct Robot {
     pub x: i64,
     pub y: i64,
     pub energy_joules: u64,
+    /// Personal robots are owned by the player's armor and always return items
+    /// and recovered cargo to the player inventory. They never adopt, charge
+    /// at, or deposit into a stationary roboport network.
+    pub personal: bool,
     /// Roboport this robot docks into when it is done. `None` only while the
     /// world has no roboport left to adopt it.
     pub home_roboport: Option<EntityId>,

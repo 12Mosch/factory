@@ -1,6 +1,8 @@
 use factory_data::ItemId;
 use serde::{Deserialize, Serialize};
 
+use crate::robots::RoboportChargingState;
+
 /// One module installed in the equipped armor's grid.
 ///
 /// Entries are stored in canonical `(y, x, item_id)` order by the simulation.
@@ -19,8 +21,15 @@ pub struct PlayerEquipmentState {
     pub(crate) installed: Vec<InstalledEquipment>,
     pub(crate) battery_energy_joules: u64,
     pub(crate) shield_energy_joules: u64,
+    /// Energy buffered by installed personal roboports. This is separate from
+    /// the shared armor battery so dispatch cannot spend energy promised to a
+    /// shield in the same tick.
+    pub(crate) personal_roboport_energy_joules: u64,
+    /// Durable pad and queue ownership for personal construction robots.
+    pub(crate) personal_roboport_charging: RoboportChargingState,
     pub(crate) generation_remainder_watt_ticks: u64,
     pub(crate) recharge_remainder_watt_ticks: u64,
+    pub(crate) personal_recharge_remainder_watt_ticks: u64,
 }
 
 impl PlayerEquipmentState {
@@ -38,6 +47,10 @@ impl PlayerEquipmentState {
 
     pub fn shield_energy_joules(&self) -> u64 {
         self.shield_energy_joules
+    }
+
+    pub fn personal_roboport_energy_joules(&self) -> u64 {
+        self.personal_roboport_energy_joules
     }
 }
 

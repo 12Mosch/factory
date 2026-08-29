@@ -144,6 +144,7 @@ pub(super) fn commit_robot_dispatch(
         x: dock.0,
         y: dock.1,
         energy_joules: dispatch.energy_capacity_joules,
+        personal: false,
         home_roboport: Some(dispatch.roboport),
         errand: Some(errand),
         activity: RobotActivity::Flying,

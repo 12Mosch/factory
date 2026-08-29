@@ -290,8 +290,16 @@ pub(crate) fn update_equipment_window_text(
         text.0 = armor_name.clone();
     }
     let (energy, capacity) = sim.personal_stored_energy();
+    let (roboport_energy, roboport_capacity) = sim.personal_roboport_energy();
+    let roboport_status = sim.personal_roboport_coverage().map(|bounds| {
+        let radius = (bounds.max_x - bounds.min_x) / 2;
+        format!(" · Personal roboport: {roboport_energy} / {roboport_capacity} J, radius {radius}")
+    });
     for mut text in &mut energy_texts {
-        text.0 = format!("Stored energy: {energy} / {capacity} J");
+        text.0 = format!(
+            "Stored energy: {energy} / {capacity} J{}",
+            roboport_status.as_deref().unwrap_or_default()
+        );
     }
     let (shield, shield_capacity) = sim.personal_shield_points();
     for mut text in &mut shield_texts {

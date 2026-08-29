@@ -259,6 +259,9 @@ pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidati
         if robot.energy_joules > profile.energy_capacity_joules {
             return Err(invalid());
         }
+        if robot.personal && (robot.home_roboport.is_some() || robot.delivery.is_some()) {
+            return Err(invalid());
+        }
         for stack in robot.cargo.iter().chain(robot.payload.iter()) {
             if ItemStack::new(&sim.world.prototypes, stack.item_id(), stack.count()).is_err() {
                 return Err(invalid());
@@ -347,18 +350,34 @@ pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidati
         let registered = match robot.activity {
             RobotActivity::Flying => true,
             RobotActivity::SeekingCharge(roboport) => {
-                sim.entities.roboports.contains_key(&roboport)
+                !robot.personal && sim.entities.roboports.contains_key(&roboport)
             }
             RobotActivity::Queued(roboport) => sim
                 .robot_flights
                 .charging
                 .get(&roboport)
-                .is_some_and(|state| state.queue.contains(robot_id)),
+                .is_some_and(|state| !robot.personal && state.queue.contains(robot_id)),
             RobotActivity::Charging(roboport) => sim
                 .robot_flights
                 .charging
                 .get(&roboport)
-                .is_some_and(|state| state.charging.contains(robot_id)),
+                .is_some_and(|state| !robot.personal && state.charging.contains(robot_id)),
+            RobotActivity::PersonalQueued => {
+                robot.personal
+                    && sim
+                        .player_equipment
+                        .personal_roboport_charging
+                        .queue
+                        .contains(robot_id)
+            }
+            RobotActivity::PersonalCharging => {
+                robot.personal
+                    && sim
+                        .player_equipment
+                        .personal_roboport_charging
+                        .charging
+                        .contains(robot_id)
+            }
         };
         if !registered {
             return Err(invalid());
@@ -405,6 +424,27 @@ pub(super) fn validate_robot_flights(sim: &Simulation) -> Result<(), SimValidati
         let mut seen = BTreeSet::new();
         if state.queue.iter().any(|robot_id| !seen.insert(*robot_id)) {
             return Err(invalid());
+        }
+    }
+
+    let personal = &sim.player_equipment.personal_roboport_charging;
+    let mut seen = BTreeSet::new();
+    for robot_id in &personal.charging {
+        if !seen.insert(*robot_id)
+            || sim.robot_flights.robots.get(robot_id).is_none_or(|robot| {
+                !robot.personal || robot.activity != RobotActivity::PersonalCharging
+            })
+        {
+            return Err(SimValidationError::InvalidPlayerEquipment);
+        }
+    }
+    for robot_id in &personal.queue {
+        if !seen.insert(*robot_id)
+            || sim.robot_flights.robots.get(robot_id).is_none_or(|robot| {
+                !robot.personal || robot.activity != RobotActivity::PersonalQueued
+            })
+        {
+            return Err(SimValidationError::InvalidPlayerEquipment);
         }
     }
 
