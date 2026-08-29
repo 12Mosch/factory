@@ -573,15 +573,7 @@ fn commands_around_save_apply_once_and_continue_deterministically() {
 /// Measures the bounded capture pause and tick progress during worker activity.
 fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
     let mut app = test_app(Duration::ZERO, "large_world_background_save");
-    {
-        let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
-        let mut sim = sim_resource.write_for_tests();
-        for y in -10..10 {
-            for x in -10..10 {
-                sim.ensure_chunk_generated(ChunkCoord { x, y });
-            }
-        }
-    }
+    generate_large_world(&mut app);
 
     press_key(&mut app, KeyCode::F5);
     let submission_update_started = Instant::now();
@@ -630,11 +622,6 @@ fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
         submission_update.as_secs_f64() * 1000.0
     );
     assert!(metrics.last_snapshot_capture_ms > 0.0);
-    let snapshot_capture = Duration::from_secs_f64(metrics.last_snapshot_capture_ms / 1000.0);
-    assert!(
-        snapshot_capture <= LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET,
-        "large-world snapshot capture {snapshot_capture:?} exceeded the one-frame budget {LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET:?}"
-    );
     assert!(metrics.last_request_submission_ms >= metrics.last_snapshot_capture_ms);
     assert!(
         submission_update.as_secs_f64() * 1000.0 >= metrics.last_request_submission_ms,
@@ -642,6 +629,39 @@ fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
     );
     assert!(metrics.last_serialize_ms > 0.0);
     assert!(metrics.last_write_ms > 0.0);
+}
+
+#[test]
+#[ignore = "wall-clock performance budget; run on a controlled benchmark host"]
+/// Enforces the documented one-frame capture budget on controlled hardware.
+fn large_world_snapshot_capture_stays_within_one_frame_budget() {
+    let mut app = test_app(Duration::ZERO, "large_world_capture_budget");
+    generate_large_world(&mut app);
+
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    drain_save_jobs(&mut app);
+
+    let capture_ms = app
+        .world()
+        .resource::<SaveLoadMetrics>()
+        .last_snapshot_capture_ms;
+    let snapshot_capture = Duration::from_secs_f64(capture_ms / 1000.0);
+    assert!(
+        snapshot_capture <= LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET,
+        "large-world snapshot capture {snapshot_capture:?} exceeded the one-frame budget {LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET:?}"
+    );
+}
+
+/// Generates the shared 20x20-chunk fixture used by save performance coverage.
+fn generate_large_world(app: &mut App) {
+    let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+    let mut sim = sim_resource.write_for_tests();
+    for y in -10..10 {
+        for x in -10..10 {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
 }
 
 fn test_app(frame_duration: Duration, name: &str) -> App {
