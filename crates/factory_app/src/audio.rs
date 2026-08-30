@@ -3,7 +3,7 @@ use bevy::audio::{AudioSink, AudioSinkPlayback, SpatialAudioSink, SpatialScale, 
 use bevy::prelude::*;
 use factory_data::EntityKind;
 use factory_sim::{
-    CraftingJob, EntityId, MachineStatus, ManualMiningProgress, RocketLaunchPhase, ThreatEventKind,
+    EntityId, MachineStatus, ManualMiningProgress, RocketLaunchPhase, ThreatEventKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -115,8 +115,22 @@ pub struct ManualMiningAudioObserver {
 
 #[derive(Resource, Default)]
 pub struct CraftingAudioObserver {
-    previous_front: Option<CraftingJob>,
-    previous_len: usize,
+    initialized: bool,
+    sim_replacement_revision: u64,
+    previous_completed_jobs: u64,
+}
+
+impl CraftingAudioObserver {
+    fn observe(&mut self, sim_replacement_revision: u64, completed_jobs: u64) -> bool {
+        let completed_in_current_world = self.initialized
+            && self.sim_replacement_revision == sim_replacement_revision
+            && self.previous_completed_jobs != completed_jobs;
+
+        self.initialized = true;
+        self.sim_replacement_revision = sim_replacement_revision;
+        self.previous_completed_jobs = completed_jobs;
+        completed_in_current_world
+    }
 }
 
 #[derive(Resource, Default)]
@@ -403,19 +417,14 @@ pub(crate) fn observe_crafting_audio(
     mut observer: ResMut<CraftingAudioObserver>,
     mut sounds: MessageWriter<SoundEvent>,
 ) {
+    let sim_replacement_revision = sim.replacement_revision();
     let sim = sim.read();
-    let queue = sim.crafting_queue();
-    let current_front = queue.entries.front().copied();
-    let current_len = queue.entries.len();
-
-    if let Some(previous_front) = observer.previous_front
-        && (current_len < observer.previous_len || current_front != Some(previous_front))
-    {
+    if observer.observe(
+        sim_replacement_revision,
+        sim.crafting_queue().completed_jobs,
+    ) {
         sounds.write(SoundEvent::CraftComplete);
     }
-
-    observer.previous_front = current_front;
-    observer.previous_len = current_len;
 }
 
 pub(crate) fn observe_research_audio(
@@ -740,6 +749,16 @@ mod tests {
         assert_eq!(settings.volume, 0.0);
         settings.adjust_volume_steps(20);
         assert_eq!(settings.volume, 1.0);
+    }
+
+    #[test]
+    fn crafting_audio_does_not_treat_world_replacement_as_completion() {
+        let mut observer = CraftingAudioObserver::default();
+
+        assert!(!observer.observe(0, 3));
+        assert!(observer.observe(0, 4));
+        assert!(!observer.observe(1, 0));
+        assert!(observer.observe(1, 1));
     }
 
     #[test]

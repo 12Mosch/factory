@@ -8,15 +8,17 @@ use std::collections::BTreeMap;
 use crate::ui::formatting::{format_item_display_name, format_recipe_display_name};
 use crate::ui::resources::CraftingPanelTab;
 
-use super::components::{CraftingPanelSnapshot, ManualCraftRecipeRow};
+use super::components::{CraftingPanelSnapshot, ManualCraftQueueRow, ManualCraftRecipeRow};
 
 pub(crate) fn crafting_panel_snapshot(
     sim: &Simulation,
     selected_tab: CraftingPanelTab,
+    feedback: Option<String>,
 ) -> CraftingPanelSnapshot {
     CraftingPanelSnapshot {
         selected_tab,
         rows: recipe_rows(sim, selected_tab),
+        feedback,
     }
 }
 
@@ -215,22 +217,44 @@ fn locking_technology_name(catalog: &PrototypeCatalog, recipe_id: RecipeId) -> S
         .unwrap_or_else(|| "Technology".to_string())
 }
 
-pub(crate) fn queue_snapshot(sim: &Simulation) -> Vec<String> {
-    sim.crafting_queue()
-        .entries
+pub(crate) fn queue_snapshot(sim: &Simulation) -> Vec<ManualCraftQueueRow> {
+    let queue = &sim.crafting_queue().entries;
+    queue
         .iter()
         .enumerate()
         .map(|(index, job)| {
-            let recipe_name = sim
+            let (recipe_name, total_ticks) = sim
                 .catalog()
                 .recipe(job.recipe_id)
-                .map(|recipe| format_recipe_display_name(&recipe.name))
-                .unwrap_or_else(|| "Unknown".to_string());
-            let mut line = format!("{recipe_name}: {} ticks remaining", job.remaining_ticks);
+                .map(|recipe| {
+                    (
+                        format_recipe_display_name(&recipe.name),
+                        recipe.crafting_time_ticks,
+                    )
+                })
+                .unwrap_or_else(|| ("Unknown".to_string(), job.remaining_ticks));
+            let completed_ticks = total_ticks.saturating_sub(job.remaining_ticks);
+            let percent = completed_ticks
+                .saturating_mul(100)
+                .checked_div(total_ticks)
+                .unwrap_or(100);
+            let position = if index == 0 {
+                "Active".to_string()
+            } else {
+                format!("Queued {}", index + 1)
+            };
+            let mut status = format!(
+                "{position} · {recipe_name} · {completed_ticks}/{total_ticks} ticks ({percent}%)"
+            );
             if index == 0 && job.remaining_ticks == 0 && front_job_waiting_for_space(sim) {
-                line.push_str(" - Waiting for inventory space");
+                status.push_str(" · Waiting for inventory space");
             }
-            line
+            ManualCraftQueueRow {
+                job_id: job.id,
+                status,
+                can_move_earlier: index > 0,
+                can_move_later: index + 1 < queue.len(),
+            }
         })
         .collect()
 }
@@ -262,6 +286,7 @@ fn front_job_waiting_for_space(sim: &Simulation) -> bool {
 mod tests {
     use super::*;
     use factory_data::{item_id_by_name, recipe_id_by_name};
+    use factory_sim::{CraftingJobId, CraftingQueueMove};
 
     #[test]
     fn manual_craft_ui_shows_locked_recipes_as_disabled() {
@@ -314,6 +339,37 @@ mod tests {
         assert!(!row.button_enabled);
         assert_eq!(row.status, "Missing: Iron Plate x1");
         assert!(row.ingredients.contains("Iron Plate 1/2"));
+    }
+
+    #[test]
+    fn queue_ui_exposes_progress_and_safe_move_controls() {
+        let mut sim = Simulation::new_test_world(123);
+        let catalog = sim.catalog().clone();
+        let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
+        let gear_recipe = recipe_id_by_name(sim.catalog(), "iron_gear_wheel");
+        let pipe_recipe = recipe_id_by_name(sim.catalog(), "pipe");
+        sim.player_inventory_mut()
+            .insert(&catalog, iron_plate, 3)
+            .unwrap();
+        sim.start_manual_craft(gear_recipe).unwrap();
+        sim.start_manual_craft(pipe_recipe).unwrap();
+        for _ in 0..10 {
+            sim.tick();
+        }
+
+        let rows = queue_snapshot(&sim);
+        assert!(rows[0].status.contains("Active · Iron Gear Wheel"));
+        assert!(rows[0].status.contains("10/30 ticks (33%)"));
+        assert!(!rows[0].can_move_earlier);
+        assert!(rows[0].can_move_later);
+
+        sim.move_manual_craft(CraftingJobId(0), CraftingQueueMove::Later)
+            .unwrap();
+        let rows = queue_snapshot(&sim);
+        assert!(rows[1].status.contains("Queued 2 · Iron Gear Wheel"));
+        assert!(rows[1].status.contains("10/30 ticks (33%)"));
+        assert!(rows[1].can_move_earlier);
+        assert!(!rows[1].can_move_later);
     }
 
     fn row_for_recipe(

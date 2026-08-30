@@ -81,6 +81,8 @@ pub(crate) fn handle_sim_command_results(
                 feedback.message = Some(slot_transfer_error_message(sim.read().catalog(), *error));
             }
             (SimCommand::StartManualCraft(_), Ok(_))
+            | (SimCommand::CancelManualCraft { .. }, Ok(_))
+            | (SimCommand::MoveManualCraft { .. }, Ok(_))
             | (SimCommand::SelectAssemblerRecipe { .. }, Ok(_))
             | (SimCommand::EnqueueResearch(_), Ok(_))
             | (SimCommand::RemoveQueuedResearch { .. }, Ok(_))

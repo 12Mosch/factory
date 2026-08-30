@@ -1,13 +1,14 @@
 use bevy::prelude::*;
-use factory_sim::SimCommand;
+use factory_sim::{CraftingError, SimCommand, SimCommandError};
 
 use crate::audio::SoundEvent;
 use crate::resources::SimResource;
-use crate::simulation::SimCommandRequest;
+use crate::simulation::{SimCommandRequest, SimCommandResult};
 use crate::ui::resources::CraftingWindowState;
 
 use super::components::{
-    CraftingPanelSnapshot, CraftingQueueSnapshot, CraftingRecipeButton, CraftingTabButton,
+    CraftingPanelSnapshot, CraftingQueueAction, CraftingQueueButton, CraftingQueueSnapshot,
+    CraftingRecipeButton, CraftingTabButton,
 };
 use super::helpers::{craftable_for_player, crafting_panel_snapshot, queue_snapshot};
 use super::view::{manual_crafting_root, spawn_manual_crafting_contents, spawn_queue_contents};
@@ -23,6 +24,12 @@ type CraftingRecipeInteractionQuery<'w, 's> = Query<
     'w,
     's,
     (&'static Interaction, &'static CraftingRecipeButton),
+    (Changed<Interaction>, With<Button>),
+>;
+type CraftingQueueInteractionQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Interaction, &'static CraftingQueueButton),
     (Changed<Interaction>, With<Button>),
 >;
 
@@ -65,6 +72,64 @@ pub(crate) fn handle_manual_crafting_recipe_buttons(
     }
 }
 
+pub(crate) fn handle_manual_crafting_queue_buttons(
+    mut interactions: CraftingQueueInteractionQuery,
+    state: Res<CraftingWindowState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    if !state.open {
+        return;
+    }
+
+    for (interaction, button) in &mut interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let command = match button.action {
+            CraftingQueueAction::Cancel => SimCommand::CancelManualCraft {
+                job_id: button.job_id,
+            },
+            CraftingQueueAction::Move(direction) => SimCommand::MoveManualCraft {
+                job_id: button.job_id,
+                direction,
+            },
+        };
+        commands.write(SimCommandRequest(command));
+    }
+}
+
+pub(crate) fn handle_manual_crafting_command_results(
+    mut results: MessageReader<SimCommandResult>,
+    mut state: ResMut<CraftingWindowState>,
+) {
+    for outcome in results.read() {
+        if !matches!(
+            &outcome.command,
+            SimCommand::StartManualCraft(_)
+                | SimCommand::CancelManualCraft { .. }
+                | SimCommand::MoveManualCraft { .. }
+        ) {
+            continue;
+        }
+
+        state.feedback = match outcome.result {
+            Ok(_) => None,
+            Err(SimCommandError::Crafting(CraftingError::RefundInventoryFull)) => {
+                Some("Cannot cancel: make inventory room for all refunded ingredients.".to_string())
+            }
+            Err(SimCommandError::Crafting(CraftingError::MissingJob(_))) => {
+                Some("That crafting job is no longer queued.".to_string())
+            }
+            Err(SimCommandError::Crafting(CraftingError::InsufficientIngredients)) => {
+                Some("Not enough ingredients to start that craft.".to_string())
+            }
+            Err(SimCommandError::Crafting(_)) | Err(_) => {
+                Some("The crafting queue could not be changed.".to_string())
+            }
+        };
+    }
+}
+
 pub(crate) fn sync_manual_crafting_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
@@ -82,7 +147,7 @@ pub(crate) fn sync_manual_crafting_panel(
         &mut roots,
         state.open,
         true,
-        || crafting_panel_snapshot(&sim.read(), state.selected_tab),
+        || crafting_panel_snapshot(&sim.read(), state.selected_tab, state.feedback.clone()),
         manual_crafting_root,
         |root, snapshot| spawn_manual_crafting_contents(root, snapshot, queue.clone()),
     );

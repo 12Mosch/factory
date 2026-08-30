@@ -41,6 +41,7 @@ use crate::ui::inventory_panel::{
 use crate::ui::logistics_panel::{handle_logistic_request_step_buttons, update_logistic_panel};
 use crate::ui::machine_indicators::{update_machine_guidance, update_machine_indicators};
 use crate::ui::manual_crafting::{
+    handle_manual_crafting_command_results, handle_manual_crafting_queue_buttons,
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
     sync_manual_crafting_panel,
 };
@@ -182,11 +183,21 @@ impl Plugin for UiPlugin {
                     sync_enemy_settings_window.after(handle_enemy_settings_buttons),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
+                )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                (
                     handle_manual_crafting_tab_buttons.in_set(AppSet::UiInteraction),
                     handle_manual_crafting_recipe_buttons.in_set(AppSet::UiInteraction),
+                    handle_manual_crafting_queue_buttons.in_set(AppSet::UiInteraction),
+                    handle_manual_crafting_command_results.after(handle_sim_command_results),
                     sync_manual_crafting_panel
                         .after(handle_manual_crafting_tab_buttons)
-                        .after(handle_manual_crafting_recipe_buttons),
+                        .after(handle_manual_crafting_recipe_buttons)
+                        .after(handle_manual_crafting_queue_buttons)
+                        .after(handle_manual_crafting_command_results),
                 )
                     .in_set(InGameSet),
             )

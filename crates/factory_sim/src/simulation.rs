@@ -43,7 +43,9 @@ pub use crate::construction::{
     Blueprint, BlueprintEntity, ConstructionError, ConstructionJob, ConstructionState, GhostEntity,
     GhostId,
 };
-pub use crate::crafting::{CraftingError, CraftingJob, CraftingQueue};
+pub use crate::crafting::{
+    CraftingError, CraftingJob, CraftingJobId, CraftingQueue, CraftingQueueMove,
+};
 pub use crate::enemies::{
     Enemy, EnemyBaseId, EnemyDifficultyPreset, EnemyId, EnemyMapSnapshot, EnemyMission, EnemyMode,
     EnemyRuntimeSettings, EnemySubsystem, EnemyWorldSettings, ExpansionId, RaidId,
@@ -795,6 +797,15 @@ pub enum SimValidationError {
     },
     InvalidCraftingRecipe {
         recipe_id: RecipeId,
+    },
+    InvalidCraftingJobIdentity {
+        job_id: CraftingJobId,
+    },
+    /// A queued manual craft claims more work remains than its recipe requires.
+    InvalidCraftingProgress {
+        job_id: CraftingJobId,
+        remaining_ticks: u32,
+        required_ticks: u32,
     },
     InvalidBeltItemPosition {
         entity_id: EntityId,

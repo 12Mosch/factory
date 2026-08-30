@@ -99,7 +99,10 @@ use bincode::Options;
 // power, launches, or is removed.
 // v49: personal roboport buffer and charging-pad state joined powered equipment,
 // and flying robots gained durable personal ownership.
-pub const SAVE_VERSION: u32 = 49;
+// v50: manual crafting jobs gained stable identities and the queue gained
+// durable identity and completion cursors so cancel/reorder commands remain
+// safe across saves and presentation can distinguish completion from mutation.
+pub const SAVE_VERSION: u32 = 50;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
