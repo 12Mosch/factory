@@ -25,10 +25,13 @@ pub enum PrototypeLoadError {
         entity: String,
         item: String,
     },
-    MissingRocketSiloLaunchItem {
-        entity: String,
+    MissingItemLaunchProduct {
         item: String,
-        role: &'static str,
+        product: String,
+    },
+    InvalidItemLaunchMetadata {
+        item: String,
+        detail: &'static str,
     },
     InvalidBuildingMenuMetadata {
         entity: String,
@@ -253,9 +256,13 @@ impl fmt::Display for PrototypeLoadError {
                     "entity {entity:?} references missing build item {item:?}"
                 )
             }
-            Self::MissingRocketSiloLaunchItem { entity, item, role } => write!(
+            Self::MissingItemLaunchProduct { item, product } => write!(
                 formatter,
-                "rocket silo {entity:?} references missing {role} item {item:?}"
+                "launchable item {item:?} references missing product {product:?}"
+            ),
+            Self::InvalidItemLaunchMetadata { item, detail } => write!(
+                formatter,
+                "item {item:?} has invalid launch metadata: {detail}"
             ),
             Self::InvalidBuildingMenuMetadata { entity, detail } => write!(
                 formatter,

@@ -2,7 +2,7 @@ use super::MachineModuleState;
 use super::MachineStatus;
 use crate::ids::EntityId;
 use crate::inventory::Inventory;
-use factory_data::ItemId;
+use factory_data::{ItemAmount, ItemId, PrototypeCatalog};
 use serde::{Deserialize, Serialize};
 
 pub const LAUNCH_SEAL_TICKS: u16 = 60;
@@ -138,14 +138,39 @@ impl RocketSiloState {
         self.parts_completed >= self.parts_per_rocket
     }
 
-    /// Whether the cargo holder contains exactly the configured single payload.
-    pub(crate) fn has_launch_payload(&self, launch_payload: ItemId) -> bool {
-        self.cargo_inventory
+    /// Atomic reward selected by the exact one-item cargo stack.
+    ///
+    /// Cargo remains present throughout the launch, so every phase resolves
+    /// acceptance and completion through this same catalog definition.
+    pub(crate) fn launch_products_for_cargo<'a>(
+        &self,
+        catalog: &'a PrototypeCatalog,
+    ) -> Option<&'a [ItemAmount]> {
+        let payload = self
+            .cargo_inventory
             .slots()
             .first()
             .and_then(|slot| slot.stack())
-            .is_some_and(|stack| stack.item_id() == launch_payload && stack.count() == 1)
+            .filter(|stack| stack.count() == 1)?
+            .item_id();
+        catalog.rocket_launch_products(payload)
     }
+}
+
+/// Returns the output inventory after inserting a whole launch reward.
+///
+/// Building the result on a clone makes the operation atomic for heterogeneous
+/// product lists: callers either commit every stack or leave the silo untouched.
+pub(crate) fn output_with_launch_products(
+    catalog: &PrototypeCatalog,
+    output: &Inventory,
+    products: &[ItemAmount],
+) -> Option<Inventory> {
+    let mut next = output.clone();
+    for product in products {
+        next.insert(catalog, product.item, product.amount).ok()?;
+    }
+    Some(next)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

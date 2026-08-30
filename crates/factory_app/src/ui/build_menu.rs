@@ -1,5 +1,7 @@
 use bevy::ecs::system::SystemParam;
+use bevy::input_focus::AutoFocus;
 use bevy::prelude::*;
+use bevy::text::{EditableText, TextCursorStyle};
 use bevy::ui_widgets::ScrollArea;
 use factory_data::{BuildingCategory, PrototypeCatalog};
 use factory_sim::Simulation;
@@ -14,7 +16,8 @@ use crate::placement::build::{BuildablePrototype, buildable_prototypes, display_
 use crate::resources::SimResource;
 use crate::ui::build_bar::{BuildMenuButton, slot_key_label};
 use crate::ui::resources::{OpenContainer, TechnologyWindowState};
-use crate::ui::window_sync::{WindowRootQuery, sync_window};
+use crate::ui::text_input::{editor_value, is_non_control, set_editor_value, single_line_editor};
+use crate::ui::window_sync::{WindowRoot, WindowRootQuery, sync_contents, sync_window};
 use crate::utils::compact_item_name;
 
 const CATEGORIES: [BuildingCategory; 8] = [
@@ -51,6 +54,12 @@ pub(crate) struct BuildMenuViewButton(BuildingMenuView);
 
 #[derive(Component)]
 pub(crate) struct BuildMenuCloseButton;
+
+#[derive(Component)]
+pub(crate) struct BuildMenuSearchInput;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BuildMenuShellSnapshot;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BuildMenuSnapshot {
@@ -183,22 +192,64 @@ pub(crate) fn sync_build_menu(
     hotbar: Res<HotbarState>,
     state: Res<BuildMenuState>,
     mut cached_buildables: Local<Option<Vec<BuildablePrototype>>>,
-    mut roots: WindowRootQuery<BuildMenuSnapshot>,
+    mut shell_roots: WindowRootQuery<BuildMenuShellSnapshot>,
+    mut contents_roots: WindowRootQuery<BuildMenuSnapshot>,
 ) {
     let buildables = cached_buildables.get_or_insert_with(|| {
         let mut buildables = buildable_prototypes(sim.read().catalog());
         sort_buildables(&mut buildables);
         buildables
     });
+    let mut snapshot = None;
     sync_window(
         &mut commands,
-        &mut roots,
+        &mut shell_roots,
         state.open,
-        sim.is_changed() || hotbar.is_changed() || state.is_changed(),
-        || build_menu_snapshot(&sim.read(), &hotbar, &state, buildables),
+        false,
+        || BuildMenuShellSnapshot,
         build_menu_root,
-        spawn_contents,
+        |root, _| {
+            let snapshot = snapshot.get_or_insert_with(|| {
+                build_menu_snapshot(&sim.read(), &hotbar, &state, buildables)
+            });
+            spawn_contents(root, snapshot);
+        },
     );
+    if state.open && (sim.is_changed() || hotbar.is_changed() || state.is_changed()) {
+        let snapshot = snapshot
+            .unwrap_or_else(|| build_menu_snapshot(&sim.read(), &hotbar, &state, buildables));
+        sync_contents(
+            &mut commands,
+            &mut contents_roots,
+            snapshot,
+            spawn_dynamic_contents,
+        );
+    }
+}
+
+pub(crate) fn sync_build_menu_search_from_state(
+    menu: Res<BuildMenuState>,
+    mut inputs: Query<&mut EditableText, With<BuildMenuSearchInput>>,
+) {
+    if !menu.is_changed() {
+        return;
+    }
+    for mut input in &mut inputs {
+        set_editor_value(&mut input, &menu.search_query);
+    }
+}
+
+pub(crate) fn sync_build_menu_search_to_state(
+    inputs: Query<&EditableText, (With<BuildMenuSearchInput>, Changed<EditableText>)>,
+    mut menu: ResMut<BuildMenuState>,
+) {
+    for input in &inputs {
+        let value = editor_value(input);
+        if menu.search_query != value {
+            menu.search_query = value;
+            menu.message = None;
+        }
+    }
 }
 
 pub(crate) fn build_menu_snapshot(
@@ -395,29 +446,110 @@ fn spawn_contents(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &BuildMenuSnapshot,
 ) {
-    root.spawn((Node { width: Val::Px(750.0), max_width: Val::Vw(92.0), height: Val::Vh(72.0), max_height: Val::Px(720.0), flex_direction: FlexDirection::Column, row_gap: Val::Px(10.0), padding: UiRect::all(Val::Px(14.0)), border: UiRect::all(Val::Px(1.0)), overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::srgba(0.035, 0.038, 0.040, 0.98)), BorderColor::all(Color::srgba(0.49, 0.48, 0.42, 0.8))))
-        .with_children(|panel| {
-            spawn_header(panel, snapshot);
-            panel.spawn((Node { flex_grow: 1.0, flex_direction: FlexDirection::Row, column_gap: Val::Px(12.0), min_height: Val::ZERO, ..default() }, BackgroundColor(Color::NONE))).with_children(|body| {
-                spawn_navigation(body, snapshot);
-                body.spawn((Node { flex_grow: 1.0, min_width: Val::Px(GRID_WIDTH), height: Val::Percent(100.0), overflow: Overflow::scroll_y(), scrollbar_width: 10.0, padding: UiRect::right(Val::Px(4.0)), ..default() }, BackgroundColor(Color::srgba(0.02, 0.022, 0.023, 0.75)), ScrollArea)).with_children(|viewport| {
-                    viewport.spawn((Node { width: Val::Px(GRID_WIDTH), flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap, align_content: AlignContent::FlexStart, column_gap: Val::Px(CELL_GAP), row_gap: Val::Px(CELL_GAP), padding: UiRect::all(Val::Px(GRID_PADDING)), ..default() }, BackgroundColor(Color::NONE))).with_children(|grid| {
-                        if let Some(message) = &snapshot.empty_message {
-                            grid.spawn((Text::new(message.clone()), TextFont::from_font_size(14.0), TextColor(Color::srgb(0.72, 0.72, 0.67))));
-                        }
-                        for entry in &snapshot.entries { spawn_entry(grid, entry); }
-                    });
-                });
-            });
-            if let Some(message) = &snapshot.message { panel.spawn((Text::new(message.clone()), TextFont::from_font_size(12.0), TextColor(Color::srgb(0.98, 0.72, 0.28)))); }
-            panel.spawn((Text::new("Click an unlocked card to build | +/- toggles hotbar favorite | 1-0 select favorites outside catalog"), TextFont::from_font_size(11.0), TextColor(Color::srgb(0.68, 0.70, 0.66))));
-        });
+    root.spawn((
+        Node {
+            width: Val::Px(750.0),
+            max_width: Val::Vw(92.0),
+            height: Val::Vh(72.0),
+            max_height: Val::Px(720.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.035, 0.038, 0.040, 0.98)),
+        BorderColor::all(Color::srgba(0.49, 0.48, 0.42, 0.8)),
+    ))
+    .with_children(|panel| {
+        spawn_header(panel, &snapshot.search_query);
+        panel
+            .spawn((
+                Node {
+                    flex_grow: 1.0,
+                    min_height: Val::ZERO,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(10.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+                WindowRoot::new(snapshot.clone()),
+            ))
+            .with_children(|contents| spawn_dynamic_contents(contents, snapshot));
+    });
 }
 
-fn spawn_header(
+fn spawn_dynamic_contents(
     panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &BuildMenuSnapshot,
 ) {
+    panel
+        .spawn((
+            Node {
+                flex_grow: 1.0,
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(12.0),
+                min_height: Val::ZERO,
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ))
+        .with_children(|body| {
+            spawn_navigation(body, snapshot);
+            body.spawn((
+                Node {
+                    flex_grow: 1.0,
+                    min_width: Val::Px(GRID_WIDTH),
+                    height: Val::Percent(100.0),
+                    overflow: Overflow::scroll_y(),
+                    scrollbar_width: 10.0,
+                    padding: UiRect::right(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.02, 0.022, 0.023, 0.75)),
+                ScrollArea,
+            ))
+            .with_children(|viewport| {
+                viewport
+                    .spawn((
+                        Node {
+                            width: Val::Px(GRID_WIDTH),
+                            flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
+                            align_content: AlignContent::FlexStart,
+                            column_gap: Val::Px(CELL_GAP),
+                            row_gap: Val::Px(CELL_GAP),
+                            padding: UiRect::all(Val::Px(GRID_PADDING)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|grid| {
+                        if let Some(message) = &snapshot.empty_message {
+                            grid.spawn((
+                                Text::new(message.clone()),
+                                TextFont::from_font_size(14.0),
+                                TextColor(Color::srgb(0.72, 0.72, 0.67)),
+                            ));
+                        }
+                        for entry in &snapshot.entries {
+                            spawn_entry(grid, entry);
+                        }
+                    });
+            });
+        });
+    if let Some(message) = &snapshot.message {
+        panel.spawn((
+            Text::new(message.clone()),
+            TextFont::from_font_size(12.0),
+            TextColor(Color::srgb(0.98, 0.72, 0.28)),
+        ));
+    }
+    panel.spawn((Text::new("Click an unlocked card to build | +/- toggles hotbar favorite | 1-0 select favorites outside catalog"), TextFont::from_font_size(11.0), TextColor(Color::srgb(0.68, 0.70, 0.66))));
+}
+
+fn spawn_header(panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, search_query: &str) {
     panel
         .spawn((
             Node {
@@ -435,29 +567,26 @@ fn spawn_header(
                 TextFont::from_font_size(20.0),
                 TextColor(Color::srgb(0.94, 0.93, 0.86)),
             ));
-            let search = if snapshot.search_query.is_empty() {
-                "Search buildings...".into()
-            } else {
-                snapshot.search_query.clone()
-            };
-            header
-                .spawn((
-                    Node {
-                        flex_grow: 1.0,
-                        height: Val::Px(30.0),
-                        align_items: AlignItems::Center,
-                        padding: UiRect::horizontal(Val::Px(10.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.07, 0.08, 0.08, 0.96)),
-                    BorderColor::all(Color::srgba(0.48, 0.55, 0.48, 0.8)),
-                ))
-                .with_child((
-                    Text::new(search),
-                    TextFont::from_font_size(12.0),
-                    TextColor(Color::srgb(0.78, 0.82, 0.75)),
-                ));
+            header.spawn((
+                Node {
+                    flex_grow: 1.0,
+                    height: Val::Px(30.0),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::horizontal(Val::Px(10.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    overflow: Overflow::clip_x(),
+                    ..default()
+                },
+                single_line_editor(search_query, None, is_non_control),
+                TextLayout::no_wrap(),
+                TextCursorStyle::default(),
+                TextFont::from_font_size(12.0),
+                TextColor(Color::srgb(0.78, 0.82, 0.75)),
+                BackgroundColor(Color::srgba(0.07, 0.08, 0.08, 0.96)),
+                BorderColor::all(Color::srgba(0.48, 0.55, 0.48, 0.8)),
+                AutoFocus,
+                BuildMenuSearchInput,
+            ));
             header
                 .spawn((
                     Button,

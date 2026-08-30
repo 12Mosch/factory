@@ -1,4 +1,4 @@
-use factory_data::{entity_prototype_id_by_name, item_id_by_name, recipe_id_by_name};
+use factory_data::{TechnologyId, entity_prototype_id_by_name, item_id_by_name, recipe_id_by_name};
 use factory_sim::{
     CHUNK_SIZE, ChunkCoord, Direction, EnemyDifficultyPreset, EnemyMode, EntityId, Inventory,
     Simulation, SimulationCounts, SimulationTickProfile, load_from_bytes, save_to_bytes,
@@ -35,6 +35,8 @@ const ROUTED_BENCHMARK_TRAINS: usize = 16;
 /// where it can be asserted exactly, beside the search.
 const ROUTE_SEARCH_ALLOC_P95_BYTES_BUDGET: u64 = 160 * 1024;
 const ROUTE_SEARCH_ALLOC_P95_COUNT_BUDGET: u64 = 1_600;
+const SILO_SMOKE_ALLOC_P95_BYTES_BUDGET: u64 = 64 * 1024;
+const SILO_SMOKE_ALLOC_P95_COUNT_BUDGET: u64 = 256;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -93,6 +95,75 @@ fn scripted_red_science_tick_allocation_smoke_budget() {
         "allocation p95 {} allocs exceeded smoke budget {} allocs",
         stats.alloc_p95_count,
         SMOKE_ALLOC_P95_COUNT_BUDGET
+    );
+}
+
+/// A small always-on fixture covering both stocked and empty silos. The silos
+/// are deliberately unpowered: stocked machines remain active demand
+/// candidates without consuming their ingredients, so every measured tick has
+/// the same work and the allocation budget measures steady state.
+#[test]
+fn rocket_silo_tick_allocation_smoke_budget() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut sim = build_rocket_silo_benchmark(16, 8);
+    run_warmup_ticks(&mut sim, 30);
+
+    let stats = collect_benchmark_stats(&mut sim, 60);
+    print_benchmark_stats("rocket_silo_smoke_16", stats);
+
+    sim.validate_state()
+        .expect("silo smoke budget run should leave a valid simulation state");
+    assert_eq!(stats.counts.machine_count, 16);
+    assert_eq!(stats.counts.active_machines, 8);
+    assert_eq!(stats.counts.idle_machines, 8);
+    assert!(
+        stats.alloc_p95_bytes <= SILO_SMOKE_ALLOC_P95_BYTES_BUDGET,
+        "allocation p95 {} bytes exceeded silo budget {} bytes",
+        stats.alloc_p95_bytes,
+        SILO_SMOKE_ALLOC_P95_BYTES_BUDGET
+    );
+    assert!(
+        stats.alloc_p95_count <= SILO_SMOKE_ALLOC_P95_COUNT_BUDGET,
+        "allocation p95 {} allocs exceeded silo budget {} allocs",
+        stats.alloc_p95_count,
+        SILO_SMOKE_ALLOC_P95_COUNT_BUDGET
+    );
+}
+
+/// Manual scaling diagnostic for silo-heavy worlds. It reports whole-tick and
+/// machine-phase time plus allocations for an eightfold entity increase. The
+/// generous bound catches super-linear regressions while leaving room for
+/// scheduler noise on shared CI workers.
+#[test]
+#[ignore]
+fn rocket_silo_scaling_benchmark_64_to_512() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut small = build_rocket_silo_benchmark(64, 32);
+    let mut large = build_rocket_silo_benchmark(512, 256);
+    run_warmup_ticks(&mut small, 120);
+    run_warmup_ticks(&mut large, 120);
+
+    let small_stats = collect_benchmark_stats(&mut small, 300);
+    let large_stats = collect_benchmark_stats(&mut large, 300);
+    print_benchmark_stats("rocket_silo_scaling_64", small_stats);
+    print_benchmark_stats("rocket_silo_scaling_512", large_stats);
+
+    let fixed_noise = Duration::from_micros(250);
+    assert!(
+        large_stats.p95.machines <= small_stats.p95.machines * 12 + fixed_noise,
+        "eightfold silo growth raised machine p95 from {:.3} ms to {:.3} ms",
+        ms(small_stats.p95.machines),
+        ms(large_stats.p95.machines)
+    );
+    assert!(
+        large_stats.alloc_p95_count <= small_stats.alloc_p95_count.saturating_add(64),
+        "steady-state allocation p95 grew from {} to {} for eightfold silo growth",
+        small_stats.alloc_p95_count,
+        large_stats.alloc_p95_count
     );
 }
 
@@ -573,6 +644,69 @@ fn build_factory_benchmark(spec: FactoryBenchmarkSpec) -> Simulation {
     sim.validate_state()
         .expect("constructed benchmark fixture should be valid");
     sim
+}
+
+fn build_rocket_silo_benchmark(silo_count: usize, stocked_count: usize) -> Simulation {
+    assert!(stocked_count <= silo_count);
+    let mut sim = Simulation::new_seeded(123);
+    let rocket_silo_technology = sim
+        .catalog()
+        .technologies
+        .iter()
+        .find(|technology| technology.name == "rocket_silo")
+        .expect("base catalog should define rocket silo research")
+        .id;
+    complete_research_with_prerequisites(&mut sim, rocket_silo_technology);
+
+    let requested_tiles = silo_count.saturating_mul(256);
+    let chunks_needed = requested_tiles.div_ceil((CHUNK_SIZE * CHUNK_SIZE) as usize);
+    let radius = (((chunks_needed as f64).sqrt() / 2.0).ceil() as i32 + 4).max(4);
+    for y in -radius..=radius {
+        for x in -radius..=radius {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
+
+    let silo_ids = place_spaced_entities(&mut sim, "rocket_silo", silo_count, Direction::North, 16);
+    let ingredients = sim
+        .rocket_silo_recipe()
+        .expect("rocket silo research should unlock the part recipe")
+        .ingredients
+        .clone();
+    let catalog = sim.catalog().clone();
+    for &silo_id in silo_ids.iter().take(stocked_count) {
+        for ingredient in &ingredients {
+            *sim.player_inventory_mut() = Inventory::player();
+            sim.player_inventory_mut()
+                .insert(&catalog, ingredient.item, ingredient.amount)
+                .expect("benchmark inventory should accept one recipe cycle");
+            factory_sim::entity_transfer::player_slot_to_rocket_silo_input(&mut sim, silo_id, 0)
+                .expect("benchmark silo should accept its fixed-recipe ingredient");
+        }
+    }
+    *sim.player_inventory_mut() = Inventory::player();
+    sim.tick();
+    sim.validate_state()
+        .expect("constructed silo benchmark fixture should be valid");
+    sim
+}
+
+fn complete_research_with_prerequisites(sim: &mut Simulation, technology_id: TechnologyId) {
+    if sim.technology_level(technology_id).unwrap_or(0) > 0 {
+        return;
+    }
+    let technology = sim
+        .catalog()
+        .technology(technology_id)
+        .expect("benchmark research id should resolve")
+        .clone();
+    for prerequisite in technology.prerequisites {
+        complete_research_with_prerequisites(sim, prerequisite);
+    }
+    sim.select_research(technology_id)
+        .expect("benchmark research should be selectable after its prerequisites");
+    sim.add_research_units(technology.required_units)
+        .expect("benchmark research should complete in one setup operation");
 }
 
 fn generate_extra_chunks(sim: &mut Simulation, spec: FactoryBenchmarkSpec) {

@@ -1,10 +1,9 @@
 use super::common::{
     first_available_hotbar_slot, hotbar_key_for_slot, set_player_inventory_slot, test_app,
 };
-use bevy::input::ButtonState;
-use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
+use bevy::text::EditableText;
 use factory_app::audio::AudioSettingsWindowState;
 use factory_app::build::resources::{
     BlueprintLibraryWindowState, BuildMenuState, BuildPlacementState,
@@ -551,14 +550,12 @@ fn b_opens_build_menu_and_types_into_search_while_open() {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyB);
-    app.world_mut().write_message(KeyboardInput {
-        key_code: KeyCode::KeyB,
-        logical_key: Key::Character("b".into()),
-        state: ButtonState::Pressed,
-        text: Some("b".into()),
-        repeat: false,
-        window: Entity::PLACEHOLDER,
-    });
+    let mut inputs = app.world_mut().query::<&mut EditableText>();
+    inputs
+        .single_mut(app.world_mut())
+        .expect("the open build menu should have one editable search field")
+        .editor_mut()
+        .set_text("b");
     app.update();
 
     let menu = app.world().resource::<BuildMenuState>();

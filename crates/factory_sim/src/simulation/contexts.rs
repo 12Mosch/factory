@@ -192,6 +192,10 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) stopped_stock: &'a rolling_stock_ops::StoppedStockIndex,
     pub(super) transport: &'a mut TransportLaneCache,
     pub(super) research: &'a mut ResearchState,
+    /// Research-aware recipe snapshot resolved when this bulk pass begins.
+    /// The machine and inserter passes build separate contexts because labs run
+    /// between them and may unlock the recipe in the same simulation tick.
+    pub(super) rocket_silo_recipe: ResolvedRocketSiloRecipe,
     pub(super) mining_drill_productivity_permyriad: u64,
     pub(super) power: &'a mut PowerSubsystem,
     pub(super) power_demand_cache: &'a mut PowerDemandCache,

@@ -189,6 +189,11 @@ impl Simulation {
     }
 
     pub(super) fn refresh_power_state(&mut self) {
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
         if self.power.topology_dirty {
             self.power.topology = self.rebuild_power_topology();
             self.power.topology_dirty = false;
@@ -212,6 +217,7 @@ impl Simulation {
                 fluid_boxes: FluidBoxes::new(&self.entities, &self.rolling_stock),
                 fluids: &self.fluids,
                 research: &self.research,
+                rocket_silo_recipe,
             },
             &self.power.topology,
             &mut self.power.entity_statuses,

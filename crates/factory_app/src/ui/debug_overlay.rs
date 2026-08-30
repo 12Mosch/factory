@@ -1,5 +1,6 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
+use bevy::scene::ScenePatch;
 use factory_sim::{PowerSummary, SimulationCounts};
 use std::time::Duration;
 
@@ -8,11 +9,32 @@ use crate::resources::{SimProfileStats, SimResource, UpsStats};
 
 const DEBUG_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct DebugOverlayText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct DebugOverlayRoot;
+
+/// Static retained hierarchy for the debug performance overlay.
+fn debug_overlay_scene() -> impl Scene {
+    bsn! {
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            left: Val::Px(12.0),
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+        }
+        BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.72))
+        GlobalZIndex(1000)
+        DebugOverlayRoot
+        Children [(
+            Text("Tick: 0\nUPS: 0.0")
+            TextFont { font_size: FontSize::Px(14.0) }
+            TextColor(Color::WHITE)
+            DebugOverlayText
+        )]
+    }
+}
 
 /// Whether the debug performance overlay is shown. Toggled with F4.
 #[derive(Resource)]
@@ -48,26 +70,16 @@ impl DebugOverlayRefresh {
     }
 }
 
-pub(crate) fn setup_debug_overlay(mut commands: Commands) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(12.0),
-                left: Val::Px(12.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.72)),
-            GlobalZIndex(1000),
-            DebugOverlayRoot,
-        ))
-        .with_child((
-            Text::new("Tick: 0\nUPS: 0.0"),
-            TextFont::from_font_size(14.0),
-            TextColor(Color::WHITE),
-            DebugOverlayText,
-        ));
+pub(crate) fn setup_debug_overlay(
+    mut commands: Commands,
+    asset_server: Option<Res<AssetServer>>,
+    scene_patches: Option<Res<Assets<ScenePatch>>>,
+) {
+    if asset_server.is_none() || scene_patches.is_none() {
+        return;
+    }
+
+    commands.spawn_scene(debug_overlay_scene());
 }
 
 pub(crate) fn toggle_debug_overlay(
@@ -256,7 +268,73 @@ pub fn format_joules(joules: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::{asset::AssetPlugin, scene::ScenePlugin};
     use factory_sim::SimulationTickProfile;
+
+    fn scene_test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((AssetPlugin::default(), ScenePlugin));
+        app
+    }
+
+    #[test]
+    fn debug_overlay_scene_has_the_expected_retained_hierarchy() {
+        let mut app = scene_test_app();
+        app.add_systems(Update, setup_debug_overlay);
+        app.update();
+
+        let root = {
+            let world = app.world_mut();
+            let mut roots = world.query_filtered::<Entity, With<DebugOverlayRoot>>();
+            roots
+                .single(world)
+                .expect("setup should spawn one debug overlay root")
+        };
+
+        let world = app.world();
+        assert!(world.entity(root).contains::<Node>());
+        assert!(world.entity(root).contains::<BackgroundColor>());
+        assert_eq!(
+            world.entity(root).get::<Visibility>(),
+            Some(&Visibility::Inherited)
+        );
+
+        let children = world
+            .entity(root)
+            .get::<Children>()
+            .expect("debug overlay root should have a text child");
+        assert_eq!(children.len(), 1);
+        let text = children[0];
+        assert!(world.entity(text).contains::<DebugOverlayText>());
+        assert!(world.entity(text).contains::<Text>());
+        assert!(world.entity(text).contains::<TextFont>());
+        assert!(world.entity(text).contains::<TextColor>());
+    }
+
+    #[test]
+    fn debug_overlay_visibility_still_updates_the_scene_root() {
+        let mut app = scene_test_app();
+        let root = app
+            .world_mut()
+            .spawn_scene(debug_overlay_scene())
+            .expect("debug overlay scene should spawn")
+            .id();
+        app.insert_resource(DebugOverlayVisible(false))
+            .add_systems(Update, apply_debug_overlay_visibility);
+
+        app.update();
+        assert_eq!(
+            app.world().entity(root).get::<Visibility>(),
+            Some(&Visibility::Hidden)
+        );
+
+        app.world_mut().resource_mut::<DebugOverlayVisible>().0 = true;
+        app.update();
+        assert_eq!(
+            app.world().entity(root).get::<Visibility>(),
+            Some(&Visibility::Visible)
+        );
+    }
 
     #[test]
     fn debug_overlay_format_includes_required_profiling_labels() {

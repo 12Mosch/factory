@@ -131,7 +131,9 @@ pub const SAVE_VERSION: u32 = 48;
 // capacity metadata.
 // v30: technologies gained level models, cost curves, and typed simulation
 // bonus effects.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 30;
+// v31: launch rewards moved from the rocket silo prototype to data-driven item
+// payload metadata and gained atomic multi-product support.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 31;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -516,6 +518,17 @@ mod tests {
         let before = prototype_hash(&catalog);
 
         catalog.items[0].stack_size += 1;
+
+        assert_ne!(before, prototype_hash(&catalog));
+    }
+
+    #[test]
+    fn prototype_hash_includes_payload_launch_products() {
+        let mut catalog = PrototypeCatalog::load_base().unwrap();
+        let before = prototype_hash(&catalog);
+        let satellite = factory_data::item_id_by_name(&catalog, "satellite");
+
+        catalog.items[satellite.index()].launch_products[0].amount -= 1;
 
         assert_ne!(before, prototype_hash(&catalog));
     }

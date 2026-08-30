@@ -1,6 +1,6 @@
-use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input_focus::{AutoFocus, InputFocus};
 use bevy::prelude::*;
+use bevy::text::{EditableText, TextCursorStyle};
 use chrono::{DateTime, Local};
 
 use crate::audio::SoundEvent;
@@ -10,8 +10,11 @@ use crate::save_load::{
     delete_save, load_save, request_named_save, request_overwrite,
 };
 use crate::ui::layout::scroll_column;
-use crate::ui::window_sync::{WindowRootQuery, sync_window};
-use crate::utils::remove_previous_word;
+use crate::ui::text_input::{
+    EditableTextSanitizer, can_submit, editor_value, is_non_control, set_editor_value,
+    single_line_editor,
+};
+use crate::ui::window_sync::{WindowRoot, WindowRootQuery, WindowSync, sync_contents, sync_window};
 use crate::world_setup::{AppMode, WorldSetupState};
 
 #[derive(Component)]
@@ -25,6 +28,10 @@ pub struct SaveEntryButton {
 }
 #[derive(Component)]
 pub struct SaveCreateButton;
+/// Defers a create-button press until the current editor value has been
+/// synchronized in `PostUpdate`.
+#[derive(Message)]
+pub(crate) struct SaveCreateRequested;
 #[derive(Component)]
 pub struct SaveConfirmationButton(pub bool);
 #[derive(Component)]
@@ -33,6 +40,8 @@ pub struct SaveLoadModal;
 pub struct SaveLoadSlotList;
 #[derive(Component)]
 pub struct NewWorldButton;
+#[derive(Component)]
+pub(crate) struct SaveNameInput;
 #[derive(Resource, Default)]
 pub struct NewWorldConfirmation {
     pub awaiting_confirmation: bool,
@@ -45,7 +54,7 @@ pub enum SaveEntryAction {
     Delete,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SaveLoadSnapshot {
     window: SaveLoadWindowState,
     status: SaveLoadStatus,
@@ -54,6 +63,34 @@ pub(crate) struct SaveLoadSnapshot {
     confirmation: PendingSaveConfirmation,
     new_world_confirmation: bool,
 }
+
+impl PartialEq for SaveLoadSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.window.open == other.window.open
+            && self.window.tab == other.window.tab
+            && self.status == other.status
+            && self.entries == other.entries
+            && self.pending == other.pending
+            && self.confirmation == other.confirmation
+            && self.new_world_confirmation == other.new_world_confirmation
+    }
+}
+
+impl Eq for SaveLoadSnapshot {}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SaveLoadShellSnapshot {
+    tab: SaveLoadTab,
+    name_buffer: String,
+}
+
+impl PartialEq for SaveLoadShellSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.tab == other.tab
+    }
+}
+
+impl Eq for SaveLoadShellSnapshot {}
 
 type TabButtons<'w, 's> = Query<
     'w,
@@ -81,6 +118,7 @@ pub(crate) fn handle_save_load_buttons(
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
     mut sounds: MessageWriter<SoundEvent>,
+    mut create_requests: MessageWriter<SaveCreateRequested>,
 ) {
     if !load_state.window.open {
         return;
@@ -94,16 +132,7 @@ pub(crate) fn handle_save_load_buttons(
     for interaction in &mut create {
         if *interaction == Interaction::Pressed {
             sounds.write(SoundEvent::UiClick);
-            request_named_save(
-                &load_state.window.name_buffer,
-                &load_state.sim,
-                &config,
-                &catalog,
-                &mut pending,
-                &mut confirmation,
-                &mut status,
-                &mut load_state.metrics,
-            );
+            create_requests.write(SaveCreateRequested);
         }
     }
     for (interaction, button) in &mut entries {
@@ -151,16 +180,70 @@ pub(crate) fn handle_save_load_buttons(
     }
 }
 
+/// Processes create-button requests after editor-to-state synchronization so
+/// a click uses text entered during the same frame.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_save_name_input(
-    mut inputs: MessageReader<KeyboardInput>,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+pub(crate) fn submit_save_create_requests(
+    mut requests: MessageReader<SaveCreateRequested>,
     config: Res<SaveLoadConfig>,
     catalog: Res<SaveCatalog>,
     mut pending: ResMut<PendingSaveJobs>,
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
+    state: Res<SaveLoadWindowState>,
+    sim: Res<crate::resources::SimResource>,
+    mut metrics: ResMut<crate::save_load::SaveLoadMetrics>,
+) {
+    if requests.read().count() == 0 {
+        return;
+    }
+    request_named_save(
+        &state.name_buffer,
+        &sim,
+        &config,
+        &catalog,
+        &mut pending,
+        &mut confirmation,
+        &mut status,
+        &mut metrics,
+    );
+}
+
+pub(crate) fn sync_save_name_from_state(
+    state: Res<SaveLoadWindowState>,
+    mut inputs: Query<&mut EditableText, With<SaveNameInput>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    for mut input in &mut inputs {
+        set_editor_value(&mut input, &state.name_buffer);
+    }
+}
+
+pub(crate) fn sync_save_name_to_state(
+    inputs: Query<&EditableText, (With<SaveNameInput>, Changed<EditableText>)>,
     mut state: ResMut<SaveLoadWindowState>,
+) {
+    for input in &inputs {
+        let value = editor_value(input);
+        if state.name_buffer != value {
+            state.name_buffer = value;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_save_name_input(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    input_focus: Option<Res<InputFocus>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<SaveNameInput>>,
+    config: Res<SaveLoadConfig>,
+    catalog: Res<SaveCatalog>,
+    mut pending: ResMut<PendingSaveJobs>,
+    mut confirmation: ResMut<PendingSaveConfirmation>,
+    mut status: ResMut<SaveLoadStatus>,
+    state: Res<SaveLoadWindowState>,
     sim: Res<crate::resources::SimResource>,
     mut metrics: ResMut<crate::save_load::SaveLoadMetrics>,
 ) {
@@ -170,41 +253,31 @@ pub(crate) fn handle_save_name_input(
     {
         return;
     }
-    let control = keyboard.as_deref().is_some_and(|keys| {
-        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
-    });
-    for input in inputs.read() {
-        if input.state != ButtonState::Pressed || input.key_code == KeyCode::Escape {
-            continue;
-        }
-        match input.key_code {
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                request_named_save(
-                    &state.name_buffer,
-                    &sim,
-                    &config,
-                    &catalog,
-                    &mut pending,
-                    &mut confirmation,
-                    &mut status,
-                    &mut metrics,
-                );
-            }
-            KeyCode::Backspace if control => remove_previous_word(&mut state.name_buffer),
-            KeyCode::Backspace => {
-                state.name_buffer.pop();
-            }
-            _ if !control => {
-                if let Some(text) = &input.text {
-                    let remaining = 65usize.saturating_sub(state.name_buffer.chars().count());
-                    state
-                        .name_buffer
-                        .extend(text.chars().filter(|c| !c.is_control()).take(remaining));
-                }
-            }
-            _ => {}
-        }
+    let Some(keyboard) = keyboard else {
+        return;
+    };
+    if !keyboard.just_pressed(KeyCode::Enter) && !keyboard.just_pressed(KeyCode::NumpadEnter) {
+        return;
     }
+    let Some(focused) = input_focus.as_deref().and_then(InputFocus::get) else {
+        return;
+    };
+    let Ok((input, sanitizer)) = inputs.get(focused) else {
+        return;
+    };
+    if !can_submit(input, sanitizer) {
+        return;
+    }
+    request_named_save(
+        &editor_value(input),
+        &sim,
+        &config,
+        &catalog,
+        &mut pending,
+        &mut confirmation,
+        &mut status,
+        &mut metrics,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -216,27 +289,78 @@ pub(crate) fn sync_save_load_window(
     status: Res<SaveLoadStatus>,
     confirmation: Res<PendingSaveConfirmation>,
     mut new_world: ResMut<NewWorldConfirmation>,
-    mut roots: WindowRootQuery<SaveLoadSnapshot>,
+    mut shell_roots: WindowRootQuery<SaveLoadShellSnapshot>,
+    mut contents_roots: WindowRootQuery<SaveLoadSnapshot>,
 ) {
-    if !state.open {
+    if !state.open && new_world.awaiting_confirmation {
         new_world.awaiting_confirmation = false;
     }
-    sync_window(
+    let contents_changed = catalog.is_changed()
+        || pending.is_changed()
+        || status.is_changed()
+        || confirmation.is_changed()
+        || new_world.is_changed();
+    let mut snapshot = None;
+    let shell_sync = sync_window(
         &mut commands,
-        &mut roots,
+        &mut shell_roots,
         state.open,
-        true,
-        || SaveLoadSnapshot {
-            window: state.clone(),
-            status: status.clone(),
-            entries: catalog.entries().to_vec(),
-            pending: pending.pending_ids(),
-            confirmation: confirmation.clone(),
-            new_world_confirmation: new_world.awaiting_confirmation,
+        state.is_changed(),
+        || SaveLoadShellSnapshot {
+            tab: state.tab,
+            name_buffer: state.name_buffer.clone(),
         },
         save_load_root,
-        spawn_save_load_modal,
+        |root, shell| {
+            let snapshot = snapshot.get_or_insert_with(|| {
+                save_load_snapshot(
+                    &state,
+                    &catalog,
+                    &pending,
+                    &status,
+                    &confirmation,
+                    &new_world,
+                )
+            });
+            spawn_save_load_modal(root, shell, snapshot);
+        },
     );
+    if state.open && contents_changed && shell_sync == WindowSync::Unchanged {
+        let snapshot = snapshot.unwrap_or_else(|| {
+            save_load_snapshot(
+                &state,
+                &catalog,
+                &pending,
+                &status,
+                &confirmation,
+                &new_world,
+            )
+        });
+        sync_contents(
+            &mut commands,
+            &mut contents_roots,
+            snapshot,
+            spawn_save_load_dynamic_contents,
+        );
+    }
+}
+
+fn save_load_snapshot(
+    state: &SaveLoadWindowState,
+    catalog: &SaveCatalog,
+    pending: &PendingSaveJobs,
+    status: &SaveLoadStatus,
+    confirmation: &PendingSaveConfirmation,
+    new_world: &NewWorldConfirmation,
+) -> SaveLoadSnapshot {
+    SaveLoadSnapshot {
+        window: state.clone(),
+        status: status.clone(),
+        entries: catalog.entries().to_vec(),
+        pending: pending.pending_ids(),
+        confirmation: confirmation.clone(),
+        new_world_confirmation: new_world.awaiting_confirmation,
+    }
 }
 
 fn save_load_root() -> impl Bundle {
@@ -258,6 +382,7 @@ fn save_load_root() -> impl Bundle {
 
 fn spawn_save_load_modal(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    shell: &SaveLoadShellSnapshot,
     snapshot: &SaveLoadSnapshot,
 ) {
     root.spawn((
@@ -282,44 +407,62 @@ fn spawn_save_load_modal(
             TextFont::from_font_size(22.0),
             TextColor(Color::srgb(0.88, 0.94, 0.78)),
         ));
-        spawn_tabs(modal, snapshot.window.tab);
-        if snapshot.window.tab == SaveLoadTab::Save {
-            spawn_name_input(modal, &snapshot.window.name_buffer);
+        spawn_tabs(modal, shell.tab);
+        if shell.tab == SaveLoadTab::Save {
+            spawn_name_input(modal, &shell.name_buffer);
         }
-        spawn_catalog(modal, snapshot);
-        if let Some(id) = confirmation_id(&snapshot.confirmation)
-            && let Some(entry) = snapshot.entries.iter().find(|entry| &entry.id == id)
-        {
-            spawn_confirmation(
-                modal,
-                entry,
-                matches!(snapshot.confirmation, PendingSaveConfirmation::Delete(_)),
-            );
-        }
-        spawn_status(modal, &snapshot.status);
         modal
             .spawn((
-                Button,
                 Node {
-                    height: Val::Px(32.0),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    border: UiRect::all(Val::Px(1.0)),
+                    flex_grow: 1.0,
+                    min_height: Val::ZERO,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(10.0),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.17, 0.07, 0.05)),
-                BorderColor::all(Color::srgb(0.72, 0.28, 0.18)),
-                NewWorldButton,
+                WindowRoot::new(snapshot.clone()),
             ))
-            .with_child((
-                Text::new(if snapshot.new_world_confirmation {
-                    "Confirm New World"
-                } else {
-                    "New World"
-                }),
-                TextFont::from_font_size(12.0),
-            ));
+            .with_children(|contents| spawn_save_load_dynamic_contents(contents, snapshot));
     });
+}
+
+fn spawn_save_load_dynamic_contents(
+    modal: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    snapshot: &SaveLoadSnapshot,
+) {
+    spawn_catalog(modal, snapshot);
+    if let Some(id) = confirmation_id(&snapshot.confirmation)
+        && let Some(entry) = snapshot.entries.iter().find(|entry| &entry.id == id)
+    {
+        spawn_confirmation(
+            modal,
+            entry,
+            matches!(snapshot.confirmation, PendingSaveConfirmation::Delete(_)),
+        );
+    }
+    spawn_status(modal, &snapshot.status);
+    modal
+        .spawn((
+            Button,
+            Node {
+                height: Val::Px(32.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.17, 0.07, 0.05)),
+            BorderColor::all(Color::srgb(0.72, 0.28, 0.18)),
+            NewWorldButton,
+        ))
+        .with_child((
+            Text::new(if snapshot.new_world_confirmation {
+                "Confirm New World"
+            } else {
+                "New World"
+            }),
+            TextFont::from_font_size(12.0),
+        ));
 }
 
 fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected: SaveLoadTab) {
@@ -370,23 +513,18 @@ fn spawn_name_input(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, val
                     padding: UiRect::horizontal(Val::Px(10.0)),
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(1.0)),
+                    overflow: Overflow::clip_x(),
                     ..default()
                 },
+                single_line_editor(value, Some(65), is_non_control),
+                TextLayout::no_wrap(),
+                TextCursorStyle::default(),
+                TextFont::from_font_size(13.0),
+                TextColor(Color::WHITE),
                 BackgroundColor(Color::srgb(0.045, 0.055, 0.050)),
                 BorderColor::all(Color::srgb(0.34, 0.42, 0.31)),
-            ))
-            .with_child((
-                Text::new(if value.is_empty() {
-                    "Name your save…".to_string()
-                } else {
-                    value.to_string()
-                }),
-                TextFont::from_font_size(13.0),
-                TextColor(if value.is_empty() {
-                    Color::srgb(0.48, 0.52, 0.46)
-                } else {
-                    Color::WHITE
-                }),
+                AutoFocus,
+                SaveNameInput,
             ));
             spawn_plain_button(row, "Create Save", Some(SaveCreateButton));
         });

@@ -135,31 +135,19 @@ fn visible_rising_rockets(
     visible_ids: &HashSet<EntityId>,
     overstep: f32,
 ) -> Vec<(EntityId, Vec3)> {
-    let mut rockets = visible_ids
-        .iter()
-        .copied()
-        .filter_map(|entity_id| {
-            let progress = rising_progress(sim, entity_id, overstep)?;
+    factory_sim::entity_access::rocket_silo_launch_phases(sim)
+        .filter_map(|(entity_id, phase)| {
+            if !visible_ids.contains(&entity_id) {
+                return None;
+            }
+            let progress = phase.rise_progress(overstep)?;
             let placed = sim.entities().placed_entity(entity_id)?;
             Some((
                 entity_id,
                 rocket_rise_translation(&placed.footprint, progress),
             ))
         })
-        .collect::<Vec<_>>();
-    rockets.sort_unstable_by_key(|(entity_id, _)| entity_id.raw());
-    rockets
-}
-
-fn rising_progress(
-    sim: &factory_sim::Simulation,
-    entity_id: EntityId,
-    overstep: f32,
-) -> Option<f32> {
-    factory_sim::entity_access::rocket_silo_state(sim, entity_id)
-        .ok()?
-        .launch_phase
-        .rise_progress(overstep)
+        .collect()
 }
 
 #[cfg(test)]

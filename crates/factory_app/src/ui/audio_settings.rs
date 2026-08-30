@@ -44,13 +44,22 @@ pub(crate) fn handle_audio_settings_buttons(
             continue;
         }
 
-        sounds.write(SoundEvent::UiClick);
-        match button.action {
-            AudioSettingsAction::ToggleMute => settings.toggle_muted(),
-            AudioSettingsAction::VolumeDown => settings.adjust_volume_steps(-1),
-            AudioSettingsAction::VolumeUp => settings.adjust_volume_steps(1),
-            AudioSettingsAction::Test => {}
-        }
+        let sound = match button.action {
+            AudioSettingsAction::ToggleMute => {
+                settings.toggle_muted();
+                SoundEvent::UiClick
+            }
+            AudioSettingsAction::VolumeDown => {
+                settings.adjust_volume_steps(-1);
+                SoundEvent::UiClick
+            }
+            AudioSettingsAction::VolumeUp => {
+                settings.adjust_volume_steps(1);
+                SoundEvent::UiClick
+            }
+            AudioSettingsAction::Test => SoundEvent::AudioTest,
+        };
+        sounds.write(sound);
     }
 }
 

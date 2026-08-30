@@ -18,22 +18,27 @@ use crate::ui::build_bar::{
     handle_build_bar_button_clicks, setup_build_bar, update_build_bar_action_visuals,
     update_build_bar_visuals, update_build_status_text,
 };
-use crate::ui::build_menu::{handle_build_menu_buttons, sync_build_menu};
+use crate::ui::build_menu::{
+    handle_build_menu_buttons, sync_build_menu, sync_build_menu_search_from_state,
+    sync_build_menu_search_to_state,
+};
+use crate::ui::text_input::TextInputSanitization;
 
 /// Build placement input, preview, hotbar, build bar, and build menu.
 pub(super) struct BuildPlugin;
 
 impl Plugin for BuildPlugin {
+    /// Registers build interaction and defers catalog-backed hotbar defaults until world entry.
     fn build(&self, app: &mut App) {
-        let hotbar = HotbarState {
-            slots: default_hotbar_slots(app.world().resource::<SimResource>().read().catalog()),
-        };
-
-        app.insert_resource(hotbar)
+        app.init_resource::<HotbarState>()
             .init_resource::<BuildPlacementState>()
             .init_resource::<BuildPlacementPreviewState>()
             .init_resource::<BuildMenuState>()
             .add_systems(Startup, (setup_build_bar, spawn_build_preview))
+            .add_systems(
+                OnEnter(crate::world_setup::AppMode::InGame),
+                initialize_hotbar,
+            )
             .add_systems(
                 Update,
                 (
@@ -55,9 +60,25 @@ impl Plugin for BuildPlugin {
                         .after(update_build_placement_preview_state)
                         .after(update_paste_preview),
                     handle_build_menu_buttons.in_set(AppSet::UiInteraction),
-                    sync_build_menu.after(handle_build_menu_buttons),
+                    sync_build_menu_search_from_state.after(handle_build_menu_buttons),
+                    sync_build_menu
+                        .after(handle_build_menu_buttons)
+                        .after(sync_build_menu_search_from_state),
                 )
                     .in_set(InGameSet),
+            )
+            .add_systems(
+                PostUpdate,
+                sync_build_menu_search_to_state
+                    .after(TextInputSanitization)
+                    .in_set(InGameSet),
             );
+    }
+}
+
+/// Fills a new session's empty hotbar from the active world's prototype catalog.
+fn initialize_hotbar(mut hotbar: ResMut<HotbarState>, sim: Res<SimResource>) {
+    if hotbar.slots.iter().all(Option::is_none) {
+        hotbar.slots = default_hotbar_slots(sim.read().catalog());
     }
 }

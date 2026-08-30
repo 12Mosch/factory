@@ -6,7 +6,7 @@ use factory_sim::{
     CraftingJob, EntityId, MachineStatus, ManualMiningProgress, RocketLaunchPhase, ThreatEventKind,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,7 @@ const ROCKET_AUDIO_DISTANCE_TILES: f32 = 8.0;
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SoundEvent {
     UiClick,
+    AudioTest,
     Place,
     PlaceError,
     ManualMineTick,
@@ -133,7 +134,7 @@ pub struct ThreatAudioObserver {
 pub struct RocketLaunchAudioObserver {
     initialized: bool,
     reload_token: u64,
-    phases: HashMap<EntityId, RocketAudioPhase>,
+    phases: BTreeMap<EntityId, RocketAudioPhase>,
 }
 
 #[derive(Resource, Default)]
@@ -289,24 +290,30 @@ pub(crate) fn play_sound_events(
         return;
     }
 
-    let tick = sim.read().tick_count();
+    let tick = sim.is_initialized().then(|| sim.read().tick_count());
     for event in events.read() {
         let cooldown = sound_cooldown_ticks(*event);
-        if cooldown > 0 {
-            if dedupe
+        if tick.is_some_and(|tick| {
+            dedupe
                 .last_played_tick
                 .get(event)
-                .is_some_and(|last_tick| tick.saturating_sub(*last_tick) < cooldown)
-            {
-                continue;
-            }
-            dedupe.last_played_tick.insert(*event, tick);
+                .is_some_and(|last_tick| cooldown > 0 && tick.saturating_sub(*last_tick) < cooldown)
+        }) {
+            continue;
         }
         let Some(handle) = sound_handle(&assets, *event).cloned() else {
             continue;
         };
+        if cooldown > 0
+            && let Some(tick) = tick
+        {
+            dedupe.last_played_tick.insert(*event, tick);
+        }
         let gain = one_shot_gain(*event);
-        let translation = spatial_sound_translation(&sim.read(), *event);
+        let translation = sim
+            .is_initialized()
+            .then(|| spatial_sound_translation(&sim.read(), *event))
+            .flatten();
         let mut playback =
             PlaybackSettings::DESPAWN.with_volume(Volume::Linear(effective_volume * gain));
         if translation.is_some() {
@@ -590,6 +597,7 @@ fn machine_loop_candidate(
 fn sound_handle(assets: &AudioAssets, event: SoundEvent) -> Option<&Handle<AudioSource>> {
     match event {
         SoundEvent::UiClick => assets.ui_click.as_ref(),
+        SoundEvent::AudioTest => assets.craft_complete.as_ref(),
         SoundEvent::Place => assets.place.as_ref(),
         SoundEvent::PlaceError => assets.place_error.as_ref(),
         SoundEvent::ManualMineTick => assets.manual_mine_tick.as_ref(),
@@ -605,6 +613,7 @@ fn sound_handle(assets: &AudioAssets, event: SoundEvent) -> Option<&Handle<Audio
 fn one_shot_gain(event: SoundEvent) -> f32 {
     match event {
         SoundEvent::UiClick => 0.35,
+        SoundEvent::AudioTest => 0.75,
         SoundEvent::Place => 0.8,
         SoundEvent::PlaceError => 0.55,
         SoundEvent::ManualMineTick => 0.30,
@@ -625,6 +634,7 @@ fn sound_cooldown_ticks(event: SoundEvent) -> u64 {
         SoundEvent::EnemyWarning => 600,
         SoundEvent::RocketSeal { .. }
         | SoundEvent::RocketLaunch { .. }
+        | SoundEvent::AudioTest
         | SoundEvent::Place
         | SoundEvent::ManualMineComplete
         | SoundEvent::CraftComplete
@@ -657,13 +667,25 @@ impl RocketLaunchAudioObserver {
         let current = rocket_audio_phases(sim);
         let mut sounds = Vec::new();
         for (&entity_id, &phase) in &current {
-            if self.phases.get(&entity_id) == Some(&phase) {
-                continue;
-            }
-            match phase {
-                RocketAudioPhase::Sealing => sounds.push(SoundEvent::RocketSeal { entity_id }),
-                RocketAudioPhase::Rising => sounds.push(SoundEvent::RocketLaunch { entity_id }),
-                RocketAudioPhase::Idle => {}
+            match (self.phases.get(&entity_id).copied(), phase) {
+                (Some(previous), current) if previous == current => {}
+                (Some(RocketAudioPhase::Idle), RocketAudioPhase::Rising) => {
+                    // `Update` runs after any fixed-step catch-up. Preserve both
+                    // transition sounds if the seal phase elapsed in one frame.
+                    sounds.push(SoundEvent::RocketSeal { entity_id });
+                    sounds.push(SoundEvent::RocketLaunch { entity_id });
+                }
+                (Some(RocketAudioPhase::Sealing), RocketAudioPhase::Idle) => {
+                    // The entire rise phase elapsed during fixed-step catch-up.
+                    sounds.push(SoundEvent::RocketLaunch { entity_id });
+                }
+                (_, RocketAudioPhase::Sealing) => {
+                    sounds.push(SoundEvent::RocketSeal { entity_id });
+                }
+                (_, RocketAudioPhase::Rising) => {
+                    sounds.push(SoundEvent::RocketLaunch { entity_id });
+                }
+                (_, RocketAudioPhase::Idle) => {}
             }
         }
         self.phases = current;
@@ -671,7 +693,7 @@ impl RocketLaunchAudioObserver {
     }
 }
 
-fn rocket_audio_phases(sim: &factory_sim::Simulation) -> HashMap<EntityId, RocketAudioPhase> {
+fn rocket_audio_phases(sim: &factory_sim::Simulation) -> BTreeMap<EntityId, RocketAudioPhase> {
     factory_sim::entity_access::rocket_silo_launch_phases(sim)
         .map(|(entity_id, phase)| (entity_id, phase.into()))
         .collect()
@@ -750,6 +772,29 @@ mod tests {
         assert!(
             observer.poll(&loaded, 1).is_empty(),
             "reloading a running launch must not replay its transition sound"
+        );
+    }
+
+    #[test]
+    fn rocket_audio_preserves_transitions_across_fixed_step_catch_up() {
+        let mut sim = factory_sim::Simulation::new_rocket_launch_fixture();
+        let silo_id = factory_sim::entity_access::rocket_silo_launch_phases(&sim)
+            .next()
+            .expect("launch fixture should contain a silo")
+            .0;
+        let mut observer = RocketLaunchAudioObserver::default();
+        observer.reset(&sim, 0);
+
+        for _ in 0..=60 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            observer.poll(&sim, 0),
+            vec![
+                SoundEvent::RocketSeal { entity_id: silo_id },
+                SoundEvent::RocketLaunch { entity_id: silo_id },
+            ]
         );
     }
 

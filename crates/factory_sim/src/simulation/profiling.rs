@@ -216,6 +216,11 @@ impl Simulation {
     }
 
     fn active_machine_count(&self) -> usize {
+        let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
+            &self.world.prototypes,
+            &self.research,
+            &self.entities,
+        );
         self.entities
             .mining_drills
             .iter()
@@ -237,7 +242,7 @@ impl Simulation {
                 .entities
                 .rocket_silos
                 .values()
-                .filter(|state| self.rocket_silo_is_active(state))
+                .filter(|state| self.rocket_silo_is_active(state, rocket_silo_recipe))
                 .count()
             + self
                 .entities
@@ -313,8 +318,12 @@ impl Simulation {
             )
     }
 
-    fn rocket_silo_is_active(&self, state: &RocketSiloState) -> bool {
-        let Some(recipe) = rocket_silo_recipe(&self.world.prototypes, &self.research) else {
+    fn rocket_silo_is_active(
+        &self,
+        state: &RocketSiloState,
+        resolved_recipe: ResolvedRocketSiloRecipe,
+    ) -> bool {
+        let Some(recipe) = resolved_recipe.get(&self.world.prototypes) else {
             return false;
         };
 

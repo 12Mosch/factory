@@ -44,6 +44,7 @@ use crate::rendering::world::measured_sync_visible_world_tiles;
 pub(super) struct RenderingPlugin;
 
 impl Plugin for RenderingPlugin {
+    /// Registers world presentation, deferring simulation-backed entities until world entry.
     fn build(&self, app: &mut App) {
         app.init_resource::<RenderSyncStats>()
             .insert_resource(ResourceRenderSettings {
@@ -64,12 +65,12 @@ impl Plugin for RenderingPlugin {
                 Startup,
                 (
                     setup_camera,
-                    spawn_player,
                     spawn_cursor_tile_highlight,
                     spawn_manual_mining_progress_bar,
                     spawn_day_night_tint,
                 ),
             )
+            .add_systems(OnEnter(crate::world_setup::AppMode::InGame), spawn_player)
             .add_systems(
                 Update,
                 sync_day_night_tint

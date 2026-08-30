@@ -60,7 +60,7 @@ pub fn transfer_container_slot(
                                 sim.catalog(),
                                 &sim.research,
                                 &sim.entities,
-                                ItemSlotPolicy::RocketCargo(entity_id),
+                                ItemSlotPolicy::RocketCargo,
                                 ItemSlotOperation::PlayerInsert,
                                 stack.item_id(),
                             )

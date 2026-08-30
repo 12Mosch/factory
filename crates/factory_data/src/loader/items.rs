@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::PrototypeLoadError;
 use crate::ids::{ItemId, TileId};
-use crate::model::{ItemPrototype, TilePlacementPrototype};
+use crate::model::{ItemAmount, ItemPrototype, TilePlacementPrototype};
 use crate::raw::RawItemPrototype;
 
 pub(super) fn load_items(
@@ -13,14 +13,24 @@ pub(super) fn load_items(
     // Burnt results are resolved after this pass so a fuel may name residue
     // declared later in the list.
     let mut burnt_result_names = Vec::new();
+    let mut launch_product_names = Vec::new();
     let mut items = items
         .into_iter()
-        .map(|item| {
+        .map(|mut item| {
             validate_item_metadata(&item)?;
             let id = ItemId::new(item.id);
             item_ids_by_name.insert(item.name.clone(), id);
             if let Some(burnt_result) = item.burnt_result.clone() {
                 burnt_result_names.push((item.name.clone(), burnt_result));
+            }
+            if let Some(launch_products) = item.launch_products.take() {
+                if launch_products.is_empty() {
+                    return Err(PrototypeLoadError::InvalidItemLaunchMetadata {
+                        item: item.name,
+                        detail: "launch definitions require at least one product",
+                    });
+                }
+                launch_product_names.push((item.name.clone(), launch_products));
             }
             let place_as_tile = item
                 .place_as_tile
@@ -59,6 +69,7 @@ pub(super) fn load_items(
                 module_effect: item.module_effect,
                 place_as_tile,
                 robot: item.robot,
+                launch_products: Vec::new(),
             })
         })
         .collect::<Result<Vec<ItemPrototype>, PrototypeLoadError>>()?;
@@ -76,6 +87,41 @@ pub(super) fn load_items(
             .find(|item| item.name == item_name)
             .expect("burnt results are collected from the items being loaded");
         item.burnt_result = Some(burnt_result);
+    }
+
+    for (item_name, raw_products) in launch_product_names {
+        let mut seen = HashSet::new();
+        let mut launch_products = Vec::with_capacity(raw_products.len());
+        for raw_product in raw_products {
+            let product = item_ids_by_name
+                .get(&raw_product.item)
+                .copied()
+                .ok_or_else(|| PrototypeLoadError::MissingItemLaunchProduct {
+                    item: item_name.clone(),
+                    product: raw_product.item.clone(),
+                })?;
+            if raw_product.amount == 0 {
+                return Err(PrototypeLoadError::InvalidItemLaunchMetadata {
+                    item: item_name,
+                    detail: "launch product amounts must be positive",
+                });
+            }
+            if !seen.insert(product) {
+                return Err(PrototypeLoadError::InvalidItemLaunchMetadata {
+                    item: item_name,
+                    detail: "launch products must be unique",
+                });
+            }
+            launch_products.push(ItemAmount {
+                item: product,
+                amount: raw_product.amount,
+            });
+        }
+        let item = items
+            .iter_mut()
+            .find(|item| item.name == item_name)
+            .expect("launch products are collected from the items being loaded");
+        item.launch_products = launch_products;
     }
 
     Ok((items, item_ids_by_name))

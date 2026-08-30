@@ -1,6 +1,8 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::system::SystemParam;
+use bevy::input_focus::{AutoFocus, InputFocus};
 use bevy::prelude::*;
+use bevy::text::{EditableText, TextCursorStyle};
 use factory_data::{ItemId, PrototypeCatalog};
 use factory_sim::{Blueprint, Inventory, SimCommand};
 use std::collections::BTreeMap;
@@ -14,12 +16,23 @@ use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::format_item_display_name;
 use crate::ui::resources::OpenContainer;
+use crate::ui::text_input::{
+    EditableTextSanitizer, can_submit, editor_value, is_non_control, set_editor_value,
+    single_line_editor,
+};
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 #[derive(Component)]
 pub(crate) struct BlueprintLibraryButton {
     pub action: BlueprintLibraryAction,
 }
+
+#[derive(Component)]
+pub(crate) struct BlueprintRenameInput;
+
+/// Defers a Save-button rename until queued editor changes have been applied.
+#[derive(Message)]
+pub(crate) struct BlueprintRenameCommitRequested;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlueprintLibraryAction {
@@ -43,12 +56,21 @@ pub(crate) enum BlueprintLibraryAction {
     CancelRename,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct BlueprintLibrarySnapshot {
     rows: Vec<BlueprintRowSnapshot>,
     clipboard: Option<(String, usize)>,
     /// (index, current buffer) of the blueprint being renamed, if any.
     editing: Option<(usize, String)>,
+}
+
+impl PartialEq for BlueprintLibrarySnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.rows == other.rows
+            && self.clipboard == other.clipboard
+            && self.editing.as_ref().map(|(index, _)| index)
+                == other.editing.as_ref().map(|(index, _)| index)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +95,7 @@ pub(crate) struct BlueprintLibraryButtonState<'w> {
     build_state: ResMut<'w, BuildPlacementState>,
     open_container: ResMut<'w, OpenContainer>,
     commands: MessageWriter<'w, SimCommandRequest>,
+    rename_requests: MessageWriter<'w, BlueprintRenameCommitRequested>,
     sounds: MessageWriter<'w, SoundEvent>,
 }
 
@@ -142,18 +165,7 @@ pub(crate) fn handle_blueprint_library_buttons(
                 state.window.rename_buffer = blueprint.name.clone();
             }
             BlueprintLibraryAction::ConfirmRename => {
-                if let Some(index) = state.window.editing_index {
-                    let name = state.window.rename_buffer.trim().to_string();
-                    if !name.is_empty() {
-                        state
-                            .commands
-                            .write(SimCommandRequest(SimCommand::RenameBlueprint {
-                                index,
-                                name,
-                            }));
-                    }
-                }
-                state.window.cancel_rename();
+                state.rename_requests.write(BlueprintRenameCommitRequested);
             }
             BlueprintLibraryAction::CancelRename => {
                 state.window.cancel_rename();
@@ -162,22 +174,118 @@ pub(crate) fn handle_blueprint_library_buttons(
     }
 }
 
+/// Commits Save-button requests after editor sanitization and state sync.
+pub(crate) fn submit_blueprint_rename_button(
+    mut requests: MessageReader<BlueprintRenameCommitRequested>,
+    mut input_focus: Option<ResMut<InputFocus>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<BlueprintRenameInput>>,
+    mut window: ResMut<BlueprintLibraryWindowState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    if requests.read().count() == 0 || window.editing_index.is_none() {
+        return;
+    }
+    let Ok((input, sanitizer)) = inputs.single() else {
+        return;
+    };
+    if !can_submit(input, sanitizer) {
+        return;
+    }
+    commit_blueprint_rename(&mut window, editor_value(input), &mut commands);
+    if let Some(focus) = input_focus.as_deref_mut() {
+        focus.clear();
+    }
+}
+
 pub(crate) fn sync_blueprint_library_window(
     mut commands: Commands,
     window: Res<BlueprintLibraryWindowState>,
     sim: Res<SimResource>,
     planner: Res<PlannerState>,
+    editors: Query<(), With<BlueprintRenameInput>>,
     mut roots: WindowRootQuery<BlueprintLibrarySnapshot>,
 ) {
+    let preserve_live_editor = window.editing_index.is_some() && !editors.is_empty();
     sync_window(
         &mut commands,
         &mut roots,
         window.open,
-        true,
+        !preserve_live_editor && (window.is_changed() || sim.is_changed() || planner.is_changed()),
         || blueprint_library_snapshot(&sim, &planner, &window),
         blueprint_library_root,
         spawn_blueprint_library_modal,
     );
+}
+
+pub(crate) fn sync_blueprint_rename_from_state(
+    window: Res<BlueprintLibraryWindowState>,
+    mut inputs: Query<&mut EditableText, With<BlueprintRenameInput>>,
+) {
+    if !window.is_changed() {
+        return;
+    }
+    for mut input in &mut inputs {
+        set_editor_value(&mut input, &window.rename_buffer);
+    }
+}
+
+pub(crate) fn sync_blueprint_rename_to_state(
+    inputs: Query<&EditableText, (With<BlueprintRenameInput>, Changed<EditableText>)>,
+    mut window: ResMut<BlueprintLibraryWindowState>,
+) {
+    for input in &inputs {
+        let value = editor_value(input);
+        if window.rename_buffer != value {
+            window.rename_buffer = value;
+        }
+    }
+}
+
+pub(crate) fn submit_blueprint_rename(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    input_focus: Option<Res<InputFocus>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<BlueprintRenameInput>>,
+    mut window: ResMut<BlueprintLibraryWindowState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    let Some(index) = window.editing_index else {
+        return;
+    };
+    let Some(keyboard) = keyboard else {
+        return;
+    };
+    if !keyboard.just_pressed(KeyCode::Enter) && !keyboard.just_pressed(KeyCode::NumpadEnter) {
+        return;
+    }
+    let Some(focused) = input_focus.as_deref().and_then(InputFocus::get) else {
+        return;
+    };
+    let Ok((input, sanitizer)) = inputs.get(focused) else {
+        return;
+    };
+    if !can_submit(input, sanitizer) {
+        return;
+    }
+    debug_assert_eq!(window.editing_index, Some(index));
+    commit_blueprint_rename(&mut window, editor_value(input), &mut commands);
+}
+
+fn commit_blueprint_rename(
+    window: &mut BlueprintLibraryWindowState,
+    value: String,
+    commands: &mut MessageWriter<SimCommandRequest>,
+) {
+    let Some(index) = window.editing_index else {
+        return;
+    };
+    let name = value.trim().to_string();
+    if !name.is_empty() {
+        commands.write(SimCommandRequest(SimCommand::RenameBlueprint {
+            index,
+            name,
+        }));
+    }
+    window.cancel_rename();
 }
 
 fn blueprint_library_snapshot(
@@ -355,29 +463,26 @@ fn spawn_blueprint_library_modal(
                         ))
                         .with_children(|header_row| {
                             if let Some(buffer) = &editing_buffer {
-                                let text = if buffer.is_empty() {
-                                    "Blueprint name...".to_string()
-                                } else {
-                                    buffer.clone()
-                                };
-                                header_row
-                                    .spawn((
-                                        Node {
-                                            flex_grow: 1.0,
-                                            height: Val::Px(26.0),
-                                            align_items: AlignItems::Center,
-                                            padding: UiRect::horizontal(Val::Px(8.0)),
-                                            border: UiRect::all(Val::Px(1.0)),
-                                            ..default()
-                                        },
-                                        BackgroundColor(Color::srgba(0.07, 0.08, 0.08, 0.96)),
-                                        BorderColor::all(Color::srgba(0.48, 0.55, 0.48, 0.8)),
-                                    ))
-                                    .with_child((
-                                        Text::new(text),
-                                        TextFont::from_font_size(13.0),
-                                        TextColor(Color::srgb(0.91, 0.92, 0.86)),
-                                    ));
+                                header_row.spawn((
+                                    Node {
+                                        flex_grow: 1.0,
+                                        height: Val::Px(26.0),
+                                        align_items: AlignItems::Center,
+                                        padding: UiRect::horizontal(Val::Px(8.0)),
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        overflow: Overflow::clip_x(),
+                                        ..default()
+                                    },
+                                    single_line_editor(buffer, None, is_non_control),
+                                    TextLayout::no_wrap(),
+                                    TextCursorStyle::default(),
+                                    TextFont::from_font_size(13.0),
+                                    TextColor(Color::srgb(0.91, 0.92, 0.86)),
+                                    BackgroundColor(Color::srgba(0.07, 0.08, 0.08, 0.96)),
+                                    BorderColor::all(Color::srgba(0.48, 0.55, 0.48, 0.8)),
+                                    AutoFocus,
+                                    BlueprintRenameInput,
+                                ));
                             } else {
                                 header_row.spawn((
                                     Text::new(format!(
@@ -469,4 +574,50 @@ fn spawn_library_button(
             TextFont::from_font_size(13.0),
             TextColor(Color::WHITE),
         ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::message::Messages;
+
+    #[test]
+    fn save_button_commit_uses_the_synchronized_editor_value() {
+        let mut app = App::new();
+        app.add_message::<BlueprintRenameCommitRequested>()
+            .add_message::<SimCommandRequest>()
+            .insert_resource(BlueprintLibraryWindowState {
+                open: true,
+                editing_index: Some(3),
+                rename_buffer: "Previous Name".into(),
+            })
+            .add_systems(
+                Update,
+                (
+                    sync_blueprint_rename_to_state,
+                    submit_blueprint_rename_button,
+                )
+                    .chain(),
+            );
+        app.world_mut().spawn((
+            EditableText::new("Current Name"),
+            EditableTextSanitizer::new("Current Name", is_non_control, None),
+            BlueprintRenameInput,
+        ));
+        app.world_mut()
+            .write_message(BlueprintRenameCommitRequested);
+
+        app.update();
+
+        let requests = app
+            .world_mut()
+            .resource_mut::<Messages<SimCommandRequest>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            requests.as_slice(),
+            [SimCommandRequest(SimCommand::RenameBlueprint { index: 3, name })]
+                if name == "Current Name"
+        ));
+    }
 }

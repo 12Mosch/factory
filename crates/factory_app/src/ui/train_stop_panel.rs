@@ -11,9 +11,10 @@
 //! module panels are: the name is edited a keystroke at a time, and a window
 //! that respawned on each one would lose the caret with it.
 
-use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::ecs::system::SystemParam;
+use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
+use bevy::text::{EditableText, TextCursorStyle};
 use factory_sim::{EntityId, SimCommand, Simulation};
 
 use crate::audio::SoundEvent;
@@ -25,6 +26,10 @@ use crate::ui::circuit::widgets::{
     LABEL_COLOR, spawn_button, spawn_caption, spawn_heading, spawn_row,
 };
 use crate::ui::resources::OpenContainer;
+use crate::ui::text_input::{
+    EditableTextSanitizer, can_submit, editor_value, is_non_control, set_editor_value,
+    single_line_editor,
+};
 
 /// Longest station name a player may type. Long enough for "Iron ore unload
 /// west", short enough that the schedule rows it appears in stay readable.
@@ -49,6 +54,31 @@ pub(crate) struct TrainStopLabel(pub(crate) TrainStopLabelKind);
 /// Starts or finishes typing a new name.
 #[derive(Component)]
 pub(crate) struct TrainStopRenameButton;
+
+#[derive(Component)]
+pub(crate) struct TrainStopNameInput;
+
+/// Defers a rename-button commit until queued text edits have been applied.
+#[derive(Message)]
+pub(crate) struct TrainStopRenameCommitRequested(EntityId);
+
+type StopLabelQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Text,
+        &'static TrainStopLabel,
+        &'static mut Node,
+    ),
+    (With<TrainStopLabel>, Without<TrainStopNameInput>),
+>;
+
+type StopNameInputQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut EditableText, &'static mut Node),
+    (With<TrainStopNameInput>, Without<TrainStopLabel>),
+>;
 
 #[derive(Component)]
 pub(crate) struct TrainStopLimitStepButton(pub(crate) i32);
@@ -94,6 +124,25 @@ pub(crate) fn spawn_train_stop_panel(parent: &mut bevy::ecs::hierarchy::ChildSpa
                     TextColor(Color::WHITE),
                     TrainStopLabel(TrainStopLabelKind::Name),
                 ));
+                row.spawn((
+                    Node {
+                        display: Display::None,
+                        width: Val::Px(190.0),
+                        height: Val::Px(26.0),
+                        padding: UiRect::horizontal(Val::Px(6.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        overflow: Overflow::clip_x(),
+                        ..default()
+                    },
+                    single_line_editor("", Some(MAX_STOP_NAME_LENGTH), is_non_control),
+                    TextLayout::no_wrap(),
+                    TextCursorStyle::default(),
+                    TextFont::from_font_size(12.0),
+                    TextColor(Color::WHITE),
+                    BackgroundColor(Color::srgb(0.045, 0.055, 0.050)),
+                    BorderColor::all(Color::srgb(0.34, 0.42, 0.31)),
+                    TrainStopNameInput,
+                ));
             });
             spawn_row(panel, |row| {
                 spawn_button(row, 66.0, "Rename", TrainStopRenameButton, ());
@@ -133,7 +182,8 @@ pub(crate) fn update_train_stop_panel(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     rename: Res<TrainStopRenameState>,
-    mut labels: Query<(&mut Text, &TrainStopLabel)>,
+    mut labels: StopLabelQuery,
+    mut inputs: StopNameInputQuery,
 ) {
     if labels.is_empty() {
         return;
@@ -146,11 +196,15 @@ pub(crate) fn update_train_stop_panel(
         return;
     };
     let editing = rename.editing == Some(entity_id);
-    for (mut text, label) in &mut labels {
+    for (mut text, label, mut node) in &mut labels {
+        if label.0 == TrainStopLabelKind::Name {
+            node.display = if editing {
+                Display::None
+            } else {
+                Display::Flex
+            };
+        }
         let value = match label.0 {
-            // A caret while typing, so it is obvious the keyboard is going here
-            // rather than into the world behind the window.
-            TrainStopLabelKind::Name if editing => format!("{}_", rename.buffer),
             TrainStopLabelKind::Name => state.name.clone(),
             TrainStopLabelKind::TrainLimit => sim.train_stop_effective_limit(entity_id).to_string(),
             TrainStopLabelKind::LimitSignal => {
@@ -160,6 +214,16 @@ pub(crate) fn update_train_stop_panel(
         };
         if text.0 != value {
             text.0 = value;
+        }
+    }
+    for (mut input, mut node) in &mut inputs {
+        node.display = if editing {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if editing {
+            set_editor_value(&mut input, &rename.buffer);
         }
     }
 }
@@ -197,43 +261,99 @@ fn pressed(interaction: &Interaction) -> bool {
 }
 
 /// Starts a rename, or commits the one in progress.
+#[derive(SystemParam)]
+pub(crate) struct TrainStopRenameButtonState<'w, 's> {
+    sim: Res<'w, SimResource>,
+    open_container: Res<'w, OpenContainer>,
+    rename: ResMut<'w, TrainStopRenameState>,
+    inputs: Query<'w, 's, (Entity, &'static mut EditableText), With<TrainStopNameInput>>,
+    input_focus: Option<ResMut<'w, InputFocus>>,
+    commit_requests: MessageWriter<'w, TrainStopRenameCommitRequested>,
+    sounds: MessageWriter<'w, SoundEvent>,
+}
+
 pub(crate) fn handle_train_stop_rename_button(
     buttons: Query<&Interaction, (Changed<Interaction>, With<TrainStopRenameButton>)>,
-    sim: Res<SimResource>,
-    open_container: Res<OpenContainer>,
-    mut rename: ResMut<TrainStopRenameState>,
-    mut commands: MessageWriter<SimCommandRequest>,
-    mut sounds: MessageWriter<SoundEvent>,
+    mut state: TrainStopRenameButtonState,
 ) {
     if !buttons.iter().any(pressed) {
         return;
     }
-    let Some(entity_id) = open_container.entity_id else {
+    let Some(entity_id) = state.open_container.entity_id else {
         return;
     };
-    sounds.write(SoundEvent::UiClick);
-    if rename.editing == Some(entity_id) {
-        commit_rename(&mut rename, entity_id, &mut commands);
+    state.sounds.write(SoundEvent::UiClick);
+    let Ok((input_entity, mut input)) = state.inputs.single_mut() else {
+        return;
+    };
+    if state.rename.editing == Some(entity_id) {
+        state
+            .commit_requests
+            .write(TrainStopRenameCommitRequested(entity_id));
         return;
     }
     // Seeded with the current name, so a small correction is a small edit
     // rather than retyping the station.
-    rename.buffer = sim
+    state.rename.buffer = state
+        .sim
         .read()
         .train_stop(entity_id)
         .map(|state| state.name.clone())
         .unwrap_or_default();
-    rename.editing = Some(entity_id);
+    state.rename.editing = Some(entity_id);
+    set_editor_value(&mut input, &state.rename.buffer);
+    if let Some(focus) = state.input_focus.as_deref_mut() {
+        focus.set(input_entity, FocusCause::Navigated);
+    }
 }
 
-/// Types into the name buffer while a rename is open.
-///
-/// Enter commits, Escape abandons, and closing the window abandons with it: a
-/// rename is only worth keeping while the stop it belongs to is in front of the
-/// player.
-pub(crate) fn handle_train_stop_rename_input(
-    mut inputs: MessageReader<KeyboardInput>,
+/// Commits rename-button requests after editor sanitization and state sync.
+pub(crate) fn submit_train_stop_rename_button(
+    mut requests: MessageReader<TrainStopRenameCommitRequested>,
+    mut input_focus: Option<ResMut<InputFocus>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<TrainStopNameInput>>,
+    open_container: Res<OpenContainer>,
+    mut rename: ResMut<TrainStopRenameState>,
+    mut commands: MessageWriter<SimCommandRequest>,
+) {
+    let Some(entity_id) = requests.read().last().map(|request| request.0) else {
+        return;
+    };
+    if rename.editing != Some(entity_id) || open_container.entity_id != Some(entity_id) {
+        return;
+    }
+    let Ok((input, sanitizer)) = inputs.single() else {
+        return;
+    };
+    if !can_submit(input, sanitizer) {
+        return;
+    }
+    commit_rename(&mut rename, entity_id, editor_value(input), &mut commands);
+    if let Some(focus) = input_focus.as_deref_mut() {
+        focus.clear();
+    }
+}
+
+pub(crate) fn sync_train_stop_rename_to_state(
+    inputs: Query<&EditableText, (With<TrainStopNameInput>, Changed<EditableText>)>,
+    mut rename: ResMut<TrainStopRenameState>,
+) {
+    if rename.editing.is_none() {
+        return;
+    }
+    for input in &inputs {
+        let value = editor_value(input);
+        if rename.buffer != value {
+            rename.buffer = value;
+        }
+    }
+}
+
+/// Enter commits the focused editor. Closing the stop window abandons it.
+pub(crate) fn submit_train_stop_rename(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut input_focus: Option<ResMut<InputFocus>>,
+    inputs: Query<(&EditableText, &EditableTextSanitizer), With<TrainStopNameInput>>,
     open_container: Res<OpenContainer>,
     mut rename: ResMut<TrainStopRenameState>,
     mut commands: MessageWriter<SimCommandRequest>,
@@ -243,38 +363,29 @@ pub(crate) fn handle_train_stop_rename_input(
     };
     if open_container.entity_id != Some(entity_id) {
         rename.cancel();
+        if let Some(focus) = input_focus.as_deref_mut() {
+            focus.clear();
+        }
         return;
     }
-    let control = keyboard.as_deref().is_some_and(|keys| {
-        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
-    });
-    for input in inputs.read() {
-        if input.state != ButtonState::Pressed {
-            continue;
-        }
-        match input.key_code {
-            KeyCode::Escape => rename.cancel(),
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                commit_rename(&mut rename, entity_id, &mut commands);
-                return;
-            }
-            KeyCode::Backspace => {
-                rename.buffer.pop();
-            }
-            _ if !control => {
-                if let Some(text) = &input.text {
-                    let remaining =
-                        MAX_STOP_NAME_LENGTH.saturating_sub(rename.buffer.chars().count());
-                    let typed = text
-                        .chars()
-                        .filter(|character| !character.is_control())
-                        .take(remaining)
-                        .collect::<Vec<_>>();
-                    rename.buffer.extend(typed);
-                }
-            }
-            _ => {}
-        }
+    let Some(keyboard) = keyboard else {
+        return;
+    };
+    if !keyboard.just_pressed(KeyCode::Enter) && !keyboard.just_pressed(KeyCode::NumpadEnter) {
+        return;
+    }
+    let Some(focused) = input_focus.as_deref().and_then(InputFocus::get) else {
+        return;
+    };
+    let Ok((input, sanitizer)) = inputs.get(focused) else {
+        return;
+    };
+    if !can_submit(input, sanitizer) {
+        return;
+    }
+    commit_rename(&mut rename, entity_id, editor_value(input), &mut commands);
+    if let Some(focus) = input_focus.as_deref_mut() {
+        focus.clear();
     }
 }
 
@@ -283,9 +394,10 @@ pub(crate) fn handle_train_stop_rename_input(
 fn commit_rename(
     rename: &mut TrainStopRenameState,
     entity_id: EntityId,
+    value: String,
     commands: &mut MessageWriter<SimCommandRequest>,
 ) {
-    let name = rename.buffer.trim().to_string();
+    let name = value.trim().to_string();
     rename.cancel();
     if name.is_empty() {
         return;
@@ -343,4 +455,54 @@ pub(crate) fn handle_train_stop_limit_signal_button(
     sounds.write(SoundEvent::UiClick);
     editor.picker =
         (editor.picker != Some(SignalSlot::TrainStopLimit)).then_some(SignalSlot::TrainStopLimit);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::message::Messages;
+
+    #[test]
+    fn rename_button_commit_uses_the_synchronized_editor_value() {
+        let stop = EntityId::new(17);
+        let mut app = App::new();
+        app.add_message::<TrainStopRenameCommitRequested>()
+            .add_message::<SimCommandRequest>()
+            .insert_resource(OpenContainer {
+                entity_id: Some(stop),
+                rolling_stock: None,
+            })
+            .insert_resource(TrainStopRenameState {
+                editing: Some(stop),
+                buffer: "Previous Name".into(),
+            })
+            .add_systems(
+                Update,
+                (
+                    sync_train_stop_rename_to_state,
+                    submit_train_stop_rename_button,
+                )
+                    .chain(),
+            );
+        app.world_mut().spawn((
+            EditableText::new("Current Name"),
+            EditableTextSanitizer::new("Current Name", is_non_control, Some(40)),
+            TrainStopNameInput,
+        ));
+        app.world_mut()
+            .write_message(TrainStopRenameCommitRequested(stop));
+
+        app.update();
+
+        let requests = app
+            .world_mut()
+            .resource_mut::<Messages<SimCommandRequest>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            requests.as_slice(),
+            [SimCommandRequest(SimCommand::RenameTrainStop { stop: actual, name })]
+                if *actual == stop && name == "Current Name"
+        ));
+    }
 }

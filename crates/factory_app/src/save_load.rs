@@ -6,7 +6,8 @@ mod types;
 
 pub use catalog::{refresh_catalog, scan_catalog};
 pub use container::{
-    CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES, decode_container, encode_container,
+    BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
+    TEMP_ARTIFACT_MARKER, decode_container, encode_container,
 };
 pub use jobs::PendingSaveJobs;
 pub use types::*;
@@ -15,7 +16,6 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use factory_sim::{SaveLoadError, load_from_bytes};
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -70,6 +70,7 @@ pub struct PresentationReloadToken {
     pub value: u64,
 }
 
+/// Initializes autosave timing when a world exists and refreshes the disk catalog in all modes.
 pub(crate) fn initialize_save_state(
     sim: Res<SimResource>,
     config: Res<SaveLoadConfig>,
@@ -77,7 +78,11 @@ pub(crate) fn initialize_save_state(
     mut catalog: ResMut<SaveCatalog>,
     mut status: ResMut<SaveLoadStatus>,
 ) {
-    autosave.last_autosave_tick = sim.read().tick_count();
+    autosave.last_autosave_tick = if sim.is_initialized() {
+        sim.read().tick_count()
+    } else {
+        0
+    };
     refresh_with_status(&config, &mut catalog, &mut status);
 }
 
@@ -243,7 +248,7 @@ pub fn delete_save(
         refresh_with_status(config, catalog, status);
         return false;
     }
-    if let Err(error) = fs::remove_file(&entry.path) {
+    if let Err(error) = container::remove_save_and_artifacts(&entry.path) {
         set_error(
             status,
             format!("Cannot delete {}: {error}", entry.metadata.display_name),

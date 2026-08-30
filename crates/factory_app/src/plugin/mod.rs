@@ -9,14 +9,20 @@ mod simulation;
 mod ui;
 
 use crate::world_setup::{
-    AppMode, StartInWorldSetup, WorldSetupSaveListState, build_world_setup_ui, cleanup_world_setup,
-    handle_world_setup_buttons, handle_world_setup_load_buttons, handle_world_setup_seed_input,
-    sync_world_setup_save_list, sync_world_setup_text,
+    AppMode, StartInWorldSetup, WorldSetupSaveListState, WorldSetupStartRequested,
+    build_world_setup_ui, cleanup_world_setup, handle_world_setup_buttons,
+    handle_world_setup_load_buttons, start_world_from_setup, sync_world_setup_save_list,
+    sync_world_setup_seed_input, sync_world_setup_text,
 };
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin, FrameTimeDiagnosticsPlugin};
 use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
+use bevy::text::EditableTextSystems;
+
+use crate::ui::text_input::{
+    TextInputSanitization, capture_editable_text_composition, sanitize_editable_text,
+};
 
 /// Shared ordering labels for systems whose ordering constraints cross plugin
 /// boundaries. Plugin-internal ordering uses direct `.before`/`.after` edges
@@ -69,6 +75,7 @@ pub(crate) struct InGameSet;
 pub struct FactoryAppPlugin;
 
 impl Plugin for FactoryAppPlugin {
+    /// Registers application state, global scheduling gates, and feature plugins.
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<StatesPlugin>() {
             app.add_plugins(StatesPlugin);
@@ -92,6 +99,7 @@ impl Plugin for FactoryAppPlugin {
         app.configure_sets(PreUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
             .configure_sets(FixedUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
             .configure_sets(Update, InGameSet.run_if(in_state(AppMode::InGame)))
+            .configure_sets(PostUpdate, InGameSet.run_if(in_state(AppMode::InGame)))
             .configure_sets(
                 PreUpdate,
                 AppSet::PanelInput.after(InputSystems).in_set(InGameSet),
@@ -109,10 +117,25 @@ impl Plugin for FactoryAppPlugin {
                     .in_set(InGameSet),
             )
             .configure_sets(Update, AppSet::UiInteraction.in_set(InGameSet))
-            .configure_sets(Update, (AppSet::MapTexture, AppSet::RenderSync).chain());
+            .configure_sets(
+                Update,
+                (AppSet::MapTexture, AppSet::RenderSync)
+                    .chain()
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                PostUpdate,
+                sanitize_editable_text
+                    .after(EditableTextSystems)
+                    .in_set(TextInputSanitization),
+            )
+            .add_systems(
+                PostUpdate,
+                capture_editable_text_composition.before(EditableTextSystems),
+            );
 
-        // SimulationPlugin must come first: BuildPlugin reads the prototype
-        // catalog from `SimResource` to build the default hotbar.
+        // SimulationPlugin must come first so world-entry systems can use the
+        // explicit empty or initialized `SimResource` it installs.
         app.add_plugins((
             simulation::SimulationPlugin,
             input::InputPlugin,
@@ -126,18 +149,25 @@ impl Plugin for FactoryAppPlugin {
         ))
         .init_resource::<crate::world_setup::WorldSetupState>()
         .init_resource::<WorldSetupSaveListState>()
+        .add_message::<WorldSetupStartRequested>()
         .add_systems(OnEnter(AppMode::WorldSetup), build_world_setup_ui)
         .add_systems(OnExit(AppMode::WorldSetup), cleanup_world_setup)
         .add_systems(
             Update,
             (
-                handle_world_setup_seed_input,
                 handle_world_setup_load_buttons,
                 handle_world_setup_buttons,
                 sync_world_setup_save_list,
                 sync_world_setup_text,
             )
                 .chain()
+                .run_if(in_state(AppMode::WorldSetup)),
+        )
+        .add_systems(
+            PostUpdate,
+            (sync_world_setup_seed_input, start_world_from_setup)
+                .chain()
+                .after(TextInputSanitization)
                 .run_if(in_state(AppMode::WorldSetup)),
         );
     }

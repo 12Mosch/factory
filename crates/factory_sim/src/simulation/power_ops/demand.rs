@@ -14,6 +14,7 @@ pub(super) struct ConsumerDemandInputs<'a> {
     pub(super) fluid_boxes: crate::simulation::fluid_ops::FluidBoxes<'a>,
     pub(super) fluids: &'a FluidSubsystem,
     pub(super) research: &'a ResearchState,
+    pub(super) rocket_silo_recipe: ResolvedRocketSiloRecipe,
 }
 
 pub(super) fn refresh_consumer_demand_cache(
@@ -207,6 +208,7 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         fluid_boxes,
         fluids,
         research,
+        rocket_silo_recipe,
     } = inputs;
     let catalog = &world.prototypes;
     if entities.radars.contains_key(&entity_id) {
@@ -216,7 +218,7 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         return assembler_can_work(catalog, entities, research, entity_id, state);
     }
     if let Some(state) = entities.rocket_silos.get(&entity_id) {
-        return rocket_silo_can_work(catalog, research, state);
+        return rocket_silo_can_work(catalog, rocket_silo_recipe, state);
     }
     if let Some(state) = entities.furnaces.get(&entity_id) {
         return furnace_can_work(catalog, research, state);
@@ -247,7 +249,15 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         entities.placed_entity(entity_id),
         entities.inserters.get(&entity_id),
     ) {
-        return inserter_can_work(catalog, research, entities, stopped_stock, placed, state);
+        return inserter_can_work(
+            catalog,
+            research,
+            entities,
+            rocket_silo_recipe,
+            stopped_stock,
+            placed,
+            state,
+        );
     }
 
     false
@@ -259,10 +269,10 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
 /// with a full output.
 fn rocket_silo_can_work(
     catalog: &PrototypeCatalog,
-    research: &ResearchState,
+    resolved_recipe: ResolvedRocketSiloRecipe,
     state: &RocketSiloState,
 ) -> bool {
-    let Some(recipe) = rocket_silo_recipe(catalog, research) else {
+    let Some(recipe) = resolved_recipe.get(catalog) else {
         return false;
     };
     !state.rocket_ready() && assembler_has_ingredients(&state.input_inventory, &recipe.ingredients)
@@ -412,6 +422,7 @@ fn inserter_can_work(
     catalog: &PrototypeCatalog,
     research: &ResearchState,
     entities: &EntityStore,
+    rocket_silo_recipe: ResolvedRocketSiloRecipe,
     stopped_stock: crate::simulation::rolling_stock_ops::StoppedStock<'_>,
     placed: &PlacedEntity,
     state: &InserterState,
@@ -430,10 +441,11 @@ fn inserter_can_work(
             else {
                 return false;
             };
-            inserter_target_can_accept(
+            inserter_target_can_accept_with_rocket_recipe(
                 catalog,
                 research,
                 entities,
+                rocket_silo_recipe,
                 stopped_stock,
                 drop_tile,
                 ItemStack::new(catalog, item_id, 1)
@@ -441,8 +453,14 @@ fn inserter_can_work(
             )
         }
         InserterState::Picking { .. } | InserterState::Dropping { .. } => true,
-        InserterState::Holding { item } => {
-            inserter_target_can_accept(catalog, research, entities, stopped_stock, drop_tile, item)
-        }
+        InserterState::Holding { item } => inserter_target_can_accept_with_rocket_recipe(
+            catalog,
+            research,
+            entities,
+            rocket_silo_recipe,
+            stopped_stock,
+            drop_tile,
+            item,
+        ),
     }
 }

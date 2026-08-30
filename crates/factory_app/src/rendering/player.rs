@@ -9,7 +9,15 @@ use crate::resources::SimResource;
 #[derive(Component)]
 pub(crate) struct PlayerSprite;
 
-pub(crate) fn spawn_player(mut commands: Commands, sim: Res<SimResource>) {
+/// Spawns the active world's player sprite unless the retained sprite already exists.
+pub(crate) fn spawn_player(
+    mut commands: Commands,
+    sim: Res<SimResource>,
+    existing: Query<(), With<PlayerSprite>>,
+) {
+    if !existing.is_empty() {
+        return;
+    }
     commands.spawn((
         Sprite::from_color(
             Color::srgb(0.92, 0.84, 0.42),
