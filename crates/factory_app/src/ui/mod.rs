@@ -22,6 +22,7 @@ pub mod resources;
 pub(crate) mod rocket_launch;
 pub mod rolling_stock_window;
 pub mod save_load;
+pub mod settings;
 pub(crate) mod signal_picker;
 pub mod technology_panel;
 pub(crate) mod text_input;

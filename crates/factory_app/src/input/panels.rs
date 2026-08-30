@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::window::PrimaryWindow;
 
-use crate::audio::AudioSettingsWindowState;
+use crate::audio::AudioSettings;
 use crate::build::resources::{
     BlueprintLibraryWindowState, BuildMenuState, BuildPlacementState, PlannerState, PlannerTool,
 };
@@ -13,7 +13,6 @@ use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapOverlay, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::{PendingSaveConfirmation, SaveLoadWindowState};
-use crate::ui::enemy_settings::EnemySettingsWindowState;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
     fullscreen_map_display_size, fullscreen_map_image_size,
@@ -22,14 +21,14 @@ use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, OpenContainer, ProductionStatsWindowState,
     TechnologyWindowState,
 };
+use crate::ui::settings::{SettingsTab, SettingsWindowState};
 
 #[derive(SystemParam)]
 pub(crate) struct WorldBlockingWindows<'w, 's> {
     map: Res<'w, MapViewState>,
     stats: Res<'w, ProductionStatsWindowState>,
     crafting: Res<'w, CraftingWindowState>,
-    audio_settings: Res<'w, AudioSettingsWindowState>,
-    enemy_settings: Res<'w, EnemySettingsWindowState>,
+    settings: Res<'w, SettingsWindowState>,
     save_load: Res<'w, SaveLoadWindowState>,
     build_menu: Res<'w, BuildMenuState>,
     blueprint_library: Res<'w, BlueprintLibraryWindowState>,
@@ -43,8 +42,7 @@ struct WindowOpenFlags {
     map: bool,
     stats: bool,
     crafting: bool,
-    audio_settings: bool,
-    enemy_settings: bool,
+    settings: bool,
     save_load: bool,
     build_menu: bool,
     blueprint_library: bool,
@@ -57,8 +55,7 @@ impl WorldBlockingWindows<'_, '_> {
             map: self.map.open,
             stats: self.stats.open,
             crafting: self.crafting.open,
-            audio_settings: self.audio_settings.open,
-            enemy_settings: self.enemy_settings.open,
+            settings: self.settings.open,
             save_load: self.save_load.open,
             build_menu: self.build_menu.open,
             blueprint_library: self.blueprint_library.open,
@@ -75,8 +72,7 @@ fn world_blocking_windows_open(flags: WindowOpenFlags) -> bool {
     flags.map
         || flags.stats
         || flags.crafting
-        || flags.audio_settings
-        || flags.enemy_settings
+        || flags.settings
         || flags.save_load
         || flags.build_menu
         || flags.blueprint_library
@@ -96,11 +92,11 @@ pub(crate) struct PanelInputResources<'w, 's> {
     input_state: ResMut<'w, AppInputState>,
     sim: Res<'w, SimResource>,
     map: ResMut<'w, MapViewState>,
-    settings: ResMut<'w, MapDisplaySettings>,
+    map_settings: ResMut<'w, MapDisplaySettings>,
     stats: ResMut<'w, ProductionStatsWindowState>,
     crafting: ResMut<'w, CraftingWindowState>,
-    audio_settings: ResMut<'w, AudioSettingsWindowState>,
-    enemy_settings: ResMut<'w, EnemySettingsWindowState>,
+    settings: ResMut<'w, SettingsWindowState>,
+    audio: Res<'w, AudioSettings>,
     technology: ResMut<'w, TechnologyWindowState>,
     save_load: ResMut<'w, SaveLoadWindowState>,
     save_confirmation: ResMut<'w, PendingSaveConfirmation>,
@@ -146,8 +142,7 @@ pub(crate) fn handle_panel_input(
             map: resources.map.open,
             stats: resources.stats.open,
             crafting: resources.crafting.open,
-            audio_settings: resources.audio_settings.open,
-            enemy_settings: resources.enemy_settings.open,
+            settings: resources.settings.open,
             save_load: resources.save_load.open,
             build_menu: resources.build_menu.open,
             blueprint_library: resources.blueprint_library.open,
@@ -169,8 +164,37 @@ pub(crate) fn handle_panel_input(
             map: resources.map.open,
             stats: resources.stats.open,
             crafting: resources.crafting.open,
-            audio_settings: resources.audio_settings.open,
-            enemy_settings: resources.enemy_settings.open,
+            settings: resources.settings.open,
+            save_load: resources.save_load.open,
+            build_menu: resources.build_menu.open,
+            blueprint_library: resources.blueprint_library.open,
+            equipment: resources.equipment.open,
+        });
+        return;
+    }
+
+    if resources.settings.open {
+        if keyboard.just_pressed(KeyCode::KeyO) {
+            if resources.settings.active_tab == SettingsTab::Audio {
+                close_settings(&mut resources.settings, &mut resources.save_load);
+            } else {
+                resources.settings.active_tab = SettingsTab::Audio;
+            }
+        } else if keyboard.just_pressed(KeyCode::KeyN) {
+            if resources.settings.active_tab == SettingsTab::Gameplay {
+                close_settings(&mut resources.settings, &mut resources.save_load);
+            } else {
+                resources.settings.active_tab = SettingsTab::Gameplay;
+            }
+        } else if keyboard.just_pressed(KeyCode::Escape) {
+            close_settings(&mut resources.settings, &mut resources.save_load);
+            resources.input_state.escape_consumed = true;
+        }
+        resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
+            map: resources.map.open,
+            stats: resources.stats.open,
+            crafting: resources.crafting.open,
+            settings: resources.settings.open,
             save_load: resources.save_load.open,
             build_menu: resources.build_menu.open,
             blueprint_library: resources.blueprint_library.open,
@@ -207,18 +231,20 @@ pub(crate) fn handle_panel_input(
         }
     }
     if keyboard.just_pressed(KeyCode::KeyO) {
-        resources.audio_settings.open = !resources.audio_settings.open;
-        if resources.audio_settings.open {
-            resources.build_state.selected = None;
-            resources.open_container.close();
-        }
+        let enemy_preset = resources.sim.read().enemy_settings().preset;
+        resources
+            .settings
+            .open_tab(SettingsTab::Audio, &resources.audio, enemy_preset, false);
+        resources.build_state.selected = None;
+        resources.open_container.close();
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
-        resources.enemy_settings.open = !resources.enemy_settings.open;
-        if resources.enemy_settings.open {
-            resources.build_state.selected = None;
-            resources.open_container.close();
-        }
+        let enemy_preset = resources.sim.read().enemy_settings().preset;
+        resources
+            .settings
+            .open_tab(SettingsTab::Gameplay, &resources.audio, enemy_preset, false);
+        resources.build_state.selected = None;
+        resources.open_container.close();
     }
     if keyboard.just_pressed(KeyCode::KeyE) {
         resources.equipment.open = !resources.equipment.open;
@@ -244,8 +270,8 @@ pub(crate) fn handle_panel_input(
         resources.open_container.close();
     }
     if keyboard.just_pressed(KeyCode::F3) {
-        resources.settings.debug_reveal_all = !resources.settings.debug_reveal_all;
-        resources.settings.show_chunk_grid = resources.settings.debug_reveal_all;
+        resources.map_settings.debug_reveal_all = !resources.map_settings.debug_reveal_all;
+        resources.map_settings.show_chunk_grid = resources.map_settings.debug_reveal_all;
     }
 
     if keyboard.just_pressed(KeyCode::Escape) {
@@ -258,11 +284,11 @@ pub(crate) fn handle_panel_input(
         } else if resources.crafting.open {
             resources.crafting.open = false;
             resources.input_state.escape_consumed = true;
-        } else if resources.audio_settings.open {
-            resources.audio_settings.open = false;
-            resources.input_state.escape_consumed = true;
-        } else if resources.enemy_settings.open {
-            resources.enemy_settings.open = false;
+        } else if resources.settings.open {
+            if resources.settings.close() {
+                resources.save_load.open = true;
+                resources.save_load.refresh_on_open = true;
+            }
             resources.input_state.escape_consumed = true;
         } else if resources.equipment.open {
             resources.equipment.open = false;
@@ -300,13 +326,19 @@ pub(crate) fn handle_panel_input(
         map: resources.map.open,
         stats: resources.stats.open,
         crafting: resources.crafting.open,
-        audio_settings: resources.audio_settings.open,
-        enemy_settings: resources.enemy_settings.open,
+        settings: resources.settings.open,
         save_load: resources.save_load.open,
         build_menu: resources.build_menu.open,
         blueprint_library: resources.blueprint_library.open,
         equipment: resources.equipment.open,
     });
+}
+
+fn close_settings(settings: &mut SettingsWindowState, save_load: &mut SaveLoadWindowState) {
+    if settings.close() {
+        save_load.open = true;
+        save_load.refresh_on_open = true;
+    }
 }
 
 #[derive(SystemParam)]

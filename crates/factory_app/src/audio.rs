@@ -77,11 +77,6 @@ impl AudioSettings {
 }
 
 #[derive(Resource, Default)]
-pub struct AudioSettingsWindowState {
-    pub open: bool,
-}
-
-#[derive(Resource, Default)]
 pub struct AudioAssets {
     pub ui_click: Option<Handle<AudioSource>>,
     pub place: Option<Handle<AudioSource>>,

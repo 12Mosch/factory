@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use crate::FactoryAppPlugin;
 use crate::audio::{
-    AudioAssets, AudioEventDedupe, AudioSettings, AudioSettingsWindowState, MachineAudioLoops,
-    SoundEvent, play_sound_events, sync_machine_audio_loops,
+    AudioAssets, AudioEventDedupe, AudioSettings, MachineAudioLoops, SoundEvent, play_sound_events,
+    sync_machine_audio_loops,
 };
 use crate::rendering::resources::VisibleEntityIds;
 use crate::rendering::robots::RobotSprite;
@@ -18,14 +18,13 @@ use crate::test_performance::{
     BENCHMARK_LOCK, PerformanceBudget, assert_performance_budget, collect_performance_stats,
     collect_prepared_performance_stats, measure_performance_sample, print_performance_stats,
 };
-use crate::ui::audio_settings::sync_audio_settings_window;
-use crate::ui::enemy_settings::{EnemySettingsWindowState, sync_enemy_settings_window};
 use crate::ui::manual_crafting::sync_manual_crafting_panel;
 use crate::ui::objectives_panel::sync_objectives_panel;
 use crate::ui::production_stats::sync_production_stats_window;
 use crate::ui::resources::{
     CraftingWindowState, ProductionStatsWindowState, TechnologyWindowState,
 };
+use crate::ui::settings::{SettingsTab, SettingsWindowState, sync_settings_window};
 use crate::ui::technology_panel::sync_technology_panel;
 use crate::ui::threat::sync_threat_ui;
 
@@ -107,8 +106,7 @@ fn retained_ui_frame_p99_hitch_and_allocation_budget() {
     app.add_systems(
         UiBenchmark,
         (
-            sync_audio_settings_window,
-            sync_enemy_settings_window,
+            sync_settings_window,
             sync_technology_panel,
             sync_manual_crafting_panel,
             sync_production_stats_window,
@@ -356,12 +354,16 @@ fn full_app_fixture() -> App {
 }
 
 fn open_benchmark_windows(app: &mut App) {
+    let audio = app.world().resource::<AudioSettings>().clone();
+    let enemy_preset = app
+        .world()
+        .resource::<SimResource>()
+        .read()
+        .enemy_settings()
+        .preset;
     app.world_mut()
-        .resource_mut::<AudioSettingsWindowState>()
-        .open = true;
-    app.world_mut()
-        .resource_mut::<EnemySettingsWindowState>()
-        .open = true;
+        .resource_mut::<SettingsWindowState>()
+        .open_tab(SettingsTab::Gameplay, &audio, enemy_preset, false);
     app.world_mut().resource_mut::<TechnologyWindowState>().open = true;
     app.world_mut().resource_mut::<CraftingWindowState>().open = true;
     app.world_mut()

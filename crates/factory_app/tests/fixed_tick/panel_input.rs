@@ -4,7 +4,6 @@ use super::common::{
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::text::EditableText;
-use factory_app::audio::AudioSettingsWindowState;
 use factory_app::build::resources::{
     BlueprintLibraryWindowState, BuildMenuState, BuildPlacementState,
 };
@@ -15,11 +14,11 @@ use factory_app::map::resources::{
 };
 use factory_app::resources::SimResource;
 use factory_app::save_load::SaveLoadWindowState;
-use factory_app::ui::enemy_settings::EnemySettingsWindowState;
 use factory_app::ui::equipment_window::EquipmentInventoryButton;
 use factory_app::ui::resources::{
     CraftingWindowState, EquipmentWindowState, ProductionStatsWindowState, TechnologyWindowState,
 };
+use factory_app::ui::settings::{SettingsTab, SettingsWindowState};
 use std::time::Duration;
 
 #[test]
@@ -388,7 +387,9 @@ fn audio_settings_panel_toggles_with_o() {
         .press(KeyCode::KeyO);
     app.update();
 
-    assert!(app.world().resource::<AudioSettingsWindowState>().open);
+    let settings = app.world().resource::<SettingsWindowState>();
+    assert!(settings.open);
+    assert_eq!(settings.active_tab, SettingsTab::Audio);
 
     {
         let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -401,7 +402,7 @@ fn audio_settings_panel_toggles_with_o() {
         .press(KeyCode::KeyO);
     app.update();
 
-    assert!(!app.world().resource::<AudioSettingsWindowState>().open);
+    assert!(!app.world().resource::<SettingsWindowState>().open);
 }
 
 #[test]
@@ -453,8 +454,7 @@ fn save_load_window_suppresses_panel_and_debug_hotkeys() {
     assert!(!app.world().resource::<MapViewState>().open);
     assert!(!app.world().resource::<ProductionStatsWindowState>().open);
     assert!(!app.world().resource::<CraftingWindowState>().open);
-    assert!(!app.world().resource::<AudioSettingsWindowState>().open);
-    assert!(!app.world().resource::<EnemySettingsWindowState>().open);
+    assert!(!app.world().resource::<SettingsWindowState>().open);
     assert!(!app.world().resource::<BuildMenuState>().open);
     assert!(!app.world().resource::<BlueprintLibraryWindowState>().open);
     let settings = app.world().resource::<MapDisplaySettings>();
@@ -629,7 +629,7 @@ fn escape_closes_settings_panel() {
         .press(KeyCode::Escape);
     app.update();
 
-    assert!(!app.world().resource::<AudioSettingsWindowState>().open);
+    assert!(!app.world().resource::<SettingsWindowState>().open);
     assert!(app.world().resource::<AppInputState>().escape_consumed);
 }
 

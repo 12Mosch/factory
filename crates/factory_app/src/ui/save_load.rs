@@ -10,6 +10,7 @@ use crate::save_load::{
     delete_save, load_save, request_named_save, request_overwrite,
 };
 use crate::ui::layout::scroll_column;
+use crate::ui::settings::SettingsMenuButton;
 use crate::ui::text_input::{
     EditableTextSanitizer, can_submit, editor_value, is_non_control, set_editor_value,
     single_line_editor,
@@ -441,6 +442,7 @@ fn spawn_save_load_dynamic_contents(
         );
     }
     spawn_status(modal, &snapshot.status);
+    spawn_plain_button(modal, "Settings", Some(SettingsMenuButton));
     modal
         .spawn((
             Button,
