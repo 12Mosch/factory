@@ -19,6 +19,13 @@ pub(super) fn validate_crafting_queue(sim: &Simulation) -> Result<(), SimValidat
                 recipe_id: job.recipe_id,
             });
         }
+        if job.remaining_ticks > recipe.crafting_time_ticks {
+            return Err(SimValidationError::InvalidCraftingProgress {
+                job_id: job.id,
+                remaining_ticks: job.remaining_ticks,
+                required_ticks: recipe.crafting_time_ticks,
+            });
+        }
     }
 
     Ok(())

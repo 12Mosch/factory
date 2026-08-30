@@ -801,6 +801,12 @@ pub enum SimValidationError {
     InvalidCraftingJobIdentity {
         job_id: CraftingJobId,
     },
+    /// A queued manual craft claims more work remains than its recipe requires.
+    InvalidCraftingProgress {
+        job_id: CraftingJobId,
+        remaining_ticks: u32,
+        required_ticks: u32,
+    },
     InvalidBeltItemPosition {
         entity_id: EntityId,
         lane_index: usize,

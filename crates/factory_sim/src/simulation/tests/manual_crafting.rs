@@ -322,6 +322,31 @@ fn mutated_queue_round_trips_and_continues_deterministically() {
 }
 
 #[test]
+fn load_rejects_manual_crafting_progress_above_recipe_duration() {
+    let mut sim = Simulation::new_test_world(123);
+    let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, iron_plate, 2)
+        .unwrap();
+    sim.start_manual_craft(recipe).unwrap();
+    sim.crafting_queue.entries[0].remaining_ticks = 31;
+
+    let error = crate::load_from_bytes(&crate::save_to_bytes(&sim).unwrap())
+        .expect_err("progress above the recipe duration must be rejected");
+
+    assert!(matches!(
+        error,
+        SaveLoadError::InvalidSimulationState(SimulationValidationError::InvalidCraftingProgress {
+            job_id: CraftingJobId(0),
+            remaining_ticks: 31,
+            required_ticks: 30,
+        })
+    ));
+}
+
+#[test]
 fn statistics_count_only_successfully_completed_manual_crafts() {
     let mut sim = Simulation::new_test_world(123);
     let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
