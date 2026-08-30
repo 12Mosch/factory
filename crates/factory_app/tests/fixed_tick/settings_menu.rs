@@ -33,6 +33,35 @@ fn pause_menu_settings_button_opens_settings_and_back_returns_to_pause() {
 }
 
 #[test]
+fn active_tab_shortcuts_return_pause_origin_to_pause_menu() {
+    for (tab, key) in [
+        (SettingsTab::Gameplay, KeyCode::KeyN),
+        (SettingsTab::Audio, KeyCode::KeyO),
+    ] {
+        let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+        app.update();
+        open_settings_from_pause(&mut app);
+
+        if tab != SettingsTab::Gameplay {
+            let button = tab_button(&mut app, tab);
+            press_button(&mut app, button);
+        }
+        assert_eq!(
+            app.world().resource::<SettingsWindowState>().active_tab,
+            tab
+        );
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
+        app.update();
+
+        assert!(!app.world().resource::<SettingsWindowState>().open);
+        assert!(app.world().resource::<SaveLoadWindowState>().open);
+    }
+}
+
+#[test]
 fn every_placeholder_tab_is_reachable_and_clearly_unavailable() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
@@ -156,6 +185,13 @@ fn open_settings_with_key(app: &mut App, key: KeyCode) {
     let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
     keyboard.clear_just_pressed(key);
     keyboard.release(key);
+}
+
+fn open_settings_from_pause(app: &mut App) {
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.update();
+    let settings_button = single_button::<SettingsMenuButton>(app);
+    press_button(app, settings_button);
 }
 
 fn single_button<T: Component>(app: &mut App) -> Entity {

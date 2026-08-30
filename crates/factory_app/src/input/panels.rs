@@ -176,21 +176,18 @@ pub(crate) fn handle_panel_input(
     if resources.settings.open {
         if keyboard.just_pressed(KeyCode::KeyO) {
             if resources.settings.active_tab == SettingsTab::Audio {
-                resources.settings.close();
+                close_settings(&mut resources.settings, &mut resources.save_load);
             } else {
                 resources.settings.active_tab = SettingsTab::Audio;
             }
         } else if keyboard.just_pressed(KeyCode::KeyN) {
             if resources.settings.active_tab == SettingsTab::Gameplay {
-                resources.settings.close();
+                close_settings(&mut resources.settings, &mut resources.save_load);
             } else {
                 resources.settings.active_tab = SettingsTab::Gameplay;
             }
         } else if keyboard.just_pressed(KeyCode::Escape) {
-            if resources.settings.close() {
-                resources.save_load.open = true;
-                resources.save_load.refresh_on_open = true;
-            }
+            close_settings(&mut resources.settings, &mut resources.save_load);
             resources.input_state.escape_consumed = true;
         }
         resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
@@ -335,6 +332,13 @@ pub(crate) fn handle_panel_input(
         blueprint_library: resources.blueprint_library.open,
         equipment: resources.equipment.open,
     });
+}
+
+fn close_settings(settings: &mut SettingsWindowState, save_load: &mut SaveLoadWindowState) {
+    if settings.close() {
+        save_load.open = true;
+        save_load.refresh_on_open = true;
+    }
 }
 
 #[derive(SystemParam)]
