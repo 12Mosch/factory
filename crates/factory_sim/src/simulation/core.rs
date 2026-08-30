@@ -17,9 +17,9 @@ impl Simulation {
         assert!(config.is_valid(), "invalid enemy simulation configuration");
         let world = WorldSim::new(seed, prototypes);
         let research = ResearchState::from_catalog(&world.prototypes);
-        let entities = EntityStore::new_test_entities(seed);
+        let entities = EntityStore::empty();
         let player = find_player_start(&world, &entities.occupancy)
-            .expect("test world should contain a walkable player start");
+            .expect("world should contain a walkable player start");
         let mut player_inventory = Inventory::player();
         let burner_mining_drill = item_id(&world.prototypes, "burner_mining_drill");
         let stone_furnace = item_id(&world.prototypes, "stone_furnace");

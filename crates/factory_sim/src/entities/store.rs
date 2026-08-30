@@ -5,6 +5,8 @@ use factory_data::{EntityKind, EntityPrototypeId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+const FIRST_ENTITY_ID: u64 = 1;
+
 /// Single source of truth for the per-kind entity state maps in [`EntityStore`].
 ///
 /// Each entry is `map_field: StateType => OwnerTag`, where `OwnerTag` is the
@@ -118,8 +120,12 @@ macro_rules! define_entity_store {
         }
 
         impl EntityStore {
-            /// Store without entities; `next_entity_id` seeds the id allocator.
-            pub(crate) fn empty(next_entity_id: u64) -> Self {
+            /// Empty production store. Gameplay entity IDs start at one.
+            pub(crate) fn empty() -> Self {
+                Self::empty_with_next_entity_id(FIRST_ENTITY_ID)
+            }
+
+            fn empty_with_next_entity_id(next_entity_id: u64) -> Self {
                 Self {
                     entities: Vec::new(),
                     placed_entities: BTreeMap::new(),
@@ -351,7 +357,7 @@ mod tests {
         let recipe = RecipeId::new(1);
         let technology = TechnologyId::new(1);
 
-        let mut store = EntityStore::empty(32);
+        let mut store = EntityStore::empty_with_next_entity_id(32);
 
         for raw in 1..=31 {
             let id = EntityId::new(raw);

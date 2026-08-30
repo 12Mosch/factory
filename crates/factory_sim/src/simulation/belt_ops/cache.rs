@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn catalog_distance_is_resolved_only_for_incremental_patches() {
-        let entities = EntityStore::empty(1);
+        let entities = EntityStore::empty();
         let mut cache = TransportLaneCache::default();
         let resolutions = Cell::new(0);
         let resolve_distance = || {

@@ -25,16 +25,6 @@ impl EntityStore {
         self.placed_entities.values()
     }
 
-    pub(super) fn new_test_entities(seed: u64) -> Self {
-        let mut store = Self::empty(2);
-        store.entities.push(SimEntity {
-            id: EntityId::new(1),
-            x: (seed % 97) as i64,
-            y: (seed % 53) as i64,
-        });
-        store
-    }
-
     pub(super) fn entity_inventory(
         &self,
         entity_id: EntityId,
