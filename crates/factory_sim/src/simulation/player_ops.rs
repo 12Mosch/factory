@@ -143,6 +143,9 @@ impl Simulation {
         };
     }
 
+    /// Reserves a recipe's ingredients immediately and appends a compact job.
+    /// Item consumption and production statistics are recorded together only
+    /// when that job completes, so cancellation needs no counter rollback.
     pub fn start_manual_craft(&mut self, recipe_id: RecipeId) -> Result<(), CraftingError> {
         let recipe = self
             .world
@@ -159,6 +162,13 @@ impl Simulation {
         if !self.is_recipe_unlocked(recipe_id) {
             return Err(CraftingError::RecipeLocked(recipe_id));
         }
+
+        let job_id = CraftingJobId(self.crafting_queue.next_job_id);
+        let next_job_id = self
+            .crafting_queue
+            .next_job_id
+            .checked_add(1)
+            .ok_or(CraftingError::JobIdExhausted)?;
 
         for ingredient in &recipe.ingredients {
             let required = recipe
@@ -178,14 +188,77 @@ impl Simulation {
             self.player_inventory
                 .remove(ingredient.item, ingredient.amount)
                 .expect("manual crafting checked ingredients before removing");
-            self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
         }
 
+        self.crafting_queue.next_job_id = next_job_id;
         self.crafting_queue.entries.push_back(CraftingJob {
+            id: job_id,
             recipe_id,
             remaining_ticks: crafting_time_ticks,
         });
 
+        Ok(())
+    }
+
+    /// Cancels one manual craft and returns all of its reserved ingredients.
+    ///
+    /// The active job may be cancelled even after making partial progress; no
+    /// product is produced and the full reservation is returned. The refund is
+    /// planned against an inventory copy so insufficient space leaves the job,
+    /// inventory, and statistics unchanged.
+    pub fn cancel_manual_craft(&mut self, job_id: CraftingJobId) -> Result<(), CraftingError> {
+        let index = self
+            .crafting_queue
+            .entries
+            .iter()
+            .position(|job| job.id == job_id)
+            .ok_or(CraftingError::MissingJob(job_id))?;
+        let recipe_id = self.crafting_queue.entries[index].recipe_id;
+        let ingredients = self
+            .world
+            .prototypes
+            .recipe(recipe_id)
+            .ok_or(CraftingError::MissingRecipe(recipe_id))?
+            .ingredients
+            .clone();
+
+        let mut refunded_inventory = self.player_inventory.clone();
+        for ingredient in &ingredients {
+            refunded_inventory
+                .insert(&self.world.prototypes, ingredient.item, ingredient.amount)
+                .map_err(|_| CraftingError::RefundInventoryFull)?;
+        }
+
+        self.player_inventory = refunded_inventory;
+        self.crafting_queue
+            .entries
+            .remove(index)
+            .expect("manual crafting job index was found before refund planning");
+        Ok(())
+    }
+
+    /// Moves a queued job by one position while preserving its reserved
+    /// ingredients and any progress it made while active.
+    pub fn move_manual_craft(
+        &mut self,
+        job_id: CraftingJobId,
+        direction: CraftingQueueMove,
+    ) -> Result<(), CraftingError> {
+        let index = self
+            .crafting_queue
+            .entries
+            .iter()
+            .position(|job| job.id == job_id)
+            .ok_or(CraftingError::MissingJob(job_id))?;
+        let target = match direction {
+            CraftingQueueMove::Earlier => index.checked_sub(1),
+            CraftingQueueMove::Later => {
+                (index + 1 < self.crafting_queue.entries.len()).then_some(index + 1)
+            }
+        };
+        if let Some(target) = target {
+            self.crafting_queue.entries.swap(index, target);
+        }
         Ok(())
     }
 
@@ -208,6 +281,7 @@ impl Simulation {
             .prototypes
             .recipe(recipe_id)
             .expect("queued manual craft should reference an existing recipe");
+        let ingredients = recipe.ingredients.clone();
         let products = recipe.products.clone();
         let mut inventory = self.player_inventory.clone();
 
@@ -222,9 +296,13 @@ impl Simulation {
 
         self.player_inventory = inventory;
         self.crafting_queue.entries.pop_front();
+        self.crafting_queue.completed_jobs = self.crafting_queue.completed_jobs.wrapping_add(1);
+        for ingredient in &ingredients {
+            self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
+        }
+        let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
         for product in &products {
             self.record_item_produced(product.item, u64::from(product.amount));
-            let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
             if product.item == base.items.transport_belt {
                 self.onboarding_progress.record_counter(
                     |progress| &mut progress.transport_belts_manually_crafted,

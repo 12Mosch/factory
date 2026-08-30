@@ -134,6 +134,36 @@ fn apply_command_start_manual_craft_reports_crafting_error() {
 }
 
 #[test]
+fn apply_command_routes_manual_crafting_queue_mutations_by_stable_job_id() {
+    let mut sim = Simulation::new_test_world(123);
+    let gear_recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
+    let pipe_recipe = recipe_id(&sim.world.prototypes, "pipe");
+    let iron_plate = item_id(&sim.world.prototypes, "iron_plate");
+    sim.player_inventory = Inventory::player();
+    sim.player_inventory
+        .insert(&sim.world.prototypes, iron_plate, 3)
+        .unwrap();
+    sim.apply_command(&SimCommand::StartManualCraft(gear_recipe))
+        .unwrap();
+    sim.apply_command(&SimCommand::StartManualCraft(pipe_recipe))
+        .unwrap();
+
+    sim.apply_command(&SimCommand::MoveManualCraft {
+        job_id: CraftingJobId(1),
+        direction: CraftingQueueMove::Earlier,
+    })
+    .unwrap();
+    sim.apply_command(&SimCommand::CancelManualCraft {
+        job_id: CraftingJobId(0),
+    })
+    .unwrap();
+
+    assert_eq!(sim.crafting_queue.entries.len(), 1);
+    assert_eq!(sim.crafting_queue.entries[0].id, CraftingJobId(1));
+    assert_eq!(sim.player_inventory.count(iron_plate), 2);
+}
+
+#[test]
 fn apply_command_research_queue_lifecycle() {
     let mut sim = Simulation::new_test_world(123);
     let logistics = technology_id(&sim.world.prototypes, "logistics");

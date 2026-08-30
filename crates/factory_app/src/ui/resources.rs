@@ -50,6 +50,7 @@ pub struct EquipmentWindowState {
 pub struct CraftingWindowState {
     pub open: bool,
     pub selected_tab: CraftingPanelTab,
+    pub feedback: Option<String>,
 }
 
 impl Default for CraftingWindowState {
@@ -57,6 +58,7 @@ impl Default for CraftingWindowState {
         Self {
             open: false,
             selected_tab: CraftingPanelTab::Player,
+            feedback: None,
         }
     }
 }

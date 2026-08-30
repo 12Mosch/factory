@@ -4,6 +4,7 @@ mod systems;
 mod view;
 
 pub(crate) use systems::{
+    handle_manual_crafting_command_results, handle_manual_crafting_queue_buttons,
     handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
     sync_manual_crafting_panel,
 };

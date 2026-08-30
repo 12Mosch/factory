@@ -4,10 +4,12 @@ use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 use crate::ui::resources::CraftingPanelTab;
 
 use super::components::{
-    CraftingPanelSnapshot, CraftingQueueSnapshot, CraftingRecipeButton, CraftingRecipeListRoot,
-    CraftingTabButton, ManualCraftRecipeRow,
+    CraftingPanelSnapshot, CraftingQueueAction, CraftingQueueButton, CraftingQueueSnapshot,
+    CraftingRecipeButton, CraftingRecipeListRoot, CraftingTabButton, ManualCraftQueueRow,
+    ManualCraftRecipeRow,
 };
 use crate::ui::window_sync::WindowRoot;
+use factory_sim::CraftingQueueMove;
 
 pub(crate) fn manual_crafting_root() -> impl Bundle {
     (
@@ -32,13 +34,20 @@ pub(crate) fn manual_crafting_root() -> impl Bundle {
 pub(crate) fn spawn_manual_crafting_contents(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &CraftingPanelSnapshot,
-    queue: Vec<String>,
+    queue: Vec<ManualCraftQueueRow>,
 ) {
     root.spawn((
         Text::new("Crafting"),
         TextFont::from_font_size(18.0),
         TextColor(Color::srgb(0.94, 0.95, 0.90)),
     ));
+    if let Some(feedback) = &snapshot.feedback {
+        root.spawn((
+            Text::new(feedback.clone()),
+            TextFont::from_font_size(11.0),
+            TextColor(Color::srgb(0.96, 0.70, 0.42)),
+        ));
+    }
     spawn_tabs(root, snapshot.selected_tab);
     spawn_recipe_rows(root, &snapshot.rows);
     spawn_queue(root, queue);
@@ -226,21 +235,30 @@ fn spawn_recipe_row(
         });
 }
 
-fn spawn_queue(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, queue: Vec<String>) {
+fn spawn_queue(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    queue: Vec<ManualCraftQueueRow>,
+) {
     parent.spawn((
         Text::new("Queue"),
         TextFont::from_font_size(14.0),
         TextColor(Color::srgb(0.92, 0.93, 0.88)),
     ));
+    parent.spawn((
+        Text::new("Cancel refunds every reserved ingredient; partial progress is discarded."),
+        TextFont::from_font_size(10.0),
+        TextColor(Color::srgb(0.70, 0.72, 0.67)),
+    ));
 
+    let mut queue_node = scroll_column();
+    queue_node.flex_grow = 0.0;
+    queue_node.flex_basis = Val::Px(120.0);
+    queue_node.max_height = Val::Percent(40.0);
+    queue_node.row_gap = Val::Px(4.0);
+    queue_node.padding = UiRect::top(Val::Px(2.0));
     parent
         .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                padding: UiRect::top(Val::Px(2.0)),
-                ..default()
-            },
+            queue_node,
             BackgroundColor(Color::NONE),
             WindowRoot::new(CraftingQueueSnapshot(queue.clone())),
         ))
@@ -249,7 +267,7 @@ fn spawn_queue(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, queue: V
 
 pub(crate) fn spawn_queue_contents(
     queue_node: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    queue: &[String],
+    queue: &[ManualCraftQueueRow],
 ) {
     if queue.is_empty() {
         queue_node.spawn((
@@ -260,11 +278,91 @@ pub(crate) fn spawn_queue_contents(
         return;
     }
 
-    for line in queue {
-        queue_node.spawn((
-            Text::new(line.clone()),
-            TextFont::from_font_size(12.0),
-            TextColor(Color::srgb(0.84, 0.86, 0.80)),
-        ));
+    for row in queue {
+        queue_node
+            .spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    min_height: Val::Px(38.0),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(5.0),
+                    row_gap: Val::Px(5.0),
+                    padding: UiRect::all(Val::Px(5.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.06, 0.065, 0.062, 0.94)),
+            ))
+            .with_children(|job| {
+                job.spawn((
+                    Node {
+                        flex_basis: Val::Px(270.0),
+                        flex_grow: 1.0,
+                        min_width: Val::Px(0.0),
+                        ..default()
+                    },
+                    Text::new(row.status.clone()),
+                    TextFont::from_font_size(11.0),
+                    TextColor(Color::srgb(0.84, 0.86, 0.80)),
+                ));
+                if row.can_move_earlier {
+                    spawn_queue_button(
+                        job,
+                        row.job_id,
+                        CraftingQueueAction::Move(CraftingQueueMove::Earlier),
+                        "Earlier",
+                        false,
+                    );
+                }
+                if row.can_move_later {
+                    spawn_queue_button(
+                        job,
+                        row.job_id,
+                        CraftingQueueAction::Move(CraftingQueueMove::Later),
+                        "Later",
+                        false,
+                    );
+                }
+                spawn_queue_button(job, row.job_id, CraftingQueueAction::Cancel, "Cancel", true);
+            });
     }
+}
+
+fn spawn_queue_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    job_id: factory_sim::CraftingJobId,
+    action: CraftingQueueAction,
+    label: &str,
+    destructive: bool,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                min_width: Val::Px(54.0),
+                min_height: Val::Px(27.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::horizontal(Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(if destructive {
+                Color::srgba(0.35, 0.14, 0.12, 0.98)
+            } else {
+                Color::srgba(0.15, 0.20, 0.17, 0.98)
+            }),
+            BorderColor::all(if destructive {
+                Color::srgba(0.58, 0.28, 0.23, 0.90)
+            } else {
+                Color::srgba(0.34, 0.43, 0.35, 0.90)
+            }),
+            CraftingQueueButton { job_id, action },
+        ))
+        .with_child((
+            Text::new(label.to_string()),
+            TextFont::from_font_size(10.0),
+            TextColor(Color::WHITE),
+        ));
 }

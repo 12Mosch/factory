@@ -15,6 +15,13 @@ pub enum SimCommand {
     },
     SetManualMiningTarget(Option<ManualMiningTarget>),
     StartManualCraft(RecipeId),
+    CancelManualCraft {
+        job_id: CraftingJobId,
+    },
+    MoveManualCraft {
+        job_id: CraftingJobId,
+        direction: CraftingQueueMove,
+    },
     SelectAssemblerRecipe {
         entity_id: EntityId,
         recipe_id: RecipeId,
@@ -407,6 +414,16 @@ impl Simulation {
             }
             SimCommand::StartManualCraft(recipe_id) => {
                 self.start_manual_craft(recipe_id)
+                    .map_err(SimCommandError::Crafting)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::CancelManualCraft { job_id } => {
+                self.cancel_manual_craft(job_id)
+                    .map_err(SimCommandError::Crafting)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::MoveManualCraft { job_id, direction } => {
+                self.move_manual_craft(job_id, direction)
                     .map_err(SimCommandError::Crafting)?;
                 Ok(SimCommandEffect::None)
             }

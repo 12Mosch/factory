@@ -3,7 +3,7 @@ use bevy::audio::{AudioSink, AudioSinkPlayback, SpatialAudioSink, SpatialScale, 
 use bevy::prelude::*;
 use factory_data::EntityKind;
 use factory_sim::{
-    CraftingJob, EntityId, MachineStatus, ManualMiningProgress, RocketLaunchPhase, ThreatEventKind,
+    EntityId, MachineStatus, ManualMiningProgress, RocketLaunchPhase, ThreatEventKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -115,8 +115,8 @@ pub struct ManualMiningAudioObserver {
 
 #[derive(Resource, Default)]
 pub struct CraftingAudioObserver {
-    previous_front: Option<CraftingJob>,
-    previous_len: usize,
+    initialized: bool,
+    previous_completed_jobs: u64,
 }
 
 #[derive(Resource, Default)]
@@ -405,17 +405,12 @@ pub(crate) fn observe_crafting_audio(
 ) {
     let sim = sim.read();
     let queue = sim.crafting_queue();
-    let current_front = queue.entries.front().copied();
-    let current_len = queue.entries.len();
-
-    if let Some(previous_front) = observer.previous_front
-        && (current_len < observer.previous_len || current_front != Some(previous_front))
-    {
+    if observer.initialized && queue.completed_jobs != observer.previous_completed_jobs {
         sounds.write(SoundEvent::CraftComplete);
     }
 
-    observer.previous_front = current_front;
-    observer.previous_len = current_len;
+    observer.initialized = true;
+    observer.previous_completed_jobs = queue.completed_jobs;
 }
 
 pub(crate) fn observe_research_audio(
