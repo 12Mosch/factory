@@ -8,6 +8,7 @@ mod fixed_tick {
     mod map_rendering;
     mod panel_input;
     mod research;
+    mod settings_menu;
     mod slot_transfer;
     mod technology_panel;
     mod ui_formatting;

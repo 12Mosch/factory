@@ -3,15 +3,14 @@ use bevy::prelude::*;
 use super::{AppSet, InGameSet};
 use crate::audio::{
     AudioAssets, AudioEventDedupe, AudioSettings, AudioSettingsPersistenceState,
-    AudioSettingsWindowState, CraftingAudioObserver, MachineAudioLoops, ManualMiningAudioObserver,
-    ResearchAudioObserver, RocketLaunchAudioObserver, SoundEvent, ThreatAudioObserver,
-    apply_audio_settings_to_sinks, cleanup_reloaded_rocket_launch_audio,
-    initialize_rocket_launch_audio, load_audio_assets, load_persisted_audio_settings,
-    observe_crafting_audio, observe_manual_mining_audio, observe_research_audio,
-    observe_rocket_launch_audio, observe_threat_audio, play_sound_events,
+    CraftingAudioObserver, MachineAudioLoops, ManualMiningAudioObserver, ResearchAudioObserver,
+    RocketLaunchAudioObserver, SoundEvent, ThreatAudioObserver, apply_audio_settings_to_sinks,
+    cleanup_reloaded_rocket_launch_audio, initialize_rocket_launch_audio, load_audio_assets,
+    load_persisted_audio_settings, observe_crafting_audio, observe_manual_mining_audio,
+    observe_research_audio, observe_rocket_launch_audio, observe_threat_audio, play_sound_events,
     save_audio_settings_if_changed, sync_machine_audio_loops,
 };
-use crate::ui::audio_settings::{handle_audio_settings_buttons, sync_audio_settings_window};
+use crate::ui::audio_settings::handle_audio_settings_buttons;
 use crate::world_setup::AppMode;
 
 /// Sound-effect playback, machine audio loops, and audio settings.
@@ -20,7 +19,6 @@ pub(super) struct AudioPlugin;
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AudioSettings>()
-            .init_resource::<AudioSettingsWindowState>()
             .init_resource::<AudioAssets>()
             .init_resource::<MachineAudioLoops>()
             .init_resource::<AudioEventDedupe>()
@@ -48,7 +46,6 @@ impl Plugin for AudioPlugin {
                 (
                     handle_audio_settings_buttons.in_set(AppSet::UiInteraction),
                     save_audio_settings_if_changed,
-                    sync_audio_settings_window.in_set(InGameSet),
                     apply_audio_settings_to_sinks,
                     cleanup_reloaded_rocket_launch_audio,
                 )

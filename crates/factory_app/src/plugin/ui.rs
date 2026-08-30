@@ -10,6 +10,7 @@ use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
 use crate::resources::UpsStats;
+use crate::ui::audio_settings::handle_audio_settings_buttons;
 use crate::ui::build_menu::handle_build_menu_buttons;
 use crate::ui::circuit::interaction::{
     handle_circuit_constant_step_buttons, handle_circuit_operand_mode_buttons,
@@ -27,9 +28,7 @@ use crate::ui::debug_overlay::{
     DebugOverlayVisible, apply_debug_overlay_visibility, debug_overlay_refresh_due,
     setup_debug_overlay, toggle_debug_overlay, update_debug_overlay, update_ups_stats,
 };
-use crate::ui::enemy_settings::{
-    EnemySettingsWindowState, handle_enemy_settings_buttons, sync_enemy_settings_window,
-};
+use crate::ui::enemy_settings::handle_enemy_settings_buttons;
 use crate::ui::equipment_window::{
     handle_equipment_buttons, handle_equipment_command_results, sync_equipment_window,
     update_equipment_selection_colors, update_equipment_window_text,
@@ -58,6 +57,8 @@ use crate::ui::rocket_launch::{
     RocketLaunchUiState, setup_rocket_launch_ui, sync_rocket_launch_ui,
 };
 use crate::ui::rolling_stock_window::{sync_rolling_stock_window, update_rolling_stock_fluid_text};
+use crate::ui::save_load::sync_save_load_window;
+use crate::ui::settings::{SettingsWindowState, handle_settings_buttons, sync_settings_window};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
@@ -122,7 +123,7 @@ impl Plugin for UiPlugin {
             .init_resource::<CraftingWindowState>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<ObjectivesPanelState>()
-            .init_resource::<EnemySettingsWindowState>()
+            .init_resource::<SettingsWindowState>()
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
             .init_resource::<RocketLaunchUiState>()
@@ -180,7 +181,13 @@ impl Plugin for UiPlugin {
                     handle_threat_alert_clicks.in_set(AppSet::UiInteraction),
                     sync_threat_ui.after(handle_threat_alert_clicks),
                     handle_enemy_settings_buttons.in_set(AppSet::UiInteraction),
-                    sync_enemy_settings_window.after(handle_enemy_settings_buttons),
+                    handle_settings_buttons
+                        .in_set(AppSet::UiInteraction)
+                        .before(sync_save_load_window),
+                    sync_settings_window
+                        .after(handle_audio_settings_buttons)
+                        .after(handle_enemy_settings_buttons)
+                        .after(handle_settings_buttons),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
                 )
