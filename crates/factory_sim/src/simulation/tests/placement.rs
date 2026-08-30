@@ -2,6 +2,26 @@ use super::super::*;
 use super::support::*;
 
 #[test]
+fn first_placed_entity_receives_id_one() {
+    let mut sim = Simulation::new_test_world(123);
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+    let (x, y) = first_buildable_rect(&sim.world, 1, 1);
+
+    let entity_id = crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: inserter,
+            x,
+            y,
+            direction: Direction::North,
+        },
+    )
+    .expect("first entity should be placeable");
+
+    assert_eq!(entity_id, EntityId::new(1));
+}
+
+#[test]
 fn two_by_two_entity_cannot_overlap_another_entity() {
     let mut sim = Simulation::new_test_world(123);
     let furnace = entity_id_by_name(&sim.world.prototypes, "stone_furnace");

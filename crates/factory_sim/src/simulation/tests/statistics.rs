@@ -2,6 +2,26 @@ use super::super::*;
 use super::support::*;
 use std::time::Duration;
 
+fn add_moving_test_entity(sim: &mut Simulation) -> SimEntity {
+    let entity = SimEntity {
+        id: EntityId::new(sim.entities.next_entity_id),
+        x: 0,
+        y: 0,
+    };
+    sim.entities.next_entity_id += 1;
+    sim.entities.entities.push(entity.clone());
+    entity
+}
+
+#[test]
+fn new_world_starts_without_entities() {
+    let sim = Simulation::new_test_world(123);
+
+    assert!(sim.entities().is_empty());
+    assert_eq!(sim.entities().placed_len(), 0);
+    assert_eq!(sim.counts().entity_count, 0);
+}
+
 #[test]
 fn counts_report_entities_chunks_belts_items_machines_and_inserters() {
     let mut sim = Simulation::new_test_world(123);
@@ -12,7 +32,7 @@ fn counts_report_entities_chunks_belts_items_machines_and_inserters() {
         .expect("empty belt should accept one item");
 
     let counts = sim.counts();
-    assert_eq!(counts.entity_count, 9);
+    assert_eq!(counts.entity_count, 8);
     assert_eq!(counts.enemy_count, 0);
     assert_eq!(counts.chunk_count, 25);
     assert_eq!(counts.belt_count, 1);
@@ -38,12 +58,16 @@ fn profiled_tick_advances_one_tick_and_reports_total_time() {
 fn profiled_tick_preserves_deterministic_hashes_against_tick() {
     let mut ticked = Simulation::new_test_world(123);
     let mut profiled = Simulation::new_test_world(123);
+    let moving_entity = add_moving_test_entity(&mut ticked);
+    assert_eq!(add_moving_test_entity(&mut profiled), moving_entity);
 
     for _ in 0..120 {
         ticked.tick();
         profiled.profiled_tick();
         assert_eq!(profiled.state_hash(), ticked.state_hash());
     }
+
+    assert_ne!(ticked.entities.entities[0], moving_entity);
 }
 
 #[test]
