@@ -26,6 +26,8 @@ use crate::rendering::transforms::entity_translation;
 use crate::rendering::visuals::{
     ConnectionMask, EntityVisualStyle, VisualAssets, spawn_entity_visual,
 };
+
+pub(crate) use crate::rendering::visuals::RocketSiloVisualPhase;
 use crate::resources::SimResource;
 
 #[derive(Component)]
@@ -42,13 +44,6 @@ pub(crate) struct RocketSiloSprite {
 #[derive(Component)]
 pub(crate) struct RocketSiloStatusIndicator {
     pub(crate) operational_state: factory_sim::RocketSiloOperationalState,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RocketSiloVisualPhase {
-    Idle,
-    Sealed,
-    Rising,
 }
 
 impl From<factory_sim::RocketLaunchPhase> for RocketSiloVisualPhase {
@@ -281,6 +276,7 @@ pub(crate) fn renderable_entity_visual_style(
     if style.kind == EntityKind::RocketSilo
         && let Ok(state) = factory_sim::entity_access::rocket_silo_state(sim, entity_id)
     {
+        style.rocket_silo_phase = state.launch_phase.into();
         style.base_color = match state.launch_phase {
             factory_sim::RocketLaunchPhase::Idle => rocket_silo_color(),
             // Closed doors darken the pad; the rising phase becomes the warm
@@ -628,6 +624,7 @@ pub(crate) fn entity_prototype_visual_style(
             direction,
             connections: ConnectionMask::EMPTY,
             rail: factory_sim::rail_ops::piece_geometry(prototype, direction),
+            rocket_silo_phase: RocketSiloVisualPhase::Idle,
         }),
         // A signal shows its aspect, so the prototype-only style — a preview, a
         // ghost, a build-menu icon — shows the clear one and
@@ -669,6 +666,7 @@ fn entity_visual_style(
         direction,
         connections: ConnectionMask::EMPTY,
         rail: None,
+        rocket_silo_phase: RocketSiloVisualPhase::Idle,
     }
 }
 

@@ -1,5 +1,5 @@
-use super::super::EntityVisualStyle;
 use super::super::layers::VisualLayerBuilder;
+use super::super::{EntityVisualStyle, RocketSiloVisualPhase};
 use bevy::prelude::*;
 
 pub(super) fn drill_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
@@ -63,9 +63,10 @@ pub(super) fn assembler_layers(builder: &mut VisualLayerBuilder, _style: EntityV
         );
 }
 
-/// A launch pad seen from above: a ring of blast apron, the open doors inside
-/// it, and the nose of the rocket standing in the middle.
-pub(super) fn rocket_silo_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {
+/// A launch pad seen from above. Idle and rising keep the doors open; sealing
+/// draws closed leaves over the pad so the sequence is readable without relying
+/// on a tint alone.
+pub(super) fn rocket_silo_layers(builder: &mut VisualLayerBuilder, style: EntityVisualStyle) {
     builder
         .scaled_ellipse(
             Vec2::splat(0.92),
@@ -78,26 +79,77 @@ pub(super) fn rocket_silo_layers(builder: &mut VisualLayerBuilder, _style: Entit
             Vec2::ZERO,
             0.06,
             Color::srgba(0.14, 0.15, 0.16, 0.80),
-        )
-        .scaled_rounded(
-            Vec2::new(0.62, 0.08),
-            Vec2::ZERO,
-            0.09,
-            Color::srgba(0.86, 0.84, 0.78, 0.66),
-            0.45,
-        )
-        .scaled_ellipse(
-            Vec2::splat(0.30),
-            Vec2::ZERO,
-            0.12,
-            Color::srgba(0.92, 0.90, 0.86, 0.90),
-        )
-        .scaled_ellipse(
-            Vec2::splat(0.13),
-            Vec2::ZERO,
-            0.14,
-            Color::srgba(0.88, 0.34, 0.24, 0.92),
         );
+
+    match style.rocket_silo_phase {
+        RocketSiloVisualPhase::Sealed => {
+            builder
+                .scaled_rounded(
+                    Vec2::new(0.34, 0.58),
+                    Vec2::new(-0.18, 0.0),
+                    0.10,
+                    Color::srgba(0.42, 0.44, 0.46, 0.94),
+                    0.18,
+                )
+                .scaled_rounded(
+                    Vec2::new(0.34, 0.58),
+                    Vec2::new(0.18, 0.0),
+                    0.10,
+                    Color::srgba(0.36, 0.38, 0.40, 0.94),
+                    0.18,
+                )
+                .scaled(
+                    Vec2::new(0.05, 0.58),
+                    Vec2::ZERO,
+                    0.12,
+                    Color::srgba(0.12, 0.12, 0.13, 0.88),
+                );
+        }
+        RocketSiloVisualPhase::Rising => {
+            builder
+                .scaled_rounded(
+                    Vec2::new(0.62, 0.08),
+                    Vec2::ZERO,
+                    0.09,
+                    Color::srgba(0.86, 0.84, 0.78, 0.66),
+                    0.45,
+                )
+                .scaled_ellipse(
+                    Vec2::splat(0.28),
+                    Vec2::ZERO,
+                    0.12,
+                    Color::srgba(1.0, 0.46, 0.14, 0.88),
+                )
+                .scaled_ellipse(
+                    Vec2::splat(0.12),
+                    Vec2::ZERO,
+                    0.14,
+                    Color::srgba(1.0, 0.82, 0.36, 0.92),
+                );
+        }
+        RocketSiloVisualPhase::Idle => {
+            builder
+                .scaled_rounded(
+                    Vec2::new(0.62, 0.08),
+                    Vec2::ZERO,
+                    0.09,
+                    Color::srgba(0.86, 0.84, 0.78, 0.66),
+                    0.45,
+                )
+                .scaled_ellipse(
+                    Vec2::splat(0.30),
+                    Vec2::ZERO,
+                    0.12,
+                    Color::srgba(0.92, 0.90, 0.86, 0.90),
+                )
+                .scaled_ellipse(
+                    Vec2::splat(0.13),
+                    Vec2::ZERO,
+                    0.14,
+                    Color::srgba(0.88, 0.34, 0.24, 0.92),
+                );
+        }
+    }
 }
 
 pub(super) fn lab_layers(builder: &mut VisualLayerBuilder, _style: EntityVisualStyle) {

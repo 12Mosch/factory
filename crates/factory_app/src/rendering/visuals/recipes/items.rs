@@ -44,3 +44,46 @@ pub(super) fn resource_layers(color: Color, size: Vec2) -> Vec<VisualLayer> {
         );
     builder.finish()
 }
+
+pub(super) fn launch_rocket_layers(color: Color, size: Vec2) -> Vec<VisualLayer> {
+    let mut builder = VisualLayerBuilder::new(size);
+    builder
+        .scaled_ellipse(
+            Vec2::new(0.55, 0.28),
+            Vec2::new(0.0, -0.46),
+            -0.04,
+            Color::srgba(1.0, 0.42, 0.12, 0.88),
+        )
+        .scaled_ellipse(
+            Vec2::new(0.28, 0.18),
+            Vec2::new(0.0, -0.58),
+            -0.02,
+            Color::srgba(1.0, 0.82, 0.32, 0.90),
+        )
+        .scaled_rounded(
+            Vec2::new(0.62, 0.72),
+            Vec2::new(0.0, -0.04),
+            0.0,
+            color,
+            0.28,
+        )
+        .scaled(
+            Vec2::new(0.18, 0.36),
+            Vec2::new(-0.32, -0.22),
+            0.04,
+            Color::srgba(0.22, 0.24, 0.26, 0.92),
+        )
+        .scaled(
+            Vec2::new(0.18, 0.36),
+            Vec2::new(0.32, -0.22),
+            0.04,
+            Color::srgba(0.22, 0.24, 0.26, 0.92),
+        )
+        .scaled_ellipse(
+            Vec2::new(0.46, 0.34),
+            Vec2::new(0.0, 0.34),
+            0.08,
+            Color::srgba(0.88, 0.34, 0.24, 0.96),
+        );
+    builder.finish()
+}

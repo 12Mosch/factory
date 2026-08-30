@@ -5,8 +5,8 @@ use crate::inventory::Inventory;
 use factory_data::{ItemAmount, ItemId, PrototypeCatalog};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const LAUNCH_SEAL_TICKS: u16 = 60;
-pub(crate) const LAUNCH_RISE_TICKS: u16 = 120;
+pub const LAUNCH_SEAL_TICKS: u16 = 60;
+pub const LAUNCH_RISE_TICKS: u16 = 120;
 
 /// A rocket silo mid-build.
 ///
@@ -54,6 +54,26 @@ pub enum RocketLaunchPhase {
     Rising {
         ticks_remaining: u16,
     },
+}
+
+impl RocketLaunchPhase {
+    /// How far the rocket has risen, in `[0, 1]`.
+    ///
+    /// `overstep` is the fraction toward the next simulation tick. The value is
+    /// derived only from this phase, so skipped render frames catch up instead
+    /// of interpolating from a stale height.
+    pub fn rise_progress(self, overstep: f32) -> Option<f32> {
+        match self {
+            Self::Rising { ticks_remaining } => {
+                let total = f32::from(LAUNCH_RISE_TICKS);
+                let remaining = f32::from(ticks_remaining);
+                let current = ((total - remaining) / total).clamp(0.0, 1.0);
+                let next = ((total - remaining + 1.0) / total).clamp(0.0, 1.0);
+                Some(current + (next - current) * overstep.clamp(0.0, 1.0))
+            }
+            Self::Idle | Self::Sealed { .. } => None,
+        }
+    }
 }
 
 /// Player-facing operating state derived from a rocket silo's durable state.

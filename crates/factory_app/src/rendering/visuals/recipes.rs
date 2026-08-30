@@ -12,7 +12,7 @@ mod rails;
 use super::layers::VisualLayer;
 use super::templates::VisualTemplate;
 use bevy::prelude::*;
-use items::{belt_item_layers, resource_layers};
+use items::{belt_item_layers, launch_rocket_layers, resource_layers};
 
 pub(super) fn visual_layers(
     template: VisualTemplate,
@@ -25,6 +25,7 @@ pub(super) fn visual_layers(
             direction,
             connections,
             rail,
+            rocket_silo_phase,
         } => entities::entity_layers(super::EntityVisualStyle {
             base_color: color,
             size,
@@ -32,9 +33,11 @@ pub(super) fn visual_layers(
             direction,
             connections,
             rail,
+            rocket_silo_phase,
         }),
         VisualTemplate::BeltItem => belt_item_layers(color, size),
         VisualTemplate::Resource => resource_layers(color, size),
+        VisualTemplate::LaunchRocket => launch_rocket_layers(color, size),
     }
 }
 
@@ -52,6 +55,7 @@ mod tests {
             direction: Direction::North,
             connections,
             rail: None,
+            rocket_silo_phase: super::super::templates::RocketSiloVisualPhase::Idle,
         }
     }
 
@@ -101,5 +105,28 @@ mod tests {
         );
 
         assert_eq!(joined.len(), unconnected.len() + 2);
+    }
+
+    #[test]
+    fn rocket_silo_sealed_doors_differ_from_the_idle_pad() {
+        let size = Vec2::splat(TILE_SIZE * 9.0);
+        let idle = visual_layers(
+            entity_template(EntityKind::RocketSilo, ConnectionMask::EMPTY),
+            Color::WHITE,
+            size,
+        );
+        let sealed = visual_layers(
+            VisualTemplate::Entity {
+                kind: EntityKind::RocketSilo,
+                direction: Direction::North,
+                connections: ConnectionMask::EMPTY,
+                rail: None,
+                rocket_silo_phase: super::super::templates::RocketSiloVisualPhase::Sealed,
+            },
+            Color::WHITE,
+            size,
+        );
+
+        assert_ne!(idle, sealed);
     }
 }

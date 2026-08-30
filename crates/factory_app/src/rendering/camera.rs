@@ -18,6 +18,7 @@ pub(crate) const BELT_DETAIL_MAX_SCALE: f32 = 5.0;
 pub(crate) fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera2d,
+        SpatialListener::new(TILE_SIZE * 2.0),
         Projection::Orthographic(OrthographicProjection {
             scale: INITIAL_CAMERA_SCALE,
             ..OrthographicProjection::default_2d()

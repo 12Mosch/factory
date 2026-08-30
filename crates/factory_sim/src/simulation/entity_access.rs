@@ -155,6 +155,19 @@ pub fn rocket_silo_state(
     sim.entities.rocket_silo_state(entity_id)
 }
 
+/// Launch phases for every placed rocket silo, in stable entity-id order.
+///
+/// Presentation observers use this narrow projection instead of scanning all
+/// placed entities or depending on the private silo state map.
+pub fn rocket_silo_launch_phases(
+    sim: &Simulation,
+) -> impl Iterator<Item = (EntityId, RocketLaunchPhase)> + '_ {
+    sim.entities
+        .rocket_silos
+        .iter()
+        .map(|(&entity_id, state)| (entity_id, state.launch_phase))
+}
+
 pub fn module_slots(sim: &Simulation, entity_id: EntityId) -> Result<&ModuleSlots, ModuleError> {
     if let Some(slots) = sim.entities.module_slots(entity_id) {
         Ok(slots)

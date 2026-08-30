@@ -269,6 +269,49 @@ def enemy_warning():
     return fade_out(normalize(x, 0.82), 50)
 
 
+def rocket_seal():
+    """Heavy silo doors closing: hydraulic travel followed by two steel latches."""
+    dur = 1.05
+    tt = t(dur)
+    x = np.zeros_like(tt)
+
+    travel = fft_filter(rng.standard_normal(len(tt)), lo=80, hi=850)
+    travel *= np.minimum(tt / 0.035, 1.0) * np.exp(-tt / 0.72)
+    motor_phase = 2 * np.pi * np.cumsum(95.0 + 35.0 * tt / dur) / SR
+    x += 0.48 * travel + 0.28 * np.sin(motor_phase) * np.exp(-tt / 0.8)
+
+    for at, gain in ((0.66, 0.85), (0.82, 1.0)):
+        impact_t = t(0.22)
+        impact = fft_filter(rng.standard_normal(len(impact_t)), lo=180, hi=2600)
+        impact *= np.exp(-impact_t / 0.025)
+        impact += 0.75 * np.sin(2 * np.pi * 72 * impact_t) * np.exp(-impact_t / 0.07)
+        place_at(x, impact, at, gain=gain)
+
+    return fade_out(normalize(attack(x, 4), 0.82), 80)
+
+
+def rocket_launch():
+    """Ignition and sustained exhaust: a deep transient growing into a rising roar."""
+    dur = 2.5
+    tt = t(dur)
+
+    ignition = fft_filter(rng.standard_normal(len(tt)), lo=35, hi=1400, slope=1.4)
+    ignition *= exp_env(dur, 0.18)
+    roar = fft_filter(rng.standard_normal(len(tt)), lo=28, hi=760, slope=1.3)
+    roar_env = np.minimum(tt / 0.14, 1.0) * np.exp(-np.maximum(tt - 1.75, 0.0) / 0.5)
+    turbulence = 0.76 + 0.16 * np.sin(2 * np.pi * 7.0 * tt)
+    turbulence += 0.08 * np.sin(2 * np.pi * 13.0 * tt + 1.2)
+    hiss = fft_filter(rng.standard_normal(len(tt)), lo=900, hi=5200)
+    pitch = 46.0 + 28.0 * tt / dur
+    phase = 2 * np.pi * np.cumsum(pitch) / SR
+
+    x = 1.25 * ignition
+    x += 0.9 * normalize(roar, 1.0) * roar_env * turbulence
+    x += 0.12 * normalize(hiss, 1.0) * roar_env
+    x += 0.22 * np.sin(phase) * roar_env
+    return fade_out(normalize(attack(x, 3), 0.88), 180)
+
+
 # --- machine loops ------------------------------------------------------------
 # Tonal components use frequencies that are integer multiples of 1/duration and
 # noise is shaped with circular FFT filters, so both loops wrap seamlessly.
@@ -343,6 +386,8 @@ SOUNDS = {
     "craft_complete.wav": craft_complete,
     "research_complete.wav": research_complete,
     "enemy_warning.wav": enemy_warning,
+    "rocket_seal.wav": rocket_seal,
+    "rocket_launch.wav": rocket_launch,
     "machine_burner_loop.wav": machine_burner_loop,
     "machine_electric_loop.wav": machine_electric_loop,
 }

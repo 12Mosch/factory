@@ -262,6 +262,7 @@ mod tests {
             direction,
             connections: crate::rendering::visuals::ConnectionMask::EMPTY,
             rail: None,
+            rocket_silo_phase: crate::rendering::visuals::RocketSiloVisualPhase::Idle,
         }
     }
 

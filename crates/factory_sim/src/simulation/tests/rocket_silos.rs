@@ -1095,3 +1095,43 @@ fn mid_launch_save_round_trip_preserves_phase_and_finishes_headlessly() {
     assert_eq!(restored.rockets_launched(), 1);
     assert_eq!(restored.state_hash(), loaded.state_hash());
 }
+
+#[test]
+fn rise_progress_is_derived_from_the_fixed_tick_phase() {
+    assert_eq!(
+        RocketLaunchPhase::Rising {
+            ticks_remaining: crate::machines::LAUNCH_RISE_TICKS,
+        }
+        .rise_progress(0.0),
+        Some(0.0)
+    );
+    assert_eq!(
+        RocketLaunchPhase::Rising { ticks_remaining: 1 }.rise_progress(1.0),
+        Some(1.0)
+    );
+    assert!(RocketLaunchPhase::Idle.rise_progress(0.5).is_none());
+    assert!(
+        RocketLaunchPhase::Sealed {
+            ticks_remaining: 10
+        }
+        .rise_progress(0.0)
+        .is_none()
+    );
+}
+
+#[test]
+fn rise_progress_catches_up_after_skipped_ticks() {
+    let early = RocketLaunchPhase::Rising {
+        ticks_remaining: crate::machines::LAUNCH_RISE_TICKS - 10,
+    }
+    .rise_progress(0.0)
+    .expect("rising phase should report progress");
+    let later = RocketLaunchPhase::Rising {
+        ticks_remaining: crate::machines::LAUNCH_RISE_TICKS - 70,
+    }
+    .rise_progress(0.0)
+    .expect("rising phase should report progress");
+
+    assert!(later > early);
+    assert!((later - 70.0 / f32::from(crate::machines::LAUNCH_RISE_TICKS)).abs() < 1e-6);
+}

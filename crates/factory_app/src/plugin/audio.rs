@@ -4,12 +4,15 @@ use super::{AppSet, InGameSet};
 use crate::audio::{
     AudioAssets, AudioEventDedupe, AudioSettings, AudioSettingsPersistenceState,
     AudioSettingsWindowState, CraftingAudioObserver, MachineAudioLoops, ManualMiningAudioObserver,
-    ResearchAudioObserver, SoundEvent, ThreatAudioObserver, apply_audio_settings_to_sinks,
-    load_audio_assets, load_persisted_audio_settings, observe_crafting_audio,
-    observe_manual_mining_audio, observe_research_audio, observe_threat_audio, play_sound_events,
+    ResearchAudioObserver, RocketLaunchAudioObserver, SoundEvent, ThreatAudioObserver,
+    apply_audio_settings_to_sinks, cleanup_reloaded_rocket_launch_audio,
+    initialize_rocket_launch_audio, load_audio_assets, load_persisted_audio_settings,
+    observe_crafting_audio, observe_manual_mining_audio, observe_research_audio,
+    observe_rocket_launch_audio, observe_threat_audio, play_sound_events,
     save_audio_settings_if_changed, sync_machine_audio_loops,
 };
 use crate::ui::audio_settings::{handle_audio_settings_buttons, sync_audio_settings_window};
+use crate::world_setup::AppMode;
 
 /// Sound-effect playback, machine audio loops, and audio settings.
 pub(super) struct AudioPlugin;
@@ -25,9 +28,11 @@ impl Plugin for AudioPlugin {
             .init_resource::<CraftingAudioObserver>()
             .init_resource::<ResearchAudioObserver>()
             .init_resource::<ThreatAudioObserver>()
+            .init_resource::<RocketLaunchAudioObserver>()
             .init_resource::<AudioSettingsPersistenceState>()
             .add_message::<SoundEvent>()
             .add_systems(Startup, (load_persisted_audio_settings, load_audio_assets))
+            .add_systems(OnEnter(AppMode::InGame), initialize_rocket_launch_audio)
             .add_systems(
                 FixedUpdate,
                 (
@@ -45,6 +50,7 @@ impl Plugin for AudioPlugin {
                     save_audio_settings_if_changed,
                     sync_audio_settings_window.in_set(InGameSet),
                     apply_audio_settings_to_sinks,
+                    cleanup_reloaded_rocket_launch_audio,
                 )
                     .chain()
                     .before(AppSet::MapTexture),
@@ -55,7 +61,10 @@ impl Plugin for AudioPlugin {
                     sync_machine_audio_loops
                         .after(AppSet::VisibleEntities)
                         .in_set(InGameSet),
-                    play_sound_events.after(AppSet::UiInteraction),
+                    observe_rocket_launch_audio.in_set(InGameSet),
+                    play_sound_events
+                        .after(AppSet::UiInteraction)
+                        .after(observe_rocket_launch_audio),
                 ),
             );
     }
