@@ -13,6 +13,7 @@ use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapOverlay, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::{PendingSaveConfirmation, SaveLoadWindowState};
+use crate::ui::accessibility::UiPreferences;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
     fullscreen_map_display_size, fullscreen_map_image_size,
@@ -97,6 +98,7 @@ pub(crate) struct PanelInputResources<'w, 's> {
     crafting: ResMut<'w, CraftingWindowState>,
     settings: ResMut<'w, SettingsWindowState>,
     audio: Res<'w, AudioSettings>,
+    ui_preferences: Res<'w, UiPreferences>,
     technology: ResMut<'w, TechnologyWindowState>,
     save_load: ResMut<'w, SaveLoadWindowState>,
     save_confirmation: ResMut<'w, PendingSaveConfirmation>,
@@ -232,17 +234,25 @@ pub(crate) fn handle_panel_input(
     }
     if keyboard.just_pressed(KeyCode::KeyO) {
         let enemy_preset = resources.sim.read().enemy_settings().preset;
-        resources
-            .settings
-            .open_tab(SettingsTab::Audio, &resources.audio, enemy_preset, false);
+        resources.settings.open_tab(
+            SettingsTab::Audio,
+            &resources.audio,
+            enemy_preset,
+            &resources.ui_preferences,
+            false,
+        );
         resources.build_state.selected = None;
         resources.open_container.close();
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
         let enemy_preset = resources.sim.read().enemy_settings().preset;
-        resources
-            .settings
-            .open_tab(SettingsTab::Gameplay, &resources.audio, enemy_preset, false);
+        resources.settings.open_tab(
+            SettingsTab::Gameplay,
+            &resources.audio,
+            enemy_preset,
+            &resources.ui_preferences,
+            false,
+        );
         resources.build_state.selected = None;
         resources.open_container.close();
     }

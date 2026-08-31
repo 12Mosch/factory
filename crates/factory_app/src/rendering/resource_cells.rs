@@ -12,6 +12,7 @@ use crate::rendering::resources::{RenderDetail, RenderSyncStats};
 use crate::rendering::transforms::tile_translation;
 use crate::rendering::visuals::{VisualAssets, spawn_resource_visual};
 use crate::resources::SimResource;
+use crate::ui::accessibility::ReadableWorldLabel;
 
 #[derive(Component)]
 pub(crate) struct ResourceSprite;
@@ -335,6 +336,7 @@ fn spawn_resource_label(
             Transform::from_translation(tile_translation(x, y, 2.0)),
             Anchor::CENTER,
             Text2dShadow::default(),
+            ReadableWorldLabel::new(4.0),
             ResourceAmountLabel,
         ))
         .id()

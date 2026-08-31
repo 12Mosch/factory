@@ -6,6 +6,10 @@ use crate::audio::{AudioSettings, SoundEvent};
 use crate::resources::SimResource;
 use crate::save_load::SaveLoadWindowState;
 use crate::simulation::SimCommandRequest;
+use crate::ui::accessibility::{
+    AccessibilitySettingsSnapshot, DisplaySettingsSnapshot, UiPreferences,
+    spawn_accessibility_settings_content, spawn_display_settings_content,
+};
 use crate::ui::audio_settings::{
     AudioSettingsSnapshot, audio_settings_snapshot, spawn_audio_settings_content,
 };
@@ -42,6 +46,8 @@ pub struct PendingSettingsValues {
     pub audio_muted: bool,
     pub audio_volume: f32,
     pub enemy_preset: EnemyDifficultyPreset,
+    pub ui_scale_percent: u16,
+    pub readable_high_contrast: bool,
 }
 
 impl Default for PendingSettingsValues {
@@ -51,6 +57,8 @@ impl Default for PendingSettingsValues {
             audio_muted: audio.muted,
             audio_volume: audio.volume,
             enemy_preset: EnemyDifficultyPreset::Standard,
+            ui_scale_percent: 100,
+            readable_high_contrast: false,
         }
     }
 }
@@ -70,6 +78,7 @@ impl SettingsWindowState {
         tab: SettingsTab,
         audio: &AudioSettings,
         enemy_preset: EnemyDifficultyPreset,
+        ui_preferences: &UiPreferences,
         return_to_pause_menu: bool,
     ) {
         self.open = true;
@@ -78,6 +87,8 @@ impl SettingsWindowState {
             audio_muted: audio.muted,
             audio_volume: audio.volume,
             enemy_preset,
+            ui_scale_percent: ui_preferences.scale_percent,
+            readable_high_contrast: ui_preferences.readable_high_contrast,
         };
         self.dirty = false;
         self.return_to_pause_menu = return_to_pause_menu;
@@ -116,6 +127,8 @@ pub(crate) struct SettingsSnapshot {
     dirty: bool,
     audio: AudioSettingsSnapshot,
     gameplay: EnemySettingsSnapshot,
+    display: DisplaySettingsSnapshot,
+    accessibility: AccessibilitySettingsSnapshot,
 }
 
 type MenuButtonQuery<'w, 's> = Query<
@@ -152,6 +165,7 @@ pub(crate) struct SettingsButtonResources<'w> {
     sim: Res<'w, SimResource>,
     sim_commands: MessageWriter<'w, SimCommandRequest>,
     sounds: MessageWriter<'w, SoundEvent>,
+    ui_preferences: ResMut<'w, UiPreferences>,
 }
 
 pub(crate) fn handle_settings_buttons(
@@ -163,9 +177,13 @@ pub(crate) fn handle_settings_buttons(
             continue;
         }
         let enemy_preset = resources.sim.read().enemy_settings().preset;
-        resources
-            .window
-            .open_tab(SettingsTab::Gameplay, &resources.audio, enemy_preset, true);
+        resources.window.open_tab(
+            SettingsTab::Gameplay,
+            &resources.audio,
+            enemy_preset,
+            &resources.ui_preferences,
+            true,
+        );
         resources.save_load.open = false;
         resources.sounds.write(SoundEvent::UiClick);
     }
@@ -203,6 +221,11 @@ pub(crate) fn handle_settings_buttons(
                     ),
                 ));
                 resources.window.dirty = false;
+                resources
+                    .ui_preferences
+                    .set_scale_percent(resources.window.pending_values.ui_scale_percent);
+                resources.ui_preferences.readable_high_contrast =
+                    resources.window.pending_values.readable_high_contrast;
             }
             SettingsAction::Reset => match resources.window.active_tab {
                 SettingsTab::Audio => {
@@ -222,7 +245,15 @@ pub(crate) fn handle_settings_buttons(
                     ));
                     resources.window.dirty = true;
                 }
-                SettingsTab::Display | SettingsTab::Controls | SettingsTab::Accessibility => {
+                SettingsTab::Display => {
+                    resources.window.pending_values.ui_scale_percent = 100;
+                    resources.window.dirty = true;
+                }
+                SettingsTab::Accessibility => {
+                    resources.window.pending_values.readable_high_contrast = false;
+                    resources.window.dirty = true;
+                }
+                SettingsTab::Controls => {
                     resources.window.dirty = false;
                 }
             },
@@ -253,6 +284,12 @@ pub(crate) fn sync_settings_window(
             dirty: window.dirty,
             audio: audio_settings_snapshot(&audio),
             gameplay: enemy_settings_snapshot(&sim),
+            display: DisplaySettingsSnapshot {
+                scale_percent: window.pending_values.ui_scale_percent,
+            },
+            accessibility: AccessibilitySettingsSnapshot {
+                readable_high_contrast: window.pending_values.readable_high_contrast,
+            },
         },
         settings_root,
         spawn_settings_window,
@@ -284,12 +321,13 @@ fn spawn_settings_window(
         Node {
             width: Val::Vw(92.0),
             max_width: Val::Px(760.0),
-            min_height: Val::Px(430.0),
+            height: Val::Vh(90.0),
             max_height: Val::Vh(90.0),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(14.0),
             padding: UiRect::all(Val::Px(18.0)),
             border: UiRect::all(Val::Px(1.0)),
+            overflow: Overflow::scroll_y(),
             ..default()
         },
         BackgroundColor(Color::srgba(0.025, 0.030, 0.029, 0.99)),
@@ -305,11 +343,12 @@ fn spawn_settings_window(
         modal
             .spawn(Node {
                 flex_grow: 1.0,
-                min_height: Val::Px(210.0),
+                min_height: Val::ZERO,
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(12.0),
                 padding: UiRect::all(Val::Px(14.0)),
                 border: UiRect::all(Val::Px(1.0)),
+                overflow: Overflow::scroll_y(),
                 ..default()
             })
             .insert((
@@ -319,21 +358,15 @@ fn spawn_settings_window(
             .with_children(|content| match snapshot.active_tab {
                 SettingsTab::Gameplay => spawn_enemy_settings_content(content, &snapshot.gameplay),
                 SettingsTab::Audio => spawn_audio_settings_content(content, &snapshot.audio),
-                SettingsTab::Display => spawn_placeholder(
-                    content,
-                    "Display settings",
-                    "Display settings are not available yet.",
-                ),
+                SettingsTab::Display => spawn_display_settings_content(content, &snapshot.display),
                 SettingsTab::Controls => spawn_placeholder(
                     content,
                     "Control settings",
                     "Control rebinding is not available yet. Current shortcuts remain active.",
                 ),
-                SettingsTab::Accessibility => spawn_placeholder(
-                    content,
-                    "Accessibility settings",
-                    "Accessibility settings are not available yet.",
-                ),
+                SettingsTab::Accessibility => {
+                    spawn_accessibility_settings_content(content, &snapshot.accessibility)
+                }
             });
         spawn_actions(modal, snapshot.dirty);
     });

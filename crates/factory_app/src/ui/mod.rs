@@ -1,3 +1,4 @@
+pub mod accessibility;
 pub mod audio_settings;
 pub(crate) mod blueprint_library;
 pub(crate) mod build_bar;

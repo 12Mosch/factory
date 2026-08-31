@@ -9,6 +9,7 @@ use factory_sim::Simulation;
 
 use crate::constants::BELT_ITEM_LABEL_FONT_SIZE;
 use crate::rendering::resources::BeltItemRenderPool;
+use crate::ui::accessibility::ReadableWorldLabel;
 use crate::utils::compact_item_name;
 
 use super::components::{BeltItemLabel, VisibleBeltItemRenderState};
@@ -38,6 +39,7 @@ pub(super) fn spawn_or_reuse_belt_item_label(
             Transform::from_translation(translation),
             Anchor::CENTER,
             Text2dShadow::default(),
+            ReadableWorldLabel::new(BELT_ITEM_LABEL_FONT_SIZE),
             Visibility::Visible,
             marker,
         ));
@@ -53,6 +55,7 @@ pub(super) fn spawn_or_reuse_belt_item_label(
             Transform::from_translation(translation),
             Anchor::CENTER,
             Text2dShadow::default(),
+            ReadableWorldLabel::new(BELT_ITEM_LABEL_FONT_SIZE),
             Visibility::Visible,
             marker,
         ))
