@@ -6,6 +6,7 @@ use factory_app::ui::accessibility::{
     ReadableHighContrastButton, UiPreferences, UiScaleAction, UiScaleButton,
 };
 use factory_app::ui::enemy_settings::EnemyPresetButton;
+use factory_app::ui::pause_menu::PauseMenuState;
 use factory_app::ui::settings::{
     SettingsAction, SettingsActionButton, SettingsMenuButton, SettingsScrollArea, SettingsTab,
     SettingsTabButton, SettingsWindowState,
@@ -18,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 fn pause_menu_settings_button_opens_settings_and_back_returns_to_pause() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
-    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<PauseMenuState>().open = true;
     app.update();
 
     let settings_button = single_button::<SettingsMenuButton>(&mut app);
@@ -27,13 +28,15 @@ fn pause_menu_settings_button_opens_settings_and_back_returns_to_pause() {
     let settings = app.world().resource::<SettingsWindowState>();
     assert!(settings.open);
     assert_eq!(settings.active_tab, SettingsTab::Gameplay);
+    assert!(!app.world().resource::<PauseMenuState>().open);
     assert!(!app.world().resource::<SaveLoadWindowState>().open);
 
     let back = action_button(&mut app, SettingsAction::Back);
     press_button(&mut app, back);
 
     assert!(!app.world().resource::<SettingsWindowState>().open);
-    assert!(app.world().resource::<SaveLoadWindowState>().open);
+    assert!(app.world().resource::<PauseMenuState>().open);
+    assert!(!app.world().resource::<SaveLoadWindowState>().open);
 }
 
 #[test]
@@ -61,7 +64,8 @@ fn active_tab_shortcuts_return_pause_origin_to_pause_menu() {
         app.update();
 
         assert!(!app.world().resource::<SettingsWindowState>().open);
-        assert!(app.world().resource::<SaveLoadWindowState>().open);
+        assert!(app.world().resource::<PauseMenuState>().open);
+        assert!(!app.world().resource::<SaveLoadWindowState>().open);
     }
 }
 
@@ -167,6 +171,7 @@ fn escape_closes_direct_settings_without_opening_pause_menu() {
     app.update();
 
     assert!(!app.world().resource::<SettingsWindowState>().open);
+    assert!(!app.world().resource::<PauseMenuState>().open);
     assert!(!app.world().resource::<SaveLoadWindowState>().open);
 }
 
@@ -251,7 +256,7 @@ fn open_settings_with_key(app: &mut App, key: KeyCode) {
 }
 
 fn open_settings_from_pause(app: &mut App) {
-    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<PauseMenuState>().open = true;
     app.update();
     let settings_button = single_button::<SettingsMenuButton>(app);
     press_button(app, settings_button);

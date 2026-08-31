@@ -54,6 +54,9 @@ use crate::ui::module_panel::update_module_panel;
 use crate::ui::objectives_panel::{
     ObjectivesPanelState, setup_objectives_panel, sync_objectives_panel,
 };
+use crate::ui::pause_menu::{
+    NewWorldConfirmation, PauseMenuState, handle_pause_menu_buttons, sync_pause_menu,
+};
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
 use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, InventoryTransferFeedback, OpenContainer,
@@ -63,7 +66,7 @@ use crate::ui::rocket_launch::{
     RocketLaunchUiState, setup_rocket_launch_ui, sync_rocket_launch_ui,
 };
 use crate::ui::rolling_stock_window::{sync_rolling_stock_window, update_rolling_stock_fluid_text};
-use crate::ui::save_load::sync_save_load_window;
+use crate::ui::save_load::{handle_save_load_buttons, sync_save_load_window};
 use crate::ui::settings::{SettingsWindowState, handle_settings_buttons, sync_settings_window};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
@@ -134,6 +137,8 @@ impl Plugin for UiPlugin {
             .init_resource::<CraftingWindowState>()
             .init_resource::<ProductionStatsWindowState>()
             .init_resource::<ObjectivesPanelState>()
+            .init_resource::<PauseMenuState>()
+            .init_resource::<NewWorldConfirmation>()
             .init_resource::<SettingsWindowState>()
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
@@ -222,6 +227,19 @@ impl Plugin for UiPlugin {
                         .after(handle_settings_buttons),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
+                )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_pause_menu_buttons
+                        .in_set(AppSet::UiInteraction)
+                        .before(sync_save_load_window),
+                    sync_pause_menu
+                        .after(handle_pause_menu_buttons)
+                        .after(handle_save_load_buttons)
+                        .after(handle_settings_buttons),
                 )
                     .in_set(InGameSet),
             )

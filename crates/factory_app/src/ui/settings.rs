@@ -5,7 +5,6 @@ use factory_sim::{EnemyDifficultyPreset, SimCommand};
 
 use crate::audio::{AudioSettings, SoundEvent};
 use crate::resources::SimResource;
-use crate::save_load::SaveLoadWindowState;
 use crate::simulation::SimCommandRequest;
 use crate::ui::accessibility::{
     AccessibilitySettingsSnapshot, DisplaySettingsSnapshot, UiPreferences,
@@ -18,6 +17,7 @@ use crate::ui::enemy_settings::{
     EnemySettingsSnapshot, enemy_settings_snapshot, spawn_enemy_settings_content,
 };
 use crate::ui::layout::PANEL_SCROLLBAR_WIDTH;
+use crate::ui::pause_menu::PauseMenuState;
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -168,7 +168,7 @@ pub(crate) struct SettingsButtonQueries<'w, 's> {
 #[derive(SystemParam)]
 pub(crate) struct SettingsButtonResources<'w> {
     window: ResMut<'w, SettingsWindowState>,
-    save_load: ResMut<'w, SaveLoadWindowState>,
+    pause: ResMut<'w, PauseMenuState>,
     audio: ResMut<'w, AudioSettings>,
     sim: Res<'w, SimResource>,
     sim_commands: MessageWriter<'w, SimCommandRequest>,
@@ -193,7 +193,7 @@ pub(crate) fn handle_settings_buttons(
             &resources.ui_preferences,
             true,
         );
-        resources.save_load.open = false;
+        resources.pause.open = false;
         resources.sounds.write(SoundEvent::UiClick);
     }
 
@@ -268,8 +268,7 @@ pub(crate) fn handle_settings_buttons(
             },
             SettingsAction::Back => {
                 if resources.window.close() {
-                    resources.save_load.open = true;
-                    resources.save_load.refresh_on_open = true;
+                    resources.pause.open = true;
                 }
             }
         }

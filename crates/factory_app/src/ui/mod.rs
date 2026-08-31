@@ -18,6 +18,7 @@ pub(crate) mod manual_crafting;
 pub mod map_view;
 pub(crate) mod module_panel;
 pub mod objectives_panel;
+pub mod pause_menu;
 pub mod production_stats;
 pub mod resources;
 pub(crate) mod rocket_launch;

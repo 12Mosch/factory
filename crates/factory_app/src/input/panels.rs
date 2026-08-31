@@ -18,6 +18,7 @@ use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
     fullscreen_map_display_size, fullscreen_map_image_size,
 };
+use crate::ui::pause_menu::{NewWorldConfirmation, PauseMenuState};
 use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, OpenContainer, ProductionStatsWindowState,
     TechnologyWindowState,
@@ -30,6 +31,7 @@ pub(crate) struct WorldBlockingWindows<'w, 's> {
     stats: Res<'w, ProductionStatsWindowState>,
     crafting: Res<'w, CraftingWindowState>,
     settings: Res<'w, SettingsWindowState>,
+    pause: Res<'w, PauseMenuState>,
     save_load: Res<'w, SaveLoadWindowState>,
     build_menu: Res<'w, BuildMenuState>,
     blueprint_library: Res<'w, BlueprintLibraryWindowState>,
@@ -44,6 +46,7 @@ struct WindowOpenFlags {
     stats: bool,
     crafting: bool,
     settings: bool,
+    pause: bool,
     save_load: bool,
     build_menu: bool,
     blueprint_library: bool,
@@ -57,6 +60,7 @@ impl WorldBlockingWindows<'_, '_> {
             stats: self.stats.open,
             crafting: self.crafting.open,
             settings: self.settings.open,
+            pause: self.pause.open,
             save_load: self.save_load.open,
             build_menu: self.build_menu.open,
             blueprint_library: self.blueprint_library.open,
@@ -74,6 +78,7 @@ fn world_blocking_windows_open(flags: WindowOpenFlags) -> bool {
         || flags.stats
         || flags.crafting
         || flags.settings
+        || flags.pause
         || flags.save_load
         || flags.build_menu
         || flags.blueprint_library
@@ -97,6 +102,8 @@ pub(crate) struct PanelInputResources<'w, 's> {
     stats: ResMut<'w, ProductionStatsWindowState>,
     crafting: ResMut<'w, CraftingWindowState>,
     settings: ResMut<'w, SettingsWindowState>,
+    pause: ResMut<'w, PauseMenuState>,
+    new_world_confirmation: ResMut<'w, NewWorldConfirmation>,
     audio: Res<'w, AudioSettings>,
     ui_preferences: Res<'w, UiPreferences>,
     technology: ResMut<'w, TechnologyWindowState>,
@@ -145,6 +152,30 @@ pub(crate) fn handle_panel_input(
             stats: resources.stats.open,
             crafting: resources.crafting.open,
             settings: resources.settings.open,
+            pause: resources.pause.open,
+            save_load: resources.save_load.open,
+            build_menu: resources.build_menu.open,
+            blueprint_library: resources.blueprint_library.open,
+            equipment: resources.equipment.open,
+        });
+        return;
+    }
+
+    if resources.pause.open {
+        if keyboard.just_pressed(KeyCode::Escape) {
+            if resources.new_world_confirmation.awaiting_confirmation {
+                resources.new_world_confirmation.awaiting_confirmation = false;
+            } else {
+                resources.pause.open = false;
+            }
+            resources.input_state.escape_consumed = true;
+        }
+        resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
+            map: resources.map.open,
+            stats: resources.stats.open,
+            crafting: resources.crafting.open,
+            settings: resources.settings.open,
+            pause: resources.pause.open,
             save_load: resources.save_load.open,
             build_menu: resources.build_menu.open,
             blueprint_library: resources.blueprint_library.open,
@@ -159,6 +190,7 @@ pub(crate) fn handle_panel_input(
                 *resources.save_confirmation = PendingSaveConfirmation::None;
             } else {
                 resources.save_load.open = false;
+                resources.pause.open = true;
             }
             resources.input_state.escape_consumed = true;
         }
@@ -167,6 +199,7 @@ pub(crate) fn handle_panel_input(
             stats: resources.stats.open,
             crafting: resources.crafting.open,
             settings: resources.settings.open,
+            pause: resources.pause.open,
             save_load: resources.save_load.open,
             build_menu: resources.build_menu.open,
             blueprint_library: resources.blueprint_library.open,
@@ -178,18 +211,18 @@ pub(crate) fn handle_panel_input(
     if resources.settings.open {
         if keyboard.just_pressed(KeyCode::KeyO) {
             if resources.settings.active_tab == SettingsTab::Audio {
-                close_settings(&mut resources.settings, &mut resources.save_load);
+                close_settings(&mut resources.settings, &mut resources.pause);
             } else {
                 resources.settings.active_tab = SettingsTab::Audio;
             }
         } else if keyboard.just_pressed(KeyCode::KeyN) {
             if resources.settings.active_tab == SettingsTab::Gameplay {
-                close_settings(&mut resources.settings, &mut resources.save_load);
+                close_settings(&mut resources.settings, &mut resources.pause);
             } else {
                 resources.settings.active_tab = SettingsTab::Gameplay;
             }
         } else if keyboard.just_pressed(KeyCode::Escape) {
-            close_settings(&mut resources.settings, &mut resources.save_load);
+            close_settings(&mut resources.settings, &mut resources.pause);
             resources.input_state.escape_consumed = true;
         }
         resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
@@ -197,6 +230,7 @@ pub(crate) fn handle_panel_input(
             stats: resources.stats.open,
             crafting: resources.crafting.open,
             settings: resources.settings.open,
+            pause: resources.pause.open,
             save_load: resources.save_load.open,
             build_menu: resources.build_menu.open,
             blueprint_library: resources.blueprint_library.open,
@@ -296,8 +330,7 @@ pub(crate) fn handle_panel_input(
             resources.input_state.escape_consumed = true;
         } else if resources.settings.open {
             if resources.settings.close() {
-                resources.save_load.open = true;
-                resources.save_load.refresh_on_open = true;
+                resources.pause.open = true;
             }
             resources.input_state.escape_consumed = true;
         } else if resources.equipment.open {
@@ -325,9 +358,7 @@ pub(crate) fn handle_panel_input(
             resources.build_state.last_status = Default::default();
             resources.input_state.escape_consumed = true;
         } else {
-            resources.save_load.open = true;
-            resources.save_load.tab = crate::save_load::SaveLoadTab::Save;
-            resources.save_load.refresh_on_open = true;
+            resources.pause.open = true;
             resources.input_state.escape_consumed = true;
         }
     }
@@ -337,6 +368,7 @@ pub(crate) fn handle_panel_input(
         stats: resources.stats.open,
         crafting: resources.crafting.open,
         settings: resources.settings.open,
+        pause: resources.pause.open,
         save_load: resources.save_load.open,
         build_menu: resources.build_menu.open,
         blueprint_library: resources.blueprint_library.open,
@@ -344,10 +376,9 @@ pub(crate) fn handle_panel_input(
     });
 }
 
-fn close_settings(settings: &mut SettingsWindowState, save_load: &mut SaveLoadWindowState) {
+fn close_settings(settings: &mut SettingsWindowState, pause: &mut PauseMenuState) {
     if settings.close() {
-        save_load.open = true;
-        save_load.refresh_on_open = true;
+        pause.open = true;
     }
 }
 
