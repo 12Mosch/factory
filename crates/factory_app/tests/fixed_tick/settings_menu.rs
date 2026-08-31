@@ -1,13 +1,14 @@
 use super::common::test_app;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use factory_app::save_load::{SaveLoadConfig, SaveLoadWindowState};
 use factory_app::ui::accessibility::{
     ReadableHighContrastButton, UiPreferences, UiScaleAction, UiScaleButton,
 };
 use factory_app::ui::enemy_settings::EnemyPresetButton;
 use factory_app::ui::settings::{
-    SettingsAction, SettingsActionButton, SettingsMenuButton, SettingsTab, SettingsTabButton,
-    SettingsWindowState,
+    SettingsAction, SettingsActionButton, SettingsMenuButton, SettingsScrollArea, SettingsTab,
+    SettingsTabButton, SettingsWindowState,
 };
 use factory_app::{audio::AudioSettings, resources::SimResource};
 use factory_sim::EnemyDifficultyPreset;
@@ -69,6 +70,14 @@ fn display_accessibility_and_control_tabs_expose_their_expected_content() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
     open_settings_with_key(&mut app, KeyCode::KeyO);
+
+    let world = app.world_mut();
+    let mut scroll_areas = world
+        .query_filtered::<(&Node, &ScrollPosition), (With<ScrollArea>, With<SettingsScrollArea>)>();
+    let (node, _) = scroll_areas
+        .single(world)
+        .expect("settings content should be an interactive scroll area");
+    assert_eq!(node.overflow.y, OverflowAxis::Scroll);
 
     for (tab, expected_text) in [
         (SettingsTab::Display, "Interface scale"),

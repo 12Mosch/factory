@@ -1,5 +1,6 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use factory_sim::{EnemyDifficultyPreset, SimCommand};
 
 use crate::audio::{AudioSettings, SoundEvent};
@@ -16,6 +17,7 @@ use crate::ui::audio_settings::{
 use crate::ui::enemy_settings::{
     EnemySettingsSnapshot, enemy_settings_snapshot, spawn_enemy_settings_content,
 };
+use crate::ui::layout::PANEL_SCROLLBAR_WIDTH;
 use crate::ui::window_sync::{WindowRootQuery, sync_window};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -73,6 +75,7 @@ pub struct SettingsWindowState {
 }
 
 impl SettingsWindowState {
+    /// Opens a tab with a fresh pending snapshot of every configurable value.
     pub fn open_tab(
         &mut self,
         tab: SettingsTab,
@@ -94,6 +97,7 @@ impl SettingsWindowState {
         self.return_to_pause_menu = return_to_pause_menu;
     }
 
+    /// Closes settings and reports whether the pause menu should be restored.
     pub fn close(&mut self) -> bool {
         self.open = false;
         self.dirty = false;
@@ -103,6 +107,10 @@ impl SettingsWindowState {
 
 #[derive(Component)]
 pub struct SettingsMenuButton;
+
+/// Marks the settings body that owns wheel and trackpad scrolling.
+#[derive(Component)]
+pub struct SettingsScrollArea;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettingsTabButton {
@@ -168,6 +176,7 @@ pub(crate) struct SettingsButtonResources<'w> {
     ui_preferences: ResMut<'w, UiPreferences>,
 }
 
+/// Handles settings entry, tab navigation, applying, resetting, and closing.
 pub(crate) fn handle_settings_buttons(
     mut buttons: SettingsButtonQueries,
     mut resources: SettingsButtonResources,
@@ -267,6 +276,7 @@ pub(crate) fn handle_settings_buttons(
     }
 }
 
+/// Reconciles the settings modal with the current session snapshot.
 pub(crate) fn sync_settings_window(
     mut commands: Commands,
     window: Res<SettingsWindowState>,
@@ -296,6 +306,7 @@ pub(crate) fn sync_settings_window(
     );
 }
 
+/// Builds the full-screen modal backdrop that blocks world interaction.
 fn settings_root() -> impl Bundle {
     (
         Node {
@@ -313,6 +324,7 @@ fn settings_root() -> impl Bundle {
     )
 }
 
+/// Spawns the responsive settings chrome and active-tab contents.
 fn spawn_settings_window(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &SettingsSnapshot,
@@ -327,7 +339,6 @@ fn spawn_settings_window(
             row_gap: Val::Px(14.0),
             padding: UiRect::all(Val::Px(18.0)),
             border: UiRect::all(Val::Px(1.0)),
-            overflow: Overflow::scroll_y(),
             ..default()
         },
         BackgroundColor(Color::srgba(0.025, 0.030, 0.029, 0.99)),
@@ -341,19 +352,22 @@ fn spawn_settings_window(
         ));
         spawn_tabs(modal, snapshot.active_tab);
         modal
-            .spawn(Node {
-                flex_grow: 1.0,
-                min_height: Val::ZERO,
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(12.0),
-                padding: UiRect::all(Val::Px(14.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                overflow: Overflow::scroll_y(),
-                ..default()
-            })
-            .insert((
+            .spawn((
+                Node {
+                    flex_grow: 1.0,
+                    min_height: Val::ZERO,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(12.0),
+                    padding: UiRect::all(Val::Px(14.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    overflow: Overflow::scroll_y(),
+                    scrollbar_width: PANEL_SCROLLBAR_WIDTH,
+                    ..default()
+                },
                 BackgroundColor(Color::srgb(0.045, 0.055, 0.050)),
                 BorderColor::all(Color::srgb(0.25, 0.31, 0.23)),
+                ScrollArea,
+                SettingsScrollArea,
             ))
             .with_children(|content| match snapshot.active_tab {
                 SettingsTab::Gameplay => spawn_enemy_settings_content(content, &snapshot.gameplay),
@@ -372,6 +386,7 @@ fn spawn_settings_window(
     });
 }
 
+/// Spawns the wrapping settings-tab navigation row.
 fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected: SettingsTab) {
     parent
         .spawn(Node {
@@ -389,6 +404,7 @@ fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected:
 }
 
 // Follow-up: docs/issues/issue-central-settings-placeholder-pages.md
+/// Spawns an explanatory placeholder for settings not implemented yet.
 fn spawn_placeholder(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     title: &str,
@@ -406,6 +422,7 @@ fn spawn_placeholder(
     ));
 }
 
+/// Spawns fixed, always-reachable Reset, Apply, and Back actions.
 fn spawn_actions(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, dirty: bool) {
     parent
         .spawn(Node {
@@ -442,6 +459,7 @@ fn spawn_actions(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, dirty:
         });
 }
 
+/// Spawns a settings button with consistent sizing and selected styling.
 fn spawn_button<T: Component>(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     label: &str,

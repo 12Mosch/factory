@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::sprite::Text2dShadow;
@@ -14,6 +15,7 @@ pub const MAX_UI_SCALE_PERCENT: u16 = 200;
 const UI_SCALE_STEP_PERCENT: u16 = 25;
 const MIN_LOGICAL_VIEWPORT_WIDTH: f32 = 800.0;
 const MIN_LOGICAL_VIEWPORT_HEIGHT: f32 = 450.0;
+const PERSISTENCE_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct UiPreferences {
@@ -33,10 +35,12 @@ impl Default for UiPreferences {
 }
 
 impl UiPreferences {
+    /// Returns the configured percentage as Bevy's multiplicative scale.
     pub fn requested_scale(&self) -> f32 {
         f32::from(self.scale_percent) / 100.0
     }
 
+    /// Stores a scale percentage after constraining it to the supported range.
     pub fn set_scale_percent(&mut self, percent: u16) {
         self.scale_percent = percent.clamp(MIN_UI_SCALE_PERCENT, MAX_UI_SCALE_PERCENT);
     }
@@ -45,6 +49,7 @@ impl UiPreferences {
 #[derive(Resource, Default)]
 pub struct UiPreferencesPersistenceState {
     last_saved: Option<UiPreferencesFile>,
+    retry_after: Option<Duration>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -64,6 +69,7 @@ impl Default for UiPreferencesFile {
 }
 
 impl UiPreferencesFile {
+    /// Builds the stable on-disk representation of the current preferences.
     fn from_preferences(preferences: &UiPreferences) -> Self {
         Self {
             scale_percent: preferences
@@ -73,6 +79,7 @@ impl UiPreferencesFile {
         }
     }
 
+    /// Sanitizes values loaded from files created by older or edited versions.
     fn normalize(&mut self) {
         self.scale_percent = self
             .scale_percent
@@ -86,6 +93,7 @@ pub struct ReadableWorldLabel {
 }
 
 impl ReadableWorldLabel {
+    /// Records the unscaled font size used by the world-label policy.
     pub const fn new(base_font_size: f32) -> Self {
         Self { base_font_size }
     }
@@ -169,6 +177,7 @@ pub(crate) struct AccessibilitySettingsSnapshot {
     pub readable_high_contrast: bool,
 }
 
+/// Applies Display and Accessibility button presses to the pending session.
 pub(crate) fn handle_accessibility_settings_buttons(
     mut scale_buttons: UiScaleButtonQuery,
     mut contrast_buttons: ContrastButtonQuery,
@@ -204,6 +213,7 @@ pub(crate) fn handle_accessibility_settings_buttons(
     }
 }
 
+/// Spawns the interface-scale controls for the Display tab.
 pub(crate) fn spawn_display_settings_content(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &DisplaySettingsSnapshot,
@@ -254,6 +264,7 @@ pub(crate) fn spawn_display_settings_content(
     ));
 }
 
+/// Spawns the readable high-contrast control for the Accessibility tab.
 pub(crate) fn spawn_accessibility_settings_content(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &AccessibilitySettingsSnapshot,
@@ -276,6 +287,7 @@ pub(crate) fn spawn_accessibility_settings_content(
     );
 }
 
+/// Spawns a settings-section heading using the shared visual treatment.
 fn spawn_heading(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, text: &str) {
     parent.spawn((
         Text::new(text),
@@ -284,6 +296,7 @@ fn spawn_heading(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, text: 
     ));
 }
 
+/// Spawns a minimum-size accessibility control and its interaction marker.
 fn spawn_control_button(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     label: &str,
@@ -324,6 +337,7 @@ fn spawn_control_button(
     ));
 }
 
+/// Loads preferences once at startup and establishes the persistence baseline.
 pub(crate) fn load_persisted_ui_preferences(
     config: Res<SaveLoadConfig>,
     mut preferences: ResMut<UiPreferences>,
@@ -337,22 +351,38 @@ pub(crate) fn load_persisted_ui_preferences(
     persistence.last_saved = Some(UiPreferencesFile::from_preferences(&preferences));
 }
 
+/// Persists changed preferences and retries transient failures with backoff.
 pub(crate) fn save_ui_preferences_if_changed(
+    time: Res<Time<Real>>,
     preferences: Res<UiPreferences>,
     mut persistence: ResMut<UiPreferencesPersistenceState>,
 ) {
-    if !preferences.is_changed() || preferences.settings_path.as_os_str().is_empty() {
+    if preferences.settings_path.as_os_str().is_empty() {
         return;
     }
     let file = UiPreferencesFile::from_preferences(&preferences);
     if persistence.last_saved.as_ref() == Some(&file) {
+        persistence.retry_after = None;
+        return;
+    }
+
+    let now = time.elapsed();
+    if !preferences.is_changed()
+        && persistence
+            .retry_after
+            .is_none_or(|retry_after| now < retry_after)
+    {
         return;
     }
     if write_ui_preferences_file(&preferences.settings_path, &file).is_ok() {
         persistence.last_saved = Some(file);
+        persistence.retry_after = None;
+    } else {
+        persistence.retry_after = Some(now + PERSISTENCE_RETRY_DELAY);
     }
 }
 
+/// Reads and normalizes a UI preference file, returning `None` when invalid.
 pub fn read_ui_preferences_file(path: &Path) -> Option<UiPreferencesFile> {
     let text = fs::read_to_string(path).ok()?;
     let mut file = ron::from_str::<UiPreferencesFile>(&text).ok()?;
@@ -360,6 +390,7 @@ pub fn read_ui_preferences_file(path: &Path) -> Option<UiPreferencesFile> {
     Some(file)
 }
 
+/// Creates parent directories and writes a UI preference file as readable RON.
 pub fn write_ui_preferences_file(
     path: &Path,
     file: &UiPreferencesFile,
@@ -372,10 +403,12 @@ pub fn write_ui_preferences_file(
     fs::write(path, text)
 }
 
+/// Returns the UI preference path within the configured save directory.
 pub fn ui_preferences_path(config: &SaveLoadConfig) -> PathBuf {
     config.root_dir.join("ui-settings.ron")
 }
 
+/// Synchronizes Bevy's global UI scale with the responsive effective scale.
 pub(crate) fn sync_ui_scale(
     preferences: Res<UiPreferences>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -394,6 +427,7 @@ pub(crate) fn sync_ui_scale(
     }
 }
 
+/// Limits a requested scale so the viewport retains a usable logical area.
 pub fn effective_ui_scale(requested: f32, viewport_width: f32, viewport_height: f32) -> f32 {
     let requested = requested.clamp(
         f32::from(MIN_UI_SCALE_PERCENT) / 100.0,
@@ -405,6 +439,7 @@ pub fn effective_ui_scale(requested: f32, viewport_width: f32, viewport_height: 
     requested.min(responsive_limit)
 }
 
+/// Applies or restores the complete UI palette when the preset changes.
 pub(crate) fn refresh_high_contrast_palette(
     mut commands: Commands,
     preferences: Res<UiPreferences>,
@@ -448,6 +483,7 @@ pub(crate) fn refresh_high_contrast_palette(
     }
 }
 
+/// Applies high contrast to newly spawned or subsequently recolored UI nodes.
 pub(crate) fn update_high_contrast_palette(
     mut commands: Commands,
     preferences: Res<UiPreferences>,
@@ -469,6 +505,7 @@ pub(crate) fn update_high_contrast_palette(
     }
 }
 
+/// Stores a text color's normal value before applying its contrast mapping.
 fn apply_text_contrast(
     commands: &mut Commands,
     entity: Entity,
@@ -484,6 +521,7 @@ fn apply_text_contrast(
     color.0 = high_contrast_text(normal);
 }
 
+/// Stores a background's normal value before applying its contrast mapping.
 fn apply_background_contrast(
     commands: &mut Commands,
     entity: Entity,
@@ -501,6 +539,7 @@ fn apply_background_contrast(
     color.0 = high_contrast_background(normal);
 }
 
+/// Stores all normal border sides before applying their contrast mappings.
 fn apply_border_contrast(
     commands: &mut Commands,
     entity: Entity,
@@ -516,6 +555,7 @@ fn apply_border_contrast(
     *color = high_contrast_borders(normal);
 }
 
+/// Maps text to white, warning yellow, or success green with strong opacity.
 fn high_contrast_text(color: Color) -> Color {
     let source = color.to_srgba();
     let max = source.red.max(source.green).max(source.blue);
@@ -530,6 +570,7 @@ fn high_contrast_text(color: Color) -> Color {
     }
 }
 
+/// Maps opaque backgrounds onto two separated near-black luminance levels.
 fn high_contrast_background(color: Color) -> Color {
     let source = color.to_srgba();
     if source.alpha <= f32::EPSILON {
@@ -540,6 +581,7 @@ fn high_contrast_background(color: Color) -> Color {
     Color::srgba(level, level, level, source.alpha)
 }
 
+/// Maps a visible border to the preset's bright interaction outline.
 fn high_contrast_border(color: Color) -> Color {
     let source = color.to_srgba();
     if source.alpha <= f32::EPSILON {
@@ -548,6 +590,7 @@ fn high_contrast_border(color: Color) -> Color {
     Color::srgba(0.92, 0.98, 0.62, source.alpha.max(0.88))
 }
 
+/// Maps each border side independently so asymmetric borders remain reversible.
 fn high_contrast_borders(colors: BorderColor) -> BorderColor {
     BorderColor {
         top: high_contrast_border(colors.top),
@@ -557,6 +600,7 @@ fn high_contrast_borders(colors: BorderColor) -> BorderColor {
     }
 }
 
+/// Restyles every accessible world label when preferences change.
 pub(crate) fn refresh_world_label_readability(
     preferences: Res<UiPreferences>,
     mut labels: Query<(&ReadableWorldLabel, &mut TextFont, &mut Text2dShadow)>,
@@ -569,6 +613,7 @@ pub(crate) fn refresh_world_label_readability(
     }
 }
 
+/// Styles newly spawned world labels without scanning unchanged labels.
 pub(crate) fn style_new_world_labels(
     preferences: Res<UiPreferences>,
     mut labels: Query<
@@ -581,6 +626,7 @@ pub(crate) fn style_new_world_labels(
     }
 }
 
+/// Applies the requested scale, readable floor, and shadow to one world label.
 fn apply_world_label_style(
     preferences: &UiPreferences,
     label: &ReadableWorldLabel,
@@ -647,6 +693,52 @@ mod tests {
             Some(UiPreferencesFile {
                 scale_percent: 125,
                 readable_high_contrast: false,
+            })
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_preference_write_retries_after_the_backoff() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("factory-ui-retry-{unique}"));
+        fs::write(&root, "temporarily blocking the settings directory").unwrap();
+
+        let path = root.join("ui-settings.ron");
+        let preferences = UiPreferences {
+            scale_percent: 150,
+            readable_high_contrast: true,
+            settings_path: path.clone(),
+        };
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .insert_resource(preferences)
+            .init_resource::<UiPreferencesPersistenceState>()
+            .add_systems(Update, save_ui_preferences_if_changed);
+
+        app.update();
+        assert!(!path.exists());
+        assert!(
+            app.world()
+                .resource::<UiPreferencesPersistenceState>()
+                .retry_after
+                .is_some()
+        );
+
+        fs::remove_file(&root).unwrap();
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(PERSISTENCE_RETRY_DELAY);
+        app.update();
+
+        assert_eq!(
+            read_ui_preferences_file(&path),
+            Some(UiPreferencesFile {
+                scale_percent: 150,
+                readable_high_contrast: true,
             })
         );
         fs::remove_dir_all(root).unwrap();
