@@ -355,6 +355,10 @@ fn full_app_fixture() -> App {
 
 fn open_benchmark_windows(app: &mut App) {
     let audio = app.world().resource::<AudioSettings>().clone();
+    let ui_preferences = app
+        .world()
+        .resource::<crate::ui::accessibility::UiPreferences>()
+        .clone();
     let enemy_preset = app
         .world()
         .resource::<SimResource>()
@@ -363,7 +367,13 @@ fn open_benchmark_windows(app: &mut App) {
         .preset;
     app.world_mut()
         .resource_mut::<SettingsWindowState>()
-        .open_tab(SettingsTab::Gameplay, &audio, enemy_preset, false);
+        .open_tab(
+            SettingsTab::Gameplay,
+            &audio,
+            enemy_preset,
+            &ui_preferences,
+            false,
+        );
     app.world_mut().resource_mut::<TechnologyWindowState>().open = true;
     app.world_mut().resource_mut::<CraftingWindowState>().open = true;
     app.world_mut()

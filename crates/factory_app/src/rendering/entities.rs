@@ -29,6 +29,7 @@ use crate::rendering::visuals::{
 
 pub(crate) use crate::rendering::visuals::RocketSiloVisualPhase;
 use crate::resources::SimResource;
+use crate::ui::accessibility::ReadableWorldLabel;
 
 #[derive(Component)]
 pub(crate) struct PlacedEntitySprite {
@@ -199,6 +200,7 @@ fn spawn_rocket_silo_status_indicator(
             Transform::from_xyz(0.0, footprint_height as f32 * TILE_SIZE * 0.5 + 7.0, 0.2),
             Anchor::CENTER,
             Text2dShadow::default(),
+            ReadableWorldLabel::new(6.0),
             RocketSiloStatusIndicator { operational_state },
         ))
         .id()

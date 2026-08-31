@@ -10,6 +10,12 @@ use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
 use crate::resources::UpsStats;
+use crate::ui::accessibility::{
+    UiPreferences, UiPreferencesPersistenceState, handle_accessibility_settings_buttons,
+    load_persisted_ui_preferences, refresh_high_contrast_palette, refresh_world_label_readability,
+    save_ui_preferences_if_changed, style_new_world_labels, sync_ui_scale,
+    update_high_contrast_palette,
+};
 use crate::ui::audio_settings::handle_audio_settings_buttons;
 use crate::ui::build_menu::handle_build_menu_buttons;
 use crate::ui::circuit::interaction::{
@@ -115,6 +121,11 @@ impl Plugin for UiPlugin {
         install_default_ui_font(app);
 
         app.init_resource::<UpsStats>()
+            // Full Bevy applications get this from bevy_ui; initialize it here
+            // as well so the accessibility systems remain valid in headless apps.
+            .init_resource::<UiScale>()
+            .init_resource::<UiPreferences>()
+            .init_resource::<UiPreferencesPersistenceState>()
             .init_resource::<DebugOverlayVisible>()
             .init_resource::<OpenContainer>()
             .init_resource::<InventoryTransferFeedback>()
@@ -131,7 +142,26 @@ impl Plugin for UiPlugin {
             .init_resource::<TrainScheduleEditorState>()
             .init_resource::<TrainStopRenameState>()
             .add_message::<TrainStopRenameCommitRequested>()
-            .add_systems(Startup, (setup_debug_overlay, setup_threat_ui))
+            .add_systems(
+                Startup,
+                (
+                    load_persisted_ui_preferences,
+                    setup_debug_overlay,
+                    setup_threat_ui,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    sync_ui_scale,
+                    save_ui_preferences_if_changed,
+                    refresh_high_contrast_palette,
+                    update_high_contrast_palette,
+                    refresh_world_label_readability,
+                    style_new_world_labels,
+                )
+                    .chain(),
+            )
             .add_systems(
                 OnEnter(crate::world_setup::AppMode::InGame),
                 (setup_objectives_panel, setup_rocket_launch_ui),
@@ -181,11 +211,13 @@ impl Plugin for UiPlugin {
                     handle_threat_alert_clicks.in_set(AppSet::UiInteraction),
                     sync_threat_ui.after(handle_threat_alert_clicks),
                     handle_enemy_settings_buttons.in_set(AppSet::UiInteraction),
+                    handle_accessibility_settings_buttons.in_set(AppSet::UiInteraction),
                     handle_settings_buttons
                         .in_set(AppSet::UiInteraction)
                         .before(sync_save_load_window),
                     sync_settings_window
                         .after(handle_audio_settings_buttons)
+                        .after(handle_accessibility_settings_buttons)
                         .after(handle_enemy_settings_buttons)
                         .after(handle_settings_buttons),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),

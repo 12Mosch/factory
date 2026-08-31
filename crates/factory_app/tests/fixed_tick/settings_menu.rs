@@ -1,14 +1,18 @@
 use super::common::test_app;
 use bevy::prelude::*;
-use factory_app::save_load::SaveLoadWindowState;
+use bevy::ui_widgets::ScrollArea;
+use factory_app::save_load::{SaveLoadConfig, SaveLoadWindowState};
+use factory_app::ui::accessibility::{
+    ReadableHighContrastButton, UiPreferences, UiScaleAction, UiScaleButton,
+};
 use factory_app::ui::enemy_settings::EnemyPresetButton;
 use factory_app::ui::settings::{
-    SettingsAction, SettingsActionButton, SettingsMenuButton, SettingsTab, SettingsTabButton,
-    SettingsWindowState,
+    SettingsAction, SettingsActionButton, SettingsMenuButton, SettingsScrollArea, SettingsTab,
+    SettingsTabButton, SettingsWindowState,
 };
 use factory_app::{audio::AudioSettings, resources::SimResource};
 use factory_sim::EnemyDifficultyPreset;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn pause_menu_settings_button_opens_settings_and_back_returns_to_pause() {
@@ -62,24 +66,26 @@ fn active_tab_shortcuts_return_pause_origin_to_pause_menu() {
 }
 
 #[test]
-fn every_placeholder_tab_is_reachable_and_clearly_unavailable() {
+fn display_accessibility_and_control_tabs_expose_their_expected_content() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
     open_settings_with_key(&mut app, KeyCode::KeyO);
 
+    let world = app.world_mut();
+    let mut scroll_areas = world
+        .query_filtered::<(&Node, &ScrollPosition), (With<ScrollArea>, With<SettingsScrollArea>)>();
+    let (node, _) = scroll_areas
+        .single(world)
+        .expect("settings content should be an interactive scroll area");
+    assert_eq!(node.overflow.y, OverflowAxis::Scroll);
+
     for (tab, expected_text) in [
-        (
-            SettingsTab::Display,
-            "Display settings are not available yet.",
-        ),
+        (SettingsTab::Display, "Interface scale"),
         (
             SettingsTab::Controls,
             "Control rebinding is not available yet. Current shortcuts remain active.",
         ),
-        (
-            SettingsTab::Accessibility,
-            "Accessibility settings are not available yet.",
-        ),
+        (SettingsTab::Accessibility, "Readable high contrast"),
     ] {
         let button = tab_button(&mut app, tab);
         press_button(&mut app, button);
@@ -89,6 +95,63 @@ fn every_placeholder_tab_is_reachable_and_clearly_unavailable() {
             tab
         );
         assert!(all_text(&mut app).iter().any(|text| text == expected_text));
+    }
+}
+
+#[test]
+fn display_scale_and_readable_contrast_apply_to_global_preferences() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let settings_root = std::env::temp_dir().join(format!("factory-ui-settings-{unique}"));
+    let save_config = SaveLoadConfig {
+        root_dir: settings_root.clone(),
+        ..default()
+    };
+    app.insert_resource(save_config);
+    app.update();
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+
+    let display = tab_button(&mut app, SettingsTab::Display);
+    press_button(&mut app, display);
+    let increase = {
+        let world = app.world_mut();
+        let mut buttons = world.query::<(Entity, &UiScaleButton)>();
+        buttons
+            .iter(world)
+            .find_map(|(entity, button)| (button.0 == UiScaleAction::Increase).then_some(entity))
+            .expect("display tab should contain a scale increase button")
+    };
+    press_button(&mut app, increase);
+    assert_eq!(
+        app.world()
+            .resource::<SettingsWindowState>()
+            .pending_values
+            .ui_scale_percent,
+        125
+    );
+
+    let apply = action_button(&mut app, SettingsAction::Apply);
+    press_button(&mut app, apply);
+    app.update();
+    assert_eq!(app.world().resource::<UiPreferences>().scale_percent, 125);
+    assert_eq!(app.world().resource::<UiScale>().0, 1.25);
+
+    let accessibility = tab_button(&mut app, SettingsTab::Accessibility);
+    press_button(&mut app, accessibility);
+    let contrast = single_button::<ReadableHighContrastButton>(&mut app);
+    press_button(&mut app, contrast);
+    let apply = action_button(&mut app, SettingsAction::Apply);
+    press_button(&mut app, apply);
+    assert!(
+        app.world()
+            .resource::<UiPreferences>()
+            .readable_high_contrast
+    );
+    if settings_root.exists() {
+        std::fs::remove_dir_all(settings_root).unwrap();
     }
 }
 
