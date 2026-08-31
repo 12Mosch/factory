@@ -10,13 +10,12 @@ use crate::save_load::{
     delete_save, load_save, request_named_save, request_overwrite,
 };
 use crate::ui::layout::scroll_column;
-use crate::ui::settings::SettingsMenuButton;
+use crate::ui::pause_menu::PauseMenuState;
 use crate::ui::text_input::{
     EditableTextSanitizer, can_submit, editor_value, is_non_control, set_editor_value,
     single_line_editor,
 };
 use crate::ui::window_sync::{WindowRoot, WindowRootQuery, WindowSync, sync_contents, sync_window};
-use crate::world_setup::{AppMode, WorldSetupState};
 
 #[derive(Component)]
 pub struct SaveLoadTabButton {
@@ -40,13 +39,9 @@ pub struct SaveLoadModal;
 #[derive(Component)]
 pub struct SaveLoadSlotList;
 #[derive(Component)]
-pub struct NewWorldButton;
+pub struct SaveLoadBackButton;
 #[derive(Component)]
 pub(crate) struct SaveNameInput;
-#[derive(Resource, Default)]
-pub struct NewWorldConfirmation {
-    pub awaiting_confirmation: bool,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SaveEntryAction {
@@ -62,7 +57,6 @@ pub(crate) struct SaveLoadSnapshot {
     entries: Vec<SaveEntry>,
     pending: Vec<SaveId>,
     confirmation: PendingSaveConfirmation,
-    new_world_confirmation: bool,
 }
 
 impl PartialEq for SaveLoadSnapshot {
@@ -73,7 +67,6 @@ impl PartialEq for SaveLoadSnapshot {
             && self.entries == other.entries
             && self.pending == other.pending
             && self.confirmation == other.confirmation
-            && self.new_world_confirmation == other.new_world_confirmation
     }
 }
 
@@ -111,6 +104,7 @@ pub(crate) fn handle_save_load_buttons(
     mut tabs: TabButtons,
     mut entries: EntryButtons,
     mut create: Query<&Interaction, (Changed<Interaction>, With<SaveCreateButton>)>,
+    mut backs: Query<&Interaction, (Changed<Interaction>, With<SaveLoadBackButton>)>,
     mut confirms: Query<(&Interaction, &SaveConfirmationButton), Changed<Interaction>>,
     config: Res<SaveLoadConfig>,
     mut catalog: ResMut<SaveCatalog>,
@@ -118,11 +112,20 @@ pub(crate) fn handle_save_load_buttons(
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
+    mut pause: ResMut<PauseMenuState>,
     mut sounds: MessageWriter<SoundEvent>,
     mut create_requests: MessageWriter<SaveCreateRequested>,
 ) {
     if !load_state.window.open {
         return;
+    }
+    for interaction in &mut backs {
+        if *interaction == Interaction::Pressed {
+            sounds.write(SoundEvent::UiClick);
+            load_state.window.open = false;
+            pause.open = true;
+            *confirmation = PendingSaveConfirmation::None;
+        }
     }
     for (interaction, button) in &mut tabs {
         if *interaction == Interaction::Pressed {
@@ -289,18 +292,13 @@ pub(crate) fn sync_save_load_window(
     pending: Res<PendingSaveJobs>,
     status: Res<SaveLoadStatus>,
     confirmation: Res<PendingSaveConfirmation>,
-    mut new_world: ResMut<NewWorldConfirmation>,
     mut shell_roots: WindowRootQuery<SaveLoadShellSnapshot>,
     mut contents_roots: WindowRootQuery<SaveLoadSnapshot>,
 ) {
-    if !state.open && new_world.awaiting_confirmation {
-        new_world.awaiting_confirmation = false;
-    }
     let contents_changed = catalog.is_changed()
         || pending.is_changed()
         || status.is_changed()
-        || confirmation.is_changed()
-        || new_world.is_changed();
+        || confirmation.is_changed();
     let mut snapshot = None;
     let shell_sync = sync_window(
         &mut commands,
@@ -314,28 +312,14 @@ pub(crate) fn sync_save_load_window(
         save_load_root,
         |root, shell| {
             let snapshot = snapshot.get_or_insert_with(|| {
-                save_load_snapshot(
-                    &state,
-                    &catalog,
-                    &pending,
-                    &status,
-                    &confirmation,
-                    &new_world,
-                )
+                save_load_snapshot(&state, &catalog, &pending, &status, &confirmation)
             });
             spawn_save_load_modal(root, shell, snapshot);
         },
     );
     if state.open && contents_changed && shell_sync == WindowSync::Unchanged {
         let snapshot = snapshot.unwrap_or_else(|| {
-            save_load_snapshot(
-                &state,
-                &catalog,
-                &pending,
-                &status,
-                &confirmation,
-                &new_world,
-            )
+            save_load_snapshot(&state, &catalog, &pending, &status, &confirmation)
         });
         sync_contents(
             &mut commands,
@@ -352,7 +336,6 @@ fn save_load_snapshot(
     pending: &PendingSaveJobs,
     status: &SaveLoadStatus,
     confirmation: &PendingSaveConfirmation,
-    new_world: &NewWorldConfirmation,
 ) -> SaveLoadSnapshot {
     SaveLoadSnapshot {
         window: state.clone(),
@@ -360,7 +343,6 @@ fn save_load_snapshot(
         entries: catalog.entries().to_vec(),
         pending: pending.pending_ids(),
         confirmation: confirmation.clone(),
-        new_world_confirmation: new_world.awaiting_confirmation,
     }
 }
 
@@ -442,29 +424,13 @@ fn spawn_save_load_dynamic_contents(
         );
     }
     spawn_status(modal, &snapshot.status);
-    spawn_plain_button(modal, "Settings", Some(SettingsMenuButton));
     modal
-        .spawn((
-            Button,
-            Node {
-                height: Val::Px(32.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.17, 0.07, 0.05)),
-            BorderColor::all(Color::srgb(0.72, 0.28, 0.18)),
-            NewWorldButton,
-        ))
-        .with_child((
-            Text::new(if snapshot.new_world_confirmation {
-                "Confirm New World"
-            } else {
-                "New World"
-            }),
-            TextFont::from_font_size(12.0),
-        ));
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::FlexEnd,
+            ..default()
+        })
+        .with_children(|row| spawn_plain_button(row, "Back", Some(SaveLoadBackButton)));
 }
 
 fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected: SaveLoadTab) {
@@ -812,29 +778,4 @@ pub fn format_timestamp(unix_ms: u64) -> String {
     DateTime::<Local>::from(std::time::UNIX_EPOCH + std::time::Duration::from_millis(unix_ms))
         .format("%Y-%m-%d %H:%M:%S %:z")
         .to_string()
-}
-
-type NewWorldQuery<'w, 's> =
-    Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<Button>, With<NewWorldButton>)>;
-pub(crate) fn handle_new_world_button(
-    mut buttons: NewWorldQuery,
-    mut confirmation: ResMut<NewWorldConfirmation>,
-    mut window: ResMut<SaveLoadWindowState>,
-    mut setup: ResMut<WorldSetupState>,
-    mut next: ResMut<NextState<AppMode>>,
-    mut sounds: MessageWriter<SoundEvent>,
-) {
-    for interaction in &mut buttons {
-        if *interaction == Interaction::Pressed {
-            sounds.write(SoundEvent::UiClick);
-            if confirmation.awaiting_confirmation {
-                window.open = false;
-                confirmation.awaiting_confirmation = false;
-                setup.allow_cancel = true;
-                next.set(AppMode::WorldSetup);
-            } else {
-                confirmation.awaiting_confirmation = true;
-            }
-        }
-    }
 }

@@ -7,6 +7,7 @@ mod fixed_tick {
     mod determinism;
     mod map_rendering;
     mod panel_input;
+    mod pause_menu;
     mod research;
     mod settings_menu;
     mod slot_transfer;
