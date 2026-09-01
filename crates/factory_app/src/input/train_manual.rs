@@ -33,7 +33,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use factory_sim::{RollingStockId, SimCommand, Simulation, TrainId, TrainThrottle, WorldTileCoord};
 
-use crate::input::bindings::{ActionBindings, ActionInput, InputAction};
+use crate::input::bindings::{ActionBindings, ActionInput, InputAction, KeyDisplayNames};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::{AppInputState, TrainManualInput, TrainManualKey};
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -42,11 +42,14 @@ use crate::simulation::SimCommandRequest;
 use crate::ui::resources::TechnologyWindowState;
 
 /// Player-facing copy derived from the same active registry as input handling.
-pub(crate) fn manual_train_controls_hint(bindings: &ActionBindings) -> String {
+pub(crate) fn manual_train_controls_hint(
+    bindings: &ActionBindings,
+    key_names: &KeyDisplayNames,
+) -> String {
     format!(
         "{} drive / reverse  ·  {} brake",
-        bindings.display_name(InputAction::TrainDrive),
-        bindings.display_name(InputAction::TrainBrake)
+        bindings.display_name(InputAction::TrainDrive, key_names),
+        bindings.display_name(InputAction::TrainBrake, key_names)
     )
 }
 

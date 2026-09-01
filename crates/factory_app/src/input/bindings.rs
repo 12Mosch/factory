@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bevy::ecs::system::SystemParam;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -314,7 +316,7 @@ impl InputBinding {
         }
     }
 
-    pub fn display_name(self) -> String {
+    pub fn display_name(self, key_names: &KeyDisplayNames) -> String {
         let mut parts = Vec::new();
         if self.modifiers.control {
             parts.push("Ctrl".to_string());
@@ -329,7 +331,7 @@ impl InputBinding {
             parts.push("Super".to_string());
         }
         parts.push(match self.input {
-            BindingInput::Key(key) => key_name(key),
+            BindingInput::Key(key) => key_names.name(key),
             BindingInput::Mouse(button) => mouse_name(button),
         });
         parts.join("+")
@@ -368,10 +370,10 @@ impl ActionBindings {
         self.bindings.get(&action).map_or(&[], Vec::as_slice)
     }
 
-    pub fn display_name(&self, action: InputAction) -> String {
+    pub fn display_name(&self, action: InputAction, key_names: &KeyDisplayNames) -> String {
         self.bindings(action)
             .iter()
-            .map(|binding| binding.display_name())
+            .map(|binding| binding.display_name(key_names))
             .collect::<Vec<_>>()
             .join(" / ")
     }
@@ -761,7 +763,52 @@ pub fn bindings_path(config: &SaveLoadConfig) -> PathBuf {
     config.root_dir.join("controls.ron")
 }
 
-fn key_name(key: KeyCode) -> String {
+/// Layout-resolved names learned from Bevy keyboard messages. Bindings remain
+/// physical [`KeyCode`]s; this resource only controls their presentation.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyDisplayNames(BTreeMap<KeyCode, String>);
+
+impl KeyDisplayNames {
+    fn name(&self, key: KeyCode) -> String {
+        self.0
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| physical_key_name(key))
+    }
+
+    fn record(&mut self, key_code: KeyCode, logical_key: &Key) {
+        let Some(name) = logical_key_name(logical_key) else {
+            return;
+        };
+        self.0.insert(key_code, name);
+    }
+}
+
+/// Records the active layout's logical label for each physical key as Bevy
+/// reports it. A later press replaces the label, so changing keyboard layouts
+/// while the game is running updates the controls reference naturally.
+pub(crate) fn update_key_display_names(
+    mut keyboard_input: MessageReader<KeyboardInput>,
+    mut key_names: ResMut<KeyDisplayNames>,
+) {
+    for input in keyboard_input.read() {
+        if input.state == ButtonState::Pressed && !input.repeat {
+            key_names.record(input.key_code, &input.logical_key);
+        }
+    }
+}
+
+fn logical_key_name(key: &Key) -> Option<String> {
+    match key {
+        Key::Character(character) if !character.is_empty() => {
+            Some(character.chars().flat_map(char::to_uppercase).collect())
+        }
+        Key::Dead(Some(character)) => Some(character.to_string()),
+        _ => None,
+    }
+}
+
+fn physical_key_name(key: KeyCode) -> String {
     let raw = format!("{key:?}");
     if let Some(letter) = raw.strip_prefix("Key") {
         return letter.to_string();
@@ -798,6 +845,51 @@ fn mouse_name(button: MouseButton) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_bindings_use_layout_resolved_character_names() {
+        let mut key_names = KeyDisplayNames::default();
+        key_names.record(KeyCode::KeyW, &Key::Character("z".into()));
+        key_names.record(KeyCode::KeyA, &Key::Character("q".into()));
+
+        assert_eq!(
+            InputBinding::key(KeyCode::KeyW).display_name(&key_names),
+            "Z"
+        );
+        assert_eq!(
+            InputBinding::control(KeyCode::KeyA).display_name(&key_names),
+            "Ctrl+Q"
+        );
+        assert_eq!(
+            InputBinding::key(KeyCode::ArrowUp).display_name(&key_names),
+            "Up"
+        );
+    }
+
+    #[test]
+    fn keyboard_messages_refresh_layout_resolved_names() {
+        let mut app = App::new();
+        app.add_message::<KeyboardInput>()
+            .init_resource::<KeyDisplayNames>()
+            .add_systems(Update, update_key_display_names);
+
+        for character in ["z", "w"] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::KeyW,
+                logical_key: Key::Character(character.into()),
+                state: ButtonState::Pressed,
+                text: Some(character.into()),
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            });
+            app.update();
+            assert_eq!(
+                InputBinding::key(KeyCode::KeyW)
+                    .display_name(app.world().resource::<KeyDisplayNames>()),
+                character.to_uppercase()
+            );
+        }
+    }
 
     #[test]
     fn defaults_cover_every_action_without_same_context_conflicts() {

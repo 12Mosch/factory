@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::input::bindings::{
-    ActionBindings, BindingInput, InputAction, InputBinding, current_modifiers,
+    ActionBindings, BindingInput, InputAction, InputBinding, KeyDisplayNames, current_modifiers,
 };
 use crate::ui::settings::{SettingsTab, SettingsWindowState};
 
@@ -37,6 +37,7 @@ type ControlBindingButtonQuery<'w, 's> = Query<
 
 pub(crate) fn controls_snapshot(
     bindings: &ActionBindings,
+    key_names: &KeyDisplayNames,
     state: &ControlRebindState,
 ) -> ControlsSnapshot {
     ControlsSnapshot {
@@ -44,7 +45,7 @@ pub(crate) fn controls_snapshot(
             .into_iter()
             .map(|action| ControlRowSnapshot {
                 action,
-                binding: bindings.display_name(action),
+                binding: bindings.display_name(action, key_names),
             })
             .collect(),
         capturing: state.capturing,
@@ -75,6 +76,7 @@ pub(crate) fn capture_control_binding(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     mut bindings: ResMut<ActionBindings>,
+    key_names: Res<KeyDisplayNames>,
     mut state: ResMut<ControlRebindState>,
     mut settings: ResMut<SettingsWindowState>,
 ) {
@@ -131,7 +133,7 @@ pub(crate) fn capture_control_binding(
         Err(conflict) => {
             state.error = Some(format!(
                 "{} is already bound to {} in the same context.",
-                binding.display_name(),
+                binding.display_name(&key_names),
                 conflict.action.label()
             ));
         }

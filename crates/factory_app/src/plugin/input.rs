@@ -4,7 +4,8 @@ use bevy::prelude::*;
 
 use super::AppSet;
 use crate::input::bindings::{
-    ActionBindings, BindingPersistenceState, load_persisted_bindings, save_bindings_if_changed,
+    ActionBindings, BindingPersistenceState, KeyDisplayNames, load_persisted_bindings,
+    save_bindings_if_changed, update_key_display_names,
 };
 use crate::input::camera::zoom_camera;
 use crate::input::mining::update_manual_mining_from_input;
@@ -29,10 +30,15 @@ impl Plugin for InputPlugin {
             .init_resource::<AppInputState>()
             .init_resource::<ActionBindings>()
             .init_resource::<BindingPersistenceState>()
+            .init_resource::<KeyDisplayNames>()
             .init_resource::<RailGraphOverlay>()
             .init_resource::<TrainManualInput>()
             .add_systems(Startup, load_persisted_bindings)
             .add_systems(Update, save_bindings_if_changed)
+            .add_systems(
+                PreUpdate,
+                update_key_display_names.after(bevy::input::InputSystems),
+            )
             .add_systems(
                 PreUpdate,
                 (reset_app_input_state, handle_panel_input)

@@ -4,7 +4,7 @@ use bevy::ui_widgets::ScrollArea;
 use factory_sim::{EnemyDifficultyPreset, SimCommand};
 
 use crate::audio::{AudioSettings, SoundEvent};
-use crate::input::bindings::ActionBindings;
+use crate::input::bindings::{ActionBindings, KeyDisplayNames};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::accessibility::{
@@ -183,6 +183,16 @@ pub(crate) struct SettingsButtonResources<'w> {
     control_rebind: ResMut<'w, ControlRebindState>,
 }
 
+#[derive(SystemParam)]
+pub(crate) struct SettingsSnapshotResources<'w> {
+    window: Res<'w, SettingsWindowState>,
+    audio: Res<'w, AudioSettings>,
+    bindings: Res<'w, ActionBindings>,
+    key_names: Res<'w, KeyDisplayNames>,
+    control_rebind: Res<'w, ControlRebindState>,
+    sim: Res<'w, SimResource>,
+}
+
 /// Handles settings entry, tab navigation, applying, resetting, and closing.
 pub(crate) fn handle_settings_buttons(
     mut buttons: SettingsButtonQueries,
@@ -294,30 +304,30 @@ pub(crate) fn handle_settings_buttons(
 /// Reconciles the settings modal with the current session snapshot.
 pub(crate) fn sync_settings_window(
     mut commands: Commands,
-    window: Res<SettingsWindowState>,
-    audio: Res<AudioSettings>,
-    bindings: Res<ActionBindings>,
-    control_rebind: Res<ControlRebindState>,
-    sim: Res<SimResource>,
+    resources: SettingsSnapshotResources,
     mut roots: WindowRootQuery<SettingsSnapshot>,
 ) {
     sync_window(
         &mut commands,
         &mut roots,
-        window.open,
+        resources.window.open,
         true,
         || SettingsSnapshot {
-            active_tab: window.active_tab,
-            dirty: window.dirty,
-            audio: audio_settings_snapshot(&audio),
-            gameplay: enemy_settings_snapshot(&sim),
+            active_tab: resources.window.active_tab,
+            dirty: resources.window.dirty,
+            audio: audio_settings_snapshot(&resources.audio),
+            gameplay: enemy_settings_snapshot(&resources.sim),
             display: DisplaySettingsSnapshot {
-                scale_percent: window.pending_values.ui_scale_percent,
+                scale_percent: resources.window.pending_values.ui_scale_percent,
             },
             accessibility: AccessibilitySettingsSnapshot {
-                readable_high_contrast: window.pending_values.readable_high_contrast,
+                readable_high_contrast: resources.window.pending_values.readable_high_contrast,
             },
-            controls: controls_snapshot(&bindings, &control_rebind),
+            controls: controls_snapshot(
+                &resources.bindings,
+                &resources.key_names,
+                &resources.control_rebind,
+            ),
         },
         settings_root,
         spawn_settings_window,

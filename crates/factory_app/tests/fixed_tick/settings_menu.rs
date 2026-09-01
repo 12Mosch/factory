@@ -1,4 +1,6 @@
 use super::common::test_app;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use factory_app::input::bindings::{ActionBindings, InputAction};
@@ -98,6 +100,27 @@ fn display_accessibility_and_control_tabs_expose_their_expected_content() {
         );
         assert!(all_text(&mut app).iter().any(|text| text == expected_text));
     }
+}
+
+#[test]
+fn controls_display_the_logical_name_for_a_physical_key() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::KeyW,
+        logical_key: Key::Character("z".into()),
+        state: ButtonState::Pressed,
+        text: Some("z".into()),
+        repeat: false,
+        window: Entity::PLACEHOLDER,
+    });
+    app.update();
+
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+    let controls = tab_button(&mut app, SettingsTab::Controls);
+    press_button(&mut app, controls);
+
+    button_with_child_text(&mut app, "Z / Up");
 }
 
 #[test]

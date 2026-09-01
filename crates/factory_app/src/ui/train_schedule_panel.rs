@@ -680,6 +680,7 @@ mod tests {
     fn train_hint() -> String {
         crate::input::train_manual::manual_train_controls_hint(
             &crate::input::bindings::ActionBindings::default(),
+            &crate::input::bindings::KeyDisplayNames::default(),
         )
     }
 
