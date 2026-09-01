@@ -3,6 +3,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::build::resources::{BuildPlacementPreviewState, BuildPlacementState, BuildTarget};
 use crate::constants::TILE_SIZE;
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::placement::build::tile_placement_preview;
 use crate::rendering::entities::entity_prototype_render_style;
@@ -146,7 +147,7 @@ pub(crate) fn update_build_preview(
 }
 
 pub(crate) fn update_build_placement_preview_state(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     sim: Res<SimResource>,
@@ -166,9 +167,7 @@ pub(crate) fn update_build_placement_preview_state(
         return;
     };
 
-    let ghost = keyboard.as_deref().is_some_and(|keyboard| {
-        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
-    });
+    let ghost = actions.pressed(InputAction::Alternate);
     preview_state.cursor_tile = Some((x, y));
     preview_state.ghost = ghost;
 

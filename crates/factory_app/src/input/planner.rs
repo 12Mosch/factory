@@ -4,6 +4,7 @@ use bevy::window::PrimaryWindow;
 use factory_sim::{SimCommand, WorldTileCoord};
 
 use crate::build::resources::{BuildPlacementState, PlannerState, PlannerTool};
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -45,14 +46,6 @@ fn planner_input_blocked(
     world_input_blocked(input_state) || technology_window_open(technology_window)
 }
 
-fn shift_pressed(keyboard: &ButtonInput<KeyCode>) -> bool {
-    keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
-}
-
-pub(crate) fn control_pressed(keyboard: &ButtonInput<KeyCode>) -> bool {
-    keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight)
-}
-
 fn ui_button_hovered(ui_buttons: &Query<&Interaction, With<Button>>) -> bool {
     ui_buttons
         .iter()
@@ -71,33 +64,26 @@ pub(crate) struct PlannerKeyState<'w> {
 /// Tool activation: Ctrl+C copies an area, Ctrl+V pastes the clipboard, and X
 /// toggles the deconstruction planner. Escape deactivation lives in the panel
 /// input chain so it cooperates with window priorities.
-pub(crate) fn handle_planner_keys(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mut state: PlannerKeyState,
-) {
+pub(crate) fn handle_planner_keys(actions: ActionInput, mut state: PlannerKeyState) {
     if planner_input_blocked(
         state.input_state.as_deref(),
         state.technology_window.as_deref(),
     ) {
         return;
     }
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-
-    if state.planner.tool == PlannerTool::Paste && keyboard.just_pressed(KeyCode::KeyR) {
+    if state.planner.tool == PlannerTool::Paste && actions.just_pressed(InputAction::RotateRepair) {
         state.planner.rotation_steps = (state.planner.rotation_steps + 1) % 4;
     }
 
-    let requested = if control_pressed(&keyboard) && keyboard.just_pressed(KeyCode::KeyC) {
+    let requested = if actions.just_pressed(InputAction::CopyBlueprint) {
         Some(PlannerTool::Copy)
-    } else if control_pressed(&keyboard) && keyboard.just_pressed(KeyCode::KeyV) {
+    } else if actions.just_pressed(InputAction::PasteBlueprint) {
         state
             .planner
             .clipboard
             .is_some()
             .then_some(PlannerTool::Paste)
-    } else if keyboard.just_pressed(KeyCode::KeyX) {
+    } else if actions.just_pressed(InputAction::DeconstructionPlanner) {
         if state.planner.tool == PlannerTool::Deconstruct {
             state.planner.set_tool(PlannerTool::None);
             return;
@@ -143,8 +129,7 @@ pub(crate) struct PlannerDragState<'w> {
 /// Drag selection for the area tools (deconstruct, copy, capture blueprint):
 /// press starts the selection, release applies it.
 pub(crate) fn handle_planner_drag(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    actions: ActionInput,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
@@ -164,11 +149,7 @@ pub(crate) fn handle_planner_drag(
         state.planner.drag_start = None;
         return;
     }
-    let (Some(keyboard), Some(mouse)) = (keyboard, mouse) else {
-        return;
-    };
-
-    if mouse.just_pressed(MouseButton::Left)
+    if actions.just_pressed(InputAction::Primary)
         && state.planner.drag_start.is_none()
         && !ui_button_hovered(&ui_buttons)
         && let Some(tile) = cursor_tile_from_window(&windows, &cameras)
@@ -176,7 +157,7 @@ pub(crate) fn handle_planner_drag(
         state.planner.drag_start = Some(tile);
     }
 
-    if !mouse.just_released(MouseButton::Left) {
+    if !actions.just_released(InputAction::Primary) {
         return;
     }
     let Some(drag_start) = state.planner.drag_start.take() else {
@@ -187,7 +168,7 @@ pub(crate) fn handle_planner_drag(
 
     match state.planner.tool {
         PlannerTool::Deconstruct => {
-            let command = if shift_pressed(&keyboard) {
+            let command = if actions.pressed(InputAction::Alternate) {
                 SimCommand::CancelDeconstruction {
                     min_x: rect.min_x,
                     min_y: rect.min_y,
@@ -264,7 +245,7 @@ pub(crate) struct PasteClickState<'w> {
 /// Paste tool: click places the clipboard as ghosts with the blueprint origin
 /// at the cursor tile. The tool stays active for repeated pastes.
 pub(crate) fn handle_paste_click(
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    actions: ActionInput,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
@@ -277,10 +258,7 @@ pub(crate) fn handle_paste_click(
     {
         return;
     }
-    let Some(mouse) = mouse else {
-        return;
-    };
-    if !mouse.just_pressed(MouseButton::Left) || ui_button_hovered(&ui_buttons) {
+    if !actions.just_pressed(InputAction::Primary) || ui_button_hovered(&ui_buttons) {
         return;
     }
     let Some(blueprint) = state.planner.clipboard.as_ref() else {
@@ -322,8 +300,7 @@ pub(crate) struct GhostClickState<'w> {
 /// from the player inventory, right-click cancels it. Shift+left-click on a
 /// marked entity deconstructs it immediately.
 pub(crate) fn handle_ghost_click(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    actions: ActionInput,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
@@ -337,11 +314,8 @@ pub(crate) fn handle_ghost_click(
     {
         return;
     }
-    let (Some(keyboard), Some(mouse)) = (keyboard, mouse) else {
-        return;
-    };
-    let left = mouse.just_pressed(MouseButton::Left);
-    let right = mouse.just_pressed(MouseButton::Right);
+    let left = actions.just_pressed(InputAction::Primary);
+    let right = actions.just_pressed(InputAction::Secondary);
     if !left && !right {
         return;
     }
@@ -370,7 +344,7 @@ pub(crate) fn handle_ghost_click(
     }
 
     if left
-        && shift_pressed(&keyboard)
+        && actions.pressed(InputAction::Alternate)
         && let Some(entity_id) = state.sim.read().entities().occupancy().entity_at(x, y)
         && state
             .sim

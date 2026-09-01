@@ -9,11 +9,13 @@ use crate::audio::AudioSettings;
 use crate::build::resources::{
     BlueprintLibraryWindowState, BuildMenuState, BuildPlacementState, PlannerState, PlannerTool,
 };
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapOverlay, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::{PendingSaveConfirmation, SaveLoadWindowState};
 use crate::ui::accessibility::UiPreferences;
+use crate::ui::controls::ControlRebindState;
 use crate::ui::map_view::{
     FULL_MAP_MAX_ZOOM, FULL_MAP_MIN_ZOOM, clamp_map_center, fullscreen_crop_bounds,
     fullscreen_map_display_size, fullscreen_map_image_size,
@@ -102,6 +104,7 @@ pub(crate) struct PanelInputResources<'w, 's> {
     stats: ResMut<'w, ProductionStatsWindowState>,
     crafting: ResMut<'w, CraftingWindowState>,
     settings: ResMut<'w, SettingsWindowState>,
+    control_rebind: Res<'w, ControlRebindState>,
     pause: ResMut<'w, PauseMenuState>,
     new_world_confirmation: ResMut<'w, NewWorldConfirmation>,
     audio: Res<'w, AudioSettings>,
@@ -119,26 +122,24 @@ pub(crate) struct PanelInputResources<'w, 's> {
     editable_texts: Query<'w, 's, Entity, With<EditableText>>,
 }
 
-pub(crate) fn handle_panel_input(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mut resources: PanelInputResources,
-) {
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-
+pub(crate) fn handle_panel_input(actions: ActionInput, mut resources: PanelInputResources) {
     let editable_text_focused = resources
         .input_focus
         .as_deref()
         .and_then(InputFocus::get)
         .is_some_and(|focused| resources.editable_texts.contains(focused));
-    if editable_text_focused && !keyboard.just_pressed(KeyCode::Escape) {
+    let cancel_pressed = if editable_text_focused {
+        actions.text_entry_cancelled()
+    } else {
+        actions.just_pressed(InputAction::CancelPause)
+    };
+    if editable_text_focused && !cancel_pressed {
         resources.input_state.world_blocked = true;
         return;
     }
 
     if resources.build_menu.open {
-        if keyboard.just_pressed(KeyCode::Escape) {
+        if cancel_pressed {
             if resources.build_menu.search_query.is_empty() {
                 resources.build_menu.close();
             } else {
@@ -162,7 +163,7 @@ pub(crate) fn handle_panel_input(
     }
 
     if resources.pause.open {
-        if keyboard.just_pressed(KeyCode::Escape) {
+        if cancel_pressed {
             if resources.new_world_confirmation.awaiting_confirmation {
                 resources.new_world_confirmation.awaiting_confirmation = false;
             } else {
@@ -185,7 +186,7 @@ pub(crate) fn handle_panel_input(
     }
 
     if resources.save_load.open {
-        if keyboard.just_pressed(KeyCode::Escape) {
+        if cancel_pressed {
             if *resources.save_confirmation != PendingSaveConfirmation::None {
                 *resources.save_confirmation = PendingSaveConfirmation::None;
             } else {
@@ -209,19 +210,23 @@ pub(crate) fn handle_panel_input(
     }
 
     if resources.settings.open {
-        if keyboard.just_pressed(KeyCode::KeyO) {
+        if resources.control_rebind.capturing.is_some() {
+            resources.input_state.world_blocked = true;
+            return;
+        }
+        if actions.just_pressed(InputAction::OpenAudioSettings) {
             if resources.settings.active_tab == SettingsTab::Audio {
                 close_settings(&mut resources.settings, &mut resources.pause);
             } else {
                 resources.settings.active_tab = SettingsTab::Audio;
             }
-        } else if keyboard.just_pressed(KeyCode::KeyN) {
+        } else if actions.just_pressed(InputAction::OpenGameplaySettings) {
             if resources.settings.active_tab == SettingsTab::Gameplay {
                 close_settings(&mut resources.settings, &mut resources.pause);
             } else {
                 resources.settings.active_tab = SettingsTab::Gameplay;
             }
-        } else if keyboard.just_pressed(KeyCode::Escape) {
+        } else if cancel_pressed {
             close_settings(&mut resources.settings, &mut resources.pause);
             resources.input_state.escape_consumed = true;
         }
@@ -239,7 +244,7 @@ pub(crate) fn handle_panel_input(
         return;
     }
 
-    if keyboard.just_pressed(KeyCode::KeyM) {
+    if actions.just_pressed(InputAction::OpenMap) {
         resources.map.open = !resources.map.open;
         if resources.map.open {
             resources.build_state.selected = None;
@@ -250,23 +255,21 @@ pub(crate) fn handle_panel_input(
             }
         }
     }
-    if keyboard.just_pressed(KeyCode::KeyP) {
+    if actions.just_pressed(InputAction::OpenProduction) {
         resources.stats.open = !resources.stats.open;
         if resources.stats.open {
             resources.build_state.selected = None;
             resources.open_container.close();
         }
     }
-    let control_held =
-        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
-    if keyboard.just_pressed(KeyCode::KeyC) && !control_held {
+    if actions.just_pressed(InputAction::OpenCrafting) {
         resources.crafting.open = !resources.crafting.open;
         if resources.crafting.open {
             resources.build_state.selected = None;
             resources.open_container.close();
         }
     }
-    if keyboard.just_pressed(KeyCode::KeyO) {
+    if actions.just_pressed(InputAction::OpenAudioSettings) {
         let enemy_preset = resources.sim.read().enemy_settings().preset;
         resources.settings.open_tab(
             SettingsTab::Audio,
@@ -278,7 +281,7 @@ pub(crate) fn handle_panel_input(
         resources.build_state.selected = None;
         resources.open_container.close();
     }
-    if keyboard.just_pressed(KeyCode::KeyN) {
+    if actions.just_pressed(InputAction::OpenGameplaySettings) {
         let enemy_preset = resources.sim.read().enemy_settings().preset;
         resources.settings.open_tab(
             SettingsTab::Gameplay,
@@ -290,7 +293,7 @@ pub(crate) fn handle_panel_input(
         resources.build_state.selected = None;
         resources.open_container.close();
     }
-    if keyboard.just_pressed(KeyCode::KeyE) {
+    if actions.just_pressed(InputAction::OpenEquipment) {
         resources.equipment.open = !resources.equipment.open;
         resources.equipment.selected_inventory_slot = None;
         resources.equipment.feedback = None;
@@ -299,7 +302,7 @@ pub(crate) fn handle_panel_input(
             resources.open_container.close();
         }
     }
-    if keyboard.just_pressed(KeyCode::KeyB) && control_held {
+    if actions.just_pressed(InputAction::OpenBlueprintLibrary) {
         if resources.blueprint_library.open {
             resources.blueprint_library.close();
         } else {
@@ -308,17 +311,17 @@ pub(crate) fn handle_panel_input(
             resources.open_container.close();
         }
     }
-    if keyboard.just_pressed(KeyCode::KeyB) && !control_held {
+    if actions.just_pressed(InputAction::OpenBuildMenu) {
         resources.build_menu.open_fresh();
         resources.build_state.selected = None;
         resources.open_container.close();
     }
-    if keyboard.just_pressed(KeyCode::F3) {
+    if actions.just_pressed(InputAction::ToggleDebugReveal) {
         resources.map_settings.debug_reveal_all = !resources.map_settings.debug_reveal_all;
         resources.map_settings.show_chunk_grid = resources.map_settings.debug_reveal_all;
     }
 
-    if keyboard.just_pressed(KeyCode::Escape) {
+    if cancel_pressed {
         if resources.map.open {
             resources.map.open = false;
             resources.input_state.escape_consumed = true;
@@ -384,8 +387,7 @@ fn close_settings(settings: &mut SettingsWindowState, pause: &mut PauseMenuState
 
 #[derive(SystemParam)]
 pub(crate) struct FullscreenMapInputResources<'w, 's> {
-    keyboard: Option<Res<'w, ButtonInput<KeyCode>>>,
-    mouse_buttons: Option<Res<'w, ButtonInput<MouseButton>>>,
+    actions: ActionInput<'w>,
     mouse_motion: Option<Res<'w, AccumulatedMouseMotion>>,
     mouse_scroll: Option<Res<'w, AccumulatedMouseScroll>>,
     sim: Res<'w, SimResource>,
@@ -407,22 +409,20 @@ pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResou
         resources.state.center_tile = player_center;
     }
 
-    if let Some(keyboard) = resources.keyboard.as_deref() {
-        if keyboard.just_pressed(KeyCode::KeyF) {
-            resources.state.center_tile = player_center;
-            resources.state.follow_player = true;
-        }
-        for (key, overlay) in [
-            (KeyCode::Digit1, MapOverlay::Pollution),
-            (KeyCode::Digit2, MapOverlay::Resources),
-            (KeyCode::Digit3, MapOverlay::PowerNetworks),
-            (KeyCode::Digit4, MapOverlay::ProductionProblems),
-            (KeyCode::Digit5, MapOverlay::Enemies),
-            (KeyCode::Digit6, MapOverlay::ConstructionPlans),
-        ] {
-            if keyboard.just_pressed(key) {
-                resources.settings.overlays.toggle(overlay);
-            }
+    if resources.actions.just_pressed(InputAction::MapCenterPlayer) {
+        resources.state.center_tile = player_center;
+        resources.state.follow_player = true;
+    }
+    for (action, overlay) in InputAction::MAP_OVERLAYS.into_iter().zip([
+        MapOverlay::Pollution,
+        MapOverlay::Resources,
+        MapOverlay::PowerNetworks,
+        MapOverlay::ProductionProblems,
+        MapOverlay::Enemies,
+        MapOverlay::ConstructionPlans,
+    ]) {
+        if resources.actions.just_pressed(action) {
+            resources.settings.overlays.toggle(overlay);
         }
     }
 
@@ -446,9 +446,7 @@ pub(crate) fn handle_fullscreen_map_input(mut resources: FullscreenMapInputResou
         }
     }
 
-    let dragging = resources.mouse_buttons.as_deref().is_some_and(|buttons| {
-        buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Middle)
-    });
+    let dragging = resources.actions.pressed(InputAction::MapDrag);
     let interacting_with_button = resources
         .ui_buttons
         .iter()

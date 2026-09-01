@@ -1,3 +1,4 @@
+pub mod bindings;
 pub(crate) mod build;
 pub(crate) mod camera;
 pub(crate) mod mining;

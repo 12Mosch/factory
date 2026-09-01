@@ -26,6 +26,9 @@ use crate::ui::circuit::panel::update_circuit_panel;
 use crate::ui::circuit::picker::{handle_signal_picker_buttons, sync_signal_picker};
 use crate::ui::circuit::state::CircuitEditorState;
 use crate::ui::container_window::sync_container_window;
+use crate::ui::controls::{
+    ControlRebindState, capture_control_binding, handle_control_binding_buttons,
+};
 use crate::ui::crafting_panel::{
     handle_crafting_recipe_button_clicks, update_crafting_detail_text,
     update_crafting_recipe_button_colors,
@@ -140,6 +143,7 @@ impl Plugin for UiPlugin {
             .init_resource::<PauseMenuState>()
             .init_resource::<NewWorldConfirmation>()
             .init_resource::<SettingsWindowState>()
+            .init_resource::<ControlRebindState>()
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
             .init_resource::<RocketLaunchUiState>()
@@ -154,6 +158,17 @@ impl Plugin for UiPlugin {
                     setup_debug_overlay,
                     setup_threat_ui,
                 ),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_control_binding_buttons.in_set(AppSet::UiInteraction),
+                    capture_control_binding
+                        .after(handle_control_binding_buttons)
+                        .after(handle_settings_buttons)
+                        .in_set(AppSet::UiInteraction),
+                )
+                    .in_set(InGameSet),
             )
             .add_systems(
                 Update,
@@ -224,6 +239,7 @@ impl Plugin for UiPlugin {
                         .after(handle_audio_settings_buttons)
                         .after(handle_accessibility_settings_buttons)
                         .after(handle_enemy_settings_buttons)
+                        .after(capture_control_binding)
                         .after(handle_settings_buttons),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),

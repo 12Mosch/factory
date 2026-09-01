@@ -4,6 +4,7 @@ use bevy::window::PrimaryWindow;
 use factory_sim::{EntityId, RollingStockId, Simulation};
 
 use crate::build::resources::{BuildPlacementState, PlannerState, PlannerTool};
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::{escape_consumed, world_input_blocked};
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -22,17 +23,13 @@ pub(crate) struct ContainerOpenState<'w> {
 }
 
 pub(crate) fn handle_container_open_input(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    actions: ActionInput,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
     mut state: ContainerOpenState,
 ) {
-    let Some(mouse) = mouse else {
-        return;
-    };
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !actions.just_pressed(InputAction::Primary) {
         return;
     }
     if world_input_blocked(state.input_state.as_deref())
@@ -58,9 +55,7 @@ pub(crate) fn handle_container_open_input(
     let cursor_tile = cursor_tile_from_window(&windows, &cameras);
     // Shift+click on a marked entity deconstructs it (see
     // `handle_ghost_click`) instead of opening its window.
-    let shift_held = keyboard.as_deref().is_some_and(|keyboard| {
-        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
-    });
+    let shift_held = actions.pressed(InputAction::Alternate);
     if shift_held
         && let Some((x, y)) = cursor_tile
         && let Some(entity_id) = state.sim.read().entities().occupancy().entity_at(x, y)
@@ -79,17 +74,14 @@ pub(crate) fn handle_container_open_input(
 }
 
 pub(crate) fn handle_container_close_input(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     mut open_container: ResMut<OpenContainer>,
 ) {
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-    if escape_consumed(input_state.as_deref()) {
+    if escape_consumed(input_state.as_deref()) || world_input_blocked(input_state.as_deref()) {
         return;
     }
-    if keyboard.just_pressed(KeyCode::Escape) {
+    if actions.just_pressed(InputAction::CancelPause) {
         open_container.close();
     }
 }
@@ -132,4 +124,37 @@ pub fn opened_container_after_world_click(
 
 pub fn container_open_input_allowed(build_state: &BuildPlacementState) -> bool {
     build_state.selected.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::bindings::{ActionBindings, InputBinding};
+
+    #[test]
+    fn remapped_cancel_does_not_close_a_container_while_world_input_is_blocked() {
+        let mut bindings = ActionBindings::default();
+        bindings
+            .rebind(InputAction::CancelPause, InputBinding::key(KeyCode::KeyI))
+            .unwrap();
+        let mut keyboard = ButtonInput::default();
+        keyboard.press(KeyCode::KeyI);
+
+        let mut app = App::new();
+        app.insert_resource(bindings)
+            .insert_resource(keyboard)
+            .insert_resource(AppInputState {
+                world_blocked: true,
+                escape_consumed: false,
+            })
+            .insert_resource(OpenContainer {
+                entity_id: Some(EntityId::new(1)),
+                rolling_stock: None,
+            })
+            .add_systems(Update, handle_container_close_input);
+
+        app.update();
+
+        assert!(app.world().resource::<OpenContainer>().is_open());
+    }
 }

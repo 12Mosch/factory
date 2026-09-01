@@ -7,6 +7,7 @@ use factory_sim::{
 };
 
 use crate::constants::{SLOT_BUTTON_HEIGHT, SLOT_BUTTON_WIDTH};
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::formatting::{format_item_display_name, format_item_stack};
@@ -163,15 +164,13 @@ pub(crate) fn spawn_slot_button(
 
 pub(crate) fn handle_container_slot_clicks(
     mut interactions: ContainerSlotInteractionQuery,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut feedback: ResMut<InventoryTransferFeedback>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
-    let shift_held = keyboard.as_deref().is_some_and(|keyboard| {
-        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
-    });
+    let shift_held = actions.pressed(InputAction::Alternate);
 
     for (interaction, button) in &mut interactions {
         if *interaction != Interaction::Pressed {

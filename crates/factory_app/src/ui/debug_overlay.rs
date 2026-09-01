@@ -4,6 +4,9 @@ use bevy::scene::ScenePatch;
 use factory_sim::{PowerSummary, SimulationCounts};
 use std::time::Duration;
 
+use crate::input::bindings::{ActionInput, InputAction};
+use crate::input::panels::world_input_blocked;
+use crate::input::resources::AppInputState;
 use crate::rendering::resources::RenderSyncStats;
 use crate::resources::{SimProfileStats, SimResource, UpsStats};
 
@@ -83,14 +86,13 @@ pub(crate) fn setup_debug_overlay(
 }
 
 pub(crate) fn toggle_debug_overlay(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
+    input_state: Option<Res<AppInputState>>,
     mut visible: ResMut<DebugOverlayVisible>,
 ) {
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-
-    if keyboard.just_pressed(KeyCode::F4) {
+    if !world_input_blocked(input_state.as_deref())
+        && actions.just_pressed(InputAction::ToggleDebugOverlay)
+    {
         visible.0 = !visible.0;
     }
 }

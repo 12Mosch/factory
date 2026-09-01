@@ -40,7 +40,6 @@ use factory_sim::{
     RollingStockId, SignalOperand, Simulation, TrainId, TrainWaitCondition, TrainWaitConditionKind,
 };
 
-use crate::input::train_manual::manual_train_controls_hint;
 use crate::resources::SimResource;
 use crate::ui::circuit::signals::signal_short_label;
 use crate::ui::circuit::widgets::{
@@ -318,6 +317,7 @@ pub(crate) const fn condition_kind_label(kind: TrainWaitConditionKind) -> &'stat
 pub(crate) fn spawn_train_schedule_panel(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &ScheduleSnapshot,
+    manual_controls_hint: &str,
 ) {
     parent
         .spawn((
@@ -362,7 +362,7 @@ pub(crate) fn spawn_train_schedule_panel(
                 // leaves the player in a state whose controls exist only in
                 // the source code.
                 spawn_caption(panel, "Close this window, point at the train, then press:");
-                spawn_caption(panel, &manual_train_controls_hint());
+                spawn_caption(panel, manual_controls_hint);
             }
             for (index, row) in snapshot.rows.iter().enumerate() {
                 spawn_entry(panel, index, row, revision);
@@ -677,6 +677,13 @@ fn seconds(ticks: u64) -> String {
 mod tests {
     use super::*;
 
+    fn train_hint() -> String {
+        crate::input::train_manual::manual_train_controls_hint(
+            &crate::input::bindings::ActionBindings::default(),
+            &crate::input::bindings::KeyDisplayNames::default(),
+        )
+    }
+
     fn snapshot_of(sim: &Simulation, conditions: &[TrainWaitCondition]) -> ScheduleSnapshot {
         ScheduleSnapshot {
             manual: false,
@@ -744,7 +751,7 @@ mod tests {
         {
             let mut commands = Commands::new(&mut queue, &world);
             commands.spawn_empty().with_children(|parent| {
-                spawn_train_schedule_panel(parent, &snapshot);
+                spawn_train_schedule_panel(parent, &snapshot, &train_hint());
             });
         }
         queue.apply(&mut world);
@@ -774,7 +781,7 @@ mod tests {
         {
             let mut commands = Commands::new(&mut queue, &world);
             commands.spawn_empty().with_children(|parent| {
-                spawn_train_schedule_panel(parent, &snapshot);
+                spawn_train_schedule_panel(parent, &snapshot, &train_hint());
             });
         }
         queue.apply(&mut world);
@@ -807,7 +814,7 @@ mod tests {
         {
             let mut commands = Commands::new(&mut automatic_queue, &automatic_world);
             commands.spawn_empty().with_children(|parent| {
-                spawn_train_schedule_panel(parent, &automatic_snapshot);
+                spawn_train_schedule_panel(parent, &automatic_snapshot, &train_hint());
             });
         }
         automatic_queue.apply(&mut automatic_world);

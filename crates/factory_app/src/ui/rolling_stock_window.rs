@@ -17,6 +17,8 @@ use factory_sim::{
     InventoryPanel, ROLLING_STOCK_FUEL_SLOT_INDEX, RollingStockId, Simulation, entity_access,
 };
 
+use crate::input::bindings::{ActionBindings, KeyDisplayNames};
+use crate::input::train_manual::manual_train_controls_hint;
 use crate::placement::build::entity_display_name as prototype_display_name;
 use crate::resources::SimResource;
 use crate::ui::inventory_panel::{
@@ -64,11 +66,14 @@ pub(crate) struct RollingStockWindowSnapshot {
     /// a live label instead, so the editor does not rebuild under the player's
     /// cursor every tick.
     schedule: Option<ScheduleSnapshot>,
+    manual_controls_hint: String,
 }
 
 pub(crate) fn sync_rolling_stock_window(
     mut commands: Commands,
     sim: Res<SimResource>,
+    bindings: Res<ActionBindings>,
+    key_names: Res<KeyDisplayNames>,
     mut open_container: ResMut<OpenContainer>,
     mut feedback: ResMut<InventoryTransferFeedback>,
     mut roots: WindowRootQuery<RollingStockWindowSnapshot>,
@@ -90,7 +95,7 @@ pub(crate) fn sync_rolling_stock_window(
         true,
         || {
             let stock_id = open.expect("a snapshot is only built while stock is open");
-            rolling_stock_window_snapshot(&sim.read(), stock_id)
+            rolling_stock_window_snapshot(&sim.read(), stock_id, &bindings, &key_names)
         },
         rolling_stock_window_root,
         spawn_rolling_stock_window_contents,
@@ -105,6 +110,8 @@ pub(crate) fn sync_rolling_stock_window(
 fn rolling_stock_window_snapshot(
     sim: &Simulation,
     stock_id: RollingStockId,
+    bindings: &ActionBindings,
+    key_names: &KeyDisplayNames,
 ) -> RollingStockWindowSnapshot {
     let cargo_slots = entity_access::rolling_stock_panel_slot_count(
         sim,
@@ -131,6 +138,7 @@ fn rolling_stock_window_snapshot(
             .is_some_and(|stock| !stock.fluid_boxes.is_empty()),
         stopped: sim.rolling_stock_is_stopped(stock_id),
         schedule: schedule_snapshot(sim, stock_id),
+        manual_controls_hint: manual_train_controls_hint(bindings, key_names),
     }
 }
 
@@ -299,7 +307,7 @@ fn spawn_rolling_stock_window_contents(
         // Under the cargo, because a schedule is about the train while
         // everything above it is about this one piece of it.
         if let Some(schedule) = &snapshot.schedule {
-            spawn_train_schedule_panel(panel, schedule);
+            spawn_train_schedule_panel(panel, schedule, &snapshot.manual_controls_hint);
         }
         spawn_inventory_transfer_feedback(panel);
     });

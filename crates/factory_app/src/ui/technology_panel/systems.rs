@@ -3,7 +3,8 @@ use factory_sim::SimCommand;
 
 use crate::audio::SoundEvent;
 use crate::build::resources::{BuildMenuState, BuildPlacementState};
-use crate::input::panels::escape_consumed;
+use crate::input::bindings::{ActionInput, InputAction};
+use crate::input::panels::{escape_consumed, world_input_blocked};
 use crate::input::resources::AppInputState;
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
@@ -41,28 +42,27 @@ type TechnologyQueueInteractionQuery<'w, 's> = Query<
 >;
 
 pub(crate) fn handle_technology_window_input(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     build_menu: Res<BuildMenuState>,
     mut window_state: ResMut<TechnologyWindowState>,
     mut build_state: ResMut<BuildPlacementState>,
 ) {
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-
-    if build_menu.open || escape_consumed(input_state.as_deref()) {
+    if build_menu.open
+        || escape_consumed(input_state.as_deref())
+        || world_input_blocked(input_state.as_deref())
+    {
         return;
     }
 
-    if keyboard.just_pressed(KeyCode::KeyT) {
+    if actions.just_pressed(InputAction::OpenTechnology) {
         window_state.open = !window_state.open;
         if window_state.open {
             build_state.selected = None;
         }
     }
 
-    if window_state.open && keyboard.just_pressed(KeyCode::Escape) {
+    if window_state.open && actions.just_pressed(InputAction::CancelPause) {
         window_state.open = false;
     }
 }
