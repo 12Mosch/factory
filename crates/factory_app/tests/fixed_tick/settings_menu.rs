@@ -1,6 +1,7 @@
 use super::common::test_app;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
+use factory_app::input::bindings::{ActionBindings, InputAction};
 use factory_app::save_load::{SaveLoadConfig, SaveLoadWindowState};
 use factory_app::ui::accessibility::{
     ReadableHighContrastButton, UiPreferences, UiScaleAction, UiScaleButton,
@@ -97,6 +98,133 @@ fn display_accessibility_and_control_tabs_expose_their_expected_content() {
         );
         assert!(all_text(&mut app).iter().any(|text| text == expected_text));
     }
+}
+
+#[test]
+fn tab_switch_cancels_binding_capture_before_processing_the_same_key_press() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+    let controls = tab_button(&mut app, SettingsTab::Controls);
+    press_button(&mut app, controls);
+    let defaults = app
+        .world()
+        .resource::<ActionBindings>()
+        .bindings(InputAction::MoveUp)
+        .to_vec();
+    let move_up = button_with_child_text(&mut app, "W / Up");
+    press_button(&mut app, move_up);
+
+    let gameplay = tab_button(&mut app, SettingsTab::Gameplay);
+    *app.world_mut()
+        .entity_mut(gameplay)
+        .get_mut::<Interaction>()
+        .unwrap() = Interaction::Pressed;
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyI);
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<ActionBindings>()
+            .bindings(InputAction::MoveUp),
+        defaults
+    );
+}
+
+#[test]
+fn back_cancels_binding_capture_before_processing_the_same_key_press() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+    let controls = tab_button(&mut app, SettingsTab::Controls);
+    press_button(&mut app, controls);
+    let defaults = app
+        .world()
+        .resource::<ActionBindings>()
+        .bindings(InputAction::MoveUp)
+        .to_vec();
+    let move_up = button_with_child_text(&mut app, "W / Up");
+    press_button(&mut app, move_up);
+
+    let back = action_button(&mut app, SettingsAction::Back);
+    *app.world_mut()
+        .entity_mut(back)
+        .get_mut::<Interaction>()
+        .unwrap() = Interaction::Pressed;
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyI);
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .resource::<ActionBindings>()
+            .bindings(InputAction::MoveUp),
+        defaults
+    );
+    assert!(!app.world().resource::<SettingsWindowState>().open);
+}
+
+#[test]
+fn leaving_controls_clears_a_stale_binding_conflict() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+    let controls = tab_button(&mut app, SettingsTab::Controls);
+    press_button(&mut app, controls);
+    let move_up = button_with_child_text(&mut app, "W / Up");
+    press_button(&mut app, move_up);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyB);
+    app.update();
+    assert!(
+        all_text(&mut app)
+            .iter()
+            .any(|text| text.contains("already bound"))
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset(KeyCode::KeyB);
+
+    let audio = tab_button(&mut app, SettingsTab::Audio);
+    press_button(&mut app, audio);
+    let controls = tab_button(&mut app, SettingsTab::Controls);
+    press_button(&mut app, controls);
+
+    assert!(
+        all_text(&mut app)
+            .iter()
+            .all(|text| !text.contains("already bound"))
+    );
+
+    let move_up = button_with_child_text(&mut app, "W / Up");
+    press_button(&mut app, move_up);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyB);
+    app.update();
+    assert!(
+        all_text(&mut app)
+            .iter()
+            .any(|text| text.contains("already bound"))
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset(KeyCode::KeyB);
+    let back = action_button(&mut app, SettingsAction::Back);
+    press_button(&mut app, back);
+
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+    let controls = tab_button(&mut app, SettingsTab::Controls);
+    press_button(&mut app, controls);
+    assert!(
+        all_text(&mut app)
+            .iter()
+            .all(|text| !text.contains("already bound"))
+    );
 }
 
 #[test]
@@ -297,4 +425,15 @@ fn all_text(app: &mut App) -> Vec<String> {
     let world = app.world_mut();
     let mut texts = world.query::<&Text>();
     texts.iter(world).map(|text| text.0.clone()).collect()
+}
+
+fn button_with_child_text(app: &mut App, expected: &str) -> Entity {
+    let world = app.world_mut();
+    let mut texts = world.query::<(&Text, &ChildOf)>();
+    let entity = texts
+        .iter(world)
+        .find_map(|(text, parent)| (text.0 == expected).then_some(parent.parent()))
+        .expect("text with the expected value should exist");
+    assert!(world.entity(entity).contains::<Button>());
+    entity
 }

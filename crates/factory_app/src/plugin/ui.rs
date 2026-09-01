@@ -165,6 +165,7 @@ impl Plugin for UiPlugin {
                     handle_control_binding_buttons.in_set(AppSet::UiInteraction),
                     capture_control_binding
                         .after(handle_control_binding_buttons)
+                        .after(handle_settings_buttons)
                         .in_set(AppSet::UiInteraction),
                 )
                     .in_set(InGameSet),

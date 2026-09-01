@@ -213,6 +213,7 @@ pub(crate) fn handle_settings_buttons(
             resources.window.active_tab = button.tab;
             if button.tab != SettingsTab::Controls {
                 resources.control_rebind.capturing = None;
+                resources.control_rebind.error = None;
             }
             resources.sounds.write(SoundEvent::UiClick);
         }
@@ -281,6 +282,7 @@ pub(crate) fn handle_settings_buttons(
             },
             SettingsAction::Back => {
                 resources.control_rebind.capturing = None;
+                resources.control_rebind.error = None;
                 if resources.window.close() {
                     resources.pause.open = true;
                 }

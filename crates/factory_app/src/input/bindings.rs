@@ -334,6 +334,16 @@ impl InputBinding {
         });
         parts.join("+")
     }
+
+    /// Returns whether both bindings can activate from the same physical
+    /// input state. Shift is intentionally permissive at runtime so that
+    /// alternate actions such as Shift+click still perform the base click.
+    fn overlaps(self, other: Self) -> bool {
+        self.input == other.input
+            && self.modifiers.control == other.modifiers.control
+            && self.modifiers.alt == other.modifiers.alt
+            && self.modifiers.super_key == other.modifiers.super_key
+    }
 }
 
 /// The active binding registry. An action can have multiple physical inputs;
@@ -374,7 +384,10 @@ impl ActionBindings {
         if let Some(conflicting_action) = InputAction::ALL.into_iter().find(|other| {
             *other != action
                 && action.contexts() & other.contexts() != 0
-                && self.bindings(*other).contains(&binding)
+                && self
+                    .bindings(*other)
+                    .iter()
+                    .any(|other_binding| binding.overlaps(*other_binding))
         }) {
             return Err(BindingConflict {
                 action: conflicting_action,
@@ -474,7 +487,12 @@ impl InputBinding {
         mouse: Option<&ButtonInput<MouseButton>>,
         phase: ButtonPhase,
     ) -> bool {
-        if !modifiers_match(self.modifiers, keyboard, self.input) {
+        // A release completes an action that began while its modifiers were
+        // held. Players may release those modifiers before the primary key or
+        // mouse button, so only press phases inspect the current modifier set.
+        if !matches!(phase, ButtonPhase::JustReleased)
+            && !modifiers_match(self.modifiers, keyboard, self.input)
+        {
             return false;
         }
         match self.input {
@@ -665,7 +683,10 @@ impl BindingsFile {
                 InputAction::ALL.into_iter().any(|other| {
                     other != action
                         && action.contexts() & other.contexts() != 0
-                        && registry.bindings(other).contains(binding)
+                        && registry
+                            .bindings(other)
+                            .iter()
+                            .any(|other_binding| binding.overlaps(*other_binding))
                 })
             });
             if has_conflict {
@@ -788,7 +809,10 @@ mod tests {
                     !InputAction::ALL.into_iter().any(|other| {
                         other != action
                             && action.contexts() & other.contexts() != 0
-                            && registry.bindings(other).contains(binding)
+                            && registry
+                                .bindings(other)
+                                .iter()
+                                .any(|other_binding| binding.overlaps(*other_binding))
                     }),
                     "{action:?} conflicts on {binding:?}"
                 );
@@ -824,6 +848,25 @@ mod tests {
                 .rebind(InputAction::MapCenterPlayer, world_binding)
                 .is_ok(),
             "the same key is valid in the exclusive full-map context"
+        );
+    }
+
+    #[test]
+    fn shift_chords_conflict_with_their_unmodified_binding() {
+        let mut registry = ActionBindings::default();
+        let shift_w = InputBinding {
+            input: BindingInput::Key(KeyCode::KeyW),
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(
+            registry.rebind(InputAction::OpenBuildMenu, shift_w),
+            Err(BindingConflict {
+                action: InputAction::MoveUp,
+            })
         );
     }
 
@@ -864,11 +907,59 @@ mod tests {
     }
 
     #[test]
+    fn chord_release_matches_after_its_modifier_is_released() {
+        let binding = InputBinding {
+            input: BindingInput::Mouse(MouseButton::Left),
+            modifiers: Modifiers {
+                control: true,
+                ..Default::default()
+            },
+        };
+        let mut keyboard = ButtonInput::default();
+        let mut mouse = ButtonInput::default();
+        keyboard.press(KeyCode::ControlLeft);
+        mouse.press(MouseButton::Left);
+        assert!(binding.matches(Some(&keyboard), Some(&mouse), ButtonPhase::Pressed));
+
+        keyboard.release(KeyCode::ControlLeft);
+        mouse.release(MouseButton::Left);
+        assert!(binding.matches(Some(&keyboard), Some(&mouse), ButtonPhase::JustReleased));
+    }
+
+    #[test]
+    fn persisted_shift_overlap_falls_back_to_the_default() {
+        let registry = ActionBindings::default();
+        let mut file = BindingsFile::from_registry(&registry);
+        let shift_w = InputBinding {
+            input: BindingInput::Key(KeyCode::KeyW),
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        };
+        file.bindings
+            .iter_mut()
+            .find(|entry| entry.action == InputAction::OpenBuildMenu)
+            .unwrap()
+            .bindings = vec![shift_w];
+
+        let loaded = file.into_registry(PathBuf::new()).unwrap();
+        assert_eq!(
+            loaded.bindings(InputAction::OpenBuildMenu),
+            registry.bindings(InputAction::OpenBuildMenu)
+        );
+    }
+
+    #[test]
     fn versioned_file_round_trips_and_rejects_unknown_versions() {
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .replace(|character: char| !character.is_ascii_alphanumeric(), "_");
         let root = std::env::temp_dir().join(format!(
             "factory-controls-test-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("unnamed")
+            thread_name
         ));
         let path = root.join("controls.ron");
         let mut registry = ActionBindings::default();

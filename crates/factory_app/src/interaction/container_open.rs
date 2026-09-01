@@ -78,7 +78,7 @@ pub(crate) fn handle_container_close_input(
     input_state: Option<Res<AppInputState>>,
     mut open_container: ResMut<OpenContainer>,
 ) {
-    if escape_consumed(input_state.as_deref()) {
+    if escape_consumed(input_state.as_deref()) || world_input_blocked(input_state.as_deref()) {
         return;
     }
     if actions.just_pressed(InputAction::CancelPause) {
@@ -124,4 +124,37 @@ pub fn opened_container_after_world_click(
 
 pub fn container_open_input_allowed(build_state: &BuildPlacementState) -> bool {
     build_state.selected.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::bindings::{ActionBindings, InputBinding};
+
+    #[test]
+    fn remapped_cancel_does_not_close_a_container_while_world_input_is_blocked() {
+        let mut bindings = ActionBindings::default();
+        bindings
+            .rebind(InputAction::CancelPause, InputBinding::key(KeyCode::KeyI))
+            .unwrap();
+        let mut keyboard = ButtonInput::default();
+        keyboard.press(KeyCode::KeyI);
+
+        let mut app = App::new();
+        app.insert_resource(bindings)
+            .insert_resource(keyboard)
+            .insert_resource(AppInputState {
+                world_blocked: true,
+                escape_consumed: false,
+            })
+            .insert_resource(OpenContainer {
+                entity_id: Some(EntityId::new(1)),
+                rolling_stock: None,
+            })
+            .add_systems(Update, handle_container_close_input);
+
+        app.update();
+
+        assert!(app.world().resource::<OpenContainer>().is_open());
+    }
 }
