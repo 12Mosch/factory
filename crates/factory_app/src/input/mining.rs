@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use factory_sim::{ManualMiningTarget, SimCommand};
 
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
 use crate::input::train_manual::stock_at_tile;
@@ -11,7 +12,7 @@ use crate::simulation::SimCommandRequest;
 use crate::ui::resources::TechnologyWindowState;
 
 pub(crate) fn update_manual_mining_from_input(
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     sim: Res<SimResource>,
@@ -25,10 +26,10 @@ pub(crate) fn update_manual_mining_from_input(
     let cursor = if blocked {
         None
     } else {
-        mouse
-            .as_deref()
-            .filter(|mouse| mouse.pressed(MouseButton::Right))
-            .and_then(|_| cursor_tile_from_window(&windows, &cameras))
+        actions
+            .pressed(InputAction::Secondary)
+            .then(|| cursor_tile_from_window(&windows, &cameras))
+            .flatten()
     };
 
     // Rolling stock comes off the rails in one action rather than by chipping
@@ -38,9 +39,7 @@ pub(crate) fn update_manual_mining_from_input(
     // keeps a held right-click from trying to mine the same wagon every frame.
     let stock_under_cursor = cursor.and_then(|(x, y)| stock_at_tile(&sim.read(), x, y));
     if let Some(stock_id) = stock_under_cursor
-        && mouse
-            .as_deref()
-            .is_some_and(|mouse| mouse.just_pressed(MouseButton::Right))
+        && actions.just_pressed(InputAction::Secondary)
     {
         commands.write(SimCommandRequest(SimCommand::MineRollingStock { stock_id }));
     }

@@ -4,9 +4,10 @@ use bevy::window::PrimaryWindow;
 use factory_sim::SimCommand;
 
 use crate::build::resources::{
-    BuildPlacementState, BuildPlacementStatus, BuildSelection, BuildTarget, HOTBAR_SLOT_COUNT,
-    HotbarState, PlannerState, PlannerTool,
+    BuildPlacementState, BuildPlacementStatus, BuildSelection, BuildTarget, HotbarState,
+    PlannerState, PlannerTool,
 };
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::placement::build::{entity_display_name, next_direction, short_inventory_need};
@@ -25,7 +26,7 @@ pub(crate) struct BuildWorldClickState<'w> {
 }
 
 pub(crate) fn handle_build_hotbar_keys(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     sim: Res<SimResource>,
@@ -38,12 +39,8 @@ pub(crate) fn handle_build_hotbar_keys(
     {
         return;
     }
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-
-    for (slot_index, key_code) in hotbar_keys().into_iter().enumerate() {
-        if keyboard.just_pressed(key_code) {
+    for (slot_index, action) in InputAction::HOTBAR.into_iter().enumerate() {
+        if actions.just_pressed(action) {
             select_build_slot(
                 &sim.read(),
                 technology_window.as_deref(),
@@ -58,7 +55,7 @@ pub(crate) fn handle_build_hotbar_keys(
 }
 
 pub(crate) fn handle_build_rotate_cancel_keys(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     mut build_state: ResMut<BuildPlacementState>,
@@ -69,22 +66,17 @@ pub(crate) fn handle_build_rotate_cancel_keys(
     {
         return;
     }
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-
-    if keyboard.just_pressed(KeyCode::Escape) && build_state.selected.is_some() {
+    if actions.just_pressed(InputAction::CancelPause) && build_state.selected.is_some() {
         build_state.selected = None;
         build_state.last_status = Default::default();
     }
-    if keyboard.just_pressed(KeyCode::KeyR) && build_state.selected.is_some() {
+    if actions.just_pressed(InputAction::RotateRepair) && build_state.selected.is_some() {
         build_state.direction = next_direction(build_state.direction);
     }
 }
 
 pub(crate) fn handle_build_world_click(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    actions: ActionInput,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
@@ -95,10 +87,7 @@ pub(crate) fn handle_build_world_click(
     {
         return;
     }
-    let Some(mouse) = mouse else {
-        return;
-    };
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !actions.just_pressed(InputAction::Primary) {
         return;
     }
     if ui_buttons
@@ -117,9 +106,7 @@ pub(crate) fn handle_build_world_click(
 
     // Shift-click plans a ghost instead of building immediately. Terrain has
     // no ghost form, so tile items always place immediately.
-    let ghost = keyboard.as_deref().is_some_and(|keyboard| {
-        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
-    });
+    let ghost = actions.pressed(InputAction::Alternate);
     let command = match selection.target {
         BuildTarget::Tile(_) => SimCommand::PlaceTileFromPlayerInventory {
             item_id: selection.item_id,
@@ -205,21 +192,6 @@ pub fn select_build_selection(
     };
     planner.set_tool(PlannerTool::None);
     true
-}
-
-fn hotbar_keys() -> [KeyCode; HOTBAR_SLOT_COUNT] {
-    [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-        KeyCode::Digit0,
-    ]
 }
 
 pub(crate) fn technology_window_open(window: Option<&TechnologyWindowState>) -> bool {

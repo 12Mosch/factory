@@ -11,8 +11,9 @@ use factory_sim::{
 use crate::build::resources::{
     BuildPlacementState, BuildPlacementStatus, PlannerState, PlannerTool,
 };
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
-use crate::input::planner::{activate_planner_tool, control_pressed};
+use crate::input::planner::activate_planner_tool;
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
 use crate::placement::build::display_name;
@@ -31,28 +32,16 @@ pub(crate) struct WireKeyState<'w> {
     open_container: ResMut<'w, OpenContainer>,
 }
 
-/// `C` takes the red wire and `V` the green one; pressing the same key again
-/// puts the wire away. Both are plain keys, since Ctrl+C / Ctrl+V are already
-/// the blueprint copy and paste bindings.
-pub(crate) fn handle_wire_tool_keys(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mut state: WireKeyState,
-) {
+/// Activates the selected wire tool, or puts it away when pressed again.
+pub(crate) fn handle_wire_tool_keys(actions: ActionInput, mut state: WireKeyState) {
     if world_input_blocked(state.input_state.as_deref())
         || technology_window_open(state.technology_window.as_deref())
     {
         return;
     }
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-    if control_pressed(&keyboard) {
-        return;
-    }
-
-    let requested = if keyboard.just_pressed(KeyCode::KeyC) {
+    let requested = if actions.just_pressed(InputAction::RedWire) {
         Some(WireColor::Red)
-    } else if keyboard.just_pressed(KeyCode::KeyV) {
+    } else if actions.just_pressed(InputAction::GreenWire) {
         Some(WireColor::Green)
     } else {
         None
@@ -84,8 +73,7 @@ pub(crate) struct WireClickState<'w> {
 }
 
 pub(crate) fn handle_wire_click(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    actions: ActionInput,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     ui_buttons: Query<&Interaction, With<Button>>,
@@ -99,11 +87,8 @@ pub(crate) fn handle_wire_click(
     let PlannerTool::Wire(color) = state.planner.tool else {
         return;
     };
-    let (Some(keyboard), Some(mouse)) = (keyboard, mouse) else {
-        return;
-    };
-    let left = mouse.just_pressed(MouseButton::Left);
-    let right = mouse.just_pressed(MouseButton::Right);
+    let left = actions.just_pressed(InputAction::Primary);
+    let right = actions.just_pressed(InputAction::Secondary);
     if !left && !right {
         return;
     }
@@ -119,7 +104,7 @@ pub(crate) fn handle_wire_click(
 
     let cursor_node = {
         let sim = state.sim.read();
-        connector_under_cursor(&sim, x, y, &keyboard)
+        connector_under_cursor(&sim, x, y, actions.pressed(InputAction::Alternate))
     };
     let Some(node) = cursor_node else {
         // Clicking empty ground cancels a half-drawn wire rather than leaving
@@ -175,14 +160,14 @@ fn connector_under_cursor(
     sim: &Simulation,
     x: WorldTileCoord,
     y: WorldTileCoord,
-    keyboard: &ButtonInput<KeyCode>,
+    alternate: bool,
 ) -> Option<CircuitNode> {
     let entity_id = sim.entities().occupancy().entity_at(x, y)?;
     let connector = factory_sim::entity_access::circuit_connector(sim, entity_id)?;
     let port = match connector.ports {
         factory_data::CircuitPortLayout::Single => ConnectorPort::Single,
         factory_data::CircuitPortLayout::InputOutput => {
-            if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+            if alternate {
                 ConnectorPort::Output
             } else {
                 ConnectorPort::Input

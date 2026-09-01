@@ -3,6 +3,9 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 
 use super::AppSet;
+use crate::input::bindings::{
+    ActionBindings, BindingPersistenceState, load_persisted_bindings, save_bindings_if_changed,
+};
 use crate::input::camera::zoom_camera;
 use crate::input::mining::update_manual_mining_from_input;
 use crate::input::movement::move_player_from_input;
@@ -24,8 +27,12 @@ impl Plugin for InputPlugin {
             .init_resource::<AccumulatedMouseMotion>()
             .init_resource::<AccumulatedMouseScroll>()
             .init_resource::<AppInputState>()
+            .init_resource::<ActionBindings>()
+            .init_resource::<BindingPersistenceState>()
             .init_resource::<RailGraphOverlay>()
             .init_resource::<TrainManualInput>()
+            .add_systems(Startup, load_persisted_bindings)
+            .add_systems(Update, save_bindings_if_changed)
             .add_systems(
                 PreUpdate,
                 (reset_app_input_state, handle_panel_input)

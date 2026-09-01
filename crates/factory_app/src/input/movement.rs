@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::time::Fixed;
 use factory_sim::SimCommand;
 
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
 use crate::simulation::SimCommandRequest;
@@ -9,7 +10,7 @@ use crate::ui::resources::TechnologyWindowState;
 
 pub(crate) fn move_player_from_input(
     time: Res<Time<Fixed>>,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     mut commands: MessageWriter<SimCommandRequest>,
@@ -20,11 +21,7 @@ pub(crate) fn move_player_from_input(
         return;
     }
 
-    let Some(keyboard) = keyboard else {
-        return;
-    };
-
-    let direction = movement_direction_from_keyboard(&keyboard);
+    let direction = movement_direction(&actions);
     if direction != Vec2::ZERO {
         commands.write(SimCommandRequest(SimCommand::MovePlayer {
             direction_x: direction.x,
@@ -34,18 +31,18 @@ pub(crate) fn move_player_from_input(
     }
 }
 
-fn movement_direction_from_keyboard(keyboard: &ButtonInput<KeyCode>) -> Vec2 {
+fn movement_direction(actions: &ActionInput) -> Vec2 {
     let mut direction = Vec2::ZERO;
-    if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
+    if actions.pressed(InputAction::MoveUp) {
         direction.y += 1.0;
     }
-    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
+    if actions.pressed(InputAction::MoveDown) {
         direction.y -= 1.0;
     }
-    if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
+    if actions.pressed(InputAction::MoveLeft) {
         direction.x -= 1.0;
     }
-    if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
+    if actions.pressed(InputAction::MoveRight) {
         direction.x += 1.0;
     }
 

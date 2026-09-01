@@ -19,6 +19,7 @@ use factory_sim::{
 };
 
 use crate::audio::SoundEvent;
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::circuit::state::cycle;
@@ -337,7 +338,7 @@ pub(crate) fn handle_schedule_condition_remove_buttons(
 /// place.
 pub(crate) fn handle_schedule_condition_edit_buttons(
     buttons: ConditionEditButtons,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
     mut commands: MessageWriter<SimCommandRequest>,
@@ -345,9 +346,7 @@ pub(crate) fn handle_schedule_condition_edit_buttons(
 ) {
     // Shift steps a cycling button backwards, the rule every other cycling
     // button in the game follows.
-    let backwards = keyboard
-        .as_deref()
-        .is_some_and(|keys| keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
+    let backwards = actions.pressed(InputAction::Alternate);
     let Some((address, edit, revision)) = buttons.pressed_edit() else {
         return;
     };

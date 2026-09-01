@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use factory_sim::{CircuitCondition, EntityId, SignalId, SignalOperand, SimCommand, Simulation};
 
 use crate::audio::SoundEvent;
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::resources::OpenContainer;
@@ -201,7 +202,7 @@ type OutputValueButtons<'w, 's> =
 /// touch the open entity.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_circuit_toggle_buttons(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     mut comparators: ComparatorButtons,
     mut operations: OperationButtons,
     mut clears: ClearConditionButtons,
@@ -215,9 +216,7 @@ pub(crate) fn handle_circuit_toggle_buttons(
     };
     // Shift steps a cycling button backwards, so a long option list stays
     // reachable from either direction.
-    let backwards = keyboard.is_some_and(|keyboard| {
-        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
-    });
+    let backwards = actions.pressed(InputAction::Alternate);
 
     let mut commands = Vec::new();
     {

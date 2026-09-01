@@ -5,6 +5,7 @@ pub(crate) mod build_bar;
 pub(crate) mod build_menu;
 pub(crate) mod circuit;
 pub(crate) mod container_window;
+pub(crate) mod controls;
 pub(crate) mod crafting_panel;
 pub mod debug_overlay;
 pub mod enemy_settings;

@@ -85,10 +85,7 @@ fn display_accessibility_and_control_tabs_expose_their_expected_content() {
 
     for (tab, expected_text) in [
         (SettingsTab::Display, "Interface scale"),
-        (
-            SettingsTab::Controls,
-            "Control rebinding is not available yet. Current shortcuts remain active.",
-        ),
+        (SettingsTab::Controls, "Active controls"),
         (SettingsTab::Accessibility, "Readable high contrast"),
     ] {
         let button = tab_button(&mut app, tab);

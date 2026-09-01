@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 bevy.workspace = true
+bevy_input = { version = "0.19.1", features = ["serialize"] }
 factory_data.workspace = true
 factory_sim.workspace = true
 ron = "0.12.2"

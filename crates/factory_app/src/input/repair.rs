@@ -4,6 +4,7 @@ use bevy::window::PrimaryWindow;
 use factory_sim::SimCommand;
 
 use crate::build::resources::BuildPlacementState;
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -13,7 +14,7 @@ use crate::ui::resources::TechnologyWindowState;
 
 #[derive(SystemParam)]
 pub(crate) struct RepairInputState<'w> {
-    keyboard: Option<Res<'w, ButtonInput<KeyCode>>>,
+    actions: ActionInput<'w>,
     input_state: Option<Res<'w, AppInputState>>,
     technology_window: Option<Res<'w, TechnologyWindowState>>,
     build_state: Res<'w, BuildPlacementState>,
@@ -29,11 +30,8 @@ pub(crate) fn update_repair_from_input(
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
-    let Some(keyboard) = state.keyboard.as_deref() else {
-        return;
-    };
     // R rotates while a building is selected; repair only applies otherwise.
-    if !keyboard.pressed(KeyCode::KeyR)
+    if !state.actions.pressed(InputAction::RotateRepair)
         || state.build_state.selected.is_some()
         || world_input_blocked(state.input_state.as_deref())
         || state

@@ -7,18 +7,18 @@
 
 use bevy::prelude::*;
 
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::{AppInputState, RailGraphOverlay};
 
 pub(crate) fn toggle_rail_overlay_from_input(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     mut overlay: ResMut<RailGraphOverlay>,
 ) {
-    let Some(keyboard) = keyboard.as_deref() else {
-        return;
-    };
-    if !keyboard.just_pressed(KeyCode::F7) || world_input_blocked(input_state.as_deref()) {
+    if !actions.just_pressed(InputAction::ToggleRailOverlay)
+        || world_input_blocked(input_state.as_deref())
+    {
         return;
     }
 

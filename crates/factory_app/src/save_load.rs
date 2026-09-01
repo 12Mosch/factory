@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::build::resources::BuildPlacementState;
 use crate::constants::SIM_TICKS_PER_SECOND;
-use crate::input::resources::TrainManualInput;
+use crate::input::bindings::{ActionInput, InputAction};
+use crate::input::panels::world_input_blocked;
+use crate::input::resources::{AppInputState, TrainManualInput};
 use crate::map::resources::{MapDetailCache, MapTextureCache, MapViewState};
 use crate::rendering::map_texture::MapTextureUploadQueue;
 use crate::rendering::resource_cells::ResourceRenderCache;
@@ -264,17 +266,18 @@ pub fn delete_save(
 }
 
 pub(crate) fn handle_save_load_shortcuts(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
+    input_state: Option<Res<AppInputState>>,
     config: Res<SaveLoadConfig>,
     catalog: Res<SaveCatalog>,
     mut pending: ResMut<PendingSaveJobs>,
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
 ) {
-    let Some(keyboard) = keyboard else {
+    if world_input_blocked(input_state.as_deref()) {
         return;
-    };
-    if keyboard.just_pressed(KeyCode::F5) {
+    }
+    if actions.just_pressed(InputAction::QuickSave) {
         request_system_save(
             SaveKind::Quicksave,
             &load_state.sim,
@@ -285,7 +288,7 @@ pub(crate) fn handle_save_load_shortcuts(
             true,
         );
     }
-    if keyboard.just_pressed(KeyCode::F9) {
+    if actions.just_pressed(InputAction::QuickLoad) {
         let id = SaveId::new("quicksave");
         load_save(&id, &catalog, &pending, &mut status, &mut load_state);
     }

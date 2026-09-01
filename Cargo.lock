@@ -967,6 +967,7 @@ dependencies = [
  "bevy_reflect",
  "derive_more",
  "log",
+ "serde",
  "smol_str",
  "thiserror 2.0.20",
 ]
@@ -2497,6 +2498,7 @@ name = "factory_app"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_input",
  "chrono",
  "factory_data",
  "factory_sim",

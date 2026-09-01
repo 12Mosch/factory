@@ -33,6 +33,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use factory_sim::{RollingStockId, SimCommand, Simulation, TrainId, TrainThrottle, WorldTileCoord};
 
+use crate::input::bindings::{ActionBindings, ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::{AppInputState, TrainManualInput, TrainManualKey};
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -40,12 +41,13 @@ use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::resources::TechnologyWindowState;
 
-const TRAIN_DRIVE_KEY: KeyCode = KeyCode::F8;
-const TRAIN_BRAKE_KEY: KeyCode = KeyCode::F10;
-
-/// Player-facing control copy derived from the keys the input system reads.
-pub(crate) fn manual_train_controls_hint() -> String {
-    format!("{TRAIN_DRIVE_KEY:?} drive / reverse  ·  {TRAIN_BRAKE_KEY:?} brake")
+/// Player-facing copy derived from the same active registry as input handling.
+pub(crate) fn manual_train_controls_hint(bindings: &ActionBindings) -> String {
+    format!(
+        "{} drive / reverse  ·  {} brake",
+        bindings.display_name(InputAction::TrainDrive),
+        bindings.display_name(InputAction::TrainBrake)
+    )
 }
 
 /// Collects the manual driving keys during the frame, each with the tile it was
@@ -60,27 +62,25 @@ pub(crate) fn manual_train_controls_hint() -> String {
 /// rather than kept: what the player aimed at is behind a panel now, and the
 /// fixed step must not act on it there.
 pub(crate) fn collect_train_manual_input(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     technology_window: Option<Res<TechnologyWindowState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
     mut pending: ResMut<TrainManualInput>,
 ) {
-    let Some(keyboard) = keyboard.as_deref() else {
-        return;
-    };
     if train_input_blocked(input_state.as_deref(), technology_window.as_deref()) {
         pending.clear();
         return;
     }
     let presses = [
-        (TRAIN_DRIVE_KEY, TrainManualKey::Drive),
-        (TRAIN_BRAKE_KEY, TrainManualKey::Brake),
-    ]
-    .into_iter()
-    .filter(|(key, _)| keyboard.just_pressed(*key));
-    for (_, key) in presses {
+        (InputAction::TrainDrive, TrainManualKey::Drive),
+        (InputAction::TrainBrake, TrainManualKey::Brake),
+    ];
+    for (_, key) in presses
+        .into_iter()
+        .filter(|(action, _)| actions.just_pressed(*action))
+    {
         // A press with nowhere to point is dropped rather than queued: it can
         // never be resolved, and the cursor is the half of it that says what it
         // meant.

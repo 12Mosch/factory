@@ -4,6 +4,7 @@ use bevy::ui_widgets::ScrollArea;
 use factory_sim::{EnemyDifficultyPreset, SimCommand};
 
 use crate::audio::{AudioSettings, SoundEvent};
+use crate::input::bindings::ActionBindings;
 use crate::resources::SimResource;
 use crate::simulation::SimCommandRequest;
 use crate::ui::accessibility::{
@@ -12,6 +13,9 @@ use crate::ui::accessibility::{
 };
 use crate::ui::audio_settings::{
     AudioSettingsSnapshot, audio_settings_snapshot, spawn_audio_settings_content,
+};
+use crate::ui::controls::{
+    ControlRebindState, ControlsSnapshot, controls_snapshot, spawn_controls_content,
 };
 use crate::ui::enemy_settings::{
     EnemySettingsSnapshot, enemy_settings_snapshot, spawn_enemy_settings_content,
@@ -137,6 +141,7 @@ pub(crate) struct SettingsSnapshot {
     gameplay: EnemySettingsSnapshot,
     display: DisplaySettingsSnapshot,
     accessibility: AccessibilitySettingsSnapshot,
+    controls: ControlsSnapshot,
 }
 
 type MenuButtonQuery<'w, 's> = Query<
@@ -174,6 +179,8 @@ pub(crate) struct SettingsButtonResources<'w> {
     sim_commands: MessageWriter<'w, SimCommandRequest>,
     sounds: MessageWriter<'w, SoundEvent>,
     ui_preferences: ResMut<'w, UiPreferences>,
+    bindings: ResMut<'w, ActionBindings>,
+    control_rebind: ResMut<'w, ControlRebindState>,
 }
 
 /// Handles settings entry, tab navigation, applying, resetting, and closing.
@@ -204,6 +211,9 @@ pub(crate) fn handle_settings_buttons(
     for (interaction, button) in &mut buttons.tabs {
         if *interaction == Interaction::Pressed {
             resources.window.active_tab = button.tab;
+            if button.tab != SettingsTab::Controls {
+                resources.control_rebind.capturing = None;
+            }
             resources.sounds.write(SoundEvent::UiClick);
         }
     }
@@ -263,10 +273,14 @@ pub(crate) fn handle_settings_buttons(
                     resources.window.dirty = true;
                 }
                 SettingsTab::Controls => {
-                    resources.window.dirty = false;
+                    resources.bindings.reset_to_defaults();
+                    resources.control_rebind.capturing = None;
+                    resources.control_rebind.error = None;
+                    resources.window.dirty = true;
                 }
             },
             SettingsAction::Back => {
+                resources.control_rebind.capturing = None;
                 if resources.window.close() {
                     resources.pause.open = true;
                 }
@@ -280,6 +294,8 @@ pub(crate) fn sync_settings_window(
     mut commands: Commands,
     window: Res<SettingsWindowState>,
     audio: Res<AudioSettings>,
+    bindings: Res<ActionBindings>,
+    control_rebind: Res<ControlRebindState>,
     sim: Res<SimResource>,
     mut roots: WindowRootQuery<SettingsSnapshot>,
 ) {
@@ -299,6 +315,7 @@ pub(crate) fn sync_settings_window(
             accessibility: AccessibilitySettingsSnapshot {
                 readable_high_contrast: window.pending_values.readable_high_contrast,
             },
+            controls: controls_snapshot(&bindings, &control_rebind),
         },
         settings_root,
         spawn_settings_window,
@@ -372,11 +389,7 @@ fn spawn_settings_window(
                 SettingsTab::Gameplay => spawn_enemy_settings_content(content, &snapshot.gameplay),
                 SettingsTab::Audio => spawn_audio_settings_content(content, &snapshot.audio),
                 SettingsTab::Display => spawn_display_settings_content(content, &snapshot.display),
-                SettingsTab::Controls => spawn_placeholder(
-                    content,
-                    "Control settings",
-                    "Control rebinding is not available yet. Current shortcuts remain active.",
-                ),
+                SettingsTab::Controls => spawn_controls_content(content, &snapshot.controls),
                 SettingsTab::Accessibility => {
                     spawn_accessibility_settings_content(content, &snapshot.accessibility)
                 }
@@ -400,25 +413,6 @@ fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected:
                 spawn_button(row, label, SettingsTabButton { tab }, tab == selected);
             }
         });
-}
-
-// Follow-up: docs/issues/issue-central-settings-placeholder-pages.md
-/// Spawns an explanatory placeholder for settings not implemented yet.
-fn spawn_placeholder(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    title: &str,
-    explanation: &str,
-) {
-    parent.spawn((
-        Text::new(title),
-        TextFont::from_font_size(16.0),
-        TextColor(Color::srgb(0.94, 0.95, 0.90)),
-    ));
-    parent.spawn((
-        Text::new(explanation),
-        TextFont::from_font_size(13.0),
-        TextColor(Color::srgb(0.67, 0.71, 0.65)),
-    ));
 }
 
 /// Spawns fixed, always-reachable Reset, Apply, and Back actions.

@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use crate::build::resources::{PastePlacementPreviewState, PlannerState, PlannerTool};
 use crate::constants::TILE_SIZE;
+use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
 use crate::interaction::cursor::{CursorCameraFilter, cursor_tile_from_window};
@@ -209,7 +210,7 @@ fn footprint_size(footprint: &EntityFootprint) -> Vec2 {
 /// Shows the drag-selection rectangle while an area tool selection is in
 /// progress.
 pub(crate) fn update_planner_selection_rect(
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    actions: ActionInput,
     input_state: Option<Res<AppInputState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), CursorCameraFilter>,
@@ -236,9 +237,7 @@ pub(crate) fn update_planner_selection_rect(
     let width = (max_x - min_x + 1) as f32 * TILE_SIZE;
     let height = (max_y - min_y + 1) as f32 * TILE_SIZE;
 
-    let cancelling = keyboard.as_deref().is_some_and(|keyboard| {
-        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight)
-    });
+    let cancelling = actions.pressed(InputAction::Alternate);
     sprite.color = match planner.tool {
         PlannerTool::Deconstruct if cancelling => Color::srgba(0.95, 0.72, 0.25, 0.22),
         PlannerTool::Deconstruct => Color::srgba(1.0, 0.22, 0.16, 0.22),
