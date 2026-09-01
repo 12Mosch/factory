@@ -1,7 +1,42 @@
 use bevy::prelude::*;
 use factory_sim::{SimCommand, SimCommandEffect, SimCommandError};
 
+use crate::input::resources::TrainManualInput;
 use crate::resources::{SimProfileStats, SimResource, UpsStats};
+
+/// Presentation-owned pause state for the active game session.
+///
+/// This deliberately lives outside [`factory_sim::Simulation`]: pausing is an
+/// application concern, is not serialized, and must not participate in the
+/// deterministic simulation hash.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AppPauseState {
+    paused: bool,
+}
+
+impl AppPauseState {
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+}
+
+/// Run condition for fixed-step systems that may advance simulation state.
+pub(crate) fn simulation_running(pause: Res<AppPauseState>) -> bool {
+    !pause.is_paused()
+}
+
+/// Run condition for frame-side command buffering while simulation is paused.
+pub(crate) fn simulation_paused(pause: Res<AppPauseState>) -> bool {
+    pause.is_paused()
+}
 
 /// A player command queued for the simulation. Frame-rate systems (UI clicks,
 /// world input) write these; [`drain_sim_commands`] applies them at the next
@@ -22,14 +57,34 @@ pub struct SimCommandResult {
 #[derive(Resource, Default)]
 pub struct SimCommandBacklog(pub Vec<SimCommand>);
 
+/// Drops transient input that was waiting when pause began.
+///
+/// Commands deliberately issued from responsive paused UI (for example enemy
+/// settings) are written after this transition and continue to collect in FIFO
+/// order. Only input aimed at the world before the pause boundary is discarded.
+pub(crate) fn discard_transient_input_on_pause(
+    pause: Res<AppPauseState>,
+    mut requests: ResMut<Messages<SimCommandRequest>>,
+    mut backlog: ResMut<SimCommandBacklog>,
+    mut train_input: ResMut<TrainManualInput>,
+) {
+    if !pause.is_changed() || !pause.is_paused() {
+        return;
+    }
+
+    requests.clear();
+    backlog.0.clear();
+    train_input.clear();
+}
+
 /// Applies all queued commands at the tick boundary, before the simulation
 /// advances.
 pub(crate) fn collect_sim_commands(
-    mut requests: MessageReader<SimCommandRequest>,
+    mut requests: ResMut<Messages<SimCommandRequest>>,
     mut backlog: ResMut<SimCommandBacklog>,
 ) {
-    for request in requests.read() {
-        backlog.0.push(request.0.clone());
+    for request in requests.drain() {
+        backlog.0.push(request.0);
     }
 }
 
@@ -64,9 +119,37 @@ pub(crate) fn tick_sim(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory_sim::Simulation;
+    use factory_sim::{EnemyDifficultyPreset, Simulation, load_from_bytes, save_to_bytes};
 
+    use crate::input::resources::TrainManualInput;
     use crate::resources::{SimProfileStats, UpsStats};
+
+    fn pause_test_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(Simulation::new_test_world(123)))
+            .init_resource::<AppPauseState>()
+            .init_resource::<SimCommandBacklog>()
+            .init_resource::<TrainManualInput>()
+            .init_resource::<SimProfileStats>()
+            .init_resource::<UpsStats>()
+            .add_message::<SimCommandRequest>()
+            .add_message::<SimCommandResult>()
+            .add_systems(
+                PreUpdate,
+                (
+                    discard_transient_input_on_pause,
+                    collect_sim_commands.run_if(simulation_paused),
+                )
+                    .chain(),
+            )
+            .add_systems(
+                FixedUpdate,
+                (collect_sim_commands, tick_sim)
+                    .chain()
+                    .run_if(simulation_running),
+            );
+        app
+    }
 
     #[test]
     /// Verifies that a fixed tick drains each queued command exactly once.
@@ -121,5 +204,103 @@ mod tests {
                 .position_tiles(),
             after_command_position
         );
+    }
+
+    #[test]
+    fn paused_fixed_steps_leave_tick_and_deterministic_hash_unchanged() {
+        let mut app = pause_test_app();
+        app.world_mut().run_schedule(FixedUpdate);
+
+        app.world_mut().resource_mut::<AppPauseState>().pause();
+        app.world_mut().run_schedule(PreUpdate);
+        let before = {
+            let sim = app.world().resource::<SimResource>().read();
+            (sim.tick_count(), sim.state_hash())
+        };
+
+        for _ in 0..128 {
+            app.world_mut().run_schedule(FixedUpdate);
+        }
+
+        let after = {
+            let sim = app.world().resource::<SimResource>().read();
+            (sim.tick_count(), sim.state_hash())
+        };
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn paused_commands_resume_once_in_fifo_order_without_stale_input() {
+        let mut app = pause_test_app();
+        let stale = EnemyDifficultyPreset::Peaceful.config().runtime;
+        let first = EnemyDifficultyPreset::Aggressive.config().runtime;
+        let second = EnemyDifficultyPreset::Standard.config().runtime;
+
+        app.world_mut()
+            .write_message(SimCommandRequest(SimCommand::SetEnemyRuntimeSettings(
+                stale,
+            )));
+        app.world_mut().resource_mut::<AppPauseState>().pause();
+        app.world_mut().run_schedule(PreUpdate);
+
+        app.world_mut()
+            .write_message(SimCommandRequest(SimCommand::SetEnemyRuntimeSettings(
+                first,
+            )));
+        app.world_mut().run_schedule(PreUpdate);
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut()
+            .write_message(SimCommandRequest(SimCommand::SetEnemyRuntimeSettings(
+                second,
+            )));
+        app.world_mut().run_schedule(PreUpdate);
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let paused_tick = app.world().resource::<SimResource>().read().tick_count();
+        assert_eq!(app.world().resource::<SimCommandBacklog>().0.len(), 2);
+        assert_ne!(
+            app.world()
+                .resource::<SimResource>()
+                .read()
+                .enemy_settings()
+                .runtime,
+            stale,
+            "the command waiting before pause must be discarded"
+        );
+
+        app.world_mut().resource_mut::<AppPauseState>().resume();
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let sim = app.world().resource::<SimResource>().read();
+        assert_eq!(sim.tick_count(), paused_tick + 1);
+        assert_eq!(sim.enemy_settings().runtime, second);
+        assert!(app.world().resource::<SimCommandBacklog>().0.is_empty());
+    }
+
+    #[test]
+    fn save_load_round_trip_does_not_serialize_or_clear_app_pause() {
+        let mut app = pause_test_app();
+        app.world_mut().resource_mut::<AppPauseState>().pause();
+        app.world_mut().run_schedule(PreUpdate);
+
+        let (bytes, expected) = {
+            let sim = app.world().resource::<SimResource>().read();
+            (
+                save_to_bytes(&sim).expect("paused simulation should save"),
+                (sim.tick_count(), sim.state_hash()),
+            )
+        };
+        let loaded = load_from_bytes(&bytes).expect("paused save should load");
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .replace(loaded)
+            .expect("test simulation should not be locked");
+
+        let actual = {
+            let sim = app.world().resource::<SimResource>().read();
+            (sim.tick_count(), sim.state_hash())
+        };
+        assert_eq!(actual, expected);
+        assert!(app.world().resource::<AppPauseState>().is_paused());
     }
 }

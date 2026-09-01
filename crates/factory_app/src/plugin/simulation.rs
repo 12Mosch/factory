@@ -7,7 +7,8 @@ use super::AppSet;
 use crate::constants::SIM_TICKS_PER_SECOND;
 use crate::resources::{SimProfileStats, SimResource};
 use crate::simulation::{
-    SimCommandBacklog, SimCommandRequest, SimCommandResult, collect_sim_commands, tick_sim,
+    AppPauseState, SimCommandBacklog, SimCommandRequest, SimCommandResult, collect_sim_commands,
+    tick_sim,
 };
 use crate::world_setup::StartInWorldSetup;
 
@@ -29,6 +30,7 @@ impl Plugin for SimulationPlugin {
         app.insert_resource(Time::<Fixed>::from_hz(SIM_TICKS_PER_SECOND))
             .insert_resource(sim)
             .init_resource::<SimProfileStats>()
+            .init_resource::<AppPauseState>()
             .init_resource::<SimCommandBacklog>()
             .add_message::<SimCommandRequest>()
             .add_message::<SimCommandResult>()

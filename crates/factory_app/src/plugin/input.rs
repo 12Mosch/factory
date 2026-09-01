@@ -15,6 +15,9 @@ use crate::input::rail_debug::toggle_rail_overlay_from_input;
 use crate::input::repair::update_repair_from_input;
 use crate::input::resources::{AppInputState, RailGraphOverlay, TrainManualInput};
 use crate::input::train_manual::{apply_train_manual_input, collect_train_manual_input};
+use crate::simulation::{
+    collect_sim_commands, discard_transient_input_on_pause, simulation_paused,
+};
 
 /// Input resources, panel-state collection, and the fixed-step systems that
 /// feed frame-collected input into the simulation.
@@ -41,7 +44,12 @@ impl Plugin for InputPlugin {
             )
             .add_systems(
                 PreUpdate,
-                (reset_app_input_state, handle_panel_input)
+                (
+                    reset_app_input_state,
+                    handle_panel_input,
+                    discard_transient_input_on_pause,
+                    collect_sim_commands.run_if(simulation_paused),
+                )
                     .chain()
                     .in_set(AppSet::PanelInput),
             )

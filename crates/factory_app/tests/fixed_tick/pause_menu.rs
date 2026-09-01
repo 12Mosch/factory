@@ -1,7 +1,10 @@
-use super::common::test_app;
+use super::common::{sim_tick_and_hash, test_app};
 use bevy::prelude::*;
 use factory_app::save_load::SaveLoadWindowState;
-use factory_app::ui::pause_menu::{PauseMenuAction, PauseMenuActionButton, PauseMenuState};
+use factory_app::simulation::AppPauseState;
+use factory_app::ui::pause_menu::{
+    PauseHudButton, PauseMenuAction, PauseMenuActionButton, PauseMenuState,
+};
 use factory_app::ui::save_load::{SaveLoadBackButton, SaveLoadModal, SaveLoadSlotList};
 use std::time::Duration;
 
@@ -47,6 +50,46 @@ fn escape_from_save_load_returns_to_pause() {
 
     assert!(app.world().resource::<PauseMenuState>().open);
     assert!(!app.world().resource::<SaveLoadWindowState>().open);
+}
+
+#[test]
+fn escape_pause_freezes_render_frames_and_resumes_fixed_ticks() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    press_key(&mut app, KeyCode::Escape);
+    app.update();
+    assert!(app.world().resource::<AppPauseState>().is_paused());
+    assert!(app.world().resource::<PauseMenuState>().open);
+    let frozen = sim_tick_and_hash(&app);
+
+    release_key(&mut app, KeyCode::Escape);
+    for _ in 0..120 {
+        app.update();
+    }
+    assert_eq!(sim_tick_and_hash(&app), frozen);
+
+    press_key(&mut app, KeyCode::Escape);
+    app.update();
+    assert!(!app.world().resource::<AppPauseState>().is_paused());
+    assert!(!app.world().resource::<PauseMenuState>().open);
+    assert!(sim_tick_and_hash(&app).0 > frozen.0);
+}
+
+#[test]
+fn hud_pause_and_menu_resume_control_the_same_state() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    app.update();
+
+    let pause = single_button::<PauseHudButton>(&mut app);
+    press_button(&mut app, pause);
+    assert!(app.world().resource::<AppPauseState>().is_paused());
+    assert!(app.world().resource::<PauseMenuState>().open);
+
+    let resume = action_button(&mut app, PauseMenuAction::Resume);
+    press_button(&mut app, resume);
+    assert!(!app.world().resource::<AppPauseState>().is_paused());
+    assert!(!app.world().resource::<PauseMenuState>().open);
 }
 
 fn action_button(app: &mut App, action: PauseMenuAction) -> Entity {
