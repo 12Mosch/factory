@@ -58,7 +58,8 @@ use crate::ui::objectives_panel::{
     ObjectivesPanelState, setup_objectives_panel, sync_objectives_panel,
 };
 use crate::ui::pause_menu::{
-    NewWorldConfirmation, PauseMenuState, handle_pause_menu_buttons, sync_pause_menu,
+    NewWorldConfirmation, PauseMenuState, handle_pause_hud_button, handle_pause_menu_buttons,
+    setup_pause_hud, sync_pause_hud, sync_pause_indicator, sync_pause_menu,
 };
 use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
 use crate::ui::resources::{
@@ -156,6 +157,7 @@ impl Plugin for UiPlugin {
                 (
                     load_persisted_ui_preferences,
                     setup_debug_overlay,
+                    setup_pause_hud,
                     setup_threat_ui,
                 ),
             )
@@ -249,11 +251,20 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
+                    handle_pause_hud_button.in_set(AppSet::UiInteraction),
                     handle_pause_menu_buttons
                         .in_set(AppSet::UiInteraction)
                         .before(sync_save_load_window),
+                    sync_pause_hud
+                        .after(handle_pause_hud_button)
+                        .after(handle_pause_menu_buttons),
                     sync_pause_menu
+                        .after(handle_pause_hud_button)
                         .after(handle_pause_menu_buttons)
+                        .after(handle_save_load_buttons)
+                        .after(handle_settings_buttons),
+                    sync_pause_indicator
+                        .after(sync_pause_menu)
                         .after(handle_save_load_buttons)
                         .after(handle_settings_buttons),
                 )

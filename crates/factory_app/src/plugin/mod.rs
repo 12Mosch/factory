@@ -20,6 +20,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy::text::EditableTextSystems;
 
+use crate::simulation::simulation_running;
 use crate::ui::text_input::{
     TextInputSanitization, capture_editable_text_composition, sanitize_editable_text,
 };
@@ -109,6 +110,14 @@ impl Plugin for FactoryAppPlugin {
                 (AppSet::SimInput, AppSet::SimTick, AppSet::PostTick)
                     .chain()
                     .in_set(InGameSet),
+            )
+            .configure_sets(
+                FixedUpdate,
+                (
+                    AppSet::SimInput.run_if(simulation_running),
+                    AppSet::SimTick.run_if(simulation_running),
+                    AppSet::PostTick.run_if(simulation_running),
+                ),
             )
             .configure_sets(
                 Update,

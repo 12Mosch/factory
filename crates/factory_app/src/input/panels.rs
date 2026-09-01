@@ -14,6 +14,7 @@ use crate::input::resources::AppInputState;
 use crate::map::resources::{MapDisplaySettings, MapOverlay, MapTextureCache, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::{PendingSaveConfirmation, SaveLoadWindowState};
+use crate::simulation::AppPauseState;
 use crate::ui::accessibility::UiPreferences;
 use crate::ui::controls::ControlRebindState;
 use crate::ui::map_view::{
@@ -38,6 +39,7 @@ pub(crate) struct WorldBlockingWindows<'w, 's> {
     build_menu: Res<'w, BuildMenuState>,
     blueprint_library: Res<'w, BlueprintLibraryWindowState>,
     equipment: Res<'w, EquipmentWindowState>,
+    app_pause: Res<'w, AppPauseState>,
     input_focus: Option<Res<'w, InputFocus>>,
     editable_texts: Query<'w, 's, Entity, With<EditableText>>,
 }
@@ -57,21 +59,23 @@ struct WindowOpenFlags {
 
 impl WorldBlockingWindows<'_, '_> {
     fn any_open(&self) -> bool {
-        world_blocking_windows_open(WindowOpenFlags {
-            map: self.map.open,
-            stats: self.stats.open,
-            crafting: self.crafting.open,
-            settings: self.settings.open,
-            pause: self.pause.open,
-            save_load: self.save_load.open,
-            build_menu: self.build_menu.open,
-            blueprint_library: self.blueprint_library.open,
-            equipment: self.equipment.open,
-        }) || self
-            .input_focus
-            .as_deref()
-            .and_then(InputFocus::get)
-            .is_some_and(|focused| self.editable_texts.contains(focused))
+        self.app_pause.is_paused()
+            || world_blocking_windows_open(WindowOpenFlags {
+                map: self.map.open,
+                stats: self.stats.open,
+                crafting: self.crafting.open,
+                settings: self.settings.open,
+                pause: self.pause.open,
+                save_load: self.save_load.open,
+                build_menu: self.build_menu.open,
+                blueprint_library: self.blueprint_library.open,
+                equipment: self.equipment.open,
+            })
+            || self
+                .input_focus
+                .as_deref()
+                .and_then(InputFocus::get)
+                .is_some_and(|focused| self.editable_texts.contains(focused))
     }
 }
 
@@ -106,6 +110,7 @@ pub(crate) struct PanelInputResources<'w, 's> {
     settings: ResMut<'w, SettingsWindowState>,
     control_rebind: Res<'w, ControlRebindState>,
     pause: ResMut<'w, PauseMenuState>,
+    app_pause: ResMut<'w, AppPauseState>,
     new_world_confirmation: ResMut<'w, NewWorldConfirmation>,
     audio: Res<'w, AudioSettings>,
     ui_preferences: Res<'w, UiPreferences>,
@@ -168,6 +173,7 @@ pub(crate) fn handle_panel_input(actions: ActionInput, mut resources: PanelInput
                 resources.new_world_confirmation.awaiting_confirmation = false;
             } else {
                 resources.pause.open = false;
+                resources.app_pause.resume();
             }
             resources.input_state.escape_consumed = true;
         }
@@ -361,22 +367,24 @@ pub(crate) fn handle_panel_input(actions: ActionInput, mut resources: PanelInput
             resources.build_state.last_status = Default::default();
             resources.input_state.escape_consumed = true;
         } else {
+            resources.app_pause.pause();
             resources.pause.open = true;
             resources.input_state.escape_consumed = true;
         }
     }
 
-    resources.input_state.world_blocked = world_blocking_windows_open(WindowOpenFlags {
-        map: resources.map.open,
-        stats: resources.stats.open,
-        crafting: resources.crafting.open,
-        settings: resources.settings.open,
-        pause: resources.pause.open,
-        save_load: resources.save_load.open,
-        build_menu: resources.build_menu.open,
-        blueprint_library: resources.blueprint_library.open,
-        equipment: resources.equipment.open,
-    });
+    resources.input_state.world_blocked = resources.app_pause.is_paused()
+        || world_blocking_windows_open(WindowOpenFlags {
+            map: resources.map.open,
+            stats: resources.stats.open,
+            crafting: resources.crafting.open,
+            settings: resources.settings.open,
+            pause: resources.pause.open,
+            save_load: resources.save_load.open,
+            build_menu: resources.build_menu.open,
+            blueprint_library: resources.blueprint_library.open,
+            equipment: resources.equipment.open,
+        });
 }
 
 fn close_settings(settings: &mut SettingsWindowState, pause: &mut PauseMenuState) {

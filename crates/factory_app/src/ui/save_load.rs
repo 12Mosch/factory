@@ -152,7 +152,11 @@ pub(crate) fn handle_save_load_buttons(
                 *confirmation = PendingSaveConfirmation::Delete(button.id.clone())
             }
             SaveEntryAction::Load => {
-                load_save(&button.id, &catalog, &pending, &mut status, &mut load_state);
+                if load_save(&button.id, &catalog, &pending, &mut status, &mut load_state)
+                    && load_state.app_pause.is_paused()
+                {
+                    pause.open = true;
+                }
             }
         }
     }

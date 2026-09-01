@@ -29,7 +29,7 @@ use crate::rendering::map_texture::MapTextureUploadQueue;
 use crate::rendering::resource_cells::ResourceRenderCache;
 use crate::rendering::resources::VisibleEntityIds;
 use crate::resources::{SimAccessError, SimResource};
-use crate::simulation::{SimCommandBacklog, SimCommandRequest, SimCommandResult};
+use crate::simulation::{AppPauseState, SimCommandBacklog, SimCommandRequest, SimCommandResult};
 use crate::ui::resources::{EquipmentWindowState, OpenContainer};
 use crate::world_setup::AppMode;
 
@@ -388,6 +388,7 @@ pub(crate) struct LoadState<'w> {
     pub(crate) next_mode: ResMut<'w, NextState<AppMode>>,
     pub(crate) sim: ResMut<'w, SimResource>,
     pub(crate) window: ResMut<'w, SaveLoadWindowState>,
+    pub(crate) app_pause: Res<'w, AppPauseState>,
     pub(crate) autosave: ResMut<'w, AutosaveState>,
     pub(crate) build_state: ResMut<'w, BuildPlacementState>,
     pub(crate) open_container: ResMut<'w, OpenContainer>,
