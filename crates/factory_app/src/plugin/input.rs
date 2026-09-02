@@ -13,8 +13,10 @@ use crate::input::movement::move_player_from_input;
 use crate::input::panels::{handle_panel_input, reset_app_input_state};
 use crate::input::rail_debug::toggle_rail_overlay_from_input;
 use crate::input::repair::update_repair_from_input;
+use crate::input::resources::WeaponInput;
 use crate::input::resources::{AppInputState, RailGraphOverlay, TrainManualInput};
 use crate::input::train_manual::{apply_train_manual_input, collect_train_manual_input};
+use crate::input::weapon::{apply_weapon_input, collect_weapon_input};
 use crate::simulation::{
     collect_sim_commands, discard_transient_input_on_pause, simulation_paused,
 };
@@ -36,6 +38,7 @@ impl Plugin for InputPlugin {
             .init_resource::<KeyDisplayNames>()
             .init_resource::<RailGraphOverlay>()
             .init_resource::<TrainManualInput>()
+            .init_resource::<WeaponInput>()
             .add_systems(Startup, load_persisted_bindings)
             .add_systems(Update, save_bindings_if_changed)
             .add_systems(
@@ -59,6 +62,7 @@ impl Plugin for InputPlugin {
                     move_player_from_input,
                     update_manual_mining_from_input,
                     update_repair_from_input,
+                    apply_weapon_input,
                     apply_train_manual_input,
                 )
                     .chain()
@@ -70,6 +74,7 @@ impl Plugin for InputPlugin {
                     zoom_camera,
                     toggle_rail_overlay_from_input,
                     collect_train_manual_input,
+                    collect_weapon_input,
                 )
                     .in_set(AppSet::WorldInput),
             );

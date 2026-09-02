@@ -37,7 +37,8 @@ pub use crate::combat::{
     AttackDefinition, AttackDelivery, CombatCommand, CombatCommandBuffer, CombatSource,
     CombatantId, Damage, DamageType, EnemySpawnerState, Faction, FactionRelation,
     GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState, HealthState, LaserTurretState, PLAYER_MAX_HEALTH,
-    RepairError, Resistance, ResistanceProfile, TargetPriority,
+    PlayerWeaponError, PlayerWeaponState, PlayerWeaponStatus, RepairError, Resistance,
+    ResistanceProfile, TargetPriority,
 };
 pub use crate::construction::{
     Blueprint, BlueprintEntity, ConstructionError, ConstructionJob, ConstructionState, GhostEntity,
@@ -212,6 +213,7 @@ pub struct Simulation {
 
     player: PlayerState,
     player_equipment: PlayerEquipmentState,
+    player_weapon: PlayerWeaponState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
@@ -892,6 +894,7 @@ pub enum SimValidationError {
         enemy_id: EnemyId,
     },
     InvalidPlayerState,
+    InvalidPlayerWeaponState,
     InvalidPlayerEquipment,
     InvalidEnemyState,
     AttackBudgetCapacityExceeded {

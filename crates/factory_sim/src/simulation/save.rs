@@ -102,7 +102,9 @@ use bincode::Options;
 // v50: manual crafting jobs gained stable identities and the queue gained
 // durable identity and completion cursors so cancel/reorder commands remain
 // safe across saves and presentation can distinguish completion from mutation.
-pub const SAVE_VERSION: u32 = 50;
+// v51: selected personal weapon, opened magazine, and fire cooldown joined the
+// durable player state.
+pub const SAVE_VERSION: u32 = 51;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -139,7 +141,8 @@ pub const SAVE_VERSION: u32 = 50;
 // v31: launch rewards moved from the rocket silo prototype to data-driven item
 // payload metadata and gained atomic multi-product support.
 // v32: powered equipment gained the personal-roboport effect metadata.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 32;
+// v33: item prototypes gained personal weapons and typed ammunition categories.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 33;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -193,6 +196,7 @@ struct SimulationSnapshotOwned {
     construction: ConstructionState,
     player: PlayerState,
     player_equipment: PlayerEquipmentState,
+    player_weapon: PlayerWeaponState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
@@ -382,6 +386,7 @@ struct SimulationSnapshotRef<'a> {
     construction: &'a ConstructionState,
     player: PlayerState,
     player_equipment: &'a PlayerEquipmentState,
+    player_weapon: PlayerWeaponState,
     player_inventory: &'a Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: &'a CraftingQueue,
@@ -418,6 +423,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             construction: &sim.construction,
             player: sim.player,
             player_equipment: &sim.player_equipment,
+            player_weapon: sim.player_weapon,
             player_inventory: &sim.player_inventory,
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: &sim.crafting_queue,
@@ -457,6 +463,7 @@ impl SimulationSnapshotOwned {
             construction: sim.construction.clone(),
             player: sim.player,
             player_equipment: sim.player_equipment.clone(),
+            player_weapon: sim.player_weapon,
             player_inventory: sim.player_inventory.clone(),
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: sim.crafting_queue.clone(),
@@ -496,6 +503,7 @@ impl SimulationSnapshotOwned {
             construction: self.construction,
             player: self.player,
             player_equipment: self.player_equipment,
+            player_weapon: self.player_weapon,
             player_inventory: self.player_inventory,
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,

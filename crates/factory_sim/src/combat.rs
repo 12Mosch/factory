@@ -1,10 +1,59 @@
 use crate::inventory::Inventory;
 use crate::{EnemyId, EntityId};
-pub use factory_data::DamageType;
+use factory_data::ItemId;
+pub use factory_data::{AmmoCategory, DamageType};
 use serde::{Deserialize, Serialize};
 
 pub const GUN_TURRET_AMMO_SLOT_COUNT: usize = 1;
 pub const PLAYER_MAX_HEALTH: u32 = 100;
+
+/// Durable state for the player's selected weapon and opened magazine.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PlayerWeaponState {
+    pub selected_weapon: Option<ItemId>,
+    pub loaded_ammo: Option<ItemId>,
+    pub loaded_shots: u32,
+    pub loaded_damage: Damage,
+    pub next_ready_tick: u64,
+    /// Weapon whose cadence established `next_ready_tick`. It remains the
+    /// origin when another compatible weapon is selected during that cooldown.
+    pub cooldown_origin: Option<ItemId>,
+}
+
+impl Default for PlayerWeaponState {
+    /// Creates the canonical state for a player with no selected weapon.
+    fn default() -> Self {
+        Self {
+            selected_weapon: None,
+            loaded_ammo: None,
+            loaded_shots: 0,
+            loaded_damage: Damage::physical(0),
+            next_ready_tick: 0,
+            cooldown_origin: None,
+        }
+    }
+}
+
+/// Read-only summary used by the HUD without exposing mutable combat state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayerWeaponStatus {
+    pub selected_weapon: Option<ItemId>,
+    pub loaded_ammo: Option<ItemId>,
+    pub loaded_shots: u32,
+    pub reserve_shots: u64,
+    pub cooldown_remaining_ticks: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerWeaponError {
+    NoWeaponsAvailable,
+    NoWeaponSelected,
+    WeaponUnavailable(ItemId),
+    NoAmmunition,
+    CoolingDown { remaining_ticks: u32 },
+    NoHostileTarget,
+    OutOfRange { range_tiles: u32 },
+}
 
 /// Ownership group used by combat targeting and damage authorization.
 ///

@@ -8,6 +8,44 @@ pub struct AppInputState {
     pub escape_consumed: bool,
 }
 
+/// Frame-collected personal-combat input consumed by the fixed simulation
+/// schedule. Aim is sampled with the visible frame; selection presses are
+/// counted so neither high nor low frame rates duplicate or lose them.
+#[derive(Resource, Default)]
+pub struct WeaponInput {
+    pub fire_held: bool,
+    pub aim_tile: Option<(WorldTileCoord, WorldTileCoord)>,
+    pending_shot: Option<(WorldTileCoord, WorldTileCoord)>,
+    pending_cycles: u8,
+}
+
+impl WeaponInput {
+    /// Retains one weapon-selection edge, capped to bound catch-up work.
+    pub fn push_cycle(&mut self) {
+        self.pending_cycles = self.pending_cycles.saturating_add(1).min(8);
+    }
+
+    /// Drains all retained weapon-selection edges for the next fixed step.
+    pub fn take_cycles(&mut self) -> u8 {
+        std::mem::take(&mut self.pending_cycles)
+    }
+
+    /// Retains the first aimed shot until the fixed schedule consumes it.
+    pub fn push_shot(&mut self, tile: (WorldTileCoord, WorldTileCoord)) {
+        self.pending_shot.get_or_insert(tile);
+    }
+
+    /// Takes the pending aimed shot, if one was sampled this frame.
+    pub fn take_shot(&mut self) -> Option<(WorldTileCoord, WorldTileCoord)> {
+        self.pending_shot.take()
+    }
+
+    /// Drops every transient weapon input when world input is unavailable.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Whether the rail connectivity overlay is being drawn.
 ///
 /// Off by default: it answers a question a player only asks while laying track,

@@ -17,7 +17,7 @@ pub(in crate::simulation) enum ItemSlotPolicy {
     RocketPartIngredient,
     RocketCargo,
     SciencePack,
-    Ammunition,
+    Ammunition(EntityId),
     /// A roboport's robot slots, which take any item declaring a flight
     /// profile — construction and logistic robots alike, since a roboport
     /// stations and charges both the same way.
@@ -120,7 +120,9 @@ pub(in crate::simulation) fn item_slot_policy_accepts_with_rocket_recipe(
             }
             ItemSlotPolicy::RocketCargo => catalog.rocket_launch_products(item_id).is_some(),
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
-            ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
+            ItemSlotPolicy::Ammunition(entity_id) => {
+                turret_accepts_ammunition(catalog, entities, entity_id, item_id)
+            }
             ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),
             ItemSlotPolicy::ConstructionMaterial => item_is_construction_material(catalog, item_id),
             ItemSlotPolicy::OutputOnly => false,
@@ -156,11 +158,32 @@ pub(in crate::simulation) fn item_slot_policy_accepts_with_rocket_recipe(
             }
             ItemSlotPolicy::RocketCargo => catalog.rocket_launch_products(item_id).is_some(),
             ItemSlotPolicy::SciencePack => lab_can_accept_item(catalog, item_id),
-            ItemSlotPolicy::Ammunition => item_is_ammo(catalog, item_id),
+            ItemSlotPolicy::Ammunition(entity_id) => {
+                turret_accepts_ammunition(catalog, entities, entity_id, item_id)
+            }
             ItemSlotPolicy::Robot => item_is_robot(catalog, item_id),
             ItemSlotPolicy::ConstructionMaterial => item_is_construction_material(catalog, item_id),
         },
     }
+}
+
+/// Whether an item matches the ammunition category declared by a gun turret.
+fn turret_accepts_ammunition(
+    catalog: &PrototypeCatalog,
+    entities: &EntityStore,
+    entity_id: EntityId,
+    item_id: ItemId,
+) -> bool {
+    let accepted_category = entities
+        .placed_entity(entity_id)
+        .and_then(|placed| catalog.entity(placed.prototype_id))
+        .and_then(|prototype| prototype.gun_turret)
+        .map(|turret| turret.ammo_category);
+    let item_category = catalog
+        .item(item_id)
+        .and_then(|item| item.ammo)
+        .map(|ammo| ammo.category);
+    accepted_category.is_some() && accepted_category == item_category
 }
 
 /// Whether an item is a robot a roboport can station.
@@ -233,7 +256,7 @@ pub(in crate::simulation) fn inventory_policy_for_entity(
     if entities.labs.contains_key(&entity_id) {
         ItemSlotPolicy::SciencePack
     } else if entities.gun_turrets.contains_key(&entity_id) {
-        ItemSlotPolicy::Ammunition
+        ItemSlotPolicy::Ammunition(entity_id)
     } else {
         ItemSlotPolicy::Unrestricted
     }

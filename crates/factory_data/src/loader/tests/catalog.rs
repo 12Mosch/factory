@@ -90,6 +90,8 @@ const ITEM_NAMES: &[&str] = &[
     "rocket_fuel",
     "rocket_part",
     "rocket_silo",
+    "pistol",
+    "submachine_gun",
 ];
 
 const FLUID_NAMES: &[&str] = &["water", "steam", "crude_oil", "petroleum_gas"];
@@ -155,6 +157,8 @@ const RECIPE_NAMES: &[&str] = &[
     "rocket_fuel",
     "rocket_part",
     "rocket_silo",
+    "pistol",
+    "submachine_gun",
 ];
 
 const ENTITY_NAMES: &[&str] = &[
@@ -243,9 +247,9 @@ const TECHNOLOGY_NAMES: &[&str] = &[
 fn base_catalog_loads_from_ron() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
 
-    assert_eq!(catalog.items.len(), 124);
+    assert_eq!(catalog.items.len(), 126);
     assert_eq!(catalog.fluids.len(), 7);
-    assert_eq!(catalog.recipes.len(), 121);
+    assert_eq!(catalog.recipes.len(), 123);
     assert_eq!(catalog.entities.len(), 78);
     assert_eq!(catalog.tiles.len(), 11);
     assert_eq!(catalog.technologies.len(), 51);

@@ -31,6 +31,8 @@ pub enum InputAction {
     Alternate,
     CancelPause,
     RotateRepair,
+    FireWeapon,
+    CycleWeapon,
     Hotbar1,
     Hotbar2,
     Hotbar3,
@@ -72,7 +74,7 @@ pub enum InputAction {
 }
 
 impl InputAction {
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 50] = [
         Self::MoveUp,
         Self::MoveDown,
         Self::MoveLeft,
@@ -83,6 +85,8 @@ impl InputAction {
         Self::Alternate,
         Self::CancelPause,
         Self::RotateRepair,
+        Self::FireWeapon,
+        Self::CycleWeapon,
         Self::Hotbar1,
         Self::Hotbar2,
         Self::Hotbar3,
@@ -157,6 +161,8 @@ impl InputAction {
             Self::Alternate => "Alternate mode",
             Self::CancelPause => "Cancel / pause",
             Self::RotateRepair => "Rotate / repair",
+            Self::FireWeapon => "Fire selected weapon",
+            Self::CycleWeapon => "Select next weapon",
             Self::Hotbar1 => "Hotbar slot 1",
             Self::Hotbar2 => "Hotbar slot 2",
             Self::Hotbar3 => "Hotbar slot 3",
@@ -219,6 +225,7 @@ impl InputAction {
             | Self::RedWire
             | Self::GreenWire
             | Self::RotateRepair => "BUILDING & TOOLS",
+            Self::FireWeapon | Self::CycleWeapon => "COMBAT",
             Self::OpenMap
             | Self::OpenProduction
             | Self::OpenTechnology
@@ -550,7 +557,7 @@ fn default_binding_map() -> BTreeMap<InputAction, Vec<InputBinding>> {
     use KeyCode as K;
     use MouseButton as M;
 
-    let entries: [(A, Vec<InputBinding>); 48] = [
+    let entries: [(A, Vec<InputBinding>); 50] = [
         (
             A::MoveUp,
             vec![InputBinding::key(K::KeyW), InputBinding::key(K::ArrowUp)],
@@ -582,6 +589,8 @@ fn default_binding_map() -> BTreeMap<InputAction, Vec<InputBinding>> {
         ),
         (A::CancelPause, vec![InputBinding::key(K::Escape)]),
         (A::RotateRepair, vec![InputBinding::key(K::KeyR)]),
+        (A::FireWeapon, vec![InputBinding::key(K::Space)]),
+        (A::CycleWeapon, vec![InputBinding::key(K::KeyQ)]),
         (A::Hotbar1, vec![InputBinding::key(K::Digit1)]),
         (A::Hotbar2, vec![InputBinding::key(K::Digit2)]),
         (A::Hotbar3, vec![InputBinding::key(K::Digit3)]),

@@ -96,6 +96,9 @@ use crate::ui::train_stop_panel::{
     submit_train_stop_rename, submit_train_stop_rename_button, sync_train_stop_rename_to_state,
     update_train_stop_panel,
 };
+use crate::ui::weapon::{
+    WeaponUiState, handle_weapon_command_results, setup_weapon_ui, sync_weapon_ui,
+};
 
 /// General UI: debug overlay, containers and inventory, technology window,
 /// manual crafting, production stats, and machine indicators.
@@ -151,6 +154,7 @@ impl Plugin for UiPlugin {
             .init_resource::<CircuitEditorState>()
             .init_resource::<TrainScheduleEditorState>()
             .init_resource::<TrainStopRenameState>()
+            .init_resource::<WeaponUiState>()
             .add_message::<TrainStopRenameCommitRequested>()
             .add_systems(
                 Startup,
@@ -159,6 +163,7 @@ impl Plugin for UiPlugin {
                     setup_debug_overlay,
                     setup_pause_hud,
                     setup_threat_ui,
+                    setup_weapon_ui,
                 ),
             )
             .add_systems(
@@ -245,6 +250,14 @@ impl Plugin for UiPlugin {
                         .after(handle_settings_buttons),
                     handle_production_stats_buttons.in_set(AppSet::UiInteraction),
                     sync_production_stats_window.after(handle_production_stats_buttons),
+                )
+                    .in_set(InGameSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_weapon_command_results.in_set(AppSet::UiInteraction),
+                    sync_weapon_ui.after(handle_weapon_command_results),
                 )
                     .in_set(InGameSet),
             )

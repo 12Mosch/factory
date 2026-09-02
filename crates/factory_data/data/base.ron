@@ -56,7 +56,7 @@
             id: 44,
             name: "firearm_magazine",
             stack_size: 200,
-            ammo: Some((damage_per_shot: 5, shots_per_item: 10, damage_type: Physical)),
+            ammo: Some((category: Bullet, damage_per_shot: 5, shots_per_item: 10, damage_type: Physical)),
         ),
         (
             id: 45,
@@ -81,7 +81,7 @@
             id: 59,
             name: "piercing_rounds_magazine",
             stack_size: 200,
-            ammo: Some((damage_per_shot: 8, shots_per_item: 10, damage_type: Physical)),
+            ammo: Some((category: Bullet, damage_per_shot: 8, shots_per_item: 10, damage_type: Physical)),
         ),
         (id: 60, name: "military_science_pack", stack_size: 200),
         (id: 61, name: "laser_turret", stack_size: 50),
@@ -366,6 +366,28 @@
                     charging_pad_watts: 100000,
                     construction_radius_tiles: 15,
                 ),
+            )),
+        ),
+        (
+            id: 124,
+            name: "pistol",
+            stack_size: 1,
+            weapon: Some((
+                ammo_category: Bullet,
+                delivery: Hitscan,
+                range_tiles: 10,
+                cooldown_ticks: 20,
+            )),
+        ),
+        (
+            id: 125,
+            name: "submachine_gun",
+            stack_size: 1,
+            weapon: Some((
+                ammo_category: Bullet,
+                delivery: Hitscan,
+                range_tiles: 11,
+                cooldown_ticks: 8,
             )),
         ),
     ],
@@ -1780,6 +1802,29 @@
             ],
             products: [(item: "personal_roboport_equipment", amount: 1)],
         ),
+        (
+            id: 121,
+            name: "pistol",
+            category: Crafting,
+            crafting_time_ticks: 300,
+            ingredients: [
+                (item: "iron_plate", amount: 5),
+                (item: "copper_plate", amount: 5),
+            ],
+            products: [(item: "pistol", amount: 1)],
+        ),
+        (
+            id: 122,
+            name: "submachine_gun",
+            category: Crafting,
+            crafting_time_ticks: 600,
+            ingredients: [
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "steel_plate", amount: 5),
+                (item: "copper_plate", amount: 5),
+            ],
+            products: [(item: "submachine_gun", amount: 1)],
+        ),
     ],
     entities: [
         (
@@ -2474,7 +2519,11 @@
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),
             max_health: Some(400),
-            gun_turret: Some((range_tiles: 12, cooldown_ticks: 12)),
+            gun_turret: Some((
+                ammo_category: Bullet,
+                range_tiles: 12,
+                cooldown_ticks: 12,
+            )),
         ),
         (
             id: 36,
@@ -3728,7 +3777,10 @@
             ],
             required_units: 75,
             research_time_ticks: 600,
-            effects: [UnlockRecipe("piercing_rounds_magazine")],
+            effects: [
+                UnlockRecipe("piercing_rounds_magazine"),
+                UnlockRecipe("submachine_gun"),
+            ],
         ),
         (
             id: 23,

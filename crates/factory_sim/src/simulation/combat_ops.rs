@@ -8,6 +8,205 @@ struct AccumulatedDamage {
 }
 
 impl Simulation {
+    /// Selects the next distinct weapon currently carried by the player.
+    pub fn cycle_player_weapon(&mut self) -> Result<ItemId, PlayerWeaponError> {
+        let mut weapons = Vec::new();
+        for item_id in self
+            .player_inventory
+            .slots()
+            .iter()
+            .filter_map(|slot| slot.stack())
+            .map(|stack| stack.item_id())
+        {
+            if self
+                .world
+                .prototypes
+                .item(item_id)
+                .is_some_and(|item| item.weapon.is_some())
+                && !weapons.contains(&item_id)
+            {
+                weapons.push(item_id);
+            }
+        }
+        let selected = match self.player_weapon.selected_weapon {
+            Some(current) => weapons
+                .iter()
+                .position(|item_id| *item_id == current)
+                .map_or(weapons.first().copied(), |index| {
+                    weapons.get((index + 1) % weapons.len()).copied()
+                }),
+            None => weapons.first().copied(),
+        }
+        .ok_or(PlayerWeaponError::NoWeaponsAvailable)?;
+        let selected_category = self
+            .world
+            .prototypes
+            .item(selected)
+            .and_then(|item| item.weapon)
+            .map(|weapon| weapon.ammo_category)
+            .expect("selected inventory item was verified as a weapon");
+        let loaded_category = self.player_weapon.loaded_ammo.and_then(|item_id| {
+            self.world
+                .prototypes
+                .item(item_id)
+                .and_then(|item| item.ammo)
+                .map(|ammo| ammo.category)
+        });
+        if loaded_category.is_some_and(|category| category != selected_category) {
+            self.player_weapon.loaded_ammo = None;
+            self.player_weapon.loaded_shots = 0;
+            self.player_weapon.loaded_damage = Damage::physical(0);
+        }
+        self.player_weapon.selected_weapon = Some(selected);
+        Ok(selected)
+    }
+
+    /// Commits one deterministic personal-weapon attack against the hostile
+    /// combatant occupying the aimed tile.
+    pub fn attack_with_player_weapon(
+        &mut self,
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    ) -> Result<CombatantId, PlayerWeaponError> {
+        let weapon_item = self
+            .player_weapon
+            .selected_weapon
+            .ok_or(PlayerWeaponError::NoWeaponSelected)?;
+        if self.player_inventory.count(weapon_item) == 0 {
+            return Err(PlayerWeaponError::WeaponUnavailable(weapon_item));
+        }
+        let weapon = self
+            .world
+            .prototypes
+            .item(weapon_item)
+            .and_then(|item| item.weapon)
+            .ok_or(PlayerWeaponError::WeaponUnavailable(weapon_item))?;
+        let remaining = self.player_weapon.next_ready_tick.saturating_sub(self.tick);
+        if remaining > 0 {
+            return Err(PlayerWeaponError::CoolingDown {
+                remaining_ticks: u32::try_from(remaining).unwrap_or(u32::MAX),
+            });
+        }
+
+        let target = self
+            .hostile_target_at_tile(x, y)
+            .ok_or(PlayerWeaponError::NoHostileTarget)?;
+        let player_tile = self.player.tile_position();
+        let player_footprint = EntityFootprint::single_tile(player_tile.0, player_tile.1);
+        let target_footprint = self
+            .combatant_footprint(target)
+            .ok_or(PlayerWeaponError::NoHostileTarget)?;
+        if player_footprint.chebyshev_distance_to(&target_footprint) > i64::from(weapon.range_tiles)
+        {
+            return Err(PlayerWeaponError::OutOfRange {
+                range_tiles: weapon.range_tiles,
+            });
+        }
+
+        if self.player_weapon.loaded_shots == 0 {
+            load_player_magazine(
+                &self.world.prototypes,
+                &mut self.player_inventory,
+                &mut self.player_weapon,
+                weapon.ammo_category,
+            )?;
+        }
+
+        let damage = self.player_weapon.loaded_damage;
+        self.player_weapon.loaded_shots -= 1;
+        if self.player_weapon.loaded_shots == 0 {
+            self.player_weapon.loaded_ammo = None;
+            self.player_weapon.loaded_damage = Damage::physical(0);
+        }
+        self.player_weapon.next_ready_tick = self.tick + u64::from(weapon.cooldown_ticks);
+        self.player_weapon.cooldown_origin = Some(weapon_item);
+
+        let attack = match weapon.delivery {
+            factory_data::WeaponDeliveryPrototype::Hitscan => {
+                AttackDefinition::hitscan(damage, weapon.cooldown_ticks, weapon.range_tiles)
+            }
+        };
+        let mut commands = CombatCommandBuffer::default();
+        commands.attack(
+            CombatSource::new(CombatantId::Player, Faction::Player),
+            target,
+            attack,
+        );
+        self.resolve_combat_commands(commands);
+        Ok(target)
+    }
+
+    /// Returns a read-only weapon summary with compatible reserve ammunition.
+    pub fn player_weapon_status(&self) -> PlayerWeaponStatus {
+        let selected = self.player_weapon.selected_weapon;
+        let category = selected.and_then(|item_id| {
+            self.world
+                .prototypes
+                .item(item_id)
+                .and_then(|item| item.weapon)
+                .map(|weapon| weapon.ammo_category)
+        });
+        let reserve_shots = category.map_or(0, |category| {
+            self.player_inventory
+                .slots()
+                .iter()
+                .filter_map(|slot| slot.stack())
+                .filter_map(|stack| {
+                    self.world
+                        .prototypes
+                        .item(stack.item_id())
+                        .and_then(|item| item.ammo)
+                        .filter(|ammo| ammo.category == category)
+                        .map(|ammo| u64::from(stack.count()) * u64::from(ammo.shots_per_item))
+                })
+                .sum()
+        });
+        PlayerWeaponStatus {
+            selected_weapon: selected,
+            loaded_ammo: self.player_weapon.loaded_ammo,
+            loaded_shots: self.player_weapon.loaded_shots,
+            reserve_shots,
+            cooldown_remaining_ticks: u32::try_from(
+                self.player_weapon.next_ready_tick.saturating_sub(self.tick),
+            )
+            .unwrap_or(u32::MAX),
+        }
+    }
+
+    /// Resolves the deterministic hostile combatant occupying an aimed tile.
+    fn hostile_target_at_tile(&self, x: WorldTileCoord, y: WorldTileCoord) -> Option<CombatantId> {
+        self.enemies
+            .enemies
+            .values()
+            .find(|enemy| enemy.tile() == (x, y) && Faction::Player.is_hostile_to(enemy.faction()))
+            .map(|enemy| CombatantId::Enemy(enemy.id))
+            .or_else(|| {
+                let entity_id = self.entities.occupancy.entity_at(x, y)?;
+                Faction::Player
+                    .is_hostile_to(self.faction_of(CombatantId::Entity(entity_id))?)
+                    .then_some(CombatantId::Entity(entity_id))
+            })
+    }
+
+    /// Returns the occupied footprint used for personal-weapon range checks.
+    fn combatant_footprint(&self, target: CombatantId) -> Option<EntityFootprint> {
+        match target {
+            CombatantId::Player => {
+                let (x, y) = self.player.tile_position();
+                Some(EntityFootprint::single_tile(x, y))
+            }
+            CombatantId::Entity(entity_id) => self
+                .entities
+                .placed_entities
+                .get(&entity_id)
+                .map(|placed| placed.footprint),
+            CombatantId::Enemy(enemy_id) => self.enemies.enemies.get(&enemy_id).map(|enemy| {
+                let (x, y) = enemy.tile();
+                EntityFootprint::single_tile(x, y)
+            }),
+        }
+    }
+
     /// Advances every player defensive turret from one shared target snapshot.
     pub(super) fn advance_defensive_turrets(&mut self, commands: &mut CombatCommandBuffer) {
         if self.onboarding_progress.loaded_gun_turrets == 0
@@ -62,7 +261,7 @@ impl Simulation {
                 };
 
                 if state.loaded_shots == 0 {
-                    load_magazine(world, state);
+                    load_magazine(world, state, turret.ammo_category);
                 }
                 if state.loaded_shots == 0 {
                     continue;
@@ -450,7 +649,11 @@ fn defensive_target_from_parts(
 }
 
 /// Breaks one magazine out of the turret's ammo inventory into loose shots.
-fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
+fn load_magazine(
+    world: &WorldSim,
+    state: &mut GunTurretState,
+    category: factory_data::AmmoCategory,
+) {
     let Some((item_id, ammo)) = state
         .ammo
         .slots()
@@ -461,6 +664,7 @@ fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
                 .prototypes
                 .item(stack.item_id())
                 .and_then(|item| item.ammo)
+                .filter(|ammo| ammo.category == category)
                 .map(|ammo| (stack.item_id(), ammo))
         })
     else {
@@ -471,6 +675,91 @@ fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
     }
     state.loaded_shots = ammo.shots_per_item;
     state.loaded_damage = Damage::new(ammo.damage_per_shot, ammo.damage_type);
+}
+
+/// Consumes the first compatible magazine in stable inventory-slot order.
+fn load_player_magazine(
+    catalog: &PrototypeCatalog,
+    inventory: &mut Inventory,
+    state: &mut PlayerWeaponState,
+    category: factory_data::AmmoCategory,
+) -> Result<(), PlayerWeaponError> {
+    let (item_id, ammo) = inventory
+        .slots()
+        .iter()
+        .filter_map(|slot| slot.stack())
+        .find_map(|stack| {
+            catalog
+                .item(stack.item_id())
+                .and_then(|item| item.ammo)
+                .filter(|ammo| ammo.category == category)
+                .map(|ammo| (stack.item_id(), ammo))
+        })
+        .ok_or(PlayerWeaponError::NoAmmunition)?;
+    inventory
+        .remove(item_id, 1)
+        .expect("compatible ammunition was just found in the player inventory");
+    state.loaded_ammo = Some(item_id);
+    state.loaded_shots = ammo.shots_per_item;
+    state.loaded_damage = Damage::new(ammo.damage_per_shot, ammo.damage_type);
+    Ok(())
+}
+
+/// Validates the durable selected weapon and canonical opened-magazine state.
+pub(super) fn validate_player_weapon_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    let state = sim.player_weapon;
+    let Some(weapon_item) = state.selected_weapon else {
+        return if state.loaded_ammo.is_none()
+            && state.loaded_shots == 0
+            && state.loaded_damage == Damage::physical(0)
+            && state.next_ready_tick == 0
+            && state.cooldown_origin.is_none()
+        {
+            Ok(())
+        } else {
+            Err(SimValidationError::InvalidPlayerWeaponState)
+        };
+    };
+    let weapon = sim
+        .world
+        .prototypes
+        .item(weapon_item)
+        .and_then(|item| item.weapon)
+        .ok_or(SimValidationError::InvalidPlayerWeaponState)?;
+    match state.cooldown_origin {
+        None if state.next_ready_tick == 0 => {}
+        Some(origin_item) => {
+            let origin = sim
+                .world
+                .prototypes
+                .item(origin_item)
+                .and_then(|item| item.weapon)
+                .ok_or(SimValidationError::InvalidPlayerWeaponState)?;
+            if state.next_ready_tick.saturating_sub(sim.tick) > u64::from(origin.cooldown_ticks) {
+                return Err(SimValidationError::InvalidPlayerWeaponState);
+            }
+        }
+        None => return Err(SimValidationError::InvalidPlayerWeaponState),
+    }
+    match (state.loaded_ammo, state.loaded_shots) {
+        (None, 0) if state.loaded_damage == Damage::physical(0) => Ok(()),
+        (Some(ammo_item), shots) if shots > 0 => {
+            let ammo = sim
+                .world
+                .prototypes
+                .item(ammo_item)
+                .and_then(|item| item.ammo)
+                .ok_or(SimValidationError::InvalidPlayerWeaponState)?;
+            if ammo.category != weapon.ammo_category
+                || shots > ammo.shots_per_item
+                || state.loaded_damage != Damage::new(ammo.damage_per_shot, ammo.damage_type)
+            {
+                return Err(SimValidationError::InvalidPlayerWeaponState);
+            }
+            Ok(())
+        }
+        _ => Err(SimValidationError::InvalidPlayerWeaponState),
+    }
 }
 
 /// Nearest enemy unit whose tile lies within `range` of the turret
