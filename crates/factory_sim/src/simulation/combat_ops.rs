@@ -38,6 +38,25 @@ impl Simulation {
             None => weapons.first().copied(),
         }
         .ok_or(PlayerWeaponError::NoWeaponsAvailable)?;
+        let selected_category = self
+            .world
+            .prototypes
+            .item(selected)
+            .and_then(|item| item.weapon)
+            .map(|weapon| weapon.ammo_category)
+            .expect("selected inventory item was verified as a weapon");
+        let loaded_category = self.player_weapon.loaded_ammo.and_then(|item_id| {
+            self.world
+                .prototypes
+                .item(item_id)
+                .and_then(|item| item.ammo)
+                .map(|ammo| ammo.category)
+        });
+        if loaded_category.is_some_and(|category| category != selected_category) {
+            self.player_weapon.loaded_ammo = None;
+            self.player_weapon.loaded_shots = 0;
+            self.player_weapon.loaded_damage = Damage::physical(0);
+        }
         self.player_weapon.selected_weapon = Some(selected);
         Ok(selected)
     }
@@ -100,6 +119,7 @@ impl Simulation {
             self.player_weapon.loaded_damage = Damage::physical(0);
         }
         self.player_weapon.next_ready_tick = self.tick + u64::from(weapon.cooldown_ticks);
+        self.player_weapon.cooldown_origin = Some(weapon_item);
 
         let attack = match weapon.delivery {
             factory_data::WeaponDeliveryPrototype::Hitscan => {
@@ -116,6 +136,7 @@ impl Simulation {
         Ok(target)
     }
 
+    /// Returns a read-only weapon summary with compatible reserve ammunition.
     pub fn player_weapon_status(&self) -> PlayerWeaponStatus {
         let selected = self.player_weapon.selected_weapon;
         let category = selected.and_then(|item_id| {
@@ -152,6 +173,7 @@ impl Simulation {
         }
     }
 
+    /// Resolves the deterministic hostile combatant occupying an aimed tile.
     fn hostile_target_at_tile(&self, x: WorldTileCoord, y: WorldTileCoord) -> Option<CombatantId> {
         self.enemies
             .enemies
@@ -166,6 +188,7 @@ impl Simulation {
             })
     }
 
+    /// Returns the occupied footprint used for personal-weapon range checks.
     fn combatant_footprint(&self, target: CombatantId) -> Option<EntityFootprint> {
         match target {
             CombatantId::Player => {
@@ -238,7 +261,7 @@ impl Simulation {
                 };
 
                 if state.loaded_shots == 0 {
-                    load_magazine(world, state);
+                    load_magazine(world, state, turret.ammo_category);
                 }
                 if state.loaded_shots == 0 {
                     continue;
@@ -626,7 +649,11 @@ fn defensive_target_from_parts(
 }
 
 /// Breaks one magazine out of the turret's ammo inventory into loose shots.
-fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
+fn load_magazine(
+    world: &WorldSim,
+    state: &mut GunTurretState,
+    category: factory_data::AmmoCategory,
+) {
     let Some((item_id, ammo)) = state
         .ammo
         .slots()
@@ -637,6 +664,7 @@ fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
                 .prototypes
                 .item(stack.item_id())
                 .and_then(|item| item.ammo)
+                .filter(|ammo| ammo.category == category)
                 .map(|ammo| (stack.item_id(), ammo))
         })
     else {
@@ -649,6 +677,7 @@ fn load_magazine(world: &WorldSim, state: &mut GunTurretState) {
     state.loaded_damage = Damage::new(ammo.damage_per_shot, ammo.damage_type);
 }
 
+/// Consumes the first compatible magazine in stable inventory-slot order.
 fn load_player_magazine(
     catalog: &PrototypeCatalog,
     inventory: &mut Inventory,
@@ -676,13 +705,15 @@ fn load_player_magazine(
     Ok(())
 }
 
+/// Validates the durable selected weapon and canonical opened-magazine state.
 pub(super) fn validate_player_weapon_state(sim: &Simulation) -> Result<(), SimValidationError> {
     let state = sim.player_weapon;
     let Some(weapon_item) = state.selected_weapon else {
         return if state.loaded_ammo.is_none()
             && state.loaded_shots == 0
-            && state.loaded_damage.amount == 0
+            && state.loaded_damage == Damage::physical(0)
             && state.next_ready_tick == 0
+            && state.cooldown_origin.is_none()
         {
             Ok(())
         } else {
@@ -695,11 +726,23 @@ pub(super) fn validate_player_weapon_state(sim: &Simulation) -> Result<(), SimVa
         .item(weapon_item)
         .and_then(|item| item.weapon)
         .ok_or(SimValidationError::InvalidPlayerWeaponState)?;
-    if state.next_ready_tick.saturating_sub(sim.tick) > u64::from(weapon.cooldown_ticks) {
-        return Err(SimValidationError::InvalidPlayerWeaponState);
+    match state.cooldown_origin {
+        None if state.next_ready_tick == 0 => {}
+        Some(origin_item) => {
+            let origin = sim
+                .world
+                .prototypes
+                .item(origin_item)
+                .and_then(|item| item.weapon)
+                .ok_or(SimValidationError::InvalidPlayerWeaponState)?;
+            if state.next_ready_tick.saturating_sub(sim.tick) > u64::from(origin.cooldown_ticks) {
+                return Err(SimValidationError::InvalidPlayerWeaponState);
+            }
+        }
+        None => return Err(SimValidationError::InvalidPlayerWeaponState),
     }
     match (state.loaded_ammo, state.loaded_shots) {
-        (None, 0) if state.loaded_damage.amount == 0 => Ok(()),
+        (None, 0) if state.loaded_damage == Damage::physical(0) => Ok(()),
         (Some(ammo_item), shots) if shots > 0 => {
             let ammo = sim
                 .world

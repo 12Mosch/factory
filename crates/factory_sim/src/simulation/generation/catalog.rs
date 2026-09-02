@@ -70,9 +70,3 @@ pub(in crate::simulation) fn lab_can_accept_item(
 ) -> bool {
     is_science_pack_item(catalog, item_id)
 }
-
-pub(in crate::simulation) fn item_is_ammo(catalog: &PrototypeCatalog, item_id: ItemId) -> bool {
-    catalog
-        .item(item_id)
-        .is_some_and(|prototype| prototype.ammo.is_some())
-}

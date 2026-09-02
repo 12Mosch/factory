@@ -41,6 +41,7 @@ pub enum DamageType {
 pub enum AmmoCategory {
     #[default]
     Bullet,
+    Rocket,
 }
 
 impl DamageType {
@@ -362,6 +363,8 @@ pub enum BuildingCategory {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct GunTurretPrototype {
+    /// Ammunition category accepted by the turret's inventory and loader.
+    pub ammo_category: AmmoCategory,
     /// Maximum distance from the turret's footprint to a target, in tiles.
     pub range_tiles: u32,
     pub cooldown_ticks: u32,

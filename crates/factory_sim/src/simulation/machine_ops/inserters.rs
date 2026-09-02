@@ -238,7 +238,7 @@ pub(in crate::simulation) fn inserter_target_can_accept_with_rocket_recipe(
             catalog,
             research,
             entities,
-            ItemSlotPolicy::Ammunition,
+            ItemSlotPolicy::Ammunition(entity_id),
             ItemSlotOperation::InserterInsert,
             item.item_id(),
         ) && turret
@@ -559,7 +559,7 @@ pub(in crate::simulation) fn try_drop_inserter_item(
             catalog,
             research,
             entities,
-            ItemSlotPolicy::Ammunition,
+            ItemSlotPolicy::Ammunition(entity_id),
             ItemSlotOperation::InserterInsert,
             item.item_id(),
         ) {

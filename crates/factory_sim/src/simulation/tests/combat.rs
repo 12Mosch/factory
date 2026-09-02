@@ -78,6 +78,7 @@ fn spawn_test_enemy_at(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoor
     id
 }
 
+/// Inserts a named weapon and firearm magazines into the test player inventory.
 fn give_player_weapon_and_ammo(sim: &mut Simulation, weapon_name: &str, magazines: u16) -> ItemId {
     let weapon = item_id_by_name(&sim.world.prototypes, weapon_name);
     let magazine = item_id_by_name(&sim.world.prototypes, "firearm_magazine");
@@ -687,6 +688,52 @@ fn gun_turret_kills_enemy_and_consumes_ammo() {
     );
 }
 
+/// Ensures every turret insertion and validation path applies its declared
+/// ammunition category.
+#[test]
+fn gun_turret_rejects_incompatible_ammunition_category() {
+    let mut sim = Simulation::new_test_world(123);
+    let turret = entity_id_by_name(&sim.world.prototypes, "gun_turret");
+    let magazine = item_id_by_name(&sim.world.prototypes, "firearm_magazine");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 3, 3);
+    let turret_id = place_at(&mut sim, turret, x, y, Direction::North);
+    sim.world.prototypes.items[magazine.index()]
+        .ammo
+        .as_mut()
+        .expect("firearm magazine should have ammunition metadata")
+        .category = factory_data::AmmoCategory::Rocket;
+    let catalog = sim.world.prototypes.clone();
+    sim.player_inventory
+        .insert(&catalog, magazine, 1)
+        .expect("player inventory should accept test ammunition");
+    let player_slot = sim
+        .player_inventory
+        .slots()
+        .iter()
+        .position(|slot| {
+            slot.stack()
+                .is_some_and(|stack| stack.item_id() == magazine)
+        })
+        .expect("inserted magazine should occupy a player slot");
+
+    assert_eq!(
+        crate::entity_transfer::player_slot_to_entity(&mut sim, turret_id, player_slot),
+        Err(ContainerError::InvalidItem(magazine))
+    );
+
+    crate::entity_access::inventory_mut(&mut sim, turret_id)
+        .expect("turret should expose its ammo inventory")
+        .insert(&catalog, magazine, 1)
+        .expect("direct inventory mutation deliberately bypasses slot policy");
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidMachineItem {
+            entity_id: turret_id,
+            item_id: magazine,
+        })
+    );
+}
+
 #[test]
 fn enemy_and_turret_attacks_resolve_simultaneously() {
     let mut sim = Simulation::new_test_world(123);
@@ -1140,6 +1187,8 @@ fn wall_and_turret_recipes_unlock_via_research() {
     assert!(sim.is_recipe_unlocked(submachine_gun_recipe));
 }
 
+/// Ensures an out-of-range attack has no side effects and the exact range
+/// boundary commits damage, ammunition, and cooldown together.
 #[test]
 fn player_weapon_range_boundary_and_failed_attack_preserve_ammo_and_cooldown() {
     let mut sim = Simulation::new_test_world(123);
@@ -1170,6 +1219,7 @@ fn player_weapon_range_boundary_and_failed_attack_preserve_ammo_and_cooldown() {
     assert_eq!(fired.cooldown_remaining_ticks, 20);
 }
 
+/// Ensures cooldown cadence and magazine exhaustion use exact fixed ticks.
 #[test]
 fn player_weapon_cadence_and_ammunition_exhaustion_are_exact() {
     let mut sim = Simulation::new_test_world(123);
@@ -1210,6 +1260,7 @@ fn player_weapon_cadence_and_ammunition_exhaustion_are_exact() {
     assert_eq!(sim.enemies.get(enemy_id).unwrap().health.current, 950);
 }
 
+/// Ensures personal weapon damage uses the target's typed resistance profile.
 #[test]
 fn player_weapon_damage_uses_typed_resistance_per_shot() {
     let mut sim = Simulation::new_test_world(123);
@@ -1230,6 +1281,7 @@ fn player_weapon_damage_uses_typed_resistance_per_shot() {
     assert_eq!(sim.enemies.get(enemy_id).unwrap().health.current, 28);
 }
 
+/// Ensures selected weapon state survives saves and remains lockstep-identical.
 #[test]
 fn player_weapon_state_round_trips_and_stays_deterministic() {
     let mut original = Simulation::new_test_world(123);
@@ -1259,6 +1311,67 @@ fn player_weapon_state_round_trips_and_stays_deterministic() {
     assert_eq!(loaded.state_hash(), original.state_hash());
 }
 
+/// Ensures cycling between compatible weapons preserves both a partial
+/// magazine and the active cooldown without invalidating simulation state.
+#[test]
+fn cycling_weapon_during_cooldown_preserves_valid_state() {
+    let mut sim = Simulation::new_test_world(123);
+    let pistol = give_player_weapon_and_ammo(&mut sim, "pistol", 1);
+    let submachine_gun = item_id_by_name(&sim.world.prototypes, "submachine_gun");
+    let catalog = sim.world.prototypes.clone();
+    sim.player_inventory
+        .insert(&catalog, submachine_gun, 1)
+        .expect("player inventory should accept the second weapon");
+    assert_eq!(sim.cycle_player_weapon(), Ok(pistol));
+    let (x, y) = sim.player.tile_position();
+    spawn_test_enemy_at(&mut sim, x + 2, y);
+    sim.attack_with_player_weapon(x + 2, y).unwrap();
+    let pistol_status = sim.player_weapon_status();
+
+    assert_eq!(sim.cycle_player_weapon(), Ok(submachine_gun));
+    let switched_status = sim.player_weapon_status();
+    assert_eq!(switched_status.loaded_ammo, pistol_status.loaded_ammo);
+    assert_eq!(switched_status.loaded_shots, pistol_status.loaded_shots);
+    assert_eq!(
+        switched_status.cooldown_remaining_ticks,
+        pistol_status.cooldown_remaining_ticks
+    );
+    assert_eq!(sim.player_weapon.cooldown_origin, Some(pistol));
+    sim.validate()
+        .expect("a cooldown originating from the previous weapon remains valid");
+}
+
+/// Ensures a loaded magazine is discarded canonically when the next weapon
+/// belongs to a different ammunition category.
+#[test]
+fn cycling_to_incompatible_weapon_clears_loaded_magazine() {
+    let mut sim = Simulation::new_test_world(123);
+    let pistol = give_player_weapon_and_ammo(&mut sim, "pistol", 1);
+    let submachine_gun = item_id_by_name(&sim.world.prototypes, "submachine_gun");
+    let catalog = sim.world.prototypes.clone();
+    sim.player_inventory
+        .insert(&catalog, submachine_gun, 1)
+        .expect("player inventory should accept the second weapon");
+    assert_eq!(sim.cycle_player_weapon(), Ok(pistol));
+    let (x, y) = sim.player.tile_position();
+    spawn_test_enemy_at(&mut sim, x + 2, y);
+    sim.attack_with_player_weapon(x + 2, y).unwrap();
+    sim.world.prototypes.items[submachine_gun.index()]
+        .weapon
+        .as_mut()
+        .expect("submachine gun should have weapon metadata")
+        .ammo_category = factory_data::AmmoCategory::Rocket;
+
+    assert_eq!(sim.cycle_player_weapon(), Ok(submachine_gun));
+    let status = sim.player_weapon_status();
+    assert_eq!(status.loaded_ammo, None);
+    assert_eq!(status.loaded_shots, 0);
+    sim.validate()
+        .expect("switching categories should leave canonical unloaded state");
+}
+
+/// Ensures malformed combinations of weapon, magazine, damage, and cooldown
+/// state cannot enter the durable simulation.
 #[test]
 fn invalid_player_weapon_state_is_rejected() {
     let mut sim = Simulation::new_test_world(123);
@@ -1268,6 +1381,22 @@ fn invalid_player_weapon_state_is_rejected() {
 
     assert_eq!(
         sim.validate(),
+        Err(SimValidationError::InvalidPlayerWeaponState)
+    );
+
+    let mut no_selection = Simulation::new_test_world(123);
+    no_selection.player_weapon.loaded_damage = Damage::new(0, DamageType::Fire);
+    assert_eq!(
+        no_selection.validate(),
+        Err(SimValidationError::InvalidPlayerWeaponState)
+    );
+
+    let mut selected_unloaded = Simulation::new_test_world(123);
+    give_player_weapon_and_ammo(&mut selected_unloaded, "pistol", 0);
+    selected_unloaded.cycle_player_weapon().unwrap();
+    selected_unloaded.player_weapon.loaded_damage = Damage::new(0, DamageType::Fire);
+    assert_eq!(
+        selected_unloaded.validate(),
         Err(SimValidationError::InvalidPlayerWeaponState)
     );
 }

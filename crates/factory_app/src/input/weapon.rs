@@ -74,6 +74,8 @@ pub(crate) fn apply_weapon_input(
 mod tests {
     use super::*;
 
+    /// Ensures selection input is bounded and a fast shot keeps its original
+    /// cursor tile until the fixed schedule consumes it.
     #[test]
     fn selection_edges_are_counted_and_bounded() {
         let mut input = WeaponInput::default();

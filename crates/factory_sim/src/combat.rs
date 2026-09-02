@@ -15,9 +15,13 @@ pub struct PlayerWeaponState {
     pub loaded_shots: u32,
     pub loaded_damage: Damage,
     pub next_ready_tick: u64,
+    /// Weapon whose cadence established `next_ready_tick`. It remains the
+    /// origin when another compatible weapon is selected during that cooldown.
+    pub cooldown_origin: Option<ItemId>,
 }
 
 impl Default for PlayerWeaponState {
+    /// Creates the canonical state for a player with no selected weapon.
     fn default() -> Self {
         Self {
             selected_weapon: None,
@@ -25,6 +29,7 @@ impl Default for PlayerWeaponState {
             loaded_shots: 0,
             loaded_damage: Damage::physical(0),
             next_ready_tick: 0,
+            cooldown_origin: None,
         }
     }
 }

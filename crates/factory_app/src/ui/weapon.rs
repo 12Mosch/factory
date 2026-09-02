@@ -18,6 +18,7 @@ pub struct WeaponUiState {
     rendered: String,
 }
 
+/// Builds the retained bottom-left weapon status panel.
 fn weapon_panel_scene() -> impl Scene {
     bsn! {
         Node {
@@ -41,6 +42,7 @@ fn weapon_panel_scene() -> impl Scene {
     }
 }
 
+/// Spawns the weapon panel when render assets are available.
 pub fn setup_weapon_ui(
     mut commands: Commands,
     asset_server: Option<Res<AssetServer>>,
@@ -51,6 +53,7 @@ pub fn setup_weapon_ui(
     }
 }
 
+/// Retains player-facing feedback for failed weapon commands.
 pub fn handle_weapon_command_results(
     mut results: MessageReader<SimCommandResult>,
     sim: Res<SimResource>,
@@ -72,6 +75,7 @@ pub fn handle_weapon_command_results(
     }
 }
 
+/// Synchronizes selected weapon, ammunition, cooldown, and binding labels.
 pub fn sync_weapon_ui(
     sim: Res<SimResource>,
     bindings: Res<ActionBindings>,
@@ -115,6 +119,7 @@ pub fn sync_weapon_ui(
     }
 }
 
+/// Maps every deterministic weapon failure to concise HUD copy.
 fn weapon_error_text(error: PlayerWeaponError) -> &'static str {
     match error {
         PlayerWeaponError::NoWeaponsAvailable => "NO CARRIED WEAPON",
@@ -131,6 +136,8 @@ fn weapon_error_text(error: PlayerWeaponError) -> &'static str {
 mod tests {
     use super::*;
 
+    /// Ensures every simulation-level attack failure remains visible to the
+    /// player rather than silently dropping input.
     #[test]
     fn every_weapon_failure_has_player_facing_copy() {
         let failures = [

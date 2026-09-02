@@ -545,7 +545,7 @@ impl EntityStateBehavior for GunTurretState {
                 &sim.world.prototypes,
                 &sim.research,
                 &sim.entities,
-                ItemSlotPolicy::Ammunition,
+                ItemSlotPolicy::Ammunition(entity_id),
                 ItemSlotOperation::MachineInsert,
                 stack.item_id(),
             ) {

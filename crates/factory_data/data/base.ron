@@ -2519,7 +2519,11 @@
             size: (x: 2, y: 2),
             collision_mask: (layers: ["ground", "building"]),
             max_health: Some(400),
-            gun_turret: Some((range_tiles: 12, cooldown_ticks: 12)),
+            gun_turret: Some((
+                ammo_category: Bullet,
+                range_tiles: 12,
+                cooldown_ticks: 12,
+            )),
         ),
         (
             id: 36,
