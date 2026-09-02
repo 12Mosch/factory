@@ -10,7 +10,7 @@ use crate::model::{
     RadarPrototype, RailPiecePrototype, RepairToolPrototype, ResourceExtraction, RoboportPrototype,
     RobotPrototype, RollingStockPrototype, SolarPanelPrototype, SplitterPrototype,
     SteamEnginePrototype, TransportBeltPrototype, UndergroundPipePrototype, UnitPrototype,
-    VirtualSignalKind,
+    VirtualSignalKind, WeaponPrototype,
 };
 use crate::validation::RawPrototype;
 
@@ -133,6 +133,7 @@ pub(crate) struct RawItemPrototype {
     #[serde(default)]
     pub(crate) burnt_result: Option<String>,
     pub(crate) ammo: Option<AmmoPrototype>,
+    pub(crate) weapon: Option<WeaponPrototype>,
     pub(crate) repair: Option<RepairToolPrototype>,
     pub(crate) armor: Option<ArmorPrototype>,
     pub(crate) equipment: Option<EquipmentPrototype>,

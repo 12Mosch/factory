@@ -33,4 +33,5 @@ pub mod threat;
 pub(crate) mod train_schedule_edit;
 pub(crate) mod train_schedule_panel;
 pub(crate) mod train_stop_panel;
+pub(crate) mod weapon;
 pub(crate) mod window_sync;

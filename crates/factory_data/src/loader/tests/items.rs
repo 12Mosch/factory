@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use crate::catalog::PrototypeCatalog;
-use crate::model::{DamageType, EntityKind, EquipmentEffectPrototype, TechnologyEffect};
+use crate::model::{
+    AmmoCategory, DamageType, EntityKind, EquipmentEffectPrototype, TechnologyEffect,
+    WeaponDeliveryPrototype,
+};
 
 use super::common::{recipe_by_id, researchable_technology_ids};
 
@@ -81,6 +84,28 @@ fn military_items_load_typed_ammo_armor_and_powered_equipment() {
     assert_eq!((piercing.shots_per_item, piercing.damage_per_shot), (10, 8));
     assert_eq!(firearm.damage_type, DamageType::Physical);
     assert_eq!(piercing.damage_type, DamageType::Physical);
+    assert_eq!(firearm.category, AmmoCategory::Bullet);
+    assert_eq!(piercing.category, AmmoCategory::Bullet);
+
+    let pistol = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "pistol")
+        .and_then(|item| item.weapon)
+        .unwrap();
+    let submachine_gun = catalog
+        .items
+        .iter()
+        .find(|item| item.name == "submachine_gun")
+        .and_then(|item| item.weapon)
+        .unwrap();
+    assert_eq!((pistol.range_tiles, pistol.cooldown_ticks), (10, 20));
+    assert_eq!(
+        (submachine_gun.range_tiles, submachine_gun.cooldown_ticks),
+        (11, 8)
+    );
+    assert_eq!(pistol.ammo_category, AmmoCategory::Bullet);
+    assert_eq!(pistol.delivery, WeaponDeliveryPrototype::Hitscan);
 
     let armor = catalog
         .items

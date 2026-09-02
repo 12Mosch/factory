@@ -14,6 +14,13 @@ pub enum SimCommand {
         delta_seconds: f32,
     },
     SetManualMiningTarget(Option<ManualMiningTarget>),
+    /// Selects the next held weapon present in the player inventory.
+    CyclePlayerWeapon,
+    /// Fires the selected weapon at the hostile combatant occupying this tile.
+    AttackWithPlayerWeapon {
+        x: WorldTileCoord,
+        y: WorldTileCoord,
+    },
     StartManualCraft(RecipeId),
     CancelManualCraft {
         job_id: CraftingJobId,
@@ -333,6 +340,7 @@ pub enum SimCommandError {
     Construction(ConstructionError),
     Repair(RepairError),
     Equipment(PlayerEquipmentError),
+    Weapon(PlayerWeaponError),
     TilePlacement(TilePlacementError),
     Circuit(CircuitError),
     LogisticChest(LogisticChestError),
@@ -411,6 +419,16 @@ impl Simulation {
                 let count_before = gained_item.map(|item_id| self.player_inventory.count(item_id));
                 self.update_manual_mining(target);
                 Ok(item_gain_effect(self, gained_item, count_before))
+            }
+            SimCommand::CyclePlayerWeapon => {
+                self.cycle_player_weapon()
+                    .map_err(SimCommandError::Weapon)?;
+                Ok(SimCommandEffect::None)
+            }
+            SimCommand::AttackWithPlayerWeapon { x, y } => {
+                self.attack_with_player_weapon(x, y)
+                    .map_err(SimCommandError::Weapon)?;
+                Ok(SimCommandEffect::None)
             }
             SimCommand::StartManualCraft(recipe_id) => {
                 self.start_manual_craft(recipe_id)

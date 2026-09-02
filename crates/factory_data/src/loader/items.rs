@@ -63,6 +63,7 @@ pub(super) fn load_items(
                 fuel_value_joules: item.fuel_value_joules,
                 burnt_result: None,
                 ammo: item.ammo,
+                weapon: item.weapon,
                 repair: item.repair,
                 armor: item.armor,
                 equipment: item.equipment,
@@ -157,13 +158,14 @@ fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadEr
         }
         if item.fuel_value_joules.is_some()
             || item.ammo.is_some()
+            || item.weapon.is_some()
             || item.repair.is_some()
             || item.armor.is_some()
             || item.equipment.is_some()
         {
             return Err(PrototypeLoadError::InvalidModuleMetadata {
                 item: item.name.clone(),
-                detail: "modules cannot also be fuel, ammunition, repair tools, armor, or equipment",
+                detail: "modules cannot also be fuel, ammunition, weapons, repair tools, armor, or equipment",
             });
         }
     }
@@ -174,6 +176,15 @@ fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadEr
         return Err(PrototypeLoadError::InvalidAmmoMetadata {
             item: item.name.clone(),
             detail: "damage and shots per item must be positive",
+        });
+    }
+    if item
+        .weapon
+        .is_some_and(|weapon| weapon.range_tiles == 0 || weapon.cooldown_ticks == 0)
+    {
+        return Err(PrototypeLoadError::InvalidWeaponMetadata {
+            item: item.name.clone(),
+            detail: "range and cooldown must be positive",
         });
     }
     if let Some(armor) = item.armor.as_ref() {
@@ -246,6 +257,7 @@ fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadEr
         if item.repair.is_some()
             || item.fuel_value_joules.is_some()
             || item.ammo.is_some()
+            || item.weapon.is_some()
             || item.armor.is_some()
             || item.equipment.is_some()
             || item.module_effect.is_some()
@@ -253,7 +265,7 @@ fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadEr
         {
             return Err(PrototypeLoadError::InvalidRobotMetadata {
                 item: item.name.clone(),
-                detail: "robots cannot also be fuel, ammunition, repair tools, armor, equipment, modules, or tiles",
+                detail: "robots cannot also be fuel, ammunition, weapons, repair tools, armor, equipment, modules, or tiles",
             });
         }
     }

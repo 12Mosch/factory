@@ -45,6 +45,10 @@ pub enum PrototypeLoadError {
         item: String,
         detail: &'static str,
     },
+    InvalidWeaponMetadata {
+        item: String,
+        detail: &'static str,
+    },
     InvalidArmorMetadata {
         item: String,
         detail: &'static str,
@@ -278,6 +282,12 @@ impl fmt::Display for PrototypeLoadError {
                 write!(
                     formatter,
                     "item {item:?} has invalid ammunition metadata: {detail}"
+                )
+            }
+            Self::InvalidWeaponMetadata { item, detail } => {
+                write!(
+                    formatter,
+                    "item {item:?} has invalid weapon metadata: {detail}"
                 )
             }
             Self::InvalidArmorMetadata { item, detail } => {

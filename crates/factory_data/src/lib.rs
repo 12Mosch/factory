@@ -21,7 +21,7 @@ pub use ids::{
     EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId, TileId, VirtualSignalId,
 };
 pub use model::{
-    AccumulatorPrototype, AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype,
+    AccumulatorPrototype, AmmoCategory, AmmoPrototype, ArmorPrototype, AssemblingMachinePrototype,
     BeaconPrototype, BiomeConfig, BoilerPrototype, BuildingCategory, BurnerPrototype,
     CircuitConnectorPrototype, CircuitPortLayout, ClimateNoiseConfig, ClimateRange, CollisionLayer,
     CollisionMask, CombinatorKind, CombinatorPrototype, ConnectionSide, CraftingCategory,
@@ -43,6 +43,6 @@ pub use model::{
     TechnologyEffect, TechnologyLevelModel, TechnologyPrototype, TerrainNoiseConfig,
     TilePlacementPrototype, TilePrototype, TransportBeltPrototype, UndergroundBeltPart,
     UndergroundBeltPrototype, UndergroundPipePrototype, UnitPrototype, VirtualSignalKind,
-    VirtualSignalPrototype, WORLD_GENERATION_FORMAT_VERSION, WorldGenerationConfig,
-    roboport_coverage_bounds,
+    VirtualSignalPrototype, WORLD_GENERATION_FORMAT_VERSION, WeaponDeliveryPrototype,
+    WeaponPrototype, WorldGenerationConfig, roboport_coverage_bounds,
 };

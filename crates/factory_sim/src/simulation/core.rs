@@ -52,6 +52,7 @@ impl Simulation {
             construction: ConstructionState::default(),
             player,
             player_equipment: PlayerEquipmentState::default(),
+            player_weapon: PlayerWeaponState::default(),
             player_inventory,
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
@@ -259,7 +260,7 @@ impl Simulation {
 
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
-        "factory-sim-state-v3".hash(&mut hasher);
+        "factory-sim-state-v4".hash(&mut hasher);
         self.tick.hash(&mut hasher);
         self.day_night_cycle.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
@@ -275,6 +276,7 @@ impl Simulation {
         self.construction.hash(&mut hasher);
         self.player.hash(&mut hasher);
         self.player_equipment.hash(&mut hasher);
+        self.player_weapon.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);
         self.manual_mining_progress.hash(&mut hasher);
         self.crafting_queue.hash(&mut hasher);

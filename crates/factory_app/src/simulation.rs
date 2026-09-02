@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use factory_sim::{SimCommand, SimCommandEffect, SimCommandError};
 
-use crate::input::resources::TrainManualInput;
+use crate::input::resources::{TrainManualInput, WeaponInput};
 use crate::resources::{SimProfileStats, SimResource, UpsStats};
 
 /// Presentation-owned pause state for the active game session.
@@ -67,6 +67,7 @@ pub(crate) fn discard_transient_input_on_pause(
     mut requests: ResMut<Messages<SimCommandRequest>>,
     mut backlog: ResMut<SimCommandBacklog>,
     mut train_input: ResMut<TrainManualInput>,
+    mut weapon_input: ResMut<WeaponInput>,
 ) {
     if !pause.is_changed() || !pause.is_paused() {
         return;
@@ -75,6 +76,7 @@ pub(crate) fn discard_transient_input_on_pause(
     requests.clear();
     backlog.0.clear();
     train_input.clear();
+    weapon_input.clear();
 }
 
 /// Applies all queued commands at the tick boundary, before the simulation
@@ -130,6 +132,7 @@ mod tests {
             .init_resource::<AppPauseState>()
             .init_resource::<SimCommandBacklog>()
             .init_resource::<TrainManualInput>()
+            .init_resource::<WeaponInput>()
             .init_resource::<SimProfileStats>()
             .init_resource::<UpsStats>()
             .add_message::<SimCommandRequest>()

@@ -35,6 +35,14 @@ pub enum DamageType {
     Laser,
 }
 
+/// Compatibility group shared by weapons, ammunition, and ammunition-fed
+/// defensive structures.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum AmmoCategory {
+    #[default]
+    Bullet,
+}
+
 impl DamageType {
     pub const COUNT: usize = 5;
 
@@ -60,8 +68,10 @@ pub struct ItemPrototype {
     /// fits, which is what makes spent fuel reprocessing a closed loop. Ordinary
     /// burners (furnaces, boilers, burner inserters) burn residue-free fuels.
     pub burnt_result: Option<ItemId>,
-    /// Present when the item can be loaded into gun turrets as ammunition.
+    /// Present when the item can be loaded into a compatible weapon or turret.
     pub ammo: Option<AmmoPrototype>,
+    /// Present when the item can be selected as a player-held weapon.
+    pub weapon: Option<WeaponPrototype>,
     /// Present when the item can be consumed to repair damaged entities.
     pub repair: Option<RepairToolPrototype>,
     /// Present when the item can be equipped as the player's armor.
@@ -105,9 +115,30 @@ pub struct ModuleEffectPrototype {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct AmmoPrototype {
+    #[serde(default)]
+    pub category: AmmoCategory,
     pub damage_per_shot: u32,
     pub shots_per_item: u32,
     pub damage_type: DamageType,
+}
+
+/// How a personal weapon delivers one committed attack.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub enum WeaponDeliveryPrototype {
+    #[default]
+    Hitscan,
+}
+
+/// Data-driven rules for a player-held weapon. Damage belongs to ammunition so
+/// ammunition upgrades affect personal weapons and gun turrets consistently.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct WeaponPrototype {
+    #[serde(default)]
+    pub ammo_category: AmmoCategory,
+    #[serde(default)]
+    pub delivery: WeaponDeliveryPrototype,
+    pub range_tiles: u32,
+    pub cooldown_ticks: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]

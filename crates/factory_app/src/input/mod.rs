@@ -9,4 +9,5 @@ pub(crate) mod rail_debug;
 pub(crate) mod repair;
 pub mod resources;
 pub(crate) mod train_manual;
+pub(crate) mod weapon;
 pub(crate) mod wiring;
