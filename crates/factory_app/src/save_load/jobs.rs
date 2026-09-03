@@ -7,6 +7,7 @@ use super::{
 use crate::resources::SimResource;
 use factory_sim::{capture_save_snapshot, save_snapshot_to_bytes};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -32,6 +33,22 @@ impl PendingSaveJobs {
     }
     pub fn pending_ids(&self) -> Vec<SaveId> {
         self.jobs.iter().map(|job| job.id.clone()).collect()
+    }
+
+    fn join_all(&mut self) {
+        for job in self.jobs.drain(..) {
+            if let Err(error) = join_job(job.handle) {
+                eprintln!("Cannot save {} during shutdown: {error}", job.display_name);
+            }
+        }
+    }
+}
+
+impl Drop for PendingSaveJobs {
+    fn drop(&mut self) {
+        // Dropping a JoinHandle detaches its worker. Explicitly join every
+        // accepted request so application teardown cannot abandon a first save.
+        self.join_all();
     }
 }
 
@@ -62,7 +79,7 @@ pub(crate) struct SaveJobOutcome {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Captures the latest completed tick and starts its background save worker.
+/// Starts a background worker that captures and saves the latest completed tick.
 pub(crate) fn queue_save(
     id: SaveId,
     kind: SaveKind,
@@ -87,21 +104,27 @@ pub(crate) fn queue_save(
         return false;
     }
     let submission_start = Instant::now();
-    // Save requests run after FixedUpdate. Copying the durable state here
-    // therefore captures exactly the last completed tick. Only this copy is
-    // performed while the live simulation is read-locked; encoding and I/O
-    // receive the owned snapshot below.
-    let (snapshot, snapshot_capture_ms) = {
-        let sim = sim.read();
-        let snapshot_start = Instant::now();
-        let snapshot = capture_save_snapshot(&sim);
-        (snapshot, snapshot_start.elapsed().as_secs_f64() * 1000.0)
-    };
-    let snapshot_tick = snapshot.tick_count();
+    let sim = sim.clone_handle();
     let worker_id = id.clone();
     let worker_name = display_name.clone();
+    let (capture_started_tx, capture_started_rx) = mpsc::sync_channel(0);
     let handle = thread::spawn(move || {
         let worker_start = Instant::now();
+        // Signal only after acquiring the read lock. The request system runs
+        // after FixedUpdate, so this pins its exact completed-tick boundary
+        // without cloning the durable world on the main thread. Frame-side
+        // readers remain concurrent; fixed ticks defer via `try_write`.
+        let sim = sim
+            .read()
+            .map_err(|_| "simulation lock poisoned".to_string())?;
+        capture_started_tx
+            .send(())
+            .map_err(|_| "save request was abandoned before capture".to_string())?;
+        let snapshot_start = Instant::now();
+        let snapshot = capture_save_snapshot(&sim);
+        let snapshot_capture_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
+        let snapshot_tick = snapshot.tick_count();
+        drop(sim);
         let serialize_start = Instant::now();
         let payload = save_snapshot_to_bytes(&snapshot)
             .map_err(|error| format!("simulation serialization failed: {error:?}"))?;
@@ -126,6 +149,14 @@ pub(crate) fn queue_save(
             bytes: bytes.len(),
         })
     });
+    if capture_started_rx.recv().is_err() {
+        let error = join_job(handle)
+            .err()
+            .unwrap_or_else(|| "save worker stopped before snapshot capture began".to_string());
+        status.message = Some(format!("Cannot save {display_name}: {error}"));
+        status.kind = SaveLoadStatusKind::Error;
+        return false;
+    }
     pending.jobs.push(SaveJob {
         id,
         display_name: display_name.clone(),
@@ -154,10 +185,7 @@ pub(crate) fn take_completed(pending: &mut PendingSaveJobs) -> Vec<CompletedJob>
             index += 1;
         } else {
             let job = pending.jobs.swap_remove(index);
-            let result = job
-                .handle
-                .join()
-                .unwrap_or_else(|_| Err("save worker panicked".into()));
+            let result = join_job(job.handle);
             completed.push(CompletedJob {
                 id: job.id,
                 display_name: job.display_name,
@@ -167,6 +195,12 @@ pub(crate) fn take_completed(pending: &mut PendingSaveJobs) -> Vec<CompletedJob>
         }
     }
     completed
+}
+
+fn join_job(handle: JoinHandle<Result<SaveJobOutcome, String>>) -> Result<SaveJobOutcome, String> {
+    handle
+        .join()
+        .unwrap_or_else(|_| Err("save worker panicked".into()))
 }
 
 pub(crate) fn system_path(config: &SaveLoadConfig, kind: &SaveKind) -> PathBuf {

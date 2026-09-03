@@ -90,7 +90,11 @@ pub(crate) fn collect_sim_commands(
     }
 }
 
-/// Applies retained commands in FIFO order, then completes one simulation tick.
+/// Applies retained commands and ticks when no save worker is capturing a snapshot.
+///
+/// Snapshot capture only holds a read lock while cloning durable state. Skipping
+/// fixed steps during that interval keeps frame-side presentation responsive and
+/// preserves commands in FIFO order for the next completed tick.
 pub(crate) fn tick_sim(
     mut sim: ResMut<SimResource>,
     mut backlog: ResMut<SimCommandBacklog>,
@@ -99,7 +103,11 @@ pub(crate) fn tick_sim(
     mut profile_stats: ResMut<SimProfileStats>,
     mut catch_up_stats: ResMut<FixedStepCatchUpStats>,
 ) {
-    let mut simulation = sim.write();
+    let Some(mut simulation) = sim.try_write() else {
+        profile_stats.save_blocked_fixed_ticks =
+            profile_stats.save_blocked_fixed_ticks.saturating_add(1);
+        return;
+    };
 
     for command in backlog.0.drain(..) {
         let result = simulation.apply_command(&command);
@@ -127,6 +135,8 @@ pub(crate) fn tick_sim(
 mod tests {
     use super::*;
     use factory_sim::{EnemyDifficultyPreset, Simulation, load_from_bytes, save_to_bytes};
+    use std::sync::mpsc;
+    use std::thread;
 
     use crate::input::resources::TrainManualInput;
     use crate::resources::{SimProfileStats, UpsStats};
@@ -214,6 +224,64 @@ mod tests {
                 .position_tiles(),
             after_command_position
         );
+    }
+
+    #[test]
+    fn snapshot_read_lock_defers_ticks_without_losing_commands() {
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(Simulation::new_test_world(123)))
+            .init_resource::<SimCommandBacklog>()
+            .init_resource::<SimProfileStats>()
+            .init_resource::<FixedStepCatchUpStats>()
+            .init_resource::<UpsStats>()
+            .add_message::<SimCommandRequest>()
+            .add_message::<SimCommandResult>()
+            .add_systems(Update, (collect_sim_commands, tick_sim).chain());
+
+        let before_tick = app.world().resource::<SimResource>().read().tick_count();
+        app.world_mut()
+            .write_message(SimCommandRequest(SimCommand::MovePlayer {
+                direction_x: 1.0,
+                direction_y: 0.0,
+                delta_seconds: 1.0,
+            }));
+
+        let handle = app.world().resource::<SimResource>().clone_handle();
+        let (locked_tx, locked_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let worker = thread::spawn(move || {
+            let _guard = handle.read().expect("simulation lock should be readable");
+            locked_tx.send(()).expect("test should receive lock signal");
+            release_rx
+                .recv()
+                .expect("test should release snapshot lock");
+        });
+        locked_rx.recv().expect("snapshot lock should be held");
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimResource>().read().tick_count(),
+            before_tick
+        );
+        assert_eq!(app.world().resource::<SimCommandBacklog>().0.len(), 1);
+        assert_eq!(
+            app.world()
+                .resource::<SimProfileStats>()
+                .save_blocked_fixed_ticks,
+            1
+        );
+
+        release_tx
+            .send(())
+            .expect("snapshot worker should be waiting");
+        worker.join().expect("snapshot worker should finish");
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SimResource>().read().tick_count(),
+            before_tick + 1
+        );
+        assert!(app.world().resource::<SimCommandBacklog>().0.is_empty());
     }
 
     #[test]

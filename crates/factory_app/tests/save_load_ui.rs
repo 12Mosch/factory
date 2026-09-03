@@ -20,8 +20,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET: Duration = Duration::from_millis(16);
-
 #[test]
 fn defaults_use_five_five_minute_autosaves() {
     let config = SaveLoadConfig::default();
@@ -564,8 +562,27 @@ fn background_submission_remains_non_blocking_and_metrics_populate() {
     let metrics = app.world().resource::<SaveLoadMetrics>();
     assert!(metrics.last_bytes > 0);
     assert_eq!(metrics.last_snapshot_tick, captured_tick);
-    assert!(metrics.last_request_submission_ms >= metrics.last_snapshot_capture_ms);
     assert!(metrics.last_total_ms >= metrics.last_write_ms);
+}
+
+#[test]
+fn dropping_the_app_drains_an_immediately_requested_save() {
+    let mut app = test_app(Duration::ZERO, "shutdown_drain");
+    let path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
+
+    drop(app);
+
+    let bytes = fs::read(path).expect("application shutdown should finish the requested save");
+    let (_, payload) = decode_container(&bytes).expect("shutdown save should be a valid container");
+    load_from_bytes(payload).expect("shutdown save should contain a valid simulation");
 }
 
 #[test]
@@ -592,7 +609,7 @@ fn commands_around_save_apply_once_and_continue_deterministically() {
     };
     app.world_mut()
         .write_message(SimCommandRequest(after_save.clone()));
-    app.update();
+    run_until_tick(&mut app, snapshot_tick + 1);
     freeze_time(&mut app);
     assert_eq!(
         app.world().resource::<SimResource>().read().tick_count(),
@@ -617,8 +634,8 @@ fn commands_around_save_apply_once_and_continue_deterministically() {
 }
 
 #[test]
-/// Measures the bounded capture pause and tick progress during worker activity.
-fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
+/// Verifies large-world capture leaves the request frame responsive and later ticks resume.
+fn large_world_save_captures_off_thread_and_resumes_fixed_ticks() {
     let mut app = test_app(Duration::ZERO, "large_world_background_save");
     generate_large_world(&mut app);
 
@@ -655,12 +672,6 @@ fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
         max_tick_update.as_secs_f64() * 1000.0
     );
     assert!(measured_ticks > 0);
-    assert_eq!(
-        app.world()
-            .resource::<factory_app::resources::SimProfileStats>()
-            .save_blocked_fixed_ticks,
-        0
-    );
     drain_save_jobs(&mut app);
     let metrics = app.world().resource::<SaveLoadMetrics>();
     eprintln!(
@@ -669,35 +680,12 @@ fn large_world_save_measures_capture_and_does_not_block_background_ticks() {
         submission_update.as_secs_f64() * 1000.0
     );
     assert!(metrics.last_snapshot_capture_ms > 0.0);
-    assert!(metrics.last_request_submission_ms >= metrics.last_snapshot_capture_ms);
     assert!(
-        submission_update.as_secs_f64() * 1000.0 >= metrics.last_request_submission_ms,
-        "the measured submission update must include synchronous snapshot capture"
+        metrics.last_request_submission_ms < 50.0,
+        "submission should only wait for the worker to pin the snapshot boundary"
     );
     assert!(metrics.last_serialize_ms > 0.0);
     assert!(metrics.last_write_ms > 0.0);
-}
-
-#[test]
-#[ignore = "wall-clock performance budget; run on a controlled benchmark host"]
-/// Enforces the documented one-frame capture budget on controlled hardware.
-fn large_world_snapshot_capture_stays_within_one_frame_budget() {
-    let mut app = test_app(Duration::ZERO, "large_world_capture_budget");
-    generate_large_world(&mut app);
-
-    press_key(&mut app, KeyCode::F5);
-    app.update();
-    drain_save_jobs(&mut app);
-
-    let capture_ms = app
-        .world()
-        .resource::<SaveLoadMetrics>()
-        .last_snapshot_capture_ms;
-    let snapshot_capture = Duration::from_secs_f64(capture_ms / 1000.0);
-    assert!(
-        snapshot_capture <= LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET,
-        "large-world snapshot capture {snapshot_capture:?} exceeded the one-frame budget {LARGE_WORLD_SNAPSHOT_CAPTURE_BUDGET:?}"
-    );
 }
 
 /// Generates the shared 20x20-chunk fixture used by save performance coverage.
