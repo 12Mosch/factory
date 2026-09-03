@@ -2,6 +2,7 @@ mod catalog;
 mod compatibility;
 mod container;
 mod jobs;
+mod timestamp;
 mod types;
 
 pub use catalog::{refresh_catalog, scan_catalog};
@@ -10,6 +11,7 @@ pub use container::{
     TEMP_ARTIFACT_MARKER, decode_container, encode_container,
 };
 pub use jobs::PendingSaveJobs;
+pub(crate) use timestamp::local_datetime_from_unix_ms;
 pub use types::*;
 
 use bevy::ecs::system::SystemParam;

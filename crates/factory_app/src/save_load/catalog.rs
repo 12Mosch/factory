@@ -6,6 +6,7 @@ use super::container::{
 };
 use super::{
     SaveCatalog, SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig, SaveMetadata,
+    local_datetime_from_unix_ms,
 };
 use bevy::log::warn;
 use factory_data::PrototypeCatalog;
@@ -360,9 +361,11 @@ fn inspect_entry(
     let timestamp = file_timestamp_ms(&path);
     let fallback = || fallback_metadata(id.clone(), kind.clone(), fallback_name.clone(), timestamp);
     let inspection = inspect_file(&path, &kind, current_hash);
-    let metadata = inspection
-        .metadata
-        .filter(|metadata| metadata.id == id && metadata.kind == kind);
+    let metadata = inspection.metadata.filter(|metadata| {
+        metadata.id == id
+            && metadata.kind == kind
+            && local_datetime_from_unix_ms(metadata.completed_at_unix_ms).is_some()
+    });
     let metadata_available = metadata.is_some();
     let metadata = metadata.unwrap_or_else(fallback);
     SaveEntry {
@@ -450,7 +453,9 @@ fn file_timestamp_ms(path: &Path) -> u64 {
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_millis() as u64)
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .filter(|timestamp| local_datetime_from_unix_ms(*timestamp).is_some())
+        .unwrap_or(0)
 }
 
 /// Assigns stable catalog groups for sorting.

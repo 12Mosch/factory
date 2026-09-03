@@ -12,7 +12,7 @@ use factory_app::save_load::{
 use factory_app::simulation::SimCommandRequest;
 use factory_app::ui::resources::OpenContainer;
 use factory_app::ui::save_load::{
-    SaveConfirmationButton, SaveCreateButton, SaveEntryAction, SaveEntryButton,
+    SaveConfirmationButton, SaveCreateButton, SaveEntryAction, SaveEntryButton, format_timestamp,
 };
 use factory_data::{EntityPrototypeId, ItemId};
 use factory_sim::{ChunkCoord, EntityId, SAVE_VERSION, SimCommand, load_from_bytes, save_to_bytes};
@@ -276,6 +276,43 @@ fn malformed_metadata_falls_back_without_blocking_load() {
     press_entry(&mut app, &id, SaveEntryAction::Load);
     app.update();
     assert_eq!(sim_tick_and_hash(&app), expected);
+}
+
+#[test]
+fn invalid_metadata_timestamp_falls_back_to_file_timestamp() {
+    let mut app = test_app(Duration::ZERO, "timestamp_fallback");
+    app.update();
+    create_named_save(&mut app, "Timestamp Fallback");
+    drain_save_jobs(&mut app);
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let bytes = fs::read(&path).unwrap();
+    let (mut metadata, payload) = decode_container(&bytes).unwrap();
+    metadata.completed_at_unix_ms = u64::MAX;
+    fs::write(&path, encode_container(&metadata, payload).unwrap()).unwrap();
+    let file_timestamp = fs::metadata(&path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    refresh_manager(&mut app);
+
+    let entry = &app.world().resource::<SaveCatalog>().entries()[0];
+    assert!(!entry.metadata_available);
+    assert_eq!(entry.metadata.completed_at_unix_ms, file_timestamp);
+    assert_ne!(
+        format_timestamp(entry.metadata.completed_at_unix_ms),
+        "Invalid timestamp"
+    );
+}
+
+#[test]
+fn timestamp_formatting_handles_unrepresentable_values() {
+    assert_eq!(format_timestamp(u64::MAX), "Invalid timestamp");
 }
 
 #[test]
