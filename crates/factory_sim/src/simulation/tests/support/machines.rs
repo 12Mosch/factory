@@ -10,7 +10,7 @@ pub(in crate::simulation::tests) fn place_named_furnace(
     furnace_name: &str,
 ) -> EntityId {
     let furnace = entity_id_by_name(&sim.world.prototypes, furnace_name);
-    let prototype = &sim.world.prototypes.entities[furnace.index()];
+    let prototype = &sim.world.prototypes.entities()[furnace.index()];
     let (width, height) = (prototype.size.x, prototype.size.y);
     let (x, y) = first_buildable_rect(&sim.world, width, height);
     crate::placement::place(
@@ -45,7 +45,7 @@ pub(in crate::simulation::tests) fn complete_research_by_name(
     technology_name: &str,
 ) {
     let technology_id = technology_id(&sim.world.prototypes, technology_name);
-    let required_units = sim.world.prototypes.technologies[technology_id.index()].required_units;
+    let required_units = sim.world.prototypes.technologies()[technology_id.index()].required_units;
 
     sim.select_research(technology_id)
         .unwrap_or_else(|_| panic!("{technology_name} should be selectable"));
@@ -66,11 +66,11 @@ pub(in crate::simulation::tests) fn unlock_with_prerequisites(
         return;
     }
     let technology_id = technology_id(&sim.world.prototypes, technology_name);
-    let prerequisites = sim.world.prototypes.technologies[technology_id.index()]
+    let prerequisites = sim.world.prototypes.technologies()[technology_id.index()]
         .prerequisites
         .clone();
     for prerequisite in prerequisites {
-        let name = sim.world.prototypes.technologies[prerequisite.index()]
+        let name = sim.world.prototypes.technologies()[prerequisite.index()]
             .name
             .clone();
         unlock_with_prerequisites(sim, &name);

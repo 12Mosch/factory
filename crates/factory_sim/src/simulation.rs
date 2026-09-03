@@ -3,7 +3,9 @@ pub(crate) use factory_data::{
     CraftingCategory, EntityKind, PrototypeCatalog, ResourceExtraction, TechnologyEffect, TileId,
     UndergroundBeltPart,
 };
-use factory_data::{EntityPrototypeId, FluidId, ItemId, RecipeId, TechnologyId};
+use factory_data::{
+    EntityPrototypeId, FluidId, ItemId, MissingBasePrototype, RecipeId, TechnologyId,
+};
 use serde::{Deserialize, Serialize};
 pub(crate) use smallvec::SmallVec;
 pub(crate) use std::collections::VecDeque;
@@ -674,6 +676,35 @@ enum DrillOutputTarget {
 }
 
 pub type SimulationValidationError = SimValidationError;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SimulationCreationError {
+    InvalidConfig,
+    InvalidCatalog(SimValidationError),
+    MissingRequiredPrototype(MissingBasePrototype),
+    NoWalkablePlayerStart,
+    InvalidStartingInventory(InventoryError),
+}
+
+impl std::fmt::Display for SimulationCreationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidConfig => formatter.write_str("invalid simulation configuration"),
+            Self::InvalidCatalog(error) => {
+                write!(formatter, "invalid prototype catalog: {error:?}")
+            }
+            Self::MissingRequiredPrototype(error) => error.fmt(formatter),
+            Self::NoWalkablePlayerStart => {
+                formatter.write_str("world has no walkable player start")
+            }
+            Self::InvalidStartingInventory(error) => {
+                write!(formatter, "invalid player starting inventory: {error:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SimulationCreationError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PollutionRemainderSource {

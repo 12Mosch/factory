@@ -333,13 +333,13 @@ impl TileColorTable {
         let mut colors = vec![
             Color::default();
             catalog
-                .tiles
+                .tiles()
                 .iter()
                 .map(|tile| tile.id.index() + 1)
                 .max()
                 .unwrap_or_default()
         ];
-        for tile in &catalog.tiles {
+        for tile in catalog.tiles() {
             let [r, g, b] = tile.color;
             colors[tile.id.index()] = Color::srgb_u8(r, g, b);
         }
@@ -506,13 +506,13 @@ mod tests {
     #[test]
     fn tile_colors_are_indexed_by_tile_id() {
         let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
-        let mut high_id_tile = catalog.tiles[0].clone();
+        let mut high_id_tile = catalog.tiles()[0].clone();
         high_id_tile.id = TileId::new(2);
         high_id_tile.color = [10, 20, 30];
-        let mut low_id_tile = catalog.tiles[1].clone();
+        let mut low_id_tile = catalog.tiles()[1].clone();
         low_id_tile.id = TileId::new(0);
         low_id_tile.color = [40, 50, 60];
-        catalog.tiles = vec![high_id_tile, low_id_tile];
+        catalog.replace_tiles(vec![high_id_tile, low_id_tile]);
 
         let colors = TileColorTable::from_catalog(&catalog);
 

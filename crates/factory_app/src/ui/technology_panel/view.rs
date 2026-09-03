@@ -118,7 +118,7 @@ fn spawn_technology_list(
                 TextFont::from_font_size(13.0),
                 TextColor(Color::srgb(0.92, 0.93, 0.88)),
             ));
-            for technology in &sim.catalog().technologies {
+            for technology in sim.catalog().technologies() {
                 spawn_technology_button(list, sim, technology.id, selected == Some(technology.id));
             }
         });

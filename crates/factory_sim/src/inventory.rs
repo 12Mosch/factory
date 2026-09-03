@@ -685,10 +685,10 @@ mod tests {
     #[test]
     fn from_slots_revalidates_stacks_against_its_catalog() {
         let source_catalog = base_catalog();
-        let item_id = source_catalog.items.last().unwrap().id;
+        let item_id = source_catalog.items().last().unwrap().id;
         let stack = ItemStack::new(&source_catalog, item_id, 1).unwrap();
         let mut target_catalog = source_catalog.clone();
-        target_catalog.items.pop();
+        target_catalog.items_vec_mut().pop();
 
         assert_eq!(
             Inventory::from_slots(&target_catalog, vec![test_slot(stack)]),
@@ -738,10 +738,10 @@ mod tests {
     #[test]
     fn insert_stack_revalidates_against_the_destination_catalog() {
         let source_catalog = base_catalog();
-        let item_id = source_catalog.items.last().unwrap().id;
+        let item_id = source_catalog.items().last().unwrap().id;
         let stack = ItemStack::new(&source_catalog, item_id, 1).unwrap();
         let mut target_catalog = source_catalog.clone();
-        target_catalog.items.pop();
+        target_catalog.items_vec_mut().pop();
         let mut inventory = Inventory::with_slot_count(1);
 
         assert_eq!(

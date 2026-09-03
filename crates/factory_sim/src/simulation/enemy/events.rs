@@ -218,7 +218,7 @@ impl Simulation {
     /// so the `None` early-returns downstream only fire for catalogs that
     /// genuinely have no enemies.
     pub(in crate::simulation) fn gameplay(&self) -> Option<&EnemyGameplayConfig> {
-        self.world.prototypes.enemy_gameplay.as_ref()
+        self.world.prototypes.enemy_gameplay()
     }
 }
 

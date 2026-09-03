@@ -69,16 +69,16 @@ pub(in crate::simulation) fn validate_mining_drill(
     }
     validate_item_slot(&sim.world.prototypes, state.output_slot)?;
     if let Some(stack) = state.output_slot.stack() {
-        let is_solid_resource =
-            sim.world
-                .prototypes
-                .world_generation
-                .resources
-                .iter()
-                .any(|resource| {
-                    resource.resource_item == stack.item_id()
-                        && resource.extraction == ResourceExtraction::Solid
-                });
+        let is_solid_resource = sim
+            .world
+            .prototypes
+            .world_generation()
+            .resources
+            .iter()
+            .any(|resource| {
+                resource.resource_item == stack.item_id()
+                    && resource.extraction == ResourceExtraction::Solid
+            });
         if !is_solid_resource {
             return Err(SimValidationError::InvalidMachineItem {
                 entity_id,
@@ -91,7 +91,7 @@ pub(in crate::simulation) fn validate_mining_drill(
             && sim
                 .world
                 .prototypes
-                .world_generation
+                .world_generation()
                 .resources
                 .iter()
                 .any(|resource| {

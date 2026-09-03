@@ -58,7 +58,7 @@ impl Simulation {
     /// Normalized daylight available at the current deterministic simulation
     /// phase. Disabled cycles remain at full daylight.
     pub fn daylight(&self) -> f32 {
-        let Some(config) = self.catalog().day_night_cycle else {
+        let Some(config) = self.catalog().day_night_cycle() else {
             return 1.0;
         };
         self.day_night_cycle
@@ -68,7 +68,7 @@ impl Simulation {
     /// Exact daylight fraction as `(numerator, denominator)` for deterministic
     /// integer solar output. Disabled cycles report full daylight `(1, 1)`.
     pub(crate) fn daylight_ratio(&self) -> (u64, u64) {
-        let Some(config) = self.catalog().day_night_cycle else {
+        let Some(config) = self.catalog().day_night_cycle() else {
             return (1, 1);
         };
         self.day_night_cycle
@@ -76,7 +76,7 @@ impl Simulation {
     }
 
     pub(crate) fn advance_day_night_cycle(&mut self) {
-        let Some(config) = self.catalog().day_night_cycle else {
+        let Some(config) = self.catalog().day_night_cycle() else {
             return;
         };
         if let Some(state) = self.day_night_cycle.as_mut() {
@@ -86,7 +86,7 @@ impl Simulation {
 }
 
 pub(crate) fn validate_day_night_cycle_state(sim: &Simulation) -> Result<(), SimValidationError> {
-    let config = sim.catalog().day_night_cycle;
+    let config = sim.catalog().day_night_cycle();
     match (config, sim.day_night_cycle) {
         (None, None) => Ok(()),
         (Some(_), None) | (None, Some(_)) => {
@@ -114,22 +114,22 @@ pub(crate) fn validate_day_night_cycle_state(sim: &Simulation) -> Result<(), Sim
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{load_from_bytes, save_to_bytes};
+    use crate::{SimulationCreationError, load_from_bytes, save_to_bytes};
     use factory_data::PrototypeCatalog;
 
     fn simulation_with_cycle(cycle_length_ticks: u64, dawn_dusk_ticks: u64) -> Simulation {
         let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
-        catalog.day_night_cycle = Some(DayNightCycleConfig {
+        catalog.set_day_night_cycle(Some(DayNightCycleConfig {
             cycle_length_ticks,
             dawn_dusk_ticks,
-        });
-        Simulation::new(17, catalog)
+        }));
+        Simulation::new(17, catalog).unwrap()
     }
 
     fn simulation_without_cycle() -> Simulation {
         let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
-        catalog.day_night_cycle = None;
-        Simulation::new(17, catalog)
+        catalog.set_day_night_cycle(None);
+        Simulation::new(17, catalog).unwrap()
     }
 
     #[test]
@@ -251,15 +251,16 @@ mod tests {
     #[test]
     fn validation_rejects_invalid_cycle_configuration() {
         let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
-        catalog.day_night_cycle = Some(DayNightCycleConfig {
+        catalog.set_day_night_cycle(Some(DayNightCycleConfig {
             cycle_length_ticks: 16,
             dawn_dusk_ticks: 4,
-        });
-        let sim = Simulation::new(17, catalog);
+        }));
 
         assert_eq!(
-            sim.validate(),
-            Err(SimValidationError::InvalidDayNightCycleConfig)
+            Simulation::new(17, catalog),
+            Err(SimulationCreationError::InvalidCatalog(
+                SimValidationError::InvalidDayNightCycleConfig
+            ))
         );
     }
 

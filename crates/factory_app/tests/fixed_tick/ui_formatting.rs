@@ -287,7 +287,7 @@ fn assembler_recipe_choices_are_all_and_only_crafting_recipes() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let choices = crafting_recipe_choices(&catalog);
     let expected_count = catalog
-        .recipes
+        .recipes()
         .iter()
         .filter(|recipe| recipe.category == CraftingCategory::Crafting)
         .count();
@@ -300,7 +300,7 @@ fn assembler_recipe_choices_are_all_and_only_crafting_recipes() {
     );
     assert!(
         catalog
-            .recipes
+            .recipes()
             .iter()
             .filter(|recipe| recipe.category != CraftingCategory::Crafting)
             .all(|recipe| !choices.iter().any(|choice| choice.id == recipe.id))
@@ -489,7 +489,7 @@ fn rocket_silo_launch_product_label_follows_the_prototype() {
     let satellite = item_id_by_name(&catalog, "satellite");
     let iron_plate = item_id_by_name(&catalog, "iron_plate");
     let copper_plate = item_id_by_name(&catalog, "copper_plate");
-    catalog.items[satellite.index()].launch_products = vec![
+    catalog.items_mut()[satellite.index()].launch_products = vec![
         factory_data::ItemAmount {
             item: iron_plate,
             amount: 1,
@@ -499,7 +499,7 @@ fn rocket_silo_launch_product_label_follows_the_prototype() {
             amount: 1,
         },
     ];
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     unlock_with_prerequisites(&mut sim, "rocket_silo");
     let (x, y) = place_powered_fixture_origin(&mut sim, 9, 9, (-1, 4));
     let entity_id = factory_sim::placement::place(

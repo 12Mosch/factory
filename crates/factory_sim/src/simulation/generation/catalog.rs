@@ -1,8 +1,9 @@
 use super::*;
-use factory_data::{ResourceExtraction, item_id_by_name};
+use factory_data::ResourceExtraction;
 
+#[cfg(test)]
 pub(in crate::simulation) fn item_id(prototypes: &PrototypeCatalog, name: &str) -> ItemId {
-    item_id_by_name(prototypes, name)
+    factory_data::item_id_by_name(prototypes, name)
 }
 
 #[cfg(test)]
@@ -27,7 +28,7 @@ pub(in crate::simulation) fn is_fluid_resource_item(
     item_id: ItemId,
 ) -> bool {
     prototypes
-        .world_generation
+        .world_generation()
         .resources
         .iter()
         .any(|resource| {
@@ -58,7 +59,7 @@ pub(in crate::simulation) fn is_science_pack_item(
     item_id: ItemId,
 ) -> bool {
     catalog
-        .technologies
+        .technologies()
         .iter()
         .flat_map(|technology| &technology.science_packs)
         .any(|science_pack| science_pack.item == item_id)

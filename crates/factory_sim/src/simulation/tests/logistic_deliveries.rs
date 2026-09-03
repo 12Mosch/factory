@@ -147,10 +147,10 @@ fn a_machine_slot_has_only_one_in_flight_delivery() {
 fn alternative_payloads_share_one_machine_delivery_reservation() {
     let (mut sim, silo, provider, _, satellite) = machine_delivery_fixture(8);
     let iron = item_id(&sim.world.prototypes, "iron_plate");
-    let satellite_products = sim.world.prototypes.items[satellite.index()]
+    let satellite_products = sim.world.prototypes.items()[satellite.index()]
         .launch_products
         .clone();
-    sim.world.prototypes.items[iron.index()].launch_products = satellite_products;
+    sim.world.prototypes.items_mut()[iron.index()].launch_products = satellite_products;
     insert_into_chest(&mut sim, provider, iron, 1);
     sim.entities.note_logistic_endpoint_changed(silo);
 

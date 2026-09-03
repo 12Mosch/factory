@@ -130,7 +130,7 @@ pub(in crate::simulation) fn item_slot_policy_accepts_with_rocket_recipe(
         ItemSlotOperation::MachineInsert => match policy {
             ItemSlotPolicy::OutputOnly | ItemSlotPolicy::Unrestricted => true,
             ItemSlotPolicy::Fuel => fuel_value_joules(catalog, item_id).is_some(),
-            ItemSlotPolicy::FurnaceIngredient => catalog.recipes.iter().any(|recipe| {
+            ItemSlotPolicy::FurnaceIngredient => catalog.recipes().iter().any(|recipe| {
                 recipe.category == CraftingCategory::Smelting
                     && recipe
                         .ingredients

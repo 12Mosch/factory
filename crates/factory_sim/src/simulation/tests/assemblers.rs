@@ -5,7 +5,7 @@ use super::support::*;
 fn catalog_loads_assembler_metadata() {
     let sim = Simulation::new_test_world(123);
     let assembler = entity_id_by_name(&sim.world.prototypes, "assembling_machine");
-    let prototype = &sim.world.prototypes.entities[assembler.index()];
+    let prototype = &sim.world.prototypes.entities()[assembler.index()];
     let metadata = prototype
         .assembling_machine
         .as_ref()

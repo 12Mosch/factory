@@ -129,7 +129,7 @@ pub fn nearest_resource_tile_for_app(sim: &Simulation) -> (i64, i64, factory_sim
 }
 
 pub fn format_item_name_for_test(sim: &Simulation, item_id: ItemId) -> String {
-    let name = &sim.catalog().items[item_id.index()].name;
+    let name = &sim.catalog().items()[item_id.index()].name;
     name.split('_')
         .map(|part| {
             let mut chars = part.chars();
@@ -308,7 +308,7 @@ pub fn poles_within_small_pole_reach(first: (i64, i64), second: (i64, i64)) -> b
 }
 
 pub fn first_buildable_rect(sim: &Simulation, prototype_id: EntityPrototypeId) -> (i64, i64) {
-    let prototype = &sim.catalog().entities[prototype_id.index()];
+    let prototype = &sim.catalog().entities()[prototype_id.index()];
 
     for chunk in sim.world().chunks.values() {
         for (index, _) in chunk.tiles.iter().enumerate() {
@@ -388,7 +388,7 @@ pub fn recipe_id_by_name(catalog: &PrototypeCatalog, name: &str) -> factory_data
 
 pub fn complete_research_by_name(sim: &mut Simulation, technology_name: &str) {
     let technology_id = technology_id_by_name(sim.catalog(), technology_name);
-    let required_units = sim.catalog().technologies[technology_id.index()].required_units;
+    let required_units = sim.catalog().technologies()[technology_id.index()].required_units;
 
     sim.select_research(technology_id)
         .unwrap_or_else(|_| panic!("{technology_name} should be selectable"));
@@ -405,11 +405,11 @@ pub fn unlock_with_prerequisites(sim: &mut Simulation, technology_name: &str) {
     if sim.is_technology_unlocked(technology_id) {
         return;
     }
-    let prerequisites = sim.catalog().technologies[technology_id.index()]
+    let prerequisites = sim.catalog().technologies()[technology_id.index()]
         .prerequisites
         .clone();
     for prerequisite in prerequisites {
-        let name = sim.catalog().technologies[prerequisite.index()]
+        let name = sim.catalog().technologies()[prerequisite.index()]
             .name
             .clone();
         unlock_with_prerequisites(sim, &name);

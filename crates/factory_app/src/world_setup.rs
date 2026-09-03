@@ -464,7 +464,10 @@ pub(crate) fn start_world_from_setup(
         return;
     }
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    let new_world = Simulation::new_with_config(seed, catalog, setup.config);
+    let Ok(new_world) = Simulation::new_with_config(seed, catalog, setup.config) else {
+        setup.validation_error = Some("Unable to create a simulation from these settings".into());
+        return;
+    };
     let tick = new_world.tick_count();
     let player_tile = new_world.player().position_tiles();
     if load_state.sim.replace(new_world).is_err() {

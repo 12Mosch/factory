@@ -16,13 +16,13 @@ pub(crate) fn technology_panel_snapshot(
         queue: sim.research_queue().to_vec(),
         progress_units: sim
             .catalog()
-            .technologies
+            .technologies()
             .iter()
             .map(|technology| sim.technology_progress(technology.id).unwrap_or(0))
             .collect(),
         completed_levels: sim
             .catalog()
-            .technologies
+            .technologies()
             .iter()
             .map(|technology| sim.technology_level(technology.id).unwrap_or(0))
             .collect(),

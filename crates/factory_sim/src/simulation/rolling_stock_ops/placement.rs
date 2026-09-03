@@ -553,7 +553,7 @@ impl Simulation {
         prototype_id: EntityPrototypeId,
         position: RailPosition,
     ) -> RollingStockId {
-        let prototype = &self.world.prototypes.entities[prototype_id.index()];
+        let prototype = &self.world.prototypes.entities()[prototype_id.index()];
         let inventory = prototype
             .inventory_slot_count
             .map(Inventory::with_slot_count);

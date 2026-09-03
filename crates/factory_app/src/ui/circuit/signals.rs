@@ -18,17 +18,17 @@ impl SignalCatalog {
     pub(crate) fn from_catalog(catalog: &PrototypeCatalog) -> Self {
         Self {
             items: catalog
-                .items
+                .items()
                 .iter()
                 .map(|item| SignalId::Item(item.id))
                 .collect(),
             fluids: catalog
-                .fluids
+                .fluids()
                 .iter()
                 .map(|fluid| SignalId::Fluid(fluid.id))
                 .collect(),
             virtuals: catalog
-                .virtual_signals
+                .virtual_signals()
                 .iter()
                 .map(|signal| SignalId::Virtual(signal.id))
                 .collect(),

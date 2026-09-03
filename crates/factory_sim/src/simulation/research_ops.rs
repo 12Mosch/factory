@@ -4,14 +4,14 @@ impl ResearchState {
     pub(super) fn from_catalog(catalog: &PrototypeCatalog) -> Self {
         Self {
             technology_names: catalog
-                .technologies
+                .technologies()
                 .iter()
                 .map(|technology| technology.name.clone())
                 .collect(),
             active: None,
             queue: Vec::new(),
             technologies: catalog
-                .technologies
+                .technologies()
                 .iter()
                 .map(|technology| TechnologyResearchState {
                     technology_id: technology.id,

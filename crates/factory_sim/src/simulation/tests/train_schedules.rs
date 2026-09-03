@@ -1291,7 +1291,7 @@ fn virtual_signal(sim: &Simulation, name: &str) -> crate::circuits::SignalId {
     crate::circuits::SignalId::Virtual(
         sim.world
             .prototypes
-            .virtual_signals
+            .virtual_signals()
             .iter()
             .find(|signal| signal.name == name)
             .unwrap_or_else(|| panic!("the catalog defines virtual signal {name}"))
@@ -1391,7 +1391,7 @@ fn fill_tank(
 fn fill_every_slot(sim: &mut Simulation, stock_id: crate::rolling_stock::RollingStockId) {
     let catalog = sim.world.prototypes.clone();
     let coal = factory_data::item_id_by_name(&catalog, "coal");
-    let stack_size = catalog.items[coal.index()].stack_size;
+    let stack_size = catalog.items()[coal.index()].stack_size;
     set_every_slot(sim, stock_id, stack_size);
 }
 

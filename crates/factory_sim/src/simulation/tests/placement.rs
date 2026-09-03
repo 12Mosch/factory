@@ -224,7 +224,7 @@ fn placement_preview_reports_outside_generated_chunks() {
     let max_chunk = sim
         .world
         .prototypes
-        .world_generation
+        .world_generation()
         .starting_area
         .max_chunk;
     let outside_x = i64::from((max_chunk + 1) * CHUNK_SIZE);
@@ -252,7 +252,7 @@ fn placement_preview_reports_missing_drill_resource() {
     let mut sim = Simulation::new_test_world(123);
     let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
     let drill_item = item_id_by_name(&sim.world.prototypes, "burner_mining_drill");
-    let prototype = &sim.world.prototypes.entities[drill.index()];
+    let prototype = &sim.world.prototypes.entities()[drill.index()];
     let (x, y) =
         first_buildable_rect_without_resource(&sim.world, prototype.size.x, prototype.size.y);
     give_player_build_item(&mut sim, drill_item);
@@ -389,7 +389,7 @@ fn entity_cannot_be_placed_outside_generated_chunks() {
     let max_chunk = sim
         .world
         .prototypes
-        .world_generation
+        .world_generation()
         .starting_area
         .max_chunk;
     let outside_x = i64::from((max_chunk + 1) * CHUNK_SIZE);
@@ -415,9 +415,9 @@ fn entity_cannot_be_placed_outside_generated_chunks() {
 fn rotation_updates_entity_footprint() {
     let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let inserter = entity_id_by_name(&catalog, "inserter");
-    catalog.entities[inserter.index()].size.y = 2;
+    catalog.entities_mut()[inserter.index()].size.y = 2;
 
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let (x, y) = first_buildable_rect(&sim.world, 2, 2);
     let entity_id = crate::placement::place(
         &mut sim,
@@ -441,7 +441,7 @@ fn rotation_updates_entity_footprint() {
         .expect("rotated rectangular entity should still be placeable");
 
     let entity = sim
-        .entities
+        .entities()
         .placed_entity(entity_id)
         .expect("placed entity should remain");
     assert_eq!(entity.footprint.width, 2);
@@ -458,9 +458,9 @@ fn rotation_updates_entity_footprint() {
 fn rotation_cannot_overlap_player_tile() {
     let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let inserter = entity_id_by_name(&catalog, "inserter");
-    catalog.entities[inserter.index()].size.y = 2;
+    catalog.entities_mut()[inserter.index()].size.y = 2;
 
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let (x, y) = first_buildable_rect(&sim.world, 2, 2);
     let entity_id = crate::placement::place(
         &mut sim,
@@ -706,7 +706,7 @@ fn inventory_backed_placement_rejects_resource_patch() {
     let resource_patch = sim
         .world
         .prototypes
-        .entities
+        .entities()
         .iter()
         .find(|prototype| prototype.entity_kind == EntityKind::ResourcePatch)
         .expect("base catalog should include resource patch prototypes")
@@ -818,7 +818,7 @@ fn give_player_build_item(sim: &mut Simulation, item_id: ItemId) {
 }
 
 fn build_item_or_fallback_item(sim: &Simulation, prototype_id: EntityPrototypeId) -> ItemId {
-    sim.world.prototypes.entities[prototype_id.index()]
+    sim.world.prototypes.entities()[prototype_id.index()]
         .build_item
         .unwrap_or_else(|| item_id_by_name(&sim.world.prototypes, "transport_belt"))
 }

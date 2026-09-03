@@ -358,7 +358,7 @@ pub(in crate::simulation::tests) fn first_buildable_offshore_pump_footprint_away
     sim: &Simulation,
     pump: EntityPrototypeId,
 ) -> (WorldTileCoord, WorldTileCoord) {
-    let prototype = &sim.world.prototypes.entities[pump.index()];
+    let prototype = &sim.world.prototypes.entities()[pump.index()];
     for (x, y) in all_tile_coords(&sim.world) {
         let footprint =
             EntityFootprint::from_size(x, y, prototype.size.x, prototype.size.y, Direction::North);

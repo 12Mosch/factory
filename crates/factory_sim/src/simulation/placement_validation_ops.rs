@@ -39,7 +39,7 @@ impl<'a> PlacementValidator<'a> {
             return false;
         };
 
-        self.world.prototypes.recipes.iter().any(|recipe| {
+        self.world.prototypes.recipes().iter().any(|recipe| {
             recipe
                 .products
                 .iter()

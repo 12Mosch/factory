@@ -60,7 +60,7 @@ impl Simulation {
         let prototypes = &self.world.prototypes;
         self.transport.refresh(&self.entities, || {
             prototypes
-                .entities
+                .entities()
                 .iter()
                 .filter_map(|prototype| prototype.transport_belt.as_ref())
                 .filter_map(|belt| belt.underground.as_ref())

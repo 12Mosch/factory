@@ -24,7 +24,7 @@ pub(crate) fn crafting_panel_snapshot(
 
 fn recipe_rows(sim: &Simulation, selected_tab: CraftingPanelTab) -> Vec<ManualCraftRecipeRow> {
     sim.catalog()
-        .recipes
+        .recipes()
         .iter()
         .filter(|recipe| recipe_visible_in_tab(recipe, selected_tab))
         .map(|recipe| recipe_row(sim, selected_tab, recipe))
@@ -206,7 +206,7 @@ fn missing_ingredients(
 
 fn locking_technology_name(catalog: &PrototypeCatalog, recipe_id: RecipeId) -> String {
     catalog
-        .technologies
+        .technologies()
         .iter()
         .find(|technology| {
             technology.effects.iter().any(|effect| {

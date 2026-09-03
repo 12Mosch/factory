@@ -29,7 +29,7 @@ impl ResearchState {
 
     pub fn bonuses(&self, catalog: &PrototypeCatalog) -> ResearchBonuses {
         let mut bonuses = ResearchBonuses::default();
-        for technology in &catalog.technologies {
+        for technology in catalog.technologies() {
             let completed_levels = self
                 .technology_state(technology.id)
                 .map_or(0, |state| state.completed_levels);

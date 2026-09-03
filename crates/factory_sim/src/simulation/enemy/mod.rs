@@ -198,7 +198,8 @@ mod enemy_feature_tests {
             ..standard
         };
         let mut sim =
-            Simulation::new_with_config(123, PrototypeCatalog::load_base().unwrap(), config);
+            Simulation::new_with_config(123, PrototypeCatalog::load_base().unwrap(), config)
+                .unwrap();
         for y in -20..=20 {
             for x in -20..=20 {
                 sim.ensure_chunk_generated(ChunkCoord { x, y });

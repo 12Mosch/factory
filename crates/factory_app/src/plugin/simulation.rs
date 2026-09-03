@@ -21,10 +21,13 @@ impl Plugin for SimulationPlugin {
         let sim = if app.world().contains_resource::<StartInWorldSetup>() {
             SimResource::empty()
         } else {
-            SimResource::new(Simulation::new(
-                123,
-                PrototypeCatalog::load_base().expect("base prototype catalog should load"),
-            ))
+            SimResource::new(
+                Simulation::new(
+                    123,
+                    PrototypeCatalog::load_base().expect("base prototype catalog should load"),
+                )
+                .expect("base prototype catalog should construct a simulation"),
+            )
         };
 
         app.insert_resource(Time::<Fixed>::from_hz(SIM_TICKS_PER_SECOND))

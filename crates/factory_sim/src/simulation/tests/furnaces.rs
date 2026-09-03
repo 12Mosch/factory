@@ -177,10 +177,10 @@ fn invalid_furnace_input_is_rejected() {
 fn locked_smelting_recipes_are_not_selected_by_furnaces() {
     let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let stone_brick = recipe_id(&catalog, "stone_brick");
-    catalog.technologies[0]
+    catalog.technologies_mut()[0]
         .effects
         .push(TechnologyEffect::UnlockRecipe(stone_brick));
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let furnace_id = place_stone_furnace(&mut sim);
     let stone = item_id(&sim.world.prototypes, "stone");
     sim.entities

@@ -361,8 +361,8 @@ fn enemy_heavy_benchmark_500_attackers_2000_structures() {
     let mut catalog =
         factory_data::PrototypeCatalog::load_base().expect("base catalog should load");
     let chest = entity_prototype_id_by_name(&catalog, "chest");
-    catalog.entities[chest.index()].max_health = Some(u32::MAX);
-    let mut sim = Simulation::new_with_config(123, catalog, config);
+    catalog.entities_mut()[chest.index()].max_health = Some(u32::MAX);
+    let mut sim = Simulation::new_with_config(123, catalog, config).unwrap();
     for y in -12..=12 {
         for x in -12..=12 {
             sim.ensure_chunk_generated(ChunkCoord { x, y });
@@ -651,7 +651,7 @@ fn build_rocket_silo_benchmark(silo_count: usize, stocked_count: usize) -> Simul
     let mut sim = Simulation::new_seeded(123);
     let rocket_silo_technology = sim
         .catalog()
-        .technologies
+        .technologies()
         .iter()
         .find(|technology| technology.name == "rocket_silo")
         .expect("base catalog should define rocket silo research")

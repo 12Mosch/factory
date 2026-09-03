@@ -24,8 +24,8 @@ fn tick_until_parts_built(sim: &mut Simulation, entity_id: EntityId, parts: u32)
 fn set_launch_payload(sim: &mut Simulation, payload: ItemId) {
     let satellite = item_id(&sim.world.prototypes, "satellite");
     let products =
-        std::mem::take(&mut sim.world.prototypes.items[satellite.index()].launch_products);
-    sim.world.prototypes.items[payload.index()].launch_products = products;
+        std::mem::take(&mut sim.world.prototypes.items_mut()[satellite.index()].launch_products);
+    sim.world.prototypes.items_mut()[payload.index()].launch_products = products;
 }
 
 fn set_launch_products(
@@ -33,14 +33,14 @@ fn set_launch_products(
     payload: ItemId,
     products: Vec<factory_data::ItemAmount>,
 ) {
-    sim.world.prototypes.items[payload.index()].launch_products = products;
+    sim.world.prototypes.items_mut()[payload.index()].launch_products = products;
 }
 
 #[test]
 fn catalog_loads_rocket_silo_metadata() {
     let sim = Simulation::new_test_world(123);
     let silo = entity_id_by_name(&sim.world.prototypes, "rocket_silo");
-    let prototype = &sim.world.prototypes.entities[silo.index()];
+    let prototype = &sim.world.prototypes.entities()[silo.index()];
     let metadata = prototype
         .rocket_silo
         .expect("rocket silo prototype should load metadata");
@@ -74,13 +74,13 @@ fn rocket_part_recipe_belongs_to_the_silo_alone() {
     let rocket_part = recipe_id(&sim.world.prototypes, "rocket_part");
 
     assert_eq!(
-        sim.world.prototypes.recipes[rocket_part.index()].category,
+        sim.world.prototypes.recipes()[rocket_part.index()].category,
         CraftingCategory::RocketBuilding
     );
     assert!(
         !sim.world
             .prototypes
-            .entities
+            .entities()
             .iter()
             .any(
                 |prototype| prototype.assembling_machine.as_ref().is_some_and(

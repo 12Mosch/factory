@@ -430,7 +430,7 @@ pub(crate) fn observe_research_audio(
     let completed_levels = sim
         .read()
         .catalog()
-        .technologies
+        .technologies()
         .iter()
         .map(|technology| sim.read().technology_level(technology.id).unwrap_or(0))
         .collect::<Vec<_>>();

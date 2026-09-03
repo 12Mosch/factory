@@ -3,15 +3,17 @@ use super::ids::*;
 use factory_data::{EquipmentEffectPrototype, WeaponDeliveryPrototype};
 use std::collections::HashSet;
 
-pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError> {
+pub(in crate::simulation) fn validate_catalog(
+    catalog: &PrototypeCatalog,
+) -> Result<(), SimValidationError> {
     if catalog
-        .day_night_cycle
+        .day_night_cycle()
         .is_some_and(|config| !config.is_valid())
     {
         return Err(SimValidationError::InvalidDayNightCycleConfig);
     }
 
-    for (index, item) in catalog.items.iter().enumerate() {
+    for (index, item) in catalog.items().iter().enumerate() {
         if item.id.index() != index {
             return Err(SimValidationError::UnknownItem(item.id));
         }
@@ -102,13 +104,13 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         }
     }
 
-    for (index, fluid) in catalog.fluids.iter().enumerate() {
+    for (index, fluid) in catalog.fluids().iter().enumerate() {
         if fluid.id.index() != index {
             return Err(SimValidationError::InvalidFluidId(fluid.id));
         }
     }
 
-    for (index, recipe) in catalog.recipes.iter().enumerate() {
+    for (index, recipe) in catalog.recipes().iter().enumerate() {
         if recipe.id.index() != index {
             return Err(SimValidationError::InvalidCraftingRecipe {
                 recipe_id: recipe.id,
@@ -139,7 +141,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         }
     }
 
-    for (index, technology) in catalog.technologies.iter().enumerate() {
+    for (index, technology) in catalog.technologies().iter().enumerate() {
         if technology.id.index() != index {
             return Err(SimValidationError::InvalidResearchTechnology {
                 technology_id: technology.id,
@@ -192,7 +194,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         }
     }
 
-    for prototype in &catalog.entities {
+    for prototype in catalog.entities() {
         if prototype.size.x <= 0 || prototype.size.y <= 0 {
             return Err(SimValidationError::InvalidCatalogEntityPrototype {
                 prototype_id: prototype.id,
