@@ -220,6 +220,22 @@ mod enemy_feature_tests {
     }
 
     #[test]
+    fn runtime_command_reports_invalid_settings_without_mutating_state() {
+        let mut sim = Simulation::new_test_world(123);
+        let original = sim.enemy_settings();
+        let mut runtime = original.runtime;
+        runtime.raid_frequency_percent = 24;
+
+        assert_eq!(
+            sim.apply_command(&SimCommand::SetEnemyRuntimeSettings(runtime)),
+            Err(SimCommandError::EnemyRuntimeSettings(
+                EnemyRuntimeSettingsError::RaidFrequencyPercentOutOfRange(24)
+            ))
+        );
+        assert_eq!(sim.enemy_settings(), original);
+    }
+
+    #[test]
     fn zero_frequency_percent_schedules_never_without_overflow() {
         assert_eq!(next_scaled_tick(u64::MAX - 5, 3_600, 0), u64::MAX);
         assert_eq!(next_scaled_tick(u64::MAX - 5, 3_600, 100), u64::MAX);

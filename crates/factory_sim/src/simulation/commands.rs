@@ -332,6 +332,7 @@ pub enum SlotTransferError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimCommandError {
+    EnemyRuntimeSettings(EnemyRuntimeSettingsError),
     Crafting(CraftingError),
     Assembler(AssemblerError),
     Research(ResearchError),
@@ -394,7 +395,8 @@ impl Simulation {
     ) -> Result<SimCommandEffect, SimCommandError> {
         match *command {
             SimCommand::SetEnemyRuntimeSettings(settings) => {
-                self.set_enemy_runtime_settings(settings);
+                self.set_enemy_runtime_settings(settings)
+                    .map_err(SimCommandError::EnemyRuntimeSettings)?;
                 Ok(SimCommandEffect::None)
             }
             SimCommand::MovePlayer {

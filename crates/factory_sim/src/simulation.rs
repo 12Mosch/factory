@@ -50,8 +50,9 @@ pub use crate::crafting::{
 };
 pub use crate::enemies::{
     Enemy, EnemyBaseId, EnemyDifficultyPreset, EnemyId, EnemyMapSnapshot, EnemyMission, EnemyMode,
-    EnemyRuntimeSettings, EnemySubsystem, EnemyWorldSettings, ExpansionId, RaidId,
-    SimulationConfig, ThreatEvent, ThreatEventKind, ThreatLocation, ThreatSnapshot, ThreatTier,
+    EnemyRuntimeSettings, EnemyRuntimeSettingsError, EnemySubsystem, EnemyWorldSettings,
+    ExpansionId, RaidId, SimulationConfig, ThreatEvent, ThreatEventKind, ThreatLocation,
+    ThreatSnapshot, ThreatTier,
 };
 pub(crate) use crate::entities::store::for_each_entity_state_map;
 pub use crate::entities::{

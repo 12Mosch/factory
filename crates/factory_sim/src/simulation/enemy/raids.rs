@@ -4,17 +4,13 @@ impl Simulation {
     pub(in crate::simulation) fn set_enemy_runtime_settings(
         &mut self,
         settings: EnemyRuntimeSettings,
-    ) {
-        let mut candidate = self.config;
-        candidate.runtime = settings;
-        candidate.preset = EnemyDifficultyPreset::Custom;
-        if !candidate.is_valid() {
-            return;
-        }
+    ) -> Result<(), EnemyRuntimeSettingsError> {
+        settings.validate()?;
         let old = self.config.runtime;
-        self.config = candidate;
+        self.config.runtime = settings;
+        self.config.preset = EnemyDifficultyPreset::Custom;
         let Some(gameplay) = self.gameplay().copied() else {
-            return;
+            return Ok(());
         };
         for base in self.enemies.bases.values_mut() {
             base.next_raid_tick = next_scaled_tick(
@@ -44,6 +40,7 @@ impl Simulation {
                 base.staging_started_tick = None;
             }
         }
+        Ok(())
     }
     pub(in crate::simulation) fn raid_target_size(&self) -> u8 {
         4 + (self.enemies.evolution_points / 2500).min(4) as u8

@@ -80,6 +80,53 @@ pub struct EnemyRuntimeSettings {
     pub expansion_frequency_percent: u16,
 }
 
+/// Why a requested set of enemy runtime settings cannot be applied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnemyRuntimeSettingsError {
+    StrengthPercentOutOfRange(u16),
+    PollutionSensitivityPercentOutOfRange(u16),
+    EvolutionRatePercentOutOfRange(u16),
+    RaidFrequencyPercentOutOfRange(u16),
+    ExpansionFrequencyPercentOutOfRange(u16),
+}
+
+impl EnemyRuntimeSettings {
+    pub fn validate(self) -> Result<(), EnemyRuntimeSettingsError> {
+        if !(50..=200).contains(&self.strength_percent) {
+            return Err(EnemyRuntimeSettingsError::StrengthPercentOutOfRange(
+                self.strength_percent,
+            ));
+        }
+        if !(25..=200).contains(&self.pollution_sensitivity_percent) {
+            return Err(
+                EnemyRuntimeSettingsError::PollutionSensitivityPercentOutOfRange(
+                    self.pollution_sensitivity_percent,
+                ),
+            );
+        }
+        if !(25..=200).contains(&self.evolution_rate_percent) {
+            return Err(EnemyRuntimeSettingsError::EvolutionRatePercentOutOfRange(
+                self.evolution_rate_percent,
+            ));
+        }
+        if self.raid_frequency_percent != 0 && !(25..=200).contains(&self.raid_frequency_percent) {
+            return Err(EnemyRuntimeSettingsError::RaidFrequencyPercentOutOfRange(
+                self.raid_frequency_percent,
+            ));
+        }
+        if self.expansion_frequency_percent != 0
+            && !(25..=200).contains(&self.expansion_frequency_percent)
+        {
+            return Err(
+                EnemyRuntimeSettingsError::ExpansionFrequencyPercentOutOfRange(
+                    self.expansion_frequency_percent,
+                ),
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct SimulationConfig {
     pub preset: EnemyDifficultyPreset,
@@ -152,13 +199,7 @@ impl SimulationConfig {
     pub fn is_valid(self) -> bool {
         self.world.base_density_percent <= 200
             && (64..=320).contains(&self.world.starting_safe_radius_tiles)
-            && (50..=200).contains(&self.runtime.strength_percent)
-            && (25..=200).contains(&self.runtime.pollution_sensitivity_percent)
-            && (25..=200).contains(&self.runtime.evolution_rate_percent)
-            && (self.runtime.raid_frequency_percent == 0
-                || (25..=200).contains(&self.runtime.raid_frequency_percent))
-            && (self.runtime.expansion_frequency_percent == 0
-                || (25..=200).contains(&self.runtime.expansion_frequency_percent))
+            && self.runtime.validate().is_ok()
     }
 }
 
