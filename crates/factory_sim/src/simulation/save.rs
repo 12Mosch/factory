@@ -647,6 +647,65 @@ mod tests {
     }
 
     #[test]
+    fn delayed_combat_round_trip_stays_lockstep_through_effect_ticks() {
+        let mut original = Simulation::new_test_world(8675309);
+        let target = CombatantId::Player;
+        let source = CombatSource::new(CombatantId::Enemy(EnemyId::new(u64::MAX)), Faction::Enemy);
+        let (impact_x, impact_y) = original.player.tile_position();
+        let projectile_id = ProjectileId::new(0);
+        original.delayed_combat = DelayedCombatState {
+            next_projectile_id: 1,
+            projectiles: BTreeMap::from([(
+                projectile_id,
+                ProjectileState {
+                    id: projectile_id,
+                    source,
+                    start_x_fixed: original.player.x_fixed() - POSITION_SCALE,
+                    start_y_fixed: original.player.y_fixed(),
+                    impact_x,
+                    impact_y,
+                    launched_tick: original.tick,
+                    impact_tick: original.tick + 4,
+                    speed_fixed_per_tick: 256,
+                    damage: Damage::new(7, DamageType::Explosion),
+                    explosion_radius_tiles: 1,
+                },
+            )]),
+            statuses: BTreeMap::from([(
+                target,
+                CombatStatusEffects {
+                    burning: Some(BurningStatus {
+                        source,
+                        damage_per_tick: Damage::new(3, DamageType::Fire),
+                        interval_ticks: 2,
+                        next_damage_tick: original.tick + 2,
+                        expires_tick: original.tick + 6,
+                    }),
+                },
+            )]),
+        };
+        original
+            .validate()
+            .expect("delayed combat fixture is valid");
+
+        let bytes = save_to_bytes(&original).expect("delayed combat state should save");
+        let mut restored = load_from_bytes(&bytes).expect("delayed combat state should reload");
+
+        assert_eq!(restored.delayed_combat, original.delayed_combat);
+        assert_eq!(restored.state_hash(), original.state_hash());
+
+        for expected_health in [100, 97, 97, 87, 87, 84] {
+            original.tick();
+            restored.tick();
+            assert_eq!(restored.player_health().0, expected_health);
+            assert_eq!(restored.delayed_combat, original.delayed_combat);
+            assert_eq!(restored.state_hash(), original.state_hash());
+        }
+        assert!(original.delayed_combat.projectiles.is_empty());
+        assert!(original.delayed_combat.statuses.is_empty());
+    }
+
+    #[test]
     fn round_trip_preserves_pending_chunk_generation_order() {
         let mut sim = Simulation::new_test_world(123);
         let required = ChunkCoord { x: 40, y: -37 };
