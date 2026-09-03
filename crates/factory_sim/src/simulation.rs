@@ -34,11 +34,12 @@ pub use crate::circuits::{
     SignalOperand, SignalSet, WireColor,
 };
 pub use crate::combat::{
-    AttackDefinition, AttackDelivery, CombatCommand, CombatCommandBuffer, CombatSource,
-    CombatantId, Damage, DamageType, EnemySpawnerState, Faction, FactionRelation,
-    GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState, HealthState, LaserTurretState, PLAYER_MAX_HEALTH,
-    PlayerWeaponError, PlayerWeaponState, PlayerWeaponStatus, RepairError, Resistance,
-    ResistanceProfile, TargetPriority,
+    AttackDefinition, AttackDelivery, BurningStatus, CombatCommand, CombatCommandBuffer,
+    CombatSource, CombatStatusEffects, CombatantId, Damage, DamageType, DelayedCombatState,
+    EnemySpawnerState, Faction, FactionRelation, GUN_TURRET_AMMO_SLOT_COUNT, GunTurretState,
+    HealthState, LaserTurretState, PLAYER_MAX_HEALTH, PlayerWeaponError, PlayerWeaponState,
+    PlayerWeaponStatus, ProjectileId, ProjectileState, RepairError, Resistance, ResistanceProfile,
+    TargetPriority,
 };
 pub use crate::construction::{
     Blueprint, BlueprintEntity, ConstructionError, ConstructionJob, ConstructionState, GhostEntity,
@@ -214,6 +215,7 @@ pub struct Simulation {
     player: PlayerState,
     player_equipment: PlayerEquipmentState,
     player_weapon: PlayerWeaponState,
+    delayed_combat: DelayedCombatState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
@@ -895,6 +897,7 @@ pub enum SimValidationError {
     },
     InvalidPlayerState,
     InvalidPlayerWeaponState,
+    InvalidDelayedCombatState,
     InvalidPlayerEquipment,
     InvalidEnemyState,
     AttackBudgetCapacityExceeded {

@@ -169,6 +169,54 @@ fn military_items_load_typed_ammo_armor_and_powered_equipment() {
 }
 
 #[test]
+fn advanced_personal_weapons_load_their_deterministic_delivery_rules() {
+    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let item = |name: &str| {
+        catalog
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("missing {name}"))
+    };
+
+    assert_eq!(
+        item("shotgun_shell").ammo.unwrap().category,
+        AmmoCategory::ShotgunShell
+    );
+    assert_eq!(
+        item("shotgun").weapon.unwrap().delivery,
+        WeaponDeliveryPrototype::Shotgun {
+            pellet_count: 8,
+            cone_half_width_permyriad: 3_500,
+        }
+    );
+    assert_eq!(
+        item("rocket_launcher").weapon.unwrap().delivery,
+        WeaponDeliveryPrototype::Rocket {
+            speed_fixed_per_tick: 256,
+            explosion_radius_tiles: 3,
+        }
+    );
+    assert_eq!(
+        item("flamethrower").weapon.unwrap().delivery,
+        WeaponDeliveryPrototype::Flame {
+            cone_half_width_permyriad: 5_000,
+            burn_duration_ticks: 180,
+            burn_interval_ticks: 30,
+        }
+    );
+    assert_eq!(
+        item("personal_laser_equipment").equipment.unwrap().effect,
+        EquipmentEffectPrototype::PersonalLaser {
+            damage: 15,
+            range_tiles: 15,
+            cooldown_ticks: 30,
+            energy_per_shot_joules: 50_000,
+        }
+    );
+}
+
+#[test]
 fn module_items_and_beacon_load_exact_metadata() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let expected = [

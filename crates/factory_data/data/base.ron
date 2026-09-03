@@ -390,6 +390,76 @@
                 cooldown_ticks: 8,
             )),
         ),
+        (
+            id: 126,
+            name: "shotgun_shell",
+            stack_size: 200,
+            ammo: Some((category: ShotgunShell, damage_per_shot: 8, shots_per_item: 1, damage_type: Physical)),
+        ),
+        (
+            id: 127,
+            name: "shotgun",
+            stack_size: 1,
+            weapon: Some((
+                ammo_category: ShotgunShell,
+                delivery: Shotgun(pellet_count: 8, cone_half_width_permyriad: 3500),
+                range_tiles: 7,
+                cooldown_ticks: 45,
+            )),
+        ),
+        (
+            id: 128,
+            name: "rocket",
+            stack_size: 100,
+            ammo: Some((category: Rocket, damage_per_shot: 80, shots_per_item: 1, damage_type: Explosion)),
+        ),
+        (
+            id: 129,
+            name: "rocket_launcher",
+            stack_size: 1,
+            weapon: Some((
+                ammo_category: Rocket,
+                delivery: Rocket(speed_fixed_per_tick: 256, explosion_radius_tiles: 3),
+                range_tiles: 22,
+                cooldown_ticks: 90,
+            )),
+        ),
+        (
+            id: 130,
+            name: "flamethrower_ammo",
+            stack_size: 100,
+            ammo: Some((category: Flamethrower, damage_per_shot: 2, shots_per_item: 50, damage_type: Fire)),
+        ),
+        (
+            id: 131,
+            name: "flamethrower",
+            stack_size: 1,
+            weapon: Some((
+                ammo_category: Flamethrower,
+                delivery: Flame(
+                    cone_half_width_permyriad: 5000,
+                    burn_duration_ticks: 180,
+                    burn_interval_ticks: 30,
+                ),
+                range_tiles: 9,
+                cooldown_ticks: 1,
+            )),
+        ),
+        (
+            id: 132,
+            name: "personal_laser_equipment",
+            stack_size: 20,
+            equipment: Some((
+                width: 2,
+                height: 2,
+                effect: PersonalLaser(
+                    damage: 15,
+                    range_tiles: 15,
+                    cooldown_ticks: 30,
+                    energy_per_shot_joules: 50000,
+                ),
+            )),
+        ),
     ],
     fluids: [
         (id: 0, name: "water"),
@@ -1824,6 +1894,89 @@
                 (item: "copper_plate", amount: 5),
             ],
             products: [(item: "submachine_gun", amount: 1)],
+        ),
+        (
+            id: 123,
+            name: "shotgun_shell",
+            category: Crafting,
+            crafting_time_ticks: 180,
+            ingredients: [
+                (item: "iron_plate", amount: 2),
+                (item: "copper_plate", amount: 2),
+            ],
+            products: [(item: "shotgun_shell", amount: 4)],
+        ),
+        (
+            id: 124,
+            name: "shotgun",
+            category: Crafting,
+            crafting_time_ticks: 600,
+            ingredients: [
+                (item: "steel_plate", amount: 15),
+                (item: "iron_gear_wheel", amount: 5),
+                (item: "copper_plate", amount: 5),
+            ],
+            products: [(item: "shotgun", amount: 1)],
+        ),
+        (
+            id: 125,
+            name: "rocket",
+            category: Crafting,
+            crafting_time_ticks: 240,
+            ingredients: [
+                (item: "steel_plate", amount: 2),
+                (item: "electronic_circuit", amount: 1),
+                (item: "sulfur", amount: 2),
+            ],
+            products: [(item: "rocket", amount: 1)],
+        ),
+        (
+            id: 126,
+            name: "rocket_launcher",
+            category: Crafting,
+            crafting_time_ticks: 900,
+            ingredients: [
+                (item: "steel_plate", amount: 20),
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "electronic_circuit", amount: 5),
+            ],
+            products: [(item: "rocket_launcher", amount: 1)],
+        ),
+        (
+            id: 127,
+            name: "flamethrower_ammo",
+            category: Crafting,
+            crafting_time_ticks: 300,
+            ingredients: [
+                (item: "steel_plate", amount: 1),
+                (item: "plastic_bar", amount: 2),
+                (item: "sulfur", amount: 1),
+            ],
+            products: [(item: "flamethrower_ammo", amount: 1)],
+        ),
+        (
+            id: 128,
+            name: "flamethrower",
+            category: Crafting,
+            crafting_time_ticks: 900,
+            ingredients: [
+                (item: "steel_plate", amount: 20),
+                (item: "iron_gear_wheel", amount: 10),
+                (item: "advanced_circuit", amount: 5),
+            ],
+            products: [(item: "flamethrower", amount: 1)],
+        ),
+        (
+            id: 129,
+            name: "personal_laser_equipment",
+            category: Crafting,
+            crafting_time_ticks: 900,
+            ingredients: [
+                (item: "advanced_circuit", amount: 40),
+                (item: "steel_plate", amount: 10),
+                (item: "copper_plate", amount: 10),
+            ],
+            products: [(item: "personal_laser_equipment", amount: 1)],
         ),
     ],
     entities: [
@@ -3709,7 +3862,13 @@
             ],
             required_units: 50,
             research_time_ticks: 600,
-            effects: [UnlockRecipe("chemical_science_pack")],
+            effects: [
+                UnlockRecipe("chemical_science_pack"),
+                UnlockRecipe("rocket"),
+                UnlockRecipe("rocket_launcher"),
+                UnlockRecipe("flamethrower_ammo"),
+                UnlockRecipe("flamethrower"),
+            ],
         ),
         (
             id: 18,
@@ -3780,6 +3939,8 @@
             effects: [
                 UnlockRecipe("piercing_rounds_magazine"),
                 UnlockRecipe("submachine_gun"),
+                UnlockRecipe("shotgun_shell"),
+                UnlockRecipe("shotgun"),
             ],
         ),
         (
@@ -3792,7 +3953,9 @@
             ],
             required_units: 75,
             research_time_ticks: 600,
-            effects: [UnlockRecipe("military_science_pack")],
+            effects: [
+                UnlockRecipe("military_science_pack"),
+            ],
         ),
         (
             id: 24,
@@ -3809,7 +3972,10 @@
             ],
             required_units: 100,
             research_time_ticks: 600,
-            effects: [UnlockRecipe("laser_turret")],
+            effects: [
+                UnlockRecipe("laser_turret"),
+                UnlockRecipe("personal_laser_equipment"),
+            ],
         ),
         (
             id: 25,

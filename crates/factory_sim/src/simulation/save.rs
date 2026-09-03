@@ -104,7 +104,9 @@ use bincode::Options;
 // safe across saves and presentation can distinguish completion from mutation.
 // v51: selected personal weapon, opened magazine, and fire cooldown joined the
 // durable player state.
-pub const SAVE_VERSION: u32 = 51;
+// v52: delayed projectiles, combat status effects, and per-module personal
+// laser cooldowns joined durable combat/equipment state.
+pub const SAVE_VERSION: u32 = 52;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -142,7 +144,8 @@ pub const SAVE_VERSION: u32 = 51;
 // payload metadata and gained atomic multi-product support.
 // v32: powered equipment gained the personal-roboport effect metadata.
 // v33: item prototypes gained personal weapons and typed ammunition categories.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 33;
+// v34: cone, rocket, and flame delivery metadata plus personal-laser equipment.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 34;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -197,6 +200,7 @@ struct SimulationSnapshotOwned {
     player: PlayerState,
     player_equipment: PlayerEquipmentState,
     player_weapon: PlayerWeaponState,
+    delayed_combat: DelayedCombatState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
@@ -387,6 +391,7 @@ struct SimulationSnapshotRef<'a> {
     player: PlayerState,
     player_equipment: &'a PlayerEquipmentState,
     player_weapon: PlayerWeaponState,
+    delayed_combat: &'a DelayedCombatState,
     player_inventory: &'a Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: &'a CraftingQueue,
@@ -424,6 +429,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             player: sim.player,
             player_equipment: &sim.player_equipment,
             player_weapon: sim.player_weapon,
+            delayed_combat: &sim.delayed_combat,
             player_inventory: &sim.player_inventory,
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: &sim.crafting_queue,
@@ -464,6 +470,7 @@ impl SimulationSnapshotOwned {
             player: sim.player,
             player_equipment: sim.player_equipment.clone(),
             player_weapon: sim.player_weapon,
+            delayed_combat: sim.delayed_combat.clone(),
             player_inventory: sim.player_inventory.clone(),
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: sim.crafting_queue.clone(),
@@ -504,6 +511,7 @@ impl SimulationSnapshotOwned {
             player: self.player,
             player_equipment: self.player_equipment,
             player_weapon: self.player_weapon,
+            delayed_combat: self.delayed_combat,
             player_inventory: self.player_inventory,
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,

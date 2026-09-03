@@ -3,6 +3,7 @@ use crate::{EnemyId, EntityId};
 use factory_data::ItemId;
 pub use factory_data::{AmmoCategory, DamageType};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const GUN_TURRET_AMMO_SLOT_COUNT: usize = 1;
 pub const PLAYER_MAX_HEALTH: u32 = 100;
@@ -357,6 +358,107 @@ impl CombatCommandBuffer {
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
+}
+
+/// Stable identity for a delayed projectile. IDs are allocated monotonically
+/// and projectiles are stored in ID order so simultaneous impacts replay in a
+/// stable order after save/load.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ProjectileId(u64);
+
+impl ProjectileId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+/// A projectile committed to a fixed impact tile. Travel is linear in integer
+/// fixed-point space; targets are sampled only when the projectile arrives.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct ProjectileState {
+    pub id: ProjectileId,
+    pub source: CombatSource,
+    pub start_x_fixed: i64,
+    pub start_y_fixed: i64,
+    pub impact_x: i64,
+    pub impact_y: i64,
+    pub launched_tick: u64,
+    pub impact_tick: u64,
+    pub speed_fixed_per_tick: u32,
+    pub damage: Damage,
+    pub explosion_radius_tiles: u32,
+}
+
+impl ProjectileState {
+    /// Integer-interpolated position suitable for deterministic presentation.
+    pub fn position_fixed_at(self, tick: u64) -> (i64, i64) {
+        let duration = self.impact_tick.saturating_sub(self.launched_tick).max(1);
+        let elapsed = tick.saturating_sub(self.launched_tick).min(duration);
+        let target_x = tile_center_fixed(self.impact_x);
+        let target_y = tile_center_fixed(self.impact_y);
+        (
+            interpolate_fixed(self.start_x_fixed, target_x, elapsed, duration),
+            interpolate_fixed(self.start_y_fixed, target_y, elapsed, duration),
+        )
+    }
+}
+
+/// Typed fire damage which survives its source and ticks at exact intervals.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct BurningStatus {
+    pub source: CombatSource,
+    pub damage_per_tick: Damage,
+    pub interval_ticks: u32,
+    pub next_damage_tick: u64,
+    pub expires_tick: u64,
+}
+
+/// Status effects attached to one combatant. New effect kinds belong here so
+/// delayed combat rules share ownership, cleanup, validation, and save logic.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct CombatStatusEffects {
+    pub burning: Option<BurningStatus>,
+}
+
+/// Durable state for delayed combat mechanics.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct DelayedCombatState {
+    pub(crate) next_projectile_id: u64,
+    pub(crate) projectiles: BTreeMap<ProjectileId, ProjectileState>,
+    pub(crate) statuses: BTreeMap<CombatantId, CombatStatusEffects>,
+}
+
+impl DelayedCombatState {
+    pub fn projectiles(&self) -> impl Iterator<Item = &ProjectileState> {
+        self.projectiles.values()
+    }
+
+    pub fn status(&self, combatant: CombatantId) -> Option<CombatStatusEffects> {
+        self.statuses.get(&combatant).copied()
+    }
+}
+
+const COMBAT_POSITION_SCALE: i64 = 1024;
+
+fn tile_center_fixed(tile: i64) -> i64 {
+    tile.saturating_mul(COMBAT_POSITION_SCALE)
+        .saturating_add(COMBAT_POSITION_SCALE / 2)
+}
+
+fn interpolate_fixed(start: i64, end: i64, elapsed: u64, duration: u64) -> i64 {
+    let delta = i128::from(end) - i128::from(start);
+    let offset = delta.saturating_mul(i128::from(elapsed)) / i128::from(duration);
+    i64::try_from(i128::from(start).saturating_add(offset)).unwrap_or_else(|_| {
+        if offset.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
 }
 
 /// Runtime state of a placed gun turret. Magazines are loaded one at a time

@@ -178,13 +178,35 @@ fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadEr
             detail: "damage and shots per item must be positive",
         });
     }
-    if item
-        .weapon
-        .is_some_and(|weapon| weapon.range_tiles == 0 || weapon.cooldown_ticks == 0)
-    {
+    if item.weapon.is_some_and(|weapon| {
+        use crate::model::WeaponDeliveryPrototype;
+
+        let delivery_is_valid = match weapon.delivery {
+            WeaponDeliveryPrototype::Hitscan => true,
+            WeaponDeliveryPrototype::Shotgun {
+                pellet_count,
+                cone_half_width_permyriad,
+            } => pellet_count > 0 && cone_half_width_permyriad > 0,
+            WeaponDeliveryPrototype::Rocket {
+                speed_fixed_per_tick,
+                explosion_radius_tiles,
+            } => speed_fixed_per_tick > 0 && explosion_radius_tiles > 0,
+            WeaponDeliveryPrototype::Flame {
+                cone_half_width_permyriad,
+                burn_duration_ticks,
+                burn_interval_ticks,
+            } => {
+                cone_half_width_permyriad > 0
+                    && burn_duration_ticks > 0
+                    && burn_interval_ticks > 0
+                    && burn_interval_ticks <= burn_duration_ticks
+            }
+        };
+        weapon.range_tiles == 0 || weapon.cooldown_ticks == 0 || !delivery_is_valid
+    }) {
         return Err(PrototypeLoadError::InvalidWeaponMetadata {
             item: item.name.clone(),
-            detail: "range and cooldown must be positive",
+            detail: "range, cooldown, and delivery values must be positive and consistent",
         });
     }
     if let Some(armor) = item.armor.as_ref() {
@@ -232,6 +254,12 @@ fn validate_item_metadata(item: &RawItemPrototype) -> Result<(), PrototypeLoadEr
                     && charging_pad_watts > 0
                     && construction_radius_tiles > 0
             }
+            EquipmentEffectPrototype::PersonalLaser {
+                damage,
+                range_tiles,
+                cooldown_ticks,
+                energy_per_shot_joules,
+            } => damage > 0 && range_tiles > 0 && cooldown_ticks > 0 && energy_per_shot_joules > 0,
         };
         if equipment.width == 0 || equipment.height == 0 || !effect_is_valid {
             return Err(PrototypeLoadError::InvalidEquipmentMetadata {

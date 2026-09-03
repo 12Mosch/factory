@@ -41,7 +41,9 @@ pub enum DamageType {
 pub enum AmmoCategory {
     #[default]
     Bullet,
+    ShotgunShell,
     Rocket,
+    Flamethrower,
 }
 
 impl DamageType {
@@ -128,6 +130,25 @@ pub struct AmmoPrototype {
 pub enum WeaponDeliveryPrototype {
     #[default]
     Hitscan,
+    /// A deterministic spread: every pellet is resolved as its own hit so
+    /// flat resistance applies to each pellet independently.
+    Shotgun {
+        pellet_count: u8,
+        /// Tangent-like half width of the cone (10,000 = one tile sideways
+        /// per tile forward). This avoids floating-point angle decisions.
+        cone_half_width_permyriad: u16,
+    },
+    /// A projectile travels to the committed aim tile and explodes there.
+    Rocket {
+        speed_fixed_per_tick: u32,
+        explosion_radius_tiles: u32,
+    },
+    /// Repeated shots form a cone and refresh a typed burning status.
+    Flame {
+        cone_half_width_permyriad: u16,
+        burn_duration_ticks: u32,
+        burn_interval_ticks: u32,
+    },
 }
 
 /// Data-driven rules for a player-held weapon. Damage belongs to ammunition so
@@ -190,6 +211,14 @@ pub enum EquipmentEffectPrototype {
         charging_pad_count: u8,
         charging_pad_watts: u64,
         construction_radius_tiles: u16,
+    },
+    /// Automatic armor-grid weapon. Every installed module owns an independent
+    /// cooldown and spends energy from the shared armor battery per shot.
+    PersonalLaser {
+        damage: u32,
+        range_tiles: u32,
+        cooldown_ticks: u32,
+        energy_per_shot_joules: u64,
     },
 }
 

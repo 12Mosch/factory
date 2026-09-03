@@ -1,6 +1,6 @@
 use super::super::*;
 use super::ids::*;
-use factory_data::EquipmentEffectPrototype;
+use factory_data::{EquipmentEffectPrototype, WeaponDeliveryPrototype};
 use std::collections::HashSet;
 
 pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError> {
@@ -19,6 +19,32 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
             && (ammo.damage_per_shot == 0 || ammo.shots_per_item == 0)
         {
             return Err(SimValidationError::UnknownItem(item.id));
+        }
+        if let Some(weapon) = item.weapon {
+            let valid_delivery = match weapon.delivery {
+                WeaponDeliveryPrototype::Hitscan => true,
+                WeaponDeliveryPrototype::Shotgun {
+                    pellet_count,
+                    cone_half_width_permyriad,
+                } => pellet_count > 0 && cone_half_width_permyriad > 0,
+                WeaponDeliveryPrototype::Rocket {
+                    speed_fixed_per_tick,
+                    explosion_radius_tiles,
+                } => speed_fixed_per_tick > 0 && explosion_radius_tiles > 0,
+                WeaponDeliveryPrototype::Flame {
+                    cone_half_width_permyriad,
+                    burn_duration_ticks,
+                    burn_interval_ticks,
+                } => {
+                    cone_half_width_permyriad > 0
+                        && burn_duration_ticks > 0
+                        && burn_interval_ticks > 0
+                        && burn_interval_ticks <= burn_duration_ticks
+                }
+            };
+            if weapon.range_tiles == 0 || weapon.cooldown_ticks == 0 || !valid_delivery {
+                return Err(SimValidationError::UnknownItem(item.id));
+            }
         }
         if let Some(repair) = item.repair
             && repair.restore_health == 0
@@ -57,6 +83,17 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                         && charging_pad_count > 0
                         && charging_pad_watts > 0
                         && construction_radius_tiles > 0
+                }
+                EquipmentEffectPrototype::PersonalLaser {
+                    damage,
+                    range_tiles,
+                    cooldown_ticks,
+                    energy_per_shot_joules,
+                } => {
+                    damage > 0
+                        && range_tiles > 0
+                        && cooldown_ticks > 0
+                        && energy_per_shot_joules > 0
                 }
             };
             if equipment.width == 0 || equipment.height == 0 || !valid_effect {

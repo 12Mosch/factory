@@ -1,4 +1,5 @@
 use super::super::*;
+use super::combat::spawn_test_enemy_at;
 use super::support::{
     all_tile_coords, entity_id_by_name, item_id_by_name, place_at, set_inventory_slot,
 };
@@ -74,6 +75,51 @@ fn tick_until(sim: &mut Simulation, limit: usize, predicate: impl Fn(&Simulation
         sim.tick();
     }
     panic!("condition did not hold within {limit} ticks");
+}
+
+#[test]
+fn personal_laser_uses_shared_battery_and_tracks_each_grid_slot_cooldown() {
+    let mut sim = Simulation::new_test_world(123);
+    equip_modular_armor(&mut sim);
+    let battery = add_item(&mut sim, 11, "battery_equipment");
+    let laser = add_item(&mut sim, 12, "personal_laser_equipment");
+    sim.install_equipment(11, 0, 0).unwrap();
+    sim.install_equipment(12, 1, 0).unwrap();
+    sim.player_equipment.battery_energy_joules = 100_000;
+    let (x, y) = sim.player.tile_position();
+    let enemy = spawn_test_enemy_at(&mut sim, x + 5, y);
+
+    let mut commands = CombatCommandBuffer::default();
+    sim.advance_defensive_turrets(&mut commands);
+    sim.advance_personal_lasers(&mut commands);
+    sim.resolve_combat_commands(commands);
+    assert_eq!(sim.enemies.get(enemy).unwrap().health.current, 15);
+    assert_eq!(sim.personal_stored_energy(), (50_000, 500_000));
+
+    let mut commands = CombatCommandBuffer::default();
+    sim.advance_defensive_turrets(&mut commands);
+    sim.advance_personal_lasers(&mut commands);
+    assert!(commands.is_empty(), "module must respect its own cooldown");
+    for _ in 0..30 {
+        sim.tick += 1;
+        sim.advance_day_night_cycle();
+        sim.advance_statistics_to_current_tick();
+    }
+    sim.advance_defensive_turrets(&mut commands);
+    sim.advance_personal_lasers(&mut commands);
+    sim.resolve_combat_commands(commands);
+    assert!(sim.enemies.get(enemy).is_none());
+    assert_eq!(sim.personal_stored_energy(), (0, 500_000));
+
+    sim.remove_equipment(1, 0).unwrap();
+    assert_eq!(sim.player_inventory.count(laser), 1);
+    assert_eq!(sim.player_inventory.count(battery), 0);
+    assert!(
+        sim.player_equipment
+            .personal_laser_next_ready_ticks
+            .is_empty()
+    );
+    sim.validate().unwrap();
 }
 
 #[test]
