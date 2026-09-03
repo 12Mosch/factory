@@ -39,8 +39,8 @@ use crate::rendering::rolling_stock::sync_rolling_stock_rendering;
 use crate::rendering::visuals::VisualAssetCache;
 use crate::rendering::world::measured_sync_visible_world_tiles;
 
-/// World presentation: camera, player sprite, and the chained render-sync
-/// systems that mirror simulation state into render entities.
+/// World presentation: camera, player sprite, and the render-sync systems that
+/// mirror simulation state into render entities.
 pub(super) struct RenderingPlugin;
 
 impl Plugin for RenderingPlugin {
@@ -92,26 +92,35 @@ impl Plugin for RenderingPlugin {
                 (
                     update_render_detail,
                     update_visible_chunks,
-                    update_visible_entity_ids.in_set(AppSet::VisibleEntities),
-                    measured_sync_visible_world_tiles,
-                    measured_sync_resource_debug_rendering,
-                    measured_sync_placed_entity_rendering,
+                    update_visible_entity_ids
+                        .after(update_visible_chunks)
+                        .in_set(AppSet::VisibleEntities),
+                    measured_sync_visible_world_tiles.after(update_visible_chunks),
+                    measured_sync_resource_debug_rendering
+                        .after(update_visible_chunks)
+                        .after(update_render_detail),
+                    measured_sync_placed_entity_rendering.after(update_visible_entity_ids),
                     sync_rocket_silo_rendering,
-                    sync_rocket_launch_rendering,
-                    sync_enemy_rendering,
-                    sync_robot_rendering,
-                    sync_rolling_stock_rendering,
-                    measured_sync_belt_direction_rendering,
-                    measured_sync_belt_item_rendering,
-                    sync_circuit_wire_rendering,
+                    sync_rocket_launch_rendering.after(update_visible_entity_ids),
+                    sync_enemy_rendering.after(update_visible_chunks),
+                    sync_robot_rendering.after(update_visible_chunks),
+                    sync_rolling_stock_rendering.after(update_visible_chunks),
+                    measured_sync_belt_direction_rendering
+                        .after(update_visible_entity_ids)
+                        .after(update_render_detail),
+                    measured_sync_belt_item_rendering
+                        .after(update_visible_entity_ids)
+                        .after(update_render_detail),
+                    sync_circuit_wire_rendering.after(update_visible_chunks),
                     sync_roboport_coverage_rendering,
                     // Reads the overlay toggle written in `WorldInput`, which
                     // this set has no ordering against, so it says so itself
                     // rather than showing last frame's answer when the
                     // scheduler happens to run it first.
-                    sync_rail_graph_overlay.after(toggle_rail_overlay_from_input),
+                    sync_rail_graph_overlay
+                        .after(update_visible_chunks)
+                        .after(toggle_rail_overlay_from_input),
                 )
-                    .chain()
                     .in_set(AppSet::RenderSync),
             )
             // The rail connection markers follow the build cursor, so they
