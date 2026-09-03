@@ -361,13 +361,20 @@ fn inspect_entry(
     let timestamp = file_timestamp_ms(&path);
     let fallback = || fallback_metadata(id.clone(), kind.clone(), fallback_name.clone(), timestamp);
     let inspection = inspect_file(&path, &kind, current_hash);
-    let metadata = inspection.metadata.filter(|metadata| {
-        metadata.id == id
-            && metadata.kind == kind
-            && local_datetime_from_unix_ms(metadata.completed_at_unix_ms).is_some()
+    let metadata = inspection
+        .metadata
+        .filter(|metadata| metadata.id == id && metadata.kind == kind);
+    let metadata_available = metadata.as_ref().is_some_and(|metadata| {
+        local_datetime_from_unix_ms(metadata.completed_at_unix_ms).is_some()
     });
-    let metadata_available = metadata.is_some();
-    let metadata = metadata.unwrap_or_else(fallback);
+    let metadata = metadata
+        .map(|mut metadata| {
+            if !metadata_available {
+                metadata.completed_at_unix_ms = timestamp;
+            }
+            metadata
+        })
+        .unwrap_or_else(fallback);
     SaveEntry {
         id,
         metadata,

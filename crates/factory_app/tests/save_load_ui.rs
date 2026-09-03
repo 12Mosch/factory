@@ -301,13 +301,23 @@ fn invalid_metadata_timestamp_falls_back_to_file_timestamp() {
 
     refresh_manager(&mut app);
 
-    let entry = &app.world().resource::<SaveCatalog>().entries()[0];
-    assert!(!entry.metadata_available);
-    assert_eq!(entry.metadata.completed_at_unix_ms, file_timestamp);
-    assert_ne!(
-        format_timestamp(entry.metadata.completed_at_unix_ms),
-        "Invalid timestamp"
-    );
+    {
+        let entry = &app.world().resource::<SaveCatalog>().entries()[0];
+        assert!(!entry.metadata_available);
+        assert_eq!(entry.metadata.display_name, "Timestamp Fallback");
+        assert_eq!(entry.metadata.completed_at_unix_ms, file_timestamp);
+        assert_ne!(
+            format_timestamp(entry.metadata.completed_at_unix_ms),
+            "Invalid timestamp"
+        );
+    }
+
+    create_named_save(&mut app, "timestamp fallback");
+    assert!(matches!(
+        app.world().resource::<PendingSaveConfirmation>(),
+        PendingSaveConfirmation::Overwrite(_)
+    ));
+    assert!(app.world().resource::<PendingSaveJobs>().is_empty());
 }
 
 #[test]
