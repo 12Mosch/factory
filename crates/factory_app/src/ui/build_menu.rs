@@ -793,7 +793,8 @@ mod tests {
         let sim = Simulation::new(
             7,
             PrototypeCatalog::load_base().expect("base catalog should load"),
-        );
+        )
+        .unwrap();
         let mut buildables = buildable_prototypes(sim.catalog());
         sort_buildables(&mut buildables);
         let catalog_count = buildables.len();

@@ -70,7 +70,7 @@ struct ResourceRule {
 
 impl WorldGenerator {
     pub(super) fn from_catalog(prototypes: &PrototypeCatalog) -> Self {
-        let config = &prototypes.world_generation;
+        let config = &prototypes.world_generation();
         let biomes: Vec<BiomeRule> = config
             .biomes
             .iter()
@@ -83,7 +83,7 @@ impl WorldGenerator {
             })
             .collect();
         let (fallback_tile, fallback_collision) = prototypes
-            .tiles
+            .tiles()
             .first()
             .map(|tile| (tile.id, collision_from_mask(&tile.collision_mask)))
             .unwrap_or_else(|| (TileId::new(0), ground_collision()));
@@ -101,7 +101,7 @@ impl WorldGenerator {
                     .map(|offset| (i64::from(offset.x), i64::from(offset.y))),
             })
             .collect();
-        let mut resource_minability = vec![false; prototypes.items.len()];
+        let mut resource_minability = vec![false; prototypes.items().len()];
         // Validated catalogs have unique resource items. Iterate backwards to
         // preserve the old first-match behavior for catalogs mutated directly
         // by callers after validation.
@@ -127,12 +127,12 @@ impl WorldGenerator {
                 .distance_scaling
                 .map_or(0, |scaling| i64::from(scaling.max_radius_bonus_tiles));
         let tile_pollution_absorption_per_minute_milli = prototypes
-            .tiles
+            .tiles()
             .iter()
             .map(|tile| u64::from(tile.pollution_absorption_per_minute_milli))
             .collect();
         let tile_walking_speed_percent = prototypes
-            .tiles
+            .tiles()
             .iter()
             .map(|tile| tile.walking_speed_percent)
             .collect();

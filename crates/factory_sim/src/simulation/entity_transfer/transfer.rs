@@ -228,7 +228,7 @@ mod tests {
     fn unknown_source_items_fail_planning_without_mutation() {
         let source_catalog = PrototypeCatalog::load_base().expect("base prototypes should load");
         let item_id = source_catalog
-            .items
+            .items()
             .last()
             .expect("base prototypes should contain items")
             .id;
@@ -243,7 +243,7 @@ mod tests {
         let source_before = source.clone();
         let destination_before = destination.clone();
         let mut destination_catalog = source_catalog;
-        destination_catalog.items.pop();
+        destination_catalog.items_vec_mut().pop();
 
         assert_eq!(
             plan_transfer(

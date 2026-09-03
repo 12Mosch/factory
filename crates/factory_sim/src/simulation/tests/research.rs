@@ -681,7 +681,7 @@ fn labs_atomically_consume_five_science_pack_types_per_research_unit() {
     .map(|name| item_id(&catalog, name));
     let technology_id = technology_id(&catalog, "logistics");
     let technology = catalog
-        .technologies
+        .technologies_mut()
         .iter_mut()
         .find(|technology| technology.id == technology_id)
         .expect("logistics technology should exist");
@@ -734,7 +734,7 @@ fn run_five_pack_lab_scenario(
     pack_ids: [ItemId; 5],
     missing_pack: Option<ItemId>,
 ) -> (Simulation, EntityId) {
-    let mut sim = Simulation::new(123, catalog.clone());
+    let mut sim = Simulation::new(123, catalog.clone()).unwrap();
     let military = item_id(catalog, "military_science_pack");
     let lab_id = place_lab(&mut sim);
     sim.select_research(technology_id)

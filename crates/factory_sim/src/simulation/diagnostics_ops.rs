@@ -619,7 +619,7 @@ impl Simulation {
         let mut rocket_parts_required = self
             .world
             .prototypes
-            .entities
+            .entities()
             .iter()
             .find_map(|prototype| prototype.rocket_silo)
             .map_or(1, |silo| silo.parts_per_rocket);

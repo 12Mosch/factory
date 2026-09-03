@@ -96,7 +96,7 @@ fn give_player_weapon_and_ammo(sim: &mut Simulation, weapon_name: &str, magazine
     let magazine = sim
         .world
         .prototypes
-        .items
+        .items()
         .iter()
         .find(|item| item.ammo.is_some_and(|ammo| ammo.category == category))
         .expect("base catalog should contain compatible ammunition")
@@ -177,11 +177,11 @@ fn pollution_emitter_index_tracks_placement_removal_and_work() {
 fn machine_emission_conserves_a_low_rate_over_one_minute_and_save_load() {
     let mut prototypes = PrototypeCatalog::load_base().expect("base prototypes should load");
     let assembler = entity_id_by_name(&prototypes, "assembling_machine");
-    for prototype in &mut prototypes.entities {
+    for prototype in prototypes.entities_mut() {
         prototype.pollution_per_minute_milli = None;
     }
-    prototypes.entities[assembler.index()].pollution_per_minute_milli = Some(1);
-    let mut sim = Simulation::new(123, prototypes);
+    prototypes.entities_mut()[assembler.index()].pollution_per_minute_milli = Some(1);
+    let mut sim = Simulation::new(123, prototypes).unwrap();
     let assembler_id = place_assembling_machine(&mut sim);
     assert_eq!(
         sim.pollution_emitters.emitters.len(),
@@ -319,7 +319,7 @@ fn buffered_pollution_diffusion_matches_ordered_updates_exactly() {
 #[test]
 fn pollution_does_not_spread_beyond_generated_chunks() {
     let mut sim = Simulation::new_test_world(123);
-    let area = sim.world.prototypes.world_generation.starting_area;
+    let area = sim.world.prototypes.world_generation().starting_area;
     let source = ChunkCoord {
         x: area.max_chunk,
         y: area.max_chunk,
@@ -378,10 +378,10 @@ fn terrain_absorbs_pollution_over_time() {
 #[test]
 fn terrain_absorption_conserves_its_rate_over_eight_minutes() {
     let mut prototypes = PrototypeCatalog::load_base().expect("base prototypes should load");
-    for tile in &mut prototypes.tiles {
+    for tile in prototypes.tiles_mut() {
         tile.pollution_absorption_per_minute_milli = 1;
     }
-    let mut sim = Simulation::new(123, prototypes);
+    let mut sim = Simulation::new(123, prototypes).unwrap();
     let coord = ChunkCoord { x: 0, y: 0 };
     let tile_count = sim.world.chunks[&coord].tiles.len() as u64;
     let minutes = 8;
@@ -581,7 +581,7 @@ fn queued_guard_and_staging_spawns_respect_spawner_alive_cap() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
     let placed = sim.entities.placed_entities[&spawner_id].clone();
-    let config = sim.world.prototypes.entities[placed.prototype_id.index()]
+    let config = sim.world.prototypes.entities()[placed.prototype_id.index()]
         .enemy_spawner
         .as_ref()
         .unwrap();
@@ -716,7 +716,7 @@ fn gun_turret_rejects_incompatible_ammunition_category() {
     let magazine = item_id_by_name(&sim.world.prototypes, "firearm_magazine");
     let (x, y) = first_buildable_rect_without_resource(&sim.world, 3, 3);
     let turret_id = place_at(&mut sim, turret, x, y, Direction::North);
-    sim.world.prototypes.items[magazine.index()]
+    sim.world.prototypes.items_mut()[magazine.index()]
         .ammo
         .as_mut()
         .expect("firearm magazine should have ammunition metadata")
@@ -1500,7 +1500,7 @@ fn cycling_to_incompatible_weapon_clears_loaded_magazine() {
     let (x, y) = sim.player.tile_position();
     spawn_test_enemy_at(&mut sim, x + 2, y);
     sim.attack_with_player_weapon(x + 2, y).unwrap();
-    sim.world.prototypes.items[submachine_gun.index()]
+    sim.world.prototypes.items_mut()[submachine_gun.index()]
         .weapon
         .as_mut()
         .expect("submachine gun should have weapon metadata")

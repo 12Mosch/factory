@@ -614,7 +614,7 @@ mod tests {
         let mut catalog = PrototypeCatalog::load_base().unwrap();
         let before = prototype_hash(&catalog);
 
-        catalog.items[0].stack_size += 1;
+        catalog.items_mut()[0].stack_size += 1;
 
         assert_ne!(before, prototype_hash(&catalog));
     }
@@ -625,7 +625,7 @@ mod tests {
         let before = prototype_hash(&catalog);
         let satellite = factory_data::item_id_by_name(&catalog, "satellite");
 
-        catalog.items[satellite.index()].launch_products[0].amount -= 1;
+        catalog.items_mut()[satellite.index()].launch_products[0].amount -= 1;
 
         assert_ne!(before, prototype_hash(&catalog));
     }

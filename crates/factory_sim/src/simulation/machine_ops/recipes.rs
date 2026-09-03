@@ -14,7 +14,7 @@ pub(in crate::simulation) fn recipe_is_unlocked(
     research: &ResearchState,
     recipe_id: RecipeId,
 ) -> bool {
-    let is_locked_by_technology = catalog.technologies.iter().any(|technology| {
+    let is_locked_by_technology = catalog.technologies().iter().any(|technology| {
         technology.effects.iter().any(|effect| {
             matches!(effect, TechnologyEffect::UnlockRecipe(unlocked_recipe_id) if *unlocked_recipe_id == recipe_id)
         })
@@ -23,7 +23,7 @@ pub(in crate::simulation) fn recipe_is_unlocked(
         return true;
     }
 
-    catalog.technologies.iter().any(|technology| {
+    catalog.technologies().iter().any(|technology| {
         research
             .technology_state(technology.id)
             .is_some_and(|state| state.completed_levels > 0)
@@ -38,7 +38,7 @@ pub(in crate::simulation) fn first_matching_unlocked_smelting_recipe<'a>(
     research: &ResearchState,
     input_item: ItemId,
 ) -> Option<&'a factory_data::RecipePrototype> {
-    catalog.recipes.iter().find(|recipe| {
+    catalog.recipes().iter().find(|recipe| {
         recipe.category == CraftingCategory::Smelting
             && recipe.ingredients.len() == 1
             && recipe.products.len() == 1
@@ -91,7 +91,7 @@ pub(in crate::simulation) fn rocket_silo_recipe<'a>(
     catalog: &'a PrototypeCatalog,
     research: &ResearchState,
 ) -> Option<&'a factory_data::RecipePrototype> {
-    catalog.recipes.iter().find(|recipe| {
+    catalog.recipes().iter().find(|recipe| {
         recipe.category == CraftingCategory::RocketBuilding
             && recipe_is_unlocked(catalog, research, recipe.id)
     })

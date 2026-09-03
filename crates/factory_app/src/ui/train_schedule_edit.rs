@@ -529,11 +529,11 @@ fn condition_of_kind(
 }
 
 fn first_item(catalog: &PrototypeCatalog) -> Option<ItemId> {
-    catalog.items.first().map(|item| item.id)
+    catalog.items().first().map(|item| item.id)
 }
 
 fn first_fluid(catalog: &PrototypeCatalog) -> Option<FluidId> {
-    catalog.fluids.first().map(|fluid| fluid.id)
+    catalog.fluids().first().map(|fluid| fluid.id)
 }
 
 /// A channel a circuit condition can start on.
@@ -546,7 +546,7 @@ fn first_fluid(catalog: &PrototypeCatalog) -> Option<FluidId> {
 /// wildcards falls through to the first item, because every catalog has items.
 fn first_signal(catalog: &PrototypeCatalog) -> Option<SignalId> {
     catalog
-        .virtual_signals
+        .virtual_signals()
         .iter()
         .find(|signal| !signal.kind.is_wildcard())
         .map(|signal| SignalId::Virtual(signal.id))
@@ -971,7 +971,7 @@ mod tests {
         let catalog = sim.catalog().clone();
         assert!(
             catalog
-                .virtual_signals
+                .virtual_signals()
                 .first()
                 .is_some_and(|signal| signal.kind.is_wildcard()),
             "this test is only meaningful while the catalog still leads with a wildcard"

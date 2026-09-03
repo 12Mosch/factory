@@ -17,7 +17,7 @@ fn place_radar(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoord) -> En
 
 fn radar_center_chunk(sim: &Simulation, entity_id: EntityId) -> ChunkCoord {
     let footprint = sim
-        .entities
+        .entities()
         .placed_entity(entity_id)
         .expect("radar should remain placed")
         .footprint;
@@ -43,7 +43,7 @@ fn grant_power(sim: &mut Simulation, entity_id: EntityId, satisfaction_permyriad
 fn set_radar_far_interval(sim: &mut Simulation, ticks: u32) {
     sim.world
         .prototypes
-        .entities
+        .entities_mut()
         .iter_mut()
         .find(|prototype| prototype.name == "radar")
         .and_then(|prototype| prototype.radar.as_mut())
@@ -54,7 +54,7 @@ fn set_radar_far_interval(sim: &mut Simulation, ticks: u32) {
 fn set_radar_nearby_interval(sim: &mut Simulation, ticks: u32) {
     sim.world
         .prototypes
-        .entities
+        .entities_mut()
         .iter_mut()
         .find(|prototype| prototype.name == "radar")
         .and_then(|prototype| prototype.radar.as_mut())
@@ -65,7 +65,7 @@ fn set_radar_nearby_interval(sim: &mut Simulation, ticks: u32) {
 fn radar_metadata(sim: &Simulation) -> factory_data::RadarPrototype {
     sim.world
         .prototypes
-        .entities
+        .entities()
         .iter()
         .find(|prototype| prototype.name == "radar")
         .and_then(|prototype| prototype.radar)
@@ -211,7 +211,7 @@ fn nearby_pulse_reveals_generated_chunks_and_queues_missing_chunks() {
 fn far_scan_reveals_generated_target_immediately_and_exactly() {
     let mut catalog = PrototypeCatalog::load_base().expect("base catalog");
     let radar = catalog
-        .entities
+        .entities_mut()
         .iter_mut()
         .find(|prototype| prototype.name == "radar")
         .expect("radar prototype");
@@ -220,7 +220,7 @@ fn far_scan_reveals_generated_target_immediately_and_exactly() {
         .as_mut()
         .expect("radar metadata")
         .far_scan_interval_ticks = 1;
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let (x, y) = first_buildable_rect_without_resource(&sim.world, 3, 3);
     let radar_id = place_radar(&mut sim, x, y);
     grant_power(&mut sim, radar_id, 10_000);

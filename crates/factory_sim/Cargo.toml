@@ -8,3 +8,6 @@ bincode = "1.3.3"
 factory_data.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 smallvec = { version = "1.15.2", features = ["serde"] }
+
+[dev-dependencies]
+factory_data = { workspace = true, features = ["test-utils"] }

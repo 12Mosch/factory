@@ -760,7 +760,7 @@ fn a_wired_signal_publishes_its_aspect() {
     let channel = SignalId::Virtual(
         sim.world
             .prototypes
-            .virtual_signals
+            .virtual_signals()
             .iter()
             .find(|virtual_signal| virtual_signal.name == "signal_a")
             .expect("the catalog defines signal_a")

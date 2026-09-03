@@ -63,11 +63,11 @@ mod tests {
 
     fn short_cycle_sim(enabled: bool) -> Simulation {
         let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
-        catalog.day_night_cycle = enabled.then_some(DayNightCycleConfig {
+        catalog.set_day_night_cycle(enabled.then_some(DayNightCycleConfig {
             cycle_length_ticks: 20,
             dawn_dusk_ticks: 4,
-        });
-        Simulation::new(5, catalog)
+        }));
+        Simulation::new(5, catalog).unwrap()
     }
 
     fn tint_test_app(sim: Simulation) -> App {

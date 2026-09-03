@@ -85,7 +85,7 @@ pub fn machine_recipe_choices(
     category: CraftingCategory,
 ) -> Vec<&factory_data::RecipePrototype> {
     catalog
-        .recipes
+        .recipes()
         .iter()
         .filter(|recipe| recipe.category == category)
         .collect()

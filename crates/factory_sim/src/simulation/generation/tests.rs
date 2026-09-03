@@ -81,7 +81,7 @@ fn terrain_water_forms_coherent_lakes() {
 #[test]
 fn climate_channels_are_independent() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    let noise = catalog.world_generation.climate_noise;
+    let noise = catalog.world_generation().climate_noise;
 
     for seed in [0u64, 42, 123] {
         let mut elevation_eq_moisture = 0u64;
@@ -194,7 +194,7 @@ fn starting_patches_generate_their_resource_for_any_seed() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let rules = WorldGenerator::from_catalog(&catalog);
     let starting_patches: Vec<_> = catalog
-        .world_generation
+        .world_generation()
         .resources
         .iter()
         .filter_map(|resource| resource.starting_patch)
@@ -280,7 +280,7 @@ fn resource_edge_noise_is_coherent_across_neighbouring_tiles() {
 fn resource_richness_falls_smoothly_from_patch_center() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let resource_item = catalog
-        .world_generation
+        .world_generation()
         .resources
         .first()
         .expect("base catalog should configure resources")
@@ -312,7 +312,7 @@ fn resource_richness_falls_smoothly_from_patch_center() {
 #[test]
 fn non_positive_effective_resource_radius_is_excluded() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    let resource_item = catalog.world_generation.resources[0].resource_item;
+    let resource_item = catalog.world_generation().resources[0].resource_item;
     let centers = [ResourcePatchCenter {
         resource_item,
         x: 0,
@@ -434,18 +434,18 @@ fn chunk_generation_is_deterministic_and_seed_dependent() {
 #[test]
 fn resource_minability_lookup_preserves_first_matching_rule() {
     let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    let first = catalog.world_generation.resources[0];
-    catalog.world_generation.resources[0].extraction = ResourceExtraction::Solid;
+    let first = catalog.world_generation().resources[0];
+    catalog.world_generation_mut().resources[0].extraction = ResourceExtraction::Solid;
     let mut duplicate = first;
     duplicate.extraction = ResourceExtraction::Fluid;
-    catalog.world_generation.resources.push(duplicate);
+    catalog.world_generation_mut().resources.push(duplicate);
 
     let generator = WorldGenerator::from_catalog(&catalog);
     assert!(generator.resource_is_minable(first.resource_item));
 
-    catalog.world_generation.resources[0].extraction = ResourceExtraction::Fluid;
+    catalog.world_generation_mut().resources[0].extraction = ResourceExtraction::Fluid;
     catalog
-        .world_generation
+        .world_generation_mut()
         .resources
         .last_mut()
         .expect("duplicate resource should exist")
@@ -542,7 +542,7 @@ fn grid_patch_richness_and_radius_scale_with_distance() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let rules = WorldGenerator::from_catalog(&catalog);
     let scaling = catalog
-        .world_generation
+        .world_generation()
         .distance_scaling
         .expect("base catalog should configure distance scaling");
 

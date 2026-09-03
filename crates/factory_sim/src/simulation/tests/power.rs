@@ -97,12 +97,12 @@ fn power_history_drops_samples_older_than_one_minute() {
 fn insufficient_power_slows_machine_progress() {
     let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let assembler = entity_id_by_name(&catalog, "assembling_machine");
-    catalog.entities[assembler.index()]
+    catalog.entities_mut()[assembler.index()]
         .electric_energy_source
         .as_mut()
         .expect("assembler should have electric energy source")
         .energy_usage_watts = 1_797_500;
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let assembler_id = place_assembling_machine(&mut sim);
     let recipe = recipe_id(&sim.world.prototypes, "iron_gear_wheel");
     let iron_plate = item_id(&sim.world.prototypes, "iron_plate");

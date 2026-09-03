@@ -3,15 +3,18 @@ use super::ids::*;
 use factory_data::{EquipmentEffectPrototype, WeaponDeliveryPrototype};
 use std::collections::HashSet;
 
-pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimValidationError> {
+pub(in crate::simulation) fn validate_catalog(
+    catalog: &PrototypeCatalog,
+) -> Result<(), SimValidationError> {
     if catalog
-        .day_night_cycle
+        .day_night_cycle()
         .is_some_and(|config| !config.is_valid())
     {
         return Err(SimValidationError::InvalidDayNightCycleConfig);
     }
+    validate_world_generation_config(catalog)?;
 
-    for (index, item) in catalog.items.iter().enumerate() {
+    for (index, item) in catalog.items().iter().enumerate() {
         if item.id.index() != index {
             return Err(SimValidationError::UnknownItem(item.id));
         }
@@ -102,13 +105,13 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         }
     }
 
-    for (index, fluid) in catalog.fluids.iter().enumerate() {
+    for (index, fluid) in catalog.fluids().iter().enumerate() {
         if fluid.id.index() != index {
             return Err(SimValidationError::InvalidFluidId(fluid.id));
         }
     }
 
-    for (index, recipe) in catalog.recipes.iter().enumerate() {
+    for (index, recipe) in catalog.recipes().iter().enumerate() {
         if recipe.id.index() != index {
             return Err(SimValidationError::InvalidCraftingRecipe {
                 recipe_id: recipe.id,
@@ -139,7 +142,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         }
     }
 
-    for (index, technology) in catalog.technologies.iter().enumerate() {
+    for (index, technology) in catalog.technologies().iter().enumerate() {
         if technology.id.index() != index {
             return Err(SimValidationError::InvalidResearchTechnology {
                 technology_id: technology.id,
@@ -192,7 +195,7 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
         }
     }
 
-    for prototype in &catalog.entities {
+    for prototype in catalog.entities() {
         if prototype.size.x <= 0 || prototype.size.y <= 0 {
             return Err(SimValidationError::InvalidCatalogEntityPrototype {
                 prototype_id: prototype.id,
@@ -657,6 +660,37 @@ pub(super) fn validate_catalog(catalog: &PrototypeCatalog) -> Result<(), SimVali
                 prototype_id: prototype.id,
             });
         }
+    }
+
+    Ok(())
+}
+
+fn validate_world_generation_config(catalog: &PrototypeCatalog) -> Result<(), SimValidationError> {
+    // Keep this safety-critical ceiling aligned with the data loader. Resource
+    // generation squares the effective radius into a u32 when calculating
+    // richness, and the loader's bound leaves ample room for edge noise and
+    // the maximum distance-scaling bonus.
+    let config = catalog.world_generation();
+    if config.resources.iter().any(|resource| {
+        !(1..=factory_data::MAX_RESOURCE_RADIUS_TILES).contains(&resource.radius)
+            || resource.richness == 0
+    }) {
+        return Err(SimValidationError::InvalidWorldGenerationConfig);
+    }
+
+    let radius_bonus = config
+        .distance_scaling
+        .map_or(0_i64, |scaling| i64::from(scaling.max_radius_bonus_tiles));
+    let edge_noise = i64::from(config.patch_grid.edge_noise);
+    let effective_radius_fits = config.resources.iter().all(|resource| {
+        i64::from(resource.radius)
+            .checked_add(radius_bonus)
+            .and_then(|radius| radius.checked_add(edge_noise))
+            .and_then(|radius| radius.checked_mul(radius))
+            .is_some_and(|radius_sq| u32::try_from(radius_sq).is_ok())
+    });
+    if !effective_radius_fits {
+        return Err(SimValidationError::InvalidWorldGenerationConfig);
     }
 
     Ok(())

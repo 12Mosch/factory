@@ -37,7 +37,7 @@ fn place_validated_entity(
     request: EntityPlacementRequest,
     footprint: EntityFootprint,
 ) -> EntityId {
-    let prototype = &sim.world.prototypes.entities[request.prototype_id.index()];
+    let prototype = &sim.world.prototypes.entities()[request.prototype_id.index()];
     let is_enemy_spawner = prototype.entity_kind == EntityKind::EnemySpawner;
     let is_train_stop = prototype.entity_kind == EntityKind::TrainStop;
     let reservation = reservation_for_prototype(

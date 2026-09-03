@@ -100,7 +100,7 @@ mod tests {
         let mut sim = Simulation::new_test_world(123);
         let connectors = sim
             .catalog()
-            .entities
+            .entities()
             .iter()
             .filter(|prototype| {
                 prototype.circuit_connector.is_some() && prototype.build_item.is_some()

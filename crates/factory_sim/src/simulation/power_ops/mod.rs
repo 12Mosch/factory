@@ -33,7 +33,7 @@ impl Simulation {
         let max_reach_x2 = self
             .world
             .prototypes
-            .entities
+            .entities()
             .iter()
             .filter_map(|prototype| prototype.electric_pole.as_ref())
             .map(|pole| pole.wire_reach_tiles_x2)

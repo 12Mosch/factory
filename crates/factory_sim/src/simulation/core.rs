@@ -5,7 +5,7 @@ use super::research_ops::{
 use super::*;
 
 impl Simulation {
-    pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Self {
+    pub fn new(seed: u64, prototypes: PrototypeCatalog) -> Result<Self, SimulationCreationError> {
         Self::new_with_config(seed, prototypes, SimulationConfig::default())
     }
 
@@ -13,28 +13,32 @@ impl Simulation {
         seed: u64,
         prototypes: PrototypeCatalog,
         config: SimulationConfig,
-    ) -> Self {
-        assert!(config.is_valid(), "invalid enemy simulation configuration");
+    ) -> Result<Self, SimulationCreationError> {
+        if !config.is_valid() {
+            return Err(SimulationCreationError::InvalidConfig);
+        }
+        let base_ids = factory_data::BasePrototypeIds::try_from_catalog(&prototypes)
+            .map_err(SimulationCreationError::MissingRequiredPrototype)?;
+        validation::validate_catalog(&prototypes)
+            .map_err(SimulationCreationError::InvalidCatalog)?;
         let world = WorldSim::new(seed, prototypes);
         let research = ResearchState::from_catalog(&world.prototypes);
         let entities = EntityStore::empty();
         let player = find_player_start(&world, &entities.occupancy)
-            .expect("world should contain a walkable player start");
+            .ok_or(SimulationCreationError::NoWalkablePlayerStart)?;
         let mut player_inventory = Inventory::player();
-        let burner_mining_drill = item_id(&world.prototypes, "burner_mining_drill");
-        let stone_furnace = item_id(&world.prototypes, "stone_furnace");
         player_inventory
-            .insert(&world.prototypes, burner_mining_drill, 1)
-            .expect("player starting inventory should accept burner mining drill");
+            .insert(&world.prototypes, base_ids.items.burner_mining_drill, 1)
+            .map_err(SimulationCreationError::InvalidStartingInventory)?;
         player_inventory
-            .insert(&world.prototypes, stone_furnace, 1)
-            .expect("player starting inventory should accept stone furnace");
+            .insert(&world.prototypes, base_ids.items.stone_furnace, 1)
+            .map_err(SimulationCreationError::InvalidStartingInventory)?;
 
         let mut sim = Self {
             tick: 0,
             day_night_cycle: world
                 .prototypes
-                .day_night_cycle
+                .day_night_cycle()
                 .map(|_| DayNightCycleState::new()),
             entity_topology_revision: 0,
             revealed_revision: 0,
@@ -91,7 +95,7 @@ impl Simulation {
             sim.world.chunks.keys().copied(),
         );
         sim.initialize_generated_chunks(&initial_chunks, false);
-        sim
+        Ok(sim)
     }
 
     pub fn onboarding_progress(&self) -> OnboardingProgress {
@@ -103,6 +107,7 @@ impl Simulation {
             seed,
             PrototypeCatalog::load_base().expect("base prototype catalog should load"),
         )
+        .expect("base prototype catalog should construct a simulation")
     }
 
     pub fn new_seeded(seed: u64) -> Self {
@@ -515,7 +520,7 @@ impl Simulation {
             return false;
         };
 
-        self.world.prototypes.recipes.iter().any(|recipe| {
+        self.world.prototypes.recipes().iter().any(|recipe| {
             recipe
                 .products
                 .iter()
@@ -530,7 +535,7 @@ impl Simulation {
     ) -> Vec<&factory_data::RecipePrototype> {
         self.world
             .prototypes
-            .recipes
+            .recipes()
             .iter()
             .filter(|recipe| recipe.category == category && self.is_recipe_unlocked(recipe.id))
             .collect()
@@ -636,5 +641,65 @@ impl Simulation {
         self.research
             .technology_state(technology_id)
             .ok_or(ResearchError::MissingTechnology(technology_id))
+    }
+}
+
+#[cfg(test)]
+mod construction_tests {
+    use super::*;
+
+    #[test]
+    fn construction_rejects_invalid_config_without_panicking() {
+        let catalog = PrototypeCatalog::load_base().unwrap();
+        let mut config = SimulationConfig::default();
+        config.world.base_density_percent = 201;
+
+        assert!(matches!(
+            Simulation::new_with_config(1, catalog, config),
+            Err(SimulationCreationError::InvalidConfig)
+        ));
+    }
+
+    #[test]
+    fn construction_rejects_invalid_catalog_without_panicking() {
+        let mut catalog = PrototypeCatalog::load_base().unwrap();
+        catalog.items_mut().swap(0, 1);
+
+        assert!(matches!(
+            Simulation::new(1, catalog),
+            Err(SimulationCreationError::InvalidCatalog(
+                SimValidationError::UnknownItem(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn construction_rejects_oversized_resource_radius_without_panicking() {
+        let mut catalog = PrototypeCatalog::load_base().unwrap();
+        catalog.world_generation_mut().resources[0].radius = 65_536;
+
+        assert!(matches!(
+            Simulation::new(1, catalog),
+            Err(SimulationCreationError::InvalidCatalog(
+                SimValidationError::InvalidWorldGenerationConfig
+            ))
+        ));
+    }
+
+    #[test]
+    fn construction_reports_missing_required_prototype_before_incidental_references() {
+        let mut catalog = PrototypeCatalog::load_base().unwrap();
+        let iron_ore = catalog
+            .items()
+            .iter()
+            .position(|item| item.name == "iron_ore")
+            .unwrap();
+        catalog.items_vec_mut().remove(iron_ore);
+
+        assert!(matches!(
+            Simulation::new(1, catalog),
+            Err(SimulationCreationError::MissingRequiredPrototype(missing))
+                if missing.group == "item" && missing.name == "iron_ore"
+        ));
     }
 }

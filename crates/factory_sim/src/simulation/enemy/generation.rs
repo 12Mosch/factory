@@ -8,7 +8,7 @@ impl Simulation {
     /// generation. Placement is a pure function of the world seed and chunk
     /// coordinate.
     pub(in crate::simulation) fn seed_enemy_spawners_in_chunks(&mut self, chunks: &[ChunkCoord]) {
-        let Some(config) = self.world.prototypes.world_generation.enemy_bases else {
+        let Some(config) = self.world.prototypes.world_generation().enemy_bases else {
             return;
         };
         for &coord in chunks {

@@ -10,7 +10,7 @@ impl MachineTickContext<'_> {
             let Some(placed) = self.entities.placed_entity(entity_id).cloned() else {
                 continue;
             };
-            let prototype = &self.world.prototypes.entities[placed.prototype_id.index()];
+            let prototype = &self.world.prototypes.entities()[placed.prototype_id.index()];
             let Some(mining_drill) = prototype.mining_drill.as_ref() else {
                 continue;
             };

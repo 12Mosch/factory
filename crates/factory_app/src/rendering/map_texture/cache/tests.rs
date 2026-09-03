@@ -51,9 +51,9 @@ fn incremental_update_matches_full_render_after_streaming_chunk() {
 #[test]
 fn radar_reveal_marks_one_in_bounds_chunk_and_matches_full_render() {
     let mut catalog = factory_data::PrototypeCatalog::load_base().expect("base catalog");
-    catalog.day_night_cycle = None;
+    catalog.set_day_night_cycle(None);
     let radar = catalog
-        .entities
+        .entities_mut()
         .iter_mut()
         .find(|prototype| prototype.name == "radar")
         .expect("radar prototype");
@@ -73,7 +73,7 @@ fn radar_reveal_marks_one_in_bounds_chunk_and_matches_full_render() {
         .expect("radar electric source")
         .energy_usage_watts = 60_000;
 
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let radar_id = place_solar_powered_radar(&mut sim);
     let footprint = sim
         .entities()

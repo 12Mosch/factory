@@ -5,7 +5,7 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
     let technology_names = sim
         .world
         .prototypes
-        .technologies
+        .technologies()
         .iter()
         .map(|technology| technology.name.clone())
         .collect::<Vec<_>>();
@@ -13,11 +13,11 @@ pub(super) fn validate_research_state(sim: &Simulation) -> Result<(), SimValidat
         return Err(SimValidationError::InvalidResearchTechnologyNames);
     }
 
-    if sim.research.technologies.len() != sim.world.prototypes.technologies.len() {
+    if sim.research.technologies.len() != sim.world.prototypes.technologies().len() {
         return Err(SimValidationError::InvalidResearchTechnologyNames);
     }
 
-    for (index, technology) in sim.world.prototypes.technologies.iter().enumerate() {
+    for (index, technology) in sim.world.prototypes.technologies().iter().enumerate() {
         let state = sim.research.technology_state(technology.id).ok_or(
             SimValidationError::InvalidResearchTechnology {
                 technology_id: technology.id,

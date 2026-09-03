@@ -24,9 +24,9 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
         .iter()
         .map(|buildable| match buildable.target {
             BuildTarget::Entity(prototype_id) => {
-                catalog.entities[prototype_id.index()].name.as_str()
+                catalog.entities()[prototype_id.index()].name.as_str()
             }
-            BuildTarget::Tile(_) => catalog.items[buildable.item_id.index()].name.as_str(),
+            BuildTarget::Tile(_) => catalog.items()[buildable.item_id.index()].name.as_str(),
         })
         .collect::<Vec<_>>();
 
@@ -60,12 +60,12 @@ fn buildable_prototypes_include_placeable_item_backed_entities() {
     assert!(buildables.iter().all(|buildable| {
         match buildable.target {
             BuildTarget::Entity(prototype_id) => {
-                let entity = &catalog.entities[prototype_id.index()];
+                let entity = &catalog.entities()[prototype_id.index()];
                 entity.entity_kind != EntityKind::ResourcePatch
                     && entity.build_item == Some(buildable.item_id)
             }
             // Terrain buildables are backed by the item's own paving metadata.
-            BuildTarget::Tile(tile) => catalog.items[buildable.item_id.index()]
+            BuildTarget::Tile(tile) => catalog.items()[buildable.item_id.index()]
                 .place_as_tile
                 .is_some_and(|placement| placement.tile == tile),
         }

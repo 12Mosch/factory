@@ -21,7 +21,7 @@ fn progress_revision_changes_only_when_visible_progress_changes() {
 #[test]
 fn onboarding_progress_survives_v14_save_round_trip() {
     let catalog = PrototypeCatalog::load_base().expect("base prototypes should load");
-    let mut sim = Simulation::new(73, catalog);
+    let mut sim = Simulation::new(73, catalog).unwrap();
     sim.onboarding_progress = OnboardingProgress {
         revision: 17,
         iron_ore_manually_mined: 10,
@@ -54,7 +54,8 @@ fn onboarding_progress_survives_v14_save_round_trip() {
 #[test]
 fn v13_save_header_is_rejected() {
     let catalog = PrototypeCatalog::load_base().expect("base prototypes should load");
-    let mut bytes = save_to_bytes(&Simulation::new(91, catalog)).expect("save should serialize");
+    let mut bytes =
+        save_to_bytes(&Simulation::new(91, catalog).unwrap()).expect("save should serialize");
     bytes[8..12].copy_from_slice(&13_u32.to_le_bytes());
     assert!(matches!(
         load_from_bytes(&bytes),

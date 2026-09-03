@@ -190,24 +190,22 @@ pub(in crate::simulation) fn resource_at_patch_tile(
         }
     }
 
-    best.map(|candidate| {
-        let radius_sq =
-            u32::try_from(candidate.radius_sq.max(1)).expect("resource radius is bounded");
-        let distance_sq = u32::try_from(candidate.distance_sq.max(0))
-            .expect("resource distance is bounded by radius");
+    best.and_then(|candidate| {
+        let radius_sq = u32::try_from(candidate.radius_sq.max(1)).ok()?;
+        let distance_sq = u32::try_from(candidate.distance_sq.max(0)).ok()?;
         // Distance-scaled richness can approach u32::MAX, so the amount math
         // runs in u64 and saturates on the way back.
         let falloff = u64::from((radius_sq - distance_sq).max(1));
         let base = u64::from(candidate.center.richness / 3);
         let scaled = u64::from(candidate.center.richness) * falloff / u64::from(radius_sq);
 
-        ResourceCell {
+        Some(ResourceCell {
             resource_item: candidate.center.resource_item,
             // Richness should read as a smooth gradient toward the center.
             // The coherent edge field still makes patch outlines organic, but
             // independent per-tile variation would obscure this radial falloff.
             amount: u32::try_from(base + scaled).unwrap_or(u32::MAX),
-        }
+        })
     })
 }
 

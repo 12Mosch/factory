@@ -14,7 +14,7 @@ pub(in crate::simulation) mod robots;
 mod rolling_stock;
 mod world;
 
-use self::catalog::validate_catalog;
+pub(super) use self::catalog::validate_catalog;
 use self::construction::validate_construction_state;
 use self::crafting::validate_crafting_queue;
 use self::entities::{

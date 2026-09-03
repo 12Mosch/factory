@@ -37,7 +37,7 @@ impl BuildablePrototype {
 pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototype> {
     let mut buildables = Vec::new();
 
-    for entity in &catalog.entities {
+    for entity in catalog.entities() {
         if entity.entity_kind == EntityKind::ResourcePatch {
             continue;
         }
@@ -62,7 +62,7 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
         });
     }
 
-    for item in &catalog.items {
+    for item in catalog.items() {
         let Some(placement) = item.place_as_tile else {
             continue;
         };
@@ -82,7 +82,7 @@ pub fn buildable_prototypes(catalog: &PrototypeCatalog) -> Vec<BuildablePrototyp
 
 fn required_technology(catalog: &PrototypeCatalog, item_id: ItemId) -> Option<TechnologyId> {
     catalog
-        .recipes
+        .recipes()
         .iter()
         .filter(|recipe| {
             recipe
@@ -91,7 +91,7 @@ fn required_technology(catalog: &PrototypeCatalog, item_id: ItemId) -> Option<Te
                 .any(|product| product.item == item_id)
         })
         .flat_map(|recipe| {
-            catalog.technologies.iter().filter_map(move |technology| {
+            catalog.technologies().iter().filter_map(move |technology| {
                 technology.effects.iter().any(|effect| {
                     matches!(effect, TechnologyEffect::UnlockRecipe(id) if *id == recipe.id)
                 }).then_some(technology.id)

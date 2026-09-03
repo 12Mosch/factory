@@ -236,7 +236,7 @@ fn inventory_rejects_insert_when_full() {
 fn inventory_acceptance_reports_unknown_items() {
     let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
     let mut inventory = Inventory::with_slot_count(1);
-    let unknown_item = ItemId::new(catalog.items.len() as u16);
+    let unknown_item = ItemId::new(catalog.items().len() as u16);
 
     assert_eq!(
         inventory.insert(&catalog, unknown_item, 1),

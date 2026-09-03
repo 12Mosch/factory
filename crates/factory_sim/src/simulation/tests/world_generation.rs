@@ -29,7 +29,7 @@ fn world_tile_lookup_is_stable_across_chunk_boundaries() {
 fn generated_chunks_have_expected_shape() {
     let world = WorldSim::new_seeded(123);
 
-    let area = world.prototypes.world_generation.starting_area;
+    let area = world.prototypes.world_generation().starting_area;
     let generated_side = (area.max_chunk - area.min_chunk + 1) as usize;
     assert_eq!(world.chunks.len(), generated_side * generated_side);
     for chunk in world.chunks.values() {
@@ -68,7 +68,7 @@ fn generated_chunks_cache_terrain_pollution_absorption() {
         &[far_coord]
     );
 
-    for prototype in &world.prototypes.tiles {
+    for prototype in world.prototypes.tiles() {
         assert_eq!(
             world
                 .generator
@@ -84,7 +84,7 @@ fn generated_chunks_cache_terrain_pollution_absorption() {
             .iter()
             .map(|tile| {
                 u64::from(
-                    world.prototypes.tiles[tile.tile_id.index()]
+                    world.prototypes.tiles()[tile.tile_id.index()]
                         .pollution_absorption_per_minute_milli,
                 )
             })
@@ -192,7 +192,7 @@ fn deserialization_rebuilds_the_runtime_world_generator() {
 
     let loaded: WorldSim = bincode::deserialize(&bytes).expect("world should deserialize");
 
-    for tile in &loaded.prototypes.tiles {
+    for tile in loaded.prototypes.tiles() {
         assert_eq!(
             loaded
                 .generator
@@ -272,7 +272,7 @@ fn seed_123_contains_all_resource_item_types() {
         .filter_map(|tile| tile.resource.map(|resource| resource.resource_item))
         .collect::<BTreeSet<_>>();
 
-    let configured = &world.prototypes.world_generation.resources;
+    let configured = &world.prototypes.world_generation().resources;
     assert!(!configured.is_empty());
     // Only guaranteed starting patches must land in the starting area. Resources
     // without one (uranium) are found by expanding; see the test below.
@@ -295,7 +295,7 @@ fn resources_without_a_starting_patch_generate_further_out() {
     let mut world = WorldSim::new_seeded(123);
     let expected = world
         .prototypes
-        .world_generation
+        .world_generation()
         .resources
         .iter()
         .filter(|resource| resource.starting_patch.is_none())

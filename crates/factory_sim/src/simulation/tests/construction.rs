@@ -398,7 +398,7 @@ fn blueprint_captures_assembler_recipes_onto_ghosts() {
     let recipe = sim
         .world
         .prototypes
-        .recipes
+        .recipes()
         .iter()
         .find(|recipe| {
             recipe.category == CraftingCategory::Crafting && sim.is_recipe_unlocked(recipe.id)

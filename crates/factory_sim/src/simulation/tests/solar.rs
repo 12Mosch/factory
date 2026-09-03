@@ -83,11 +83,11 @@ fn full_daylight_solar_reaches_max_output() {
 /// ticks while keeping the tick-count/phase invariant intact.
 fn sim_with_short_cycle(seed: u64) -> Simulation {
     let mut catalog = PrototypeCatalog::load_base().expect("base catalog should load");
-    catalog.day_night_cycle = Some(factory_data::DayNightCycleConfig {
+    catalog.set_day_night_cycle(Some(factory_data::DayNightCycleConfig {
         cycle_length_ticks: 20,
         dawn_dusk_ticks: 4,
-    });
-    Simulation::new(seed, catalog)
+    }));
+    Simulation::new(seed, catalog).unwrap()
 }
 
 #[test]

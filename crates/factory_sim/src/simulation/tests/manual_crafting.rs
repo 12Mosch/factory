@@ -422,7 +422,7 @@ fn base_catalog_contains_expected_manually_craftable_recipes() {
 
     for recipe_name in recipe_names {
         let recipe = catalog
-            .recipes
+            .recipes()
             .iter()
             .find(|recipe| recipe.name == recipe_name)
             .unwrap_or_else(|| panic!("missing recipe {recipe_name:?}"));

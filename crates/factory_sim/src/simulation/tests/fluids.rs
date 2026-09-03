@@ -775,18 +775,19 @@ fn incompatible_water_and_steam_network_is_blocked_and_does_not_mix() {
     let steam = fluid_id(&catalog, "steam");
     let pipe = entity_id_by_name(&catalog, "pipe");
     let tank = entity_id_by_name(&catalog, "storage_tank");
-    let zero_offset = catalog.entities[pipe.index()].fluid_boxes[0].connections[0].local_offset;
-    catalog.entities[pipe.index()].fluid_boxes[0].filter = Some(water);
-    catalog.entities[tank.index()].size.x = 1;
-    catalog.entities[tank.index()].size.y = 1;
-    catalog.entities[tank.index()].fluid_boxes[0].filter = Some(steam);
-    catalog.entities[tank.index()].fluid_boxes[0].capacity_milliunits = 100_000;
-    catalog.entities[tank.index()].fluid_boxes[0].connections =
+    let zero_offset =
+        catalog.entities_mut()[pipe.index()].fluid_boxes[0].connections[0].local_offset;
+    catalog.entities_mut()[pipe.index()].fluid_boxes[0].filter = Some(water);
+    catalog.entities_mut()[tank.index()].size.x = 1;
+    catalog.entities_mut()[tank.index()].size.y = 1;
+    catalog.entities_mut()[tank.index()].fluid_boxes[0].filter = Some(steam);
+    catalog.entities_mut()[tank.index()].fluid_boxes[0].capacity_milliunits = 100_000;
+    catalog.entities_mut()[tank.index()].fluid_boxes[0].connections =
         vec![factory_data::FluidConnectionPrototype {
             local_offset: zero_offset,
             side: factory_data::FluidConnectionSide::West,
         }];
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let (x, y) = first_buildable_rect(&sim.world, 2, 1);
     let pipe_id = crate::placement::place(
         &mut sim,
@@ -838,18 +839,19 @@ fn filtered_empty_network_rejects_wrong_fluid_before_insert() {
     let steam = fluid_id(&catalog, "steam");
     let pipe = entity_id_by_name(&catalog, "pipe");
     let tank = entity_id_by_name(&catalog, "storage_tank");
-    let zero_offset = catalog.entities[pipe.index()].fluid_boxes[0].connections[0].local_offset;
-    catalog.entities[pipe.index()].fluid_boxes[0].filter = Some(water);
-    catalog.entities[tank.index()].size.x = 1;
-    catalog.entities[tank.index()].size.y = 1;
-    catalog.entities[tank.index()].fluid_boxes[0].filter = None;
-    catalog.entities[tank.index()].fluid_boxes[0].capacity_milliunits = 100_000;
-    catalog.entities[tank.index()].fluid_boxes[0].connections =
+    let zero_offset =
+        catalog.entities_mut()[pipe.index()].fluid_boxes[0].connections[0].local_offset;
+    catalog.entities_mut()[pipe.index()].fluid_boxes[0].filter = Some(water);
+    catalog.entities_mut()[tank.index()].size.x = 1;
+    catalog.entities_mut()[tank.index()].size.y = 1;
+    catalog.entities_mut()[tank.index()].fluid_boxes[0].filter = None;
+    catalog.entities_mut()[tank.index()].fluid_boxes[0].capacity_milliunits = 100_000;
+    catalog.entities_mut()[tank.index()].fluid_boxes[0].connections =
         vec![factory_data::FluidConnectionPrototype {
             local_offset: zero_offset,
             side: factory_data::FluidConnectionSide::West,
         }];
-    let mut sim = Simulation::new(123, catalog);
+    let mut sim = Simulation::new(123, catalog).unwrap();
     let (x, y) = first_buildable_rect(&sim.world, 2, 1);
     let pipe_id = crate::placement::place(
         &mut sim,

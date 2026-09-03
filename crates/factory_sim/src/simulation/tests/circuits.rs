@@ -82,7 +82,7 @@ fn virtual_signal(sim: &Simulation, name: &str) -> SignalId {
     let id = sim
         .world
         .prototypes
-        .virtual_signals
+        .virtual_signals()
         .iter()
         .find(|signal| signal.name == name)
         .unwrap_or_else(|| panic!("catalog should define virtual signal {name}"))

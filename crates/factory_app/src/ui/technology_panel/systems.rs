@@ -88,7 +88,7 @@ pub(crate) fn ensure_selected_technology(
         .or_else(|| {
             sim.read()
                 .catalog()
-                .technologies
+                .technologies()
                 .iter()
                 .find(|technology| !sim.read().is_technology_unlocked(technology.id))
                 .map(|technology| technology.id)
@@ -96,7 +96,7 @@ pub(crate) fn ensure_selected_technology(
         .or_else(|| {
             sim.read()
                 .catalog()
-                .technologies
+                .technologies()
                 .first()
                 .map(|technology| technology.id)
         });

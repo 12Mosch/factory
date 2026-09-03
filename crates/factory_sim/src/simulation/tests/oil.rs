@@ -21,7 +21,7 @@ fn sim_with_powered_pumpjack() -> (Simulation, EntityId) {
     let starting_patch = sim
         .world
         .prototypes
-        .world_generation
+        .world_generation()
         .resources
         .iter()
         .find(|resource| resource.resource_item == crude_oil)
@@ -150,7 +150,7 @@ fn burner_drill_cannot_target_crude_oil() {
     let sim = Simulation::new_test_world(123);
     let crude_oil = item_id(&sim.world.prototypes, "crude_oil");
     let drill = entity_id_by_name(&sim.world.prototypes, "burner_mining_drill");
-    let drill_prototype = &sim.world.prototypes.entities[drill.index()];
+    let drill_prototype = &sim.world.prototypes.entities()[drill.index()];
     let mining_drill = drill_prototype
         .mining_drill
         .as_ref()
@@ -532,7 +532,7 @@ fn refinery_with_full_fluid_output_reports_output_full() {
     let crude_oil = fluid_id(&sim.world.prototypes, "crude_oil");
     let petroleum_gas = fluid_id(&sim.world.prototypes, "petroleum_gas");
     let recipe = recipe_id(&sim.world.prototypes, "basic_oil_processing");
-    let output_capacity = sim.world.prototypes.entities
+    let output_capacity = sim.world.prototypes.entities()
         [entity_id_by_name(&sim.world.prototypes, "oil_refinery").index()]
     .fluid_boxes[4]
         .capacity_milliunits;

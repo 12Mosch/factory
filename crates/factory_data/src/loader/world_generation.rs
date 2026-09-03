@@ -99,7 +99,6 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
     const MAX_PATCH_GRID_CELL_SIZE: i32 = 1_048_576;
     const MAX_PATCH_GRID_JITTER: i32 = 1_048_576;
     const MAX_PATCH_EDGE_NOISE: i32 = 4_096;
-    const MAX_RESOURCE_RADIUS: i32 = 16_384;
     const MAX_RADIUS_BONUS_TILES: u8 = 128;
     const MAX_RICHNESS_BONUS_PERCENT: u32 = 10_000;
     const MAX_PATCH_REACH_CELL_MULTIPLE: i64 = 32;
@@ -250,7 +249,7 @@ fn validate_world_generation(raw: &RawWorldGenerationConfig) -> Result<(), Proto
         .map(|resource| resource.radius)
         .max()
         .unwrap_or(0);
-    if max_radius > MAX_RESOURCE_RADIUS {
+    if max_radius > crate::MAX_RESOURCE_RADIUS_TILES {
         return Err(PrototypeLoadError::InvalidWorldGenerationConfig {
             detail: "resource radius must not exceed 16384",
         });

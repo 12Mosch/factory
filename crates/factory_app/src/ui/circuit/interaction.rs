@@ -491,7 +491,7 @@ fn command_for_operand(
 /// is arbitrary but always valid, and the player replaces it from the picker.
 fn default_signal(sim: &Simulation) -> Option<SignalId> {
     sim.catalog()
-        .items
+        .items()
         .first()
         .map(|item| SignalId::Item(item.id))
 }

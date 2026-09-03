@@ -26,7 +26,7 @@ pub(in crate::simulation) fn generate_world_chunks(
     prototypes: &PrototypeCatalog,
     generator: &WorldGenerator,
 ) -> BTreeMap<ChunkCoord, Chunk> {
-    let area = prototypes.world_generation.starting_area;
+    let area = prototypes.world_generation().starting_area;
     let mut chunks = BTreeMap::new();
 
     for chunk_y in area.min_chunk..=area.max_chunk {
