@@ -43,7 +43,11 @@ fn load_turret_ammo(sim: &mut Simulation, turret_id: EntityId, count: u16) {
         .expect("turret ammo inventory should accept magazines");
 }
 
-fn spawn_test_enemy_at(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoord) -> EnemyId {
+pub(super) fn spawn_test_enemy_at(
+    sim: &mut Simulation,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+) -> EnemyId {
     let unit = sim
         .world
         .prototypes
@@ -78,10 +82,25 @@ fn spawn_test_enemy_at(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoor
     id
 }
 
-/// Inserts a named weapon and firearm magazines into the test player inventory.
+/// Inserts a named weapon and compatible ammunition into the test player inventory.
 fn give_player_weapon_and_ammo(sim: &mut Simulation, weapon_name: &str, magazines: u16) -> ItemId {
     let weapon = item_id_by_name(&sim.world.prototypes, weapon_name);
-    let magazine = item_id_by_name(&sim.world.prototypes, "firearm_magazine");
+    let category = sim
+        .world
+        .prototypes
+        .item(weapon)
+        .unwrap()
+        .weapon
+        .unwrap()
+        .ammo_category;
+    let magazine = sim
+        .world
+        .prototypes
+        .items
+        .iter()
+        .find(|item| item.ammo.is_some_and(|ammo| ammo.category == category))
+        .expect("base catalog should contain compatible ammunition")
+        .id;
     let catalog = sim.world.prototypes.clone();
     sim.player_inventory
         .insert(&catalog, weapon, 1)
@@ -1279,6 +1298,131 @@ fn player_weapon_damage_uses_typed_resistance_per_shot() {
     sim.attack_with_player_weapon(x + 2, y).unwrap();
 
     assert_eq!(sim.enemies.get(enemy_id).unwrap().health.current, 28);
+}
+
+#[test]
+fn shotgun_spreads_individually_resisted_pellets_inside_its_cone() {
+    let mut sim = Simulation::new_test_world(123);
+    give_player_weapon_and_ammo(&mut sim, "shotgun", 1);
+    sim.cycle_player_weapon().unwrap();
+    let (x, y) = sim.player.tile_position();
+    let primary = spawn_test_enemy_at(&mut sim, x + 4, y);
+    let secondary = spawn_test_enemy_at(&mut sim, x + 4, y + 1);
+    let outside = spawn_test_enemy_at(&mut sim, x + 4, y + 3);
+    for enemy_id in [primary, secondary] {
+        let enemy = sim.enemies.enemies.get_mut(&enemy_id).unwrap();
+        enemy.health = HealthState::new(100, Faction::Enemy);
+        enemy.health.resistances =
+            ResistanceProfile::NONE.with_resistance(DamageType::Physical, Resistance::new(2, 0));
+    }
+
+    sim.attack_with_player_weapon(x + 4, y).unwrap();
+
+    // Eight pellets alternate across the two in-cone targets. Applying the
+    // flat resistance to each 8-damage pellet yields four 6-damage hits each.
+    assert_eq!(sim.enemies.get(primary).unwrap().health.current, 76);
+    assert_eq!(sim.enemies.get(secondary).unwrap().health.current, 76);
+    assert_eq!(sim.enemies.get(outside).unwrap().health.current, 30);
+}
+
+#[test]
+fn rocket_travel_and_area_impact_are_delayed_and_deterministic() {
+    let mut sim = Simulation::new_test_world(123);
+    give_player_weapon_and_ammo(&mut sim, "rocket_launcher", 1);
+    sim.cycle_player_weapon().unwrap();
+    let (x, y) = sim.player.tile_position();
+    let primary = spawn_test_enemy_at(&mut sim, x + 4, y);
+    let nearby = spawn_test_enemy_at(&mut sim, x + 6, y + 2);
+    let outside = spawn_test_enemy_at(&mut sim, x + 8, y);
+    for enemy_id in [primary, nearby, outside] {
+        sim.enemies.enemies.get_mut(&enemy_id).unwrap().health =
+            HealthState::new(200, Faction::Enemy);
+    }
+
+    sim.attack_with_player_weapon(x + 4, y).unwrap();
+    assert_eq!(sim.delayed_combat_state().projectiles().count(), 1);
+    assert_eq!(sim.enemies.get(primary).unwrap().health.current, 200);
+    let impact_tick = sim
+        .delayed_combat_state()
+        .projectiles()
+        .next()
+        .unwrap()
+        .impact_tick;
+    while sim.tick < impact_tick {
+        sim.tick += 1;
+        sim.advance_day_night_cycle();
+        sim.advance_statistics_to_current_tick();
+        let mut commands = CombatCommandBuffer::default();
+        sim.advance_delayed_combat(&mut commands);
+        sim.resolve_combat_commands(commands);
+    }
+
+    assert_eq!(sim.delayed_combat_state().projectiles().count(), 0);
+    assert_eq!(sim.enemies.get(primary).unwrap().health.current, 120);
+    assert_eq!(sim.enemies.get(nearby).unwrap().health.current, 120);
+    assert_eq!(sim.enemies.get(outside).unwrap().health.current, 200);
+    sim.validate().unwrap();
+}
+
+#[test]
+fn flamethrower_cone_applies_durable_interval_fire_damage() {
+    let mut sim = Simulation::new_test_world(123);
+    give_player_weapon_and_ammo(&mut sim, "flamethrower", 1);
+    sim.cycle_player_weapon().unwrap();
+    let (x, y) = sim.player.tile_position();
+    let primary = spawn_test_enemy_at(&mut sim, x + 4, y);
+    let secondary = spawn_test_enemy_at(&mut sim, x + 4, y + 1);
+    for enemy_id in [primary, secondary] {
+        sim.enemies.enemies.get_mut(&enemy_id).unwrap().health =
+            HealthState::new(100, Faction::Enemy);
+    }
+
+    sim.attack_with_player_weapon(x + 4, y).unwrap();
+    assert_eq!(sim.enemies.get(primary).unwrap().health.current, 98);
+    assert!(
+        sim.delayed_combat_state()
+            .status(CombatantId::Enemy(primary))
+            .unwrap()
+            .burning
+            .is_some()
+    );
+    for _ in 0..180 {
+        sim.tick += 1;
+        sim.advance_day_night_cycle();
+        sim.advance_statistics_to_current_tick();
+        let mut commands = CombatCommandBuffer::default();
+        sim.advance_delayed_combat(&mut commands);
+        sim.resolve_combat_commands(commands);
+    }
+
+    assert_eq!(sim.enemies.get(primary).unwrap().health.current, 86);
+    assert_eq!(sim.enemies.get(secondary).unwrap().health.current, 86);
+    assert!(
+        sim.delayed_combat_state()
+            .status(CombatantId::Enemy(primary))
+            .is_none()
+    );
+    sim.validate().unwrap();
+}
+
+#[test]
+fn in_flight_rocket_round_trips_and_remains_lockstep_deterministic() {
+    let mut original = Simulation::new_test_world(123);
+    give_player_weapon_and_ammo(&mut original, "rocket_launcher", 1);
+    original.cycle_player_weapon().unwrap();
+    let (x, y) = original.player.tile_position();
+    spawn_test_enemy_at(&mut original, x + 4, y);
+    original.attack_with_player_weapon(x + 4, y).unwrap();
+
+    let bytes = save_to_bytes(&original).unwrap();
+    let mut loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded.state_hash(), original.state_hash());
+    for _ in 0..30 {
+        original.tick();
+        loaded.tick();
+    }
+    assert_eq!(loaded.state_hash(), original.state_hash());
+    assert_eq!(loaded.delayed_combat_state().projectiles().count(), 0);
 }
 
 /// Ensures selected weapon state survives saves and remains lockstep-identical.

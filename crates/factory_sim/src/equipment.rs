@@ -1,5 +1,6 @@
 use factory_data::ItemId;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::robots::RoboportChargingState;
 
@@ -30,6 +31,10 @@ pub struct PlayerEquipmentState {
     pub(crate) generation_remainder_watt_ticks: u64,
     pub(crate) recharge_remainder_watt_ticks: u64,
     pub(crate) personal_recharge_remainder_watt_ticks: u64,
+    /// Next fire tick for each personal-laser module, keyed by its stable grid
+    /// origin. Keeping cooldowns per module lets mixed armor layouts behave
+    /// predictably when equipment is added or removed.
+    pub(crate) personal_laser_next_ready_ticks: BTreeMap<(u8, u8), u64>,
 }
 
 impl PlayerEquipmentState {

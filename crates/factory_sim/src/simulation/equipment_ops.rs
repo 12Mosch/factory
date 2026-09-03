@@ -172,6 +172,14 @@ impl Simulation {
 
         self.player_inventory = inventory;
         self.player_equipment.installed = installed;
+        if matches!(
+            equipment.effect,
+            EquipmentEffectPrototype::PersonalLaser { .. }
+        ) {
+            self.player_equipment
+                .personal_laser_next_ready_ticks
+                .insert((x, y), 0);
+        }
         Ok(())
     }
 
@@ -188,7 +196,8 @@ impl Simulation {
                     && y < installed.y.saturating_add(equipment.height)
             })
             .ok_or(PlayerEquipmentError::NoEquipmentAtCell { x, y })?;
-        let item_id = self.player_equipment.installed[index].item_id;
+        let removed = self.player_equipment.installed[index];
+        let item_id = removed.item_id;
         let mut inventory = self.player_inventory.clone();
         inventory
             .insert(&self.world.prototypes, item_id, 1)
@@ -196,6 +205,9 @@ impl Simulation {
 
         self.player_inventory = inventory;
         self.player_equipment.installed.remove(index);
+        self.player_equipment
+            .personal_laser_next_ready_ticks
+            .remove(&(removed.x, removed.y));
         self.clamp_personal_equipment_capacity();
         self.reconcile_personal_charging_capacity();
         Ok(())
@@ -256,6 +268,64 @@ impl Simulation {
         self.player_equipment.battery_energy_joules = available
             .saturating_sub(recharged)
             .min(totals.battery_capacity_joules);
+    }
+
+    /// Fires every ready personal-laser module in stable equipment-grid order.
+    /// Energy comes exclusively from the shared armor battery, so the weapon
+    /// participates in the same generation/storage budget as shields.
+    pub(super) fn advance_personal_lasers(&mut self, commands: &mut CombatCommandBuffer) {
+        let lasers = self
+            .player_equipment
+            .installed
+            .iter()
+            .filter_map(|installed| {
+                let equipment = equipment_prototype(&self.world.prototypes, installed.item_id);
+                let EquipmentEffectPrototype::PersonalLaser {
+                    damage,
+                    range_tiles,
+                    cooldown_ticks,
+                    energy_per_shot_joules,
+                } = equipment.effect
+                else {
+                    return None;
+                };
+                Some((
+                    (installed.x, installed.y),
+                    damage,
+                    range_tiles,
+                    cooldown_ticks,
+                    energy_per_shot_joules,
+                ))
+            })
+            .collect::<Vec<_>>();
+        for (position, damage, range_tiles, cooldown_ticks, energy_per_shot_joules) in lasers {
+            let next_ready = self
+                .player_equipment
+                .personal_laser_next_ready_ticks
+                .get(&position)
+                .copied()
+                .unwrap_or(0);
+            if self.tick < next_ready
+                || self.player_equipment.battery_energy_joules < energy_per_shot_joules
+            {
+                continue;
+            }
+            let Some(target) = self.nearest_hostile_to_player(range_tiles) else {
+                continue;
+            };
+            self.player_equipment.battery_energy_joules -= energy_per_shot_joules;
+            self.player_equipment
+                .personal_laser_next_ready_ticks
+                .insert(
+                    position,
+                    self.tick.saturating_add(u64::from(cooldown_ticks)),
+                );
+            commands.push(CombatCommand {
+                source: CombatSource::new(CombatantId::Player, Faction::Player),
+                target,
+                damage: Damage::new(damage, DamageType::Laser),
+            });
+        }
     }
 
     pub(super) fn absorb_player_damage_with_shields(&mut self, amount: u32) -> u32 {
@@ -362,6 +432,7 @@ pub(super) fn validate_player_equipment(sim: &Simulation) -> Result<(), SimValid
                 || state.shield_energy_joules != 0
                 || state.personal_roboport_energy_joules != 0
                 || !state.personal_roboport_charging.is_empty()
+                || !state.personal_laser_next_ready_ticks.is_empty()
             {
                 return Err(SimValidationError::InvalidPlayerEquipment);
             }
@@ -409,6 +480,35 @@ pub(super) fn validate_player_equipment(sim: &Simulation) -> Result<(), SimValid
             && !state.personal_roboport_charging.is_empty())
     {
         return Err(SimValidationError::InvalidPlayerEquipment);
+    }
+    let expected_lasers = state
+        .installed
+        .iter()
+        .filter_map(|installed| {
+            let equipment = equipment_prototype(&sim.world.prototypes, installed.item_id);
+            matches!(
+                equipment.effect,
+                EquipmentEffectPrototype::PersonalLaser { .. }
+            )
+            .then_some((installed.x, installed.y))
+        })
+        .collect::<Vec<_>>();
+    if state.personal_laser_next_ready_ticks.len() != expected_lasers.len() {
+        return Err(SimValidationError::InvalidPlayerEquipment);
+    }
+    for position in expected_lasers {
+        let next_ready = state
+            .personal_laser_next_ready_ticks
+            .get(&position)
+            .ok_or(SimValidationError::InvalidPlayerEquipment)?;
+        let cooldown_ticks =
+            match equipment_prototype_at(state, &sim.world.prototypes, position).effect {
+                EquipmentEffectPrototype::PersonalLaser { cooldown_ticks, .. } => cooldown_ticks,
+                _ => return Err(SimValidationError::InvalidPlayerEquipment),
+            };
+        if next_ready.saturating_sub(sim.tick) > u64::from(cooldown_ticks) {
+            return Err(SimValidationError::InvalidPlayerEquipment);
+        }
     }
     validate_equipment_remainders_and_resistance(sim)
 }
@@ -509,6 +609,7 @@ fn equipment_totals(catalog: &PrototypeCatalog, state: &PlayerEquipmentState) ->
                     .personal_roboport_construction_radius_tiles
                     .max(construction_radius_tiles);
             }
+            EquipmentEffectPrototype::PersonalLaser { .. } => {}
         }
     }
     totals
@@ -546,6 +647,19 @@ fn equipment_prototype(catalog: &PrototypeCatalog, item_id: ItemId) -> Equipment
         .item(item_id)
         .and_then(|item| item.equipment)
         .expect("installed equipment is validated against the catalog")
+}
+
+fn equipment_prototype_at(
+    state: &PlayerEquipmentState,
+    catalog: &PrototypeCatalog,
+    position: (u8, u8),
+) -> EquipmentPrototype {
+    let installed = state
+        .installed
+        .iter()
+        .find(|installed| (installed.x, installed.y) == position)
+        .expect("validated personal laser position belongs to installed equipment");
+    equipment_prototype(catalog, installed.item_id)
 }
 
 fn rectangle_fits(armor: &ArmorPrototype, equipment: EquipmentPrototype, x: u8, y: u8) -> bool {

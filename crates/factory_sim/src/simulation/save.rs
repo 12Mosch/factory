@@ -104,7 +104,9 @@ use bincode::Options;
 // safe across saves and presentation can distinguish completion from mutation.
 // v51: selected personal weapon, opened magazine, and fire cooldown joined the
 // durable player state.
-pub const SAVE_VERSION: u32 = 51;
+// v52: delayed projectiles, combat status effects, and per-module personal
+// laser cooldowns joined durable combat/equipment state.
+pub const SAVE_VERSION: u32 = 52;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -142,7 +144,8 @@ pub const SAVE_VERSION: u32 = 51;
 // payload metadata and gained atomic multi-product support.
 // v32: powered equipment gained the personal-roboport effect metadata.
 // v33: item prototypes gained personal weapons and typed ammunition categories.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 33;
+// v34: cone, rocket, and flame delivery metadata plus personal-laser equipment.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 34;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
@@ -197,6 +200,7 @@ struct SimulationSnapshotOwned {
     player: PlayerState,
     player_equipment: PlayerEquipmentState,
     player_weapon: PlayerWeaponState,
+    delayed_combat: DelayedCombatState,
     player_inventory: Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
@@ -387,6 +391,7 @@ struct SimulationSnapshotRef<'a> {
     player: PlayerState,
     player_equipment: &'a PlayerEquipmentState,
     player_weapon: PlayerWeaponState,
+    delayed_combat: &'a DelayedCombatState,
     player_inventory: &'a Inventory,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: &'a CraftingQueue,
@@ -424,6 +429,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             player: sim.player,
             player_equipment: &sim.player_equipment,
             player_weapon: sim.player_weapon,
+            delayed_combat: &sim.delayed_combat,
             player_inventory: &sim.player_inventory,
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: &sim.crafting_queue,
@@ -464,6 +470,7 @@ impl SimulationSnapshotOwned {
             player: sim.player,
             player_equipment: sim.player_equipment.clone(),
             player_weapon: sim.player_weapon,
+            delayed_combat: sim.delayed_combat.clone(),
             player_inventory: sim.player_inventory.clone(),
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: sim.crafting_queue.clone(),
@@ -504,6 +511,7 @@ impl SimulationSnapshotOwned {
             player: self.player,
             player_equipment: self.player_equipment,
             player_weapon: self.player_weapon,
+            delayed_combat: self.delayed_combat,
             player_inventory: self.player_inventory,
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,
@@ -636,6 +644,65 @@ mod tests {
         assert_eq!(sim.tick_count(), loaded.tick_count());
         assert_eq!(sim.seed(), loaded.seed());
         assert_eq!(before_hash, loaded.state_hash());
+    }
+
+    #[test]
+    fn delayed_combat_round_trip_stays_lockstep_through_effect_ticks() {
+        let mut original = Simulation::new_test_world(8675309);
+        let target = CombatantId::Player;
+        let source = CombatSource::new(CombatantId::Enemy(EnemyId::new(u64::MAX)), Faction::Enemy);
+        let (impact_x, impact_y) = original.player.tile_position();
+        let projectile_id = ProjectileId::new(0);
+        original.delayed_combat = DelayedCombatState {
+            next_projectile_id: 1,
+            projectiles: BTreeMap::from([(
+                projectile_id,
+                ProjectileState {
+                    id: projectile_id,
+                    source,
+                    start_x_fixed: original.player.x_fixed() - POSITION_SCALE,
+                    start_y_fixed: original.player.y_fixed(),
+                    impact_x,
+                    impact_y,
+                    launched_tick: original.tick,
+                    impact_tick: original.tick + 4,
+                    speed_fixed_per_tick: 256,
+                    damage: Damage::new(7, DamageType::Explosion),
+                    explosion_radius_tiles: 1,
+                },
+            )]),
+            statuses: BTreeMap::from([(
+                target,
+                CombatStatusEffects {
+                    burning: Some(BurningStatus {
+                        source,
+                        damage_per_tick: Damage::new(3, DamageType::Fire),
+                        interval_ticks: 2,
+                        next_damage_tick: original.tick + 2,
+                        expires_tick: original.tick + 6,
+                    }),
+                },
+            )]),
+        };
+        original
+            .validate()
+            .expect("delayed combat fixture is valid");
+
+        let bytes = save_to_bytes(&original).expect("delayed combat state should save");
+        let mut restored = load_from_bytes(&bytes).expect("delayed combat state should reload");
+
+        assert_eq!(restored.delayed_combat, original.delayed_combat);
+        assert_eq!(restored.state_hash(), original.state_hash());
+
+        for expected_health in [100, 97, 97, 87, 87, 84] {
+            original.tick();
+            restored.tick();
+            assert_eq!(restored.player_health().0, expected_health);
+            assert_eq!(restored.delayed_combat, original.delayed_combat);
+            assert_eq!(restored.state_hash(), original.state_hash());
+        }
+        assert!(original.delayed_combat.projectiles.is_empty());
+        assert!(original.delayed_combat.statuses.is_empty());
     }
 
     #[test]

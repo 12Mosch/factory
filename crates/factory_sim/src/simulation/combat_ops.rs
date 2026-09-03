@@ -121,17 +121,77 @@ impl Simulation {
         self.player_weapon.next_ready_tick = self.tick + u64::from(weapon.cooldown_ticks);
         self.player_weapon.cooldown_origin = Some(weapon_item);
 
-        let attack = match weapon.delivery {
-            factory_data::WeaponDeliveryPrototype::Hitscan => {
-                AttackDefinition::hitscan(damage, weapon.cooldown_ticks, weapon.range_tiles)
-            }
-        };
+        let source = CombatSource::new(CombatantId::Player, Faction::Player);
         let mut commands = CombatCommandBuffer::default();
-        commands.attack(
-            CombatSource::new(CombatantId::Player, Faction::Player),
-            target,
-            attack,
-        );
+        match weapon.delivery {
+            factory_data::WeaponDeliveryPrototype::Hitscan => commands.attack(
+                source,
+                target,
+                AttackDefinition::hitscan(damage, weapon.cooldown_ticks, weapon.range_tiles),
+            ),
+            factory_data::WeaponDeliveryPrototype::Shotgun {
+                pellet_count,
+                cone_half_width_permyriad,
+            } => {
+                let mut targets = self.hostile_combatants_in_cone(
+                    player_tile,
+                    (x, y),
+                    weapon.range_tiles,
+                    cone_half_width_permyriad,
+                );
+                if !targets.contains(&target) {
+                    targets.insert(0, target);
+                }
+                for pellet in 0..usize::from(pellet_count) {
+                    commands.push(CombatCommand {
+                        source,
+                        target: targets[pellet % targets.len()],
+                        damage,
+                    });
+                }
+            }
+            factory_data::WeaponDeliveryPrototype::Rocket {
+                speed_fixed_per_tick,
+                explosion_radius_tiles,
+            } => {
+                self.launch_player_rocket(
+                    source,
+                    (x, y),
+                    damage,
+                    speed_fixed_per_tick,
+                    explosion_radius_tiles,
+                );
+            }
+            factory_data::WeaponDeliveryPrototype::Flame {
+                cone_half_width_permyriad,
+                burn_duration_ticks,
+                burn_interval_ticks,
+            } => {
+                let mut targets = self.hostile_combatants_in_cone(
+                    player_tile,
+                    (x, y),
+                    weapon.range_tiles,
+                    cone_half_width_permyriad,
+                );
+                if !targets.contains(&target) {
+                    targets.insert(0, target);
+                }
+                for cone_target in targets {
+                    commands.push(CombatCommand {
+                        source,
+                        target: cone_target,
+                        damage,
+                    });
+                    self.apply_burning(
+                        cone_target,
+                        source,
+                        Damage::new(damage.amount, DamageType::Fire),
+                        burn_duration_ticks,
+                        burn_interval_ticks,
+                    );
+                }
+            }
+        }
         self.resolve_combat_commands(commands);
         Ok(target)
     }
@@ -205,6 +265,274 @@ impl Simulation {
                 EntityFootprint::single_tile(x, y)
             }),
         }
+    }
+
+    /// Durable delayed-combat state used by rendering, diagnostics, and tests.
+    pub fn delayed_combat_state(&self) -> &DelayedCombatState {
+        &self.delayed_combat
+    }
+
+    /// Finds all hostile targets in a fixed-point-free cone. Candidate and
+    /// result iteration are stable, while primary-line targets sort first.
+    fn hostile_combatants_in_cone(
+        &self,
+        origin: (WorldTileCoord, WorldTileCoord),
+        aim: (WorldTileCoord, WorldTileCoord),
+        range_tiles: u32,
+        cone_half_width_permyriad: u16,
+    ) -> Vec<CombatantId> {
+        let aim_x = i128::from(aim.0) - i128::from(origin.0);
+        let aim_y = i128::from(aim.1) - i128::from(origin.1);
+        let origin_footprint = EntityFootprint::single_tile(origin.0, origin.1);
+        let mut candidates = Vec::new();
+        for (&enemy_id, enemy) in &self.enemies.enemies {
+            if Faction::Player.is_hostile_to(enemy.faction()) {
+                candidates.push(CombatantId::Enemy(enemy_id));
+            }
+        }
+        for (entity_id, health) in self.entities.entity_health.iter() {
+            if Faction::Player.is_hostile_to(health.faction) {
+                candidates.push(CombatantId::Entity(*entity_id));
+            }
+        }
+
+        let mut in_cone = candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                let footprint = self.combatant_footprint(candidate)?;
+                if origin_footprint.chebyshev_distance_to(&footprint) > i64::from(range_tiles) {
+                    return None;
+                }
+                let center_x =
+                    i128::from(footprint.x) + i128::from(footprint.width.saturating_sub(1)) / 2;
+                let center_y =
+                    i128::from(footprint.y) + i128::from(footprint.height.saturating_sub(1)) / 2;
+                let target_x = center_x - i128::from(origin.0);
+                let target_y = center_y - i128::from(origin.1);
+                let dot = aim_x
+                    .saturating_mul(target_x)
+                    .saturating_add(aim_y.saturating_mul(target_y));
+                if dot <= 0 {
+                    return None;
+                }
+                let cross = aim_x
+                    .saturating_mul(target_y)
+                    .saturating_sub(aim_y.saturating_mul(target_x))
+                    .unsigned_abs();
+                if cross.saturating_mul(10_000)
+                    > dot
+                        .unsigned_abs()
+                        .saturating_mul(u128::from(cone_half_width_permyriad))
+                {
+                    return None;
+                }
+                let distance_squared = target_x
+                    .unsigned_abs()
+                    .saturating_mul(target_x.unsigned_abs())
+                    .saturating_add(
+                        target_y
+                            .unsigned_abs()
+                            .saturating_mul(target_y.unsigned_abs()),
+                    );
+                Some((cross, distance_squared, candidate))
+            })
+            .collect::<Vec<_>>();
+        in_cone.sort_unstable();
+        in_cone
+            .into_iter()
+            .map(|(_, _, candidate)| candidate)
+            .collect()
+    }
+
+    fn launch_player_rocket(
+        &mut self,
+        source: CombatSource,
+        impact: (WorldTileCoord, WorldTileCoord),
+        damage: Damage,
+        speed_fixed_per_tick: u32,
+        explosion_radius_tiles: u32,
+    ) {
+        let id = ProjectileId::new(self.delayed_combat.next_projectile_id);
+        self.delayed_combat.next_projectile_id = self
+            .delayed_combat
+            .next_projectile_id
+            .checked_add(1)
+            .expect("projectile identity space exhausted");
+        let target_x_fixed = tile_center_fixed_saturating(impact.0);
+        let target_y_fixed = tile_center_fixed_saturating(impact.1);
+        let travel_fixed = self
+            .player
+            .x_fixed()
+            .abs_diff(target_x_fixed)
+            .max(self.player.y_fixed().abs_diff(target_y_fixed));
+        let speed = u64::from(speed_fixed_per_tick);
+        let travel_ticks = travel_fixed.div_ceil(speed).max(1);
+        let projectile = ProjectileState {
+            id,
+            source,
+            start_x_fixed: self.player.x_fixed(),
+            start_y_fixed: self.player.y_fixed(),
+            impact_x: impact.0,
+            impact_y: impact.1,
+            launched_tick: self.tick,
+            impact_tick: self.tick.saturating_add(travel_ticks),
+            speed_fixed_per_tick,
+            damage,
+            explosion_radius_tiles,
+        };
+        self.delayed_combat.projectiles.insert(id, projectile);
+    }
+
+    fn apply_burning(
+        &mut self,
+        target: CombatantId,
+        source: CombatSource,
+        damage_per_tick: Damage,
+        duration_ticks: u32,
+        interval_ticks: u32,
+    ) {
+        let proposed_next = self.tick.saturating_add(u64::from(interval_ticks));
+        let proposed_expiry = self.tick.saturating_add(u64::from(duration_ticks));
+        let effects = self.delayed_combat.statuses.entry(target).or_default();
+        match effects.burning.as_mut() {
+            Some(existing) => {
+                existing.expires_tick = existing.expires_tick.max(proposed_expiry);
+                if damage_per_tick.amount >= existing.damage_per_tick.amount {
+                    existing.source = source;
+                    existing.damage_per_tick = damage_per_tick;
+                    existing.interval_ticks = interval_ticks;
+                    existing.next_damage_tick = existing.next_damage_tick.min(proposed_next);
+                }
+            }
+            None => {
+                effects.burning = Some(BurningStatus {
+                    source,
+                    damage_per_tick,
+                    interval_ticks,
+                    next_damage_tick: proposed_next,
+                    expires_tick: proposed_expiry,
+                });
+            }
+        }
+    }
+
+    /// Advances fixed-destination projectiles and interval-based statuses.
+    /// Both append to the tick's shared command buffer, preserving simultaneous
+    /// combat semantics with enemies, turrets, and armor equipment.
+    pub(super) fn advance_delayed_combat(&mut self, commands: &mut CombatCommandBuffer) {
+        let arrived = self
+            .delayed_combat
+            .projectiles
+            .iter()
+            .filter_map(|(&id, projectile)| (projectile.impact_tick <= self.tick).then_some(id))
+            .collect::<Vec<_>>();
+        for id in arrived {
+            let Some(projectile) = self.delayed_combat.projectiles.remove(&id) else {
+                continue;
+            };
+            for target in self.hostile_combatants_in_radius(
+                projectile.source.faction,
+                (projectile.impact_x, projectile.impact_y),
+                projectile.explosion_radius_tiles,
+            ) {
+                commands.push(CombatCommand {
+                    source: projectile.source,
+                    target,
+                    damage: projectile.damage,
+                });
+            }
+        }
+
+        let targets = self
+            .delayed_combat
+            .statuses
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for target in targets {
+            if self.combatant_health(target).is_none() {
+                self.delayed_combat.statuses.remove(&target);
+                continue;
+            }
+            let remove = {
+                let Some(effects) = self.delayed_combat.statuses.get_mut(&target) else {
+                    continue;
+                };
+                let Some(mut burning) = effects.burning else {
+                    continue;
+                };
+                if burning.next_damage_tick <= self.tick
+                    && burning.next_damage_tick <= burning.expires_tick
+                {
+                    commands.push(CombatCommand {
+                        source: burning.source,
+                        target,
+                        damage: burning.damage_per_tick,
+                    });
+                    burning.next_damage_tick = burning
+                        .next_damage_tick
+                        .saturating_add(u64::from(burning.interval_ticks));
+                }
+                effects.burning = Some(burning);
+                burning.next_damage_tick > burning.expires_tick
+            };
+            if remove {
+                self.delayed_combat.statuses.remove(&target);
+            }
+        }
+    }
+
+    fn hostile_combatants_in_radius(
+        &self,
+        source_faction: Faction,
+        center: (WorldTileCoord, WorldTileCoord),
+        radius_tiles: u32,
+    ) -> Vec<CombatantId> {
+        let center = EntityFootprint::single_tile(center.0, center.1);
+        let radius = i64::from(radius_tiles);
+        let mut targets = Vec::new();
+        if source_faction.is_hostile_to(self.player.health.faction)
+            && center.chebyshev_distance_to(&self.combatant_footprint(CombatantId::Player).unwrap())
+                <= radius
+        {
+            targets.push(CombatantId::Player);
+        }
+        for (&enemy_id, enemy) in &self.enemies.enemies {
+            let target = CombatantId::Enemy(enemy_id);
+            if source_faction.is_hostile_to(enemy.faction())
+                && self
+                    .combatant_footprint(target)
+                    .is_some_and(|footprint| center.chebyshev_distance_to(&footprint) <= radius)
+            {
+                targets.push(target);
+            }
+        }
+        for (entity_id, health) in self.entities.entity_health.iter() {
+            let target = CombatantId::Entity(*entity_id);
+            if source_faction.is_hostile_to(health.faction)
+                && self
+                    .combatant_footprint(target)
+                    .is_some_and(|footprint| center.chebyshev_distance_to(&footprint) <= radius)
+            {
+                targets.push(target);
+            }
+        }
+        targets.sort_unstable();
+        targets
+    }
+
+    pub(super) fn nearest_hostile_to_player(&self, range_tiles: u32) -> Option<CombatantId> {
+        let origin = self.player.tile_position();
+        let footprint = EntityFootprint::single_tile(origin.0, origin.1);
+        defensive_target_from_parts(
+            &self.enemies,
+            &self.enemy_target_chunks,
+            &self.entities.enemy_spawners,
+            &self.entities.placed_entities,
+            &self.entities.occupancy,
+            &footprint,
+            range_tiles,
+        )
     }
 
     /// Advances every player defensive turret from one shared target snapshot.
@@ -441,6 +769,16 @@ impl Simulation {
                     }
                 }
             }
+        }
+        let stale_statuses = self
+            .delayed_combat
+            .statuses
+            .keys()
+            .copied()
+            .filter(|target| self.combatant_health(*target).is_none())
+            .collect::<Vec<_>>();
+        for target in stale_statuses {
+            self.delayed_combat.statuses.remove(&target);
         }
     }
 
@@ -705,6 +1043,11 @@ fn load_player_magazine(
     Ok(())
 }
 
+fn tile_center_fixed_saturating(tile: WorldTileCoord) -> i64 {
+    tile.saturating_mul(POSITION_SCALE)
+        .saturating_add(POSITION_SCALE / 2)
+}
+
 /// Validates the durable selected weapon and canonical opened-magazine state.
 pub(super) fn validate_player_weapon_state(sim: &Simulation) -> Result<(), SimValidationError> {
     let state = sim.player_weapon;
@@ -760,6 +1103,36 @@ pub(super) fn validate_player_weapon_state(sim: &Simulation) -> Result<(), SimVa
         }
         _ => Err(SimValidationError::InvalidPlayerWeaponState),
     }
+}
+
+pub(super) fn validate_delayed_combat_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    for (&id, projectile) in &sim.delayed_combat.projectiles {
+        if projectile.id != id
+            || id.raw() >= sim.delayed_combat.next_projectile_id
+            || projectile.damage.amount == 0
+            || projectile.speed_fixed_per_tick == 0
+            || projectile.explosion_radius_tiles == 0
+            || projectile.impact_tick <= projectile.launched_tick
+            || projectile.impact_tick <= sim.tick
+        {
+            return Err(SimValidationError::InvalidDelayedCombatState);
+        }
+    }
+    for (&target, effects) in &sim.delayed_combat.statuses {
+        let Some(burning) = effects.burning else {
+            return Err(SimValidationError::InvalidDelayedCombatState);
+        };
+        if sim.combatant_health(target).is_none()
+            || burning.damage_per_tick.amount == 0
+            || burning.damage_per_tick.damage_type != DamageType::Fire
+            || burning.interval_ticks == 0
+            || burning.next_damage_tick <= sim.tick
+            || burning.next_damage_tick > burning.expires_tick
+        {
+            return Err(SimValidationError::InvalidDelayedCombatState);
+        }
+    }
+    Ok(())
 }
 
 /// Nearest enemy unit whose tile lies within `range` of the turret

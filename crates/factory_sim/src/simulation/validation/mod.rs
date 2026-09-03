@@ -60,6 +60,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
         return Err(SimValidationError::InvalidPlayerState);
     }
     super::combat_ops::validate_player_weapon_state(sim)?;
+    super::combat_ops::validate_delayed_combat_state(sim)?;
     equipment_ops::validate_player_equipment(sim)?;
     validate_crafting_queue(sim)?;
     validate_research_state(sim)?;

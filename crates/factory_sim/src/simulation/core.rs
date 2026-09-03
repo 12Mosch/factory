@@ -53,6 +53,7 @@ impl Simulation {
             player,
             player_equipment: PlayerEquipmentState::default(),
             player_weapon: PlayerWeaponState::default(),
+            delayed_combat: DelayedCombatState::default(),
             player_inventory,
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
@@ -193,7 +194,11 @@ impl Simulation {
             self.advance_enemy_spawners();
             let mut combat_commands = CombatCommandBuffer::default();
             self.advance_enemies(&mut combat_commands);
+            self.advance_delayed_combat(&mut combat_commands);
             self.advance_defensive_turrets(&mut combat_commands);
+            // Turret targeting rebuilt the post-movement enemy chunk index;
+            // armor lasers share it instead of scanning every unit per module.
+            self.advance_personal_lasers(&mut combat_commands);
             self.resolve_combat_commands(combat_commands);
             self.resolve_arrived_expansions();
             self.cleanup_enemy_groups();
@@ -260,7 +265,7 @@ impl Simulation {
 
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
-        "factory-sim-state-v4".hash(&mut hasher);
+        "factory-sim-state-v5".hash(&mut hasher);
         self.tick.hash(&mut hasher);
         self.day_night_cycle.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
@@ -277,6 +282,7 @@ impl Simulation {
         self.player.hash(&mut hasher);
         self.player_equipment.hash(&mut hasher);
         self.player_weapon.hash(&mut hasher);
+        self.delayed_combat.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);
         self.manual_mining_progress.hash(&mut hasher);
         self.crafting_queue.hash(&mut hasher);
