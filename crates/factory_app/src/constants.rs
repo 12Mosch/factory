@@ -1,5 +1,12 @@
 pub const SIM_TICKS_PER_SECOND: f64 = 60.0;
 
+/// Maximum simulation ticks run while catching up during one rendered frame.
+///
+/// Wall time beyond this ceiling is deliberately discarded. This bounds the
+/// fixed-step work caused by a hitch and lets the game recover by temporarily
+/// running slower than real time instead of entering a catch-up spiral.
+pub const MAX_SIM_CATCH_UP_TICKS: u32 = 4;
+
 pub(crate) const TILE_SIZE: f32 = 8.0;
 pub(crate) const RESOURCE_SIZE: f32 = 4.0;
 pub(crate) const PLAYER_SPRITE_SIZE: f32 = 6.0;

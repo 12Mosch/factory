@@ -5,7 +5,7 @@ use super::common::{
     technology_id_by_name, unlock_with_prerequisites,
 };
 use factory_app::rendering::resources::RenderSyncStats;
-use factory_app::resources::SimProfileStats;
+use factory_app::resources::{FixedStepCatchUpStats, SimProfileStats};
 use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_crafting_detail_text,
@@ -39,6 +39,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         save_blocked_fixed_ticks: 0,
     };
     let mut render_sync = RenderSyncStats::default();
+    let catch_up = FixedStepCatchUpStats::default();
     render_sync.record_player(Duration::from_micros(10));
     render_sync.record_world_tiles(Duration::from_micros(20));
     render_sync.record_resources(Duration::from_micros(30));
@@ -51,6 +52,7 @@ fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
         fps: Some(59.9),
         frame_ms: Some(16.667),
         sim_profile: &sim_profile,
+        catch_up: &catch_up,
         render_sync: &render_sync,
         counts: SimulationCounts {
             entity_count: 10,

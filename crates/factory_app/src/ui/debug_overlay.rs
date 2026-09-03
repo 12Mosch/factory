@@ -4,11 +4,12 @@ use bevy::scene::ScenePatch;
 use factory_sim::{PowerSummary, SimulationCounts};
 use std::time::Duration;
 
+use crate::constants::MAX_SIM_CATCH_UP_TICKS;
 use crate::input::bindings::{ActionInput, InputAction};
 use crate::input::panels::world_input_blocked;
 use crate::input::resources::AppInputState;
 use crate::rendering::resources::RenderSyncStats;
-use crate::resources::{SimProfileStats, SimResource, UpsStats};
+use crate::resources::{FixedStepCatchUpStats, SimProfileStats, SimResource, UpsStats};
 
 const DEBUG_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -140,6 +141,7 @@ pub(crate) fn update_debug_overlay(
     stats: Res<UpsStats>,
     diagnostics: Res<DiagnosticsStore>,
     sim_profile: Res<SimProfileStats>,
+    catch_up: Res<FixedStepCatchUpStats>,
     render_sync: Res<RenderSyncStats>,
     mut overlay: Query<&mut Text, With<DebugOverlayText>>,
 ) {
@@ -160,6 +162,7 @@ pub(crate) fn update_debug_overlay(
         fps,
         frame_ms,
         sim_profile: &sim_profile,
+        catch_up: &catch_up,
         render_sync: &render_sync,
         counts,
         power,
@@ -176,6 +179,7 @@ pub struct DebugOverlaySnapshot<'a> {
     pub fps: Option<f64>,
     pub frame_ms: Option<f64>,
     pub sim_profile: &'a SimProfileStats,
+    pub catch_up: &'a FixedStepCatchUpStats,
     pub render_sync: &'a RenderSyncStats,
     pub counts: SimulationCounts,
     pub power: PowerSummary,
@@ -189,6 +193,7 @@ UPS: {:.1}
 FPS: {}
 Frame: {}
 Sim tick: {:.3} ms
+Catch-up: {}/{} ticks (peak {}), capped frames {}, dropped {:.3} ms (total {:.3} ms)
 Entities: {}
 Chunks: {}
 Belts: {}
@@ -203,6 +208,12 @@ Phases: belts {}, fluids {}, circuits {}, lamps {}, power {}, radars {}, machine
         format_optional(snapshot.fps, "", 1),
         format_optional(snapshot.frame_ms, " ms", 3),
         snapshot.sim_profile.rolling_average_sim_tick_ms,
+        snapshot.catch_up.fixed_ticks_this_frame,
+        MAX_SIM_CATCH_UP_TICKS,
+        snapshot.catch_up.peak_fixed_ticks_per_frame,
+        snapshot.catch_up.capped_frames,
+        snapshot.catch_up.dropped_time_this_frame.as_secs_f64() * 1000.0,
+        snapshot.catch_up.total_dropped_time.as_secs_f64() * 1000.0,
         snapshot.counts.entity_count,
         snapshot.counts.chunk_count,
         snapshot.counts.belt_count,
@@ -362,12 +373,20 @@ mod tests {
         render_sync.record_placed_entities(Duration::from_micros(40));
         render_sync.record_belt_directions(Duration::from_micros(50));
         render_sync.record_belt_items(Duration::from_micros(450));
+        let catch_up = FixedStepCatchUpStats {
+            fixed_ticks_this_frame: 4,
+            peak_fixed_ticks_per_frame: 4,
+            capped_frames: 2,
+            dropped_time_this_frame: Duration::from_millis(100),
+            total_dropped_time: Duration::from_millis(350),
+        };
         let text = format_debug_overlay(DebugOverlaySnapshot {
             tick: 7,
             ups: 60.0,
             fps: Some(59.9),
             frame_ms: Some(16.667),
             sim_profile: &sim_profile,
+            catch_up: &catch_up,
             render_sync: &render_sync,
             counts: SimulationCounts {
                 entity_count: 10,
@@ -395,6 +414,7 @@ mod tests {
             "FPS:",
             "Frame:",
             "Sim tick:",
+            "Catch-up: 4/4 ticks (peak 4), capped frames 2, dropped 100.000 ms (total 350.000 ms)",
             "Entities:",
             "Chunks:",
             "Belts:",

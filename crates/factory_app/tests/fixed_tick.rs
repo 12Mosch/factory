@@ -1,6 +1,7 @@
 mod fixed_tick {
     mod audio_settings;
     mod build_selection;
+    mod catch_up;
     mod common;
     mod construction_planning;
     mod container_open;
