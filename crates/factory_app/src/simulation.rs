@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use factory_sim::{SimCommand, SimCommandEffect, SimCommandError};
 
 use crate::input::resources::{TrainManualInput, WeaponInput};
-use crate::resources::{SimProfileStats, SimResource, UpsStats};
+use crate::resources::{FixedStepCatchUpStats, SimProfileStats, SimResource, UpsStats};
 
 /// Presentation-owned pause state for the active game session.
 ///
@@ -97,6 +97,7 @@ pub(crate) fn tick_sim(
     mut results: MessageWriter<SimCommandResult>,
     mut ups: ResMut<UpsStats>,
     mut profile_stats: ResMut<SimProfileStats>,
+    mut catch_up_stats: ResMut<FixedStepCatchUpStats>,
 ) {
     let mut simulation = sim.write();
 
@@ -116,6 +117,10 @@ pub(crate) fn tick_sim(
     };
     profile_stats.last_tick = profile;
     ups.fixed_ticks += 1;
+    catch_up_stats.fixed_ticks_this_frame += 1;
+    catch_up_stats.peak_fixed_ticks_per_frame = catch_up_stats
+        .peak_fixed_ticks_per_frame
+        .max(catch_up_stats.fixed_ticks_this_frame);
 }
 
 #[cfg(test)]
@@ -134,6 +139,7 @@ mod tests {
             .init_resource::<TrainManualInput>()
             .init_resource::<WeaponInput>()
             .init_resource::<SimProfileStats>()
+            .init_resource::<FixedStepCatchUpStats>()
             .init_resource::<UpsStats>()
             .add_message::<SimCommandRequest>()
             .add_message::<SimCommandResult>()
@@ -161,6 +167,7 @@ mod tests {
         app.insert_resource(SimResource::new(Simulation::new_test_world(123)))
             .init_resource::<SimCommandBacklog>()
             .init_resource::<SimProfileStats>()
+            .init_resource::<FixedStepCatchUpStats>()
             .init_resource::<UpsStats>()
             .add_message::<SimCommandRequest>()
             .add_message::<SimCommandResult>()

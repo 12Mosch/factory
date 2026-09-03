@@ -1,6 +1,7 @@
 use bevy::prelude::Resource;
 use factory_sim::{Simulation, SimulationTickProfile};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::Duration;
 
 #[derive(Resource)]
 pub struct SimResource {
@@ -111,4 +112,23 @@ pub struct SimProfileStats {
     pub last_tick: SimulationTickProfile,
     pub rolling_average_sim_tick_ms: f64,
     pub save_blocked_fixed_ticks: u64,
+}
+
+/// Runtime telemetry for the fixed-step catch-up policy.
+///
+/// A capped frame intentionally loses wall time rather than retaining an
+/// unbounded simulation backlog. These counters make that degradation visible
+/// in the debug overlay and available to headless diagnostics.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FixedStepCatchUpStats {
+    /// Simulation ticks executed during the current rendered frame.
+    pub fixed_ticks_this_frame: u32,
+    /// Highest number of simulation ticks observed in one rendered frame.
+    pub peak_fixed_ticks_per_frame: u32,
+    /// Rendered frames whose wall-clock delta exceeded the catch-up ceiling.
+    pub capped_frames: u64,
+    /// Wall time discarded from the current rendered frame.
+    pub dropped_time_this_frame: Duration,
+    /// Total wall time discarded since application startup.
+    pub total_dropped_time: Duration,
 }
