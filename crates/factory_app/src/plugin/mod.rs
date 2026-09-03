@@ -55,8 +55,8 @@ pub(crate) enum AppSet {
     /// `Update`: map texture regeneration. State changes that must be visible
     /// to rendering this frame (e.g. a loaded save) run `.before` this set.
     MapTexture,
-    /// `Update`: the chained render-sync systems (render detail, visible
-    /// chunks/entities, tiles, entities, belts).
+    /// `Update`: render-sync systems (render detail, visible chunks/entities,
+    /// tiles, entities, belts).
     RenderSync,
     /// `Update`: marks `update_visible_entity_ids` inside `RenderSync` so
     /// consumers of fresh visibility data can order after it alone.
