@@ -1353,6 +1353,10 @@ pub struct CollisionMask {
 /// Version 3 split resource patch density from resource selection weights.
 pub const WORLD_GENERATION_FORMAT_VERSION: u32 = 3;
 
+/// Largest supported base resource-patch radius. This keeps squared effective
+/// radii representable by the simulation's compact `u32` richness arithmetic.
+pub const MAX_RESOURCE_RADIUS_TILES: i32 = 16_384;
+
 /// Data-driven world generation rules: terrain distribution, starting area,
 /// and resource patch definitions. Loaded from the `world_generation` section
 /// of a prototype catalog; a catalog without that section gets the empty

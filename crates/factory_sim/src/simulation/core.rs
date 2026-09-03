@@ -17,10 +17,10 @@ impl Simulation {
         if !config.is_valid() {
             return Err(SimulationCreationError::InvalidConfig);
         }
-        validation::validate_catalog(&prototypes)
-            .map_err(SimulationCreationError::InvalidCatalog)?;
         let base_ids = factory_data::BasePrototypeIds::try_from_catalog(&prototypes)
             .map_err(SimulationCreationError::MissingRequiredPrototype)?;
+        validation::validate_catalog(&prototypes)
+            .map_err(SimulationCreationError::InvalidCatalog)?;
         let world = WorldSim::new(seed, prototypes);
         let research = ResearchState::from_catalog(&world.prototypes);
         let entities = EntityStore::empty();
@@ -670,6 +670,36 @@ mod construction_tests {
             Err(SimulationCreationError::InvalidCatalog(
                 SimValidationError::UnknownItem(_)
             ))
+        ));
+    }
+
+    #[test]
+    fn construction_rejects_oversized_resource_radius_without_panicking() {
+        let mut catalog = PrototypeCatalog::load_base().unwrap();
+        catalog.world_generation_mut().resources[0].radius = 65_536;
+
+        assert!(matches!(
+            Simulation::new(1, catalog),
+            Err(SimulationCreationError::InvalidCatalog(
+                SimValidationError::InvalidWorldGenerationConfig
+            ))
+        ));
+    }
+
+    #[test]
+    fn construction_reports_missing_required_prototype_before_incidental_references() {
+        let mut catalog = PrototypeCatalog::load_base().unwrap();
+        let iron_ore = catalog
+            .items()
+            .iter()
+            .position(|item| item.name == "iron_ore")
+            .unwrap();
+        catalog.items_vec_mut().remove(iron_ore);
+
+        assert!(matches!(
+            Simulation::new(1, catalog),
+            Err(SimulationCreationError::MissingRequiredPrototype(missing))
+                if missing.group == "item" && missing.name == "iron_ore"
         ));
     }
 }

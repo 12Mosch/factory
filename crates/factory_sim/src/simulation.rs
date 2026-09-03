@@ -715,6 +715,7 @@ pub enum PollutionRemainderSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimValidationError {
     InvalidDayNightCycleConfig,
+    InvalidWorldGenerationConfig,
     DayNightCycleStatePresenceMismatch,
     InvalidDayNightCycleTick {
         tick_in_cycle: u64,

@@ -12,6 +12,7 @@ pub(in crate::simulation) fn validate_catalog(
     {
         return Err(SimValidationError::InvalidDayNightCycleConfig);
     }
+    validate_world_generation_config(catalog)?;
 
     for (index, item) in catalog.items().iter().enumerate() {
         if item.id.index() != index {
@@ -659,6 +660,37 @@ pub(in crate::simulation) fn validate_catalog(
                 prototype_id: prototype.id,
             });
         }
+    }
+
+    Ok(())
+}
+
+fn validate_world_generation_config(catalog: &PrototypeCatalog) -> Result<(), SimValidationError> {
+    // Keep this safety-critical ceiling aligned with the data loader. Resource
+    // generation squares the effective radius into a u32 when calculating
+    // richness, and the loader's bound leaves ample room for edge noise and
+    // the maximum distance-scaling bonus.
+    let config = catalog.world_generation();
+    if config.resources.iter().any(|resource| {
+        !(1..=factory_data::MAX_RESOURCE_RADIUS_TILES).contains(&resource.radius)
+            || resource.richness == 0
+    }) {
+        return Err(SimValidationError::InvalidWorldGenerationConfig);
+    }
+
+    let radius_bonus = config
+        .distance_scaling
+        .map_or(0_i64, |scaling| i64::from(scaling.max_radius_bonus_tiles));
+    let edge_noise = i64::from(config.patch_grid.edge_noise);
+    let effective_radius_fits = config.resources.iter().all(|resource| {
+        i64::from(resource.radius)
+            .checked_add(radius_bonus)
+            .and_then(|radius| radius.checked_add(edge_noise))
+            .and_then(|radius| radius.checked_mul(radius))
+            .is_some_and(|radius_sq| u32::try_from(radius_sq).is_ok())
+    });
+    if !effective_radius_fits {
+        return Err(SimValidationError::InvalidWorldGenerationConfig);
     }
 
     Ok(())
