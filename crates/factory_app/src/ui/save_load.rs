@@ -1,13 +1,12 @@
 use bevy::input_focus::{AutoFocus, InputFocus};
 use bevy::prelude::*;
 use bevy::text::{EditableText, TextCursorStyle};
-use chrono::{DateTime, Local};
 
 use crate::audio::SoundEvent;
 use crate::save_load::{
     LoadState, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveEntry, SaveId, SaveKind,
     SaveLoadConfig, SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState,
-    delete_save, load_save, request_named_save, request_overwrite,
+    delete_save, load_save, local_datetime_from_unix_ms, request_named_save, request_overwrite,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::pause_menu::PauseMenuState;
@@ -779,7 +778,8 @@ fn confirmation_id(confirmation: &PendingSaveConfirmation) -> Option<&SaveId> {
     }
 }
 pub fn format_timestamp(unix_ms: u64) -> String {
-    DateTime::<Local>::from(std::time::UNIX_EPOCH + std::time::Duration::from_millis(unix_ms))
-        .format("%Y-%m-%d %H:%M:%S %:z")
-        .to_string()
+    local_datetime_from_unix_ms(unix_ms).map_or_else(
+        || "Invalid timestamp".to_owned(),
+        |timestamp| timestamp.format("%Y-%m-%d %H:%M:%S %:z").to_string(),
+    )
 }
