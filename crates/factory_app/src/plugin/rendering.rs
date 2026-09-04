@@ -28,7 +28,8 @@ use crate::rendering::resource_cells::{
     ResourceRenderCache, ResourceRenderSettings, measured_sync_resource_debug_rendering,
 };
 use crate::rendering::resources::{
-    BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds, WorldRenderCache,
+    BeltItemRenderPool, RenderDetail, VisibleEntityIds, WorldRenderCache,
+    collect_render_sync_stats, init_render_sync_stats,
 };
 use crate::rendering::robot_coverage::{
     RoboportCoverageRenderState, sync_roboport_coverage_rendering,
@@ -46,7 +47,7 @@ pub(super) struct RenderingPlugin;
 impl Plugin for RenderingPlugin {
     /// Registers world presentation, deferring simulation-backed entities until world entry.
     fn build(&self, app: &mut App) {
-        app.init_resource::<RenderSyncStats>()
+        init_render_sync_stats(app)
             .insert_resource(ResourceRenderSettings {
                 show_amount_labels: true,
             })
@@ -131,6 +132,13 @@ impl Plugin for RenderingPlugin {
                 sync_rail_connection_preview
                     .after(update_build_placement_preview_state)
                     .in_set(AppSet::WorldInput),
+            )
+            .add_systems(
+                Update,
+                collect_render_sync_stats
+                    .after(AppSet::RenderSync)
+                    .after(measured_sync_player_sprite)
+                    .in_set(InGameSet),
             );
     }
 }

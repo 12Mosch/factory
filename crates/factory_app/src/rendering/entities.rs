@@ -21,7 +21,7 @@ use crate::rendering::colors::{
     rail_signal_color, roboport_color, rocket_silo_color, solar_panel_color, splitter_color,
     steam_engine_color, storage_tank_color, train_stop_color, transport_belt_color, wall_color,
 };
-use crate::rendering::resources::{RenderSyncStats, VisibleEntityIds};
+use crate::rendering::resources::{PlacedEntitiesRenderSyncTime, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
 use crate::rendering::visuals::{
     ConnectionMask, EntityVisualStyle, VisualAssets, spawn_entity_visual,
@@ -242,11 +242,11 @@ pub(crate) fn measured_sync_placed_entity_rendering(
     visible_entity_ids: Res<VisibleEntityIds>,
     visual_assets: VisualAssets,
     sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
-    mut stats: ResMut<RenderSyncStats>,
+    mut timing: ResMut<PlacedEntitiesRenderSyncTime>,
 ) {
     let started = Instant::now();
     sync_placed_entity_rendering(commands, sim, visible_entity_ids, visual_assets, sprites);
-    stats.record_placed_entities(started.elapsed());
+    timing.0 = started.elapsed();
 }
 
 fn visible_entity_ids_for_chunks(sim: &Simulation, visible: &VisibleChunks) -> HashSet<EntityId> {

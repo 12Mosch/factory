@@ -8,7 +8,7 @@ use std::time::Instant;
 use crate::constants::RESOURCE_SIZE;
 use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{RenderPrototypeIds, resource_color_variant};
-use crate::rendering::resources::{RenderDetail, RenderSyncStats};
+use crate::rendering::resources::{RenderDetail, ResourcesRenderSyncTime};
 use crate::rendering::transforms::tile_translation;
 use crate::rendering::visuals::{VisualAssets, spawn_resource_visual};
 use crate::resources::SimResource;
@@ -115,11 +115,11 @@ pub(crate) fn sync_resource_debug_rendering(
 pub(crate) fn measured_sync_resource_debug_rendering(
     commands: Commands,
     params: ResourceRenderParams,
-    mut stats: ResMut<RenderSyncStats>,
+    mut timing: ResMut<ResourcesRenderSyncTime>,
 ) {
     let started = Instant::now();
     sync_resource_debug_rendering(commands, params);
-    stats.record_resources(started.elapsed());
+    timing.0 = started.elapsed();
 }
 
 #[derive(SystemParam)]

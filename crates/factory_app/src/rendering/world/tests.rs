@@ -20,6 +20,7 @@ use crate::rendering::resource_cells::{
 };
 use crate::rendering::resources::{
     BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds, WorldRenderCache,
+    collect_render_sync_stats, init_render_sync_stats,
 };
 use crate::rendering::rocket_launch::{
     RocketLaunchRenderPool, RocketLaunchSprite, sync_rocket_launch_rendering,
@@ -32,7 +33,7 @@ use crate::test_performance::{
 use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
 use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, Simulation};
 use std::collections::BTreeSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const RENDER_SYNC_SMALL_MEASUREMENT_FRAMES: usize = 300;
 const RENDER_SYNC_SMALL_TOTAL_P95_BUDGET: Duration = Duration::from_millis(4);
@@ -364,6 +365,7 @@ fn render_sync_counts_are_bounded_by_visible_chunks() {
     let total_generated_chunks = sim.world().generated_chunk_count();
     let total_entities = sim.entities().placed_len();
     let mut app = App::new();
+    init_render_sync_stats(&mut app);
     app.insert_resource(SimResource::new(sim))
         .insert_resource(visible)
         .init_resource::<WorldRenderCache>()
@@ -374,7 +376,6 @@ fn render_sync_counts_are_bounded_by_visible_chunks() {
         .insert_resource(ResourceRenderSettings {
             show_amount_labels: false,
         })
-        .init_resource::<RenderSyncStats>()
         .init_resource::<PresentationReloadToken>()
         .insert_resource(Assets::<Mesh>::default())
         .insert_resource(Assets::<ColorMaterial>::default())
@@ -387,6 +388,7 @@ fn render_sync_counts_are_bounded_by_visible_chunks() {
                 measured_sync_placed_entity_rendering,
                 measured_sync_belt_direction_rendering,
                 measured_sync_belt_item_rendering,
+                collect_render_sync_stats,
             )
                 .chain(),
         );
@@ -825,6 +827,7 @@ fn resource_coord_in_chunk(coord: ChunkCoord, chunk: &factory_sim::Chunk) -> Opt
 
 fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
     let mut app = App::new();
+    init_render_sync_stats(&mut app);
     app.insert_resource(SimResource::new(sim))
         .insert_resource(visible)
         .init_resource::<WorldRenderCache>()
@@ -836,7 +839,6 @@ fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
         .insert_resource(ResourceRenderSettings {
             show_amount_labels: true,
         })
-        .init_resource::<RenderSyncStats>()
         .init_resource::<PresentationReloadToken>()
         .insert_resource(Assets::<Mesh>::default())
         .insert_resource(Assets::<ColorMaterial>::default())
@@ -846,13 +848,18 @@ fn render_sync_app(sim: Simulation, visible: VisibleChunks) -> App {
                 measured_sync_visible_world_tiles,
                 measured_sync_resource_debug_rendering,
                 update_visible_entity_ids,
-                measured_sync_placed_entity_rendering,
+                measured_sync_placed_entity_rendering.after(update_visible_entity_ids),
                 sync_rocket_silo_rendering,
                 sync_rocket_launch_rendering,
-                measured_sync_belt_direction_rendering,
-                measured_sync_belt_item_rendering,
-            )
-                .chain(),
+                measured_sync_belt_direction_rendering.after(update_visible_entity_ids),
+                measured_sync_belt_item_rendering.after(update_visible_entity_ids),
+                collect_render_sync_stats
+                    .after(measured_sync_visible_world_tiles)
+                    .after(measured_sync_resource_debug_rendering)
+                    .after(measured_sync_placed_entity_rendering)
+                    .after(measured_sync_belt_direction_rendering)
+                    .after(measured_sync_belt_item_rendering),
+            ),
         );
     app
 }
@@ -896,6 +903,7 @@ fn active_rocket_launch(app: &mut App, silo_id: EntityId) -> (Entity, Vec3) {
 
 fn dense_belt_item_render_sync_app(sim: Simulation, belt_ids: &[EntityId]) -> App {
     let mut app = App::new();
+    init_render_sync_stats(&mut app);
     app.insert_resource(SimResource::new(sim))
         .insert_resource(VisibleEntityIds {
             ids: belt_ids.iter().copied().collect(),
@@ -904,14 +912,20 @@ fn dense_belt_item_render_sync_app(sim: Simulation, belt_ids: &[EntityId]) -> Ap
         })
         .init_resource::<RenderDetail>()
         .init_resource::<BeltItemRenderPool>()
-        .init_resource::<RenderSyncStats>()
-        .add_systems(Update, measured_sync_belt_item_rendering);
+        .add_systems(
+            Update,
+            (
+                measured_sync_belt_item_rendering,
+                collect_render_sync_stats.after(measured_sync_belt_item_rendering),
+            ),
+        );
     app
 }
 
 #[derive(Clone, Copy)]
 struct RenderSyncSample {
     stats: RenderSyncStats,
+    update: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -919,6 +933,9 @@ struct RenderSyncBudgetStats {
     average: RenderSyncStats,
     p95: RenderSyncStats,
     max: RenderSyncStats,
+    update_average: Duration,
+    update_p95: Duration,
+    update_max: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -945,17 +962,22 @@ fn collect_render_sync_budget_stats(app: &mut App, frames: usize) -> RenderSyncB
     let mut samples = Vec::with_capacity(frames);
 
     for _ in 0..frames {
-        // Advance the simulation so every measured frame syncs real changes;
-        // rendering an unchanged world short-circuits in the caches and would
-        // measure nothing.
+        // Advance the simulation and force a visibility refresh so every
+        // measured phase performs representative work. This models crossing
+        // chunk boundaries while belts are moving; an unchanged view would
+        // short-circuit every phase except belt items and hide scheduling
+        // contention between the render systems.
         tick_sim_resource(app);
+        app.world_mut().resource_mut::<VisibleChunks>().revision += 1;
+        let started = Instant::now();
         app.update();
         samples.push(RenderSyncSample {
             stats: *app.world().resource::<RenderSyncStats>(),
+            update: started.elapsed(),
         });
     }
 
-    render_sync_budget_stats(samples.into_iter().map(|sample| sample.stats).collect())
+    render_sync_budget_stats(samples)
 }
 
 fn collect_dense_belt_item_render_sync_stats(
@@ -978,16 +1000,34 @@ fn collect_dense_belt_item_render_sync_stats(
     dense_belt_item_render_sync_stats(samples)
 }
 
-fn render_sync_budget_stats(mut samples: Vec<RenderSyncStats>) -> RenderSyncBudgetStats {
+fn render_sync_budget_stats(samples: Vec<RenderSyncSample>) -> RenderSyncBudgetStats {
     assert!(!samples.is_empty());
-    samples.sort_by_key(|stats| stats.total);
     let p95_index = ((samples.len() * 95).div_ceil(100)).saturating_sub(1);
+    let stats = samples
+        .iter()
+        .map(|sample| sample.stats)
+        .collect::<Vec<_>>();
+    let mut update_durations = samples
+        .iter()
+        .map(|sample| sample.update)
+        .collect::<Vec<_>>();
+    update_durations.sort_unstable();
 
     RenderSyncBudgetStats {
-        average: average_render_sync_stats(&samples),
-        p95: percentile_render_sync_stats(&samples, p95_index),
-        max: max_render_sync_stats(&samples),
+        average: average_render_sync_stats(&stats),
+        p95: percentile_render_sync_stats(&stats, p95_index),
+        max: max_render_sync_stats(&stats),
+        update_average: average_raw_duration(&update_durations),
+        update_p95: update_durations[p95_index],
+        update_max: *update_durations
+            .last()
+            .expect("render sync update durations should exist"),
     }
+}
+
+fn average_raw_duration(samples: &[Duration]) -> Duration {
+    let nanos = samples.iter().map(Duration::as_nanos).sum::<u128>() / samples.len() as u128;
+    Duration::from_nanos(nanos as u64)
 }
 
 fn dense_belt_item_render_sync_stats(
@@ -1105,7 +1145,10 @@ fn max_duration(
 
 fn print_render_sync_budget_stats(app: &mut App, stats: RenderSyncBudgetStats) {
     println!(
-        "render_sync_small_visual_load_budget:\n  total: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  world_tiles: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  resources: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  placed_entities: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belt_directions: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belt_items: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  player: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  visible chunks: {}\n  visible placed entity sprites: {}\n  belt direction sprites: {}\n  belt item sprites: {}\n  resource sprites: {}\n  resource labels: {}",
+        "render_sync_small_visual_load_budget:\n  update wall: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  total work: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  world_tiles: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  resources: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  placed_entities: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belt_directions: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  belt_items: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  player: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  visible chunks: {}\n  visible placed entity sprites: {}\n  belt direction sprites: {}\n  belt item sprites: {}\n  resource sprites: {}\n  resource labels: {}",
+        ms(stats.update_average),
+        ms(stats.update_p95),
+        ms(stats.update_max),
         ms(stats.average.total),
         ms(stats.p95.total),
         ms(stats.max.total),

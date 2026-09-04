@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::constants::BELT_ITEM_SPRITE_SIZE;
 use crate::rendering::resources::{
-    BeltItemRenderPool, RenderDetail, RenderSyncStats, VisibleEntityIds,
+    BeltItemRenderPool, BeltItemsRenderSyncTime, RenderDetail, VisibleEntityIds,
 };
 use crate::rendering::visuals::{VisualAssets, spawn_belt_item_visual};
 use crate::resources::SimResource;
@@ -540,11 +540,11 @@ fn pool_cached_item(
 
 pub(crate) fn measured_sync_belt_item_rendering(
     params: BeltItemRenderParams,
-    mut stats: ResMut<RenderSyncStats>,
+    mut timing: ResMut<BeltItemsRenderSyncTime>,
 ) {
     let started = Instant::now();
     sync_belt_item_rendering(params);
-    stats.record_belt_items(started.elapsed());
+    timing.0 = started.elapsed();
 }
 
 pub(super) fn spawn_or_reuse_belt_item_sprite(

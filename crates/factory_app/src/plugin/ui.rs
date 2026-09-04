@@ -9,6 +9,7 @@ use crate::interaction::command_feedback::{
 use crate::interaction::container_open::{
     handle_container_close_input, handle_container_open_input,
 };
+use crate::rendering::resources::collect_render_sync_stats;
 use crate::resources::UpsStats;
 use crate::ui::accessibility::{
     UiPreferences, UiPreferencesPersistenceState, handle_accessibility_settings_buttons,
@@ -220,7 +221,8 @@ impl Plugin for UiPlugin {
                     apply_debug_overlay_visibility.after(toggle_debug_overlay),
                     update_debug_overlay
                         .run_if(debug_overlay_refresh_due())
-                        .after(toggle_debug_overlay),
+                        .after(toggle_debug_overlay)
+                        .after(collect_render_sync_stats),
                     // The menu clears `open_container` when it opens; sync after
                     // it so the container window hides on the same frame.
                     sync_container_window.after(handle_build_menu_buttons),
