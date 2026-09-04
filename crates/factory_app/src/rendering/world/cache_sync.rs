@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::map::resources::VisibleChunks;
 use crate::rendering::colors::{RenderPrototypeIds, TileColorTable};
-use crate::rendering::resources::{RenderSyncStats, WorldRenderCache};
+use crate::rendering::resources::{WorldRenderCache, WorldTilesRenderSyncTime};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 
@@ -19,11 +19,11 @@ pub struct WorldChunkMesh;
 pub(crate) fn measured_sync_visible_world_tiles(
     commands: Commands,
     params: WorldTilesRenderParams,
-    mut stats: ResMut<RenderSyncStats>,
+    mut timing: ResMut<WorldTilesRenderSyncTime>,
 ) {
     let started = Instant::now();
     sync_visible_world_tiles(commands, params);
-    stats.record_world_tiles(started.elapsed());
+    timing.0 = started.elapsed();
 }
 
 pub(crate) fn sync_visible_world_tiles(mut commands: Commands, params: WorldTilesRenderParams) {

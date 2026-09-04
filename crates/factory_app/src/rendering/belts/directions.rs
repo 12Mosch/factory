@@ -6,7 +6,7 @@ use std::time::Instant;
 use crate::constants::{
     BELT_DIRECTION_HEAD_SIZE, BELT_DIRECTION_SHAFT_LENGTH, BELT_DIRECTION_SHAFT_WIDTH, TILE_SIZE,
 };
-use crate::rendering::resources::{RenderDetail, RenderSyncStats, VisibleEntityIds};
+use crate::rendering::resources::{BeltDirectionsRenderSyncTime, RenderDetail, VisibleEntityIds};
 use crate::rendering::transforms::entity_translation;
 use crate::resources::SimResource;
 
@@ -89,11 +89,11 @@ pub(crate) fn measured_sync_belt_direction_rendering(
     visible_entity_ids: Res<VisibleEntityIds>,
     detail: Res<RenderDetail>,
     sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
-    mut stats: ResMut<RenderSyncStats>,
+    mut timing: ResMut<BeltDirectionsRenderSyncTime>,
 ) {
     let started = Instant::now();
     sync_belt_direction_rendering(commands, sim, visible_entity_ids, detail, sprites);
-    stats.record_belt_directions(started.elapsed());
+    timing.0 = started.elapsed();
 }
 
 pub(crate) fn belt_direction_render_state(
