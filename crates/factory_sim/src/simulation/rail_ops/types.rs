@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::entities::Direction;
 use crate::ids::EntityId;
-use crate::rail::{RailNetworkSnapshot, RailPieceGeometry, RailPoint};
+use crate::rail::{RailCurve, RailNetworkSnapshot, RailPieceGeometry, RailPoint};
 use crate::simulation::SmallVec;
 
 /// One placed rail as the graph builder sees it. Every rail piece owns exactly
@@ -35,16 +35,18 @@ pub(in crate::simulation) struct RailEdge {
     /// loop. The graph is rebuilt wholesale whenever placement changes, so this
     /// is a copy that cannot outlive the geometry it came from.
     pub(in crate::simulation) end_positions: [RailPoint; 2],
+    /// Shape between `end_positions`, copied with them so hot-path world-point
+    /// queries do not have to resolve the placed entity and its prototype.
+    pub(in crate::simulation) curve: RailCurve,
     pub(in crate::simulation) length_fixed: i64,
     pub(in crate::simulation) network_id: u32,
 }
 
 /// One junction of the graph: the rail ends that meet at a single point.
 ///
-/// The point itself is not stored. A node exists precisely because two ends
-/// resolved to the same position, and where an end is remains a question for the
-/// piece's geometry, which is the one description of that; keeping a second copy
-/// here is how the two would eventually disagree.
+/// The point itself is not repeated on the node. A node exists precisely
+/// because two edge ends resolved to the same position, and the edge's cached
+/// geometry remains the one graph-local description of where each end lies.
 ///
 /// `ends` names the edges that touch this node and which of their two ends does
 /// the touching. Ends only *connect* when their headings oppose, so the node is

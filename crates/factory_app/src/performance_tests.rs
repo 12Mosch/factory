@@ -12,7 +12,7 @@ use crate::audio::{
 };
 use crate::rendering::resources::VisibleEntityIds;
 use crate::rendering::robots::RobotSprite;
-use crate::rendering::rolling_stock::RollingStockSprite;
+use crate::rendering::rolling_stock::{RollingStockSprite, sync_rolling_stock_rendering};
 use crate::resources::SimResource;
 use crate::test_performance::{
     BENCHMARK_LOCK, PerformanceBudget, assert_performance_budget, collect_performance_stats,
@@ -69,6 +69,9 @@ const FULL_FRAME_BUDGET: PerformanceBudget = PerformanceBudget {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
 struct UiBenchmark;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
+struct TrainRenderBenchmark;
 
 /// Exercises the two per-frame audio hot paths without requiring an audio
 /// device: visible-machine selection and a burst of queued one-shot sounds.
@@ -234,6 +237,56 @@ fn train_heavy_frame_p99_hitch_and_allocation_budget() {
     );
     sim.validate_state()
         .expect("train-heavy budget run should retain a valid simulation");
+}
+
+/// Splits the train-heavy frame into its simulation and rolling-stock
+/// presentation costs. Advancing the simulation is preparation for the render
+/// sample, so neither number contains the other.
+#[test]
+#[ignore]
+fn train_simulation_and_render_sync_profile() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut app = train_benchmark_app();
+    app.add_schedule(Schedule::new(TrainRenderBenchmark));
+    app.add_systems(TrainRenderBenchmark, sync_rolling_stock_rendering);
+    app.update();
+
+    for _ in 0..WARMUP_FRAMES {
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .tick();
+        app.world_mut().run_schedule(TrainRenderBenchmark);
+    }
+
+    let simulation = collect_performance_stats(MEASUREMENT_FRAMES, || {
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .tick();
+    });
+    print_performance_stats("train_simulation_tick", simulation);
+
+    let rendering = collect_prepared_performance_stats(MEASUREMENT_FRAMES, || {
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .tick();
+        measure_performance_sample(|| app.world_mut().run_schedule(TrainRenderBenchmark))
+    });
+    print_performance_stats("rolling_stock_render_sync", rendering);
+
+    let drawn = {
+        let world = app.world_mut();
+        let mut sprites = world.query::<&RollingStockSprite>();
+        sprites.iter(world).count()
+    };
+    assert!(
+        drawn > 0,
+        "the isolated renderer should keep drawing trains"
+    );
 }
 
 fn train_benchmark_app() -> App {

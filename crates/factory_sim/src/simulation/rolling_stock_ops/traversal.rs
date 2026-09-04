@@ -182,26 +182,40 @@ pub(in crate::simulation) fn world_point(
     sim: &Simulation,
     position: RailPosition,
 ) -> Option<RailPoint> {
-    let geometry = sim.rail_piece_geometry(position.edge)?;
-    let length = geometry.length_fixed.max(1);
-    let travelled = position.distance_fixed.clamp(0, geometry.length_fixed);
-
-    match geometry.curve {
-        RailCurve::Straight => {
-            let start = geometry.start.position;
-            let end = geometry.end.position;
-            Some(RailPoint::new(
-                interpolate(start.x, end.x, travelled, length),
-                interpolate(start.y, end.y, travelled, length),
+    // The graph carries the same immutable geometry and is already in cache
+    // for every train walk. Fall back to the placed piece only in the short
+    // interval after rail topology was invalidated and before the next tick
+    // rebuilds the graph.
+    let (start, end, curve, length_fixed) = sim
+        .rails
+        .graph
+        .edge_for_entity(position.edge)
+        .map(|edge| {
+            (
+                edge.end_positions[0],
+                edge.end_positions[1],
+                edge.curve,
+                edge.length_fixed,
+            )
+        })
+        .or_else(|| {
+            let geometry = sim.rail_piece_geometry(position.edge)?;
+            Some((
+                geometry.start.position,
+                geometry.end.position,
+                geometry.curve,
+                geometry.length_fixed,
             ))
-        }
-        RailCurve::QuarterArc { center } => Some(arc_point(
-            center,
-            geometry.start.position,
-            geometry.end.position,
-            travelled,
-            length,
+        })?;
+    let length = length_fixed.max(1);
+    let travelled = position.distance_fixed.clamp(0, length_fixed);
+
+    match curve {
+        RailCurve::Straight => Some(RailPoint::new(
+            interpolate(start.x, end.x, travelled, length),
+            interpolate(start.y, end.y, travelled, length),
         )),
+        RailCurve::QuarterArc { center } => Some(arc_point(center, start, end, travelled, length)),
     }
 }
 
