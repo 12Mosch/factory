@@ -63,6 +63,7 @@ pub(crate) fn sync_rolling_stock_rendering(
     sim: Res<SimResource>,
     visible: Res<VisibleChunks>,
     fixed_time: Option<Res<Time<Fixed>>>,
+    mut seen: Local<HashSet<RollingStockId>>,
     mut sprites: Query<(Entity, &mut RollingStockSprite, &mut Transform, &mut Sprite)>,
 ) {
     let alpha = fixed_time
@@ -71,7 +72,9 @@ pub(crate) fn sync_rolling_stock_rendering(
         .clamp(0.0, 1.0);
     let sim = sim.read();
     let tick = sim.tick_count();
-    let mut seen: HashSet<RollingStockId> = HashSet::new();
+    let stock_count = sim.rolling_stock_count();
+    seen.clear();
+    seen.reserve(stock_count);
 
     for (entity, mut sprite, mut transform, mut image) in &mut sprites {
         let Some(body) = visible_body(&sim, sprite.stock_id, &visible) else {
@@ -98,6 +101,16 @@ pub(crate) fn sync_rolling_stock_rendering(
             blend(sprite.previous, sprite.current, alpha),
         );
         seen.insert(sprite.stock_id);
+    }
+
+    // The normal case has one visible sprite for every piece of stock. Once
+    // that bijection is established there cannot be a newcomer to spawn, so
+    // avoid walking the whole simulation a second time just to rediscover the
+    // ids the sprite query already visited. The slower pass remains necessary
+    // when some stock is off screen: a moving train can enter view without the
+    // camera (and therefore `VisibleChunks`) changing.
+    if seen.len() == stock_count {
+        return;
     }
 
     for stock in sim.rolling_stock() {

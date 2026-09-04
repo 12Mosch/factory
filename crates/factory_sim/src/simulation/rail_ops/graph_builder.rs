@@ -52,6 +52,7 @@ pub(super) fn build_rail_graph_from_pieces(pieces: &[RailPieceInput]) -> RailGra
             nodes,
             headings: [ends[0].heading, ends[1].heading],
             end_positions: [ends[0].position, ends[1].position],
+            curve: piece.geometry.curve,
             length_fixed: piece.geometry.length_fixed,
             // Filled in once the components are known.
             network_id: 0,
