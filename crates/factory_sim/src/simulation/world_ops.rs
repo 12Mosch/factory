@@ -734,77 +734,22 @@ pub(super) fn find_player_start(
     world: &WorldSim,
     occupancy: &OccupancyGrid,
 ) -> Option<PlayerState> {
-    let (min_x, max_x, min_y, max_y) = world_tile_bounds(world)?;
-    let max_radius = min_x
-        .abs()
-        .max(max_x.abs())
-        .max(min_y.abs())
-        .max(max_y.abs());
-
-    for radius in 0..=max_radius {
-        for y in -radius..=radius {
-            if y < min_y || y > max_y {
-                continue;
-            }
-
-            for x in -radius..=radius {
-                if x < min_x || x > max_x {
-                    continue;
-                }
-
-                if x.abs().max(y.abs()) != radius {
-                    continue;
-                }
-
-                if player_can_occupy_tile(world, occupancy, x, y) {
-                    return Some(PlayerState::centered_on_tile(x, y));
-                }
-            }
-        }
+    if player_can_occupy_tile(world, occupancy, 0, 0) {
+        return Some(PlayerState::centered_on_tile(0, 0));
     }
-
-    None
-}
-
-pub(super) fn world_tile_bounds(
-    world: &WorldSim,
-) -> Option<(
-    WorldTileCoord,
-    WorldTileCoord,
-    WorldTileCoord,
-    WorldTileCoord,
-)> {
-    let min_chunk_x = world.chunks.keys().map(|coord| coord.x).min()?;
-    let max_chunk_x = world.chunks.keys().map(|coord| coord.x).max()?;
-    let min_chunk_y = world.chunks.keys().map(|coord| coord.y).min()?;
-    let max_chunk_y = world.chunks.keys().map(|coord| coord.y).max()?;
-
-    Some((
-        ChunkCoord {
-            x: min_chunk_x,
-            y: min_chunk_y,
-        }
-        .min_tile()
-        .0,
-        ChunkCoord {
-            x: max_chunk_x,
-            y: max_chunk_y,
-        }
-        .min_tile()
-        .0 + i64::from(CHUNK_SIZE - 1),
-        ChunkCoord {
-            x: min_chunk_x,
-            y: min_chunk_y,
-        }
-        .min_tile()
-        .1,
-        ChunkCoord {
-            x: max_chunk_x,
-            y: max_chunk_y,
-        }
-        .min_tile()
-        .1 + i64::from(CHUNK_SIZE - 1),
-    ))
+    // Visit generated tiles only: runtime worlds can contain distant chunks.
+    // The total order matches concentric square rings, then row/column order.
+    world
+        .chunks
+        .keys()
+        .flat_map(|coord| {
+            let (x, y) = coord.min_tile();
+            (0..i64::from(CHUNK_SIZE))
+                .flat_map(move |dy| (0..i64::from(CHUNK_SIZE)).map(move |dx| (x + dx, y + dy)))
+        })
+        .filter(|&(x, y)| player_can_occupy_tile(world, occupancy, x, y))
+        .min_by_key(|&(x, y)| (x.abs().max(y.abs()), y, x))
+        .map(|(x, y)| PlayerState::centered_on_tile(x, y))
 }
 
 pub(super) fn player_can_occupy_tile(

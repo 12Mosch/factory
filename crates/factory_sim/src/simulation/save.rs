@@ -106,7 +106,8 @@ use bincode::Options;
 // durable player state.
 // v52: delayed projectiles, combat status effects, and per-module personal
 // laser cooldowns joined durable combat/equipment state.
-pub const SAVE_VERSION: u32 = 52;
+// v53: durable player death tick, pending respawn request and death statistics.
+pub const SAVE_VERSION: u32 = 53;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -195,6 +196,7 @@ struct SimulationSnapshotOwned {
     fluid_statistics: FluidStatistics,
     power_statistics: PowerStatistics,
     rockets_launched: u64,
+    player_deaths: u64,
     entities: EntityStore,
     construction: ConstructionState,
     player: PlayerState,
@@ -386,6 +388,7 @@ struct SimulationSnapshotRef<'a> {
     fluid_statistics: &'a FluidStatistics,
     power_statistics: &'a PowerStatistics,
     rockets_launched: u64,
+    player_deaths: u64,
     entities: &'a EntityStore,
     construction: &'a ConstructionState,
     player: PlayerState,
@@ -424,6 +427,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             fluid_statistics: &sim.statistics.fluids,
             power_statistics: &sim.statistics.power,
             rockets_launched: sim.statistics.rockets_launched,
+            player_deaths: sim.statistics.player_deaths,
             entities: &sim.entities,
             construction: &sim.construction,
             player: sim.player,
@@ -465,6 +469,7 @@ impl SimulationSnapshotOwned {
             fluid_statistics: sim.statistics.fluids.clone(),
             power_statistics: sim.statistics.power.clone(),
             rockets_launched: sim.statistics.rockets_launched,
+            player_deaths: sim.statistics.player_deaths,
             entities: sim.entities.clone(),
             construction: sim.construction.clone(),
             player: sim.player,
@@ -542,6 +547,7 @@ impl SimulationSnapshotOwned {
                 fluids: self.fluid_statistics,
                 power: self.power_statistics,
                 rockets_launched: self.rockets_launched,
+                player_deaths: self.player_deaths,
             },
             pollution: self.pollution,
             capacity_overflows: CapacityOverflowCounters::default(),

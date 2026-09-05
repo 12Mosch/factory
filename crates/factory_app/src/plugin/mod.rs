@@ -1,6 +1,7 @@
 mod audio;
 mod build;
 mod construction;
+mod death;
 mod input;
 mod map;
 mod rendering;
@@ -148,6 +149,7 @@ impl Plugin for FactoryAppPlugin {
         app.add_plugins((
             simulation::SimulationPlugin,
             input::InputPlugin,
+            death::PlayerDeathPlugin,
             audio::AudioPlugin,
             build::BuildPlugin,
             construction::ConstructionPlugin,

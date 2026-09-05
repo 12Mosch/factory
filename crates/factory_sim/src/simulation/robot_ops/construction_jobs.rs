@@ -215,7 +215,9 @@ impl Simulation {
         // only player inventory and never borrows robots or materials from the
         // stationary network below, so either source commits the one shared
         // reservation and the other never sees the job again.
-        if self.try_dispatch_personal_construction_job(job, target_x, target_y) {
+        if !self.player.is_dead()
+            && self.try_dispatch_personal_construction_job(job, target_x, target_y)
+        {
             return true;
         }
         let Some(network_id) = self.construction_network_covering_tile(target_x, target_y) else {

@@ -1580,3 +1580,30 @@ fn combat_state_round_trips_through_save() {
         "loaded simulation should stay in lockstep"
     );
 }
+
+#[test]
+fn death_retains_opened_magazine_and_full_inventory_without_refunds() {
+    let mut sim = Simulation::new_test_world(123);
+    give_player_weapon_and_ammo(&mut sim, "pistol", 2);
+    sim.cycle_player_weapon().unwrap();
+    let (x, y) = sim.player.tile_position();
+    spawn_test_enemy_at(&mut sim, x + 10, y);
+    sim.attack_with_player_weapon(x + 10, y).unwrap();
+    let plate = item_id_by_name(sim.catalog(), "iron_plate");
+    let slots = sim.player_inventory.slots().len();
+    for slot in 0..slots {
+        if sim.player_inventory.slot(slot).is_none() {
+            set_inventory_slot(&mut sim.player_inventory, slot, plate, 100);
+        }
+    }
+    let inventory = sim.player_inventory.clone();
+    let weapon = sim.player_weapon;
+    assert_eq!(weapon.loaded_shots, 9);
+    super::player_death::damage_player(&mut sim, &[u32::MAX]);
+    let mut restored = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+    restored.apply_command(&SimCommand::RespawnPlayer).unwrap();
+    restored.tick();
+    assert_eq!(restored.player_inventory, inventory);
+    assert_eq!(restored.player_weapon, weapon);
+    restored.validate().unwrap();
+}

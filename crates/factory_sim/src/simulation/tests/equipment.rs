@@ -517,3 +517,54 @@ fn deployed_personal_robot_energy_job_and_equipment_round_trip_deterministically
         assert_eq!(sim.state_hash(), loaded.state_hash());
     }
 }
+
+#[test]
+fn death_freezes_personal_robot_and_recovers_exactly_once_after_load() {
+    let mut sim = Simulation::new_test_world(123);
+    let (_, robot_item) = install_personal_roboport(&mut sim);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
+    let material_before = sim.player_inventory.count(build_item);
+    let ghost_id = place_personal_ghost(&mut sim, furnace, false);
+    sim.tick();
+    assert_eq!(sim.robot_count(), 1);
+    let robot = sim.robots().next().unwrap().clone();
+    let installed = sim.installed_equipment().to_vec();
+    let armor = sim.equipped_armor();
+    super::player_death::damage_player(&mut sim, &[u32::MAX]);
+    assert_eq!(sim.personal_roboport_energy().0, 0);
+    for _ in 0..30 {
+        sim.tick();
+        sim.validate().unwrap();
+    }
+    assert_eq!(sim.robot(robot.id), Some(&robot));
+    assert_eq!(sim.installed_equipment(), installed);
+    assert_eq!(sim.equipped_armor(), armor);
+    let mut restored = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+    assert_eq!(sim.state_hash(), restored.state_hash());
+    // Cancelled work returns both the payload and robot; retained craft inputs
+    // and a full inventory never require a lossy death-time refund.
+    for simulation in [&mut sim, &mut restored] {
+        simulation
+            .apply_command(&SimCommand::RespawnPlayer)
+            .unwrap();
+        simulation.tick();
+        simulation
+            .apply_command(&SimCommand::CancelGhost { ghost_id })
+            .unwrap();
+        simulation.player_equipment.personal_roboport_energy_joules = 3_000_000;
+    }
+    for _ in 0..2000 {
+        sim.tick();
+        restored.profiled_tick();
+        assert_eq!(sim.state_hash(), restored.state_hash());
+        if sim.robot_count() == 0 {
+            break;
+        }
+    }
+    assert_eq!(sim.robot_count(), 0);
+    assert_eq!(sim.player_inventory.count(robot_item), 1);
+    assert_eq!(sim.player_inventory.count(build_item), material_before);
+    sim.validate().unwrap();
+}

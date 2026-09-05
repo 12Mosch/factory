@@ -12,6 +12,7 @@ pub(super) fn apply(
     command: &SimCommand,
 ) -> Result<SimCommandEffect, SimCommandError> {
     match command {
+        SimCommand::RespawnPlayer => unreachable!("respawn handled at command boundary"),
         SimCommand::SetEnemyRuntimeSettings(_)
         | SimCommand::MovePlayer { .. }
         | SimCommand::SetManualMiningTarget(_)

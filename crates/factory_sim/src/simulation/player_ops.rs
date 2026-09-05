@@ -1,6 +1,43 @@
 use super::*;
 
 impl Simulation {
+    pub fn player_deaths(&self) -> u64 {
+        self.statistics.player_deaths
+    }
+    /// Retain all items, opened consumables, craft reservations and robot ownership.
+    /// Only stored armor energy is lost. World automation continues while dead.
+    pub(super) fn transition_player_death(&mut self) {
+        if self.player.health.current != 0 || self.player.is_dead() {
+            return;
+        }
+        self.player.dead_since = Some(self.tick);
+        self.statistics.player_deaths = self.statistics.player_deaths.saturating_add(1);
+        self.manual_mining_progress = None;
+        let equipment = &mut self.player_equipment;
+        equipment.battery_energy_joules = 0;
+        equipment.shield_energy_joules = 0;
+        equipment.personal_roboport_energy_joules = 0;
+        equipment.generation_remainder_watt_ticks = 0;
+        equipment.recharge_remainder_watt_ticks = 0;
+        equipment.personal_recharge_remainder_watt_ticks = 0;
+    }
+
+    pub(super) fn advance_player_respawn(&mut self) {
+        if !self.player.is_dead() || !self.player.respawn_requested {
+            return;
+        }
+        // Scan only generated tiles, including occupancy. A blocked world leaves
+        // the request pending and retries without changing terrain or structures.
+        let Some(candidate) = find_player_start(&self.world, &self.entities.occupancy) else {
+            return;
+        };
+        self.player.x = candidate.x;
+        self.player.y = candidate.y;
+        self.player.health.current = self.player.health.maximum;
+        self.player.dead_since = None;
+        self.player.respawn_requested = false;
+    }
+
     pub fn move_player(&mut self, direction_x: f32, direction_y: f32, delta_seconds: f32) {
         if delta_seconds <= 0.0 {
             return;
@@ -32,6 +69,9 @@ impl Simulation {
     }
 
     pub fn move_player_by_tiles(&mut self, delta_x_tiles: f32, delta_y_tiles: f32) {
+        if self.player.is_dead() {
+            return;
+        }
         let delta_x = tiles_to_fixed(delta_x_tiles);
         let delta_y = tiles_to_fixed(delta_y_tiles);
 
@@ -44,6 +84,7 @@ impl Simulation {
     }
 
     pub fn update_manual_mining(&mut self, target: Option<ManualMiningTarget>) {
+        let target = target.filter(|_| !self.player.is_dead());
         let Some(target) = target else {
             self.manual_mining_progress = None;
             return;
@@ -263,6 +304,9 @@ impl Simulation {
     }
 
     pub(super) fn advance_manual_crafting(&mut self) {
+        if self.player.is_dead() {
+            return;
+        }
         let Some(job) = self.crafting_queue.entries.front_mut() else {
             return;
         };
@@ -417,6 +461,8 @@ impl PlayerState {
         Self {
             x: tile_center_fixed(x.into()),
             y: tile_center_fixed(y.into()),
+            dead_since: None,
+            respawn_requested: false,
             repair_remaining_health: 0,
             health: HealthState::new(PLAYER_MAX_HEALTH, Faction::Player),
         }
