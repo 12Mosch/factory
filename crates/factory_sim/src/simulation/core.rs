@@ -120,6 +120,7 @@ impl Simulation {
 
     pub(crate) fn advance_one_tick<P: TickProfiler>(&mut self, profiler: &mut P) {
         self.tick += 1;
+        self.advance_player_respawn();
         self.advance_day_night_cycle();
         self.advance_statistics_to_current_tick();
         self.request_chunks_around_player();
@@ -282,6 +283,7 @@ impl Simulation {
         self.statistics.fluids.hash(&mut hasher);
         self.statistics.power.hash(&mut hasher);
         self.statistics.rockets_launched.hash(&mut hasher);
+        self.statistics.player_deaths.hash(&mut hasher);
         self.entities.hash(&mut hasher);
         self.construction.hash(&mut hasher);
         self.player.hash(&mut hasher);

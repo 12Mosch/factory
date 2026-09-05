@@ -53,7 +53,14 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_rolling_stock(sim)?;
 
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
-    if !sim.player.health.is_valid()
+    if sim.player.is_dead() != (sim.player.health.current == 0)
+        || sim
+            .player
+            .dead_since
+            .is_some_and(|tick| tick > sim.tick || sim.statistics.player_deaths == 0)
+        || (sim.player.respawn_requested && !sim.player.is_dead())
+        || (sim.player.is_dead() && sim.manual_mining_progress.is_some())
+        || !sim.player.health.is_valid()
         || sim.player.health.maximum != PLAYER_MAX_HEALTH
         || sim.player.health.faction != Faction::Player
     {

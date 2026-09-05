@@ -82,10 +82,15 @@ pub(crate) fn discard_transient_input_on_pause(
 /// Applies all queued commands at the tick boundary, before the simulation
 /// advances.
 pub(crate) fn collect_sim_commands(
+    sim: Res<SimResource>,
     mut requests: ResMut<Messages<SimCommandRequest>>,
     mut backlog: ResMut<SimCommandBacklog>,
 ) {
+    let dead = sim.read().player().is_dead();
     for request in requests.drain() {
+        if dead && request.0.requires_living_player() {
+            continue;
+        }
         backlog.0.push(request.0);
     }
 }

@@ -9,6 +9,8 @@ mod dispatch;
 /// lockstep multiplayer).
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum SimCommand {
+    /// Requests recovery at the next tick; remaining commands still see a dead player.
+    RespawnPlayer,
     SetEnemyRuntimeSettings(EnemyRuntimeSettings),
     MovePlayer {
         direction_x: f32,
@@ -334,6 +336,8 @@ pub enum SlotTransferError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimCommandError {
+    PlayerDead,
+    PlayerAlive,
     EnemyRuntimeSettings(EnemyRuntimeSettingsError),
     Crafting(CraftingError),
     Assembler(AssemblerError),
@@ -390,11 +394,29 @@ pub enum SimCommandEffect {
     RollingStockMined,
 }
 
+impl SimCommand {
+    /// Used by both frame-side collection and authoritative command dispatch.
+    /// New gameplay commands require a living player unless explicitly exempted.
+    pub fn requires_living_player(&self) -> bool {
+        !matches!(self, Self::RespawnPlayer | Self::SetEnemyRuntimeSettings(_))
+    }
+}
+
 impl Simulation {
     pub fn apply_command(
         &mut self,
         command: &SimCommand,
     ) -> Result<SimCommandEffect, SimCommandError> {
+        if matches!(command, SimCommand::RespawnPlayer) {
+            if !self.player.is_dead() {
+                return Err(SimCommandError::PlayerAlive);
+            }
+            self.player.respawn_requested = true;
+            return Ok(SimCommandEffect::None);
+        }
+        if self.player.is_dead() && command.requires_living_player() {
+            return Err(SimCommandError::PlayerDead);
+        }
         dispatch::apply(self, command)
     }
 }

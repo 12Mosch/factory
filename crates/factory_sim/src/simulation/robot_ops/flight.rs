@@ -204,7 +204,9 @@ impl Simulation {
 
     /// Moves queued robots onto free charging pads, oldest arrival first.
     fn assign_charging_pads(&mut self, personal_pad_rates: &[u64]) {
-        self.assign_personal_charging_pads(personal_pad_rates.len());
+        if !self.player.is_dead() {
+            self.assign_personal_charging_pads(personal_pad_rates.len());
+        }
         if self.robot_flights.charging.is_empty() {
             return;
         }
@@ -330,7 +332,9 @@ impl Simulation {
             personal_roboport_installed,
             arrivals: Vec::new(),
         };
-        robots.retain(|_, robot| step_robot(&mut context, robot));
+        robots.retain(|_, robot| {
+            (player.is_dead() && robot.personal) || step_robot(&mut context, robot)
+        });
         context.arrivals
     }
 }

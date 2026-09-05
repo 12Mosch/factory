@@ -491,7 +491,8 @@ impl Simulation {
         let center = EntityFootprint::single_tile(center.0, center.1);
         let radius = i64::from(radius_tiles);
         let mut targets = Vec::new();
-        if source_faction.is_hostile_to(self.player.health.faction)
+        if !self.player.is_dead()
+            && source_faction.is_hostile_to(self.player.health.faction)
             && center.chebyshev_distance_to(&self.combatant_footprint(CombatantId::Player).unwrap())
                 <= radius
         {
@@ -750,6 +751,7 @@ impl Simulation {
                 CombatantId::Player => {
                     let amount = self.absorb_player_damage_with_shields(amount);
                     self.player.health.current = self.player.health.current.saturating_sub(amount);
+                    self.transition_player_death();
                 }
                 CombatantId::Entity(entity_id) => {
                     self.apply_entity_damage(entity_id, amount);
@@ -784,7 +786,7 @@ impl Simulation {
 
     fn combatant_health(&self, combatant: CombatantId) -> Option<&HealthState> {
         match combatant {
-            CombatantId::Player => Some(&self.player.health),
+            CombatantId::Player => (!self.player.is_dead()).then_some(&self.player.health),
             CombatantId::Entity(entity_id) => self.entities.entity_health.get(&entity_id),
             CombatantId::Enemy(enemy_id) => self
                 .enemies
