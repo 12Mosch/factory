@@ -4,22 +4,19 @@ impl Simulation {
     pub fn player_deaths(&self) -> u64 {
         self.statistics.player_deaths
     }
-    /// Retain all items, opened consumables, craft reservations and robot ownership.
-    /// Only stored armor energy is lost. World automation continues while dead.
+    /// Moves player-owned items into one persistent recovery container.
     pub(super) fn transition_player_death(&mut self) {
         if self.player.health.current != 0 || self.player.is_dead() {
             return;
         }
         self.player.dead_since = Some(self.tick);
-        self.statistics.player_deaths = self.statistics.player_deaths.saturating_add(1);
+        self.statistics.player_deaths = self
+            .statistics
+            .player_deaths
+            .checked_add(1)
+            .expect("player death identity space exhausted");
         self.manual_mining_progress = None;
-        let equipment = &mut self.player_equipment;
-        equipment.battery_energy_joules = 0;
-        equipment.shield_energy_joules = 0;
-        equipment.personal_roboport_energy_joules = 0;
-        equipment.generation_remainder_watt_ticks = 0;
-        equipment.recharge_remainder_watt_ticks = 0;
-        equipment.personal_recharge_remainder_watt_ticks = 0;
+        self.create_player_corpse();
     }
 
     pub(super) fn advance_player_respawn(&mut self) {

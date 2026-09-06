@@ -557,25 +557,10 @@ fn deposit_personal_cargo(context: &mut RobotStepContext<'_>, robot: &mut Robot)
 
     let mut remaining_bulk = Vec::new();
     for amount in robot.bulk_cargo.drain(..) {
-        let Some(item) = context.catalog.item(amount.item_id()) else {
-            remaining_bulk.push(amount);
-            continue;
-        };
-        let accepted = u64::from(
-            context
-                .player_inventory
-                .insert_capacity(amount.item_id(), item.stack_size),
-        )
-        .min(amount.count());
-        let mut to_insert = accepted;
-        while to_insert > 0 {
-            let chunk = to_insert.min(u64::from(u16::MAX)) as u16;
-            context
-                .player_inventory
-                .insert(context.catalog, amount.item_id(), chunk)
-                .expect("personal bulk insertion was bounded by inventory capacity");
-            to_insert -= u64::from(chunk);
-        }
+        let accepted = context
+            .player_inventory
+            .insert_partial_amount(context.catalog, amount)
+            .unwrap_or(0);
         if accepted < amount.count() {
             remaining_bulk.push(
                 ItemAmount::new(context.catalog, amount.item_id(), amount.count() - accepted)

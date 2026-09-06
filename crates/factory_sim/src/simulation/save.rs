@@ -107,7 +107,8 @@ use bincode::Options;
 // v52: delayed projectiles, combat status effects, and per-module personal
 // laser cooldowns joined durable combat/equipment state.
 // v53: durable player death tick, pending respawn request and death statistics.
-pub const SAVE_VERSION: u32 = 53;
+// v54: persistent player corpses, item quantities and opened consumables.
+pub const SAVE_VERSION: u32 = 54;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -204,6 +205,7 @@ struct SimulationSnapshotOwned {
     player_weapon: PlayerWeaponState,
     delayed_combat: DelayedCombatState,
     player_inventory: Inventory,
+    corpses: BTreeMap<u64, PlayerCorpse>,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
     onboarding_progress: OnboardingProgress,
@@ -396,6 +398,7 @@ struct SimulationSnapshotRef<'a> {
     player_weapon: PlayerWeaponState,
     delayed_combat: &'a DelayedCombatState,
     player_inventory: &'a Inventory,
+    corpses: &'a BTreeMap<u64, PlayerCorpse>,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: &'a CraftingQueue,
     onboarding_progress: OnboardingProgress,
@@ -435,6 +438,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             player_weapon: sim.player_weapon,
             delayed_combat: &sim.delayed_combat,
             player_inventory: &sim.player_inventory,
+            corpses: &sim.corpses,
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: &sim.crafting_queue,
             onboarding_progress: sim.onboarding_progress,
@@ -477,6 +481,7 @@ impl SimulationSnapshotOwned {
             player_weapon: sim.player_weapon,
             delayed_combat: sim.delayed_combat.clone(),
             player_inventory: sim.player_inventory.clone(),
+            corpses: sim.corpses.clone(),
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: sim.crafting_queue.clone(),
             onboarding_progress: sim.onboarding_progress,
@@ -518,6 +523,7 @@ impl SimulationSnapshotOwned {
             player_weapon: self.player_weapon,
             delayed_combat: self.delayed_combat,
             player_inventory: self.player_inventory,
+            corpses: self.corpses,
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,
             onboarding_progress: self.onboarding_progress,

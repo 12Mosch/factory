@@ -54,7 +54,7 @@ fn simultaneous_lethal_damage_transitions_once_and_rejects_commands() {
 }
 
 #[test]
-fn respawn_is_deferred_and_preserves_items_crafting_and_replay() {
+fn respawn_is_deferred_and_corpse_refunds_crafting_with_deterministic_recovery() {
     let mut sim = Simulation::new_test_world(123);
     let plate = item_id_by_name(sim.catalog(), "iron_plate");
     let gear = item_id_by_name(sim.catalog(), "iron_gear_wheel");
@@ -63,6 +63,14 @@ fn respawn_is_deferred_and_preserves_items_crafting_and_replay() {
         .unwrap();
     sim.player.repair_remaining_health = 17;
     damage_player(&mut sim, &[u32::MAX]);
+    assert!(
+        sim.player_inventory
+            .slots()
+            .iter()
+            .all(|slot| slot.is_empty())
+    );
+    assert!(sim.crafting_queue.entries.is_empty());
+    let corpse = sim.corpse(1).unwrap().clone();
     let inventory = sim.player_inventory.clone();
     let crafting = sim.crafting_queue.clone();
     for _ in 0..5 {
@@ -93,7 +101,25 @@ fn respawn_is_deferred_and_preserves_items_crafting_and_replay() {
     }
     assert!(!sim.player.is_dead());
     assert_eq!(sim.player_health(), (PLAYER_MAX_HEALTH, PLAYER_MAX_HEALTH));
-    assert_eq!(sim.player.repair_remaining_health, 17);
+    assert_eq!(sim.player.repair_remaining_health, 0);
+    assert_eq!(sim.player_inventory.count(gear), 0);
+    assert_eq!(sim.corpse(1), Some(&corpse));
+    for simulation in [&mut sim, &mut replay] {
+        simulation
+            .apply_command(&SimCommand::RecoverCorpse { corpse_id: 1 })
+            .unwrap();
+        assert_eq!(simulation.player.repair_remaining_health, 17);
+        assert_eq!(simulation.player_inventory.count(plate), 2);
+        assert!(simulation.corpse(1).is_none());
+        simulation
+            .start_manual_craft(recipe_id(simulation.catalog(), "iron_gear_wheel"))
+            .unwrap();
+    }
+    for _ in 0..30 {
+        sim.tick();
+        replay.profiled_tick();
+        assert_eq!(sim.state_hash(), replay.state_hash());
+    }
     assert_eq!(sim.player_inventory.count(gear), 1);
     assert_eq!(sim.player_deaths(), 1);
     let restored = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();

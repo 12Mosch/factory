@@ -11,6 +11,10 @@ mod dispatch;
 pub enum SimCommand {
     /// Requests recovery at the next tick; remaining commands still see a dead player.
     RespawnPlayer,
+    /// Takes as much as fits from a nearby corpse; leftovers stay recoverable.
+    RecoverCorpse {
+        corpse_id: u64,
+    },
     SetEnemyRuntimeSettings(EnemyRuntimeSettings),
     MovePlayer {
         direction_x: f32,
@@ -338,6 +342,7 @@ pub enum SlotTransferError {
 pub enum SimCommandError {
     PlayerDead,
     PlayerAlive,
+    CorpseRecovery(CorpseRecoveryError),
     EnemyRuntimeSettings(EnemyRuntimeSettingsError),
     Crafting(CraftingError),
     Assembler(AssemblerError),

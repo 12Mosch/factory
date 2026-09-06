@@ -1582,7 +1582,7 @@ fn combat_state_round_trips_through_save() {
 }
 
 #[test]
-fn death_retains_opened_magazine_and_full_inventory_without_refunds() {
+fn corpse_recovers_opened_magazine_and_full_inventory_without_duplication() {
     let mut sim = Simulation::new_test_world(123);
     give_player_weapon_and_ammo(&mut sim, "pistol", 2);
     sim.cycle_player_weapon().unwrap();
@@ -1603,7 +1603,23 @@ fn death_retains_opened_magazine_and_full_inventory_without_refunds() {
     let mut restored = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
     restored.apply_command(&SimCommand::RespawnPlayer).unwrap();
     restored.tick();
+    assert!(
+        restored
+            .player_inventory
+            .slots()
+            .iter()
+            .all(|slot| slot.is_empty())
+    );
+    assert_eq!(restored.player_weapon, PlayerWeaponState::default());
+    restored
+        .apply_command(&SimCommand::RecoverCorpse { corpse_id: 1 })
+        .unwrap();
     assert_eq!(restored.player_inventory, inventory);
     assert_eq!(restored.player_weapon, weapon);
+    assert!(restored.corpse(1).is_none());
+    assert_eq!(
+        restored.recover_corpse(1),
+        Err(CorpseRecoveryError::MissingCorpse)
+    );
     restored.validate().unwrap();
 }

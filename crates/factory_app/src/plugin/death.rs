@@ -10,7 +10,29 @@ pub(super) struct PlayerDeathPlugin;
 
 impl Plugin for PlayerDeathPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup)
+        app.init_resource::<crate::ui::corpse::CorpseSelection>()
+            .add_systems(Startup, (setup, crate::ui::corpse::setup))
+            .add_systems(
+                Update,
+                (
+                    crate::ui::corpse::select_next,
+                    crate::ui::corpse::recover,
+                    crate::ui::corpse::sync,
+                )
+                    .chain()
+                    .in_set(AppSet::UiInteraction),
+            )
+            .add_systems(
+                Update,
+                crate::rendering::corpses::sync_corpses.in_set(AppSet::RenderSync),
+            )
+            .add_systems(
+                OnExit(crate::world_setup::AppMode::InGame),
+                (
+                    crate::ui::corpse::hide,
+                    crate::rendering::corpses::clear_corpses,
+                ),
+            )
             .add_systems(OnExit(crate::world_setup::AppMode::InGame), hide)
             .add_systems(
                 PreUpdate,
@@ -102,7 +124,7 @@ fn sync(
         return;
     }
     let message = format!(
-        "YOU DIED · Deaths: {}\n\nInventory, armor and ammunition retained. Stored armor energy lost. Crafting and personal robots pause until respawn.\n\nRespawn restores full health at the nearest free starting-area tile.{}",
+        "YOU DIED · Deaths: {}\n\nYour items are in a corpse at the death location. Craft ingredients and personal robots/cargo are included. Stored equipment energy is lost.\n\nRespawn empty-handed with full health, then return to the pink corpse marker and click Recover items.{}",
         simulation.player_deaths(),
         if pause.is_paused() {
             "\nResume the game to complete respawn."

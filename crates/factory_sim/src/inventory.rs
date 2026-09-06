@@ -383,6 +383,27 @@ impl Inventory {
         self.insert_capacity(item_id, stack_size) >= u32::from(count)
     }
 
+    /// Inserts the portion of a bulk quantity that fits, in bounded chunks.
+    /// Returns the accepted count; the caller retains ownership of the rest.
+    pub fn insert_partial_amount(
+        &mut self,
+        catalog: &PrototypeCatalog,
+        amount: ItemAmount,
+    ) -> Result<u64, InventoryError> {
+        let item = catalog
+            .item(amount.item_id())
+            .ok_or(InventoryError::UnknownItem(amount.item_id()))?;
+        let accepted =
+            u64::from(self.insert_capacity(amount.item_id(), item.stack_size)).min(amount.count());
+        let mut remaining = accepted;
+        while remaining > 0 {
+            let chunk = remaining.min(u64::from(u16::MAX)) as u16;
+            self.insert(catalog, amount.item_id(), chunk)?;
+            remaining -= u64::from(chunk);
+        }
+        Ok(accepted)
+    }
+
     pub fn insert(
         &mut self,
         catalog: &PrototypeCatalog,

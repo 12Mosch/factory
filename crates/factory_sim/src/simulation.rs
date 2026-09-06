@@ -1,3 +1,4 @@
+pub use crate::corpse::{CorpseRecoveryError, PlayerCorpse};
 use crate::day_night::DayNightCycleState;
 pub(crate) use factory_data::{
     CraftingCategory, EntityKind, PrototypeCatalog, ResourceExtraction, TechnologyEffect, TileId,
@@ -220,6 +221,7 @@ pub struct Simulation {
     player_weapon: PlayerWeaponState,
     delayed_combat: DelayedCombatState,
     player_inventory: Inventory,
+    corpses: BTreeMap<u64, PlayerCorpse>,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
     onboarding_progress: OnboardingProgress,
@@ -929,6 +931,9 @@ pub enum SimValidationError {
         enemy_id: EnemyId,
     },
     InvalidPlayerState,
+    InvalidPlayerCorpse {
+        corpse_id: u64,
+    },
     InvalidPlayerWeaponState,
     InvalidDelayedCombatState,
     InvalidPlayerEquipment,
@@ -968,6 +973,7 @@ mod machine_ops;
 mod module_ops;
 pub(in crate::simulation) use module_ops::required_ticks_with_modules;
 pub(in crate::simulation) use module_ops::resolve_machine_module_effects;
+mod corpse_ops;
 mod machine_tick;
 pub mod placement;
 mod placement_mutation_ops;

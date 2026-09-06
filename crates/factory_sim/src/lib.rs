@@ -4,6 +4,7 @@ pub mod circuits;
 pub mod combat;
 pub mod constants;
 pub mod construction;
+pub mod corpse;
 pub mod crafting;
 mod day_night;
 pub mod enemies;

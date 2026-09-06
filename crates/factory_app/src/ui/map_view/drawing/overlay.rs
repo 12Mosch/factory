@@ -134,6 +134,18 @@ fn spawn_player_overlay(overlays: &mut Vec<MapOverlayPrimitive>, context: &MapOv
 }
 
 fn spawn_marker_overlays(overlays: &mut Vec<MapOverlayPrimitive>, context: &MapOverlayContext) {
+    for corpse in context.sim.corpses() {
+        let (x, y) = corpse.tile_position();
+        spawn_point_overlay(
+            overlays,
+            context.crop_bounds,
+            context.image_size,
+            Vec2::new(x as f32 + 0.5, y as f32 + 0.5),
+            10.0,
+            crate::rendering::corpses::CORPSE_COLOR,
+            Color::BLACK,
+        );
+    }
     for marker in &context.markers.pings {
         spawn_point_overlay(
             overlays,

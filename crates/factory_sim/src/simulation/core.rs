@@ -59,6 +59,7 @@ impl Simulation {
             player_weapon: PlayerWeaponState::default(),
             delayed_combat: DelayedCombatState::default(),
             player_inventory,
+            corpses: BTreeMap::new(),
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
             onboarding_progress: OnboardingProgress::default(),
@@ -291,6 +292,7 @@ impl Simulation {
         self.player_weapon.hash(&mut hasher);
         self.delayed_combat.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);
+        self.corpses.hash(&mut hasher);
         self.manual_mining_progress.hash(&mut hasher);
         self.crafting_queue.hash(&mut hasher);
         self.onboarding_progress.hash(&mut hasher);

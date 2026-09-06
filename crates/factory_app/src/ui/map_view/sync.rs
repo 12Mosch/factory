@@ -352,12 +352,16 @@ pub(super) fn map_detail_cache_key(
         enemy_revision: sim.enemy_map_revision(),
         power_revision: sim.power_map_revision(),
         production_revision: sim.production_status_revision(),
-        marker_signature: marker_signature(markers),
+        marker_signature: marker_signature(markers, sim),
     }
 }
 
-fn marker_signature(markers: &MapOverlayMarkers) -> u64 {
+fn marker_signature(markers: &MapOverlayMarkers, sim: &factory_sim::Simulation) -> u64 {
     let mut hasher = DefaultHasher::new();
+    for corpse in sim.corpses() {
+        corpse.id().hash(&mut hasher);
+        corpse.tile_position().hash(&mut hasher);
+    }
     markers.pings.len().hash(&mut hasher);
     for marker in &markers.pings {
         marker.position.x.to_bits().hash(&mut hasher);

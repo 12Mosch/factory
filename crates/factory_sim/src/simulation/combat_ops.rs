@@ -1052,7 +1052,13 @@ fn tile_center_fixed_saturating(tile: WorldTileCoord) -> i64 {
 
 /// Validates the durable selected weapon and canonical opened-magazine state.
 pub(super) fn validate_player_weapon_state(sim: &Simulation) -> Result<(), SimValidationError> {
-    let state = sim.player_weapon;
+    validate_weapon_state(sim, sim.player_weapon)
+}
+
+pub(super) fn validate_weapon_state(
+    sim: &Simulation,
+    state: PlayerWeaponState,
+) -> Result<(), SimValidationError> {
     let Some(weapon_item) = state.selected_weapon else {
         return if state.loaded_ammo.is_none()
             && state.loaded_shots == 0

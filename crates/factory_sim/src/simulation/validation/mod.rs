@@ -52,6 +52,7 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_robot_flights(sim)?;
     validate_rolling_stock(sim)?;
 
+    super::corpse_ops::validate_corpses(sim)?;
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
     if sim.player.is_dead() != (sim.player.health.current == 0)
         || sim
