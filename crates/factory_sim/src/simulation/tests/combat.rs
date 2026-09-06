@@ -1623,3 +1623,31 @@ fn corpse_recovers_opened_magazine_and_full_inventory_without_duplication() {
     );
     restored.validate().unwrap();
 }
+
+#[test]
+fn corpse_keeps_opened_magazine_until_player_has_its_weapon() {
+    let mut sim = Simulation::new_test_world(123);
+    sim.player_inventory = Inventory::player();
+    give_player_weapon_and_ammo(&mut sim, "pistol", 2);
+    sim.cycle_player_weapon().unwrap();
+    let (x, y) = sim.player.tile_position();
+    spawn_test_enemy_at(&mut sim, x + 10, y);
+    sim.attack_with_player_weapon(x + 10, y).unwrap();
+    let weapon = sim.player_weapon;
+    super::player_death::damage_player(&mut sim, &[u32::MAX]);
+    sim.apply_command(&SimCommand::RespawnPlayer).unwrap();
+    sim.tick();
+    let plate = item_id_by_name(sim.catalog(), "iron_plate");
+    for slot in 0..sim.player_inventory.slots().len() {
+        set_inventory_slot(&mut sim.player_inventory, slot, plate, 100);
+    }
+    assert_eq!(sim.recover_corpse(1), Err(CorpseRecoveryError::NoCapacity));
+    assert_eq!(sim.player_weapon, PlayerWeaponState::default());
+    assert_eq!(sim.corpse(1).unwrap().weapon, weapon);
+    sim.validate().unwrap();
+    sim.player_inventory.remove(plate, 200).unwrap();
+    sim.recover_corpse(1).unwrap();
+    assert_eq!(sim.player_weapon, weapon);
+    assert!(sim.corpse(1).is_none());
+    sim.validate().unwrap();
+}

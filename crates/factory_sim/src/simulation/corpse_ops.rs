@@ -122,7 +122,13 @@ impl Simulation {
         });
         // Opened magazines and repair packs are never converted into full items
         // or overwritten. Conflicting consumables remain in the corpse.
-        if corpse.weapon.loaded_shots > 0 && self.player_weapon.loaded_shots == 0 {
+        if corpse.weapon.loaded_shots > 0
+            && self.player_weapon.loaded_shots == 0
+            && corpse
+                .weapon
+                .selected_weapon
+                .is_some_and(|weapon| self.player_inventory.count(weapon) > 0)
+        {
             let next_ready = self.player_weapon.next_ready_tick;
             let origin = self.player_weapon.cooldown_origin;
             self.player_weapon = std::mem::take(&mut corpse.weapon);

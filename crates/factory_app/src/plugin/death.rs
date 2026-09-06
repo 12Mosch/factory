@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use factory_sim::SimCommand;
 
 use super::{AppSet, InGameSet};
+use crate::input::panels::WorldBlockingWindows;
 use crate::input::resources::{AppInputState, TrainManualInput, WeaponInput};
 use crate::resources::SimResource;
 use crate::simulation::{AppPauseState, SimCommandRequest};
@@ -38,6 +39,7 @@ impl Plugin for PlayerDeathPlugin {
                 PreUpdate,
                 block_dead_input.after(AppSet::PanelInput).in_set(InGameSet),
             )
+            .add_systems(FixedUpdate, refresh_world_blocked.in_set(AppSet::PostTick))
             .add_systems(Update, (sync, respawn).in_set(InGameSet));
     }
 }
@@ -105,6 +107,14 @@ fn block_dead_input(
     }
 }
 
+fn refresh_world_blocked(
+    sim: Res<SimResource>,
+    windows: WorldBlockingWindows,
+    mut input: ResMut<AppInputState>,
+) {
+    input.world_blocked = sim.read().player().is_dead() || windows.any_open();
+}
+
 fn sync(
     sim: Res<SimResource>,
     pause: Res<AppPauseState>,
@@ -129,7 +139,7 @@ fn sync(
         if pause.is_paused() {
             "\nResume the game to complete respawn."
         } else {
-            " If no tile is free, recovery waits for one."
+            " If no tile is free, respawn waits for one."
         }
     );
     for mut text in &mut texts {
@@ -162,7 +172,7 @@ fn hide(mut panels: Query<&mut Node, With<DeathPanel>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulation::{SimCommandBacklog, collect_sim_commands};
+    use crate::simulation::{SimCommandBacklog, SimCommandResult, collect_sim_commands, tick_sim};
     use factory_sim::{
         CombatCommand, CombatCommandBuffer, CombatSource, CombatantId, Damage, EnemyId, Faction,
         Simulation,
@@ -185,12 +195,31 @@ mod tests {
             .init_resource::<TrainManualInput>()
             .init_resource::<WeaponInput>()
             .init_resource::<SimCommandBacklog>()
+            .init_resource::<crate::map::resources::MapViewState>()
+            .init_resource::<crate::ui::resources::ProductionStatsWindowState>()
+            .init_resource::<crate::ui::resources::CraftingWindowState>()
+            .init_resource::<crate::ui::settings::SettingsWindowState>()
+            .init_resource::<crate::ui::pause_menu::PauseMenuState>()
+            .init_resource::<crate::save_load::SaveLoadWindowState>()
+            .init_resource::<crate::build::resources::BuildMenuState>()
+            .init_resource::<crate::build::resources::BlueprintLibraryWindowState>()
+            .init_resource::<crate::ui::resources::EquipmentWindowState>()
+            .init_resource::<crate::resources::UpsStats>()
+            .init_resource::<crate::resources::SimProfileStats>()
+            .init_resource::<crate::resources::FixedStepCatchUpStats>()
+            .add_message::<SimCommandResult>()
             .add_message::<SimCommandRequest>()
             .add_systems(Startup, setup)
+            .add_systems(PreUpdate, block_dead_input)
+            .configure_sets(FixedUpdate, (AppSet::SimTick, AppSet::PostTick).chain())
             .add_systems(
-                Update,
-                (block_dead_input, sync, respawn, collect_sim_commands).chain(),
-            );
+                FixedUpdate,
+                (collect_sim_commands, tick_sim)
+                    .chain()
+                    .in_set(AppSet::SimTick),
+            )
+            .add_systems(FixedUpdate, refresh_world_blocked.in_set(AppSet::PostTick))
+            .add_systems(Update, (sync, respawn).chain());
         app.update();
         assert!(app.world().resource::<AppInputState>().world_blocked);
         let world = app.world_mut();
@@ -202,21 +231,26 @@ mod tests {
         *buttons.single_mut(world).unwrap() = Interaction::Pressed;
         world.write_message(SimCommandRequest(SimCommand::CyclePlayerWeapon));
         app.update();
-        assert_eq!(
-            app.world().resource::<SimCommandBacklog>().0,
-            vec![SimCommand::RespawnPlayer]
-        );
-        {
-            let mut resource = app.world_mut().resource_mut::<SimResource>();
-            let mut simulation = resource.write_for_tests();
-            simulation
-                .apply_command(&SimCommand::RespawnPlayer)
-                .unwrap();
-            simulation.tick();
-        }
+        app.world_mut()
+            .resource_mut::<AppInputState>()
+            .escape_consumed = true;
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(!app.world().resource::<AppInputState>().world_blocked);
+        assert!(app.world().resource::<AppInputState>().escape_consumed);
+        assert!(app.world().resource::<SimCommandBacklog>().0.is_empty());
+        let results = app.world().resource::<Messages<SimCommandResult>>();
+        let mut cursor = results.get_cursor();
+        let commands: Vec<_> = cursor.read(results).map(|result| &result.command).collect();
+        assert_eq!(commands, vec![&SimCommand::RespawnPlayer]);
         app.update();
         let world = app.world_mut();
         let mut panels = world.query_filtered::<&Node, With<DeathPanel>>();
         assert_eq!(panels.single(world).unwrap().display, Display::None);
+        assert!(!world.resource::<AppInputState>().world_blocked);
+        world
+            .resource_mut::<crate::map::resources::MapViewState>()
+            .open = true;
+        world.run_schedule(FixedUpdate);
+        assert!(world.resource::<AppInputState>().world_blocked);
     }
 }
