@@ -5,6 +5,10 @@ pub(super) fn apply(
     command: &SimCommand,
 ) -> Result<SimCommandEffect, SimCommandError> {
     match *command {
+        SimCommand::RecoverCorpse { corpse_id } => {
+            sim.recover_corpse(corpse_id)
+                .map_err(SimCommandError::CorpseRecovery)?;
+        }
         SimCommand::SetEnemyRuntimeSettings(settings) => {
             sim.set_enemy_runtime_settings(settings)
                 .map_err(SimCommandError::EnemyRuntimeSettings)?;

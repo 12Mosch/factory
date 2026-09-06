@@ -39,3 +39,7 @@ mod train_routing;
 mod train_schedules;
 mod transfers;
 mod world_generation;
+
+mod player_death;
+
+mod corpses;

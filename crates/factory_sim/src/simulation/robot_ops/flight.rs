@@ -204,7 +204,9 @@ impl Simulation {
 
     /// Moves queued robots onto free charging pads, oldest arrival first.
     fn assign_charging_pads(&mut self, personal_pad_rates: &[u64]) {
-        self.assign_personal_charging_pads(personal_pad_rates.len());
+        if !self.player.is_dead() {
+            self.assign_personal_charging_pads(personal_pad_rates.len());
+        }
         if self.robot_flights.charging.is_empty() {
             return;
         }
@@ -330,7 +332,9 @@ impl Simulation {
             personal_roboport_installed,
             arrivals: Vec::new(),
         };
-        robots.retain(|_, robot| step_robot(&mut context, robot));
+        robots.retain(|_, robot| {
+            (player.is_dead() && robot.personal) || step_robot(&mut context, robot)
+        });
         context.arrivals
     }
 }
@@ -553,25 +557,10 @@ fn deposit_personal_cargo(context: &mut RobotStepContext<'_>, robot: &mut Robot)
 
     let mut remaining_bulk = Vec::new();
     for amount in robot.bulk_cargo.drain(..) {
-        let Some(item) = context.catalog.item(amount.item_id()) else {
-            remaining_bulk.push(amount);
-            continue;
-        };
-        let accepted = u64::from(
-            context
-                .player_inventory
-                .insert_capacity(amount.item_id(), item.stack_size),
-        )
-        .min(amount.count());
-        let mut to_insert = accepted;
-        while to_insert > 0 {
-            let chunk = to_insert.min(u64::from(u16::MAX)) as u16;
-            context
-                .player_inventory
-                .insert(context.catalog, amount.item_id(), chunk)
-                .expect("personal bulk insertion was bounded by inventory capacity");
-            to_insert -= u64::from(chunk);
-        }
+        let accepted = context
+            .player_inventory
+            .insert_partial_amount(context.catalog, amount)
+            .unwrap_or(0);
         if accepted < amount.count() {
             remaining_bulk.push(
                 ItemAmount::new(context.catalog, amount.item_id(), amount.count() - accepted)

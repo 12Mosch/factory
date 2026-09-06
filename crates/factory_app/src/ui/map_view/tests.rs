@@ -230,3 +230,43 @@ fn minimap_overlay_reconcile_benchmark() {
         elapsed.as_secs_f64() * 1000.0 / MEASUREMENT_FRAMES as f64,
     );
 }
+
+#[test]
+fn corpse_markers_invalidate_map_cache_without_player_motion() {
+    use factory_sim::{
+        CombatCommand, CombatCommandBuffer, CombatSource, CombatantId, Damage, EnemyId, Faction,
+        SimCommand, Simulation,
+    };
+    let mut sim = Simulation::new_test_world(123);
+    let settings = MapDisplaySettings::default();
+    let markers = MapOverlayMarkers::default();
+    let bounds = MapTextureBounds {
+        min_x: -64,
+        min_y: -64,
+        width: 128,
+        height: 128,
+    };
+    let key = |sim: &Simulation| {
+        map_detail_cache_key(
+            bounds,
+            Vec2::splat(176.0),
+            (Vec2::ZERO, None, None),
+            sim,
+            &settings,
+            &markers,
+        )
+    };
+    let before = key(&sim);
+    let mut damage = CombatCommandBuffer::default();
+    damage.push(CombatCommand {
+        source: CombatSource::new(CombatantId::Enemy(EnemyId::new(999)), Faction::Enemy),
+        target: CombatantId::Player,
+        damage: Damage::physical(u32::MAX),
+    });
+    sim.resolve_combat_commands(damage);
+    assert_ne!(before.marker_signature, key(&sim).marker_signature);
+    sim.apply_command(&SimCommand::RespawnPlayer).unwrap();
+    sim.tick();
+    sim.recover_corpse(1).unwrap();
+    assert_eq!(before.marker_signature, key(&sim).marker_signature);
+}

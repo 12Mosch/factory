@@ -216,6 +216,9 @@ impl Simulation {
     /// Advances armor power generation and fills personal-roboport and shield
     /// buffers in their deterministic priority order.
     pub(super) fn advance_player_equipment(&mut self) {
+        if self.player.is_dead() {
+            return;
+        }
         let totals = equipment_totals(&self.world.prototypes, &self.player_equipment);
         let generated_watt_ticks = self
             .player_equipment
@@ -274,6 +277,9 @@ impl Simulation {
     /// Energy comes exclusively from the shared armor battery, so the weapon
     /// participates in the same generation/storage budget as shields.
     pub(super) fn advance_personal_lasers(&mut self, commands: &mut CombatCommandBuffer) {
+        if self.player.is_dead() {
+            return;
+        }
         let lasers = self
             .player_equipment
             .installed

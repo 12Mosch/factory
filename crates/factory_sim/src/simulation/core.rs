@@ -55,10 +55,12 @@ impl Simulation {
             entities,
             construction: ConstructionState::default(),
             player,
+            respawn_search: Default::default(),
             player_equipment: PlayerEquipmentState::default(),
             player_weapon: PlayerWeaponState::default(),
             delayed_combat: DelayedCombatState::default(),
             player_inventory,
+            corpses: BTreeMap::new(),
             manual_mining_progress: None,
             crafting_queue: CraftingQueue::default(),
             onboarding_progress: OnboardingProgress::default(),
@@ -120,6 +122,7 @@ impl Simulation {
 
     pub(crate) fn advance_one_tick<P: TickProfiler>(&mut self, profiler: &mut P) {
         self.tick += 1;
+        self.advance_player_respawn();
         self.advance_day_night_cycle();
         self.advance_statistics_to_current_tick();
         self.request_chunks_around_player();
@@ -282,6 +285,7 @@ impl Simulation {
         self.statistics.fluids.hash(&mut hasher);
         self.statistics.power.hash(&mut hasher);
         self.statistics.rockets_launched.hash(&mut hasher);
+        self.statistics.player_deaths.hash(&mut hasher);
         self.entities.hash(&mut hasher);
         self.construction.hash(&mut hasher);
         self.player.hash(&mut hasher);
@@ -289,6 +293,7 @@ impl Simulation {
         self.player_weapon.hash(&mut hasher);
         self.delayed_combat.hash(&mut hasher);
         self.player_inventory.hash(&mut hasher);
+        self.corpses.hash(&mut hasher);
         self.manual_mining_progress.hash(&mut hasher);
         self.crafting_queue.hash(&mut hasher);
         self.onboarding_progress.hash(&mut hasher);

@@ -7,4 +7,5 @@ pub(super) struct StatisticsSubsystem {
     pub(super) power: PowerStatistics,
     /// Total successfully completed launches across the lifetime of the world.
     pub(super) rockets_launched: u64,
+    pub(super) player_deaths: u64,
 }

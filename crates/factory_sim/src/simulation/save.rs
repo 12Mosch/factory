@@ -106,7 +106,9 @@ use bincode::Options;
 // durable player state.
 // v52: delayed projectiles, combat status effects, and per-module personal
 // laser cooldowns joined durable combat/equipment state.
-pub const SAVE_VERSION: u32 = 52;
+// v53: durable player death tick, pending respawn request and death statistics.
+// v54: persistent player corpses, item quantities and opened consumables.
+pub const SAVE_VERSION: u32 = 54;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -195,6 +197,7 @@ struct SimulationSnapshotOwned {
     fluid_statistics: FluidStatistics,
     power_statistics: PowerStatistics,
     rockets_launched: u64,
+    player_deaths: u64,
     entities: EntityStore,
     construction: ConstructionState,
     player: PlayerState,
@@ -202,6 +205,7 @@ struct SimulationSnapshotOwned {
     player_weapon: PlayerWeaponState,
     delayed_combat: DelayedCombatState,
     player_inventory: Inventory,
+    corpses: BTreeMap<u64, PlayerCorpse>,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: CraftingQueue,
     onboarding_progress: OnboardingProgress,
@@ -386,6 +390,7 @@ struct SimulationSnapshotRef<'a> {
     fluid_statistics: &'a FluidStatistics,
     power_statistics: &'a PowerStatistics,
     rockets_launched: u64,
+    player_deaths: u64,
     entities: &'a EntityStore,
     construction: &'a ConstructionState,
     player: PlayerState,
@@ -393,6 +398,7 @@ struct SimulationSnapshotRef<'a> {
     player_weapon: PlayerWeaponState,
     delayed_combat: &'a DelayedCombatState,
     player_inventory: &'a Inventory,
+    corpses: &'a BTreeMap<u64, PlayerCorpse>,
     manual_mining_progress: Option<ManualMiningProgress>,
     crafting_queue: &'a CraftingQueue,
     onboarding_progress: OnboardingProgress,
@@ -424,6 +430,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             fluid_statistics: &sim.statistics.fluids,
             power_statistics: &sim.statistics.power,
             rockets_launched: sim.statistics.rockets_launched,
+            player_deaths: sim.statistics.player_deaths,
             entities: &sim.entities,
             construction: &sim.construction,
             player: sim.player,
@@ -431,6 +438,7 @@ impl<'a> SimulationSnapshotRef<'a> {
             player_weapon: sim.player_weapon,
             delayed_combat: &sim.delayed_combat,
             player_inventory: &sim.player_inventory,
+            corpses: &sim.corpses,
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: &sim.crafting_queue,
             onboarding_progress: sim.onboarding_progress,
@@ -465,6 +473,7 @@ impl SimulationSnapshotOwned {
             fluid_statistics: sim.statistics.fluids.clone(),
             power_statistics: sim.statistics.power.clone(),
             rockets_launched: sim.statistics.rockets_launched,
+            player_deaths: sim.statistics.player_deaths,
             entities: sim.entities.clone(),
             construction: sim.construction.clone(),
             player: sim.player,
@@ -472,6 +481,7 @@ impl SimulationSnapshotOwned {
             player_weapon: sim.player_weapon,
             delayed_combat: sim.delayed_combat.clone(),
             player_inventory: sim.player_inventory.clone(),
+            corpses: sim.corpses.clone(),
             manual_mining_progress: sim.manual_mining_progress,
             crafting_queue: sim.crafting_queue.clone(),
             onboarding_progress: sim.onboarding_progress,
@@ -509,10 +519,12 @@ impl SimulationSnapshotOwned {
             entities: self.entities,
             construction: self.construction,
             player: self.player,
+            respawn_search: Default::default(),
             player_equipment: self.player_equipment,
             player_weapon: self.player_weapon,
             delayed_combat: self.delayed_combat,
             player_inventory: self.player_inventory,
+            corpses: self.corpses,
             manual_mining_progress: self.manual_mining_progress,
             crafting_queue: self.crafting_queue,
             onboarding_progress: self.onboarding_progress,
@@ -542,6 +554,7 @@ impl SimulationSnapshotOwned {
                 fluids: self.fluid_statistics,
                 power: self.power_statistics,
                 rockets_launched: self.rockets_launched,
+                player_deaths: self.player_deaths,
             },
             pollution: self.pollution,
             capacity_overflows: CapacityOverflowCounters::default(),

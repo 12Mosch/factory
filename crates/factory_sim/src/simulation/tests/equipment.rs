@@ -517,3 +517,84 @@ fn deployed_personal_robot_energy_job_and_equipment_round_trip_deterministically
         assert_eq!(sim.state_hash(), loaded.state_hash());
     }
 }
+
+#[test]
+fn corpse_recovers_personal_robot_equipment_and_payload_exactly_once_after_load() {
+    let mut sim = Simulation::new_test_world(123);
+    let (module, robot_item) = install_personal_roboport(&mut sim);
+    let armor = sim.equipped_armor().unwrap();
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let build_item = sim.catalog().entity(furnace).unwrap().build_item.unwrap();
+    set_inventory_slot(&mut sim.player_inventory, 21, build_item, 1);
+    let material_before = sim.player_inventory.count(build_item);
+    let ghost_id = place_personal_ghost(&mut sim, furnace, false);
+    sim.tick();
+    assert_eq!(sim.robot_count(), 1);
+    let plate = item_id_by_name(sim.catalog(), "iron_plate");
+    let catalog = sim.catalog().clone();
+    let robot = sim.robot_flights.robots.values_mut().next().unwrap();
+    robot
+        .cargo
+        .push(ItemStack::new(&catalog, plate, 3).unwrap());
+    robot
+        .bulk_cargo
+        .push(ItemAmount::new(&catalog, plate, 100_000).unwrap());
+    sim.validate().unwrap();
+    super::player_death::damage_player(&mut sim, &[u32::MAX]);
+    assert_eq!(sim.robot_count(), 0);
+    assert!(sim.installed_equipment().is_empty());
+    assert_eq!(sim.equipped_armor(), None);
+    assert_eq!(sim.personal_roboport_energy(), (0, 0));
+    assert_eq!(sim.construction.reservations().count(), 0);
+    assert!(
+        sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::BuildGhost(ghost_id))
+    );
+    let corpse = sim.corpse(1).unwrap().clone();
+    for _ in 0..30 {
+        sim.tick();
+        sim.validate().unwrap();
+    }
+    assert_eq!(sim.corpse(1), Some(&corpse));
+    let mut restored = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+    assert_eq!(sim.state_hash(), restored.state_hash());
+    for simulation in [&mut sim, &mut restored] {
+        simulation
+            .apply_command(&SimCommand::RespawnPlayer)
+            .unwrap();
+        simulation.tick();
+        simulation
+            .apply_command(&SimCommand::RecoverCorpse { corpse_id: 1 })
+            .unwrap();
+        simulation
+            .apply_command(&SimCommand::CancelGhost { ghost_id })
+            .unwrap();
+        assert_eq!(simulation.player_inventory.count(robot_item), 1);
+        assert_eq!(
+            simulation.player_inventory.count(build_item),
+            material_before
+        );
+        assert_eq!(simulation.player_inventory.count(armor), 1);
+        assert_eq!(simulation.player_inventory.count(module), 1);
+        // Bulk robot cargo exceeds inventory capacity and stays in the corpse.
+        let remaining = simulation
+            .corpse(1)
+            .unwrap()
+            .items()
+            .iter()
+            .filter(|amount| amount.item_id() == plate)
+            .map(|amount| amount.count())
+            .sum::<u64>();
+        assert_eq!(
+            u64::from(simulation.player_inventory.count(plate)) + remaining,
+            100_003
+        );
+        simulation.validate().unwrap();
+    }
+    for _ in 0..60 {
+        sim.tick();
+        restored.profiled_tick();
+        assert_eq!(sim.state_hash(), restored.state_hash());
+    }
+}

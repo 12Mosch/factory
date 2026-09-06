@@ -58,7 +58,7 @@ struct WindowOpenFlags {
 }
 
 impl WorldBlockingWindows<'_, '_> {
-    fn any_open(&self) -> bool {
+    pub(crate) fn any_open(&self) -> bool {
         self.app_pause.is_paused()
             || world_blocking_windows_open(WindowOpenFlags {
                 map: self.map.open,

@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct PlayerState {
+    /// Tick of the one-time death transition; None means alive.
+    pub(crate) dead_since: Option<u64>,
+    pub(crate) respawn_requested: bool,
     pub(crate) x: i64,
     pub(crate) y: i64,
     /// Health the currently opened repair pack can still restore; a new pack
@@ -12,6 +15,13 @@ pub struct PlayerState {
 }
 
 impl PlayerState {
+    pub fn is_dead(self) -> bool {
+        self.dead_since.is_some()
+    }
+    pub fn dead_since(self) -> Option<u64> {
+        self.dead_since
+    }
+
     pub fn health(self) -> HealthState {
         self.health
     }

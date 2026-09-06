@@ -4,6 +4,7 @@ pub(crate) mod camera;
 pub(crate) mod circuits;
 pub(crate) mod colors;
 pub(crate) mod construction;
+pub(crate) mod corpses;
 pub(crate) mod day_night;
 pub(crate) mod enemies;
 pub(crate) mod entities;
