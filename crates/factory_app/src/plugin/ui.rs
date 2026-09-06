@@ -141,7 +141,7 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 handle_display_buttons
-                    .in_set(AppSet::UiInteraction)
+                    // Startup confirmation is also interactive in world setup.
                     .before(handle_settings_buttons),
             )
             .add_systems(

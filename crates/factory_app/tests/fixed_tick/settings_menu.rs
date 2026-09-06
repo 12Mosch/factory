@@ -310,7 +310,7 @@ fn display_scale_and_readable_contrast_apply_to_global_preferences() {
 #[test]
 fn desktop_display_buttons_stage_apply_confirm_and_reset_window_settings() {
     use bevy::window::{PrimaryWindow, WindowMode};
-    use factory_app::ui::display::DisplayPreferences;
+    use factory_app::ui::display::{DisplayPreferences, DisplayState};
 
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     let root = std::env::temp_dir().join(format!(
@@ -330,6 +330,11 @@ fn desktop_display_buttons_stage_apply_confirm_and_reset_window_settings() {
         .spawn((Window::default(), PrimaryWindow))
         .id();
     app.update();
+    {
+        let mut display = app.world_mut().resource_mut::<DisplayState>();
+        display.draft.frame_limit = 0;
+        display.apply();
+    }
     app.world_mut()
         .resource_mut::<UiPreferences>()
         .readable_high_contrast = true;
@@ -348,7 +353,12 @@ fn desktop_display_buttons_stage_apply_confirm_and_reset_window_settings() {
         app.world().entity(window).get::<Window>().unwrap().mode,
         WindowMode::BorderlessFullscreen(_)
     ));
-    assert!(!root.join("display-settings.ron").exists());
+    let before_keep = ron::from_str::<DisplayPreferences>(
+        &std::fs::read_to_string(root.join("display-settings.ron")).unwrap(),
+    )
+    .unwrap();
+    assert!(!before_keep.borderless);
+    assert_eq!(before_keep.frame_limit, 0);
     let keep = button_with_child_text(&mut app, "Keep");
     press_button(&mut app, keep);
     let saved = ron::from_str::<DisplayPreferences>(
@@ -358,6 +368,10 @@ fn desktop_display_buttons_stage_apply_confirm_and_reset_window_settings() {
     assert!(saved.borderless);
     let reset = action_button(&mut app, SettingsAction::Reset);
     press_button(&mut app, reset);
+    app.world_mut()
+        .resource_mut::<DisplayState>()
+        .draft
+        .frame_limit = 0;
     let apply = action_button(&mut app, SettingsAction::Apply);
     press_button(&mut app, apply);
     assert_eq!(
@@ -370,7 +384,84 @@ fn desktop_display_buttons_stage_apply_confirm_and_reset_window_settings() {
         app.world().entity(window).get::<Window>().unwrap().mode,
         WindowMode::BorderlessFullscreen(_)
     ));
+    // Back discards a staged mode change before a later Apply on another tab.
+    let mode = button_with_child_text(&mut app, "Mode: Borderless fullscreen");
+    press_button(&mut app, mode);
+    let back = action_button(&mut app, SettingsAction::Back);
+    press_button(&mut app, back);
+    assert!(app.world().resource::<DisplayState>().draft.borderless);
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+    let apply = action_button(&mut app, SettingsAction::Apply);
+    press_button(&mut app, apply);
+    assert!(matches!(
+        app.world().entity(window).get::<Window>().unwrap().mode,
+        WindowMode::BorderlessFullscreen(_)
+    ));
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Startup confirmation buttons must work before entering the simulation.
+#[test]
+fn saved_borderless_confirmation_accepts_keep_and_revert_in_world_setup() {
+    use bevy::window::{PrimaryWindow, WindowMode};
+    use factory_app::ui::display::DisplayPreferences;
+    use factory_app::world_setup::{AppMode, StartInWorldSetup};
+
+    for action in ["Keep", "Revert"] {
+        let root = std::env::temp_dir().join(format!(
+            "factory-startup-display-{}-{}-{action}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("display-settings.ron");
+        std::fs::write(
+            &path,
+            ron::to_string(&DisplayPreferences {
+                borderless: true,
+                frame_limit: 0,
+                ..default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = App::new();
+        app.insert_resource(StartInWorldSetup)
+            .add_plugins(MinimalPlugins)
+            .add_plugins(factory_app::FactoryAppPlugin)
+            .insert_resource(SaveLoadConfig {
+                root_dir: root.clone(),
+                ..default()
+            });
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::WorldSetup
+        );
+        let button = button_with_child_text(&mut app, action);
+        press_button(&mut app, button);
+        assert!(
+            !all_text(&mut app)
+                .iter()
+                .any(|text| text == "Keep display changes?")
+        );
+        let borderless = matches!(
+            app.world().entity(window).get::<Window>().unwrap().mode,
+            WindowMode::BorderlessFullscreen(_)
+        );
+        assert_eq!(borderless, action == "Keep");
+        let saved =
+            ron::from_str::<DisplayPreferences>(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.borderless, action == "Keep");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]

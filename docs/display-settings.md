@@ -25,7 +25,8 @@ behavior have been validated. Wayland compositors control window placement and m
 ignore centering requests. Browser builds do not expose these desktop controls.
 
 Apply previews mode and size changes for 15 seconds. Keep confirms; Revert, Escape,
-or timeout restores the last confirmed preferences. The confirmation appears above
+or timeout restores the last confirmed geometry while retaining applied VSync and
+frame-limit changes. The confirmation appears above
 all menus and uses wall time even when gameplay is paused. Unconfirmed values are
 never saved. A saved borderless launch asks for confirmation again so a changed
 desktop configuration can recover automatically to a fitted window.

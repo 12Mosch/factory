@@ -297,6 +297,7 @@ pub(crate) fn handle_settings_buttons(
                 }
             },
             SettingsAction::Back => {
+                resources.display.discard_draft();
                 resources.control_rebind.capturing = None;
                 resources.control_rebind.error = None;
                 if resources.window.close() {

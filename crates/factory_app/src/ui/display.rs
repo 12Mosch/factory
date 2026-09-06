@@ -1,7 +1,8 @@
 //! Desktop display preferences and reversible, real-time window previews.
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::window::{
     Monitor, MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode, WindowPosition,
@@ -29,6 +30,7 @@ pub struct DisplayPreferences {
 }
 
 impl Default for DisplayPreferences {
+    /// Starts in a fitted window with VSync and a conservative frame limit.
     fn default() -> Self {
         Self {
             version: 1,
@@ -41,6 +43,7 @@ impl Default for DisplayPreferences {
 }
 
 impl DisplayPreferences {
+    /// Replaces unknown versions and unsupported values with safe defaults.
     pub fn normalize(mut self) -> Self {
         if self.version != 1 {
             return Self::default();
@@ -71,6 +74,7 @@ pub struct DisplayState {
 }
 
 impl DisplayState {
+    /// Applies safe preferences immediately and previews geometry until confirmed.
     pub fn apply(&mut self) {
         if !self.available || self.preview_started.is_some() {
             return;
@@ -80,6 +84,11 @@ impl DisplayState {
             || next.window_size != self.applied.window_size
         {
             self.preview_started = Some(Instant::now());
+            self.confirmed = DisplayPreferences {
+                borderless: self.confirmed.borderless,
+                window_size: self.confirmed.window_size,
+                ..next
+            };
         } else {
             self.confirmed = next;
         }
@@ -87,10 +96,17 @@ impl DisplayState {
         self.draft = next;
     }
 
+    /// Stages default preferences without changing the current window.
     pub fn reset_draft(&mut self) {
         self.draft = DisplayPreferences::default();
     }
 
+    /// Discards unsubmitted edits while retaining currently applied preferences.
+    pub fn discard_draft(&mut self) {
+        self.draft = self.applied;
+    }
+
+    /// Keeps a timely confirmation or restores confirmed geometry after rejection.
     fn resolve_preview(&mut self, keep: bool) {
         let Some(started) = self.preview_started.take() else {
             return;
@@ -103,6 +119,7 @@ impl DisplayState {
         self.draft = self.applied;
     }
 
+    /// Captures the display controls and persistence status for retained UI updates.
     pub(crate) fn snapshot(&self) -> DisplaySnapshot {
         DisplaySnapshot {
             draft: self.draft,
@@ -138,6 +155,7 @@ type DisplayButtons<'w, 's> = Query<
     (Changed<Interaction>, With<Button>),
 >;
 
+/// Handles global confirmation actions and stages edits from the Display tab.
 pub(crate) fn handle_display_buttons(
     buttons: DisplayButtons,
     mut state: ResMut<DisplayState>,
@@ -191,10 +209,14 @@ pub(crate) fn handle_display_buttons(
     }
 }
 
+/// Loads sanitized desktop preferences and reconfirms saved fullscreen geometry.
 pub(crate) fn load_display_preferences(
     config: Res<SaveLoadConfig>,
     mut state: ResMut<DisplayState>,
 ) {
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     state.path = config.root_dir.join("display-settings.ron");
     let loaded = std::fs::read_to_string(&state.path)
         .ok()
@@ -226,6 +248,7 @@ fn fitted_size(requested: Option<(u32, u32)>, bounds: Vec2) -> Vec2 {
 type MainWindow<'w, 's> =
     Query<'w, 's, (&'static mut Window, Option<&'static OnMonitor>), With<PrimaryWindow>>;
 
+/// Reverts expired previews and applies preferences within the current monitor bounds.
 pub(crate) fn sync_display(
     mut state: ResMut<DisplayState>,
     settings: Res<SettingsWindowState>,
@@ -242,7 +265,7 @@ pub(crate) fn sync_display(
         state.resolve_preview(false);
     }
     if !settings.open {
-        state.draft = state.applied;
+        state.discard_draft();
     }
     let Ok((mut window, on_monitor)) = windows.single_mut() else {
         state.available = false;
@@ -304,6 +327,7 @@ pub(crate) fn sync_display(
     }
 }
 
+/// Atomically saves confirmed preferences, retrying transient errors with backoff.
 pub(crate) fn persist_display(mut state: ResMut<DisplayState>) {
     if state.path.as_os_str().is_empty()
         || state.preview_started.is_some()
@@ -349,6 +373,7 @@ pub(crate) fn limit_frames(state: Res<DisplayState>, mut previous: Local<Option<
 #[derive(PartialEq)]
 pub(crate) struct DisplayConfirmation;
 
+/// Shows a centered confirmation modal for the duration of a geometry preview.
 pub(crate) fn sync_display_confirmation(
     mut commands: Commands,
     state: Res<DisplayState>,
@@ -417,6 +442,7 @@ pub(crate) fn sync_display_confirmation(
     );
 }
 
+/// Builds concise controls for the available desktop display preferences.
 pub(crate) fn spawn_desktop_settings(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &DisplaySnapshot,
@@ -570,6 +596,40 @@ mod tests {
         assert_eq!(state.applied, DisplayPreferences::default());
     }
 
+    /// Rejection and late confirmation roll back geometry without losing safe edits.
+    #[test]
+    fn rejected_geometry_keeps_vsync_and_frame_limit_changes() {
+        for expired in [false, true] {
+            let mut state = DisplayState {
+                available: true,
+                ..default()
+            };
+            state.draft = DisplayPreferences {
+                borderless: true,
+                vsync: false,
+                frame_limit: 144,
+                ..default()
+            };
+            state.apply();
+            if expired {
+                state.preview_started = Some(Instant::now() - PREVIEW_DURATION);
+            }
+            state.resolve_preview(expired);
+            assert_eq!(
+                state.applied,
+                DisplayPreferences {
+                    vsync: false,
+                    frame_limit: 144,
+                    ..default()
+                }
+            );
+            assert_eq!(state.confirmed, state.applied);
+            state.draft.frame_limit = 30;
+            state.discard_draft();
+            assert_eq!(state.draft, state.applied);
+        }
+    }
+
     #[test]
     fn persistence_only_writes_confirmed_values_and_reconfirms_fullscreen_on_launch() {
         let root = std::env::temp_dir().join(format!(
@@ -598,6 +658,8 @@ mod tests {
             let mut state = app.world_mut().resource_mut::<DisplayState>();
             state.available = true;
             state.draft.borderless = true;
+            state.draft.vsync = false;
+            state.draft.frame_limit = 144;
             state.apply();
         }
         app.update();
@@ -634,6 +696,8 @@ mod tests {
         let recovered =
             ron::from_str::<DisplayPreferences>(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(!recovered.borderless);
+        assert!(!recovered.vsync);
+        assert_eq!(recovered.frame_limit, 144);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -681,7 +745,7 @@ mod tests {
         app.update();
         let window = app.world().entity(entity).get::<Window>().unwrap();
         assert_eq!(window.width(), 1280.0);
-        assert_eq!(window.present_mode, PresentMode::AutoVsync);
+        assert_eq!(window.present_mode, PresentMode::AutoNoVsync);
         app.world_mut()
             .entity_mut(monitor)
             .get_mut::<Monitor>()
