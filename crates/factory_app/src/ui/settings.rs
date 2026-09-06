@@ -17,6 +17,7 @@ use crate::ui::audio_settings::{
 use crate::ui::controls::{
     ControlRebindState, ControlsSnapshot, controls_snapshot, spawn_controls_content,
 };
+use crate::ui::display::{DisplaySnapshot, DisplayState, spawn_desktop_settings};
 use crate::ui::enemy_settings::{
     EnemySettingsSnapshot, enemy_settings_snapshot, spawn_enemy_settings_content,
 };
@@ -140,6 +141,7 @@ pub(crate) struct SettingsSnapshot {
     audio: AudioSettingsSnapshot,
     gameplay: EnemySettingsSnapshot,
     display: DisplaySettingsSnapshot,
+    desktop: DisplaySnapshot,
     accessibility: AccessibilitySettingsSnapshot,
     controls: ControlsSnapshot,
 }
@@ -181,6 +183,7 @@ pub(crate) struct SettingsButtonResources<'w> {
     ui_preferences: ResMut<'w, UiPreferences>,
     bindings: ResMut<'w, ActionBindings>,
     control_rebind: ResMut<'w, ControlRebindState>,
+    display: ResMut<'w, DisplayState>,
 }
 
 #[derive(SystemParam)]
@@ -191,6 +194,7 @@ pub(crate) struct SettingsSnapshotResources<'w> {
     key_names: Res<'w, KeyDisplayNames>,
     control_rebind: Res<'w, ControlRebindState>,
     sim: Res<'w, SimResource>,
+    display: Res<'w, DisplayState>,
 }
 
 /// Handles settings entry, tab navigation, applying, resetting, and closing.
@@ -236,6 +240,7 @@ pub(crate) fn handle_settings_buttons(
         resources.sounds.write(SoundEvent::UiClick);
         match button.action {
             SettingsAction::Apply => {
+                resources.display.apply();
                 resources.audio.muted = resources.window.pending_values.audio_muted;
                 resources
                     .audio
@@ -276,6 +281,7 @@ pub(crate) fn handle_settings_buttons(
                     resources.window.dirty = true;
                 }
                 SettingsTab::Display => {
+                    resources.display.reset_draft();
                     resources.window.pending_values.ui_scale_percent = 100;
                     resources.window.dirty = true;
                 }
@@ -320,6 +326,7 @@ pub(crate) fn sync_settings_window(
             display: DisplaySettingsSnapshot {
                 scale_percent: resources.window.pending_values.ui_scale_percent,
             },
+            desktop: resources.display.snapshot(),
             accessibility: AccessibilitySettingsSnapshot {
                 readable_high_contrast: resources.window.pending_values.readable_high_contrast,
             },
@@ -400,7 +407,10 @@ fn spawn_settings_window(
             .with_children(|content| match snapshot.active_tab {
                 SettingsTab::Gameplay => spawn_enemy_settings_content(content, &snapshot.gameplay),
                 SettingsTab::Audio => spawn_audio_settings_content(content, &snapshot.audio),
-                SettingsTab::Display => spawn_display_settings_content(content, &snapshot.display),
+                SettingsTab::Display => {
+                    spawn_desktop_settings(content, &snapshot.desktop);
+                    spawn_display_settings_content(content, &snapshot.display);
+                }
                 SettingsTab::Controls => spawn_controls_content(content, &snapshot.controls),
                 SettingsTab::Accessibility => {
                     spawn_accessibility_settings_content(content, &snapshot.accessibility)
@@ -465,7 +475,7 @@ fn spawn_actions(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, dirty:
 }
 
 /// Spawns a settings button with consistent sizing and selected styling.
-fn spawn_button<T: Component>(
+pub(crate) fn spawn_button<T: Component>(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     label: &str,
     marker: T,

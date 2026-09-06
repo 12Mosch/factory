@@ -219,11 +219,6 @@ pub(crate) fn spawn_display_settings_content(
     snapshot: &DisplaySettingsSnapshot,
 ) {
     spawn_heading(parent, "Interface scale");
-    parent.spawn((
-        Text::new("Scales panels, text, spacing, and mouse targets together."),
-        TextFont::from_font_size(12.0),
-        TextColor(Color::srgb(0.72, 0.76, 0.69)),
-    ));
     parent
         .spawn((
             Node {
@@ -255,13 +250,6 @@ pub(crate) fn spawn_display_settings_content(
             ));
             spawn_control_button(row, "+", Some(UiScaleAction::Increase), false);
         });
-    parent.spawn((
-        Text::new(
-            "On compact windows, scaling is responsively limited to keep the working area visible.",
-        ),
-        TextFont::from_font_size(11.0),
-        TextColor(Color::srgb(0.62, 0.68, 0.59)),
-    ));
 }
 
 /// Spawns the readable high-contrast control for the Accessibility tab.

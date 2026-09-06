@@ -308,6 +308,72 @@ fn display_scale_and_readable_contrast_apply_to_global_preferences() {
 }
 
 #[test]
+fn desktop_display_buttons_stage_apply_confirm_and_reset_window_settings() {
+    use bevy::window::{PrimaryWindow, WindowMode};
+    use factory_app::ui::display::DisplayPreferences;
+
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+    let root = std::env::temp_dir().join(format!(
+        "factory-display-menu-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    app.insert_resource(SaveLoadConfig {
+        root_dir: root.clone(),
+        ..default()
+    });
+    let window = app
+        .world_mut()
+        .spawn((Window::default(), PrimaryWindow))
+        .id();
+    app.update();
+    app.world_mut()
+        .resource_mut::<UiPreferences>()
+        .readable_high_contrast = true;
+    open_settings_with_key(&mut app, KeyCode::KeyO);
+    let display = tab_button(&mut app, SettingsTab::Display);
+    press_button(&mut app, display);
+    let mode = button_with_child_text(&mut app, "Mode: Windowed");
+    press_button(&mut app, mode);
+    assert_eq!(
+        app.world().entity(window).get::<Window>().unwrap().mode,
+        WindowMode::Windowed
+    );
+    let apply = action_button(&mut app, SettingsAction::Apply);
+    press_button(&mut app, apply);
+    assert!(matches!(
+        app.world().entity(window).get::<Window>().unwrap().mode,
+        WindowMode::BorderlessFullscreen(_)
+    ));
+    assert!(!root.join("display-settings.ron").exists());
+    let keep = button_with_child_text(&mut app, "Keep");
+    press_button(&mut app, keep);
+    let saved = ron::from_str::<DisplayPreferences>(
+        &std::fs::read_to_string(root.join("display-settings.ron")).unwrap(),
+    )
+    .unwrap();
+    assert!(saved.borderless);
+    let reset = action_button(&mut app, SettingsAction::Reset);
+    press_button(&mut app, reset);
+    let apply = action_button(&mut app, SettingsAction::Apply);
+    press_button(&mut app, apply);
+    assert_eq!(
+        app.world().entity(window).get::<Window>().unwrap().mode,
+        WindowMode::Windowed
+    );
+    let revert = button_with_child_text(&mut app, "Revert");
+    press_button(&mut app, revert);
+    assert!(matches!(
+        app.world().entity(window).get::<Window>().unwrap().mode,
+        WindowMode::BorderlessFullscreen(_)
+    ));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn escape_closes_direct_settings_without_opening_pause_menu() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
     app.update();
