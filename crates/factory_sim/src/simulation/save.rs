@@ -519,6 +519,7 @@ impl SimulationSnapshotOwned {
             entities: self.entities,
             construction: self.construction,
             player: self.player,
+            respawn_search: Default::default(),
             player_equipment: self.player_equipment,
             player_weapon: self.player_weapon,
             delayed_combat: self.delayed_combat,

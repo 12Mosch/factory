@@ -217,6 +217,8 @@ pub struct Simulation {
     construction: ConstructionState,
 
     player: PlayerState,
+    #[serde(skip)]
+    respawn_search: player_ops::RespawnSearchCache,
     player_equipment: PlayerEquipmentState,
     player_weapon: PlayerWeaponState,
     delayed_combat: DelayedCombatState,

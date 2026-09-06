@@ -577,6 +577,7 @@ impl OccupancyGrid {
 
         for tile in footprint.tiles() {
             self.occupied_tiles.insert(tile, entity_id);
+            self.revision = self.revision.wrapping_add(1);
         }
 
         Ok(())
@@ -586,6 +587,7 @@ impl OccupancyGrid {
         for tile in footprint.tiles() {
             if self.entity_at(tile.0, tile.1) == Some(entity_id) {
                 self.occupied_tiles.remove(&tile);
+                self.revision = self.revision.wrapping_add(1);
             }
         }
     }

@@ -55,6 +55,7 @@ impl Simulation {
             entities,
             construction: ConstructionState::default(),
             player,
+            respawn_search: Default::default(),
             player_equipment: PlayerEquipmentState::default(),
             player_weapon: PlayerWeaponState::default(),
             delayed_combat: DelayedCombatState::default(),

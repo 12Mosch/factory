@@ -165,15 +165,8 @@ fn death_counter_is_hashed_and_repeated_lives_count_once_each() {
 
 #[test]
 fn respawn_waits_when_no_generated_tile_is_walkable() {
-    let mut sim = Simulation::new_test_world(123);
+    let mut sim = blocked_respawn_sim();
     let base = factory_data::BasePrototypeIds::from_catalog(sim.catalog());
-    for (x, y) in all_tile_coords(&sim.world) {
-        if sim.world.tile_at(x, y).unwrap().tile_id != base.tiles.water {
-            sim.set_tile(x, y, base.tiles.water).unwrap();
-        }
-    }
-    damage_player(&mut sim, &[u32::MAX]);
-    sim.apply_command(&SimCommand::RespawnPlayer).unwrap();
     let before = sim.state_hash();
     sim.advance_player_respawn();
     assert!(sim.player.is_dead());
@@ -186,4 +179,83 @@ fn respawn_waits_when_no_generated_tile_is_walkable() {
         simulation.validate().unwrap();
     }
     assert_eq!(sim.state_hash(), restored.state_hash());
+}
+
+fn blocked_respawn_sim() -> Simulation {
+    let mut sim = Simulation::new_test_world(123);
+    let base = factory_data::BasePrototypeIds::from_catalog(sim.catalog());
+    for (x, y) in all_tile_coords(&sim.world) {
+        if sim.world.tile_at(x, y).unwrap().tile_id != base.tiles.water {
+            sim.set_tile(x, y, base.tiles.water).unwrap();
+        }
+    }
+    damage_player(&mut sim, &[u32::MAX]);
+    sim.apply_command(&SimCommand::RespawnPlayer).unwrap();
+    sim
+}
+
+#[test]
+fn failed_respawn_probe_is_cached_without_changing_durable_state() {
+    let mut sim = blocked_respawn_sim();
+    let before = sim.clone();
+    let bytes = save_to_bytes(&sim).unwrap();
+    for _ in 0..5 {
+        sim.advance_player_respawn();
+    }
+    assert_eq!(sim.respawn_search.probes, 1);
+    assert_eq!(sim, before);
+    assert_eq!(sim.state_hash(), before.state_hash());
+    assert_eq!(save_to_bytes(&sim).unwrap(), bytes);
+    for _ in 0..5 {
+        sim.tick();
+    }
+    assert_eq!(sim.respawn_search.probes, 1);
+    // Presentation/planning topology does not change player collision.
+    sim.bump_entity_topology_revision();
+    sim.apply_command(&SimCommand::RespawnPlayer).unwrap();
+    sim.advance_player_respawn();
+    assert_eq!(sim.respawn_search.probes, 1);
+    let mut loaded = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+    assert_eq!(loaded.respawn_search.probes, 0);
+    loaded.advance_player_respawn();
+    assert_eq!(loaded.respawn_search.probes, 1);
+    assert_eq!(loaded.state_hash(), sim.state_hash());
+}
+
+#[test]
+fn failed_respawn_probe_retries_after_occupancy_changes_but_not_paving() {
+    let mut sim = blocked_respawn_sim();
+    sim.advance_player_respawn();
+    let base = factory_data::BasePrototypeIds::from_catalog(sim.catalog());
+    sim.set_tile(2, 3, base.tiles.grass).unwrap();
+    let chest = entity_id_by_name(sim.catalog(), "chest");
+    let chest = place_at(&mut sim, chest, 2, 3, Direction::North);
+    sim.advance_player_respawn();
+    assert_eq!(sim.respawn_search.probes, 2);
+    assert!(sim.player.is_dead());
+    sim.set_tile(2, 3, base.tiles.stone_path).unwrap();
+    sim.advance_player_respawn();
+    assert_eq!(sim.respawn_search.probes, 2);
+    assert!(sim.damage_entity(chest, u32::MAX));
+    sim.advance_player_respawn();
+    assert_eq!(sim.respawn_search.probes, 3);
+    assert!(!sim.player.is_dead());
+    assert_eq!(sim.player.tile_position(), (2, 3));
+    sim.validate().unwrap();
+}
+
+#[test]
+fn failed_respawn_probe_retries_after_chunk_generation() {
+    let mut sim = blocked_respawn_sim();
+    sim.advance_player_respawn();
+    assert_eq!(sim.respawn_search.probes, 1);
+    let chunk = ChunkCoord { x: 5, y: 0 };
+    sim.ensure_chunk_generated(chunk);
+    sim.advance_player_respawn();
+    assert_eq!(sim.respawn_search.probes, 2);
+    assert!(!sim.player.is_dead());
+    let (x, y) = sim.player.tile_position();
+    assert_eq!(ChunkCoord::from_tile(x, y), Some(chunk));
+    assert!(sim.can_player_occupy_tile(x, y));
+    sim.validate().unwrap();
 }

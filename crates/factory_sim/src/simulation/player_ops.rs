@@ -1,5 +1,14 @@
 use super::*;
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct RespawnSearchCache {
+    failed_inputs: Option<(u64, u64, u64)>,
+    #[cfg(test)]
+    pub(super) probes: u64,
+}
+
+impl_runtime_only_identity!(RespawnSearchCache);
+
 impl Simulation {
     pub fn player_deaths(&self) -> u64 {
         self.statistics.player_deaths
@@ -23,11 +32,25 @@ impl Simulation {
         if !self.player.is_dead() || !self.player.respawn_requested {
             return;
         }
+        let inputs = (
+            self.world.chunk_revision(),
+            self.world.walkability_revision(),
+            self.entities.occupancy.revision,
+        );
+        if self.respawn_search.failed_inputs == Some(inputs) {
+            return;
+        }
+        #[cfg(test)]
+        {
+            self.respawn_search.probes += 1;
+        }
         // Scan only generated tiles, including occupancy. A blocked world leaves
         // the request pending and retries without changing terrain or structures.
         let Some(candidate) = find_player_start(&self.world, &self.entities.occupancy) else {
+            self.respawn_search.failed_inputs = Some(inputs);
             return;
         };
+        self.respawn_search.failed_inputs = None;
         self.player.x = candidate.x;
         self.player.y = candidate.y;
         self.player.health.current = self.player.health.maximum;
