@@ -6,6 +6,7 @@ mod timestamp;
 mod types;
 
 pub use catalog::{refresh_catalog, scan_catalog};
+pub(crate) use container::write_save_bytes;
 pub use container::{
     BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
     TEMP_ARTIFACT_MARKER, decode_container, encode_container,

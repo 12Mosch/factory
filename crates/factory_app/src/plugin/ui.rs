@@ -38,6 +38,10 @@ use crate::ui::debug_overlay::{
     DebugOverlayVisible, apply_debug_overlay_visibility, debug_overlay_refresh_due,
     setup_debug_overlay, toggle_debug_overlay, update_debug_overlay, update_ups_stats,
 };
+use crate::ui::display::{
+    DisplayState, handle_display_buttons, limit_frames, load_display_preferences, persist_display,
+    sync_display, sync_display_confirmation,
+};
 use crate::ui::enemy_settings::handle_enemy_settings_buttons;
 use crate::ui::equipment_window::{
     handle_equipment_buttons, handle_equipment_command_results, sync_equipment_window,
@@ -132,6 +136,28 @@ impl Plugin for UiPlugin {
         install_default_ui_font(app);
 
         app.init_resource::<UpsStats>()
+            .init_resource::<DisplayState>()
+            .add_systems(Startup, load_display_preferences)
+            .add_systems(
+                Update,
+                handle_display_buttons
+                    // Startup confirmation is also interactive in world setup.
+                    .before(handle_settings_buttons),
+            )
+            .add_systems(
+                Update,
+                (
+                    sync_display
+                        .after(handle_settings_buttons)
+                        .after(handle_display_buttons)
+                        .before(sync_settings_window)
+                        .before(sync_ui_scale),
+                    persist_display,
+                    sync_display_confirmation,
+                )
+                    .chain(),
+            )
+            .add_systems(Last, limit_frames)
             // Full Bevy applications get this from bevy_ui; initialize it here
             // as well so the accessibility systems remain valid in headless apps.
             .init_resource::<UiScale>()
@@ -183,7 +209,10 @@ impl Plugin for UiPlugin {
                 (
                     sync_ui_scale,
                     save_ui_preferences_if_changed,
-                    refresh_high_contrast_palette,
+                    // Rebuild modal entities before queuing palette changes for them.
+                    refresh_high_contrast_palette
+                        .after(sync_settings_window)
+                        .after(sync_display_confirmation),
                     update_high_contrast_palette,
                     refresh_world_label_readability,
                     style_new_world_labels,

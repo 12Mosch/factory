@@ -9,6 +9,7 @@ pub(crate) mod controls;
 pub(crate) mod corpse;
 pub(crate) mod crafting_panel;
 pub mod debug_overlay;
+pub mod display;
 pub mod enemy_settings;
 pub mod equipment_window;
 pub mod formatting;
