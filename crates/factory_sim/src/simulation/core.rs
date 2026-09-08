@@ -217,6 +217,18 @@ impl Simulation {
                 self.enemy_map_revision = self.enemy_map_revision.wrapping_add(1);
             }
         });
+        // Combat can remove entities after the normal fluid/heat phases. Their
+        // invalidation clears durable network summaries, so rebuild summaries
+        // before exposing this completed tick to validation or save capture.
+        // Do not run another solve: fluid/heat transfer still happens once per tick.
+        if self.fluids.topology_dirty {
+            profiler.measure(ProfilePhase::Fluids, || {
+                self.refresh_fluid_network_snapshots()
+            });
+        }
+        if self.heat.topology_dirty {
+            profiler.measure(ProfilePhase::Heat, || self.refresh_heat_network_snapshots());
+        }
     }
 
     pub fn tick_count(&self) -> u64 {

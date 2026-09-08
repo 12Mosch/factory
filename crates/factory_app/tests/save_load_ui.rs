@@ -699,6 +699,52 @@ fn generate_large_world(app: &mut App) {
     }
 }
 
+#[test]
+#[ignore = "manual stress: generates a valid world above the 64 MiB ceiling"]
+fn oversized_world_preserves_previous_quicksave() {
+    let mut app = test_app(Duration::ZERO, "oversized_quicksave");
+    let previous = sim_tick_and_hash(&app);
+    write_raw_quicksave(&app);
+    let root = app.world().resource::<SaveLoadConfig>().root_dir.clone();
+    let path = root.join("quicksave.factsim");
+    let original_bytes = fs::read(&path).unwrap();
+    {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let mut sim = resource.write_for_tests();
+        for y in -64..64 {
+            for x in -64..64 {
+                sim.ensure_chunk_generated(ChunkCoord { x, y });
+            }
+        }
+        sim.validate_state().unwrap();
+        assert!(save_to_bytes(&sim).is_err());
+    }
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !app.world().resource::<PendingSaveJobs>().is_empty() {
+        assert!(Instant::now() < deadline, "oversized save did not finish");
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = app
+        .world()
+        .resource::<factory_app::save_load::SaveLoadStatus>();
+    assert_eq!(
+        status.kind,
+        factory_app::save_load::SaveLoadStatusKind::Error
+    );
+    assert!(status.message.as_deref().unwrap().contains("SizeLimit"));
+    assert_eq!(fs::read(&path).unwrap(), original_bytes);
+    let loaded = load_from_bytes(&original_bytes).unwrap();
+    loaded.validate_state().unwrap();
+    assert_eq!((loaded.tick_count(), loaded.state_hash()), previous);
+    assert!(fs::read_dir(root).unwrap().all(|entry| {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        !name.contains(TEMP_ARTIFACT_MARKER) && !name.contains(BACKUP_ARTIFACT_MARKER)
+    }));
+}
+
 fn test_app(frame_duration: Duration, name: &str) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)

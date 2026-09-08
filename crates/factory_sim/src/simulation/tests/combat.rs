@@ -650,7 +650,21 @@ fn biter_destroys_nearby_building() {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     let chest_x = spawner.x + 4;
     let chest_y = spawner.y;
+    let utility_x = spawner.x - 3;
+    let utility_y = spawner.y - 3;
     let chest_id = place_at(&mut sim, chest, chest_x, chest_y, Direction::North);
+    // Destroying any entity invalidates these networks, even when the attacked
+    // building itself has no fluid or heat state.
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let heat_pipe = entity_id_by_name(&sim.world.prototypes, "heat_pipe");
+    place_at(&mut sim, pipe, utility_x, utility_y, Direction::North);
+    place_at(
+        &mut sim,
+        heat_pipe,
+        utility_x + 1,
+        utility_y,
+        Direction::North,
+    );
 
     let mut destroyed = false;
     for _ in 0..1500 {
@@ -668,6 +682,9 @@ fn biter_destroys_nearby_building() {
     );
     sim.validate()
         .expect("simulation should stay valid after destruction");
+    let bytes = save_to_bytes(&sim).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(sim.state_hash(), loaded.state_hash());
 }
 
 #[test]

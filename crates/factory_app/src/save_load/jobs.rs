@@ -129,6 +129,8 @@ pub(crate) fn queue_save(
         let payload = save_snapshot_to_bytes(&snapshot)
             .map_err(|error| format!("simulation serialization failed: {error:?}"))?;
         let serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
+        // Release the world copy before allocating the enclosing file buffer.
+        drop(snapshot);
         let metadata = SaveMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
             id: worker_id,
@@ -138,6 +140,7 @@ pub(crate) fn queue_save(
             application_version: env!("CARGO_PKG_VERSION").into(),
         };
         let bytes = encode_container(&metadata, &payload).map_err(|error| error.to_string())?;
+        drop(payload);
         let write_start = Instant::now();
         write_save_bytes(&path, &bytes).map_err(|error| error.to_string())?;
         Ok(SaveJobOutcome {
