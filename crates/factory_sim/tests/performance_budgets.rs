@@ -1322,3 +1322,6 @@ fn benchmark_train_journeys(sim: &Simulation) -> Vec<(factory_sim::TrainId, Enti
         })
         .collect()
 }
+
+#[path = "performance/persistence.rs"]
+mod persistence_budgets;

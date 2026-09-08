@@ -151,7 +151,9 @@ pub const PROTOTYPE_FORMAT_VERSION: u32 = 34;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
-const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum encoded durable payload, excluding the fixed save header.
+/// Bounds accepted input and prevents writing worlds the loader cannot reopen.
+pub const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum SaveLoadError {
@@ -271,6 +273,7 @@ fn encode_snapshot(
     bytes.extend_from_slice(&prototype_hash.to_le_bytes());
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
+        .with_limit(MAX_SNAPSHOT_BYTES)
         .serialize_into(&mut bytes, snapshot)
         .map_err(SaveLoadError::from)?;
     Ok(bytes)
@@ -599,6 +602,23 @@ impl SimulationSnapshotOwned {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn encoder_enforces_the_loaders_payload_ceiling() {
+        // Vec's fixed-width length prefix consumes eight payload bytes.
+        let mut payload = vec![0_u8; MAX_SNAPSHOT_BYTES as usize - 8];
+        let bytes = encode_snapshot(0, &payload).unwrap();
+        assert_eq!(
+            bytes.len() as u64,
+            MAX_SNAPSHOT_BYTES + SAVE_HEADER_SIZE as u64
+        );
+        drop(bytes);
+        payload.push(0);
+        assert!(matches!(
+            encode_snapshot(0, &payload),
+            Err(SaveLoadError::Codec(error)) if matches!(*error, bincode::ErrorKind::SizeLimit)
+        ));
+    }
 
     #[test]
     fn load_rejects_corrupt_bytes() {
