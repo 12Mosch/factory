@@ -126,8 +126,12 @@ pub(crate) fn queue_save(
         let snapshot_tick = snapshot.tick_count();
         drop(sim);
         let serialize_start = Instant::now();
-        let payload = save_snapshot_to_bytes(&snapshot)
-            .map_err(|error| format!("simulation serialization failed: {error:?}"))?;
+        let payload = save_snapshot_to_bytes(&snapshot).map_err(|error| match error {
+            factory_sim::SaveLoadError::TooLarge => {
+                "save exceeds this build's save size or collection limits".into()
+            }
+            _ => format!("simulation serialization failed: {error:?}"),
+        })?;
         let serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
         // Release the world copy before allocating the enclosing file buffer.
         drop(snapshot);

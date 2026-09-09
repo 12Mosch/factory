@@ -15,7 +15,7 @@ use factory_sim::{
 };
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -92,7 +92,7 @@ enum PrimaryState {
 enum RecoveryBackup {
     Candidate(Vec<u8>),
     Corrupt,
-    Inaccessible(io::Error),
+    Inaccessible(ContainerError),
 }
 
 struct FileInspection {
@@ -222,7 +222,9 @@ fn primary_state(path: &Path, kind: &SaveKind, current_hash: u64) -> PrimaryStat
     match inspection.compatibility {
         SaveCompatibility::Compatible => match read_simulation_payload(path) {
             Ok(payload) => simulation_payload_state(&payload),
-            Err(ContainerError::Io(_)) => PrimaryState::IntactButIncompatible,
+            Err(ContainerError::Io(_) | ContainerError::TooLarge) => {
+                PrimaryState::IntactButIncompatible
+            }
             Err(_) => PrimaryState::Corrupt,
         },
         SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
@@ -238,11 +240,18 @@ fn primary_state(path: &Path, kind: &SaveKind, current_hash: u64) -> PrimaryStat
 
 /// Distinguishes corruption from an intact payload requiring another game version.
 fn simulation_payload_state(payload: &[u8]) -> PrimaryState {
-    match load_from_bytes(payload) {
+    classify_simulation_result(load_from_bytes(payload))
+}
+
+fn classify_simulation_result(
+    result: Result<factory_sim::Simulation, SaveLoadError>,
+) -> PrimaryState {
+    match result {
         Ok(_) => PrimaryState::Valid,
         Err(
             SaveLoadError::UnsupportedSaveVersion { .. }
-            | SaveLoadError::UnsupportedPrototypeFormatVersion { .. },
+            | SaveLoadError::UnsupportedPrototypeFormatVersion { .. }
+            | SaveLoadError::TooLarge,
         ) => PrimaryState::IntactButIncompatible,
         Err(
             SaveLoadError::InvalidMagic { .. }
@@ -261,8 +270,10 @@ fn validate_recovery_backup(
     kind: &SaveKind,
     current_hash: u64,
 ) -> RecoveryBackup {
-    let bytes = match fs::read(path) {
+    let bytes = match super::container::read_save_artifact(path) {
         Ok(bytes) => bytes,
+        // A bounded read cannot establish corruption. Retain oversized backups
+        // too: they may be intact saves from a build with a different policy.
         Err(error) => return RecoveryBackup::Inaccessible(error),
     };
 
@@ -271,10 +282,10 @@ fn validate_recovery_backup(
             return RecoveryBackup::Corrupt;
         }
         return match classify_inspection(&bytes, current_hash) {
-            SaveCompatibility::Compatible => match load_from_bytes(&bytes) {
-                Ok(_) => RecoveryBackup::Candidate(bytes),
-                Err(_) => RecoveryBackup::Corrupt,
-            },
+            SaveCompatibility::Compatible => {
+                let result = load_from_bytes(&bytes);
+                classify_backup_result(bytes, result)
+            }
             SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
                 RecoveryBackup::Corrupt
             }
@@ -284,7 +295,7 @@ fn validate_recovery_backup(
 
     let container = match inspect_container(path) {
         Ok(container) => container,
-        Err(ContainerError::Io(error)) => return RecoveryBackup::Inaccessible(error),
+        Err(error @ ContainerError::Io(_)) => return RecoveryBackup::Inaccessible(error),
         Err(_) => return RecoveryBackup::Corrupt,
     };
     if container
@@ -299,16 +310,29 @@ fn validate_recovery_backup(
     }
 
     match classify_inspection(&container.simulation_header, current_hash) {
-        SaveCompatibility::Compatible => match read_simulation_payload(path) {
-            Ok(payload) if load_from_bytes(&payload).is_ok() => RecoveryBackup::Candidate(bytes),
-            Ok(_) => RecoveryBackup::Corrupt,
-            Err(ContainerError::Io(error)) => RecoveryBackup::Inaccessible(error),
+        SaveCompatibility::Compatible => match super::container::container_payload_offset(&bytes) {
+            Ok(offset) => {
+                let result = load_from_bytes(&bytes[offset..]);
+                classify_backup_result(bytes, result)
+            }
+            Err(error @ ContainerError::Io(_)) => RecoveryBackup::Inaccessible(error),
             Err(_) => RecoveryBackup::Corrupt,
         },
         SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
             RecoveryBackup::Corrupt
         }
         _ => RecoveryBackup::Candidate(bytes),
+    }
+}
+
+fn classify_backup_result(
+    bytes: Vec<u8>,
+    result: Result<factory_sim::Simulation, SaveLoadError>,
+) -> RecoveryBackup {
+    match result {
+        Ok(_) => RecoveryBackup::Candidate(bytes),
+        Err(SaveLoadError::TooLarge) => RecoveryBackup::Inaccessible(ContainerError::TooLarge),
+        Err(_) => RecoveryBackup::Corrupt,
     }
 }
 
@@ -492,6 +516,35 @@ pub(crate) fn now_unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_rejection_preserves_primary_and_defers_backup_recovery() {
+        let sim = factory_sim::Simulation::new_test_world(292);
+        let bytes = factory_sim::save_to_bytes(&sim).unwrap();
+        let limits = factory_sim::SaveLimits {
+            max_decoded_bytes: 1,
+            ..Default::default()
+        };
+        let rejected = || factory_sim::load_from_bytes_with_limits(&bytes, limits);
+        assert_eq!(
+            classify_simulation_result(rejected()),
+            PrimaryState::IntactButIncompatible
+        );
+        assert!(matches!(
+            classify_backup_result(bytes.clone(), rejected()),
+            RecoveryBackup::Inaccessible(ContainerError::TooLarge)
+        ));
+        assert_eq!(simulation_payload_state(&bytes), PrimaryState::Valid);
+        assert!(matches!(
+            classify_backup_result(bytes.clone(), load_from_bytes(&bytes)),
+            RecoveryBackup::Candidate(_)
+        ));
+        assert_eq!(simulation_payload_state(&[0]), PrimaryState::Corrupt);
+        assert!(matches!(
+            classify_backup_result(vec![0], load_from_bytes(&[0])),
+            RecoveryBackup::Corrupt
+        ));
+    }
 
     #[test]
     fn old_and_unrelated_file_names_are_ignored() {

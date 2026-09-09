@@ -337,8 +337,10 @@ pub(crate) fn persist_display(mut state: ResMut<DisplayState>) {
         return;
     }
     let result = ron::ser::to_string_pretty(&state.confirmed, ron::ser::PrettyConfig::default())
-        .map_err(std::io::Error::other)
-        .and_then(|text| write_save_bytes(&state.path, text.as_bytes()));
+        .map_err(|error| error.to_string())
+        .and_then(|text| {
+            write_save_bytes(&state.path, text.as_bytes()).map_err(|error| error.to_string())
+        });
     match result {
         Ok(()) => {
             state.saved = state.confirmed;

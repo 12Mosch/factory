@@ -28,7 +28,9 @@ pub mod rail;
 pub mod research;
 pub mod robots;
 pub mod rolling_stock;
+pub mod save_limits;
 pub mod tick;
 pub mod world;
 
+pub use save_limits::SaveLimits;
 pub use simulation::*;

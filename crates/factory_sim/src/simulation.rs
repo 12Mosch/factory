@@ -1030,7 +1030,8 @@ pub use self::rolling_stock_ops::braking_distance_fixed;
 pub use self::save::{
     MAX_SNAPSHOT_BYTES, PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo,
     SaveLoadError, SimulationSaveSnapshot, capture_save_snapshot, inspect_save_header,
-    load_from_bytes, prototype_hash, save_snapshot_to_bytes, save_to_bytes,
+    load_from_bytes, load_from_bytes_with_limits, prototype_hash, save_snapshot_to_bytes,
+    save_snapshot_to_bytes_with_limits, save_to_bytes, save_to_bytes_with_limits,
 };
 pub use self::scripted::{
     scripted_inputs_for_chemical_science_factory, scripted_inputs_for_red_science_factory,
