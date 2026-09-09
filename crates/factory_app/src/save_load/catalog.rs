@@ -15,7 +15,7 @@ use factory_sim::{
 };
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -92,7 +92,7 @@ enum PrimaryState {
 enum RecoveryBackup {
     Candidate(Vec<u8>),
     Corrupt,
-    Inaccessible(io::Error),
+    Inaccessible(ContainerError),
 }
 
 struct FileInspection {
@@ -248,7 +248,8 @@ fn simulation_payload_state(payload: &[u8]) -> PrimaryState {
             SaveLoadError::InvalidMagic { .. }
             | SaveLoadError::PrototypeHashMismatch { .. }
             | SaveLoadError::InvalidSimulationState(_)
-            | SaveLoadError::Codec(_),
+            | SaveLoadError::Codec(_)
+            | SaveLoadError::TooLarge,
         ) => PrimaryState::Corrupt,
     }
 }
@@ -261,8 +262,10 @@ fn validate_recovery_backup(
     kind: &SaveKind,
     current_hash: u64,
 ) -> RecoveryBackup {
-    let bytes = match fs::read(path) {
+    let bytes = match super::container::read_save_artifact(path) {
         Ok(bytes) => bytes,
+        // A bounded read cannot establish corruption. Retain oversized backups
+        // too: they may be intact saves from a build with a different policy.
         Err(error) => return RecoveryBackup::Inaccessible(error),
     };
 
@@ -284,7 +287,7 @@ fn validate_recovery_backup(
 
     let container = match inspect_container(path) {
         Ok(container) => container,
-        Err(ContainerError::Io(error)) => return RecoveryBackup::Inaccessible(error),
+        Err(error @ ContainerError::Io(_)) => return RecoveryBackup::Inaccessible(error),
         Err(_) => return RecoveryBackup::Corrupt,
     };
     if container
@@ -299,10 +302,12 @@ fn validate_recovery_backup(
     }
 
     match classify_inspection(&container.simulation_header, current_hash) {
-        SaveCompatibility::Compatible => match read_simulation_payload(path) {
-            Ok(payload) if load_from_bytes(&payload).is_ok() => RecoveryBackup::Candidate(bytes),
+        SaveCompatibility::Compatible => match super::container::container_payload_offset(&bytes) {
+            Ok(offset) if load_from_bytes(&bytes[offset..]).is_ok() => {
+                RecoveryBackup::Candidate(bytes)
+            }
             Ok(_) => RecoveryBackup::Corrupt,
-            Err(ContainerError::Io(error)) => RecoveryBackup::Inaccessible(error),
+            Err(error @ ContainerError::Io(_)) => RecoveryBackup::Inaccessible(error),
             Err(_) => RecoveryBackup::Corrupt,
         },
         SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {

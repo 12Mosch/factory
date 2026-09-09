@@ -1,4 +1,5 @@
 use super::*;
+use crate::SaveLimits;
 use bincode::Options;
 
 // Save version 9 intentionally invalidates older saves: construction planning
@@ -157,6 +158,7 @@ pub const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum SaveLoadError {
+    TooLarge,
     Codec(Box<bincode::ErrorKind>),
     InvalidMagic { found: [u8; 8] },
     UnsupportedSaveVersion { found: u32, supported: u32 },
@@ -167,7 +169,15 @@ pub enum SaveLoadError {
 
 impl From<bincode::Error> for SaveLoadError {
     fn from(error: bincode::Error) -> Self {
-        Self::Codec(error)
+        match *error {
+            bincode::ErrorKind::SizeLimit => Self::TooLarge,
+            bincode::ErrorKind::Custom(ref message)
+                if message == crate::save_limits::COLLECTION_LIMIT_ERROR =>
+            {
+                Self::TooLarge
+            }
+            _ => Self::Codec(error),
+        }
     }
 }
 
@@ -252,20 +262,39 @@ pub fn capture_save_snapshot(sim: &Simulation) -> SimulationSaveSnapshot {
 
 /// Serializes a previously captured snapshot without accessing the live simulation.
 pub fn save_snapshot_to_bytes(snapshot: &SimulationSaveSnapshot) -> Result<Vec<u8>, SaveLoadError> {
-    encode_snapshot(snapshot.prototype_hash, &snapshot.state)
+    save_snapshot_to_bytes_with_limits(snapshot, SaveLimits::default())
+}
+
+pub fn save_snapshot_to_bytes_with_limits(
+    snapshot: &SimulationSaveSnapshot,
+    limits: SaveLimits,
+) -> Result<Vec<u8>, SaveLoadError> {
+    encode_snapshot_with_limits(snapshot.prototype_hash, &snapshot.state, limits)
 }
 
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
+    save_to_bytes_with_limits(sim, SaveLimits::default())
+}
+
+pub fn save_to_bytes_with_limits(
+    sim: &Simulation,
+    limits: SaveLimits,
+) -> Result<Vec<u8>, SaveLoadError> {
     let prototype_hash = prototype_hash(&sim.world.prototypes);
     let snapshot = SimulationSnapshotRef::from_simulation(sim);
-    encode_snapshot(prototype_hash, &snapshot)
+    encode_snapshot_with_limits(prototype_hash, &snapshot, limits)
 }
 
 /// Encodes either borrowed or owned durable state with the common save header.
-fn encode_snapshot(
+fn encode_snapshot_with_limits(
     prototype_hash: u64,
     snapshot: &impl Serialize,
+    limits: SaveLimits,
 ) -> Result<Vec<u8>, SaveLoadError> {
+    if limits.max_encoded_bytes < SAVE_HEADER_SIZE as u64 {
+        return Err(SaveLoadError::TooLarge);
+    }
+    crate::save_limits::check_collections(snapshot, limits)?;
     let mut bytes = Vec::with_capacity(SAVE_HEADER_SIZE);
     bytes.extend_from_slice(&SAVE_MAGIC);
     bytes.extend_from_slice(&SAVE_VERSION.to_le_bytes());
@@ -273,13 +302,23 @@ fn encode_snapshot(
     bytes.extend_from_slice(&prototype_hash.to_le_bytes());
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
-        .with_limit(MAX_SNAPSHOT_BYTES)
+        .with_limit(limits.payload_bytes())
         .serialize_into(&mut bytes, snapshot)
         .map_err(SaveLoadError::from)?;
     Ok(bytes)
 }
 
 pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
+    load_from_bytes_with_limits(bytes, SaveLimits::default())
+}
+
+pub fn load_from_bytes_with_limits(
+    bytes: &[u8],
+    limits: SaveLimits,
+) -> Result<Simulation, SaveLoadError> {
+    if bytes.len() as u64 > limits.max_simulation_bytes() {
+        return Err(SaveLoadError::TooLarge);
+    }
     let (header, snapshot_bytes) = read_header(bytes)?;
 
     if header.magic != SAVE_MAGIC {
@@ -300,15 +339,12 @@ pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
         });
     }
 
-    if snapshot_bytes.len() as u64 > MAX_SNAPSHOT_BYTES {
+    if snapshot_bytes.len() as u64 > limits.payload_bytes() {
         return Err(size_limit_error());
     }
 
-    let snapshot: SimulationSnapshotOwned = bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .with_limit(MAX_SNAPSHOT_BYTES)
-        .deserialize(snapshot_bytes)
-        .map_err(SaveLoadError::from)?;
+    let snapshot: SimulationSnapshotOwned =
+        crate::save_limits::deserialize(snapshot_bytes, limits).map_err(SaveLoadError::from)?;
     let computed_hash = prototype_hash(&snapshot.prototypes);
     if header.prototype_hash != computed_hash {
         return Err(SaveLoadError::PrototypeHashMismatch {
@@ -360,7 +396,7 @@ pub fn inspect_save_header(bytes: &[u8]) -> Result<SaveHeaderInfo, SaveLoadError
 }
 
 fn size_limit_error() -> SaveLoadError {
-    SaveLoadError::Codec(bincode::ErrorKind::SizeLimit.into())
+    SaveLoadError::TooLarge
 }
 
 fn unexpected_eof_error(message: &'static str) -> SaveLoadError {
@@ -606,18 +642,62 @@ mod tests {
     #[test]
     fn encoder_enforces_the_loaders_payload_ceiling() {
         // Vec's fixed-width length prefix consumes eight payload bytes.
-        let mut payload = vec![0_u8; MAX_SNAPSHOT_BYTES as usize - 8];
-        let bytes = encode_snapshot(0, &payload).unwrap();
-        assert_eq!(
-            bytes.len() as u64,
-            MAX_SNAPSHOT_BYTES + SAVE_HEADER_SIZE as u64
-        );
+        let limits = SaveLimits {
+            max_decoded_bytes: 32,
+            ..SaveLimits::default()
+        };
+        let mut payload = vec![0_u8; 24];
+        let bytes = encode_snapshot_with_limits(0, &payload, limits).unwrap();
+        assert_eq!(bytes.len() as u64, 32 + SAVE_HEADER_SIZE as u64);
         drop(bytes);
         payload.push(0);
         assert!(matches!(
-            encode_snapshot(0, &payload),
-            Err(SaveLoadError::Codec(error)) if matches!(*error, bincode::ErrorKind::SizeLimit)
+            encode_snapshot_with_limits(0, &payload, limits),
+            Err(SaveLoadError::TooLarge)
         ));
+    }
+
+    #[test]
+    fn supported_snapshot_round_trips_at_exact_limit() {
+        let sim = Simulation::new_test_world(292);
+        let state = SimulationSnapshotRef::from_simulation(&sim);
+        let bytes = save_to_bytes(&sim).unwrap();
+        let limits = SaveLimits {
+            max_encoded_bytes: bytes.len() as u64,
+            max_decoded_bytes: (bytes.len() - SAVE_HEADER_SIZE) as u64,
+            ..SaveLimits::default()
+        };
+        assert_eq!(
+            encode_snapshot_with_limits(prototype_hash(&sim.world.prototypes), &state, limits)
+                .unwrap(),
+            bytes
+        );
+        let restored = load_from_bytes_with_limits(&bytes, limits).unwrap();
+        assert_eq!(restored.state_hash(), sim.state_hash());
+        restored.validate_state().unwrap();
+        for smaller in [
+            SaveLimits {
+                max_encoded_bytes: limits.max_encoded_bytes - 1,
+                ..limits
+            },
+            SaveLimits {
+                max_decoded_bytes: limits.max_decoded_bytes - 1,
+                ..limits
+            },
+            SaveLimits {
+                max_record_bytes: limits.max_decoded_bytes - 1,
+                ..limits
+            },
+        ] {
+            assert!(matches!(
+                encode_snapshot_with_limits(0, &state, smaller),
+                Err(SaveLoadError::TooLarge)
+            ));
+            assert!(matches!(
+                load_from_bytes_with_limits(&bytes, smaller),
+                Err(SaveLoadError::TooLarge)
+            ));
+        }
     }
 
     #[test]

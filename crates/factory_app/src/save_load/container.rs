@@ -1,5 +1,5 @@
 use super::{SaveId, SaveKind, SaveMetadata};
-use factory_sim::SAVE_HEADER_SIZE;
+use factory_sim::{SAVE_HEADER_SIZE, SaveLimits};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -15,12 +15,12 @@ pub const CONTAINER_MAGIC: [u8; 8] = *b"FACTSAVE";
 pub const CONTAINER_VERSION: u32 = 1;
 pub const METADATA_SCHEMA_VERSION: u32 = 1;
 /// Maximum serialized metadata size accepted by the container parser.
-pub const MAX_METADATA_BYTES: usize = 16 * 1024;
+pub const MAX_METADATA_BYTES: usize = factory_sim::save_limits::SAVE_METADATA_BYTES;
 /// Marker separating a canonical save name from a temporary artifact nonce.
 pub const TEMP_ARTIFACT_MARKER: &str = ".tmp-";
 /// Marker separating a canonical save name from a backup artifact nonce.
 pub const BACKUP_ARTIFACT_MARKER: &str = ".bak-";
-const PREFIX_SIZE: usize = 16;
+const PREFIX_SIZE: usize = factory_sim::save_limits::SAVE_CONTAINER_PREFIX_BYTES;
 const RETIRED_ARTIFACT_SUFFIX: &str = ".retired";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +32,8 @@ pub(crate) enum SaveArtifactKind {
 /// Error produced while encoding, inspecting, or decoding a save container.
 #[derive(Debug)]
 pub enum ContainerError {
+    TooLarge,
+    UnsupportedVersion(u32),
     Io(io::Error),
     MetadataTooLarge(usize),
     MetadataEncoding(String),
@@ -42,7 +44,12 @@ pub enum ContainerError {
 impl std::fmt::Display for ContainerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(error) => write!(formatter, "{error}"),
+            Self::TooLarge => write!(formatter, "save exceeds this build's save size limits"),
+            Self::UnsupportedVersion(version) => write!(
+                formatter,
+                "unsupported save container version {version} (supported: {CONTAINER_VERSION})"
+            ),
+            Self::Io(error) => write!(formatter, "save I/O failed: {error}"),
             Self::MetadataTooLarge(size) => write!(
                 formatter,
                 "metadata is {size} bytes (maximum is {MAX_METADATA_BYTES})"
@@ -72,14 +79,27 @@ pub fn encode_container(
     metadata: &SaveMetadata,
     payload: &[u8],
 ) -> Result<Vec<u8>, ContainerError> {
+    encode_container_with_limits(metadata, payload, SaveLimits::default())
+}
+
+fn encode_container_with_limits(
+    metadata: &SaveMetadata,
+    payload: &[u8],
+    limits: SaveLimits,
+) -> Result<Vec<u8>, ContainerError> {
+    check_size(payload.len() as u64, limits.max_simulation_bytes())?;
     let metadata_text = ron::ser::to_string(metadata)
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
     let metadata_bytes = metadata_text.as_bytes();
-    if metadata_bytes.len() > MAX_METADATA_BYTES {
+    if metadata_bytes.len() > limits.max_metadata_bytes {
         return Err(ContainerError::MetadataTooLarge(metadata_bytes.len()));
     }
     let metadata_len = u32::try_from(metadata_bytes.len())
         .map_err(|_| ContainerError::MetadataTooLarge(metadata_bytes.len()))?;
+    check_size(
+        (PREFIX_SIZE + metadata_bytes.len()) as u64 + payload.len() as u64,
+        limits.max_encoded_bytes,
+    )?;
     let mut bytes = Vec::with_capacity(PREFIX_SIZE + metadata_bytes.len() + payload.len());
     bytes.extend_from_slice(&CONTAINER_MAGIC);
     bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
@@ -92,21 +112,36 @@ pub fn encode_container(
 /// Decodes container metadata and returns a borrowed simulation payload.
 pub fn decode_container(bytes: &[u8]) -> Result<(SaveMetadata, &[u8]), ContainerError> {
     let payload_offset = container_payload_offset(bytes)?;
+    check_size(bytes.len() as u64, SaveLimits::default().max_encoded_bytes)?;
+    check_size(
+        (bytes.len() - payload_offset) as u64,
+        SaveLimits::default().max_simulation_bytes(),
+    )?;
     let metadata = ron::de::from_bytes(&bytes[PREFIX_SIZE..payload_offset])
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
     Ok((metadata, &bytes[payload_offset..]))
 }
 
 /// Validates the fixed prefix and computes the first payload byte.
-fn container_payload_offset(bytes: &[u8]) -> Result<usize, ContainerError> {
+pub(crate) fn container_payload_offset(bytes: &[u8]) -> Result<usize, ContainerError> {
+    container_payload_offset_with_limits(bytes, SaveLimits::default())
+}
+
+fn container_payload_offset_with_limits(
+    bytes: &[u8],
+    limits: SaveLimits,
+) -> Result<usize, ContainerError> {
     if bytes.len() < PREFIX_SIZE {
         return Err(ContainerError::Truncated);
     }
     if bytes[..8] != CONTAINER_MAGIC {
         return Err(ContainerError::InvalidContainerMagic);
     }
+    check_version(u32::from_le_bytes(
+        bytes[8..12].try_into().expect("fixed range"),
+    ))?;
     let metadata_len = u32::from_le_bytes(bytes[12..16].try_into().expect("fixed range")) as usize;
-    if metadata_len > MAX_METADATA_BYTES {
+    if metadata_len > limits.max_metadata_bytes {
         return Err(ContainerError::MetadataTooLarge(metadata_len));
     }
     let payload_offset = PREFIX_SIZE
@@ -157,13 +192,104 @@ fn read_inspection_bytes(reader: &mut impl Read, buffer: &mut [u8]) -> Result<()
 
 /// Reads a container payload, retaining support for legacy raw quicksaves.
 pub(crate) fn read_simulation_payload(path: &Path) -> Result<Vec<u8>, ContainerError> {
-    let bytes = fs::read(path)?;
-    if bytes.starts_with(&CONTAINER_MAGIC) {
-        let payload_offset = container_payload_offset(&bytes)?;
-        Ok(bytes[payload_offset..].to_vec())
+    read_payload(&mut fs::File::open(path)?, SaveLimits::default())
+}
+
+/// Recovery retains artifact bytes for exact duplicate comparisons, but never
+/// copies their payload into a second allocation.
+pub(crate) fn read_save_artifact(path: &Path) -> Result<Vec<u8>, ContainerError> {
+    read_bounded_bytes(
+        &mut fs::File::open(path)?,
+        Vec::new(),
+        SaveLimits::default().max_encoded_bytes,
+    )
+}
+
+fn check_size(size: u64, maximum: u64) -> Result<(), ContainerError> {
+    if size > maximum {
+        Err(ContainerError::TooLarge)
     } else {
-        Ok(bytes)
+        Ok(())
     }
+}
+
+fn check_version(version: u32) -> Result<(), ContainerError> {
+    if version != CONTAINER_VERSION {
+        Err(ContainerError::UnsupportedVersion(version))
+    } else {
+        Ok(())
+    }
+}
+
+/// Bound actual reads, including files that grow after opening. Only the payload
+/// is retained; metadata and the prefix never share a full-file allocation.
+fn read_payload(reader: &mut impl Read, limits: SaveLimits) -> Result<Vec<u8>, ContainerError> {
+    check_size(SAVE_HEADER_SIZE as u64, limits.max_simulation_bytes())?;
+    let mut magic = [0; 8];
+    read_inspection_bytes(reader, &mut magic)?;
+    let (payload, maximum) = if magic == CONTAINER_MAGIC {
+        let mut prefix = [0; 8];
+        read_inspection_bytes(reader, &mut prefix)?;
+        check_version(u32::from_le_bytes(
+            prefix[..4].try_into().expect("fixed range"),
+        ))?;
+        let metadata_len =
+            u32::from_le_bytes(prefix[4..].try_into().expect("fixed range")) as usize;
+        if metadata_len > limits.max_metadata_bytes {
+            return Err(ContainerError::MetadataTooLarge(metadata_len));
+        }
+        let overhead = PREFIX_SIZE as u64 + metadata_len as u64;
+        check_size(overhead, limits.max_encoded_bytes)?;
+        // Metadata is optional for loading, but its declared bytes must exist.
+        let copied = io::copy(&mut reader.take(metadata_len as u64), &mut io::sink())?;
+        if copied != metadata_len as u64 {
+            return Err(ContainerError::Truncated);
+        }
+        (
+            Vec::new(),
+            limits
+                .max_simulation_bytes()
+                .min(limits.max_encoded_bytes - overhead),
+        )
+    } else {
+        (magic.to_vec(), limits.max_simulation_bytes())
+    };
+    let payload = read_bounded_bytes(reader, payload, maximum)?;
+    if payload.len() < SAVE_HEADER_SIZE {
+        return Err(ContainerError::Truncated);
+    }
+    Ok(payload)
+}
+
+fn read_bounded_bytes(
+    reader: &mut impl Read,
+    mut payload: Vec<u8>,
+    maximum: u64,
+) -> Result<Vec<u8>, ContainerError> {
+    check_size(payload.len() as u64, maximum)?;
+    // Cap both reads and capacity growth, allowing one excess byte for detection.
+    let mut buffer = [0; 8192];
+    loop {
+        let remaining = maximum - payload.len() as u64;
+        let count = (buffer.len() as u64).min(remaining.saturating_add(1)) as usize;
+        let read = match reader.read(&mut buffer[..count]) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if read == 0 {
+            break;
+        }
+        check_size(read as u64, remaining)?;
+        if payload.len() + read > payload.capacity() {
+            let capacity = (payload.capacity() as u64)
+                .saturating_mul(2)
+                .max((payload.len() + read) as u64)
+                .min(maximum) as usize;
+            payload.reserve_exact(capacity - payload.len());
+        }
+        payload.extend_from_slice(&buffer[..read]);
+    }
+    Ok(payload)
 }
 
 /// Serializes save-directory mutations across the catalog and background writer.
@@ -175,12 +301,16 @@ pub(crate) fn with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> T {
 }
 
 /// Writes and durably installs a complete save without exposing partial contents.
-pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    with_save_artifact_lock(|| write_save_bytes_locked(path, bytes))
+pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> Result<(), ContainerError> {
+    with_save_artifact_lock(|| write_save_bytes_locked(path, bytes, SaveLimits::default()))
 }
 
 /// Implements save installation while the process-wide artifact lock is held.
-fn write_save_bytes_locked(path: &Path, bytes: &[u8]) -> io::Result<()> {
+fn write_save_bytes_locked(
+    path: &Path,
+    bytes: &[u8],
+    limits: SaveLimits,
+) -> Result<(), ContainerError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -198,6 +328,14 @@ fn write_save_bytes_locked(path: &Path, bytes: &[u8]) -> io::Result<()> {
             .write(true)
             .create_new(true)
             .open(&temp_path)?;
+        // Reject before installation while retaining the same artifact cleanup.
+        check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
+        if bytes.starts_with(&CONTAINER_MAGIC) {
+            let offset = container_payload_offset_with_limits(bytes, limits)?;
+            check_size((bytes.len() - offset) as u64, limits.max_simulation_bytes())?;
+        } else {
+            check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
+        }
         temp.write_all(bytes)?;
         temp.sync_all()?;
         drop(temp);
@@ -765,5 +903,98 @@ mod tests {
             Some(primary.to_path_buf())
         );
         assert!(parse_save_artifact(Path::new("manual-test.factsim.bak-12.bad")).is_none());
+    }
+
+    #[test]
+    fn bounded_reader_and_writer_agree_at_boundary_and_preserve_primary() {
+        let sim = Simulation::new_test_world(292);
+        let payload = save_to_bytes(&sim).unwrap();
+        let meta = metadata("Bounded");
+        let bytes = encode_container(&meta, &payload).unwrap();
+        let limits = SaveLimits {
+            max_encoded_bytes: bytes.len() as u64,
+            max_decoded_bytes: (payload.len() - SAVE_HEADER_SIZE) as u64,
+            ..SaveLimits::default()
+        };
+        assert_eq!(
+            encode_container_with_limits(&meta, &payload, limits).unwrap(),
+            bytes
+        );
+        let root = std::env::temp_dir().join(format!(
+            "factory-save-limits-{}-{}",
+            std::process::id(),
+            SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = root.join("manual-boundary.factsim");
+        with_save_artifact_lock(|| {
+            write_save_bytes_locked(&path, &bytes, limits).unwrap();
+            let decoded = read_payload(&mut fs::File::open(&path).unwrap(), limits).unwrap();
+            assert_eq!(decoded, payload);
+            assert_eq!(
+                load_from_bytes(&decoded).unwrap().state_hash(),
+                sim.state_hash()
+            );
+            let mut oversized = bytes.clone();
+            oversized.push(0);
+            assert!(matches!(
+                write_save_bytes_locked(&path, &oversized, limits),
+                Err(ContainerError::TooLarge)
+            ));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+            let mut reader = io::Cursor::new(&oversized);
+            assert!(matches!(
+                read_payload(&mut reader, limits),
+                Err(ContainerError::TooLarge)
+            ));
+            assert_eq!(reader.position(), bytes.len() as u64 + 1);
+        });
+        fs::remove_dir_all(root).unwrap();
+        let raw_limits = SaveLimits {
+            max_encoded_bytes: payload.len() as u64,
+            ..limits
+        };
+        assert_eq!(
+            read_payload(&mut io::Cursor::new(&payload), raw_limits).unwrap(),
+            payload
+        );
+        let mut raw = payload;
+        raw.push(0);
+        assert!(matches!(
+            read_payload(&mut io::Cursor::new(raw), raw_limits),
+            Err(ContainerError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn forged_prefixes_fail_before_reading_declared_data() {
+        let mut bytes = CONTAINER_MAGIC.to_vec();
+        bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            read_payload(&mut io::Cursor::new(&bytes), SaveLimits::default()),
+            Err(ContainerError::MetadataTooLarge(_))
+        ));
+        bytes[12..16].copy_from_slice(&10_u32.to_le_bytes());
+        assert!(matches!(
+            read_payload(&mut io::Cursor::new(&bytes), SaveLimits::default()),
+            Err(ContainerError::Truncated)
+        ));
+        bytes[8..12].copy_from_slice(&(CONTAINER_VERSION + 1).to_le_bytes());
+        assert!(matches!(
+            read_payload(&mut io::Cursor::new(&bytes), SaveLimits::default()),
+            Err(ContainerError::UnsupportedVersion(_))
+        ));
+        assert!(matches!(
+            decode_container(&bytes),
+            Err(ContainerError::UnsupportedVersion(_))
+        ));
+        assert!(matches!(
+            read_payload(
+                &mut FailingReader(io::ErrorKind::PermissionDenied),
+                SaveLimits::default()
+            ),
+            Err(ContainerError::Io(_))
+        ));
     }
 }

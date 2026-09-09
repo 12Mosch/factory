@@ -501,6 +501,7 @@ pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile:
 
 pub fn format_save_load_error(error: SaveLoadError) -> String {
     match error {
+        SaveLoadError::TooLarge => "Cannot load save: it exceeds this build's save size or collection limits.".into(),
         SaveLoadError::UnsupportedSaveVersion { found, supported } if found > supported => format!("Cannot load save: format {found} was created by a newer build; update the game."),
         SaveLoadError::UnsupportedSaveVersion { found, supported } => format!("Cannot load save: format {found} is older than {supported}; this build has no migration."),
         SaveLoadError::UnsupportedPrototypeFormatVersion { found, supported } if found > supported => format!("Cannot load save: prototype format {found} was created by a newer build; update the game."),
