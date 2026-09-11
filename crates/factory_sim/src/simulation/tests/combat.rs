@@ -615,6 +615,335 @@ fn queued_guard_and_staging_spawns_respect_spawner_alive_cap() {
 }
 
 #[test]
+fn expansion_dispatch_respects_spawner_alive_cap_with_partial_party() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let placed = sim.entities.placed_entities[&spawner_id].clone();
+    let max_alive = spawner_max_alive(&sim, spawner_id);
+    let base_id = sim.enemies.spawner_bases[&spawner_id];
+    assert!(max_alive >= 4, "fixture needs room for a 14/15 case");
+
+    // One slot below the cap: a 3-member expansion must be truncated to 1.
+    fill_spawner(&mut sim, spawner_id, max_alive - 1, placed.x, placed.y + 8);
+
+    let expansions_before = sim.enemies.expansions.len();
+    assert!(
+        sim.dispatch_expansion(base_id, (placed.x + 100, placed.y + 100)),
+        "a partially formed party still departs"
+    );
+
+    assert_eq!(
+        alive_for_spawner(&sim, spawner_id),
+        max_alive as usize,
+        "expansion must stop at max_alive_units"
+    );
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before + 1,
+        "a partially formed party still departs"
+    );
+    assert_eq!(
+        sim.enemies
+            .expansions
+            .values()
+            .last()
+            .unwrap()
+            .members
+            .len(),
+        1,
+        "only the single remaining slot may be filled"
+    );
+}
+
+#[test]
+fn expansion_dispatch_uses_sibling_spawner_when_first_is_saturated() {
+    let mut sim = Simulation::new_test_world(123);
+    let first_id = place_biter_spawner(&mut sim);
+    let first = sim.entities.placed_entities[&first_id].clone();
+    let max_alive = spawner_max_alive(&sim, first_id);
+    let base_id = sim.enemies.spawner_bases[&first_id];
+
+    // A second spawner joins the same colony; whichever spawner sorts first
+    // is the one the old dispatch always selected.
+    let second_id = join_colony(&mut sim, base_id, first.x + 6, first.y, 1)
+        .into_iter()
+        .next()
+        .expect("the colony should accept a second spawner");
+    assert_eq!(sim.enemies.bases[&base_id].spawners.len(), 2);
+
+    let saturated_id = *sim.enemies.bases[&base_id]
+        .spawners
+        .iter()
+        .next()
+        .expect("the colony should list its spawners");
+    let spare_id = if saturated_id == first_id {
+        second_id
+    } else {
+        first_id
+    };
+    fill_spawner(&mut sim, saturated_id, max_alive, first.x, first.y + 8);
+
+    let expansions_before = sim.enemies.expansions.len();
+    assert!(
+        sim.dispatch_expansion(base_id, (first.x + 100, first.y + 100)),
+        "a colony with a free sibling spawner still expands"
+    );
+
+    assert_eq!(
+        alive_for_spawner(&sim, saturated_id),
+        max_alive as usize,
+        "the saturated spawner must not gain expansion members"
+    );
+    let party = sim
+        .enemies
+        .expansions
+        .values()
+        .last()
+        .expect("a party should have departed");
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before + 1,
+        "the sibling spawner should launch the party"
+    );
+    assert!(
+        !party.members.is_empty(),
+        "the sibling spawner should launch the party"
+    );
+    for member in &party.members {
+        assert_eq!(
+            sim.enemies.enemies[member].home_spawner,
+            Some(spare_id),
+            "expansion members must belong to the spawner with capacity"
+        );
+    }
+}
+
+/// Places `extra` spawners into an existing colony near
+/// `(from_x, from_y)`, returning their ids in placement order.
+fn join_colony(
+    sim: &mut Simulation,
+    base_id: EnemyBaseId,
+    from_x: WorldTileCoord,
+    from_y: WorldTileCoord,
+    extra: usize,
+) -> Vec<EntityId> {
+    let prototype = entity_id_by_name(&sim.world.prototypes, "biter_spawner");
+    sim.enemies.placement_base = Some(base_id);
+    let mut spawners = Vec::new();
+    let mut cursor = 0;
+    while spawners.len() < extra && cursor < 400 {
+        let request = crate::placement::EntityPlacementRequest {
+            prototype_id: prototype,
+            x: from_x + (cursor % 20),
+            y: from_y + (cursor / 20),
+            direction: Direction::North,
+        };
+        if let Ok(id) = crate::placement::place(sim, request) {
+            spawners.push(id);
+        }
+        cursor += 1;
+    }
+    sim.enemies.placement_base = None;
+    assert_eq!(
+        spawners.len(),
+        extra,
+        "the colony should accept more spawners"
+    );
+    spawners
+}
+
+/// Spawns `count` units homed to `spawner_id` on tiles east of the origin.
+fn fill_spawner(
+    sim: &mut Simulation,
+    spawner_id: EntityId,
+    count: u32,
+    origin_x: WorldTileCoord,
+    origin_y: WorldTileCoord,
+) {
+    for offset in 0..count {
+        let id = spawn_test_enemy_at(sim, origin_x + i64::from(offset), origin_y);
+        sim.enemies.enemies.get_mut(&id).unwrap().home_spawner = Some(spawner_id);
+    }
+}
+
+/// Live units homed to one spawner.
+fn alive_for_spawner(sim: &Simulation, spawner_id: EntityId) -> usize {
+    sim.enemies
+        .enemies
+        .values()
+        .filter(|unit| unit.home_spawner == Some(spawner_id))
+        .count()
+}
+
+/// Retry deadline tuning for a due colony.
+fn expansion_retry_ticks(sim: &Simulation) -> u64 {
+    u64::from(
+        sim.gameplay()
+            .expect("the catalog should tune enemy expansion")
+            .expansion_retry_ticks,
+    )
+}
+
+/// Builds the scheduler minimum of three spawners in one colony and
+/// generates the surrounding chunk ring, so the expansion site search has
+/// deterministic candidates to evaluate.
+fn colony_with_three_spawners(sim: &mut Simulation) -> (EnemyBaseId, Vec<EntityId>) {
+    let first_id = place_biter_spawner(sim);
+    let first = sim.entities.placed_entities[&first_id].clone();
+    let base_id = sim.enemies.spawner_bases[&first_id];
+
+    let mut spawners = vec![first_id];
+    spawners.extend(join_colony(sim, base_id, first.x + 6, first.y, 2));
+    assert_eq!(
+        spawners.len(),
+        3,
+        "the expansion scheduler needs three spawners"
+    );
+
+    let anchor = sim.enemies.bases[&base_id].anchor;
+    for dx in -5_i32..=5 {
+        for dy in -5_i32..=5 {
+            if (3..=5).contains(&dx.abs().max(dy.abs())) {
+                sim.ensure_chunk_generated(ChunkCoord {
+                    x: anchor.x + dx,
+                    y: anchor.y + dy,
+                });
+            }
+        }
+    }
+    (base_id, spawners)
+}
+
+fn spawner_max_alive(sim: &Simulation, spawner_id: EntityId) -> u32 {
+    let placed = &sim.entities.placed_entities[&spawner_id];
+    sim.world.prototypes.entities()[placed.prototype_id.index()]
+        .enemy_spawner
+        .as_ref()
+        .expect("test spawner should define a live-unit ceiling")
+        .max_alive_units
+}
+
+/// Makes the colony old enough and due for expansion without touching the
+/// growth schedule.
+fn arm_expansion_due(sim: &mut Simulation, base_id: EnemyBaseId) {
+    let minimum_age = sim
+        .gameplay()
+        .expect("the catalog should tune enemy expansion")
+        .expansion_minimum_age_ticks;
+    sim.tick = u64::from(minimum_age) + 1000;
+    let base = sim.enemies.bases.get_mut(&base_id).unwrap();
+    base.creation_tick = 0;
+    base.next_expansion_tick = 0;
+    base.next_growth_tick = u64::MAX;
+}
+
+#[test]
+fn saturated_colony_defers_expansion_to_retry_ticks() {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, spawners) = colony_with_three_spawners(&mut sim);
+    let first = sim.entities.placed_entities[&spawners[0]].clone();
+    for &spawner_id in &spawners {
+        let cap = spawner_max_alive(&sim, spawner_id);
+        fill_spawner(&mut sim, spawner_id, cap, first.x, first.y + 8);
+    }
+    arm_expansion_due(&mut sim, base_id);
+    let retry = expansion_retry_ticks(&sim);
+    let tick = sim.tick;
+
+    let expansions_before = sim.enemies.expansions.len();
+    sim.advance_enemy_spawners();
+
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before,
+        "a saturated colony must not launch an expansion"
+    );
+    assert_eq!(
+        sim.enemies.bases[&base_id].next_expansion_tick,
+        tick + retry,
+        "a saturated dispatch must defer to the retry deadline"
+    );
+}
+
+#[test]
+fn guard_spawn_fills_last_slot_before_expansion_dispatch() {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, spawners) = colony_with_three_spawners(&mut sim);
+    let first = sim.entities.placed_entities[&spawners[0]].clone();
+    // Two spawners saturated; the last sits exactly one slot below the cap
+    // with attack-mode units only, so this tick's free guard spawn fills its
+    // last slot before the expansion scheduler runs.
+    for (index, &spawner_id) in spawners.iter().enumerate() {
+        let cap = spawner_max_alive(&sim, spawner_id);
+        let fill = if index + 1 == spawners.len() {
+            cap - 1
+        } else {
+            cap
+        };
+        fill_spawner(&mut sim, spawner_id, fill, first.x, first.y + 8);
+    }
+    arm_expansion_due(&mut sim, base_id);
+    let retry = expansion_retry_ticks(&sim);
+    let tick = sim.tick;
+    let last = *spawners.last().unwrap();
+    let cap = spawner_max_alive(&sim, last);
+
+    let expansions_before = sim.enemies.expansions.len();
+    sim.advance_enemy_spawners();
+
+    assert_eq!(
+        alive_for_spawner(&sim, last),
+        cap as usize,
+        "the guard fills the last slot and no expansion member may follow"
+    );
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before,
+        "scheduler dispatch must observe the same-tick guard spawn and defer"
+    );
+    assert_eq!(
+        sim.enemies.bases[&base_id].next_expansion_tick,
+        tick + retry,
+        "a colony saturated mid-tick must defer to the retry deadline"
+    );
+}
+
+#[test]
+fn colony_with_capacity_dispatches_expansion_on_schedule() {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, _spawners) = colony_with_three_spawners(&mut sim);
+    arm_expansion_due(&mut sim, base_id);
+    let cfg = *sim
+        .gameplay()
+        .expect("the catalog should tune enemy expansion");
+    let percent = sim.config.runtime.expansion_frequency_percent;
+    assert_ne!(percent, 0, "the test preset should scale expansion time");
+    let expected = sim.tick
+        + (u64::from(cfg.expansion_interval_ticks) * 100)
+            .div_ceil(u64::from(percent))
+            .max(1);
+    let tick = sim.tick;
+
+    let expansions_before = sim.enemies.expansions.len();
+    sim.advance_enemy_spawners();
+
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before + 1,
+        "a colony with capacity needs a reachable site to dispatch"
+    );
+    assert_eq!(
+        sim.enemies.bases[&base_id].next_expansion_tick, expected,
+        "a successful dispatch must schedule the normal interval, not the retry"
+    );
+    assert_ne!(
+        expected,
+        tick + u64::from(cfg.expansion_retry_ticks),
+        "the fixture must distinguish the normal interval from the retry"
+    );
+}
+
+#[test]
 fn excessive_attack_budget_is_reported_by_diagnostics_and_validation() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
