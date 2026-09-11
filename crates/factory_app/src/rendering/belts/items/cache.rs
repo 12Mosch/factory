@@ -26,8 +26,10 @@ pub(super) struct BeltItemRenderCache {
     items: SparseSlotMap<BeltItemId, CachedBeltItem>,
     belts: SparseSlotMap<EntityId, CachedBelt>,
     last_item_revision: u64,
+    last_membership_revision: Option<u64>,
     sim_replacement_revision: u64,
     labels_visible: bool,
+    aggregate_items: bool,
     interpolation_frame: u64,
 }
 
@@ -92,6 +94,14 @@ impl BeltItemRenderCache {
         self.last_item_revision = revision;
     }
 
+    pub(super) fn membership_changed(&self, revision: u64) -> bool {
+        self.last_membership_revision != Some(revision)
+    }
+
+    pub(super) fn set_membership_revision(&mut self, revision: u64) {
+        self.last_membership_revision = Some(revision);
+    }
+
     pub(super) fn sim_replacement_revision(&self) -> u64 {
         self.sim_replacement_revision
     }
@@ -106,6 +116,14 @@ impl BeltItemRenderCache {
 
     pub(super) fn set_labels_visible(&mut self, visible: bool) {
         self.labels_visible = visible;
+    }
+
+    pub(super) fn aggregate_items(&self) -> bool {
+        self.aggregate_items
+    }
+
+    pub(super) fn set_aggregate_items(&mut self, aggregate: bool) {
+        self.aggregate_items = aggregate;
     }
 
     pub(super) fn advance_interpolation_frame(&mut self) -> u64 {

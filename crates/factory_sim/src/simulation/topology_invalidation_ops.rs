@@ -39,6 +39,7 @@ pub(crate) fn apply_entity_topology_change(
     impact: EntityTopologyImpact,
     entity_id: EntityId,
     footprint: EntityFootprint,
+    previous_footprint: Option<EntityFootprint>,
 ) {
     if impact.affects_power_topology {
         sim.invalidate_power_state();
@@ -60,5 +61,5 @@ pub(crate) fn apply_entity_topology_change(
     if let Some(radius) = impact.beacon_effect_radius_tiles {
         sim.refresh_machines_in_beacon_region(footprint, radius);
     }
-    sim.bump_entity_topology_revision();
+    sim.bump_entity_visual_revision(entity_id, footprint, previous_footprint);
 }

@@ -544,6 +544,9 @@ impl SimulationSnapshotOwned {
             tick: self.tick,
             day_night_cycle: self.day_night_cycle,
             entity_topology_revision: 0,
+            entity_visual_changes: Default::default(),
+            entity_style_revision: 0,
+            entity_style_changes: Default::default(),
             revealed_revision: 0,
             revealed_chunk_history: Default::default(),
             pollution_map_revision: 0,
@@ -587,6 +590,7 @@ impl SimulationSnapshotOwned {
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
             rolling_stock: self.rolling_stock,
+            rolling_stock_topology_revision: 0,
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,
@@ -603,6 +607,7 @@ impl SimulationSnapshotOwned {
             config: self.config,
             attack_targets: enemy::AttackTargetCache::default(),
             enemy_target_chunks: combat_ops::EnemyChunkIndex::default(),
+            dynamic_unit_chunks: Default::default(),
             enemy_spawning_scratch: enemy::EnemySpawningScratch::default(),
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
@@ -630,6 +635,8 @@ impl SimulationSnapshotOwned {
         sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();
+        sim.enemy_target_chunks.rebuild(&sim.enemies);
+        sim.refresh_dynamic_unit_chunk_index();
         sim
     }
 }

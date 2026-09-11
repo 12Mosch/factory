@@ -550,6 +550,31 @@ impl OccupancyGrid {
             .collect()
     }
 
+    /// Visits entity IDs occupying a tile rectangle without allocating an
+    /// intermediate set. Multi-tile entities may be visited more than once;
+    /// callers that require unique IDs can insert into retained scratch.
+    pub fn for_each_entity_id_in_tile_rect(
+        &self,
+        min_x: WorldTileCoord,
+        max_x: WorldTileCoord,
+        min_y: WorldTileCoord,
+        max_y: WorldTileCoord,
+        mut visit: impl FnMut(EntityId),
+    ) {
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
+
+        for (&(x, y), &entity_id) in self
+            .occupied_tiles
+            .range((min_x, i64::MIN)..=(max_x, i64::MAX))
+        {
+            if x >= min_x && x <= max_x && y >= min_y && y <= max_y {
+                visit(entity_id);
+            }
+        }
+    }
+
     pub fn validate_available(
         &self,
         footprint: &EntityFootprint,
