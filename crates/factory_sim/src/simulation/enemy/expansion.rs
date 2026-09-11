@@ -33,13 +33,8 @@ impl Simulation {
                     // Scheduler-driven dispatch reuses the tick's maintained
                     // per-spawner counts instead of rescanning the enemy map
                     // for every due colony.
-                    let (spawner_ids, alive_by_spawner) = self.expansion_spawner_counts(base_id);
-                    if self.dispatch_expansion_with_counts(
-                        base_id,
-                        destination,
-                        &spawner_ids,
-                        &alive_by_spawner,
-                    ) {
+                    let spawners = self.expansion_spawner_counts(base_id);
+                    if self.dispatch_expansion_with_counts(base_id, destination, &spawners) {
                         if let Some(base) = self.enemies.bases.get_mut(&base_id) {
                             base.next_expansion_tick = next_scaled_tick(
                                 self.tick,
@@ -191,64 +186,57 @@ impl Simulation {
         base_id: EnemyBaseId,
         destination: (WorldTileCoord, WorldTileCoord),
     ) -> bool {
-        let spawner_ids: Vec<EntityId> = self
-            .enemies
-            .bases
-            .get(&base_id)
-            .map(|base| base.spawners.iter().copied().collect())
-            .unwrap_or_default();
-        if spawner_ids.is_empty() {
+        let Some(base) = self.enemies.bases.get(&base_id) else {
+            return false;
+        };
+        // Colonies stay small, so a linear scan of the ordered pairs keeps
+        // the census to a single pass with no auxiliary map.
+        let mut spawners: Vec<(EntityId, u32)> = base.spawners.iter().map(|&id| (id, 0)).collect();
+        if spawners.is_empty() {
             return false;
         }
-        let mut alive_by_spawner: BTreeMap<EntityId, u32> =
-            spawner_ids.iter().map(|&id| (id, 0)).collect();
         for enemy in self.enemies.enemies.values() {
             if let Some(home) = enemy.home_spawner
-                && let Some(count) = alive_by_spawner.get_mut(&home)
+                && let Some(pair) = spawners.iter_mut().find(|pair| pair.0 == home)
             {
-                *count = count.saturating_add(1);
+                pair.1 = pair.1.saturating_add(1);
             }
         }
-        self.dispatch_expansion_with_counts(base_id, destination, &spawner_ids, &alive_by_spawner)
+        self.dispatch_expansion_with_counts(base_id, destination, &spawners)
     }
 
     /// Snapshot of this colony's tick-maintained live counts for scheduler
-    /// dispatch. Exact at this point in the tick: the aggregation is rebuilt
-    /// at tick start, the spawn batch writes back every success, and nothing
-    /// between the batch and expansion dispatch removes enemy units.
-    fn expansion_spawner_counts(
-        &self,
-        base_id: EnemyBaseId,
-    ) -> (Vec<EntityId>, BTreeMap<EntityId, u32>) {
+    /// dispatch, in colony order. Exact at this point in the tick: the
+    /// aggregation is rebuilt at tick start, the spawn batch writes back
+    /// every success, and nothing between the batch and expansion dispatch
+    /// removes enemy units.
+    fn expansion_spawner_counts(&self, base_id: EnemyBaseId) -> Vec<(EntityId, u32)> {
         let Some(base) = self.enemies.bases.get(&base_id) else {
-            return (Vec::new(), BTreeMap::new());
+            return Vec::new();
         };
-        let spawner_ids: Vec<EntityId> = base.spawners.iter().copied().collect();
-        let alive_by_spawner = spawner_ids
+        base.spawners
             .iter()
             .map(|&id| (id, self.maintained_spawner_alive(id)))
-            .collect();
-        (spawner_ids, alive_by_spawner)
+            .collect()
     }
 
-    /// Shared expansion dispatch over caller-supplied live counts.
-    /// Deterministic source selection: the first spawner in colony order
-    /// with remaining capacity launches the party, so one saturated
-    /// spawner never stalls siblings. The capped party size below keeps
-    /// every member spawn inside the ceiling; the maintained count is
-    /// threaded through each spawn instead of rescanning the enemy map
-    /// once per member.
+    /// Shared expansion dispatch over caller-supplied live counts in colony
+    /// order. Deterministic source selection: the first spawner with
+    /// remaining capacity launches the party, so one saturated spawner
+    /// never stalls siblings. The capped party size below keeps every
+    /// member spawn inside the ceiling; the maintained count is threaded
+    /// through each spawn instead of rescanning the enemy map once per
+    /// member.
     fn dispatch_expansion_with_counts(
         &mut self,
         base_id: EnemyBaseId,
         destination: (WorldTileCoord, WorldTileCoord),
-        spawner_ids: &[EntityId],
-        alive_by_spawner: &BTreeMap<EntityId, u32>,
+        spawners: &[(EntityId, u32)],
     ) -> bool {
-        let Some((spawner_id, unit, spawner_prototype, mut alive, remaining)) = spawner_ids
+        let Some((spawner_id, unit, spawner_prototype, mut alive, remaining)) = spawners
             .iter()
             .copied()
-            .filter_map(|id| {
+            .filter_map(|(id, alive)| {
                 let placed = self.entities.placed_entities.get(&id)?;
                 let spawner = self
                     .world
@@ -256,7 +244,6 @@ impl Simulation {
                     .entity(placed.prototype_id)?
                     .enemy_spawner
                     .as_ref()?;
-                let alive = alive_by_spawner.get(&id).copied().unwrap_or(0);
                 let remaining = spawner.max_alive_units.saturating_sub(alive);
                 if remaining == 0 {
                     return None;
