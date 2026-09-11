@@ -44,6 +44,7 @@ impl_runtime_only_identity!(EnemySpawningScratch);
 pub(super) enum SpawnError {
     SpawnerNotFound,
     NoFreeTile,
+    AtCapacity,
 }
 
 impl Simulation {
@@ -305,6 +306,23 @@ impl Simulation {
         let Some(placed) = self.entities.placed_entities.get(&spawner_id) else {
             return Err(SpawnError::SpawnerNotFound);
         };
+        if let Some(cap) = self
+            .world
+            .prototypes
+            .entity(placed.prototype_id)
+            .and_then(|prototype| prototype.enemy_spawner.as_ref())
+            .map(|config| config.max_alive_units)
+        {
+            let alive = self
+                .enemies
+                .enemies
+                .values()
+                .filter(|enemy| enemy.home_spawner == Some(spawner_id))
+                .count();
+            if alive >= usize::from(cap) {
+                return Err(SpawnError::AtCapacity);
+            }
+        }
         let footprint = placed.footprint;
         let Some((tile_x, tile_y)) = free_tile_around_footprint(
             &self.world,

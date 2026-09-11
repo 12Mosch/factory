@@ -30,13 +30,16 @@ impl Simulation {
                 && self.tick >= next_expansion
             {
                 if let Some(destination) = self.find_expansion_site(base_id, cfg) {
-                    self.dispatch_expansion(base_id, destination);
-                    if let Some(base) = self.enemies.bases.get_mut(&base_id) {
-                        base.next_expansion_tick = next_scaled_tick(
-                            self.tick,
-                            cfg.expansion_interval_ticks,
-                            self.config.runtime.expansion_frequency_percent,
-                        );
+                    if self.dispatch_expansion(base_id, destination) {
+                        if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                            base.next_expansion_tick = next_scaled_tick(
+                                self.tick,
+                                cfg.expansion_interval_ticks,
+                                self.config.runtime.expansion_frequency_percent,
+                            );
+                        }
+                    } else if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                        base.next_expansion_tick = self.tick + u64::from(cfg.expansion_retry_ticks);
                     }
                 } else if let Some(base) = self.enemies.bases.get_mut(&base_id) {
                     base.next_expansion_tick = self.tick + u64::from(cfg.expansion_retry_ticks);
@@ -171,34 +174,47 @@ impl Simulation {
             .any(|entity| (entity.x - x).abs().max((entity.y - y).abs()) < spacing)
     }
 
-    fn dispatch_expansion(
+    pub(in crate::simulation) fn dispatch_expansion(
         &mut self,
         base_id: EnemyBaseId,
         destination: (WorldTileCoord, WorldTileCoord),
-    ) {
-        let Some((&spawner_id, unit, spawner_prototype)) = self
+    ) -> bool {
+        let Some((&spawner_id, unit, spawner_prototype, max_alive_units)) = self
             .enemies
             .bases
             .get(&base_id)
             .and_then(|base| base.spawners.iter().next())
             .and_then(|id| {
                 let placed = self.entities.placed_entities.get(id)?;
+                let spawner = self
+                    .world
+                    .prototypes
+                    .entity(placed.prototype_id)?
+                    .enemy_spawner
+                    .as_ref()?;
                 Some((
                     id,
-                    self.world
-                        .prototypes
-                        .entity(placed.prototype_id)?
-                        .enemy_spawner
-                        .as_ref()?
-                        .unit,
+                    spawner.unit,
                     placed.prototype_id,
+                    spawner.max_alive_units,
                 ))
             })
         else {
-            return;
+            return false;
         };
+        let alive = self
+            .enemies
+            .enemies
+            .values()
+            .filter(|enemy| enemy.home_spawner == Some(spawner_id))
+            .count();
+        let remaining = usize::from(max_alive_units).saturating_sub(alive);
+        if remaining == 0 {
+            return false;
+        }
+        let requested = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
+        let count = requested.min(remaining);
         let expansion_id = self.enemies.allocate_expansion_id();
-        let count = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
         let mut members = BTreeSet::new();
         for _ in 0..count {
             if let Ok(member) = self.spawn_enemy_near_spawner(
@@ -210,7 +226,7 @@ impl Simulation {
             }
         }
         if members.is_empty() {
-            return;
+            return false;
         }
         let destination_chunk = ChunkCoord::from_tile(destination.0, destination.1);
         let spotted = self
@@ -239,6 +255,7 @@ impl Simulation {
                 },
             );
         }
+        true
     }
 
     pub(in crate::simulation) fn resolve_arrived_expansions(&mut self) {

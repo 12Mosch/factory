@@ -615,6 +615,99 @@ fn queued_guard_and_staging_spawns_respect_spawner_alive_cap() {
 }
 
 #[test]
+fn expansion_dispatch_respects_spawner_alive_cap_with_partial_party() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let placed = sim.entities.placed_entities[&spawner_id].clone();
+    let max_alive = sim.world.prototypes.entities()[placed.prototype_id.index()]
+        .enemy_spawner
+        .as_ref()
+        .unwrap()
+        .max_alive_units;
+    let base_id = sim.enemies.spawner_bases[&spawner_id];
+    assert!(max_alive >= 4, "fixture needs room for a 14/15 case");
+
+    // One slot below the cap: a 3-member expansion must be truncated to 1.
+    for offset in 0..max_alive - 1 {
+        let id = spawn_test_enemy_at(&mut sim, placed.x + i64::from(offset), placed.y + 8);
+        sim.enemies.enemies.get_mut(&id).unwrap().home_spawner = Some(spawner_id);
+    }
+
+    let expansions_before = sim.enemies.expansions.len();
+    assert!(
+        sim.dispatch_expansion(base_id, (placed.x + 100, placed.y + 100)),
+        "a partially formed party still departs"
+    );
+
+    let alive = sim
+        .enemies
+        .enemies
+        .values()
+        .filter(|unit| unit.home_spawner == Some(spawner_id))
+        .count();
+    assert_eq!(
+        alive, max_alive as usize,
+        "expansion must stop at max_alive_units"
+    );
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before + 1,
+        "a partially formed party still departs"
+    );
+    assert_eq!(
+        sim.enemies
+            .expansions
+            .values()
+            .last()
+            .unwrap()
+            .members
+            .len(),
+        1,
+        "only the single remaining slot may be filled"
+    );
+}
+
+#[test]
+fn expansion_dispatch_defers_when_spawner_at_capacity() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let placed = sim.entities.placed_entities[&spawner_id].clone();
+    let max_alive = sim.world.prototypes.entities()[placed.prototype_id.index()]
+        .enemy_spawner
+        .as_ref()
+        .unwrap()
+        .max_alive_units;
+    let base_id = sim.enemies.spawner_bases[&spawner_id];
+
+    for offset in 0..max_alive {
+        let id = spawn_test_enemy_at(&mut sim, placed.x + i64::from(offset), placed.y + 8);
+        sim.enemies.enemies.get_mut(&id).unwrap().home_spawner = Some(spawner_id);
+    }
+
+    let expansions_before = sim.enemies.expansions.len();
+    assert!(
+        !sim.dispatch_expansion(base_id, (placed.x + 100, placed.y + 100)),
+        "a saturated spawner defers instead of dispatching"
+    );
+
+    let alive = sim
+        .enemies
+        .enemies
+        .values()
+        .filter(|unit| unit.home_spawner == Some(spawner_id))
+        .count();
+    assert_eq!(
+        alive, max_alive as usize,
+        "a saturated spawner must not gain expansion members"
+    );
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before,
+        "a saturated spawner defers instead of launching an empty party"
+    );
+}
+
+#[test]
 fn excessive_attack_budget_is_reported_by_diagnostics_and_validation() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
