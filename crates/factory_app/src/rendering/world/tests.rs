@@ -697,18 +697,41 @@ fn dense_belt_item_render_sync_allocation_benchmark() {
         .lock()
         .expect("benchmark lock should not poison");
     let (sim, belt_ids) = dense_belt_item_render_sync_fixture();
-    let mut app = dense_belt_item_render_sync_app(sim, &belt_ids);
+    let mut detailed = dense_belt_item_render_sync_app(sim.clone(), &belt_ids);
+    let mut aggregated = dense_belt_item_render_sync_app(sim, &belt_ids);
+    *aggregated.world_mut().resource_mut::<RenderDetail>() = RenderDetail {
+        show_resource_amount_labels: false,
+        show_belt_directions: true,
+        show_belt_items: true,
+        aggregate_belt_items: true,
+        show_belt_item_labels: false,
+    };
 
     for _ in 0..DENSE_BELT_ITEM_RENDER_WARMUP_FRAMES {
-        tick_sim_resource(&mut app);
-        app.update();
+        tick_sim_resource(&mut detailed);
+        detailed.update();
+        tick_sim_resource(&mut aggregated);
+        aggregated.update();
     }
 
-    let stats = collect_dense_belt_item_render_sync_stats(
-        &mut app,
+    let detailed_stats = collect_dense_belt_item_render_sync_stats(
+        &mut detailed,
         DENSE_BELT_ITEM_RENDER_MEASUREMENT_FRAMES,
     );
-    print_dense_belt_item_render_sync_stats(&mut app, stats);
+    let aggregated_stats = collect_dense_belt_item_render_sync_stats(
+        &mut aggregated,
+        DENSE_BELT_ITEM_RENDER_MEASUREMENT_FRAMES,
+    );
+    print_dense_belt_item_render_sync_stats(
+        "dense_belt_items_detailed",
+        &mut detailed,
+        detailed_stats,
+    );
+    print_dense_belt_item_render_sync_stats(
+        "dense_belt_items_aggregated",
+        &mut aggregated,
+        aggregated_stats,
+    );
 }
 
 fn small_render_sync_fixture() -> Simulation {
@@ -909,6 +932,7 @@ fn dense_belt_item_render_sync_app(sim: Simulation, belt_ids: &[EntityId]) -> Ap
             ids: belt_ids.iter().copied().collect(),
             visible_revision: 1,
             entity_topology_revision: 1,
+            ..Default::default()
         })
         .init_resource::<RenderDetail>()
         .init_resource::<BeltItemRenderPool>()
@@ -1179,7 +1203,11 @@ fn print_render_sync_budget_stats(app: &mut App, stats: RenderSyncBudgetStats) {
     );
 }
 
-fn print_dense_belt_item_render_sync_stats(app: &mut App, stats: DenseBeltItemRenderSyncStats) {
+fn print_dense_belt_item_render_sync_stats(
+    name: &str,
+    app: &mut App,
+    stats: DenseBeltItemRenderSyncStats,
+) {
     let visible_belt_items = app
         .world()
         .resource::<SimResource>()
@@ -1187,7 +1215,8 @@ fn print_dense_belt_item_render_sync_stats(app: &mut App, stats: DenseBeltItemRe
         .counts()
         .belt_item_count;
     println!(
-        "dense_belt_item_render_sync_allocation_benchmark:\n  visible belt items: {}\n  belt item sprites: {}\n  belt item labels: {}\n  belt_items: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
+        "{}:\n  visible belt items: {}\n  belt item sprites: {}\n  belt item labels: {}\n  belt_items: avg {:.3} ms, p95 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, max {} bytes/{} allocs",
+        name,
         visible_belt_items,
         belt_item_sprite_count(app),
         belt_item_label_count(app),

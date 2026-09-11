@@ -41,6 +41,9 @@ impl Simulation {
                 .day_night_cycle()
                 .map(|_| DayNightCycleState::new()),
             entity_topology_revision: 0,
+            entity_visual_changes: Default::default(),
+            entity_style_revision: 0,
+            entity_style_changes: Default::default(),
             revealed_revision: 0,
             revealed_chunk_history: Default::default(),
             pollution_map_revision: 0,
@@ -86,6 +89,7 @@ impl Simulation {
             config,
             attack_targets: enemy::AttackTargetCache::default(),
             enemy_target_chunks: combat_ops::EnemyChunkIndex::default(),
+            dynamic_unit_chunks: Default::default(),
             enemy_spawning_scratch: enemy::EnemySpawningScratch::default(),
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
@@ -229,6 +233,7 @@ impl Simulation {
         if self.heat.topology_dirty {
             profiler.measure(ProfilePhase::Heat, || self.refresh_heat_network_snapshots());
         }
+        self.refresh_dynamic_unit_chunk_index();
     }
 
     pub fn tick_count(&self) -> u64 {
@@ -249,6 +254,21 @@ impl Simulation {
 
     pub(crate) fn bump_entity_topology_revision(&mut self) {
         self.entity_topology_revision = self.entity_topology_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_entity_visual_revision(
+        &mut self,
+        entity_id: EntityId,
+        footprint: EntityFootprint,
+        previous_footprint: Option<EntityFootprint>,
+    ) {
+        self.bump_entity_topology_revision();
+        self.entity_visual_changes.push(
+            self.entity_topology_revision,
+            entity_id,
+            footprint,
+            previous_footprint,
+        );
     }
 
     pub fn revealed_revision(&self) -> u64 {

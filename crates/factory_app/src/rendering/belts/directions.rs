@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use factory_sim::{Direction, EntityId, Simulation};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::constants::{
@@ -13,74 +13,111 @@ use crate::resources::SimResource;
 use super::components::{BeltDirectionPart, BeltDirectionSprite};
 use super::render_state;
 
+#[derive(Default)]
+pub(crate) struct BeltDirectionRenderState {
+    initialized: bool,
+    showing: bool,
+    membership_revision: u64,
+    entities: HashMap<(EntityId, BeltDirectionPart), Entity>,
+    scratch_ids: Vec<EntityId>,
+}
+
 pub(crate) fn sync_belt_direction_rendering(
     mut commands: Commands,
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
     detail: Res<RenderDetail>,
-    mut sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
+    mut state: Local<BeltDirectionRenderState>,
+    mut sprites: Query<(&mut Transform, &mut Sprite), With<BeltDirectionSprite>>,
 ) {
+    let state = &mut *state;
     let sim = sim.read();
     if !detail.show_belt_directions {
-        for (entity, _, _, _) in &mut sprites {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-    if !visible_entity_ids.is_changed() && !detail.is_changed() {
-        return;
-    }
-
-    let visible_ids = &visible_entity_ids.ids;
-    let mut seen = HashSet::new();
-
-    for (entity, marker, mut transform, mut sprite) in &mut sprites {
-        let key = (marker.entity_id, marker.part);
-        if visible_ids.contains(&marker.entity_id)
-            && let Some((translation, size, color)) =
-                belt_direction_render_state(&sim, marker.entity_id, marker.part)
-        {
-            seen.insert(key);
-            transform.translation = translation;
-            sprite.color = color;
-            sprite.custom_size = Some(size);
-        } else {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    for &entity_id in visible_ids {
-        let Some(placed) = sim.entities().placed_entity(entity_id) else {
-            continue;
-        };
-        if factory_sim::entity_access::belt_segment(&sim, placed.id).is_err()
-            && factory_sim::entity_access::splitter_state(&sim, placed.id).is_err()
-        {
-            continue;
-        }
-
-        for part in [BeltDirectionPart::Shaft, BeltDirectionPart::Head] {
-            let key = (placed.id, part);
-            if seen.contains(&key) {
-                continue;
+        if state.showing {
+            for (_, render_entity) in state.entities.drain() {
+                commands.entity(render_entity).despawn();
             }
+        }
+        state.initialized = true;
+        state.showing = false;
+        state.membership_revision = visible_entity_ids.membership_revision;
+        return;
+    }
+    if state.initialized && !visible_entity_ids.is_changed() && !detail.is_changed() {
+        return;
+    }
 
+    let full_refresh = !state.initialized || !state.showing || visible_entity_ids.reset;
+    if full_refresh {
+        for (_, render_entity) in state.entities.drain() {
+            commands.entity(render_entity).despawn();
+        }
+    } else if state.membership_revision != visible_entity_ids.membership_revision {
+        for &entity_id in &visible_entity_ids.removed {
+            for part in [BeltDirectionPart::Shaft, BeltDirectionPart::Head] {
+                if let Some(render_entity) = state.entities.remove(&(entity_id, part)) {
+                    commands.entity(render_entity).despawn();
+                }
+            }
+        }
+    }
+
+    state.scratch_ids.clear();
+    if full_refresh {
+        state
+            .scratch_ids
+            .extend(visible_entity_ids.ids.iter().copied());
+    } else {
+        state
+            .scratch_ids
+            .extend(visible_entity_ids.added.iter().copied());
+        state
+            .scratch_ids
+            .extend(visible_entity_ids.style_dirty.iter().copied());
+        state.scratch_ids.sort_unstable();
+        state.scratch_ids.dedup();
+    }
+
+    while let Some(entity_id) = state.scratch_ids.pop() {
+        for part in [BeltDirectionPart::Shaft, BeltDirectionPart::Head] {
+            let key = (entity_id, part);
             let Some((translation, size, color)) =
-                belt_direction_render_state(&sim, placed.id, part)
+                belt_direction_render_state(&sim, entity_id, part)
             else {
+                if let Some(render_entity) = state.entities.remove(&key) {
+                    commands.entity(render_entity).despawn();
+                }
                 continue;
             };
 
-            commands.spawn((
-                Sprite::from_color(color, size),
-                Transform::from_translation(translation),
-                BeltDirectionSprite {
-                    entity_id: placed.id,
-                    part,
-                },
-            ));
+            if let Some(&render_entity) = state.entities.get(&key) {
+                if let Ok((mut transform, mut sprite)) = sprites.get_mut(render_entity) {
+                    if transform.translation != translation {
+                        transform.translation = translation;
+                    }
+                    if sprite.color != color {
+                        sprite.color = color;
+                    }
+                    if sprite.custom_size != Some(size) {
+                        sprite.custom_size = Some(size);
+                    }
+                }
+            } else {
+                let render_entity = commands
+                    .spawn((
+                        Sprite::from_color(color, size),
+                        Transform::from_translation(translation),
+                        BeltDirectionSprite { entity_id, part },
+                    ))
+                    .id();
+                state.entities.insert(key, render_entity);
+            }
         }
     }
+
+    state.initialized = true;
+    state.showing = true;
+    state.membership_revision = visible_entity_ids.membership_revision;
 }
 
 pub(crate) fn measured_sync_belt_direction_rendering(
@@ -88,11 +125,12 @@ pub(crate) fn measured_sync_belt_direction_rendering(
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
     detail: Res<RenderDetail>,
-    sprites: Query<(Entity, &BeltDirectionSprite, &mut Transform, &mut Sprite)>,
+    state: Local<BeltDirectionRenderState>,
+    sprites: Query<(&mut Transform, &mut Sprite), With<BeltDirectionSprite>>,
     mut timing: ResMut<BeltDirectionsRenderSyncTime>,
 ) {
     let started = Instant::now();
-    sync_belt_direction_rendering(commands, sim, visible_entity_ids, detail, sprites);
+    sync_belt_direction_rendering(commands, sim, visible_entity_ids, detail, state, sprites);
     timing.0 = started.elapsed();
 }
 

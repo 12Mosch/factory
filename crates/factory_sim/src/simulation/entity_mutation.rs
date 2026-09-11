@@ -29,7 +29,13 @@ pub fn rotate(
             sim.refresh_machines_in_beacon_region(old_footprint, radius);
         }
     }
-    apply_entity_topology_change(sim, rotation.impact, entity_id, rotation.footprint);
+    apply_entity_topology_change(
+        sim,
+        rotation.impact,
+        entity_id,
+        rotation.footprint,
+        old_footprint,
+    );
     Ok(())
 }
 
@@ -54,7 +60,7 @@ pub fn remove(sim: &mut Simulation, entity_id: EntityId) -> Option<PlacedEntity>
         }
         construction_ops::clear_construction_state_for_removed_entity(sim, entity_id);
         let impact = impact_for_prototype(sim, removed.prototype_id);
-        apply_entity_topology_change(sim, impact, entity_id, removed.footprint);
+        apply_entity_topology_change(sim, impact, entity_id, removed.footprint, None);
     }
     removed
 }

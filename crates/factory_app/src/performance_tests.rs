@@ -350,6 +350,7 @@ fn audio_benchmark_app() -> App {
             ids: visible_ids,
             visible_revision: 1,
             entity_topology_revision: 1,
+            ..Default::default()
         })
         .insert_resource(assets)
         .init_resource::<AudioSettings>()

@@ -61,6 +61,7 @@ impl Simulation {
     pub fn new_robot_flight_fixture(robot_count: usize) -> Self {
         let mut sim = Self::new_seeded(123);
         sim.build_robot_flight_fixture(robot_count);
+        sim.refresh_dynamic_unit_chunk_index();
         sim
     }
 
@@ -75,6 +76,7 @@ impl Simulation {
     pub fn new_rolling_stock_fixture(train_count: usize) -> Self {
         let mut sim = Self::new_seeded(123);
         sim.build_rolling_stock_fixture(train_count);
+        sim.refresh_dynamic_unit_chunk_index();
         sim
     }
 

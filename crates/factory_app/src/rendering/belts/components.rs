@@ -9,6 +9,7 @@ pub(crate) enum BeltDirectionPart {
 }
 
 #[derive(Component)]
+#[allow(dead_code)] // Retained as render-world identity for diagnostics/tests.
 pub(crate) struct BeltDirectionSprite {
     pub(super) entity_id: EntityId,
     pub(super) part: BeltDirectionPart,

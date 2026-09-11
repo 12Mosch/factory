@@ -193,6 +193,14 @@ pub struct Simulation {
     pub(crate) day_night_cycle: Option<DayNightCycleState>,
     #[serde(skip, default)]
     entity_topology_revision: u64,
+    /// Runtime-only retained changes used by presentation and other deferred
+    /// consumers that need exact entity-local invalidation.
+    #[serde(skip, default)]
+    entity_visual_changes: presentation::EntityVisualChangeHistory,
+    #[serde(skip, default)]
+    entity_style_revision: u64,
+    #[serde(skip, default)]
+    entity_style_changes: presentation::EntityStyleChangeHistory,
     #[serde(skip, default)]
     revealed_revision: u64,
     #[serde(skip, default)]
@@ -278,6 +286,10 @@ pub struct Simulation {
     attack_targets: enemy::AttackTargetCache,
     #[serde(skip)]
     enemy_target_chunks: combat_ops::EnemyChunkIndex,
+    /// Runtime-only chunk membership for presentation queries. It is rebuilt
+    /// once after a completed simulation tick, never once per rendered frame.
+    #[serde(skip, default)]
+    dynamic_unit_chunks: presentation::DynamicUnitChunkIndex,
     #[serde(skip)]
     enemy_spawning_scratch: enemy::EnemySpawningScratch,
     #[serde(skip)]
@@ -985,6 +997,7 @@ mod player_ops;
 mod pollution_ops;
 mod power_ops;
 mod power_state;
+mod presentation;
 mod profiling;
 mod radar_ops;
 pub mod rail_ops;

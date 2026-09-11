@@ -97,14 +97,17 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
     scratch.interpolated_items = 0;
     let sim = sim.read();
     let ids = BasePrototypeIds::from_catalog(sim.catalog());
-    let visibility_changed = visible_entity_ids.is_changed() || detail.is_changed() || sim_replaced;
+    let visibility_changed = cache.membership_changed(visible_entity_ids.membership_revision)
+        || detail.is_changed()
+        || sim_replaced;
+    let aggregation_changed = cache.aggregate_items() != detail.aggregate_belt_items;
     let items_changed = cache.last_item_revision() != sim.belt_item_revision();
     if visibility_changed || items_changed {
         collect_changed_belts(
             &sim,
             &visible_entity_ids.ids,
             visibility_changed,
-            sim_replaced,
+            sim_replaced || aggregation_changed,
             &cache,
             &mut scratch.changed_belts,
         );
@@ -114,6 +117,7 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
             ids,
             &visible_entity_ids.ids,
             detail.show_belt_item_labels,
+            detail.aggregate_belt_items,
             alpha,
             interpolation_frame,
             &mut pool,
@@ -124,6 +128,8 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
             &mut labels,
         );
         cache.set_last_item_revision(sim.belt_item_revision());
+        cache.set_membership_revision(visible_entity_ids.membership_revision);
+        cache.set_aggregate_items(detail.aggregate_belt_items);
     }
 
     interpolate_belt_items(
@@ -172,6 +178,7 @@ fn sync_changed_belts(
     ids: BasePrototypeIds,
     visible_ids: &HashSet<EntityId>,
     show_labels: bool,
+    aggregate_items: bool,
     alpha: f32,
     interpolation_frame: u64,
     pool: &mut BeltItemRenderPool,
@@ -210,6 +217,7 @@ fn sync_changed_belts(
                     ids,
                     entity_id,
                     show_labels,
+                    aggregate_items,
                     alpha,
                     interpolation_frame,
                     pool,
@@ -238,6 +246,7 @@ fn sync_changed_belts(
             ids,
             entity_id,
             show_labels,
+            aggregate_items,
             alpha,
             interpolation_frame,
             pool,
@@ -274,6 +283,7 @@ fn sync_current_belt(
     ids: BasePrototypeIds,
     entity_id: EntityId,
     show_labels: bool,
+    aggregate_items: bool,
     alpha: f32,
     interpolation_frame: u64,
     pool: &mut BeltItemRenderPool,
@@ -303,6 +313,9 @@ fn sync_current_belt(
     mut old_belt: CachedBelt,
 ) {
     collect_belt_items_into(sim, ids, entity_id, &mut scratch.visible_items);
+    if aggregate_items {
+        scratch.visible_items.truncate(1);
+    }
     scratch.removed_items.extend(
         old_belt
             .item_ids
@@ -327,7 +340,9 @@ fn sync_current_belt(
                 .lerp(cached.target_translation, alpha);
             match sprites.get_mut(cached.sprite) {
                 Ok((_, mut marker, mut transform, mut sprite, _)) => {
-                    transform.translation = translation;
+                    if transform.translation != translation {
+                        transform.translation = translation;
+                    }
                     if item_type_changed {
                         marker.item_id = item.item_id;
                         *sprite = visual_assets
@@ -337,7 +352,10 @@ fn sync_current_belt(
                         && let Ok((_, mut marker, mut transform, mut text, _)) =
                             labels.get_mut(label_entity)
                     {
-                        transform.translation = label_translation(translation);
+                        let translation = label_translation(translation);
+                        if transform.translation != translation {
+                            transform.translation = translation;
+                        }
                         if item_type_changed {
                             marker.item_id = item.item_id;
                             text.0 = belt_item_label(sim, item.item_id);
@@ -416,13 +434,18 @@ fn interpolate_belt_items(
             .lerp(item.target_translation, alpha);
         if let Ok((_, marker, mut transform, _, _)) = sprites.get_mut(item.sprite) {
             debug_assert_eq!(marker.key, key);
-            transform.translation = translation;
+            if transform.translation != translation {
+                transform.translation = translation;
+            }
         }
         if let Some(label) = item.label
             && let Ok((_, marker, mut transform, _, _)) = labels.get_mut(label)
         {
             debug_assert_eq!(marker.key, key);
-            transform.translation = label_translation(translation);
+            let translation = label_translation(translation);
+            if transform.translation != translation {
+                transform.translation = translation;
+            }
         }
     }
 }

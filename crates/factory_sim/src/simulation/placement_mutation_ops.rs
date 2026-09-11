@@ -58,6 +58,6 @@ fn place_validated_entity(
     if is_train_stop {
         sim.on_train_stop_placed(entity_id);
     }
-    apply_entity_topology_change(sim, impact, entity_id, footprint);
+    apply_entity_topology_change(sim, impact, entity_id, footprint, None);
     entity_id
 }

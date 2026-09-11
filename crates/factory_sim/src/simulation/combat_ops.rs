@@ -1213,7 +1213,7 @@ pub(super) struct EnemyChunkIndex {
 }
 
 impl EnemyChunkIndex {
-    fn rebuild(&mut self, enemies: &EnemySubsystem) {
+    pub(super) fn rebuild(&mut self, enemies: &EnemySubsystem) {
         for enemy_ids in self.chunks.values_mut() {
             enemy_ids.clear();
         }
@@ -1223,6 +1223,10 @@ impl EnemyChunkIndex {
             }
         }
         self.chunks.retain(|_, enemy_ids| !enemy_ids.is_empty());
+    }
+
+    pub(super) fn ids_in_chunk(&self, chunk: ChunkCoord) -> &[EnemyId] {
+        self.chunks.get(&chunk).map_or(&[], Vec::as_slice)
     }
 
     fn ids_in_expanded_footprint(

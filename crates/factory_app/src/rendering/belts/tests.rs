@@ -396,8 +396,10 @@ fn collect_visible_belt_items_into_clears_stale_items_when_visibility_empty() {
 fn visible_entity_ids<const N: usize>(ids: [EntityId; N]) -> VisibleEntityIds {
     VisibleEntityIds {
         ids: ids.into_iter().collect(),
+        membership_revision: N as u64 + 1,
         visible_revision: 1,
         entity_topology_revision: 1,
+        ..Default::default()
     }
 }
 
