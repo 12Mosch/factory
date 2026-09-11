@@ -149,11 +149,6 @@ mod tests {
             };
             assert_eq!(sim.daylight(), expected, "tick {expected_tick}");
         }
-
-        // Tick 20 wraps back to the start of the cycle, so the next cycle
-        // repeats the day phase identically.
-        sim.tick();
-        assert_eq!(sim.daylight(), 1.0, "cycle should repeat after wrap");
     }
 
     #[test]

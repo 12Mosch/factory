@@ -519,6 +519,14 @@ fn one_hundred_thousand_headless_ticks_no_panic_or_invalid_state() {
     );
     sim.validate_state()
         .expect("100k headless tick budget run should leave a valid state");
+    assert!(
+        sim.research.is_unlocked("basic-automation"),
+        "the scripted red science factory should keep its research across 100k ticks"
+    );
+    assert!(
+        sim.validate_item_conservation(),
+        "the scripted red science factory should conserve items across 100k ticks"
+    );
 }
 
 #[test]

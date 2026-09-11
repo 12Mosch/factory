@@ -18,31 +18,16 @@ fn same_seed_same_inputs_same_hash() {
     let mut a = Simulation::new_seeded(123);
     let mut b = Simulation::new_seeded(123);
 
-    for input in inputs {
-        a.apply_command(&input).unwrap();
-        b.apply_command(&input).unwrap();
+    for input in &inputs {
+        a.apply_command(input).unwrap();
+        b.apply_command(input).unwrap();
+    }
+    for _ in 0..10_000 {
         a.tick();
         b.tick();
     }
 
     assert_eq!(a.state_hash(), b.state_hash());
-}
-
-/// Nightly soak: the scripted red science factory must stay stable, keep its
-/// research, and conserve items across 100,000 ticks. Ignored by default
-/// because it dominates the normal test runtime; run it explicitly with
-/// `cargo test -- --ignored` or from a scheduled stress job.
-#[test]
-#[ignore]
-fn red_science_factory_is_stable_for_100k_ticks() {
-    let mut sim = Simulation::new_scripted_red_science_factory();
-
-    for _ in 0..100_000 {
-        sim.tick();
-    }
-
-    assert!(sim.research.is_unlocked("basic-automation"));
-    assert!(sim.validate_item_conservation());
 }
 
 /// Nightly soak: the scripted chemical science factory must reach its
@@ -86,48 +71,69 @@ fn chemical_science_factory_same_construction_same_hash() {
     assert_eq!(a.state_hash(), b.state_hash());
 }
 
+/// Advances the scripted chemical factory until `technology` unlocks. The
+/// fixture is deterministic, so milestones land on schedule; the bound only
+/// guards against hanging forever if progression ever breaks.
+fn advance_until_chemical_research(sim: &mut Simulation, technology: &str, max_ticks: u64) {
+    for _ in 0..max_ticks {
+        if sim.research.is_unlocked(technology) {
+            return;
+        }
+        tick_chemical_science_factory(sim);
+    }
+    panic!("{technology} should unlock within {max_ticks} ticks");
+}
+
+/// Saves `original`, reloads into a fresh simulation, asserts the hashes
+/// match immediately, then advances both `post_ticks` and asserts they
+/// still match.
+fn assert_save_load_continuation_matches(original: &mut Simulation, post_ticks: u64) {
+    let bytes = save_to_bytes(original).unwrap();
+    let mut loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(original.state_hash(), loaded.state_hash());
+
+    for _ in 0..post_ticks {
+        tick_chemical_science_factory(original);
+        tick_chemical_science_factory(&mut loaded);
+    }
+
+    assert_eq!(original.state_hash(), loaded.state_hash());
+}
+
 #[test]
 fn chemical_science_factory_save_load_then_continue_matches_original() {
     let mut a = Simulation::new_scripted_chemical_science_factory();
 
-    for _ in 0..2_000 {
+    // Milestone-driven pre-phase: reach the oil era (refinery running) and
+    // progress into plastics (chemical plants assigned) so the save boundary
+    // captures mid-game runtime state, not a barely-started factory. The
+    // per-tick program assigns each newly unlocked recipe on retry, a path
+    // the 100k progression soak validates end to end via blue-science
+    // unlocks that are unreachable without real production.
+    for milestone in ["oil_processing", "plastics"] {
+        advance_until_chemical_research(&mut a, milestone, 40_000);
+    }
+    for _ in 0..10 {
         tick_chemical_science_factory(&mut a);
     }
 
-    let bytes = save_to_bytes(&a).unwrap();
-    let mut b = load_from_bytes(&bytes).unwrap();
-    assert_eq!(a.state_hash(), b.state_hash());
-
-    for _ in 0..2_000 {
-        tick_chemical_science_factory(&mut a);
-        tick_chemical_science_factory(&mut b);
-    }
-
-    assert_eq!(a.state_hash(), b.state_hash());
+    assert_save_load_continuation_matches(&mut a, 2_000);
 }
 
-/// Nightly soak: long-duration persistence for the chemical science factory.
+/// Nightly soak: long-duration persistence once blue science is active.
 /// Ignored by default; run it explicitly with `cargo test -- --ignored` or
 /// from a scheduled stress job.
 #[test]
 #[ignore]
-fn chemical_science_factory_save_load_soak_30k_ticks_then_continue_matches_original() {
+fn chemical_science_factory_save_load_soak_after_blue_science_then_continue_matches_original() {
     let mut a = Simulation::new_scripted_chemical_science_factory();
 
-    for _ in 0..30_000 {
+    advance_until_chemical_research(&mut a, "chemical_science_pack", 60_000);
+    for _ in 0..10 {
         tick_chemical_science_factory(&mut a);
     }
 
-    let bytes = save_to_bytes(&a).unwrap();
-    let mut b = load_from_bytes(&bytes).unwrap();
-    assert_eq!(a.state_hash(), b.state_hash());
-
-    for _ in 0..30_000 {
-        tick_chemical_science_factory(&mut a);
-        tick_chemical_science_factory(&mut b);
-    }
-
-    assert_eq!(a.state_hash(), b.state_hash());
+    assert_save_load_continuation_matches(&mut a, 30_000);
 }
 
 #[test]
