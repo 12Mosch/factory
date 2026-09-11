@@ -179,41 +179,54 @@ impl Simulation {
         base_id: EnemyBaseId,
         destination: (WorldTileCoord, WorldTileCoord),
     ) -> bool {
-        let Some((&spawner_id, unit, spawner_prototype, max_alive_units)) = self
+        // Deterministic source selection: the first spawner in colony order
+        // with remaining capacity launches the party, so one saturated
+        // spawner never stalls siblings. A single pass over all enemies
+        // builds the per-spawner counts for this colony, and the capped
+        // party size below keeps every member spawn inside the ceiling; the
+        // maintained count is threaded through each spawn instead of
+        // rescanning the enemy map once per member.
+        let spawner_ids: Vec<EntityId> = self
             .enemies
             .bases
             .get(&base_id)
-            .and_then(|base| base.spawners.iter().next())
-            .and_then(|id| {
-                let placed = self.entities.placed_entities.get(id)?;
+            .map(|base| base.spawners.iter().copied().collect())
+            .unwrap_or_default();
+        if spawner_ids.is_empty() {
+            return false;
+        }
+        let mut alive_by_spawner: BTreeMap<EntityId, u32> =
+            spawner_ids.iter().map(|&id| (id, 0)).collect();
+        for enemy in self.enemies.enemies.values() {
+            if let Some(home) = enemy.home_spawner
+                && let Some(count) = alive_by_spawner.get_mut(&home)
+            {
+                *count = count.saturating_add(1);
+            }
+        }
+        let Some((spawner_id, unit, spawner_prototype, mut alive, remaining)) = spawner_ids
+            .into_iter()
+            .filter_map(|id| {
+                let placed = self.entities.placed_entities.get(&id)?;
                 let spawner = self
                     .world
                     .prototypes
                     .entity(placed.prototype_id)?
                     .enemy_spawner
                     .as_ref()?;
-                Some((
-                    id,
-                    spawner.unit,
-                    placed.prototype_id,
-                    spawner.max_alive_units,
-                ))
+                let alive = alive_by_spawner.get(&id).copied().unwrap_or(0);
+                let remaining = spawner.max_alive_units.saturating_sub(alive);
+                if remaining == 0 {
+                    return None;
+                }
+                Some((id, spawner.unit, placed.prototype_id, alive, remaining))
             })
+            .next()
         else {
             return false;
         };
-        let alive = self
-            .enemies
-            .enemies
-            .values()
-            .filter(|enemy| enemy.home_spawner == Some(spawner_id))
-            .count();
-        let remaining = usize::from(max_alive_units).saturating_sub(alive);
-        if remaining == 0 {
-            return false;
-        }
         let requested = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
-        let count = requested.min(remaining);
+        let count = requested.min(remaining as usize);
         let expansion_id = self.enemies.allocate_expansion_id();
         let mut members = BTreeSet::new();
         for _ in 0..count {
@@ -221,6 +234,7 @@ impl Simulation {
                 spawner_id,
                 &unit,
                 EnemyMission::Expansion(expansion_id),
+                &mut alive,
             ) {
                 members.insert(member);
             }
