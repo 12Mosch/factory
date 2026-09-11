@@ -62,7 +62,7 @@ pub(crate) struct RollingStockRenderState {
     synced_tick: u64,
     visible_revision: u64,
     sim_replacement_revision: u64,
-    stock_count: usize,
+    topology_revision: u64,
     entities: HashMap<RollingStockId, Entity>,
     visible_ids: HashSet<RollingStockId>,
     scratch_ids: Vec<RollingStockId>,
@@ -87,11 +87,11 @@ pub(crate) fn sync_rolling_stock_rendering(
     let replacement_revision = sim.replacement_revision();
     let sim = sim.read();
     let tick = sim.tick_count();
-    let stock_count = sim.rolling_stock_count();
+    let topology_revision = sim.rolling_stock_topology_revision();
     let replaced = !state.initialized || state.sim_replacement_revision != replacement_revision;
     let tick_changed = !state.initialized || state.synced_tick != tick;
     let view_changed = !state.initialized || state.visible_revision != visible.revision;
-    let topology_changed = state.initialized && state.stock_count != stock_count;
+    let topology_changed = state.initialized && state.topology_revision != topology_revision;
 
     if replaced {
         for (_, render_entity) in state.entities.drain() {
@@ -109,20 +109,6 @@ pub(crate) fn sync_rolling_stock_rendering(
                     .filter(|stock_id| sim.rolling_stock_piece(*stock_id).is_some()),
             );
         }
-        // Public placement APIs can add stock between fixed ticks. The
-        // completed-tick index intentionally has not been rebuilt yet, so pay
-        // one rare fallback scan only for that insertion frame.
-        if topology_changed && stock_count > state.stock_count {
-            state
-                .visible_ids
-                .extend(sim.rolling_stock().filter_map(|stock| {
-                    let (x, y) = sim.rolling_stock_tile(stock.id)?;
-                    factory_sim::ChunkCoord::from_tile(x, y)
-                        .is_some_and(|chunk| visible.chunks.contains(&chunk))
-                        .then_some(stock.id)
-                }));
-        }
-
         state.scratch_ids.clear();
         for &stock_id in state.entities.keys() {
             if !state.visible_ids.contains(&stock_id) {
@@ -183,7 +169,7 @@ pub(crate) fn sync_rolling_stock_rendering(
         state.synced_tick = tick;
         state.visible_revision = visible.revision;
         state.sim_replacement_revision = replacement_revision;
-        state.stock_count = stock_count;
+        state.topology_revision = topology_revision;
     }
 
     for &render_entity in state.entities.values() {
@@ -328,6 +314,48 @@ mod tests {
                 .rolling_stock_piece(mined)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn same_count_replacement_between_ticks_updates_sprite_identity() {
+        let mut app = rolling_stock_app(Simulation::new_rolling_stock_fixture(1));
+        app.update();
+        let drawn = sprite_positions(&mut app).len();
+
+        let (removed, inserted) = {
+            let mut resource = app.world_mut().resource_mut::<SimResource>();
+            let mut sim = resource.write_for_tests();
+            let (stock_id, prototype_id, (x, y)) = {
+                let stock = sim
+                    .rolling_stock()
+                    .next()
+                    .expect("the fixture placed stock");
+                (
+                    stock.id,
+                    stock.prototype_id,
+                    sim.rolling_stock_tile(stock.id)
+                        .expect("placed stock stands on a rail tile"),
+                )
+            };
+            sim.mine_rolling_stock(stock_id)
+                .expect("the parked stock can be removed");
+            let inserted = sim
+                .place_rolling_stock(prototype_id, x, y)
+                .expect("replacement stock fits where the removed stock stood");
+            (stock_id, inserted)
+        };
+
+        app.update();
+
+        let world = app.world_mut();
+        let mut query = world.query::<&RollingStockSprite>();
+        let rendered_ids = query
+            .iter(world)
+            .map(|sprite| sprite.stock_id)
+            .collect::<HashSet<_>>();
+        assert_eq!(rendered_ids.len(), drawn);
+        assert!(!rendered_ids.contains(&removed));
+        assert!(rendered_ids.contains(&inserted));
     }
 
     /// Between two fixed ticks a sprite must move, and it must move along the

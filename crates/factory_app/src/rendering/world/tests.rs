@@ -691,6 +691,24 @@ fn render_sync_small_visual_load_budget() {
 }
 
 #[test]
+fn detail_changes_do_not_replay_a_consumed_belt_direction_reset() {
+    let mut app = render_sync_app(small_render_sync_fixture(), visible_window());
+    app.update();
+    let before = belt_direction_sprite_entities(&mut app);
+    assert!(
+        !before.is_empty(),
+        "the fixture should draw belt directions"
+    );
+
+    app.world_mut()
+        .resource_mut::<RenderDetail>()
+        .show_resource_amount_labels = false;
+    app.update();
+
+    assert_eq!(belt_direction_sprite_entities(&mut app), before);
+}
+
+#[test]
 #[ignore]
 fn dense_belt_item_render_sync_allocation_benchmark() {
     let _guard = BENCHMARK_LOCK
@@ -699,6 +717,13 @@ fn dense_belt_item_render_sync_allocation_benchmark() {
     let (sim, belt_ids) = dense_belt_item_render_sync_fixture();
     let mut detailed = dense_belt_item_render_sync_app(sim.clone(), &belt_ids);
     let mut aggregated = dense_belt_item_render_sync_app(sim, &belt_ids);
+    *detailed.world_mut().resource_mut::<RenderDetail>() = RenderDetail {
+        show_resource_amount_labels: false,
+        show_belt_directions: true,
+        show_belt_items: true,
+        aggregate_belt_items: false,
+        show_belt_item_labels: false,
+    };
     *aggregated.world_mut().resource_mut::<RenderDetail>() = RenderDetail {
         show_resource_amount_labels: false,
         show_belt_directions: true,
@@ -1396,6 +1421,13 @@ fn belt_direction_sprite_count(app: &mut App) -> usize {
         .query_filtered::<Entity, With<BeltDirectionSprite>>()
         .iter(app.world())
         .count()
+}
+
+fn belt_direction_sprite_entities(app: &mut App) -> BTreeSet<Entity> {
+    app.world_mut()
+        .query_filtered::<Entity, With<BeltDirectionSprite>>()
+        .iter(app.world())
+        .collect()
 }
 
 fn belt_item_sprite_count(app: &mut App) -> usize {

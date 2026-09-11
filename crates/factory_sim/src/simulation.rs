@@ -252,6 +252,11 @@ pub struct Simulation {
     /// like the robots in flight and for the same reason: a train is a unit
     /// that exists in its own right, not a cache of something placed.
     rolling_stock: RollingStockSubsystem,
+    /// Runtime-only identity change token for presentation consumers. Movement
+    /// is covered by the fixed tick; this advances for insertion and removal,
+    /// which public APIs may perform between ticks.
+    #[serde(skip, default)]
+    rolling_stock_topology_revision: u64,
     /// Route search for trains: scratch buffers and the tick's expansion
     /// budget. Derived, like the enemy navigation beside it, and rebuilt from
     /// nothing on load — the routes themselves live on the trains.

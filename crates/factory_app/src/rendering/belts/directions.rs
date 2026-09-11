@@ -47,7 +47,9 @@ pub(crate) fn sync_belt_direction_rendering(
         return;
     }
 
-    let full_refresh = !state.initialized || !state.showing || visible_entity_ids.reset;
+    let full_refresh = !state.initialized
+        || !state.showing
+        || (visible_entity_ids.is_changed() && visible_entity_ids.reset);
     if full_refresh {
         for (_, render_entity) in state.entities.drain() {
             commands.entity(render_entity).despawn();

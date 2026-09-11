@@ -69,6 +69,7 @@ impl Simulation {
             onboarding_progress: OnboardingProgress::default(),
             research,
             rolling_stock: RollingStockSubsystem::default(),
+            rolling_stock_topology_revision: 0,
             train_routing: rolling_stock_ops::TrainRouting::default(),
             stopped_stock_index: rolling_stock_ops::StoppedStockIndex::default(),
             power: PowerSubsystem::default(),

@@ -590,6 +590,7 @@ impl SimulationSnapshotOwned {
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
             rolling_stock: self.rolling_stock,
+            rolling_stock_topology_revision: 0,
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,

@@ -195,6 +195,9 @@ impl Simulation {
     /// has not seen yet — which is the tick a signal is placed on, before the
     /// graph it cuts has been rebuilt.
     pub fn rail_signal_aspect(&self, entity_id: EntityId) -> Option<RailSignalAspect> {
+        if self.rails.graph_dirty {
+            return None;
+        }
         self.rails.signalling.aspect(entity_id)
     }
 

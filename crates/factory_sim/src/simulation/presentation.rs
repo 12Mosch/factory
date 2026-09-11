@@ -124,6 +124,20 @@ impl DynamicUnitChunkIndex {
         self.robot_ids.retain(|_, ids| !ids.is_empty());
         self.rolling_stock_ids.retain(|_, ids| !ids.is_empty());
     }
+
+    fn insert_rolling_stock(&mut self, chunk: ChunkCoord, stock_id: RollingStockId) {
+        let ids = self.rolling_stock_ids.entry(chunk).or_default();
+        if !ids.contains(&stock_id) {
+            ids.push(stock_id);
+        }
+    }
+
+    fn remove_rolling_stock(&mut self, stock_id: RollingStockId) {
+        for ids in self.rolling_stock_ids.values_mut() {
+            ids.retain(|candidate| *candidate != stock_id);
+        }
+        self.rolling_stock_ids.retain(|_, ids| !ids.is_empty());
+    }
 }
 
 impl Simulation {
@@ -168,6 +182,25 @@ impl Simulation {
             .rolling_stock_ids
             .get(&chunk)
             .map_or(&[], Vec::as_slice)
+    }
+
+    pub fn rolling_stock_topology_revision(&self) -> u64 {
+        self.rolling_stock_topology_revision
+    }
+
+    pub(super) fn record_rolling_stock_inserted(&mut self, stock_id: RollingStockId) {
+        self.rolling_stock_topology_revision = self.rolling_stock_topology_revision.wrapping_add(1);
+        if let Some((x, y)) = self.rolling_stock_tile(stock_id)
+            && let Some(chunk) = ChunkCoord::from_tile(x, y)
+        {
+            self.dynamic_unit_chunks
+                .insert_rolling_stock(chunk, stock_id);
+        }
+    }
+
+    pub(super) fn record_rolling_stock_removed(&mut self, stock_id: RollingStockId) {
+        self.rolling_stock_topology_revision = self.rolling_stock_topology_revision.wrapping_add(1);
+        self.dynamic_unit_chunks.remove_rolling_stock(stock_id);
     }
 
     pub fn entity_visual_changes_since(
