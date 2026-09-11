@@ -25,115 +25,51 @@ fn container_open_ignores_click_when_building_selected() {
     assert!(!container_open_input_allowed(&build_state));
 }
 
+/// Clicking a placed container-like entity opens that entity. Every case places
+/// a different prototype and expects the click to select exactly it; unusual
+/// interactions (like the wagon below) stay in their own tests.
 #[test]
-fn opening_clicked_chest_selects_correct_entity() {
-    let mut sim = Simulation::new_test_world(123);
-    let chest = entity_id_by_name(sim.catalog(), "chest");
-    let (x, y) = first_buildable_rect(&sim, chest);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: chest,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("chest should be placeable");
+fn opening_clicked_entity_selects_correct_entity() {
+    enum Placement {
+        BuildableRect,
+        ResourceDrill,
+        PoweredFixture,
+    }
 
-    assert_eq!(
-        opened_container_after_world_click(&sim, Some((x, y))),
-        (Some(entity_id), None)
-    );
-}
+    for (prototype_name, placement) in [
+        ("chest", Placement::BuildableRect),
+        ("burner_mining_drill", Placement::ResourceDrill),
+        ("stone_furnace", Placement::BuildableRect),
+        ("assembling_machine", Placement::PoweredFixture),
+        ("lab", Placement::PoweredFixture),
+    ] {
+        let mut sim = Simulation::new_test_world(123);
+        let prototype = entity_id_by_name(sim.catalog(), prototype_name);
+        let (x, y) = match placement {
+            Placement::BuildableRect => first_buildable_rect(&sim, prototype),
+            Placement::ResourceDrill => {
+                let coal = item_id_by_name(sim.catalog(), "coal");
+                first_placeable_resource_rect(&sim, prototype, coal)
+            }
+            Placement::PoweredFixture => place_powered_fixture_origin(&mut sim, 3, 3, (3, 1)),
+        };
+        let entity_id = factory_sim::placement::place(
+            &mut sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: prototype,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{prototype_name} should be placeable: {error:?}"));
 
-#[test]
-fn opening_clicked_burner_drill_selects_correct_entity() {
-    let mut sim = Simulation::new_test_world(123);
-    let drill = entity_id_by_name(sim.catalog(), "burner_mining_drill");
-    let coal = item_id_by_name(sim.catalog(), "coal");
-    let (x, y) = first_placeable_resource_rect(&sim, drill, coal);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: drill,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("burner drill should be placeable over resources");
-
-    assert_eq!(
-        opened_container_after_world_click(&sim, Some((x, y))),
-        (Some(entity_id), None)
-    );
-}
-
-#[test]
-fn opening_clicked_furnace_selects_correct_entity() {
-    let mut sim = Simulation::new_test_world(123);
-    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
-    let (x, y) = first_buildable_rect(&sim, furnace);
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: furnace,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("furnace should be placeable");
-
-    assert_eq!(
-        opened_container_after_world_click(&sim, Some((x, y))),
-        (Some(entity_id), None)
-    );
-}
-
-#[test]
-fn opening_clicked_assembler_selects_correct_entity() {
-    let mut sim = Simulation::new_test_world(123);
-    let assembler = entity_id_by_name(sim.catalog(), "assembling_machine");
-    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: assembler,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("assembler should be placeable");
-
-    assert_eq!(
-        opened_container_after_world_click(&sim, Some((x, y))),
-        (Some(entity_id), None)
-    );
-}
-
-#[test]
-fn opening_clicked_lab_selects_correct_entity() {
-    let mut sim = Simulation::new_test_world(123);
-    let lab = entity_id_by_name(sim.catalog(), "lab");
-    let (x, y) = place_powered_fixture_origin(&mut sim, 3, 3, (3, 1));
-    let entity_id = factory_sim::placement::place(
-        &mut sim,
-        factory_sim::placement::EntityPlacementRequest {
-            prototype_id: lab,
-            x,
-            y,
-            direction: Direction::North,
-        },
-    )
-    .expect("lab should be placeable");
-
-    assert_eq!(
-        opened_container_after_world_click(&sim, Some((x, y))),
-        (Some(entity_id), None)
-    );
+        assert_eq!(
+            opened_container_after_world_click(&sim, Some((x, y))),
+            (Some(entity_id), None),
+            "clicking {prototype_name} should select that entity"
+        );
+    }
 }
 
 /// A wagon stands on a rail, and a rail is an ordinary placed entity — so the
