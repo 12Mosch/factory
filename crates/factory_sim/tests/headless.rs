@@ -12,27 +12,6 @@ fn tick_chemical_science_factory(sim: &mut Simulation) {
 }
 
 #[test]
-fn sim_runs_3600_ticks_without_bevy() {
-    let mut sim = Simulation::new_test_world(123);
-    for _ in 0..3600 {
-        sim.tick();
-    }
-}
-
-#[test]
-fn same_seed_same_hash_after_ticks() {
-    let mut a = Simulation::new_test_world(42);
-    let mut b = Simulation::new_test_world(42);
-
-    for _ in 0..10_000 {
-        a.tick();
-        b.tick();
-    }
-
-    assert_eq!(a.state_hash(), b.state_hash());
-}
-
-#[test]
 fn same_seed_same_inputs_same_hash() {
     let inputs = scripted_inputs_for_red_science_factory();
 
@@ -49,7 +28,12 @@ fn same_seed_same_inputs_same_hash() {
     assert_eq!(a.state_hash(), b.state_hash());
 }
 
+/// Nightly soak: the scripted red science factory must stay stable, keep its
+/// research, and conserve items across 100,000 ticks. Ignored by default
+/// because it dominates the normal test runtime; run it explicitly with
+/// `cargo test -- --ignored` or from a scheduled stress job.
 #[test]
+#[ignore]
 fn red_science_factory_is_stable_for_100k_ticks() {
     let mut sim = Simulation::new_scripted_red_science_factory();
 
@@ -61,22 +45,12 @@ fn red_science_factory_is_stable_for_100k_ticks() {
     assert!(sim.validate_item_conservation());
 }
 
+/// Nightly soak: the scripted chemical science factory must reach its
+/// automated chemical science milestones within 100,000 ticks. The full
+/// duration is part of the test, so it is ignored by default; run it
+/// explicitly with `cargo test -- --ignored` or from a scheduled stress job.
 #[test]
-fn save_load_preserves_state_hash() {
-    let mut sim = Simulation::new_scripted_red_science_factory();
-
-    for _ in 0..10_000 {
-        sim.tick();
-    }
-
-    let before = sim.state_hash();
-    let bytes = save_to_bytes(&sim).unwrap();
-    let loaded = load_from_bytes(&bytes).unwrap();
-
-    assert_eq!(before, loaded.state_hash());
-}
-
-#[test]
+#[ignore]
 fn chemical_science_factory_reaches_automated_chemical_science() {
     let mut sim = Simulation::new_scripted_chemical_science_factory();
 
@@ -116,6 +90,30 @@ fn chemical_science_factory_same_construction_same_hash() {
 fn chemical_science_factory_save_load_then_continue_matches_original() {
     let mut a = Simulation::new_scripted_chemical_science_factory();
 
+    for _ in 0..2_000 {
+        tick_chemical_science_factory(&mut a);
+    }
+
+    let bytes = save_to_bytes(&a).unwrap();
+    let mut b = load_from_bytes(&bytes).unwrap();
+    assert_eq!(a.state_hash(), b.state_hash());
+
+    for _ in 0..2_000 {
+        tick_chemical_science_factory(&mut a);
+        tick_chemical_science_factory(&mut b);
+    }
+
+    assert_eq!(a.state_hash(), b.state_hash());
+}
+
+/// Nightly soak: long-duration persistence for the chemical science factory.
+/// Ignored by default; run it explicitly with `cargo test -- --ignored` or
+/// from a scheduled stress job.
+#[test]
+#[ignore]
+fn chemical_science_factory_save_load_soak_30k_ticks_then_continue_matches_original() {
+    let mut a = Simulation::new_scripted_chemical_science_factory();
+
     for _ in 0..30_000 {
         tick_chemical_science_factory(&mut a);
     }
@@ -142,6 +140,7 @@ fn save_load_then_continue_matches_original() {
 
     let bytes = save_to_bytes(&a).unwrap();
     let mut b = load_from_bytes(&bytes).unwrap();
+    assert_eq!(a.state_hash(), b.state_hash());
 
     for _ in 0..10_000 {
         a.tick();
