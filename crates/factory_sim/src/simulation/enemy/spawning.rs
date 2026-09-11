@@ -280,12 +280,7 @@ impl Simulation {
             // the spawner since. Thread the maintained count through the
             // spawn so the re-check is a HashMap lookup plus one comparison,
             // not another full scan of every enemy.
-            let mut alive = self
-                .enemy_spawning_scratch
-                .alive_by_spawner
-                .get(&request.spawner_id)
-                .copied()
-                .unwrap_or(0);
+            let mut alive = self.maintained_spawner_alive(request.spawner_id);
             if self
                 .spawn_enemy_near_spawner(
                     request.spawner_id,
@@ -329,13 +324,23 @@ impl Simulation {
             .map(|config| config.max_alive_units)
     }
 
+    /// Tick-maintained live count for one spawner, for scheduler paths that
+    /// run after the spawn batch instead of rescanning the enemy map.
+    pub(super) fn maintained_spawner_alive(&self, spawner_id: EntityId) -> u32 {
+        self.enemy_spawning_scratch
+            .alive_by_spawner
+            .get(&spawner_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Centralized live-unit ceiling: every spawn path enters here. `alive`
     /// is the caller's maintained live count for `spawner_id` and is
     /// incremented on success, so batch callers enforce the cap with a
     /// single comparison instead of rescanning the enemy map per spawn.
     /// Callers must supply the true current count: the per-tick batch uses
-    /// its tick-start aggregation, and expansion dispatch uses its own
-    /// single-pass colony census.
+    /// its tick-start aggregation, scheduler expansion dispatch passes its
+    /// maintained snapshot, and direct dispatch passes a one-shot census.
     pub(super) fn spawn_enemy_near_spawner(
         &mut self,
         spawner_id: EntityId,

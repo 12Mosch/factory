@@ -30,7 +30,16 @@ impl Simulation {
                 && self.tick >= next_expansion
             {
                 if let Some(destination) = self.find_expansion_site(base_id, cfg) {
-                    if self.dispatch_expansion(base_id, destination) {
+                    // Scheduler-driven dispatch reuses the tick's maintained
+                    // per-spawner counts instead of rescanning the enemy map
+                    // for every due colony.
+                    let (spawner_ids, alive_by_spawner) = self.expansion_spawner_counts(base_id);
+                    if self.dispatch_expansion_with_counts(
+                        base_id,
+                        destination,
+                        &spawner_ids,
+                        &alive_by_spawner,
+                    ) {
                         if let Some(base) = self.enemies.bases.get_mut(&base_id) {
                             base.next_expansion_tick = next_scaled_tick(
                                 self.tick,
@@ -174,18 +183,14 @@ impl Simulation {
             .any(|entity| (entity.x - x).abs().max((entity.y - y).abs()) < spacing)
     }
 
+    /// Direct entry for tests: build a one-shot colony census, then share
+    /// the helper below with scheduler dispatch.
+    #[cfg(test)]
     pub(in crate::simulation) fn dispatch_expansion(
         &mut self,
         base_id: EnemyBaseId,
         destination: (WorldTileCoord, WorldTileCoord),
     ) -> bool {
-        // Deterministic source selection: the first spawner in colony order
-        // with remaining capacity launches the party, so one saturated
-        // spawner never stalls siblings. A single pass over all enemies
-        // builds the per-spawner counts for this colony, and the capped
-        // party size below keeps every member spawn inside the ceiling; the
-        // maintained count is threaded through each spawn instead of
-        // rescanning the enemy map once per member.
         let spawner_ids: Vec<EntityId> = self
             .enemies
             .bases
@@ -204,8 +209,45 @@ impl Simulation {
                 *count = count.saturating_add(1);
             }
         }
+        self.dispatch_expansion_with_counts(base_id, destination, &spawner_ids, &alive_by_spawner)
+    }
+
+    /// Snapshot of this colony's tick-maintained live counts for scheduler
+    /// dispatch. Exact at this point in the tick: the aggregation is rebuilt
+    /// at tick start, the spawn batch writes back every success, and nothing
+    /// between the batch and expansion dispatch removes enemy units.
+    fn expansion_spawner_counts(
+        &self,
+        base_id: EnemyBaseId,
+    ) -> (Vec<EntityId>, BTreeMap<EntityId, u32>) {
+        let Some(base) = self.enemies.bases.get(&base_id) else {
+            return (Vec::new(), BTreeMap::new());
+        };
+        let spawner_ids: Vec<EntityId> = base.spawners.iter().copied().collect();
+        let alive_by_spawner = spawner_ids
+            .iter()
+            .map(|&id| (id, self.maintained_spawner_alive(id)))
+            .collect();
+        (spawner_ids, alive_by_spawner)
+    }
+
+    /// Shared expansion dispatch over caller-supplied live counts.
+    /// Deterministic source selection: the first spawner in colony order
+    /// with remaining capacity launches the party, so one saturated
+    /// spawner never stalls siblings. The capped party size below keeps
+    /// every member spawn inside the ceiling; the maintained count is
+    /// threaded through each spawn instead of rescanning the enemy map
+    /// once per member.
+    fn dispatch_expansion_with_counts(
+        &mut self,
+        base_id: EnemyBaseId,
+        destination: (WorldTileCoord, WorldTileCoord),
+        spawner_ids: &[EntityId],
+        alive_by_spawner: &BTreeMap<EntityId, u32>,
+    ) -> bool {
         let Some((spawner_id, unit, spawner_prototype, mut alive, remaining)) = spawner_ids
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|id| {
                 let placed = self.entities.placed_entities.get(&id)?;
                 let spawner = self

@@ -903,6 +903,61 @@ fn saturated_colony_defers_expansion_to_retry_ticks() {
 }
 
 #[test]
+fn guard_spawn_fills_last_slot_before_expansion_dispatch() {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, spawners) = colony_with_three_spawners(&mut sim);
+    let first = sim.entities.placed_entities[&spawners[0]].clone();
+    // Two spawners saturated; the last sits exactly one slot below the cap
+    // with attack-mode units only, so this tick's free guard spawn fills its
+    // last slot before the expansion scheduler runs.
+    for (index, &spawner_id) in spawners.iter().enumerate() {
+        let cap = spawner_max_alive(&sim, spawner_id);
+        let fill = if index + 1 == spawners.len() {
+            cap - 1
+        } else {
+            cap
+        };
+        for offset in 0..fill {
+            let id = spawn_test_enemy_at(&mut sim, first.x + i64::from(offset), first.y + 8);
+            sim.enemies.enemies.get_mut(&id).unwrap().home_spawner = Some(spawner_id);
+        }
+    }
+    arm_expansion_due(&mut sim, base_id);
+    let retry = u64::from(
+        sim.gameplay()
+            .expect("the catalog should tune enemy expansion")
+            .expansion_retry_ticks,
+    );
+    let tick = sim.tick;
+    let last = *spawners.last().unwrap();
+    let cap = spawner_max_alive(&sim, last);
+
+    let expansions_before = sim.enemies.expansions.len();
+    sim.advance_enemy_spawners();
+
+    let alive = sim
+        .enemies
+        .enemies
+        .values()
+        .filter(|unit| unit.home_spawner == Some(last))
+        .count();
+    assert_eq!(
+        alive, cap as usize,
+        "the guard fills the last slot and no expansion member may follow"
+    );
+    assert_eq!(
+        sim.enemies.expansions.len(),
+        expansions_before,
+        "scheduler dispatch must observe the same-tick guard spawn and defer"
+    );
+    assert_eq!(
+        sim.enemies.bases[&base_id].next_expansion_tick,
+        tick + retry,
+        "a colony saturated mid-tick must defer to the retry deadline"
+    );
+}
+
+#[test]
 fn colony_with_capacity_dispatches_expansion_on_schedule() {
     let mut sim = Simulation::new_test_world(123);
     let (base_id, _spawners) = colony_with_three_spawners(&mut sim);
