@@ -257,6 +257,7 @@ impl Simulation {
             recipe_id,
             remaining_ticks: crafting_time_ticks,
         });
+        self.crafting_revision = self.crafting_revision.wrapping_add(1);
 
         Ok(())
     }
@@ -295,6 +296,7 @@ impl Simulation {
             .entries
             .remove(index)
             .expect("manual crafting job index was found before refund planning");
+        self.crafting_revision = self.crafting_revision.wrapping_add(1);
         Ok(())
     }
 
@@ -319,6 +321,7 @@ impl Simulation {
         };
         if let Some(target) = target {
             self.crafting_queue.entries.swap(index, target);
+            self.crafting_revision = self.crafting_revision.wrapping_add(1);
         }
         Ok(())
     }
@@ -360,6 +363,7 @@ impl Simulation {
 
         self.player_inventory = inventory;
         self.crafting_queue.entries.pop_front();
+        self.crafting_revision = self.crafting_revision.wrapping_add(1);
         self.crafting_queue.completed_jobs = self.crafting_queue.completed_jobs.wrapping_add(1);
         for ingredient in &ingredients {
             self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));

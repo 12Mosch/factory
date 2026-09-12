@@ -161,6 +161,7 @@ fn lab_consumes_science_and_increases_research_progress() {
     let progress_after_insert = crate::entity_access::lab_state(&sim, lab_id)
         .expect("lab should expose state")
         .progress_ticks;
+    let revision_before_progress = sim.research_revision();
     for _ in progress_after_insert..599 {
         sim.tick();
     }
@@ -182,6 +183,7 @@ fn lab_consumes_science_and_increases_research_progress() {
         0
     );
     assert_eq!(sim.technology_progress(logistics), Some(1));
+    assert!(sim.research_revision() > revision_before_progress);
     assert!(!sim.is_technology_unlocked(logistics));
 }
 
@@ -258,6 +260,7 @@ fn lab_completed_research_unlocks_recipe() {
     complete_research_by_name(&mut sim, "logistics");
     sim.select_research(automation)
         .expect("automation should be selectable");
+    let revision_before_completion = sim.research_revision();
     set_inventory_slot(
         crate::entity_access::inventory_mut(&mut sim, lab_id).expect("lab should expose inventory"),
         0,
@@ -270,6 +273,7 @@ fn lab_completed_research_unlocks_recipe() {
     }
 
     assert!(sim.is_technology_unlocked(automation));
+    assert!(sim.research_revision() > revision_before_completion);
     assert!(sim.is_recipe_unlocked(assembling_machine));
     assert_eq!(sim.research.active, None);
     assert_eq!(sim.technology_progress(automation), Some(20));

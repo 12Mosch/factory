@@ -2,6 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use factory_sim::{EnemyDifficultyPreset, SimCommand};
+use std::sync::Arc;
 
 use crate::audio::{AudioSettings, SoundEvent};
 use crate::input::bindings::{ActionBindings, KeyDisplayNames};
@@ -15,7 +16,7 @@ use crate::ui::audio_settings::{
     AudioSettingsSnapshot, audio_settings_snapshot, spawn_audio_settings_content,
 };
 use crate::ui::controls::{
-    ControlRebindState, ControlsSnapshot, controls_snapshot, spawn_controls_content,
+    ControlRebindState, ControlsSnapshot, ControlsSnapshotCache, spawn_controls_content,
 };
 use crate::ui::display::{DisplaySnapshot, DisplayState, spawn_desktop_settings};
 use crate::ui::enemy_settings::{
@@ -143,7 +144,12 @@ pub(crate) struct SettingsSnapshot {
     display: DisplaySettingsSnapshot,
     desktop: DisplaySnapshot,
     accessibility: AccessibilitySettingsSnapshot,
-    controls: ControlsSnapshot,
+    controls: Arc<ControlsSnapshot>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct SettingsRefresh {
+    last_enemy_key: Option<(u64, u64)>,
 }
 
 type MenuButtonQuery<'w, 's> = Query<
@@ -195,6 +201,8 @@ pub(crate) struct SettingsSnapshotResources<'w> {
     control_rebind: Res<'w, ControlRebindState>,
     sim: Res<'w, SimResource>,
     display: Res<'w, DisplayState>,
+    controls_cache: ResMut<'w, ControlsSnapshotCache>,
+    refresh: ResMut<'w, SettingsRefresh>,
 }
 
 /// Handles settings entry, tab navigation, applying, resetting, and closing.
@@ -311,31 +319,56 @@ pub(crate) fn handle_settings_buttons(
 /// Reconciles the settings modal with the current session snapshot.
 pub(crate) fn sync_settings_window(
     mut commands: Commands,
-    resources: SettingsSnapshotResources,
+    mut resources: SettingsSnapshotResources,
     mut roots: WindowRootQuery<SettingsSnapshot>,
 ) {
+    let window_changed = resources.window.is_changed();
+    let controls_changed = resources.bindings.is_changed()
+        || resources.key_names.is_changed()
+        || resources.control_rebind.is_changed();
+    let enemy_changed =
+        if resources.window.open && resources.window.active_tab == SettingsTab::Gameplay {
+            let key = (
+                resources.sim.replacement_revision(),
+                resources.sim.read().enemy_settings_revision(),
+            );
+            let changed = resources.refresh.last_enemy_key != Some(key);
+            resources.refresh.last_enemy_key = Some(key);
+            changed
+        } else {
+            false
+        };
+    let inputs_changed = window_changed
+        || resources.audio.is_changed()
+        || controls_changed
+        || resources.display.is_changed()
+        || enemy_changed;
     sync_window(
         &mut commands,
         &mut roots,
         resources.window.open,
-        true,
-        || SettingsSnapshot {
-            active_tab: resources.window.active_tab,
-            dirty: resources.window.dirty,
-            audio: audio_settings_snapshot(&resources.audio),
-            gameplay: enemy_settings_snapshot(&resources.sim),
-            display: DisplaySettingsSnapshot {
-                scale_percent: resources.window.pending_values.ui_scale_percent,
-            },
-            desktop: resources.display.snapshot(),
-            accessibility: AccessibilitySettingsSnapshot {
-                readable_high_contrast: resources.window.pending_values.readable_high_contrast,
-            },
-            controls: controls_snapshot(
+        inputs_changed,
+        || {
+            let controls = resources.controls_cache.get(
                 &resources.bindings,
                 &resources.key_names,
                 &resources.control_rebind,
-            ),
+                controls_changed || window_changed,
+            );
+            SettingsSnapshot {
+                active_tab: resources.window.active_tab,
+                dirty: resources.window.dirty,
+                audio: audio_settings_snapshot(&resources.audio),
+                gameplay: enemy_settings_snapshot(&resources.sim),
+                display: DisplaySettingsSnapshot {
+                    scale_percent: resources.window.pending_values.ui_scale_percent,
+                },
+                desktop: resources.display.snapshot(),
+                accessibility: AccessibilitySettingsSnapshot {
+                    readable_high_contrast: resources.window.pending_values.readable_high_contrast,
+                },
+                controls,
+            }
         },
         settings_root,
         spawn_settings_window,
@@ -503,4 +536,36 @@ pub(crate) fn spawn_button<T: Component>(
             marker,
         ))
         .with_child((Text::new(label), TextFont::from_font_size(11.0)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use factory_sim::Simulation;
+
+    #[test]
+    fn unrelated_sim_resource_change_does_not_rebuild_audio_settings() {
+        let window = SettingsWindowState {
+            open: true,
+            active_tab: SettingsTab::Audio,
+            ..default()
+        };
+        let mut app = App::new();
+        app.insert_resource(window)
+            .init_resource::<AudioSettings>()
+            .init_resource::<ActionBindings>()
+            .init_resource::<KeyDisplayNames>()
+            .init_resource::<ControlRebindState>()
+            .insert_resource(SimResource::new(Simulation::new_test_world(123)))
+            .init_resource::<DisplayState>()
+            .init_resource::<ControlsSnapshotCache>()
+            .init_resource::<SettingsRefresh>()
+            .add_systems(Update, sync_settings_window);
+        app.update();
+
+        // An empty replacement would panic if `SimResource::is_changed()`
+        // caused the Audio tab to rebuild and read Gameplay settings.
+        app.insert_resource(SimResource::empty());
+        app.update();
+    }
 }

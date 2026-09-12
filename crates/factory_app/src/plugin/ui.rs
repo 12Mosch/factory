@@ -28,7 +28,8 @@ use crate::ui::circuit::picker::{handle_signal_picker_buttons, sync_signal_picke
 use crate::ui::circuit::state::CircuitEditorState;
 use crate::ui::container_window::sync_container_window;
 use crate::ui::controls::{
-    ControlRebindState, capture_control_binding, handle_control_binding_buttons,
+    ControlRebindState, ControlsSnapshotCache, capture_control_binding,
+    handle_control_binding_buttons,
 };
 use crate::ui::crafting_panel::{
     handle_crafting_recipe_button_clicks, update_crafting_detail_text,
@@ -54,9 +55,9 @@ use crate::ui::inventory_panel::{
 use crate::ui::logistics_panel::{handle_logistic_request_step_buttons, update_logistic_panel};
 use crate::ui::machine_indicators::{update_machine_guidance, update_machine_indicators};
 use crate::ui::manual_crafting::{
-    handle_manual_crafting_command_results, handle_manual_crafting_queue_buttons,
-    handle_manual_crafting_recipe_buttons, handle_manual_crafting_tab_buttons,
-    sync_manual_crafting_panel,
+    CraftingRecipeTextCache, ManualCraftingRefresh, handle_manual_crafting_command_results,
+    handle_manual_crafting_queue_buttons, handle_manual_crafting_recipe_buttons,
+    handle_manual_crafting_tab_buttons, sync_manual_crafting_panel,
 };
 use crate::ui::module_panel::update_module_panel;
 use crate::ui::objectives_panel::{
@@ -66,7 +67,9 @@ use crate::ui::pause_menu::{
     NewWorldConfirmation, PauseMenuState, handle_pause_hud_button, handle_pause_menu_buttons,
     setup_pause_hud, sync_pause_hud, sync_pause_indicator, sync_pause_menu,
 };
-use crate::ui::production_stats::{handle_production_stats_buttons, sync_production_stats_window};
+use crate::ui::production_stats::{
+    ProductionStatsRefresh, handle_production_stats_buttons, sync_production_stats_window,
+};
 use crate::ui::resources::{
     CraftingWindowState, EquipmentWindowState, InventoryTransferFeedback, OpenContainer,
     ProductionStatsWindowState, TechnologyWindowState,
@@ -76,7 +79,9 @@ use crate::ui::rocket_launch::{
 };
 use crate::ui::rolling_stock_window::{sync_rolling_stock_window, update_rolling_stock_fluid_text};
 use crate::ui::save_load::{handle_save_load_buttons, sync_save_load_window};
-use crate::ui::settings::{SettingsWindowState, handle_settings_buttons, sync_settings_window};
+use crate::ui::settings::{
+    SettingsRefresh, SettingsWindowState, handle_settings_buttons, sync_settings_window,
+};
 use crate::ui::technology_panel::{
     ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
     sync_technology_panel,
@@ -169,12 +174,17 @@ impl Plugin for UiPlugin {
             .init_resource::<ItemGainFeedback>()
             .init_resource::<TechnologyWindowState>()
             .init_resource::<CraftingWindowState>()
+            .init_resource::<ManualCraftingRefresh>()
+            .init_resource::<CraftingRecipeTextCache>()
             .init_resource::<ProductionStatsWindowState>()
+            .init_resource::<ProductionStatsRefresh>()
             .init_resource::<ObjectivesPanelState>()
             .init_resource::<PauseMenuState>()
             .init_resource::<NewWorldConfirmation>()
             .init_resource::<SettingsWindowState>()
+            .init_resource::<SettingsRefresh>()
             .init_resource::<ControlRebindState>()
+            .init_resource::<ControlsSnapshotCache>()
             .init_resource::<EquipmentWindowState>()
             .init_resource::<ThreatUiState>()
             .init_resource::<RocketLaunchUiState>()

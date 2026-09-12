@@ -1,10 +1,10 @@
 //! Shared lifecycle for snapshot-driven UI windows.
 //!
 //! Every panel follows the same dance: despawn when closed, spawn when
-//! missing, despawn duplicates, and rebuild children only when the data they
-//! were built from changed. [`sync_window`] implements that dance once; a
-//! panel supplies its snapshot type, its root-node chrome, and a function
-//! that spawns the contents.
+//! missing and despawn duplicates. Older panels use [`sync_window`] to rebuild
+//! their contents when a snapshot changes. Panels with frequently changing
+//! data use [`sync_retained_window`] instead: it preserves the hierarchy and
+//! lets the caller patch marked nodes in place.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
@@ -48,8 +48,79 @@ pub(crate) enum WindowSync {
     Spawned,
     /// The existing contents already match the snapshot.
     Unchanged,
-    /// The snapshot changed; children were despawned and respawned.
+    /// The contents were despawned and respawned.
     Rebuilt,
+    /// The snapshot changed and the existing hierarchy was retained.
+    Updated,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct WindowSyncInput {
+    pub(crate) open: bool,
+    pub(crate) changed: bool,
+}
+
+/// Drives a window whose contents can be updated without replacing its
+/// hierarchy.
+///
+/// `update_contents` is only called for an existing window with a different
+/// snapshot. It runs before the stored snapshot is replaced and may update
+/// components directly or queue narrowly scoped structural changes through
+/// `commands`. Duplicate roots force a full rebuild of the surviving root so
+/// global marker queries cannot reconcile against descendants being despawned.
+pub(crate) fn sync_retained_window<S: WindowSnapshot, B: Bundle>(
+    commands: &mut Commands,
+    roots: &mut WindowRootQuery<S>,
+    input: WindowSyncInput,
+    make_snapshot: impl FnOnce() -> S,
+    root_bundle: impl FnOnce() -> B,
+    spawn_contents: impl FnOnce(&mut ChildSpawnerCommands, &S),
+    update_contents: impl FnOnce(&mut Commands, Entity, &S, &S),
+) -> WindowSync {
+    if !input.open {
+        for (entity, _, _) in roots.iter() {
+            commands.entity(entity).despawn();
+        }
+        return WindowSync::Closed;
+    }
+
+    let mut roots_iter = roots.iter_mut();
+    let Some((root_entity, mut root, children)) = roots_iter.next() else {
+        let snapshot = make_snapshot();
+        let mut window = commands.spawn(root_bundle());
+        window.with_children(|root| spawn_contents(root, &snapshot));
+        window.insert(WindowRoot { snapshot });
+        return WindowSync::Spawned;
+    };
+    let mut had_duplicates = false;
+    for (duplicate, _, _) in roots_iter {
+        had_duplicates = true;
+        commands.entity(duplicate).despawn();
+    }
+
+    if had_duplicates {
+        let snapshot = make_snapshot();
+        replace_contents(
+            commands,
+            root_entity,
+            &mut root,
+            children,
+            snapshot,
+            spawn_contents,
+        );
+        return WindowSync::Rebuilt;
+    }
+
+    if !input.changed {
+        return WindowSync::Unchanged;
+    }
+    let snapshot = make_snapshot();
+    if root.snapshot == snapshot {
+        return WindowSync::Unchanged;
+    }
+    update_contents(commands, root_entity, &root.snapshot, &snapshot);
+    root.snapshot = snapshot;
+    WindowSync::Updated
 }
 
 /// Drives one window through its lifecycle for this frame.
@@ -129,6 +200,30 @@ pub(crate) fn sync_contents<S: WindowSnapshot>(
     );
 }
 
+/// Reorders a retained parent only when its child identity or order changed.
+/// This avoids dirtying Bevy's hierarchy on value-only UI refreshes.
+pub(crate) fn replace_children_if_different(
+    commands: &mut Commands,
+    parent: Entity,
+    current: &Children,
+    next: &[Entity],
+) -> bool {
+    if current.iter().eq(next.iter().copied()) {
+        return false;
+    }
+    commands.entity(parent).replace_children(next);
+    true
+}
+
+/// Removes hidden retained nodes from layout while keeping their entities.
+pub(crate) fn retained_display(visible: bool) -> Display {
+    if visible {
+        Display::Flex
+    } else {
+        Display::None
+    }
+}
+
 fn rebuild_contents<S: WindowSnapshot>(
     commands: &mut Commands,
     root_entity: Entity,
@@ -140,6 +235,25 @@ fn rebuild_contents<S: WindowSnapshot>(
     if root.snapshot == snapshot {
         return false;
     }
+    replace_contents(
+        commands,
+        root_entity,
+        root,
+        children,
+        snapshot,
+        spawn_contents,
+    );
+    true
+}
+
+fn replace_contents<S: WindowSnapshot>(
+    commands: &mut Commands,
+    root_entity: Entity,
+    root: &mut WindowRoot<S>,
+    children: Option<&Children>,
+    snapshot: S,
+    spawn_contents: impl FnOnce(&mut ChildSpawnerCommands, &S),
+) {
     if let Some(children) = children {
         for child in children.iter() {
             commands.entity(child).despawn();
@@ -149,12 +263,12 @@ fn rebuild_contents<S: WindowSnapshot>(
         .entity(root_entity)
         .with_children(|root| spawn_contents(root, &snapshot));
     root.snapshot = snapshot;
-    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::world::CommandQueue;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TestSnapshot(u32);
@@ -264,6 +378,76 @@ mod tests {
         assert_eq!(test_child_values(&mut app), vec![2]);
     }
 
+    #[test]
+    fn retained_sync_updates_without_replacing_child_identity() {
+        let mut app = App::new();
+        app.insert_resource(TestWindowState {
+            open: true,
+            inputs_changed: true,
+            snapshot: 1,
+            result: None,
+        })
+        .add_systems(Update, sync_retained_test_window);
+
+        app.update();
+        let child = test_child_entities(&mut app)[0];
+        app.world_mut().resource_mut::<TestWindowState>().snapshot = 2;
+        app.update();
+
+        assert_eq!(window_result(&app), WindowSync::Updated);
+        assert_eq!(test_child_entities(&mut app), vec![child]);
+        assert_eq!(test_child_values(&mut app), vec![2]);
+    }
+
+    #[test]
+    fn retained_sync_rebuilds_surviving_root_when_changed_with_duplicates() {
+        let mut app = App::new();
+        app.insert_resource(TestWindowState {
+            open: true,
+            inputs_changed: true,
+            snapshot: 1,
+            result: None,
+        })
+        .add_systems(Update, sync_retained_test_window);
+
+        app.update();
+        app.world_mut()
+            .spawn((WindowRoot::new(TestSnapshot(99)), TestRootMarker))
+            .with_child((TestChild(99),));
+        let previous_children = test_child_entities(&mut app);
+        app.world_mut().resource_mut::<TestWindowState>().snapshot = 2;
+
+        app.update();
+
+        assert_eq!(window_result(&app), WindowSync::Rebuilt);
+        assert_eq!(root_count(&mut app), 1);
+        assert_eq!(root_child_counts(&mut app), vec![1]);
+        assert_eq!(test_child_values(&mut app), vec![2]);
+        assert!(
+            test_child_entities(&mut app)
+                .iter()
+                .all(|entity| !previous_children.contains(entity))
+        );
+    }
+
+    #[test]
+    fn unchanged_child_order_does_not_queue_hierarchy_work() {
+        let mut world = World::new();
+        let first = world.spawn_empty().id();
+        let second = world.spawn_empty().id();
+        let parent = world.spawn_empty().add_children(&[first, second]).id();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+
+        assert!(!replace_children_if_different(
+            &mut commands,
+            parent,
+            world.entity(parent).get::<Children>().unwrap(),
+            &[first, second],
+        ));
+        assert!(queue.is_empty());
+    }
+
     fn sync_test_window(
         mut commands: Commands,
         mut state: ResMut<TestWindowState>,
@@ -295,6 +479,33 @@ mod tests {
             TestSnapshot(state.snapshot),
             spawn_test_child,
         );
+    }
+
+    fn sync_retained_test_window(
+        mut commands: Commands,
+        mut state: ResMut<TestWindowState>,
+        mut roots: WindowRootQuery<TestSnapshot>,
+        mut children: Query<&mut TestChild>,
+    ) {
+        let snapshot = state.snapshot;
+        let open = state.open;
+        let inputs_changed = state.inputs_changed;
+        state.result = Some(sync_retained_window(
+            &mut commands,
+            &mut roots,
+            WindowSyncInput {
+                open,
+                changed: inputs_changed,
+            },
+            || TestSnapshot(snapshot),
+            || (TestRootMarker,),
+            spawn_test_child,
+            |_, _, _, next| {
+                for mut child in &mut children {
+                    child.0 = next.0;
+                }
+            },
+        ));
     }
 
     fn spawn_test_child(
@@ -337,5 +548,13 @@ mod tests {
             .collect::<Vec<_>>();
         values.sort_unstable();
         values
+    }
+
+    fn test_child_entities(app: &mut App) -> Vec<Entity> {
+        let world = app.world_mut();
+        let mut children = world.query_filtered::<Entity, With<TestChild>>();
+        let mut entities = children.iter(world).collect::<Vec<_>>();
+        entities.sort_unstable();
+        entities
     }
 }

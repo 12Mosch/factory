@@ -192,6 +192,7 @@ pub(super) struct MachineTickContext<'a> {
     pub(super) stopped_stock: &'a rolling_stock_ops::StoppedStockIndex,
     pub(super) transport: &'a mut TransportLaneCache,
     pub(super) research: &'a mut ResearchState,
+    pub(super) research_revision: &'a mut u64,
     /// Research-aware recipe snapshot resolved when this bulk pass begins.
     /// The machine and inserter passes build separate contexts because labs run
     /// between them and may unlock the recipe in the same simulation tick.
@@ -242,6 +243,9 @@ impl<'a> MachineTickContext<'a> {
         units: u64,
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result = add_research_units_to_state(&self.world.prototypes, self.research, units)?;
+        if units != 0 {
+            *self.research_revision = self.research_revision.wrapping_add(1);
+        }
         if matches!(result, ResearchProgressResult::Completed { .. }) {
             self.power_demand_cache.invalidate();
         }

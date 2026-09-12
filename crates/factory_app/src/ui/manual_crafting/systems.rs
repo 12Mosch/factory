@@ -1,3 +1,4 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use factory_sim::{CraftingError, SimCommand, SimCommandError};
 
@@ -7,12 +8,23 @@ use crate::simulation::{SimCommandRequest, SimCommandResult};
 use crate::ui::resources::CraftingWindowState;
 
 use super::components::{
-    CraftingPanelSnapshot, CraftingQueueAction, CraftingQueueButton, CraftingQueueSnapshot,
-    CraftingRecipeButton, CraftingTabButton,
+    CraftingFeedbackText, CraftingPanelSnapshot, CraftingQueueAction, CraftingQueueButton,
+    CraftingQueueEmpty, CraftingQueueProgressFill, CraftingQueueRoot, CraftingQueueRow,
+    CraftingRecipeButton, CraftingRecipeEmpty, CraftingRecipeListRoot, CraftingRecipeRow,
+    CraftingTabButton, ManualCraftQueueRow, ManualCraftRecipeRow,
 };
-use super::helpers::{craftable_for_player, crafting_panel_snapshot, queue_snapshot};
-use super::view::{manual_crafting_root, spawn_manual_crafting_contents, spawn_queue_contents};
-use crate::ui::window_sync::{WindowRootQuery, WindowSync, sync_contents, sync_window};
+use super::helpers::{
+    CraftingRecipeTextCache, cached_crafting_panel_snapshot, craftable_for_player,
+};
+use super::view::{
+    manual_crafting_root, spawn_manual_crafting_contents, spawn_queue_row, spawn_recipe_row,
+};
+use crate::ui::window_sync::{
+    WindowRootQuery, WindowSyncInput, replace_children_if_different, retained_display,
+    sync_retained_window,
+};
+
+const CRAFTING_REFRESH_TICKS: u64 = 15;
 
 type CraftingTabInteractionQuery<'w, 's> = Query<
     'w,
@@ -56,7 +68,7 @@ pub(crate) fn handle_manual_crafting_recipe_buttons(
     state: Res<CraftingWindowState>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
-    if !state.open {
+    if !state.open || state.selected_tab != crate::ui::resources::CraftingPanelTab::Player {
         return;
     }
 
@@ -134,31 +146,482 @@ pub(crate) fn sync_manual_crafting_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
     state: Res<CraftingWindowState>,
+    mut refresh: ResMut<ManualCraftingRefresh>,
+    mut recipe_text: ResMut<CraftingRecipeTextCache>,
     mut roots: WindowRootQuery<CraftingPanelSnapshot>,
-    mut queue_roots: WindowRootQuery<CraftingQueueSnapshot>,
+    mut nodes: ManualCraftingNodes,
 ) {
-    let queue = if state.open {
-        queue_snapshot(&sim.read())
-    } else {
-        Vec::new()
+    if !state.open {
+        for (entity, _, _) in &mut roots {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+
+    let simulation = sim.read();
+    recipe_text.refresh(&simulation, sim.replacement_revision());
+    let key = ManualCraftingRefreshKey {
+        replacement_revision: sim.replacement_revision(),
+        tick_bucket: simulation.tick_count() / CRAFTING_REFRESH_TICKS,
+        crafting_revision: simulation.crafting_revision(),
+        selected_tab: state.selected_tab,
     };
-    let result = sync_window(
+    let inputs_changed = refresh.last_key != Some(key) || state.is_changed();
+    refresh.last_key = Some(key);
+    sync_retained_window(
         &mut commands,
         &mut roots,
-        state.open,
-        true,
-        || crafting_panel_snapshot(&sim.read(), state.selected_tab, state.feedback.clone()),
+        WindowSyncInput {
+            open: state.open,
+            changed: inputs_changed,
+        },
+        || {
+            cached_crafting_panel_snapshot(
+                &simulation,
+                state.selected_tab,
+                state.feedback.clone(),
+                &recipe_text,
+            )
+        },
         manual_crafting_root,
-        |root, snapshot| spawn_manual_crafting_contents(root, snapshot, queue.clone()),
+        spawn_manual_crafting_contents,
+        |commands, _, previous, next| {
+            update_manual_crafting(commands, previous, next, &mut nodes);
+        },
     );
-    // When the panel itself was rebuilt the queue root was respawned with
-    // fresh contents; only an unchanged panel needs the inner sync.
-    if result == WindowSync::Unchanged {
-        sync_contents(
-            &mut commands,
-            &mut queue_roots,
-            CraftingQueueSnapshot(queue),
-            |queue_node, snapshot| spawn_queue_contents(queue_node, &snapshot.0),
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct ManualCraftingRefresh {
+    last_key: Option<ManualCraftingRefreshKey>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ManualCraftingRefreshKey {
+    replacement_revision: u64,
+    tick_bucket: u64,
+    crafting_revision: u64,
+    selected_tab: crate::ui::resources::CraftingPanelTab,
+}
+
+type FeedbackFilter = (
+    With<CraftingFeedbackText>,
+    Without<CraftingRecipeEmpty>,
+    Without<CraftingQueueEmpty>,
+    Without<CraftingQueueButton>,
+    Without<CraftingQueueProgressFill>,
+);
+type FeedbackQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static mut Node, &'static mut Visibility), FeedbackFilter>;
+type CraftingTabFilter = (
+    With<CraftingTabButton>,
+    Without<CraftingRecipeRow>,
+    Without<CraftingRecipeButton>,
+);
+type CraftingTabStyleQuery<'w, 's> =
+    Query<'w, 's, (&'static CraftingTabButton, &'static mut BackgroundColor), CraftingTabFilter>;
+type RecipeEmptyFilter = (
+    With<CraftingRecipeEmpty>,
+    Without<CraftingFeedbackText>,
+    Without<CraftingQueueEmpty>,
+    Without<CraftingQueueButton>,
+    Without<CraftingQueueProgressFill>,
+);
+type RecipeEmptyQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static mut Node, &'static mut Visibility), RecipeEmptyFilter>;
+type RecipeRowQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static CraftingRecipeRow,
+        &'static Children,
+        &'static mut BackgroundColor,
+    ),
+    (With<CraftingRecipeRow>, Without<CraftingRecipeButton>),
+>;
+type RecipeButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Children,
+        &'static mut BackgroundColor,
+        &'static mut BorderColor,
+    ),
+    (With<CraftingRecipeButton>, Without<CraftingRecipeRow>),
+>;
+type QueueEmptyFilter = (
+    With<CraftingQueueEmpty>,
+    Without<CraftingFeedbackText>,
+    Without<CraftingRecipeEmpty>,
+    Without<CraftingQueueButton>,
+    Without<CraftingQueueProgressFill>,
+);
+type QueueEmptyQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static mut Node, &'static mut Visibility), QueueEmptyFilter>;
+type QueueButtonFilter = (
+    Without<CraftingFeedbackText>,
+    Without<CraftingRecipeEmpty>,
+    Without<CraftingQueueEmpty>,
+    Without<CraftingQueueProgressFill>,
+);
+type QueueButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut CraftingQueueButton,
+        &'static mut Node,
+        &'static mut Visibility,
+    ),
+    QueueButtonFilter,
+>;
+type QueueProgressFillQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static CraftingQueueProgressFill, &'static mut Node),
+    (
+        Without<CraftingFeedbackText>,
+        Without<CraftingRecipeEmpty>,
+        Without<CraftingQueueEmpty>,
+        Without<CraftingQueueButton>,
+    ),
+>;
+
+#[derive(SystemParam)]
+pub(crate) struct ManualCraftingNodes<'w, 's> {
+    feedback: FeedbackQuery<'w, 's>,
+    tabs: CraftingTabStyleQuery<'w, 's>,
+    recipe_roots: Query<'w, 's, (Entity, &'static Children), With<CraftingRecipeListRoot>>,
+    recipe_empty: RecipeEmptyQuery<'w, 's>,
+    recipe_rows: RecipeRowQuery<'w, 's>,
+    recipe_buttons: RecipeButtonQuery<'w, 's>,
+    queue_roots: Query<'w, 's, (Entity, &'static Children), With<CraftingQueueRoot>>,
+    queue_empty: QueueEmptyQuery<'w, 's>,
+    queue_rows: Query<'w, 's, (Entity, &'static CraftingQueueRow, &'static Children)>,
+    queue_buttons: QueueButtonQuery<'w, 's>,
+    progress_fills: QueueProgressFillQuery<'w, 's>,
+    children: Query<'w, 's, &'static Children>,
+}
+
+fn update_manual_crafting(
+    commands: &mut Commands,
+    previous: &CraftingPanelSnapshot,
+    next: &CraftingPanelSnapshot,
+    nodes: &mut ManualCraftingNodes,
+) {
+    if previous.feedback != next.feedback {
+        for (entity, mut node, mut visibility) in &mut nodes.feedback {
+            let visible = next.feedback.is_some();
+            node.display = retained_display(visible);
+            *visibility = if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            commands
+                .entity(entity)
+                .insert(Text::new(next.feedback.clone().unwrap_or_default()));
+        }
+    }
+    if previous.selected_tab != next.selected_tab {
+        for (button, mut background) in &mut nodes.tabs {
+            background.0 = if button.tab == next.selected_tab {
+                Color::srgba(0.22, 0.27, 0.24, 0.98)
+            } else {
+                Color::srgba(0.10, 0.11, 0.11, 0.98)
+            };
+        }
+    }
+    if previous.selected_tab != next.selected_tab || previous.rows != next.rows {
+        reconcile_recipe_rows(commands, &next.rows, nodes);
+    }
+    if previous.queue != next.queue {
+        reconcile_queue_rows(commands, &next.queue, nodes);
+    }
+}
+
+fn reconcile_recipe_rows(
+    commands: &mut Commands,
+    rows: &[ManualCraftRecipeRow],
+    nodes: &mut ManualCraftingNodes,
+) {
+    let Some((root, current_children)) = nodes.recipe_roots.iter().next() else {
+        return;
+    };
+    let empty = nodes
+        .recipe_empty
+        .iter_mut()
+        .next()
+        .map(|(entity, mut node, mut visibility)| {
+            let visible = rows.is_empty();
+            node.display = retained_display(visible);
+            *visibility = if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            entity
+        });
+    let mut ordered = Vec::with_capacity(rows.len() + 1);
+    ordered.extend(empty);
+    for row in rows {
+        if let Some((entity, _, children, mut row_background)) = nodes
+            .recipe_rows
+            .iter_mut()
+            .find(|(_, marker, _, _)| marker.0 == row.recipe_id)
+        {
+            row_background.0 = if row.button_enabled {
+                Color::srgba(0.070, 0.077, 0.073, 0.94)
+            } else {
+                Color::srgba(0.050, 0.052, 0.052, 0.90)
+            };
+            if let Some(details) = children.first()
+                && let Ok(detail_children) = nodes.children.get(*details)
+            {
+                let values = [
+                    row.display_name.as_ref(),
+                    row.products.as_ref(),
+                    row.ingredients.as_str(),
+                ];
+                for (text_entity, value) in detail_children.iter().zip(values) {
+                    commands.entity(text_entity).insert(Text::new(value));
+                }
+            }
+            if let Some(button_entity) = children.get(1)
+                && let Ok((button_children, mut background, mut border)) =
+                    nodes.recipe_buttons.get_mut(*button_entity)
+            {
+                background.0 = if row.button_enabled {
+                    Color::srgba(0.18, 0.34, 0.25, 0.98)
+                } else {
+                    Color::srgba(0.09, 0.095, 0.095, 0.96)
+                };
+                border.set_all(if row.button_enabled {
+                    Color::srgba(0.42, 0.55, 0.43, 0.90)
+                } else {
+                    Color::srgba(0.25, 0.26, 0.25, 0.85)
+                });
+                if let Some(label) = button_children.first() {
+                    commands.entity(*label).insert((
+                        Text::new(row.status.clone()),
+                        TextFont::from_font_size(if row.button_enabled { 11.0 } else { 10.0 }),
+                        TextColor(if row.button_enabled {
+                            Color::WHITE
+                        } else {
+                            Color::srgb(0.72, 0.74, 0.70)
+                        }),
+                    ));
+                }
+            }
+            ordered.push(entity);
+        } else {
+            commands.entity(root).with_children(|parent| {
+                ordered.push(spawn_recipe_row(parent, row));
+            });
+        }
+    }
+    for (entity, marker, _, _) in &nodes.recipe_rows {
+        if !rows.iter().any(|row| row.recipe_id == marker.0) {
+            commands.entity(entity).despawn();
+        }
+    }
+    replace_children_if_different(commands, root, current_children, &ordered);
+}
+
+fn reconcile_queue_rows(
+    commands: &mut Commands,
+    rows: &[ManualCraftQueueRow],
+    nodes: &mut ManualCraftingNodes,
+) {
+    let Some((root, current_children)) = nodes.queue_roots.iter().next() else {
+        return;
+    };
+    let empty = nodes
+        .queue_empty
+        .iter_mut()
+        .next()
+        .map(|(entity, mut node, mut visibility)| {
+            let visible = rows.is_empty();
+            node.display = retained_display(visible);
+            *visibility = if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            entity
+        });
+    let mut ordered = Vec::with_capacity(rows.len() + 1);
+    ordered.extend(empty);
+    for row in rows {
+        if let Some((entity, _, children)) = nodes
+            .queue_rows
+            .iter()
+            .find(|(_, marker, _)| marker.0 == row.job_id)
+        {
+            if let Some(label) = children.first() {
+                commands
+                    .entity(*label)
+                    .insert(Text::new(row.status.clone()));
+            }
+            for (marker, mut node) in &mut nodes.progress_fills {
+                if marker.0 == row.job_id {
+                    node.width = Val::Percent(f32::from(row.progress_percent));
+                }
+            }
+            for child in children.iter().skip(2) {
+                if let Ok((mut button, mut node, mut visibility)) =
+                    nodes.queue_buttons.get_mut(child)
+                {
+                    button.job_id = row.job_id;
+                    let visible = match button.action {
+                        CraftingQueueAction::Move(factory_sim::CraftingQueueMove::Earlier) => {
+                            row.can_move_earlier
+                        }
+                        CraftingQueueAction::Move(factory_sim::CraftingQueueMove::Later) => {
+                            row.can_move_later
+                        }
+                        CraftingQueueAction::Cancel => true,
+                    };
+                    node.display = retained_display(visible);
+                    *visibility = if visible {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    };
+                }
+            }
+            ordered.push(entity);
+        } else {
+            commands.entity(root).with_children(|parent| {
+                ordered.push(spawn_queue_row(parent, row));
+            });
+        }
+    }
+    for (entity, marker, _) in &nodes.queue_rows {
+        if !rows.iter().any(|row| row.job_id == marker.0) {
+            commands.entity(entity).despawn();
+        }
+    }
+    replace_children_if_different(commands, root, current_children, &ordered);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::message::Messages;
+    use factory_data::{item_id_by_name, recipe_id_by_name};
+    use factory_sim::{CraftingJobId, Simulation};
+
+    #[derive(Resource)]
+    struct ManualUpdateFixture {
+        previous: CraftingPanelSnapshot,
+        next: CraftingPanelSnapshot,
+    }
+
+    fn update_manual_crafting_fixture(
+        mut commands: Commands,
+        fixture: Res<ManualUpdateFixture>,
+        mut nodes: ManualCraftingNodes,
+    ) {
+        update_manual_crafting(&mut commands, &fixture.previous, &fixture.next, &mut nodes);
+    }
+
+    #[test]
+    fn closed_panel_does_not_access_uninitialized_simulation() {
+        let mut app = App::new();
+        app.insert_resource(SimResource::empty())
+            .init_resource::<CraftingWindowState>()
+            .init_resource::<ManualCraftingRefresh>()
+            .init_resource::<CraftingRecipeTextCache>()
+            .add_systems(Update, sync_manual_crafting_panel);
+
+        app.update();
+    }
+
+    #[test]
+    fn queue_only_change_does_not_reconcile_recipe_subtree() {
+        let previous = empty_panel_snapshot();
+        let mut next = previous.clone();
+        next.queue.push(ManualCraftQueueRow {
+            job_id: CraftingJobId(1),
+            status: "Crafting".to_string(),
+            can_move_earlier: false,
+            can_move_later: false,
+            progress_percent: 50,
+        });
+        let mut app = App::new();
+        app.insert_resource(ManualUpdateFixture { previous, next })
+            .add_systems(Update, update_manual_crafting_fixture);
+        let empty = app
+            .world_mut()
+            .spawn((
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+                Visibility::Hidden,
+                CraftingRecipeEmpty,
+            ))
+            .id();
+        app.world_mut()
+            .spawn((Node::default(), CraftingRecipeListRoot))
+            .add_child(empty);
+
+        app.update();
+
+        assert_eq!(
+            app.world().entity(empty).get::<Node>().unwrap().display,
+            Display::None
         );
+        assert_eq!(
+            *app.world().entity(empty).get::<Visibility>().unwrap(),
+            Visibility::Hidden
+        );
+    }
+
+    #[test]
+    fn assembling_tab_recipe_button_does_not_queue_manual_craft() {
+        let mut sim = Simulation::new_test_world(123);
+        let catalog = sim.catalog().clone();
+        let iron_plate = item_id_by_name(&catalog, "iron_plate");
+        let gear = recipe_id_by_name(&catalog, "iron_gear_wheel");
+        sim.player_inventory_mut()
+            .insert(&catalog, iron_plate, 2)
+            .unwrap();
+
+        let state = CraftingWindowState {
+            open: true,
+            selected_tab: crate::ui::resources::CraftingPanelTab::Assembling,
+            ..default()
+        };
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(sim))
+            .insert_resource(state)
+            .add_message::<SimCommandRequest>()
+            .add_systems(Update, handle_manual_crafting_recipe_buttons);
+        app.world_mut().spawn((
+            Button,
+            Interaction::Pressed,
+            CraftingRecipeButton { recipe_id: gear },
+        ));
+
+        app.update();
+
+        assert!(
+            app.world_mut()
+                .resource_mut::<Messages<SimCommandRequest>>()
+                .drain()
+                .next()
+                .is_none()
+        );
+    }
+
+    fn empty_panel_snapshot() -> CraftingPanelSnapshot {
+        CraftingPanelSnapshot {
+            selected_tab: crate::ui::resources::CraftingPanelTab::Player,
+            rows: Vec::new(),
+            queue: Vec::new(),
+            feedback: None,
+        }
     }
 }

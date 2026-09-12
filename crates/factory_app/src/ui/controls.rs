@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::sync::Arc;
 
 use crate::input::bindings::{
     ActionBindings, BindingInput, InputAction, InputBinding, KeyDisplayNames, current_modifiers,
@@ -20,6 +21,26 @@ pub(crate) struct ControlsSnapshot {
     rows: Vec<ControlRowSnapshot>,
     capturing: Option<InputAction>,
     error: Option<String>,
+}
+
+/// Shares formatted bindings between settings snapshots. Edits on other tabs
+/// can then retain the existing control strings without copying all rows.
+#[derive(Resource, Default)]
+pub(crate) struct ControlsSnapshotCache(Option<Arc<ControlsSnapshot>>);
+
+impl ControlsSnapshotCache {
+    pub(crate) fn get(
+        &mut self,
+        bindings: &ActionBindings,
+        key_names: &KeyDisplayNames,
+        state: &ControlRebindState,
+        inputs_changed: bool,
+    ) -> Arc<ControlsSnapshot> {
+        if inputs_changed || self.0.is_none() {
+            self.0 = Some(Arc::new(controls_snapshot(bindings, key_names, state)));
+        }
+        Arc::clone(self.0.as_ref().expect("control cache was initialized"))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
