@@ -8,6 +8,6 @@ pub use components::{
     TechnologyStartQueueButton,
 };
 pub(crate) use systems::{
-    TechnologyPanelRefresh, ensure_selected_technology, handle_technology_panel_buttons,
-    handle_technology_window_input, sync_technology_panel,
+    ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
+    sync_technology_panel,
 };

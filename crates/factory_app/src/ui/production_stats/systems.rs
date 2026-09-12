@@ -111,7 +111,6 @@ pub(crate) struct ProductionStatsNodes<'w, 's> {
     graph_bars: PowerGraphBarQuery<'w, 's>,
     diagnostic_roots: Query<'w, 's, (Entity, &'static DiagnosticLinesRoot, &'static Children)>,
     diagnostic_lines: Query<'w, 's, (Entity, &'static DiagnosticLine)>,
-    texts: Query<'w, 's, &'static mut Text>,
 }
 
 pub(crate) fn sync_production_stats_window(
@@ -167,9 +166,10 @@ fn update_production_stats(
     nodes: &mut ProductionStatsNodes,
 ) {
     for entity in &nodes.rocket_labels {
-        if let Ok(mut text) = nodes.texts.get_mut(entity) {
-            text.0 = format!("Rockets launched: {}", next.rockets_launched);
-        }
+        commands.entity(entity).insert(Text::new(format!(
+            "Rockets launched: {}",
+            next.rockets_launched
+        )));
     }
     for (button, mut background) in &mut nodes.tabs {
         background.0 = if button.tab == next.selected_tab {
@@ -268,11 +268,7 @@ fn reconcile_stat_rows(
                 .iter()
                 .zip([&row.item_name, &row.per_minute, &row.total])
             {
-                if let Ok(mut text) = nodes.texts.get_mut(child)
-                    && text.0 != *value
-                {
-                    text.0.clone_from(value);
-                }
+                commands.entity(child).insert(Text::new(value.clone()));
             }
             ordered.push(entity);
         } else {
@@ -304,11 +300,7 @@ fn reconcile_power_lines(
             .iter()
             .find(|(_, marker)| marker.0 == index)
         {
-            if let Ok(mut text) = nodes.texts.get_mut(entity)
-                && text.0 != *value
-            {
-                text.0.clone_from(value);
-            }
+            commands.entity(entity).insert(Text::new(value.clone()));
             ordered.push(entity);
         } else {
             commands.entity(root).with_children(|parent| {
@@ -408,11 +400,7 @@ fn reconcile_diagnostics(
             .iter()
             .find(|(_, marker)| marker.section == section && marker.index == index)
         {
-            if let Ok(mut text) = nodes.texts.get_mut(entity)
-                && text.0 != *value
-            {
-                text.0.clone_from(value);
-            }
+            commands.entity(entity).insert(Text::new(value.clone()));
             ordered.push(entity);
         } else {
             commands.entity(root).with_children(|parent| {

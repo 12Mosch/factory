@@ -186,7 +186,6 @@ pub(crate) fn sync_technology_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
     window_state: Res<TechnologyWindowState>,
-    mut refresh: ResMut<TechnologyPanelRefresh>,
     mut roots: WindowRootQuery<TechnologyPanelSnapshot>,
     mut nodes: TechnologyPanelNodes,
 ) {
@@ -203,14 +202,12 @@ pub(crate) fn sync_technology_panel(
         research_revision: simulation.research_revision(),
         selected: window_state.selected,
     };
-    let inputs_changed = refresh.last_key != Some(snapshot) || window_state.is_changed();
-    refresh.last_key = Some(snapshot);
     sync_retained_window(
         &mut commands,
         &mut roots,
         WindowSyncInput {
             open: window_state.open,
-            changed: inputs_changed,
+            changed: true,
         },
         || snapshot,
         technology_panel_root,
@@ -219,11 +216,6 @@ pub(crate) fn sync_technology_panel(
             update_technology_panel(commands, &simulation, previous, next, &mut nodes);
         },
     );
-}
-
-#[derive(Resource, Default)]
-pub(crate) struct TechnologyPanelRefresh {
-    last_key: Option<TechnologyPanelSnapshot>,
 }
 
 type TechnologyButtonQuery<'w, 's> = Query<
@@ -298,7 +290,6 @@ pub(crate) struct TechnologyPanelNodes<'w, 's> {
     queue_empty: TechnologyQueueEmptyQuery<'w, 's>,
     queue_rows: Query<'w, 's, (Entity, &'static TechnologyQueueRow, &'static Children)>,
     queue_buttons: TechnologyQueueButtonQuery<'w, 's>,
-    texts: Query<'w, 's, &'static mut Text>,
 }
 
 fn update_technology_panel(
@@ -308,12 +299,8 @@ fn update_technology_panel(
     next: &TechnologyPanelSnapshot,
     nodes: &mut TechnologyPanelNodes,
 ) {
-    set_marked_text(
-        &nodes.active_labels,
-        &mut nodes.texts,
-        active_research_text(sim),
-    );
-    set_marked_text(&nodes.queue_labels, &mut nodes.texts, queue_text(sim));
+    set_marked_text(commands, &nodes.active_labels, active_research_text(sim));
+    set_marked_text(commands, &nodes.queue_labels, queue_text(sim));
 
     for (button, mut background, mut border) in &mut nodes.technology_buttons {
         background.0 =
@@ -325,9 +312,9 @@ fn update_technology_panel(
         });
     }
     for (entity, marker) in &nodes.status_labels {
-        if let Ok(mut text) = nodes.texts.get_mut(entity) {
-            text.0 = technology_status_text(sim, marker.0);
-        }
+        commands
+            .entity(entity)
+            .insert(Text::new(technology_status_text(sim, marker.0)));
     }
 
     if previous.selected != next.selected {
@@ -372,11 +359,7 @@ fn update_technology_panel(
                 }
                 TechnologyDetailField::Start => start_queue_label(sim, selected),
             };
-            if let Ok(mut text) = nodes.texts.get_mut(entity)
-                && text.0 != value
-            {
-                text.0 = value;
-            }
+            commands.entity(entity).insert(Text::new(value));
         }
         for mut node in &mut nodes.progress_fills {
             node.width = Val::Percent(research_progress_percent(sim, selected));
@@ -399,16 +382,12 @@ fn update_technology_panel(
 }
 
 fn set_marked_text<M: Component>(
+    commands: &mut Commands,
     markers: &Query<Entity, With<M>>,
-    texts: &mut Query<&mut Text>,
     value: String,
 ) {
     for entity in markers {
-        if let Ok(mut text) = texts.get_mut(entity)
-            && text.0 != value
-        {
-            text.0.clone_from(&value);
-        }
+        commands.entity(entity).insert(Text::new(value.clone()));
     }
 }
 
@@ -445,14 +424,12 @@ fn reconcile_research_queue(
             .iter()
             .find(|(_, marker, _)| marker.0 == technology_id)
         {
-            if let Some(label) = children.first()
-                && let Ok(mut text) = nodes.texts.get_mut(*label)
-            {
-                text.0 = format!(
+            if let Some(label) = children.first() {
+                commands.entity(*label).insert(Text::new(format!(
                     "{}. {}",
                     index + 1,
                     super::helpers::technology_name(sim.catalog(), technology_id)
-                );
+                )));
             }
             for child in children.iter().skip(1) {
                 if let Ok((mut button, mut node, mut visibility)) =
@@ -506,7 +483,6 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(SimResource::empty())
             .init_resource::<TechnologyWindowState>()
-            .init_resource::<TechnologyPanelRefresh>()
             .add_systems(Update, sync_technology_panel);
 
         app.update();

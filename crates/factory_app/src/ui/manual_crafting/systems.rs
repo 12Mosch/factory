@@ -301,9 +301,6 @@ pub(crate) struct ManualCraftingNodes<'w, 's> {
     queue_buttons: QueueButtonQuery<'w, 's>,
     progress_fills: QueueProgressFillQuery<'w, 's>,
     children: Query<'w, 's, &'static Children>,
-    texts: Query<'w, 's, &'static mut Text>,
-    text_fonts: Query<'w, 's, &'static mut TextFont>,
-    text_colors: Query<'w, 's, &'static mut TextColor>,
 }
 
 fn update_manual_crafting(
@@ -321,9 +318,9 @@ fn update_manual_crafting(
             } else {
                 Visibility::Hidden
             };
-            if let Ok(mut text) = nodes.texts.get_mut(entity) {
-                text.0 = next.feedback.clone().unwrap_or_default();
-            }
+            commands
+                .entity(entity)
+                .insert(Text::new(next.feedback.clone().unwrap_or_default()));
         }
     }
     if previous.selected_tab != next.selected_tab {
@@ -387,11 +384,7 @@ fn reconcile_recipe_rows(
                     row.ingredients.as_str(),
                 ];
                 for (text_entity, value) in detail_children.iter().zip(values) {
-                    if let Ok(mut text) = nodes.texts.get_mut(text_entity)
-                        && text.0 != value
-                    {
-                        text.0 = value.to_owned();
-                    }
+                    commands.entity(text_entity).insert(Text::new(value));
                 }
             }
             if let Some(button_entity) = children.get(1)
@@ -409,19 +402,15 @@ fn reconcile_recipe_rows(
                     Color::srgba(0.25, 0.26, 0.25, 0.85)
                 });
                 if let Some(label) = button_children.first() {
-                    if let Ok(mut text) = nodes.texts.get_mut(*label) {
-                        text.0.clone_from(&row.status);
-                    }
-                    if let Ok(mut font) = nodes.text_fonts.get_mut(*label) {
-                        font.font_size = FontSize::Px(if row.button_enabled { 11.0 } else { 10.0 });
-                    }
-                    if let Ok(mut color) = nodes.text_colors.get_mut(*label) {
-                        color.0 = if row.button_enabled {
+                    commands.entity(*label).insert((
+                        Text::new(row.status.clone()),
+                        TextFont::from_font_size(if row.button_enabled { 11.0 } else { 10.0 }),
+                        TextColor(if row.button_enabled {
                             Color::WHITE
                         } else {
                             Color::srgb(0.72, 0.74, 0.70)
-                        };
-                    }
+                        }),
+                    ));
                 }
             }
             ordered.push(entity);
@@ -469,10 +458,10 @@ fn reconcile_queue_rows(
             .iter()
             .find(|(_, marker, _)| marker.0 == row.job_id)
         {
-            if let Some(label) = children.first()
-                && let Ok(mut text) = nodes.texts.get_mut(*label)
-            {
-                text.0.clone_from(&row.status);
+            if let Some(label) = children.first() {
+                commands
+                    .entity(*label)
+                    .insert(Text::new(row.status.clone()));
             }
             for (marker, mut node) in &mut nodes.progress_fills {
                 if marker.0 == row.job_id {

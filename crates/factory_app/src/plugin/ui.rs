@@ -83,8 +83,8 @@ use crate::ui::settings::{
     SettingsRefresh, SettingsWindowState, handle_settings_buttons, sync_settings_window,
 };
 use crate::ui::technology_panel::{
-    TechnologyPanelRefresh, ensure_selected_technology, handle_technology_panel_buttons,
-    handle_technology_window_input, sync_technology_panel,
+    ensure_selected_technology, handle_technology_panel_buttons, handle_technology_window_input,
+    sync_technology_panel,
 };
 use crate::ui::text_input::TextInputSanitization;
 use crate::ui::threat::{
@@ -173,7 +173,6 @@ impl Plugin for UiPlugin {
             .init_resource::<InventoryTransferFeedback>()
             .init_resource::<ItemGainFeedback>()
             .init_resource::<TechnologyWindowState>()
-            .init_resource::<TechnologyPanelRefresh>()
             .init_resource::<CraftingWindowState>()
             .init_resource::<ManualCraftingRefresh>()
             .init_resource::<CraftingRecipeTextCache>()
