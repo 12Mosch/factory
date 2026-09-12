@@ -50,6 +50,8 @@ impl Simulation {
             enemy_map_revision: 0,
             power_map_revision: 0,
             production_status_revision: 0,
+            research_revision: 0,
+            crafting_revision: 0,
             production_map_statuses: Vec::new(),
             production_map_status_scratch: Vec::new(),
             world,
@@ -292,6 +294,16 @@ impl Simulation {
         self.production_status_revision
     }
 
+    /// Revision of research selection, queue, progress, and completed levels.
+    pub fn research_revision(&self) -> u64 {
+        self.research_revision
+    }
+
+    /// Revision of manual-crafting queue membership and order.
+    pub fn crafting_revision(&self) -> u64 {
+        self.crafting_revision
+    }
+
     pub fn current_tick(&self) -> Tick {
         Tick(self.tick)
     }
@@ -464,6 +476,7 @@ impl Simulation {
             .retain(|queued_id| *queued_id != technology_id);
         self.prune_invalid_research_queue();
         self.power_demand_cache.invalidate();
+        self.research_revision = self.research_revision.wrapping_add(1);
         Ok(())
     }
 
@@ -484,6 +497,7 @@ impl Simulation {
         self.research.queue.push(technology_id);
         self.promote_next_queued_research()?;
         self.power_demand_cache.invalidate();
+        self.research_revision = self.research_revision.wrapping_add(1);
         Ok(())
     }
 
@@ -495,7 +509,9 @@ impl Simulation {
             return Err(ResearchError::InvalidQueueIndex { index });
         }
 
-        Ok(self.remove_queued_research_and_dependents(index))
+        let removed = self.remove_queued_research_and_dependents(index);
+        self.research_revision = self.research_revision.wrapping_add(1);
+        Ok(removed)
     }
 
     pub fn move_queued_research(
@@ -510,6 +526,7 @@ impl Simulation {
 
         let technology_id = self.research.queue.remove(from_index);
         self.research.queue.insert(to_index, technology_id);
+        self.research_revision = self.research_revision.wrapping_add(1);
         Ok(())
     }
 
@@ -534,6 +551,9 @@ impl Simulation {
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result =
             add_research_units_to_state(&self.world.prototypes, &mut self.research, units)?;
+        if units != 0 {
+            self.research_revision = self.research_revision.wrapping_add(1);
+        }
         if matches!(result, ResearchProgressResult::Completed { .. }) {
             self.power_demand_cache.invalidate();
         }

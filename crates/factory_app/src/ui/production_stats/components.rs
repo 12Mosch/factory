@@ -19,6 +19,60 @@ pub struct ProductionStatsTabButton {
     pub(super) tab: StatsTab,
 }
 
+#[derive(Component)]
+pub(super) struct ProductionStatsRocketsText;
+
+#[derive(Component)]
+pub(super) struct ProductionStatsBody;
+
+#[derive(Clone, Copy, Component, Debug, PartialEq, Eq)]
+pub(super) enum StatSection {
+    Items,
+    Fluids,
+}
+
+#[derive(Component)]
+pub(super) struct StatRowsRoot(pub(super) StatSection);
+
+#[derive(Component)]
+pub(super) struct StatEmptyLabel(pub(super) StatSection);
+
+#[derive(Component, Debug, PartialEq, Eq)]
+pub(super) struct StatRow {
+    pub(super) section: StatSection,
+    pub(super) key: String,
+}
+
+#[derive(Component)]
+pub(super) struct PowerLinesRoot;
+
+#[derive(Component)]
+pub(super) struct PowerLine(pub(super) usize);
+
+#[derive(Component)]
+pub(super) struct PowerGraphRoot;
+
+#[derive(Clone, Copy, Component, Debug, PartialEq, Eq)]
+pub(super) struct PowerGraphBar {
+    pub(super) index: usize,
+    pub(super) production: bool,
+}
+
+#[derive(Clone, Copy, Component, Debug, PartialEq, Eq)]
+pub(super) enum DiagnosticSection {
+    Status,
+    Bottleneck,
+}
+
+#[derive(Component)]
+pub(super) struct DiagnosticLinesRoot(pub(super) DiagnosticSection);
+
+#[derive(Component)]
+pub(super) struct DiagnosticLine {
+    pub(super) section: DiagnosticSection,
+    pub(super) index: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemStatDisplayRow {
     pub item_name: String,

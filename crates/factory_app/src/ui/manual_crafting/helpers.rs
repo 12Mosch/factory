@@ -1,33 +1,65 @@
+use bevy::prelude::Resource;
 use factory_data::{
     CraftingCategory, ItemAmount, ItemId, PrototypeCatalog, RecipeId, RecipePrototype,
     TechnologyEffect,
 };
 use factory_sim::{Inventory, Simulation};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::ui::formatting::{format_item_display_name, format_recipe_display_name};
 use crate::ui::resources::CraftingPanelTab;
 
 use super::components::{CraftingPanelSnapshot, ManualCraftQueueRow, ManualCraftRecipeRow};
 
-pub(crate) fn crafting_panel_snapshot(
+#[derive(Resource, Default)]
+pub(crate) struct CraftingRecipeTextCache {
+    replacement_revision: Option<u64>,
+    rows: BTreeMap<RecipeId, (Arc<str>, Arc<str>)>,
+}
+
+impl CraftingRecipeTextCache {
+    pub(crate) fn refresh(&mut self, sim: &Simulation, replacement_revision: u64) {
+        if self.replacement_revision == Some(replacement_revision) {
+            return;
+        }
+        self.rows.clear();
+        for recipe in sim.catalog().recipes() {
+            self.rows.insert(
+                recipe.id,
+                (
+                    Arc::from(format_recipe_display_name(&recipe.name)),
+                    Arc::from(product_text(sim.catalog(), &recipe.products)),
+                ),
+            );
+        }
+        self.replacement_revision = Some(replacement_revision);
+    }
+}
+
+pub(crate) fn cached_crafting_panel_snapshot(
     sim: &Simulation,
     selected_tab: CraftingPanelTab,
     feedback: Option<String>,
+    cache: &CraftingRecipeTextCache,
 ) -> CraftingPanelSnapshot {
     CraftingPanelSnapshot {
         selected_tab,
-        rows: recipe_rows(sim, selected_tab),
+        rows: recipe_rows(sim, selected_tab, Some(cache)),
         feedback,
     }
 }
 
-fn recipe_rows(sim: &Simulation, selected_tab: CraftingPanelTab) -> Vec<ManualCraftRecipeRow> {
+fn recipe_rows(
+    sim: &Simulation,
+    selected_tab: CraftingPanelTab,
+    cache: Option<&CraftingRecipeTextCache>,
+) -> Vec<ManualCraftRecipeRow> {
     sim.catalog()
         .recipes()
         .iter()
         .filter(|recipe| recipe_visible_in_tab(recipe, selected_tab))
-        .map(|recipe| recipe_row(sim, selected_tab, recipe))
+        .map(|recipe| recipe_row(sim, selected_tab, recipe, cache))
         .collect()
 }
 
@@ -48,6 +80,7 @@ fn recipe_row(
     sim: &Simulation,
     selected_tab: CraftingPanelTab,
     recipe: &RecipePrototype,
+    cache: Option<&CraftingRecipeTextCache>,
 ) -> ManualCraftRecipeRow {
     let ingredients = aggregate_amounts(&recipe.ingredients);
     let ingredient_statuses =
@@ -57,10 +90,18 @@ fn recipe_row(
         recipe_startable_for_tab(sim, selected_tab, recipe, &ingredients, unlocked);
     let status = recipe_status(sim, selected_tab, recipe, &ingredients, unlocked);
 
+    let (display_name, products) = cache
+        .and_then(|cache| cache.rows.get(&recipe.id).cloned())
+        .unwrap_or_else(|| {
+            (
+                Arc::from(format_recipe_display_name(&recipe.name)),
+                Arc::from(product_text(sim.catalog(), &recipe.products)),
+            )
+        });
     ManualCraftRecipeRow {
         recipe_id: recipe.id,
-        display_name: format_recipe_display_name(&recipe.name),
-        products: product_text(sim.catalog(), &recipe.products),
+        display_name,
+        products,
         ingredients: ingredient_statuses,
         status,
         button_enabled,
@@ -254,6 +295,7 @@ pub(crate) fn queue_snapshot(sim: &Simulation) -> Vec<ManualCraftQueueRow> {
                 status,
                 can_move_earlier: index > 0,
                 can_move_later: index + 1 < queue.len(),
+                progress_percent: percent.min(100) as u8,
             }
         })
         .collect()
@@ -377,7 +419,7 @@ mod tests {
         tab: CraftingPanelTab,
         recipe_id: RecipeId,
     ) -> ManualCraftRecipeRow {
-        recipe_rows(sim, tab)
+        recipe_rows(sim, tab, None)
             .into_iter()
             .find(|row| row.recipe_id == recipe_id)
             .expect("recipe row should be visible")

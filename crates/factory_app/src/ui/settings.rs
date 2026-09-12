@@ -2,6 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use factory_sim::{EnemyDifficultyPreset, SimCommand};
+use std::sync::Arc;
 
 use crate::audio::{AudioSettings, SoundEvent};
 use crate::input::bindings::{ActionBindings, KeyDisplayNames};
@@ -15,7 +16,7 @@ use crate::ui::audio_settings::{
     AudioSettingsSnapshot, audio_settings_snapshot, spawn_audio_settings_content,
 };
 use crate::ui::controls::{
-    ControlRebindState, ControlsSnapshot, controls_snapshot, spawn_controls_content,
+    ControlRebindState, ControlsSnapshot, ControlsSnapshotCache, spawn_controls_content,
 };
 use crate::ui::display::{DisplaySnapshot, DisplayState, spawn_desktop_settings};
 use crate::ui::enemy_settings::{
@@ -143,7 +144,7 @@ pub(crate) struct SettingsSnapshot {
     display: DisplaySettingsSnapshot,
     desktop: DisplaySnapshot,
     accessibility: AccessibilitySettingsSnapshot,
-    controls: ControlsSnapshot,
+    controls: Arc<ControlsSnapshot>,
 }
 
 type MenuButtonQuery<'w, 's> = Query<
@@ -195,6 +196,7 @@ pub(crate) struct SettingsSnapshotResources<'w> {
     control_rebind: Res<'w, ControlRebindState>,
     sim: Res<'w, SimResource>,
     display: Res<'w, DisplayState>,
+    controls_cache: ResMut<'w, ControlsSnapshotCache>,
 }
 
 /// Handles settings entry, tab navigation, applying, resetting, and closing.
@@ -311,14 +313,27 @@ pub(crate) fn handle_settings_buttons(
 /// Reconciles the settings modal with the current session snapshot.
 pub(crate) fn sync_settings_window(
     mut commands: Commands,
-    resources: SettingsSnapshotResources,
+    mut resources: SettingsSnapshotResources,
     mut roots: WindowRootQuery<SettingsSnapshot>,
 ) {
+    let controls_changed = resources.bindings.is_changed()
+        || resources.key_names.is_changed()
+        || resources.control_rebind.is_changed();
+    let inputs_changed = resources.window.is_changed()
+        || resources.audio.is_changed()
+        || controls_changed
+        || resources.display.is_changed();
+    let controls = resources.controls_cache.get(
+        &resources.bindings,
+        &resources.key_names,
+        &resources.control_rebind,
+        controls_changed,
+    );
     sync_window(
         &mut commands,
         &mut roots,
         resources.window.open,
-        true,
+        inputs_changed,
         || SettingsSnapshot {
             active_tab: resources.window.active_tab,
             dirty: resources.window.dirty,
@@ -331,11 +346,7 @@ pub(crate) fn sync_settings_window(
             accessibility: AccessibilitySettingsSnapshot {
                 readable_high_contrast: resources.window.pending_values.readable_high_contrast,
             },
-            controls: controls_snapshot(
-                &resources.bindings,
-                &resources.key_names,
-                &resources.control_rebind,
-            ),
+            controls,
         },
         settings_root,
         spawn_settings_window,

@@ -14,4 +14,6 @@ pub use rows::{
     format_per_minute_u64, production_rows,
 };
 
-pub(crate) use systems::{handle_production_stats_buttons, sync_production_stats_window};
+pub(crate) use systems::{
+    ProductionStatsRefresh, handle_production_stats_buttons, sync_production_stats_window,
+};

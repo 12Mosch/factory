@@ -4,11 +4,11 @@ use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 use crate::ui::resources::CraftingPanelTab;
 
 use super::components::{
-    CraftingPanelSnapshot, CraftingQueueAction, CraftingQueueButton, CraftingQueueSnapshot,
-    CraftingRecipeButton, CraftingRecipeListRoot, CraftingTabButton, ManualCraftQueueRow,
-    ManualCraftRecipeRow,
+    CraftingFeedbackText, CraftingPanelSnapshot, CraftingQueueAction, CraftingQueueButton,
+    CraftingQueueEmpty, CraftingQueueProgressFill, CraftingQueueRoot, CraftingQueueRow,
+    CraftingRecipeButton, CraftingRecipeEmpty, CraftingRecipeListRoot, CraftingRecipeRow,
+    CraftingTabButton, ManualCraftQueueRow, ManualCraftRecipeRow,
 };
-use crate::ui::window_sync::WindowRoot;
 use factory_sim::CraftingQueueMove;
 
 pub(crate) fn manual_crafting_root() -> impl Bundle {
@@ -41,13 +41,17 @@ pub(crate) fn spawn_manual_crafting_contents(
         TextFont::from_font_size(18.0),
         TextColor(Color::srgb(0.94, 0.95, 0.90)),
     ));
-    if let Some(feedback) = &snapshot.feedback {
-        root.spawn((
-            Text::new(feedback.clone()),
-            TextFont::from_font_size(11.0),
-            TextColor(Color::srgb(0.96, 0.70, 0.42)),
-        ));
-    }
+    root.spawn((
+        Text::new(snapshot.feedback.clone().unwrap_or_default()),
+        TextFont::from_font_size(11.0),
+        TextColor(Color::srgb(0.96, 0.70, 0.42)),
+        CraftingFeedbackText,
+        if snapshot.feedback.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        },
+    ));
     spawn_tabs(root, snapshot.selected_tab);
     spawn_recipe_rows(root, &snapshot.rows);
     spawn_queue(root, queue);
@@ -116,14 +120,17 @@ fn spawn_recipe_rows(
             CraftingRecipeListRoot,
         ))
         .with_children(|list| {
-            if rows.is_empty() {
-                list.spawn((
-                    Text::new("<none>"),
-                    TextFont::from_font_size(12.0),
-                    TextColor(Color::srgb(0.62, 0.64, 0.60)),
-                ));
-                return;
-            }
+            list.spawn((
+                Text::new("<none>"),
+                TextFont::from_font_size(12.0),
+                TextColor(Color::srgb(0.62, 0.64, 0.60)),
+                CraftingRecipeEmpty,
+                if rows.is_empty() {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                },
+            ));
 
             for row in rows {
                 spawn_recipe_row(list, row);
@@ -131,10 +138,10 @@ fn spawn_recipe_rows(
         });
 }
 
-fn spawn_recipe_row(
+pub(crate) fn spawn_recipe_row(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     row: &ManualCraftRecipeRow,
-) {
+) -> Entity {
     parent
         .spawn((
             Node {
@@ -153,6 +160,7 @@ fn spawn_recipe_row(
             } else {
                 Color::srgba(0.050, 0.052, 0.052, 0.90)
             }),
+            CraftingRecipeRow(row.recipe_id),
         ))
         .with_children(|row_node| {
             row_node
@@ -170,12 +178,12 @@ fn spawn_recipe_row(
                 ))
                 .with_children(|details| {
                     details.spawn((
-                        Text::new(row.display_name.clone()),
+                        Text::new(row.display_name.as_ref()),
                         TextFont::from_font_size(12.0),
                         TextColor(Color::WHITE),
                     ));
                     details.spawn((
-                        Text::new(row.products.clone()),
+                        Text::new(row.products.as_ref()),
                         TextFont::from_font_size(10.0),
                         TextColor(Color::srgb(0.82, 0.84, 0.78)),
                     ));
@@ -186,34 +194,9 @@ fn spawn_recipe_row(
                     ));
                 });
 
-            if row.button_enabled {
-                row_node
-                    .spawn((
-                        Button,
-                        Node {
-                            width: Val::Px(118.0),
-                            max_width: Val::Percent(100.0),
-                            min_height: Val::Px(34.0),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            padding: UiRect::horizontal(Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgba(0.18, 0.34, 0.25, 0.98)),
-                        BorderColor::all(Color::srgba(0.42, 0.55, 0.43, 0.90)),
-                        CraftingRecipeButton {
-                            recipe_id: row.recipe_id,
-                        },
-                    ))
-                    .with_child((
-                        Text::new(row.status.clone()),
-                        TextFont::from_font_size(11.0),
-                        TextColor(Color::WHITE),
-                        TextLayout::justify(Justify::Center),
-                    ));
-            } else {
-                row_node.spawn((
+            row_node
+                .spawn((
+                    Button,
                     Node {
                         width: Val::Px(118.0),
                         max_width: Val::Percent(100.0),
@@ -224,15 +207,32 @@ fn spawn_recipe_row(
                         border: UiRect::all(Val::Px(1.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.09, 0.095, 0.095, 0.96)),
-                    BorderColor::all(Color::srgba(0.25, 0.26, 0.25, 0.85)),
+                    BackgroundColor(if row.button_enabled {
+                        Color::srgba(0.18, 0.34, 0.25, 0.98)
+                    } else {
+                        Color::srgba(0.09, 0.095, 0.095, 0.96)
+                    }),
+                    BorderColor::all(if row.button_enabled {
+                        Color::srgba(0.42, 0.55, 0.43, 0.90)
+                    } else {
+                        Color::srgba(0.25, 0.26, 0.25, 0.85)
+                    }),
+                    CraftingRecipeButton {
+                        recipe_id: row.recipe_id,
+                    },
+                ))
+                .with_child((
                     Text::new(row.status.clone()),
-                    TextFont::from_font_size(10.0),
-                    TextColor(Color::srgb(0.72, 0.74, 0.70)),
+                    TextFont::from_font_size(if row.button_enabled { 11.0 } else { 10.0 }),
+                    TextColor(if row.button_enabled {
+                        Color::WHITE
+                    } else {
+                        Color::srgb(0.72, 0.74, 0.70)
+                    }),
                     TextLayout::justify(Justify::Center),
                 ));
-            }
-        });
+        })
+        .id()
 }
 
 fn spawn_queue(
@@ -257,11 +257,7 @@ fn spawn_queue(
     queue_node.row_gap = Val::Px(4.0);
     queue_node.padding = UiRect::top(Val::Px(2.0));
     parent
-        .spawn((
-            queue_node,
-            BackgroundColor(Color::NONE),
-            WindowRoot::new(CraftingQueueSnapshot(queue.clone())),
-        ))
+        .spawn((queue_node, BackgroundColor(Color::NONE), CraftingQueueRoot))
         .with_children(|queue_node| spawn_queue_contents(queue_node, &queue));
 }
 
@@ -269,64 +265,100 @@ pub(crate) fn spawn_queue_contents(
     queue_node: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     queue: &[ManualCraftQueueRow],
 ) {
-    if queue.is_empty() {
-        queue_node.spawn((
-            Text::new("<empty>"),
-            TextFont::from_font_size(12.0),
-            TextColor(Color::srgb(0.62, 0.64, 0.60)),
-        ));
-        return;
-    }
+    queue_node.spawn((
+        Text::new("<empty>"),
+        TextFont::from_font_size(12.0),
+        TextColor(Color::srgb(0.62, 0.64, 0.60)),
+        CraftingQueueEmpty,
+        if queue.is_empty() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        },
+    ));
 
     for row in queue {
-        queue_node
-            .spawn((
+        spawn_queue_row(queue_node, row);
+    }
+}
+
+pub(crate) fn spawn_queue_row(
+    queue_node: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    row: &ManualCraftQueueRow,
+) -> Entity {
+    queue_node
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                min_height: Val::Px(44.0),
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(5.0),
+                row_gap: Val::Px(5.0),
+                padding: UiRect::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.06, 0.065, 0.062, 0.94)),
+            CraftingQueueRow(row.job_id),
+        ))
+        .with_children(|job| {
+            job.spawn((
                 Node {
-                    width: Val::Percent(100.0),
-                    min_height: Val::Px(38.0),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(5.0),
-                    row_gap: Val::Px(5.0),
-                    padding: UiRect::all(Val::Px(5.0)),
+                    flex_basis: Val::Px(270.0),
+                    flex_grow: 1.0,
+                    min_width: Val::Px(0.0),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.06, 0.065, 0.062, 0.94)),
+                Text::new(row.status.clone()),
+                TextFont::from_font_size(11.0),
+                TextColor(Color::srgb(0.84, 0.86, 0.80)),
+            ));
+            job.spawn((
+                Node {
+                    flex_basis: Val::Px(270.0),
+                    flex_grow: 1.0,
+                    min_width: Val::Px(0.0),
+                    height: Val::Px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.10, 0.10, 0.11, 0.96)),
             ))
-            .with_children(|job| {
-                job.spawn((
-                    Node {
-                        flex_basis: Val::Px(270.0),
-                        flex_grow: 1.0,
-                        min_width: Val::Px(0.0),
-                        ..default()
-                    },
-                    Text::new(row.status.clone()),
-                    TextFont::from_font_size(11.0),
-                    TextColor(Color::srgb(0.84, 0.86, 0.80)),
-                ));
-                if row.can_move_earlier {
-                    spawn_queue_button(
-                        job,
-                        row.job_id,
-                        CraftingQueueAction::Move(CraftingQueueMove::Earlier),
-                        "Earlier",
-                        false,
-                    );
-                }
-                if row.can_move_later {
-                    spawn_queue_button(
-                        job,
-                        row.job_id,
-                        CraftingQueueAction::Move(CraftingQueueMove::Later),
-                        "Later",
-                        false,
-                    );
-                }
-                spawn_queue_button(job, row.job_id, CraftingQueueAction::Cancel, "Cancel", true);
-            });
-    }
+            .with_child((
+                Node {
+                    width: Val::Percent(f32::from(row.progress_percent)),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.34, 0.70, 0.86)),
+                CraftingQueueProgressFill(row.job_id),
+            ));
+            spawn_queue_button(
+                job,
+                row.job_id,
+                CraftingQueueAction::Move(CraftingQueueMove::Earlier),
+                "Earlier",
+                false,
+                row.can_move_earlier,
+            );
+            spawn_queue_button(
+                job,
+                row.job_id,
+                CraftingQueueAction::Move(CraftingQueueMove::Later),
+                "Later",
+                false,
+                row.can_move_later,
+            );
+            spawn_queue_button(
+                job,
+                row.job_id,
+                CraftingQueueAction::Cancel,
+                "Cancel",
+                true,
+                true,
+            );
+        })
+        .id()
 }
 
 fn spawn_queue_button(
@@ -335,6 +367,7 @@ fn spawn_queue_button(
     action: CraftingQueueAction,
     label: &str,
     destructive: bool,
+    visible: bool,
 ) {
     parent
         .spawn((
@@ -359,6 +392,11 @@ fn spawn_queue_button(
                 Color::srgba(0.34, 0.43, 0.35, 0.90)
             }),
             CraftingQueueButton { job_id, action },
+            if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
         ))
         .with_child((
             Text::new(label.to_string()),

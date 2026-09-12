@@ -553,6 +553,8 @@ impl SimulationSnapshotOwned {
             enemy_map_revision: 0,
             power_map_revision: 0,
             production_status_revision: 0,
+            research_revision: 0,
+            crafting_revision: 0,
             production_map_statuses: Vec::new(),
             production_map_status_scratch: Vec::new(),
             world: WorldSim::from_snapshot(self.world_seed, self.prototypes, self.chunks),
