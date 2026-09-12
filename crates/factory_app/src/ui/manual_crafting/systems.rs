@@ -151,10 +151,15 @@ pub(crate) fn sync_manual_crafting_panel(
     mut roots: WindowRootQuery<CraftingPanelSnapshot>,
     mut nodes: ManualCraftingNodes,
 ) {
-    let simulation = sim.read();
-    if state.open {
-        recipe_text.refresh(&simulation, sim.replacement_revision());
+    if !state.open {
+        for (entity, _, _) in &mut roots {
+            commands.entity(entity).despawn();
+        }
+        return;
     }
+
+    let simulation = sim.read();
+    recipe_text.refresh(&simulation, sim.replacement_revision());
     let key = ManualCraftingRefreshKey {
         replacement_revision: sim.replacement_revision(),
         tick_bucket: simulation.tick_count() / CRAFTING_REFRESH_TICKS,
@@ -162,9 +167,7 @@ pub(crate) fn sync_manual_crafting_panel(
         selected_tab: state.selected_tab,
     };
     let inputs_changed = refresh.last_key != Some(key) || state.is_changed();
-    if state.open {
-        refresh.last_key = Some(key);
-    }
+    refresh.last_key = Some(key);
     sync_retained_window(
         &mut commands,
         &mut roots,
@@ -510,6 +513,18 @@ mod tests {
     use bevy::ecs::message::Messages;
     use factory_data::{item_id_by_name, recipe_id_by_name};
     use factory_sim::Simulation;
+
+    #[test]
+    fn closed_panel_does_not_access_uninitialized_simulation() {
+        let mut app = App::new();
+        app.insert_resource(SimResource::empty())
+            .init_resource::<CraftingWindowState>()
+            .init_resource::<ManualCraftingRefresh>()
+            .init_resource::<CraftingRecipeTextCache>()
+            .add_systems(Update, sync_manual_crafting_panel);
+
+        app.update();
+    }
 
     #[test]
     fn assembling_tab_recipe_button_does_not_queue_manual_craft() {

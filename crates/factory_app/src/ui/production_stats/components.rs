@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use factory_data::{FluidId, ItemId};
 
 use crate::ui::resources::StatsTab;
 
@@ -40,7 +41,13 @@ pub(super) struct StatEmptyLabel(pub(super) StatSection);
 #[derive(Component, Debug, PartialEq, Eq)]
 pub(super) struct StatRow {
     pub(super) section: StatSection,
-    pub(super) key: String,
+    pub(super) key: StatRowKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum StatRowKey {
+    Item(ItemId),
+    Fluid(FluidId),
 }
 
 #[derive(Component)]
@@ -78,6 +85,7 @@ pub(super) struct DiagnosticLine {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemStatDisplayRow {
+    pub(crate) key: StatRowKey,
     pub item_name: String,
     pub per_minute: String,
     pub total: String,

@@ -186,7 +186,7 @@ pub(super) fn spawn_stat_row(
         false,
         Some(StatRow {
             section,
-            key: row.item_name.clone(),
+            key: row.key,
         }),
     )
 }

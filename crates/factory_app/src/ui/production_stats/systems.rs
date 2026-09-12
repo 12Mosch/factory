@@ -262,7 +262,7 @@ fn reconcile_stat_rows(
         if let Some((entity, _, children)) = nodes
             .rows
             .iter()
-            .find(|(_, marker, _)| marker.section == section && marker.key == row.item_name)
+            .find(|(_, marker, _)| marker.section == section && marker.key == row.key)
         {
             for (child, value) in children
                 .iter()
@@ -282,7 +282,7 @@ fn reconcile_stat_rows(
         }
     }
     for (entity, marker, _) in &nodes.rows {
-        if marker.section == section && !next.iter().any(|row| row.item_name == marker.key) {
+        if marker.section == section && !next.iter().any(|row| row.key == marker.key) {
             commands.entity(entity).despawn();
         }
     }
@@ -431,9 +431,15 @@ fn reconcile_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use factory_data::ItemId;
+
+    use super::super::components::{ItemStatDisplayRow, StatRowKey};
 
     #[derive(Resource, Default)]
     struct GraphFixture(Vec<super::super::PowerGraphPoint>);
+
+    #[derive(Resource)]
+    struct StatFixture(Vec<ItemStatDisplayRow>);
 
     fn reconcile_graph_fixture(
         mut commands: Commands,
@@ -441,6 +447,58 @@ mod tests {
         mut nodes: ProductionStatsNodes,
     ) {
         reconcile_graph(&mut commands, &fixture.0, &mut nodes);
+    }
+
+    fn reconcile_stat_fixture(
+        mut commands: Commands,
+        fixture: Res<StatFixture>,
+        mut nodes: ProductionStatsNodes,
+    ) {
+        reconcile_stat_rows(&mut commands, StatSection::Items, &fixture.0, &mut nodes);
+    }
+
+    #[test]
+    fn stat_rows_use_ids_instead_of_display_names_for_identity() {
+        let first = stat_fixture_row(ItemId::new(1), "Shared display name");
+        let mut app = App::new();
+        app.insert_resource(StatFixture(vec![first.clone()]))
+            .add_systems(Update, reconcile_stat_fixture);
+        let root = app
+            .world_mut()
+            .spawn((Node::default(), StatRowsRoot(StatSection::Items)))
+            .with_children(|parent| {
+                parent.spawn((
+                    Node::default(),
+                    Text::new("<none>"),
+                    Visibility::Hidden,
+                    StatEmptyLabel(StatSection::Items),
+                ));
+                parent
+                    .spawn((
+                        Node::default(),
+                        StatRow {
+                            section: StatSection::Items,
+                            key: first.key,
+                        },
+                    ))
+                    .with_children(|row| {
+                        row.spawn(Text::new(first.item_name.clone()));
+                        row.spawn(Text::new(first.per_minute.clone()));
+                        row.spawn(Text::new(first.total.clone()));
+                    });
+            })
+            .id();
+        app.update();
+        let original = stat_row_entity(&mut app, first.key);
+
+        let second = stat_fixture_row(ItemId::new(2), "Shared display name");
+        app.world_mut().resource_mut::<StatFixture>().0 = vec![second.clone()];
+        app.update();
+
+        let replacement = stat_row_entity(&mut app, second.key);
+        assert_ne!(replacement, original);
+        assert!(app.world().get_entity(original).is_err());
+        assert_eq!(children_of(&app, root).len(), 2);
     }
 
     #[test]
@@ -468,7 +526,7 @@ mod tests {
         app.update();
 
         assert_eq!(graph_bar_count(&mut app), 2);
-        assert_eq!(graph_children(&app, root).len(), 3);
+        assert_eq!(children_of(&app, root).len(), 3);
         assert_eq!(
             app.world().entity(empty).get::<Node>().unwrap().display,
             Display::None
@@ -478,7 +536,7 @@ mod tests {
         app.update();
 
         assert_eq!(graph_bar_count(&mut app), 0);
-        assert_eq!(graph_children(&app, root), vec![empty]);
+        assert_eq!(children_of(&app, root), vec![empty]);
         assert_eq!(
             app.world().entity(empty).get::<Node>().unwrap().display,
             Display::Flex
@@ -495,13 +553,31 @@ mod tests {
         query.single(world).unwrap()
     }
 
+    fn stat_fixture_row(item_id: ItemId, item_name: &str) -> ItemStatDisplayRow {
+        ItemStatDisplayRow {
+            key: StatRowKey::Item(item_id),
+            item_name: item_name.to_string(),
+            per_minute: "1/min".to_string(),
+            total: "1".to_string(),
+        }
+    }
+
+    fn stat_row_entity(app: &mut App, key: StatRowKey) -> Entity {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &StatRow)>();
+        query
+            .iter(world)
+            .find_map(|(entity, marker)| (marker.key == key).then_some(entity))
+            .expect("stat row should exist")
+    }
+
     fn graph_bar_count(app: &mut App) -> usize {
         let world = app.world_mut();
         let mut query = world.query_filtered::<Entity, With<PowerGraphBar>>();
         query.iter(world).count()
     }
 
-    fn graph_children(app: &App, root: Entity) -> Vec<Entity> {
+    fn children_of(app: &App, root: Entity) -> Vec<Entity> {
         app.world()
             .entity(root)
             .get::<Children>()

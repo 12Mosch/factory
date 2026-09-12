@@ -191,6 +191,13 @@ pub(crate) fn sync_technology_panel(
     mut roots: WindowRootQuery<TechnologyPanelSnapshot>,
     mut nodes: TechnologyPanelNodes,
 ) {
+    if !window_state.open {
+        for (entity, _, _) in &mut roots {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+
     let simulation = sim.read();
     let key = TechnologyRefreshKey {
         replacement_revision: sim.replacement_revision(),
@@ -198,9 +205,7 @@ pub(crate) fn sync_technology_panel(
         selected: window_state.selected,
     };
     let inputs_changed = refresh.last_key != Some(key) || window_state.is_changed();
-    if window_state.open {
-        refresh.last_key = Some(key);
-    }
+    refresh.last_key = Some(key);
     sync_retained_window(
         &mut commands,
         &mut roots,
@@ -498,4 +503,20 @@ fn reconcile_research_queue(
         }
     }
     replace_children_if_different(commands, root, current_children, &ordered);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_panel_does_not_access_uninitialized_simulation() {
+        let mut app = App::new();
+        app.insert_resource(SimResource::empty())
+            .init_resource::<TechnologyWindowState>()
+            .init_resource::<TechnologyPanelRefresh>()
+            .add_systems(Update, sync_technology_panel);
+
+        app.update();
+    }
 }
