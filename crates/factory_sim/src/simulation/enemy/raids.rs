@@ -9,6 +9,9 @@ impl Simulation {
         let old = self.config.runtime;
         self.config.runtime = settings;
         self.config.preset = EnemyDifficultyPreset::Custom;
+        if old != settings {
+            self.enemy_settings_revision = self.enemy_settings_revision.wrapping_add(1);
+        }
         let Some(gameplay) = self.gameplay().copied() else {
             return Ok(());
         };

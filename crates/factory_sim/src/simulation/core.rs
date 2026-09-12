@@ -51,6 +51,7 @@ impl Simulation {
             power_map_revision: 0,
             production_status_revision: 0,
             research_revision: 0,
+            enemy_settings_revision: 0,
             crafting_revision: 0,
             production_map_statuses: Vec::new(),
             production_map_status_scratch: Vec::new(),
@@ -297,6 +298,11 @@ impl Simulation {
     /// Revision of research selection, queue, progress, and completed levels.
     pub fn research_revision(&self) -> u64 {
         self.research_revision
+    }
+
+    /// Revision of runtime enemy configuration changes.
+    pub fn enemy_settings_revision(&self) -> u64 {
+        self.enemy_settings_revision
     }
 
     /// Revision of manual-crafting queue membership and order.

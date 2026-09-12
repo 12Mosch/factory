@@ -184,6 +184,30 @@ pub(crate) fn sync_contents<S: WindowSnapshot>(
     );
 }
 
+/// Reorders a retained parent only when its child identity or order changed.
+/// This avoids dirtying Bevy's hierarchy on value-only UI refreshes.
+pub(crate) fn replace_children_if_different(
+    commands: &mut Commands,
+    parent: Entity,
+    current: &Children,
+    next: &[Entity],
+) -> bool {
+    if current.iter().eq(next.iter().copied()) {
+        return false;
+    }
+    commands.entity(parent).replace_children(next);
+    true
+}
+
+/// Removes hidden retained nodes from layout while keeping their entities.
+pub(crate) fn retained_display(visible: bool) -> Display {
+    if visible {
+        Display::Flex
+    } else {
+        Display::None
+    }
+}
+
 fn rebuild_contents<S: WindowSnapshot>(
     commands: &mut Commands,
     root_entity: Entity,
@@ -210,6 +234,7 @@ fn rebuild_contents<S: WindowSnapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::world::CommandQueue;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TestSnapshot(u32);
@@ -338,6 +363,24 @@ mod tests {
         assert_eq!(window_result(&app), WindowSync::Updated);
         assert_eq!(test_child_entities(&mut app), vec![child]);
         assert_eq!(test_child_values(&mut app), vec![2]);
+    }
+
+    #[test]
+    fn unchanged_child_order_does_not_queue_hierarchy_work() {
+        let mut world = World::new();
+        let first = world.spawn_empty().id();
+        let second = world.spawn_empty().id();
+        let parent = world.spawn_empty().add_children(&[first, second]).id();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+
+        assert!(!replace_children_if_different(
+            &mut commands,
+            parent,
+            world.entity(parent).get::<Children>().unwrap(),
+            &[first, second],
+        ));
+        assert!(queue.is_empty());
     }
 
     fn sync_test_window(

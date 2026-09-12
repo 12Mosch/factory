@@ -216,6 +216,9 @@ pub struct Simulation {
     /// Runtime-only invalidation key for retained research UI.
     #[serde(skip, default)]
     research_revision: u64,
+    /// Runtime-only invalidation key for enemy settings UI.
+    #[serde(skip, default)]
+    enemy_settings_revision: u64,
     /// Runtime-only invalidation key for retained manual-crafting UI.
     #[serde(skip, default)]
     crafting_revision: u64,

@@ -79,7 +79,9 @@ use crate::ui::rocket_launch::{
 };
 use crate::ui::rolling_stock_window::{sync_rolling_stock_window, update_rolling_stock_fluid_text};
 use crate::ui::save_load::{handle_save_load_buttons, sync_save_load_window};
-use crate::ui::settings::{SettingsWindowState, handle_settings_buttons, sync_settings_window};
+use crate::ui::settings::{
+    SettingsRefresh, SettingsWindowState, handle_settings_buttons, sync_settings_window,
+};
 use crate::ui::technology_panel::{
     TechnologyPanelRefresh, ensure_selected_technology, handle_technology_panel_buttons,
     handle_technology_window_input, sync_technology_panel,
@@ -181,6 +183,7 @@ impl Plugin for UiPlugin {
             .init_resource::<PauseMenuState>()
             .init_resource::<NewWorldConfirmation>()
             .init_resource::<SettingsWindowState>()
+            .init_resource::<SettingsRefresh>()
             .init_resource::<ControlRebindState>()
             .init_resource::<ControlsSnapshotCache>()
             .init_resource::<EquipmentWindowState>()

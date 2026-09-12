@@ -148,15 +148,15 @@ fn retained_ui_frame_p99_hitch_and_allocation_budget() {
     assert_performance_budget("retained UI frame", stats, UI_BUDGET);
 }
 
-/// Covers the complete externally driven rendered frame: time advancement,
-/// fixed-step simulation, input, audio, text/layout, extraction, and rendering.
+/// Covers the complete headless CPU frame: time advancement, fixed-step
+/// simulation, input, audio, UI, map updates, and presentation synchronization.
 #[test]
 #[ignore]
 fn full_app_frame_p99_hitch_and_allocation_budget() {
     let _guard = BENCHMARK_LOCK
         .lock()
         .expect("benchmark lock should not poison");
-    let mut app = rendered_full_app_fixture();
+    let mut app = full_app_fixture();
     app.update();
     open_benchmark_windows(&mut app);
 
@@ -165,7 +165,7 @@ fn full_app_frame_p99_hitch_and_allocation_budget() {
     }
     let stats = collect_performance_stats(MEASUREMENT_FRAMES, || app.update());
     print_performance_stats("full_app_frame_budget", stats);
-    assert_performance_budget("full app frame", stats, RENDERED_FRAME_BUDGET);
+    assert_performance_budget("full app frame", stats, FULL_FRAME_BUDGET);
 
     app.world()
         .resource::<SimResource>()
@@ -191,14 +191,32 @@ fn changing_rendered_ui_frame_p99_hitch_and_allocation_budget() {
     for _ in 0..WARMUP_FRAMES {
         app.update();
     }
-    let stats = collect_performance_stats(MEASUREMENT_FRAMES, || app.update());
+    let (initial_tick, initial_research_revision, initial_completed_jobs) = {
+        let sim = app.world().resource::<SimResource>().read();
+        (
+            sim.tick_count(),
+            sim.research_revision(),
+            sim.crafting_queue().completed_jobs,
+        )
+    };
+    let stats = collect_prepared_performance_stats(MEASUREMENT_FRAMES, || {
+        {
+            let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+            let mut sim = sim_resource.write_for_tests();
+            if sim.active_research().is_some() {
+                sim.add_research_units(1)
+                    .expect("benchmark research should accept one unit");
+            }
+        }
+        measure_performance_sample(|| app.update())
+    });
     print_performance_stats("changing_rendered_ui_frame_budget", stats);
     assert_performance_budget("changing rendered UI frame", stats, RENDERED_FRAME_BUDGET);
 
     let sim = app.world().resource::<SimResource>().read();
-    assert!(sim.tick_count() > (WARMUP_FRAMES + MEASUREMENT_FRAMES) as u64);
-    assert!(sim.crafting_queue().completed_jobs > 0);
-    assert!(sim.research_revision() > 0);
+    assert!(sim.tick_count() > initial_tick);
+    assert!(sim.crafting_queue().completed_jobs > initial_completed_jobs);
+    assert!(sim.research_revision() > initial_research_revision);
 }
 
 /// Same complete frame as above, with a sky full of robots on top: the flight

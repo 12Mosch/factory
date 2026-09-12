@@ -29,6 +29,7 @@ impl Simulation {
             stopped_stock: &self.stopped_stock_index,
             transport: &mut self.transport,
             research: &mut self.research,
+            research_revision: &mut self.research_revision,
             rocket_silo_recipe,
             mining_drill_productivity_permyriad,
             power: &mut self.power,

@@ -1,12 +1,13 @@
 use bevy::prelude::*;
 
 use crate::ui::production_stats::components::{
-    DiagnosticLine, DiagnosticLinesRoot, DiagnosticSection, PowerGraphBar, PowerGraphRoot,
-    PowerLine, PowerLinesRoot, ProductionStatsBody, ProductionStatsRocketsText,
+    DiagnosticLine, DiagnosticLinesRoot, DiagnosticSection, PowerGraphBar, PowerGraphEmpty,
+    PowerGraphRoot, PowerLine, PowerLinesRoot, ProductionStatsBody, ProductionStatsRocketsText,
     ProductionStatsSnapshot, StatEmptyLabel, StatRow, StatRowsRoot, StatSection,
 };
 use crate::ui::production_stats::{ItemStatDisplayRow, PowerGraphPoint, ProductionStatsTabButton};
 use crate::ui::resources::StatsTab;
+use crate::ui::window_sync::retained_display;
 
 const POWER_GRAPH_BAR_WIDTH_PX: f32 = 3.0;
 const POWER_GRAPH_BAR_GAP_PX: f32 = 1.0;
@@ -156,6 +157,10 @@ fn spawn_item_rows(
                 TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.62, 0.64, 0.60)),
                 StatEmptyLabel(section),
+                Node {
+                    display: retained_display(rows.is_empty()),
+                    ..default()
+                },
                 if rows.is_empty() {
                     Visibility::Inherited
                 } else {
@@ -253,13 +258,21 @@ fn spawn_power_graph(
             PowerGraphRoot,
         ))
         .with_children(|bars| {
-            if graph.is_empty() {
-                bars.spawn((
-                    Text::new("<no samples>"),
-                    TextFont::from_font_size(12.0),
-                    TextColor(Color::srgb(0.62, 0.64, 0.60)),
-                ));
-            }
+            bars.spawn((
+                Text::new("<no samples>"),
+                TextFont::from_font_size(12.0),
+                TextColor(Color::srgb(0.62, 0.64, 0.60)),
+                Node {
+                    display: retained_display(graph.is_empty()),
+                    ..default()
+                },
+                if graph.is_empty() {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                },
+                PowerGraphEmpty,
+            ));
             for (index, point) in graph.iter().enumerate() {
                 spawn_power_graph_point(bars, index, *point, max_watts);
             }

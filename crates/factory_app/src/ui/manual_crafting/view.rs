@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::ui::layout::{PANEL_MARGIN, scroll_column};
 use crate::ui::resources::CraftingPanelTab;
+use crate::ui::window_sync::retained_display;
 
 use super::components::{
     CraftingFeedbackText, CraftingPanelSnapshot, CraftingQueueAction, CraftingQueueButton,
@@ -34,7 +35,6 @@ pub(crate) fn manual_crafting_root() -> impl Bundle {
 pub(crate) fn spawn_manual_crafting_contents(
     root: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &CraftingPanelSnapshot,
-    queue: Vec<ManualCraftQueueRow>,
 ) {
     root.spawn((
         Text::new("Crafting"),
@@ -46,6 +46,10 @@ pub(crate) fn spawn_manual_crafting_contents(
         TextFont::from_font_size(11.0),
         TextColor(Color::srgb(0.96, 0.70, 0.42)),
         CraftingFeedbackText,
+        Node {
+            display: retained_display(snapshot.feedback.is_some()),
+            ..default()
+        },
         if snapshot.feedback.is_some() {
             Visibility::Inherited
         } else {
@@ -54,7 +58,7 @@ pub(crate) fn spawn_manual_crafting_contents(
     ));
     spawn_tabs(root, snapshot.selected_tab);
     spawn_recipe_rows(root, &snapshot.rows);
-    spawn_queue(root, queue);
+    spawn_queue(root, &snapshot.queue);
 }
 
 fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected: CraftingPanelTab) {
@@ -125,6 +129,10 @@ fn spawn_recipe_rows(
                 TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.62, 0.64, 0.60)),
                 CraftingRecipeEmpty,
+                Node {
+                    display: retained_display(rows.is_empty()),
+                    ..default()
+                },
                 if rows.is_empty() {
                     Visibility::Inherited
                 } else {
@@ -237,7 +245,7 @@ pub(crate) fn spawn_recipe_row(
 
 fn spawn_queue(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    queue: Vec<ManualCraftQueueRow>,
+    queue: &[ManualCraftQueueRow],
 ) {
     parent.spawn((
         Text::new("Queue"),
@@ -258,7 +266,7 @@ fn spawn_queue(
     queue_node.padding = UiRect::top(Val::Px(2.0));
     parent
         .spawn((queue_node, BackgroundColor(Color::NONE), CraftingQueueRoot))
-        .with_children(|queue_node| spawn_queue_contents(queue_node, &queue));
+        .with_children(|queue_node| spawn_queue_contents(queue_node, queue));
 }
 
 pub(crate) fn spawn_queue_contents(
@@ -270,6 +278,10 @@ pub(crate) fn spawn_queue_contents(
         TextFont::from_font_size(12.0),
         TextColor(Color::srgb(0.62, 0.64, 0.60)),
         CraftingQueueEmpty,
+        Node {
+            display: retained_display(queue.is_empty()),
+            ..default()
+        },
         if queue.is_empty() {
             Visibility::Inherited
         } else {
@@ -373,6 +385,7 @@ fn spawn_queue_button(
         .spawn((
             Button,
             Node {
+                display: retained_display(visible),
                 min_width: Val::Px(54.0),
                 min_height: Val::Px(27.0),
                 align_items: AlignItems::Center,

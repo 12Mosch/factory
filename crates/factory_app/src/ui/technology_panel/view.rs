@@ -3,6 +3,7 @@ use factory_data::TechnologyId;
 
 use crate::ui::formatting::format_recipe_display_name;
 use crate::ui::layout::{PANEL_MARGIN, scroll_column};
+use crate::ui::window_sync::retained_display;
 
 use super::components::{
     ActiveResearchText, ResearchQueueText, TechnologyDetailField, TechnologyDetailRoot,
@@ -396,6 +397,10 @@ fn spawn_queue_controls(
                 TextFont::from_font_size(11.0),
                 TextColor(Color::srgb(0.65, 0.66, 0.62)),
                 TechnologyQueueEmpty,
+                Node {
+                    display: retained_display(sim.research_queue().is_empty()),
+                    ..default()
+                },
                 if sim.research_queue().is_empty() {
                     Visibility::Inherited
                 } else {
@@ -465,6 +470,7 @@ fn spawn_queue_button(
         .spawn((
             Button,
             Node {
+                display: retained_display(enabled),
                 width: Val::Px(58.0),
                 height: Val::Px(24.0),
                 align_items: AlignItems::Center,

@@ -548,6 +548,14 @@ fn gameplay_tab_keeps_enemy_preset_actions() {
             .runtime,
         EnemyDifficultyPreset::Aggressive.config().runtime
     );
+    let runtime = EnemyDifficultyPreset::Aggressive.config().runtime;
+    let expected = format!(
+        "Runtime: {}% strength · {}% pollution · {}% evolution",
+        runtime.strength_percent,
+        runtime.pollution_sensitivity_percent,
+        runtime.evolution_rate_percent
+    );
+    assert!(all_text(&mut app).contains(&expected));
 }
 
 fn open_settings_with_key(app: &mut App, key: KeyCode) {

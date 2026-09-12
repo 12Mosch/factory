@@ -14,12 +14,15 @@ use super::components::{
     CraftingTabButton, ManualCraftQueueRow, ManualCraftRecipeRow,
 };
 use super::helpers::{
-    CraftingRecipeTextCache, cached_crafting_panel_snapshot, craftable_for_player, queue_snapshot,
+    CraftingRecipeTextCache, cached_crafting_panel_snapshot, craftable_for_player,
 };
 use super::view::{
     manual_crafting_root, spawn_manual_crafting_contents, spawn_queue_row, spawn_recipe_row,
 };
-use crate::ui::window_sync::{WindowRootQuery, WindowSyncInput, sync_retained_window};
+use crate::ui::window_sync::{
+    WindowRootQuery, WindowSyncInput, replace_children_if_different, retained_display,
+    sync_retained_window,
+};
 
 const CRAFTING_REFRESH_TICKS: u64 = 15;
 
@@ -65,7 +68,7 @@ pub(crate) fn handle_manual_crafting_recipe_buttons(
     state: Res<CraftingWindowState>,
     mut commands: MessageWriter<SimCommandRequest>,
 ) {
-    if !state.open {
+    if !state.open || state.selected_tab != crate::ui::resources::CraftingPanelTab::Player {
         return;
     }
 
@@ -162,11 +165,6 @@ pub(crate) fn sync_manual_crafting_panel(
     if state.open {
         refresh.last_key = Some(key);
     }
-    let queue = if inputs_changed && state.open {
-        queue_snapshot(&simulation)
-    } else {
-        Vec::new()
-    };
     sync_retained_window(
         &mut commands,
         &mut roots,
@@ -183,9 +181,9 @@ pub(crate) fn sync_manual_crafting_panel(
             )
         },
         manual_crafting_root,
-        |root, snapshot| spawn_manual_crafting_contents(root, snapshot, queue.clone()),
+        spawn_manual_crafting_contents,
         |commands, _, _, next| {
-            update_manual_crafting(commands, next, &queue, &mut nodes);
+            update_manual_crafting(commands, next, &mut nodes);
         },
     );
 }
@@ -208,8 +206,10 @@ type FeedbackFilter = (
     Without<CraftingRecipeEmpty>,
     Without<CraftingQueueEmpty>,
     Without<CraftingQueueButton>,
+    Without<CraftingQueueProgressFill>,
 );
-type FeedbackQuery<'w, 's> = Query<'w, 's, (Entity, &'static mut Visibility), FeedbackFilter>;
+type FeedbackQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static mut Node, &'static mut Visibility), FeedbackFilter>;
 type CraftingTabFilter = (
     With<CraftingTabButton>,
     Without<CraftingRecipeRow>,
@@ -222,8 +222,10 @@ type RecipeEmptyFilter = (
     Without<CraftingFeedbackText>,
     Without<CraftingQueueEmpty>,
     Without<CraftingQueueButton>,
+    Without<CraftingQueueProgressFill>,
 );
-type RecipeEmptyQuery<'w, 's> = Query<'w, 's, (Entity, &'static mut Visibility), RecipeEmptyFilter>;
+type RecipeEmptyQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static mut Node, &'static mut Visibility), RecipeEmptyFilter>;
 type RecipeRowQuery<'w, 's> = Query<
     'w,
     's,
@@ -250,29 +252,51 @@ type QueueEmptyFilter = (
     Without<CraftingFeedbackText>,
     Without<CraftingRecipeEmpty>,
     Without<CraftingQueueButton>,
+    Without<CraftingQueueProgressFill>,
 );
-type QueueEmptyQuery<'w, 's> = Query<'w, 's, (Entity, &'static mut Visibility), QueueEmptyFilter>;
+type QueueEmptyQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static mut Node, &'static mut Visibility), QueueEmptyFilter>;
 type QueueButtonFilter = (
     Without<CraftingFeedbackText>,
     Without<CraftingRecipeEmpty>,
     Without<CraftingQueueEmpty>,
+    Without<CraftingQueueProgressFill>,
 );
-type QueueButtonQuery<'w, 's> =
-    Query<'w, 's, (&'static mut CraftingQueueButton, &'static mut Visibility), QueueButtonFilter>;
+type QueueButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut CraftingQueueButton,
+        &'static mut Node,
+        &'static mut Visibility,
+    ),
+    QueueButtonFilter,
+>;
+type QueueProgressFillQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static CraftingQueueProgressFill, &'static mut Node),
+    (
+        Without<CraftingFeedbackText>,
+        Without<CraftingRecipeEmpty>,
+        Without<CraftingQueueEmpty>,
+        Without<CraftingQueueButton>,
+    ),
+>;
 
 #[derive(SystemParam)]
 pub(crate) struct ManualCraftingNodes<'w, 's> {
     feedback: FeedbackQuery<'w, 's>,
     tabs: CraftingTabStyleQuery<'w, 's>,
-    recipe_roots: Query<'w, 's, Entity, With<CraftingRecipeListRoot>>,
+    recipe_roots: Query<'w, 's, (Entity, &'static Children), With<CraftingRecipeListRoot>>,
     recipe_empty: RecipeEmptyQuery<'w, 's>,
     recipe_rows: RecipeRowQuery<'w, 's>,
     recipe_buttons: RecipeButtonQuery<'w, 's>,
-    queue_roots: Query<'w, 's, Entity, With<CraftingQueueRoot>>,
+    queue_roots: Query<'w, 's, (Entity, &'static Children), With<CraftingQueueRoot>>,
     queue_empty: QueueEmptyQuery<'w, 's>,
     queue_rows: Query<'w, 's, (Entity, &'static CraftingQueueRow, &'static Children)>,
     queue_buttons: QueueButtonQuery<'w, 's>,
-    progress_fills: Query<'w, 's, (&'static CraftingQueueProgressFill, &'static mut Node)>,
+    progress_fills: QueueProgressFillQuery<'w, 's>,
     children: Query<'w, 's, &'static Children>,
     texts: Query<'w, 's, &'static mut Text>,
     text_fonts: Query<'w, 's, &'static mut TextFont>,
@@ -282,11 +306,12 @@ pub(crate) struct ManualCraftingNodes<'w, 's> {
 fn update_manual_crafting(
     commands: &mut Commands,
     snapshot: &CraftingPanelSnapshot,
-    queue: &[ManualCraftQueueRow],
     nodes: &mut ManualCraftingNodes,
 ) {
-    for (entity, mut visibility) in &mut nodes.feedback {
-        *visibility = if snapshot.feedback.is_some() {
+    for (entity, mut node, mut visibility) in &mut nodes.feedback {
+        let visible = snapshot.feedback.is_some();
+        node.display = retained_display(visible);
+        *visibility = if visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -303,7 +328,7 @@ fn update_manual_crafting(
         };
     }
     reconcile_recipe_rows(commands, &snapshot.rows, nodes);
-    reconcile_queue_rows(commands, queue, nodes);
+    reconcile_queue_rows(commands, &snapshot.queue, nodes);
 }
 
 fn reconcile_recipe_rows(
@@ -311,15 +336,17 @@ fn reconcile_recipe_rows(
     rows: &[ManualCraftRecipeRow],
     nodes: &mut ManualCraftingNodes,
 ) {
-    let Some(root) = nodes.recipe_roots.iter().next() else {
+    let Some((root, current_children)) = nodes.recipe_roots.iter().next() else {
         return;
     };
     let empty = nodes
         .recipe_empty
         .iter_mut()
         .next()
-        .map(|(entity, mut visibility)| {
-            *visibility = if rows.is_empty() {
+        .map(|(entity, mut node, mut visibility)| {
+            let visible = rows.is_empty();
+            node.display = retained_display(visible);
+            *visibility = if visible {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
@@ -397,7 +424,7 @@ fn reconcile_recipe_rows(
             commands.entity(entity).despawn();
         }
     }
-    commands.entity(root).replace_children(&ordered);
+    replace_children_if_different(commands, root, current_children, &ordered);
 }
 
 fn reconcile_queue_rows(
@@ -405,15 +432,17 @@ fn reconcile_queue_rows(
     rows: &[ManualCraftQueueRow],
     nodes: &mut ManualCraftingNodes,
 ) {
-    let Some(root) = nodes.queue_roots.iter().next() else {
+    let Some((root, current_children)) = nodes.queue_roots.iter().next() else {
         return;
     };
     let empty = nodes
         .queue_empty
         .iter_mut()
         .next()
-        .map(|(entity, mut visibility)| {
-            *visibility = if rows.is_empty() {
+        .map(|(entity, mut node, mut visibility)| {
+            let visible = rows.is_empty();
+            node.display = retained_display(visible);
+            *visibility = if visible {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
@@ -439,7 +468,9 @@ fn reconcile_queue_rows(
                 }
             }
             for child in children.iter().skip(2) {
-                if let Ok((mut button, mut visibility)) = nodes.queue_buttons.get_mut(child) {
+                if let Ok((mut button, mut node, mut visibility)) =
+                    nodes.queue_buttons.get_mut(child)
+                {
                     button.job_id = row.job_id;
                     let visible = match button.action {
                         CraftingQueueAction::Move(factory_sim::CraftingQueueMove::Earlier) => {
@@ -450,6 +481,7 @@ fn reconcile_queue_rows(
                         }
                         CraftingQueueAction::Cancel => true,
                     };
+                    node.display = retained_display(visible);
                     *visibility = if visible {
                         Visibility::Inherited
                     } else {
@@ -469,5 +501,50 @@ fn reconcile_queue_rows(
             commands.entity(entity).despawn();
         }
     }
-    commands.entity(root).replace_children(&ordered);
+    replace_children_if_different(commands, root, current_children, &ordered);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::message::Messages;
+    use factory_data::{item_id_by_name, recipe_id_by_name};
+    use factory_sim::Simulation;
+
+    #[test]
+    fn assembling_tab_recipe_button_does_not_queue_manual_craft() {
+        let mut sim = Simulation::new_test_world(123);
+        let catalog = sim.catalog().clone();
+        let iron_plate = item_id_by_name(&catalog, "iron_plate");
+        let gear = recipe_id_by_name(&catalog, "iron_gear_wheel");
+        sim.player_inventory_mut()
+            .insert(&catalog, iron_plate, 2)
+            .unwrap();
+
+        let state = CraftingWindowState {
+            open: true,
+            selected_tab: crate::ui::resources::CraftingPanelTab::Assembling,
+            ..default()
+        };
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(sim))
+            .insert_resource(state)
+            .add_message::<SimCommandRequest>()
+            .add_systems(Update, handle_manual_crafting_recipe_buttons);
+        app.world_mut().spawn((
+            Button,
+            Interaction::Pressed,
+            CraftingRecipeButton { recipe_id: gear },
+        ));
+
+        app.update();
+
+        assert!(
+            app.world_mut()
+                .resource_mut::<Messages<SimCommandRequest>>()
+                .drain()
+                .next()
+                .is_none()
+        );
+    }
 }

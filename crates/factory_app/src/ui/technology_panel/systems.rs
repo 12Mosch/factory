@@ -29,7 +29,10 @@ use super::view::{
     spawn_technology_queue_row, technology_panel_root, technology_status_text,
 };
 use crate::ui::formatting::format_recipe_display_name;
-use crate::ui::window_sync::{WindowRootQuery, WindowSyncInput, sync_retained_window};
+use crate::ui::window_sync::{
+    WindowRootQuery, WindowSyncInput, replace_children_if_different, retained_display,
+    sync_retained_window,
+};
 
 type TechnologySelectInteractionQuery<'w, 's> = Query<
     'w,
@@ -251,8 +254,35 @@ type TechnologyStartButtonQuery<'w, 's> = Query<
 type TechnologyQueueEmptyQuery<'w, 's> = Query<
     'w,
     's,
-    (Entity, &'static mut Visibility),
-    (With<TechnologyQueueEmpty>, Without<TechnologyQueueButton>),
+    (Entity, &'static mut Node, &'static mut Visibility),
+    (
+        With<TechnologyQueueEmpty>,
+        Without<TechnologyQueueButton>,
+        Without<TechnologyProgressFill>,
+    ),
+>;
+type TechnologyProgressFillQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Node,
+    (
+        With<TechnologyProgressFill>,
+        Without<TechnologyQueueButton>,
+        Without<TechnologyQueueEmpty>,
+    ),
+>;
+type TechnologyQueueButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut TechnologyQueueButton,
+        &'static mut Node,
+        &'static mut Visibility,
+    ),
+    (
+        Without<TechnologyQueueEmpty>,
+        Without<TechnologyProgressFill>,
+    ),
 >;
 
 #[derive(SystemParam)]
@@ -264,18 +294,13 @@ pub(crate) struct TechnologyPanelNodes<'w, 's> {
     technology_buttons: TechnologyButtonQuery<'w, 's>,
     status_labels: Query<'w, 's, (Entity, &'static TechnologyStatusText)>,
     detail_labels: Query<'w, 's, (Entity, &'static TechnologyDetailText)>,
-    progress_fills: Query<'w, 's, &'static mut Node, With<TechnologyProgressFill>>,
+    progress_fills: TechnologyProgressFillQuery<'w, 's>,
     start_buttons: TechnologyStartButtonQuery<'w, 's>,
-    queue_roots: Query<'w, 's, Entity, With<TechnologyQueueRoot>>,
+    queue_roots: Query<'w, 's, (Entity, &'static Children), With<TechnologyQueueRoot>>,
     queue_titles: Query<'w, 's, Entity, With<TechnologyQueueTitle>>,
     queue_empty: TechnologyQueueEmptyQuery<'w, 's>,
     queue_rows: Query<'w, 's, (Entity, &'static TechnologyQueueRow, &'static Children)>,
-    queue_buttons: Query<
-        'w,
-        's,
-        (&'static mut TechnologyQueueButton, &'static mut Visibility),
-        Without<TechnologyQueueEmpty>,
-    >,
+    queue_buttons: TechnologyQueueButtonQuery<'w, 's>,
     texts: Query<'w, 's, &'static mut Text>,
 }
 
@@ -395,7 +420,7 @@ fn reconcile_research_queue(
     sim: &factory_sim::Simulation,
     nodes: &mut TechnologyPanelNodes,
 ) {
-    let Some(root) = nodes.queue_roots.iter().next() else {
+    let Some((root, current_children)) = nodes.queue_roots.iter().next() else {
         return;
     };
     let title = nodes.queue_titles.iter().next();
@@ -403,8 +428,10 @@ fn reconcile_research_queue(
         .queue_empty
         .iter_mut()
         .next()
-        .map(|(entity, mut visibility)| {
-            *visibility = if sim.research_queue().is_empty() {
+        .map(|(entity, mut node, mut visibility)| {
+            let visible = sim.research_queue().is_empty();
+            node.display = retained_display(visible);
+            *visibility = if visible {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
@@ -431,7 +458,9 @@ fn reconcile_research_queue(
                 );
             }
             for child in children.iter().skip(1) {
-                if let Ok((mut button, mut visibility)) = nodes.queue_buttons.get_mut(child) {
+                if let Ok((mut button, mut node, mut visibility)) =
+                    nodes.queue_buttons.get_mut(child)
+                {
                     button.index = index;
                     let enabled = match button.action {
                         TechnologyQueueAction::MoveUp => {
@@ -443,6 +472,7 @@ fn reconcile_research_queue(
                         }
                         TechnologyQueueAction::Remove => true,
                     };
+                    node.display = retained_display(enabled);
                     *visibility = if enabled {
                         Visibility::Inherited
                     } else {
@@ -467,5 +497,5 @@ fn reconcile_research_queue(
             commands.entity(entity).despawn();
         }
     }
-    commands.entity(root).replace_children(&ordered);
+    replace_children_if_different(commands, root, current_children, &ordered);
 }

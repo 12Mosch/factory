@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use crate::audio::SoundEvent;
 use crate::resources::SimResource;
 use crate::ui::production_stats::components::{
-    DiagnosticLine, DiagnosticLinesRoot, DiagnosticSection, PowerGraphBar, PowerGraphRoot,
-    PowerLine, PowerLinesRoot, ProductionStatsBody, ProductionStatsRocketsText,
+    DiagnosticLine, DiagnosticLinesRoot, DiagnosticSection, PowerGraphBar, PowerGraphEmpty,
+    PowerGraphRoot, PowerLine, PowerLinesRoot, ProductionStatsBody, ProductionStatsRocketsText,
     ProductionStatsSnapshot, ProductionStatsTabButton, StatEmptyLabel, StatRow, StatRowsRoot,
     StatSection,
 };
@@ -15,7 +15,10 @@ use crate::ui::production_stats::view::{
     spawn_power_line, spawn_production_stats_body, spawn_production_stats_contents, spawn_stat_row,
 };
 use crate::ui::resources::{ProductionStatsWindowState, StatsTab};
-use crate::ui::window_sync::{WindowRootQuery, WindowSyncInput, sync_retained_window};
+use crate::ui::window_sync::{
+    WindowRootQuery, WindowSyncInput, replace_children_if_different, retained_display,
+    sync_retained_window,
+};
 
 /// Informational statistics do not need to be reformatted at simulation tick
 /// rate. Four refreshes per simulated second keeps the panel responsive while
@@ -40,6 +43,33 @@ type StatsTabInteractionQuery<'w, 's> = Query<
     's,
     (&'static Interaction, &'static ProductionStatsTabButton),
     (Changed<Interaction>, With<Button>),
+>;
+type StatEmptyLabelQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static StatEmptyLabel,
+        &'static mut Node,
+        &'static mut Visibility,
+    ),
+    (Without<PowerGraphEmpty>, Without<PowerGraphBar>),
+>;
+type PowerGraphEmptyQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Node, &'static mut Visibility),
+    (
+        With<PowerGraphEmpty>,
+        Without<PowerGraphBar>,
+        Without<StatEmptyLabel>,
+    ),
+>;
+type PowerGraphBarQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static PowerGraphBar, &'static mut Node),
+    (Without<PowerGraphEmpty>, Without<StatEmptyLabel>),
 >;
 
 pub(crate) fn handle_production_stats_buttons(
@@ -71,14 +101,15 @@ pub(crate) struct ProductionStatsNodes<'w, 's> {
             &'static mut BackgroundColor,
         ),
     >,
-    row_roots: Query<'w, 's, (Entity, &'static StatRowsRoot)>,
-    empty_labels: Query<'w, 's, (Entity, &'static StatEmptyLabel, &'static mut Visibility)>,
+    row_roots: Query<'w, 's, (Entity, &'static StatRowsRoot, &'static Children)>,
+    empty_labels: StatEmptyLabelQuery<'w, 's>,
     rows: Query<'w, 's, (Entity, &'static StatRow, &'static Children)>,
-    power_line_roots: Query<'w, 's, Entity, With<PowerLinesRoot>>,
+    power_line_roots: Query<'w, 's, (Entity, &'static Children), With<PowerLinesRoot>>,
     power_lines: Query<'w, 's, (Entity, &'static PowerLine)>,
-    graph_roots: Query<'w, 's, Entity, With<PowerGraphRoot>>,
-    graph_bars: Query<'w, 's, (Entity, &'static PowerGraphBar, &'static mut Node)>,
-    diagnostic_roots: Query<'w, 's, (Entity, &'static DiagnosticLinesRoot)>,
+    graph_roots: Query<'w, 's, (Entity, &'static Children), With<PowerGraphRoot>>,
+    graph_empty: PowerGraphEmptyQuery<'w, 's>,
+    graph_bars: PowerGraphBarQuery<'w, 's>,
+    diagnostic_roots: Query<'w, 's, (Entity, &'static DiagnosticLinesRoot, &'static Children)>,
     diagnostic_lines: Query<'w, 's, (Entity, &'static DiagnosticLine)>,
     texts: Query<'w, 's, &'static mut Text>,
 }
@@ -91,6 +122,13 @@ pub(crate) fn sync_production_stats_window(
     mut roots: WindowRootQuery<ProductionStatsSnapshot>,
     mut nodes: ProductionStatsNodes,
 ) {
+    if !state.open {
+        for (entity, _, _) in &mut roots {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+
     let simulation = sim.read();
     let key = ProductionStatsRefreshKey {
         replacement_revision: sim.replacement_revision(),
@@ -103,9 +141,7 @@ pub(crate) fn sync_production_stats_window(
         },
     };
     let inputs_changed = refresh.last_key != Some(key) || state.is_changed();
-    if state.open {
-        refresh.last_key = Some(key);
-    }
+    refresh.last_key = Some(key);
 
     sync_retained_window(
         &mut commands,
@@ -194,26 +230,29 @@ fn reconcile_stat_rows(
     next: &[super::ItemStatDisplayRow],
     nodes: &mut ProductionStatsNodes,
 ) {
-    let Some(root) = nodes
+    let Some((root, current_children)) = nodes
         .row_roots
         .iter()
-        .find_map(|(entity, marker)| (marker.0 == section).then_some(entity))
+        .find_map(|(entity, marker, children)| (marker.0 == section).then_some((entity, children)))
     else {
         return;
     };
-    let empty = nodes
-        .empty_labels
-        .iter_mut()
-        .find_map(|(entity, marker, mut visibility)| {
-            (marker.0 == section).then(|| {
-                *visibility = if next.is_empty() {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                };
-                entity
-            })
-        });
+    let empty =
+        nodes
+            .empty_labels
+            .iter_mut()
+            .find_map(|(entity, marker, mut node, mut visibility)| {
+                (marker.0 == section).then(|| {
+                    let visible = next.is_empty();
+                    node.display = retained_display(visible);
+                    *visibility = if visible {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    };
+                    entity
+                })
+            });
 
     let mut ordered = Vec::with_capacity(next.len() + usize::from(empty.is_some()));
     if let Some(empty) = empty {
@@ -247,7 +286,7 @@ fn reconcile_stat_rows(
             commands.entity(entity).despawn();
         }
     }
-    commands.entity(root).replace_children(&ordered);
+    replace_children_if_different(commands, root, current_children, &ordered);
 }
 
 fn reconcile_power_lines(
@@ -255,7 +294,7 @@ fn reconcile_power_lines(
     next: &[String],
     nodes: &mut ProductionStatsNodes,
 ) {
-    let Some(root) = nodes.power_line_roots.iter().next() else {
+    let Some((root, current_children)) = nodes.power_line_roots.iter().next() else {
         return;
     };
     let mut ordered = Vec::with_capacity(next.len());
@@ -282,7 +321,7 @@ fn reconcile_power_lines(
             commands.entity(entity).despawn();
         }
     }
-    commands.entity(root).replace_children(&ordered);
+    replace_children_if_different(commands, root, current_children, &ordered);
 }
 
 fn reconcile_graph(
@@ -290,7 +329,7 @@ fn reconcile_graph(
     next: &[super::PowerGraphPoint],
     nodes: &mut ProductionStatsNodes,
 ) {
-    let Some(root) = nodes.graph_roots.iter().next() else {
+    let Some((root, current_children)) = nodes.graph_roots.iter().next() else {
         return;
     };
     let max_watts = next
@@ -299,7 +338,17 @@ fn reconcile_graph(
         .max()
         .unwrap_or(1)
         .max(1);
-    let mut ordered = Vec::with_capacity(next.len() * 2);
+    let mut ordered = Vec::with_capacity(next.len() * 2 + 1);
+    if let Some((empty, mut node, mut visibility)) = nodes.graph_empty.iter_mut().next() {
+        let visible = next.is_empty();
+        node.display = retained_display(visible);
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        ordered.push(empty);
+    }
     for (index, point) in next.iter().enumerate() {
         let mut existing = [None, None];
         for (entity, marker, mut node) in &mut nodes.graph_bars {
@@ -317,6 +366,9 @@ fn reconcile_graph(
         if let [Some(production), Some(consumption)] = existing {
             ordered.extend([production, consumption]);
         } else {
+            for existing in existing.into_iter().flatten() {
+                commands.entity(existing).despawn();
+            }
             commands.entity(root).with_children(|parent| {
                 ordered.extend(spawn_power_graph_point(parent, index, *point, max_watts));
             });
@@ -327,7 +379,7 @@ fn reconcile_graph(
             commands.entity(entity).despawn();
         }
     }
-    commands.entity(root).replace_children(&ordered);
+    replace_children_if_different(commands, root, current_children, &ordered);
 }
 
 fn reconcile_diagnostics(
@@ -336,10 +388,10 @@ fn reconcile_diagnostics(
     lines: &[String],
     nodes: &mut ProductionStatsNodes,
 ) {
-    let Some(root) = nodes
+    let Some((root, current_children)) = nodes
         .diagnostic_roots
         .iter()
-        .find_map(|(entity, marker)| (marker.0 == section).then_some(entity))
+        .find_map(|(entity, marker, children)| (marker.0 == section).then_some((entity, children)))
     else {
         return;
     };
@@ -373,5 +425,88 @@ fn reconcile_diagnostics(
             commands.entity(entity).despawn();
         }
     }
-    commands.entity(root).replace_children(&ordered);
+    replace_children_if_different(commands, root, current_children, &ordered);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct GraphFixture(Vec<super::super::PowerGraphPoint>);
+
+    fn reconcile_graph_fixture(
+        mut commands: Commands,
+        fixture: Res<GraphFixture>,
+        mut nodes: ProductionStatsNodes,
+    ) {
+        reconcile_graph(&mut commands, &fixture.0, &mut nodes);
+    }
+
+    #[test]
+    fn graph_empty_label_survives_empty_populated_empty_transitions() {
+        let mut app = App::new();
+        app.init_resource::<GraphFixture>()
+            .add_systems(Update, reconcile_graph_fixture);
+        let root = app
+            .world_mut()
+            .spawn((Node::default(), PowerGraphRoot))
+            .with_child((
+                Node::default(),
+                Text::new("<no samples>"),
+                Visibility::Inherited,
+                PowerGraphEmpty,
+            ))
+            .id();
+        app.update();
+        let empty = graph_empty_entity(&mut app);
+
+        app.world_mut().resource_mut::<GraphFixture>().0 = vec![super::super::PowerGraphPoint {
+            production_watts: 100,
+            consumption_watts: 50,
+        }];
+        app.update();
+
+        assert_eq!(graph_bar_count(&mut app), 2);
+        assert_eq!(graph_children(&app, root).len(), 3);
+        assert_eq!(
+            app.world().entity(empty).get::<Node>().unwrap().display,
+            Display::None
+        );
+
+        app.world_mut().resource_mut::<GraphFixture>().0.clear();
+        app.update();
+
+        assert_eq!(graph_bar_count(&mut app), 0);
+        assert_eq!(graph_children(&app, root), vec![empty]);
+        assert_eq!(
+            app.world().entity(empty).get::<Node>().unwrap().display,
+            Display::Flex
+        );
+        assert_eq!(
+            *app.world().entity(empty).get::<Visibility>().unwrap(),
+            Visibility::Inherited
+        );
+    }
+
+    fn graph_empty_entity(app: &mut App) -> Entity {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<PowerGraphEmpty>>();
+        query.single(world).unwrap()
+    }
+
+    fn graph_bar_count(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<PowerGraphBar>>();
+        query.iter(world).count()
+    }
+
+    fn graph_children(app: &App, root: Entity) -> Vec<Entity> {
+        app.world()
+            .entity(root)
+            .get::<Children>()
+            .unwrap()
+            .iter()
+            .collect()
+    }
 }

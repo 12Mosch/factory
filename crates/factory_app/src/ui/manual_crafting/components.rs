@@ -55,6 +55,7 @@ pub(crate) struct CraftingQueueProgressFill(pub(crate) CraftingJobId);
 pub(crate) struct CraftingPanelSnapshot {
     pub(crate) selected_tab: CraftingPanelTab,
     pub(crate) rows: Vec<ManualCraftRecipeRow>,
+    pub(crate) queue: Vec<ManualCraftQueueRow>,
     pub(crate) feedback: Option<String>,
 }
 

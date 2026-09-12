@@ -46,6 +46,7 @@ pub(crate) fn cached_crafting_panel_snapshot(
     CraftingPanelSnapshot {
         selected_tab,
         rows: recipe_rows(sim, selected_tab, Some(cache)),
+        queue: queue_snapshot(sim),
         feedback,
     }
 }
@@ -412,6 +413,30 @@ mod tests {
         assert!(rows[1].status.contains("10/30 ticks (33%)"));
         assert!(rows[1].can_move_earlier);
         assert!(!rows[1].can_move_later);
+    }
+
+    #[test]
+    fn panel_snapshot_equality_includes_active_queue_progress() {
+        let mut sim = Simulation::new_test_world(123);
+        let catalog = sim.catalog().clone();
+        let iron_plate = item_id_by_name(sim.catalog(), "iron_plate");
+        let gear_recipe = recipe_id_by_name(sim.catalog(), "iron_gear_wheel");
+        sim.player_inventory_mut()
+            .insert(&catalog, iron_plate, 2)
+            .unwrap();
+        sim.start_manual_craft(gear_recipe).unwrap();
+        let mut cache = CraftingRecipeTextCache::default();
+        cache.refresh(&sim, 0);
+        let before = cached_crafting_panel_snapshot(&sim, CraftingPanelTab::Player, None, &cache);
+
+        sim.tick();
+        let after = cached_crafting_panel_snapshot(&sim, CraftingPanelTab::Player, None, &cache);
+
+        assert_ne!(before, after);
+        assert_ne!(
+            before.queue[0].progress_percent,
+            after.queue[0].progress_percent
+        );
     }
 
     fn row_for_recipe(

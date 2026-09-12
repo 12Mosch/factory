@@ -52,6 +52,9 @@ pub(super) struct PowerLine(pub(super) usize);
 #[derive(Component)]
 pub(super) struct PowerGraphRoot;
 
+#[derive(Component)]
+pub(super) struct PowerGraphEmpty;
+
 #[derive(Clone, Copy, Component, Debug, PartialEq, Eq)]
 pub(super) struct PowerGraphBar {
     pub(super) index: usize,

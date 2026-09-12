@@ -213,17 +213,20 @@ mod enemy_feature_tests {
         let mut sim = Simulation::new_test_world(123);
         let world = sim.enemy_settings().world;
         let runtime = EnemyDifficultyPreset::Peaceful.config().runtime;
+        let revision = sim.enemy_settings_revision();
         sim.apply_command(&SimCommand::SetEnemyRuntimeSettings(runtime))
             .unwrap();
         assert_eq!(sim.enemy_settings().world, world);
         assert_eq!(sim.enemy_settings().runtime, runtime);
         assert_eq!(sim.enemy_settings().preset, EnemyDifficultyPreset::Custom);
+        assert!(sim.enemy_settings_revision() > revision);
     }
 
     #[test]
     fn runtime_command_reports_invalid_settings_without_mutating_state() {
         let mut sim = Simulation::new_test_world(123);
         let original = sim.enemy_settings();
+        let revision = sim.enemy_settings_revision();
         let mut runtime = original.runtime;
         runtime.raid_frequency_percent = 24;
 
@@ -234,6 +237,7 @@ mod enemy_feature_tests {
             ))
         );
         assert_eq!(sim.enemy_settings(), original);
+        assert_eq!(sim.enemy_settings_revision(), revision);
     }
 
     #[test]
