@@ -120,7 +120,7 @@ fn retained_ui_frame_p99_hitch_and_allocation_budget() {
     let _guard = BENCHMARK_LOCK
         .lock()
         .expect("benchmark lock should not poison");
-    let mut app = full_app_fixture();
+    let mut app = changing_ui_full_app_fixture();
     app.add_schedule(Schedule::new(UiBenchmark));
     app.add_systems(
         UiBenchmark,
@@ -459,12 +459,23 @@ fn full_app_fixture() -> App {
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 60.0,
         )));
-    let mut sim = changing_ui_simulation();
+    let mut sim = Simulation::new_scripted_red_science_factory();
     sim.tick();
     app.world_mut()
         .resource_mut::<SimResource>()
         .replace(sim)
         .expect("benchmark simulation should replace before frame execution");
+    app
+}
+
+fn changing_ui_full_app_fixture() -> App {
+    let mut app = full_app_fixture();
+    let mut sim = changing_ui_simulation();
+    sim.tick();
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(sim)
+        .expect("changing UI benchmark simulation should replace before frame execution");
     app
 }
 

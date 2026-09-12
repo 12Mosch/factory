@@ -185,8 +185,8 @@ pub(crate) fn sync_manual_crafting_panel(
         },
         manual_crafting_root,
         spawn_manual_crafting_contents,
-        |commands, _, _, next| {
-            update_manual_crafting(commands, next, &mut nodes);
+        |commands, _, previous, next| {
+            update_manual_crafting(commands, previous, next, &mut nodes);
         },
     );
 }
@@ -308,30 +308,39 @@ pub(crate) struct ManualCraftingNodes<'w, 's> {
 
 fn update_manual_crafting(
     commands: &mut Commands,
-    snapshot: &CraftingPanelSnapshot,
+    previous: &CraftingPanelSnapshot,
+    next: &CraftingPanelSnapshot,
     nodes: &mut ManualCraftingNodes,
 ) {
-    for (entity, mut node, mut visibility) in &mut nodes.feedback {
-        let visible = snapshot.feedback.is_some();
-        node.display = retained_display(visible);
-        *visibility = if visible {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        if let Ok(mut text) = nodes.texts.get_mut(entity) {
-            text.0 = snapshot.feedback.clone().unwrap_or_default();
+    if previous.feedback != next.feedback {
+        for (entity, mut node, mut visibility) in &mut nodes.feedback {
+            let visible = next.feedback.is_some();
+            node.display = retained_display(visible);
+            *visibility = if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if let Ok(mut text) = nodes.texts.get_mut(entity) {
+                text.0 = next.feedback.clone().unwrap_or_default();
+            }
         }
     }
-    for (button, mut background) in &mut nodes.tabs {
-        background.0 = if button.tab == snapshot.selected_tab {
-            Color::srgba(0.22, 0.27, 0.24, 0.98)
-        } else {
-            Color::srgba(0.10, 0.11, 0.11, 0.98)
-        };
+    if previous.selected_tab != next.selected_tab {
+        for (button, mut background) in &mut nodes.tabs {
+            background.0 = if button.tab == next.selected_tab {
+                Color::srgba(0.22, 0.27, 0.24, 0.98)
+            } else {
+                Color::srgba(0.10, 0.11, 0.11, 0.98)
+            };
+        }
     }
-    reconcile_recipe_rows(commands, &snapshot.rows, nodes);
-    reconcile_queue_rows(commands, &snapshot.queue, nodes);
+    if previous.selected_tab != next.selected_tab || previous.rows != next.rows {
+        reconcile_recipe_rows(commands, &next.rows, nodes);
+    }
+    if previous.queue != next.queue {
+        reconcile_queue_rows(commands, &next.queue, nodes);
+    }
 }
 
 fn reconcile_recipe_rows(
@@ -512,7 +521,21 @@ mod tests {
     use super::*;
     use bevy::ecs::message::Messages;
     use factory_data::{item_id_by_name, recipe_id_by_name};
-    use factory_sim::Simulation;
+    use factory_sim::{CraftingJobId, Simulation};
+
+    #[derive(Resource)]
+    struct ManualUpdateFixture {
+        previous: CraftingPanelSnapshot,
+        next: CraftingPanelSnapshot,
+    }
+
+    fn update_manual_crafting_fixture(
+        mut commands: Commands,
+        fixture: Res<ManualUpdateFixture>,
+        mut nodes: ManualCraftingNodes,
+    ) {
+        update_manual_crafting(&mut commands, &fixture.previous, &fixture.next, &mut nodes);
+    }
 
     #[test]
     fn closed_panel_does_not_access_uninitialized_simulation() {
@@ -524,6 +547,47 @@ mod tests {
             .add_systems(Update, sync_manual_crafting_panel);
 
         app.update();
+    }
+
+    #[test]
+    fn queue_only_change_does_not_reconcile_recipe_subtree() {
+        let previous = empty_panel_snapshot();
+        let mut next = previous.clone();
+        next.queue.push(ManualCraftQueueRow {
+            job_id: CraftingJobId(1),
+            status: "Crafting".to_string(),
+            can_move_earlier: false,
+            can_move_later: false,
+            progress_percent: 50,
+        });
+        let mut app = App::new();
+        app.insert_resource(ManualUpdateFixture { previous, next })
+            .add_systems(Update, update_manual_crafting_fixture);
+        let empty = app
+            .world_mut()
+            .spawn((
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+                Visibility::Hidden,
+                CraftingRecipeEmpty,
+            ))
+            .id();
+        app.world_mut()
+            .spawn((Node::default(), CraftingRecipeListRoot))
+            .add_child(empty);
+
+        app.update();
+
+        assert_eq!(
+            app.world().entity(empty).get::<Node>().unwrap().display,
+            Display::None
+        );
+        assert_eq!(
+            *app.world().entity(empty).get::<Visibility>().unwrap(),
+            Visibility::Hidden
+        );
     }
 
     #[test]
@@ -561,5 +625,14 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    fn empty_panel_snapshot() -> CraftingPanelSnapshot {
+        CraftingPanelSnapshot {
+            selected_tab: crate::ui::resources::CraftingPanelTab::Player,
+            rows: Vec::new(),
+            queue: Vec::new(),
+            feedback: None,
+        }
     }
 }

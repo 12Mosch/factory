@@ -2,32 +2,8 @@ use bevy::prelude::*;
 use factory_data::{PrototypeCatalog, TechnologyEffect, TechnologyId};
 
 use crate::ui::formatting::{format_item_display_name, format_recipe_display_name};
-use crate::ui::resources::TechnologyWindowState;
 
-use super::components::{TechnologyPanelSnapshot, TechnologyUiState};
-
-pub(crate) fn technology_panel_snapshot(
-    sim: &factory_sim::Simulation,
-    window_state: &TechnologyWindowState,
-) -> TechnologyPanelSnapshot {
-    TechnologyPanelSnapshot {
-        selected: window_state.selected,
-        active: sim.active_research(),
-        queue: sim.research_queue().to_vec(),
-        progress_units: sim
-            .catalog()
-            .technologies()
-            .iter()
-            .map(|technology| sim.technology_progress(technology.id).unwrap_or(0))
-            .collect(),
-        completed_levels: sim
-            .catalog()
-            .technologies()
-            .iter()
-            .map(|technology| sim.technology_level(technology.id).unwrap_or(0))
-            .collect(),
-    }
-}
+use super::components::TechnologyUiState;
 
 pub(crate) fn active_research_text(sim: &factory_sim::Simulation) -> String {
     let Some(technology_id) = sim.active_research() else {

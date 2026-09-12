@@ -48,7 +48,7 @@ pub(crate) enum WindowSync {
     Spawned,
     /// The existing contents already match the snapshot.
     Unchanged,
-    /// The snapshot changed; children were despawned and respawned.
+    /// The contents were despawned and respawned.
     Rebuilt,
     /// The snapshot changed and the existing hierarchy was retained.
     Updated,
@@ -66,7 +66,8 @@ pub(crate) struct WindowSyncInput {
 /// `update_contents` is only called for an existing window with a different
 /// snapshot. It runs before the stored snapshot is replaced and may update
 /// components directly or queue narrowly scoped structural changes through
-/// `commands`.
+/// `commands`. Duplicate roots force a full rebuild of the surviving root so
+/// global marker queries cannot reconcile against descendants being despawned.
 pub(crate) fn sync_retained_window<S: WindowSnapshot, B: Bundle>(
     commands: &mut Commands,
     roots: &mut WindowRootQuery<S>,
@@ -84,15 +85,30 @@ pub(crate) fn sync_retained_window<S: WindowSnapshot, B: Bundle>(
     }
 
     let mut roots_iter = roots.iter_mut();
-    let Some((root_entity, mut root, _)) = roots_iter.next() else {
+    let Some((root_entity, mut root, children)) = roots_iter.next() else {
         let snapshot = make_snapshot();
         let mut window = commands.spawn(root_bundle());
         window.with_children(|root| spawn_contents(root, &snapshot));
         window.insert(WindowRoot { snapshot });
         return WindowSync::Spawned;
     };
+    let mut had_duplicates = false;
     for (duplicate, _, _) in roots_iter {
+        had_duplicates = true;
         commands.entity(duplicate).despawn();
+    }
+
+    if had_duplicates {
+        let snapshot = make_snapshot();
+        replace_contents(
+            commands,
+            root_entity,
+            &mut root,
+            children,
+            snapshot,
+            spawn_contents,
+        );
+        return WindowSync::Rebuilt;
     }
 
     if !input.changed {
@@ -219,6 +235,25 @@ fn rebuild_contents<S: WindowSnapshot>(
     if root.snapshot == snapshot {
         return false;
     }
+    replace_contents(
+        commands,
+        root_entity,
+        root,
+        children,
+        snapshot,
+        spawn_contents,
+    );
+    true
+}
+
+fn replace_contents<S: WindowSnapshot>(
+    commands: &mut Commands,
+    root_entity: Entity,
+    root: &mut WindowRoot<S>,
+    children: Option<&Children>,
+    snapshot: S,
+    spawn_contents: impl FnOnce(&mut ChildSpawnerCommands, &S),
+) {
     if let Some(children) = children {
         for child in children.iter() {
             commands.entity(child).despawn();
@@ -228,7 +263,6 @@ fn rebuild_contents<S: WindowSnapshot>(
         .entity(root_entity)
         .with_children(|root| spawn_contents(root, &snapshot));
     root.snapshot = snapshot;
-    true
 }
 
 #[cfg(test)]
@@ -363,6 +397,37 @@ mod tests {
         assert_eq!(window_result(&app), WindowSync::Updated);
         assert_eq!(test_child_entities(&mut app), vec![child]);
         assert_eq!(test_child_values(&mut app), vec![2]);
+    }
+
+    #[test]
+    fn retained_sync_rebuilds_surviving_root_when_changed_with_duplicates() {
+        let mut app = App::new();
+        app.insert_resource(TestWindowState {
+            open: true,
+            inputs_changed: true,
+            snapshot: 1,
+            result: None,
+        })
+        .add_systems(Update, sync_retained_test_window);
+
+        app.update();
+        app.world_mut()
+            .spawn((WindowRoot::new(TestSnapshot(99)), TestRootMarker))
+            .with_child((TestChild(99),));
+        let previous_children = test_child_entities(&mut app);
+        app.world_mut().resource_mut::<TestWindowState>().snapshot = 2;
+
+        app.update();
+
+        assert_eq!(window_result(&app), WindowSync::Rebuilt);
+        assert_eq!(root_count(&mut app), 1);
+        assert_eq!(root_child_counts(&mut app), vec![1]);
+        assert_eq!(test_child_values(&mut app), vec![2]);
+        assert!(
+            test_child_entities(&mut app)
+                .iter()
+                .all(|entity| !previous_children.contains(entity))
+        );
     }
 
     #[test]

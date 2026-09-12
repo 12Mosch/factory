@@ -1,6 +1,5 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use factory_data::TechnologyId;
 use factory_sim::SimCommand;
 
 use crate::audio::SoundEvent;
@@ -21,8 +20,8 @@ use super::components::{
 };
 use super::helpers::{
     active_research_text, can_enqueue_for_ui, next_science_cost_text, prerequisite_text,
-    queue_text, start_queue_label, technology_effect_text, technology_panel_snapshot,
-    technology_progress_text, technology_ui_state,
+    queue_text, start_queue_label, technology_effect_text, technology_progress_text,
+    technology_ui_state,
 };
 use super::view::{
     research_progress_percent, spawn_technology_detail, spawn_technology_panel_contents,
@@ -199,13 +198,13 @@ pub(crate) fn sync_technology_panel(
     }
 
     let simulation = sim.read();
-    let key = TechnologyRefreshKey {
+    let snapshot = TechnologyPanelSnapshot {
         replacement_revision: sim.replacement_revision(),
         research_revision: simulation.research_revision(),
         selected: window_state.selected,
     };
-    let inputs_changed = refresh.last_key != Some(key) || window_state.is_changed();
-    refresh.last_key = Some(key);
+    let inputs_changed = refresh.last_key != Some(snapshot) || window_state.is_changed();
+    refresh.last_key = Some(snapshot);
     sync_retained_window(
         &mut commands,
         &mut roots,
@@ -213,7 +212,7 @@ pub(crate) fn sync_technology_panel(
             open: window_state.open,
             changed: inputs_changed,
         },
-        || technology_panel_snapshot(&simulation, &window_state),
+        || snapshot,
         technology_panel_root,
         |root, _| spawn_technology_panel_contents(root, &simulation, window_state.selected),
         |commands, _, previous, next| {
@@ -224,14 +223,7 @@ pub(crate) fn sync_technology_panel(
 
 #[derive(Resource, Default)]
 pub(crate) struct TechnologyPanelRefresh {
-    last_key: Option<TechnologyRefreshKey>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TechnologyRefreshKey {
-    replacement_revision: u64,
-    research_revision: u64,
-    selected: Option<TechnologyId>,
+    last_key: Option<TechnologyPanelSnapshot>,
 }
 
 type TechnologyButtonQuery<'w, 's> = Query<

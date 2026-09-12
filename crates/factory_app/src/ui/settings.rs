@@ -342,7 +342,6 @@ pub(crate) fn sync_settings_window(
         || resources.audio.is_changed()
         || controls_changed
         || resources.display.is_changed()
-        || resources.sim.is_changed()
         || enemy_changed;
     sync_window(
         &mut commands,
@@ -537,4 +536,36 @@ pub(crate) fn spawn_button<T: Component>(
             marker,
         ))
         .with_child((Text::new(label), TextFont::from_font_size(11.0)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use factory_sim::Simulation;
+
+    #[test]
+    fn unrelated_sim_resource_change_does_not_rebuild_audio_settings() {
+        let window = SettingsWindowState {
+            open: true,
+            active_tab: SettingsTab::Audio,
+            ..default()
+        };
+        let mut app = App::new();
+        app.insert_resource(window)
+            .init_resource::<AudioSettings>()
+            .init_resource::<ActionBindings>()
+            .init_resource::<KeyDisplayNames>()
+            .init_resource::<ControlRebindState>()
+            .insert_resource(SimResource::new(Simulation::new_test_world(123)))
+            .init_resource::<DisplayState>()
+            .init_resource::<ControlsSnapshotCache>()
+            .init_resource::<SettingsRefresh>()
+            .add_systems(Update, sync_settings_window);
+        app.update();
+
+        // An empty replacement would panic if `SimResource::is_changed()`
+        // caused the Audio tab to rebuild and read Gameplay settings.
+        app.insert_resource(SimResource::empty());
+        app.update();
+    }
 }
