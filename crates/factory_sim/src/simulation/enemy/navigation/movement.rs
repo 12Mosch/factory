@@ -104,10 +104,10 @@ impl Simulation {
         // budgeted tile-goal pathfinder, so they can detour around obstacles
         // instead of tunneling or stalling. Pushing `party.destination`
         // directly would let `follow_path` cross blocked intermediate tiles.
-        // Retry policy: unreachable or deferred routes leave the path empty
-        // and throttle targetless units to one attempt per repath interval;
-        // the next empty-path tick tries again, so parties resume when
-        // terrain or budget pressure clears.
+        // Retry policy: waiting routes leave the path empty and throttle
+        // targetless units to one attempt per repath interval; the next
+        // empty-path tick tries again, so parties resume when terrain or
+        // budget pressure clears.
         for party in enemies.expansions.values() {
             for member in &party.members {
                 let destination = party.destination;
@@ -129,38 +129,15 @@ impl Simulation {
                 if targetless && tick < unit.next_decision_tick {
                     continue;
                 }
-                let in_range = EntityFootprint::single_tile(from.0, from.1).chebyshev_distance_to(
-                    &EntityFootprint::single_tile(destination.0, destination.1),
-                ) <= ENEMY_PATHFIND_MAX_RANGE_TILES;
-                if !in_range {
-                    // Beyond routing range: one validated greedy step, the
-                    // same fallback distant combat units use. Never crosses
-                    // blocked tiles; stalls until the next empty-path tick
-                    // when both axes are blocked.
-                    if let Some(next) = expansion_step_toward(world, entities, from, destination) {
-                        unit.path.push_back(next);
-                    } else if targetless {
-                        unit.next_decision_tick =
-                            tick + ENEMY_REPATH_INTERVAL_TICKS + unit.id.raw() % 16;
-                    }
-                    continue;
-                }
-                match enemy_navigation.request_tile_path(
-                    world,
-                    entities,
-                    from,
-                    destination,
-                    ENEMY_PATHFIND_MAX_RANGE_TILES,
-                    ENEMY_PATHFIND_MAX_EXPANSIONS,
-                ) {
-                    PathRequest::Ready(Some(path)) => {
+                match plan_expansion_move(enemy_navigation, world, entities, from, destination) {
+                    ExpansionRoute::Steps(steps) => {
                         debug_assert!(
-                            !path.is_empty(),
-                            "tile routing from outside the goal must return steps"
+                            !steps.is_empty(),
+                            "expansion routing must return steps or wait"
                         );
-                        unit.path = path;
+                        unit.path = steps;
                     }
-                    PathRequest::Ready(None) | PathRequest::Deferred => {
+                    ExpansionRoute::Wait => {
                         if targetless {
                             unit.next_decision_tick =
                                 tick + ENEMY_REPATH_INTERVAL_TICKS + unit.id.raw() % 16;
@@ -221,6 +198,79 @@ impl Simulation {
                 step_enemy(&mut context, enemy, commands);
             }
         }
+    }
+}
+
+/// Outcome of planning one expansion move: adjacent steps to follow now, or
+/// an instruction to wait and retry on a later tick.
+enum ExpansionRoute {
+    Steps(VecDeque<(WorldTileCoord, WorldTileCoord)>),
+    Wait,
+}
+
+/// Deterministic intermediate goal for long-distance expansion travel: the
+/// destination clamped into the search window around `from`. Keeps every
+/// search inside the existing range instead of running a 200+ tile A*.
+fn expansion_intermediate_goal(
+    from: (WorldTileCoord, WorldTileCoord),
+    destination: (WorldTileCoord, WorldTileCoord),
+) -> (WorldTileCoord, WorldTileCoord) {
+    (
+        from.0
+            + (destination.0.saturating_sub(from.0)).clamp(
+                -ENEMY_PATHFIND_MAX_RANGE_TILES,
+                ENEMY_PATHFIND_MAX_RANGE_TILES,
+            ),
+        from.1
+            + (destination.1.saturating_sub(from.1)).clamp(
+                -ENEMY_PATHFIND_MAX_RANGE_TILES,
+                ENEMY_PATHFIND_MAX_RANGE_TILES,
+            ),
+    )
+}
+
+fn plan_expansion_move(
+    navigation: &mut EnemyNavigation,
+    world: &WorldSim,
+    entities: &EntityStore,
+    from: (WorldTileCoord, WorldTileCoord),
+    destination: (WorldTileCoord, WorldTileCoord),
+) -> ExpansionRoute {
+    if from == destination {
+        // Arrival marker: consumed without moving once the unit is centered,
+        // then `resolve_arrived_expansions` founds the colony.
+        return ExpansionRoute::Steps(VecDeque::from([destination]));
+    }
+    let in_range = EntityFootprint::single_tile(from.0, from.1)
+        .chebyshev_distance_to(&EntityFootprint::single_tile(destination.0, destination.1))
+        <= ENEMY_PATHFIND_MAX_RANGE_TILES;
+    // Beyond routing range, head for the deterministic intermediate goal so
+    // local barriers are detoured with the shared pathfinder instead of the
+    // purely greedy fallback below.
+    let goal = if in_range {
+        destination
+    } else {
+        expansion_intermediate_goal(from, destination)
+    };
+    match navigation.request_tile_path(
+        world,
+        entities,
+        from,
+        goal,
+        ENEMY_PATHFIND_MAX_RANGE_TILES,
+        ENEMY_PATHFIND_MAX_EXPANSIONS,
+    ) {
+        PathRequest::Ready(Some(path)) if !path.is_empty() => ExpansionRoute::Steps(path),
+        // The true goal is provably unreachable inside the window: wait for
+        // terrain to change instead of marching toward it.
+        PathRequest::Ready(_) if in_range => ExpansionRoute::Wait,
+        // Otherwise the tick budget is spent or only the intermediate goal
+        // failed: probe one validated greedy step toward the destination,
+        // or wait when every adjacent step is blocked.
+        _ => match expansion_step_toward(world, entities, from, destination) {
+            Some(next) => ExpansionRoute::Steps(VecDeque::from([next])),
+            None => ExpansionRoute::Wait,
+        },
     }
 }
 
@@ -666,6 +716,68 @@ mod movement_regression_tests {
         None
     }
 
+    /// Long straight corridor two tiles wide and longer than routing range,
+    /// built synthetically so the test never depends on world generation:
+    /// every tile is cleared of entities and paved walkable except one
+    /// flooded blocker next to the start. Returns `(start, destination)`
+    /// with `distance > ENEMY_PATHFIND_MAX_RANGE_TILES`.
+    fn long_corridor_with_blocker(
+        sim: &mut Simulation,
+    ) -> (
+        (WorldTileCoord, WorldTileCoord),
+        (WorldTileCoord, WorldTileCoord),
+    ) {
+        const LENGTH: i64 = 55;
+        let concrete = factory_data::BasePrototypeIds::from_catalog(&sim.world.prototypes)
+            .tiles
+            .concrete;
+        let anchor = sim
+            .world
+            .chunks
+            .values()
+            .flat_map(|chunk| {
+                chunk.tiles.iter().enumerate().map(|(index, _)| {
+                    let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                    let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                    chunk.coord.tile_at(local_x, local_y)
+                })
+            })
+            .find(|&(x, y)| corridor_is_clear(sim, x, y))
+            .expect("test world should contain a clear tile");
+        for dx in 0..LENGTH {
+            for dy in 0..2 {
+                let coord = ChunkCoord::from_tile(anchor.0 + dx, anchor.1 + dy)
+                    .expect("corridor tiles should be in the chunk plane");
+                sim.ensure_chunk_generated(coord);
+            }
+        }
+        for dx in 0..LENGTH {
+            for dy in 0..2 {
+                let (x, y) = (anchor.0 + dx, anchor.1 + dy);
+                if let Some(occupant) = sim.entities.occupancy.entity_at(x, y) {
+                    crate::entity_mutation::remove(sim, occupant)
+                        .expect("corridor entity should be removable");
+                }
+                let paved = sim
+                    .world
+                    .tile_at(x, y)
+                    .is_some_and(|tile| tile.tile_id == concrete);
+                if !paved {
+                    sim.world
+                        .set_tile(x, y, concrete)
+                        .expect("corridor tile should accept paving");
+                }
+                assert!(
+                    tile_open_for_enemy(&sim.world, &sim.entities, x, y, None),
+                    "corridor tile should be open after clearing"
+                );
+            }
+        }
+        let blocker = (anchor.0 + 1, anchor.1);
+        flood_tile(sim, blocker.0, blocker.1);
+        ((anchor.0, anchor.1), (anchor.0 + 50, anchor.1))
+    }
+
     fn flood_tile(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoord) {
         let already_blocked = sim
             .world
@@ -958,6 +1070,66 @@ mod movement_regression_tests {
             },
         );
         enemy_id
+    }
+
+    #[test]
+    fn long_range_expansion_detours_around_nearby_blocker() {
+        // Distance 50 exceeds the 40-tile routing range, with a blocker that
+        // the purely greedy fallback cannot pass: it only tries
+        // Manhattan-reducing steps, and the only open first step detours.
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_blocker(&mut sim);
+        assert!(
+            (destination.0 - start.0).abs() > ENEMY_PATHFIND_MAX_RANGE_TILES,
+            "test geometry must exceed routing range"
+        );
+        assert!(
+            expansion_step_toward(&sim.world, &sim.entities, start, destination).is_none(),
+            "the greedy fallback alone must stall at this blocker"
+        );
+
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+        let steps = match plan_expansion_move(
+            &mut navigation,
+            &sim.world,
+            &sim.entities,
+            start,
+            destination,
+        ) {
+            ExpansionRoute::Steps(steps) => steps,
+            ExpansionRoute::Wait => panic!("a detour around one tile must exist"),
+        };
+        let blocker = (start.0 + 1, start.1);
+        let intermediate = (start.0 + ENEMY_PATHFIND_MAX_RANGE_TILES, start.1);
+        let front = *steps.front().expect("routing must return steps");
+        assert_eq!(
+            (front.0 - start.0).abs() + (front.1 - start.1).abs(),
+            1,
+            "the first routed step must be adjacent"
+        );
+        let mut previous = start;
+        for &step in &steps {
+            assert_eq!(
+                (step.0 - previous.0).abs() + (step.1 - previous.1).abs(),
+                1,
+                "every routed step must be 4-connected"
+            );
+            assert!(
+                tile_open_for_enemy(&sim.world, &sim.entities, step.0, step.1, None),
+                "no routed step may cross blocked terrain"
+            );
+            previous = step;
+        }
+        assert!(
+            !steps.contains(&blocker),
+            "the long-range route must avoid the blocker"
+        );
+        assert_eq!(
+            *steps.back().expect("routing must return steps"),
+            intermediate,
+            "beyond range, routing heads for the intermediate goal"
+        );
     }
 
     #[test]
