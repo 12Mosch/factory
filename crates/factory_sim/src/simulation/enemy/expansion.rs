@@ -338,9 +338,7 @@ impl Simulation {
             ) {
                 for id in party.members {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
                 continue;
@@ -389,22 +387,18 @@ impl Simulation {
                 self.enemies.enemies.remove(&founder);
                 for id in party.members {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
+                        unit.transition_to_guard();
                         unit.home_spawner = self.enemies.bases[&new_base]
                             .spawners
                             .iter()
                             .next()
                             .copied();
-                        unit.path.clear();
                     }
                 }
             } else {
                 for id in party.members {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
                 self.enemies.bases.remove(&new_base);

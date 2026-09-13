@@ -34,10 +34,7 @@ impl Simulation {
                 base.attack_budget_micro = 0;
                 for id in std::mem::take(&mut base.staged_units) {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mode = EnemyMode::Guard;
-                        unit.mission = EnemyMission::Guard;
-                        unit.target = None;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
                 base.staging_started_tick = None;

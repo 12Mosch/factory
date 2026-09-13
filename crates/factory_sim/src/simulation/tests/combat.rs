@@ -1046,6 +1046,370 @@ fn colony_with_capacity_dispatches_expansion_on_schedule() {
     );
 }
 
+/// Gives an expansion member a stale attack target plus a pending path, as
+/// ordinary attack targeting or combat retaliation could before resolution.
+fn spawn_expansion_member_with_stale_target(
+    sim: &mut Simulation,
+    x: WorldTileCoord,
+    y: WorldTileCoord,
+    home_spawner: EntityId,
+    target: EntityId,
+    expansion_id: ExpansionId,
+) -> EnemyId {
+    let id = spawn_test_enemy_at(sim, x, y);
+    let unit = sim.enemies.enemies.get_mut(&id).unwrap();
+    unit.mission = EnemyMission::Expansion(expansion_id);
+    unit.mode = EnemyMode::Attack;
+    unit.home_spawner = Some(home_spawner);
+    unit.target = Some(target);
+    unit.path.push_back((x + 1, y));
+    id
+}
+
+/// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
+/// the chunk first so fixed offsets near rect edges cannot leave generated
+/// area.
+fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord) -> EntityId {
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    for ring in 1..=10_i64 {
+        for dy in -ring..=ring {
+            for dx in -ring..=ring {
+                if dx.abs().max(dy.abs()) != ring {
+                    continue;
+                }
+                let (x, y) = (cx + dx, cy + dy);
+                if let Some(chunk) = ChunkCoord::from_tile(x, y) {
+                    sim.ensure_chunk_generated(chunk);
+                }
+                if crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: chest,
+                        x,
+                        y,
+                        direction: Direction::North,
+                    },
+                )
+                .is_ok()
+                {
+                    return place_at(sim, chest, x, y, Direction::North);
+                }
+            }
+        }
+    }
+    panic!("expected a placeable chest tile near {cx},{cy}");
+}
+
+fn assert_converted_to_guard(sim: &Simulation, id: EnemyId, context: &str) {
+    let unit = &sim.enemies.enemies[&id];
+    assert_eq!(
+        unit.mission,
+        EnemyMission::Guard,
+        "{context} must stand the unit down to guard"
+    );
+    assert_eq!(
+        unit.mode,
+        EnemyMode::Guard,
+        "{context} must reset guard stance"
+    );
+    assert_eq!(
+        unit.target, None,
+        "{context} must drop the stale attack target so guard aggro rules apply"
+    );
+    assert!(
+        unit.path.is_empty(),
+        "{context} must drop mission-specific navigation state"
+    );
+}
+
+/// Finds a tile that passes expansion site spacing with a free spawner
+/// footprint, mirroring `expansion_site_clear` plus placement validation.
+fn find_clear_expansion_destination(
+    sim: &mut Simulation,
+    source_base: EnemyBaseId,
+    spawner_prototype: EntityPrototypeId,
+    spacing: i64,
+) -> (WorldTileCoord, WorldTileCoord) {
+    let gameplay = *sim
+        .gameplay()
+        .expect("the catalog should tune enemy expansion");
+    let colony_spacing = i32::from(gameplay.expansion_colony_spacing_chunks);
+    let anchor = sim.enemies.bases[&source_base].anchor;
+    for dx in -6_i32..=6 {
+        for dy in -6_i32..=6 {
+            sim.ensure_chunk_generated(ChunkCoord {
+                x: anchor.x + dx,
+                y: anchor.y + dy,
+            });
+        }
+    }
+    let (player_x, player_y) = sim.player.tile_position();
+    let structures: Vec<(WorldTileCoord, WorldTileCoord)> = sim
+        .entities
+        .placed_entities
+        .values()
+        .filter(|entity| {
+            sim.world
+                .prototypes
+                .entity(entity.prototype_id)
+                .is_some_and(|p| {
+                    p.entity_kind != EntityKind::EnemySpawner
+                        && p.entity_kind != EntityKind::ResourcePatch
+                })
+        })
+        .map(|entity| (entity.x, entity.y))
+        .collect();
+    let mut candidates = all_tile_coords(&sim.world);
+    candidates.sort();
+    for (x, y) in candidates {
+        let Some(tile) = sim.world.tile_at(x, y) else {
+            continue;
+        };
+        if tile.resource.is_some()
+            || !tile.collision.walkable
+            || !tile.collision.buildable
+            || sim.entities.occupancy.entity_at(x, y).is_some()
+        {
+            continue;
+        }
+        if (player_x - x).abs().max((player_y - y).abs()) < spacing {
+            continue;
+        }
+        if structures
+            .iter()
+            .any(|&(sx, sy)| (sx - x).abs().max((sy - y).abs()) < spacing)
+        {
+            continue;
+        }
+        let Some(chunk) = ChunkCoord::from_tile(x, y) else {
+            continue;
+        };
+        if sim.enemies.bases.values().any(|base| {
+            base.id != source_base
+                && (base.anchor.x - chunk.x)
+                    .abs()
+                    .max((base.anchor.y - chunk.y).abs())
+                    < colony_spacing
+        }) {
+            continue;
+        }
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: spawner_prototype,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .is_err()
+        {
+            continue;
+        }
+        return (x, y);
+    }
+    panic!("expected a clear expansion destination with spacing {spacing}");
+}
+
+/// Regression for https://github.com/12Mosch/factory/issues/310: every
+/// expansion-to-guard transition must drop the previous attack target so the
+/// new guard reacquires victims through guard aggro rules only.
+#[test]
+fn expansion_resolution_clears_stale_targets_on_guard_conversion() {
+    // Blocked site: the destination stays occupied, so the party stands down
+    // without founding a colony.
+    {
+        let mut sim = Simulation::new_test_world(123);
+        let spawner_id = place_biter_spawner(&mut sim);
+        let base_id = sim.enemies.spawner_bases[&spawner_id];
+        let spawner_prototype = sim.entities.placed_entities[&spawner_id].prototype_id;
+        let spawner = sim.entities.placed_entities[&spawner_id].clone();
+        let blocker = place_chest_near(&mut sim, spawner.x, spawner.y);
+        let target = place_chest_near(&mut sim, spawner.x, spawner.y);
+        let destination = {
+            let placed = sim.entities.placed_entities[&blocker].clone();
+            (placed.x, placed.y)
+        };
+        let expansion_id = sim.enemies.allocate_expansion_id();
+        let founder = spawn_expansion_member_with_stale_target(
+            &mut sim,
+            destination.0,
+            destination.1,
+            spawner_id,
+            target,
+            expansion_id,
+        );
+        let follower = spawn_expansion_member_with_stale_target(
+            &mut sim,
+            destination.0 + 1,
+            destination.1,
+            spawner_id,
+            target,
+            expansion_id,
+        );
+        sim.enemies.expansions.insert(
+            expansion_id,
+            crate::enemies::Expansion {
+                id: expansion_id,
+                base_id,
+                members: [founder, follower].into_iter().collect(),
+                destination,
+                spotted: false,
+                spawner_prototype,
+            },
+        );
+
+        sim.resolve_arrived_expansions();
+
+        assert!(!sim.enemies.expansions.contains_key(&expansion_id));
+        assert_converted_to_guard(&sim, founder, "blocked expansion");
+        assert_converted_to_guard(&sim, follower, "blocked expansion");
+    }
+
+    // Successful founding: the founder is consumed by the new spawner while
+    // surviving members become guards of the new colony without stale targets.
+    {
+        let mut sim = Simulation::new_test_world(123);
+        let spawner_id = place_biter_spawner(&mut sim);
+        let base_id = sim.enemies.spawner_bases[&spawner_id];
+        let spawner_prototype = sim.entities.placed_entities[&spawner_id].prototype_id;
+        let spawner = sim.entities.placed_entities[&spawner_id].clone();
+        let target = place_chest_near(&mut sim, spawner.x, spawner.y);
+        let spacing = i64::from(
+            sim.gameplay()
+                .expect("the catalog should tune enemy expansion")
+                .expansion_player_spacing_tiles,
+        );
+        let destination =
+            find_clear_expansion_destination(&mut sim, base_id, spawner_prototype, spacing);
+        let expansion_id = sim.enemies.allocate_expansion_id();
+        let founder = spawn_expansion_member_with_stale_target(
+            &mut sim,
+            destination.0,
+            destination.1,
+            spawner_id,
+            target,
+            expansion_id,
+        );
+        let follower = spawn_expansion_member_with_stale_target(
+            &mut sim,
+            destination.0 + 1,
+            destination.1,
+            spawner_id,
+            target,
+            expansion_id,
+        );
+        sim.enemies.expansions.insert(
+            expansion_id,
+            crate::enemies::Expansion {
+                id: expansion_id,
+                base_id,
+                members: [founder, follower].into_iter().collect(),
+                destination,
+                spotted: false,
+                spawner_prototype,
+            },
+        );
+        let bases_before = sim.enemies.bases.len();
+
+        sim.resolve_arrived_expansions();
+
+        assert!(!sim.enemies.expansions.contains_key(&expansion_id));
+        assert_eq!(
+            sim.enemies.bases.len(),
+            bases_before + 1,
+            "successful expansion must found a colony"
+        );
+        assert!(
+            !sim.enemies.enemies.contains_key(&founder),
+            "the founder is consumed by the new spawner"
+        );
+        assert_converted_to_guard(&sim, follower, "successful expansion");
+        assert!(
+            sim.enemies.enemies[&follower].home_spawner.is_some(),
+            "successful expansion must re-home survivors to the new colony"
+        );
+    }
+
+    // Failed placement: the site reads clear but the spawner footprint is
+    // blocked, so the party stands down and the half-founded base is removed.
+    {
+        let mut sim = Simulation::new_test_world(123);
+        let spawner_id = place_biter_spawner(&mut sim);
+        let base_id = sim.enemies.spawner_bases[&spawner_id];
+        let spawner_prototype = sim.entities.placed_entities[&spawner_id].prototype_id;
+        let spawner = sim.entities.placed_entities[&spawner_id].clone();
+        let target = place_chest_near(&mut sim, spawner.x, spawner.y);
+        let spacing = i64::from(
+            sim.gameplay()
+                .expect("the catalog should tune enemy expansion")
+                .expansion_player_spacing_tiles,
+        );
+        let destination =
+            find_clear_expansion_destination(&mut sim, base_id, spawner_prototype, spacing);
+        // Block the footprint without touching the destination tile itself or
+        // adding placed entities, so the site still reads clear while the
+        // spawner placement fails. Mirrors `blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails`.
+        let footprint = sim
+            .world
+            .entity_footprint(
+                spawner_prototype,
+                destination.0,
+                destination.1,
+                Direction::North,
+            )
+            .expect("destination should fit a spawner footprint");
+        for (x, y) in footprint.tiles() {
+            if (x, y) != destination {
+                sim.entities
+                    .occupancy
+                    .occupied_tiles
+                    .insert((x, y), spawner_id);
+            }
+        }
+        let expansion_id = sim.enemies.allocate_expansion_id();
+        let founder = spawn_expansion_member_with_stale_target(
+            &mut sim,
+            destination.0,
+            destination.1,
+            spawner_id,
+            target,
+            expansion_id,
+        );
+        let follower = spawn_expansion_member_with_stale_target(
+            &mut sim,
+            destination.0 + 1,
+            destination.1,
+            spawner_id,
+            target,
+            expansion_id,
+        );
+        sim.enemies.expansions.insert(
+            expansion_id,
+            crate::enemies::Expansion {
+                id: expansion_id,
+                base_id,
+                members: [founder, follower].into_iter().collect(),
+                destination,
+                spotted: false,
+                spawner_prototype,
+            },
+        );
+        let bases_before = sim.enemies.bases.len();
+
+        sim.resolve_arrived_expansions();
+
+        assert!(!sim.enemies.expansions.contains_key(&expansion_id));
+        assert_eq!(
+            sim.enemies.bases.len(),
+            bases_before,
+            "failed placement must remove the half-founded base"
+        );
+        assert_converted_to_guard(&sim, founder, "failed expansion placement");
+        assert_converted_to_guard(&sim, follower, "failed expansion placement");
+    }
+}
+
 #[test]
 fn excessive_attack_budget_is_reported_by_diagnostics_and_validation() {
     let mut sim = Simulation::new_test_world(123);
