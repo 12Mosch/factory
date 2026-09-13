@@ -73,7 +73,9 @@ pub(crate) struct TechnologyQueueRow(pub(crate) TechnologyId);
 pub(crate) struct TechnologyPanelSnapshot {
     pub(crate) selected: Option<TechnologyId>,
     pub(crate) replacement_revision: u64,
-    pub(crate) research_revision: u64,
+    pub(crate) progress_revision: u64,
+    pub(crate) queue_revision: u64,
+    pub(crate) unlock_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

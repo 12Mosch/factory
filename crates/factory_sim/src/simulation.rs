@@ -105,6 +105,7 @@ pub use crate::rail::{
     RailBlockSnapshot, RailConnectionPreview, RailCurve, RailEnd, RailNetworkSnapshot,
     RailPieceGeometry, RailPoint, RailSignalAspect, RailSignalSnapshot,
 };
+pub(crate) use crate::research::ResearchRevisions;
 pub use crate::research::{
     ResearchBonuses, ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
@@ -213,9 +214,9 @@ pub struct Simulation {
     power_map_revision: u64,
     #[serde(skip, default)]
     production_status_revision: u64,
-    /// Runtime-only invalidation key for retained research UI.
+    /// Runtime-only, dependency-specific invalidation keys for retained research UI.
     #[serde(skip, default)]
-    research_revision: u64,
+    research_revisions: ResearchRevisions,
     /// Runtime-only invalidation key for enemy settings UI.
     #[serde(skip, default)]
     enemy_settings_revision: u64,

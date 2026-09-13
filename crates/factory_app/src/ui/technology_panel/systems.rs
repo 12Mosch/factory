@@ -19,15 +19,13 @@ use super::components::{
     TechnologyStartQueueButton, TechnologyStatusText,
 };
 use super::helpers::{
-    active_research_text, can_enqueue_for_ui, next_science_cost_text, prerequisite_text,
-    queue_text, start_queue_label, technology_effect_text, technology_progress_text,
-    technology_ui_state,
+    active_research_text, can_enqueue_for_ui, next_science_cost_text, queue_text,
+    start_queue_label, technology_effect_text, technology_progress_text, technology_ui_state,
 };
 use super::view::{
     research_progress_percent, spawn_technology_detail, spawn_technology_panel_contents,
     spawn_technology_queue_row, technology_panel_root, technology_status_text,
 };
-use crate::ui::formatting::format_recipe_display_name;
 use crate::ui::window_sync::{
     WindowRootQuery, WindowSyncInput, replace_children_if_different, retained_display,
     sync_retained_window,
@@ -199,7 +197,9 @@ pub(crate) fn sync_technology_panel(
     let simulation = sim.read();
     let snapshot = TechnologyPanelSnapshot {
         replacement_revision: sim.replacement_revision(),
-        research_revision: simulation.research_revision(),
+        progress_revision: simulation.research_progress_revision(),
+        queue_revision: simulation.research_queue_revision(),
+        unlock_revision: simulation.research_unlock_revision(),
         selected: window_state.selected,
     };
     sync_retained_window(
@@ -212,8 +212,8 @@ pub(crate) fn sync_technology_panel(
         || snapshot,
         technology_panel_root,
         |root, _| spawn_technology_panel_contents(root, &simulation, window_state.selected),
-        |commands, _, previous, next| {
-            update_technology_panel(commands, &simulation, previous, next, &mut nodes);
+        |commands, root, previous, next| {
+            update_technology_panel(commands, root, &simulation, previous, next, &mut nodes);
         },
     );
 }
@@ -294,30 +294,38 @@ pub(crate) struct TechnologyPanelNodes<'w, 's> {
 
 fn update_technology_panel(
     commands: &mut Commands,
+    root: Entity,
     sim: &factory_sim::Simulation,
     previous: &TechnologyPanelSnapshot,
     next: &TechnologyPanelSnapshot,
     nodes: &mut TechnologyPanelNodes,
 ) {
-    set_marked_text(commands, &nodes.active_labels, active_research_text(sim));
-    set_marked_text(commands, &nodes.queue_labels, queue_text(sim));
-
-    for (button, mut background, mut border) in &mut nodes.technology_buttons {
-        background.0 =
-            super::helpers::technology_state_color(technology_ui_state(sim, button.technology_id));
-        border.set_all(if next.selected == Some(button.technology_id) {
-            Color::srgb(0.94, 0.66, 0.20)
-        } else {
-            Color::srgba(0.32, 0.33, 0.31, 0.80)
-        });
-    }
-    for (entity, marker) in &nodes.status_labels {
+    if previous.replacement_revision != next.replacement_revision {
         commands
-            .entity(entity)
-            .insert(Text::new(technology_status_text(sim, marker.0)));
+            .entity(root)
+            .despawn_children()
+            .with_children(|root| {
+                spawn_technology_panel_contents(root, sim, next.selected);
+            });
+        return;
     }
 
-    if previous.selected != next.selected {
+    let selection_changed = previous.selected != next.selected;
+    let progress_changed = previous.progress_revision != next.progress_revision;
+    let queue_changed = previous.queue_revision != next.queue_revision;
+    let unlock_changed = previous.unlock_revision != next.unlock_revision;
+
+    if progress_changed || queue_changed {
+        set_marked_text(commands, &nodes.active_labels, active_research_text(sim));
+    }
+    if queue_changed {
+        set_marked_text(commands, &nodes.queue_labels, queue_text(sim));
+    }
+    if queue_changed || unlock_changed {
+        refresh_technology_list(commands, sim, nodes);
+    }
+    if selection_changed {
+        refresh_selected_borders(previous.selected, next.selected, nodes);
         for detail in &nodes.detail_roots {
             commands.entity(detail).despawn();
         }
@@ -332,10 +340,12 @@ fn update_technology_panel(
     if let Some(selected) = next.selected
         && let Some(technology) = sim.catalog().technology(selected)
     {
-        for (entity, marker) in &nodes.detail_labels {
-            let value = match marker.0 {
-                TechnologyDetailField::Name => format_recipe_display_name(&technology.name),
-                TechnologyDetailField::Level => format!(
+        if unlock_changed {
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Level,
+                format!(
                     "Current level: {} · {}",
                     sim.technology_level(selected).unwrap_or(0),
                     if technology.level_model.is_repeatable() {
@@ -344,40 +354,109 @@ fn update_technology_panel(
                         "Finite"
                     }
                 ),
-                TechnologyDetailField::Progress => {
-                    format!("Progress: {}", technology_progress_text(sim, selected))
-                }
-                TechnologyDetailField::Prerequisites => format!(
-                    "Prerequisites: {}",
-                    prerequisite_text(sim.catalog(), technology)
-                ),
-                TechnologyDetailField::Cost => {
-                    format!("Cost: {}", next_science_cost_text(sim, technology))
-                }
-                TechnologyDetailField::Effects => {
-                    format!("Effects: {}", technology_effect_text(sim, technology))
-                }
-                TechnologyDetailField::Start => start_queue_label(sim, selected),
-            };
-            commands.entity(entity).insert(Text::new(value));
+            );
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Cost,
+                format!("Cost: {}", next_science_cost_text(sim, technology)),
+            );
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Effects,
+                format!("Effects: {}", technology_effect_text(sim, technology)),
+            );
         }
-        for mut node in &mut nodes.progress_fills {
-            node.width = Val::Percent(research_progress_percent(sim, selected));
+        if (progress_changed && sim.active_research() == Some(selected)) || unlock_changed {
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Progress,
+                format!("Progress: {}", technology_progress_text(sim, selected)),
+            );
+            for mut node in &mut nodes.progress_fills {
+                node.width = Val::Percent(research_progress_percent(sim, selected));
+            }
         }
-        let actionable = can_enqueue_for_ui(sim, selected);
-        for (mut background, mut border) in &mut nodes.start_buttons {
-            background.0 = if actionable {
-                Color::srgba(0.20, 0.34, 0.28, 0.98)
+        if queue_changed || unlock_changed {
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Start,
+                start_queue_label(sim, selected),
+            );
+            refresh_start_button(sim, selected, nodes);
+        }
+        if queue_changed {
+            reconcile_research_queue(commands, sim, nodes);
+        }
+    }
+}
+
+fn refresh_technology_list(
+    commands: &mut Commands,
+    sim: &factory_sim::Simulation,
+    nodes: &mut TechnologyPanelNodes,
+) {
+    for (button, mut background, _) in &mut nodes.technology_buttons {
+        background.0 =
+            super::helpers::technology_state_color(technology_ui_state(sim, button.technology_id));
+    }
+    for (entity, marker) in &nodes.status_labels {
+        commands
+            .entity(entity)
+            .insert(Text::new(technology_status_text(sim, marker.0)));
+    }
+}
+
+fn refresh_selected_borders(
+    previous: Option<factory_data::TechnologyId>,
+    next: Option<factory_data::TechnologyId>,
+    nodes: &mut TechnologyPanelNodes,
+) {
+    for (button, _, mut border) in &mut nodes.technology_buttons {
+        if previous == Some(button.technology_id) || next == Some(button.technology_id) {
+            border.set_all(if next == Some(button.technology_id) {
+                Color::srgb(0.94, 0.66, 0.20)
             } else {
-                Color::srgba(0.09, 0.095, 0.095, 0.96)
-            };
-            border.set_all(if actionable {
-                Color::srgba(0.42, 0.68, 0.48, 0.85)
-            } else {
-                Color::srgba(0.25, 0.26, 0.25, 0.85)
+                Color::srgba(0.32, 0.33, 0.31, 0.80)
             });
         }
-        reconcile_research_queue(commands, sim, nodes);
+    }
+}
+
+fn set_detail_text(
+    commands: &mut Commands,
+    labels: &Query<(Entity, &TechnologyDetailText)>,
+    field: TechnologyDetailField,
+    value: String,
+) {
+    for (entity, marker) in labels {
+        if marker.0 == field {
+            commands.entity(entity).insert(Text::new(value));
+            return;
+        }
+    }
+}
+
+fn refresh_start_button(
+    sim: &factory_sim::Simulation,
+    selected: factory_data::TechnologyId,
+    nodes: &mut TechnologyPanelNodes,
+) {
+    let actionable = can_enqueue_for_ui(sim, selected);
+    for (mut background, mut border) in &mut nodes.start_buttons {
+        background.0 = if actionable {
+            Color::srgba(0.20, 0.34, 0.28, 0.98)
+        } else {
+            Color::srgba(0.09, 0.095, 0.095, 0.96)
+        };
+        border.set_all(if actionable {
+            Color::srgba(0.42, 0.68, 0.48, 0.85)
+        } else {
+            Color::srgba(0.25, 0.26, 0.25, 0.85)
+        });
     }
 }
 
@@ -477,6 +556,45 @@ fn reconcile_research_queue(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use factory_data::technology_id_by_name;
+
+    #[derive(Resource, Default)]
+    struct PanelChangeCounts {
+        active_labels: usize,
+        detail_labels: Vec<TechnologyDetailField>,
+        progress_fills: usize,
+        status_labels: usize,
+        technology_buttons: usize,
+    }
+
+    type ChangedTechnologyButtonQuery<'w, 's> = Query<
+        'w,
+        's,
+        (),
+        (
+            With<TechnologySelectButton>,
+            Or<(Changed<BackgroundColor>, Changed<BorderColor>)>,
+        ),
+    >;
+
+    fn count_panel_changes(
+        active_labels: Query<(), (With<ActiveResearchText>, Changed<Text>)>,
+        detail_labels: Query<(&TechnologyDetailText, Ref<Text>)>,
+        progress_fills: Query<(), (With<TechnologyProgressFill>, Changed<Node>)>,
+        status_labels: Query<(), (With<TechnologyStatusText>, Changed<Text>)>,
+        technology_buttons: ChangedTechnologyButtonQuery,
+        mut counts: ResMut<PanelChangeCounts>,
+    ) {
+        counts.active_labels = active_labels.iter().count();
+        counts.detail_labels = detail_labels
+            .iter()
+            .filter(|(_, text)| text.is_changed())
+            .map(|(marker, _)| marker.0)
+            .collect();
+        counts.progress_fills = progress_fills.iter().count();
+        counts.status_labels = status_labels.iter().count();
+        counts.technology_buttons = technology_buttons.iter().count();
+    }
 
     #[test]
     fn closed_panel_does_not_access_uninitialized_simulation() {
@@ -486,5 +604,38 @@ mod tests {
             .add_systems(Update, sync_technology_panel);
 
         app.update();
+    }
+
+    #[test]
+    fn in_progress_research_only_changes_three_panel_nodes() {
+        let mut simulation = factory_sim::Simulation::new_test_world(123);
+        let technology_id = technology_id_by_name(simulation.catalog(), "logistics");
+        simulation
+            .select_research(technology_id)
+            .expect("logistics should be researchable");
+
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(simulation))
+            .insert_resource(TechnologyWindowState {
+                open: true,
+                selected: Some(technology_id),
+            })
+            .init_resource::<PanelChangeCounts>()
+            .add_systems(Update, (sync_technology_panel, count_panel_changes).chain());
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .add_research_units(1)
+            .expect("one unit should advance research");
+        app.update();
+
+        let counts = app.world().resource::<PanelChangeCounts>();
+        assert_eq!(counts.active_labels, 1);
+        assert_eq!(counts.detail_labels, vec![TechnologyDetailField::Progress]);
+        assert_eq!(counts.progress_fills, 1);
+        assert_eq!(counts.status_labels, 0);
+        assert_eq!(counts.technology_buttons, 0);
     }
 }
