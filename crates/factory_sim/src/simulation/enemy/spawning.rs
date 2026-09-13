@@ -519,10 +519,7 @@ impl Simulation {
             } else {
                 for id in staged {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
-                        unit.target = None;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
             }

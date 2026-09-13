@@ -1046,6 +1046,230 @@ fn colony_with_capacity_dispatches_expansion_on_schedule() {
     );
 }
 
+/// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
+/// the chunk first so fixed offsets near rect edges cannot leave generated
+/// area.
+fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord) -> EntityId {
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    for ring in 1..=10_i64 {
+        for dy in -ring..=ring {
+            for dx in -ring..=ring {
+                if dx.abs().max(dy.abs()) != ring {
+                    continue;
+                }
+                let (x, y) = (cx + dx, cy + dy);
+                if let Some(chunk) = ChunkCoord::from_tile(x, y) {
+                    sim.ensure_chunk_generated(chunk);
+                }
+                if crate::placement::validate(
+                    sim,
+                    crate::placement::EntityPlacementRequest {
+                        prototype_id: chest,
+                        x,
+                        y,
+                        direction: Direction::North,
+                    },
+                )
+                .is_ok()
+                {
+                    return place_at(sim, chest, x, y, Direction::North);
+                }
+            }
+        }
+    }
+    panic!("expected a placeable chest tile near {cx},{cy}");
+}
+
+fn assert_converted_to_guard(sim: &Simulation, id: EnemyId, context: &str) {
+    let unit = &sim.enemies.enemies[&id];
+    assert_eq!(
+        unit.mission,
+        EnemyMission::Guard,
+        "{context} must stand the unit down to guard"
+    );
+    assert_eq!(
+        unit.mode,
+        EnemyMode::Guard,
+        "{context} must reset guard stance"
+    );
+    assert_eq!(
+        unit.target, None,
+        "{context} must drop the stale attack target so guard aggro rules apply"
+    );
+    assert!(
+        unit.path.is_empty(),
+        "{context} must drop mission-specific navigation state"
+    );
+}
+
+/// Makes spawner placement at `destination` fail while the expansion site
+/// itself still reads clear: only off-center footprint tiles are marked
+/// occupied under `occupant`, and no placed entities are added, so the site
+/// checks that inspect the center tile and nearby structures keep passing.
+fn block_spawner_footprint(
+    sim: &mut Simulation,
+    occupant: EntityId,
+    spawner_prototype: EntityPrototypeId,
+    destination: (WorldTileCoord, WorldTileCoord),
+) {
+    let footprint = sim
+        .world
+        .entity_footprint(
+            spawner_prototype,
+            destination.0,
+            destination.1,
+            Direction::North,
+        )
+        .expect("destination should fit a spawner footprint");
+    for (x, y) in footprint.tiles() {
+        if (x, y) != destination {
+            sim.entities
+                .occupancy
+                .occupied_tiles
+                .insert((x, y), occupant);
+        }
+    }
+}
+
+/// Dispatches a real expansion through the scheduler, then gives every member
+/// a stale attack target plus a pending path and teleports the first member
+/// onto the destination so the party counts as arrived. The destination is
+/// legitimate by construction: production search picked it while the stale
+/// target chest below was already placed, so every site rule held at dispatch.
+fn dispatched_arrived_expansion() -> (
+    Simulation,
+    ExpansionId,
+    (WorldTileCoord, WorldTileCoord),
+    Vec<EnemyId>,
+    EntityId,
+) {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, spawners) = colony_with_three_spawners(&mut sim);
+    let origin = sim.entities.placed_entities[&spawners[0]].clone();
+    let target = place_chest_near(&mut sim, origin.x, origin.y);
+    arm_expansion_due(&mut sim, base_id);
+    sim.advance_enemy_spawners();
+    let (expansion_id, destination, members): (
+        ExpansionId,
+        (WorldTileCoord, WorldTileCoord),
+        Vec<EnemyId>,
+    ) = sim
+        .enemies
+        .expansions
+        .iter()
+        .find(|(_, party)| party.base_id == base_id)
+        .map(|(&id, party)| {
+            (
+                id,
+                party.destination,
+                party.members.iter().copied().collect(),
+            )
+        })
+        .expect("the fixture must dispatch an expansion");
+    assert!(!members.is_empty());
+    for &id in &members {
+        let unit = sim.enemies.enemies.get_mut(&id).unwrap();
+        unit.target = Some(target);
+        unit.path.push_back((destination.0 + 1, destination.1));
+    }
+    // Teleport the first member onto the destination so the party has arrived.
+    let founder = sim.enemies.enemies.get_mut(&members[0]).unwrap();
+    founder.x = destination.0 * POSITION_SCALE + POSITION_SCALE / 2;
+    founder.y = destination.1 * POSITION_SCALE + POSITION_SCALE / 2;
+    (sim, expansion_id, destination, members, target)
+}
+
+/// Regression tests for https://github.com/12Mosch/factory/issues/310: every
+/// expansion-to-guard transition must drop the previous attack target so the
+/// new guard reacquires victims through guard aggro rules only.
+#[test]
+fn blocked_expansion_stands_down_to_guard_without_stale_targets() {
+    let (mut sim, expansion_id, destination, members, _target) = dispatched_arrived_expansion();
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    place_at(
+        &mut sim,
+        chest,
+        destination.0,
+        destination.1,
+        Direction::North,
+    );
+    assert!(
+        sim.entities
+            .occupancy
+            .entity_at(destination.0, destination.1)
+            .is_some(),
+        "the fixture must occupy the destination"
+    );
+    let bases_before = sim.enemies.bases.len();
+
+    sim.resolve_arrived_expansions();
+
+    assert!(!sim.enemies.expansions.contains_key(&expansion_id));
+    assert_eq!(sim.enemies.bases.len(), bases_before);
+    for id in members {
+        assert_converted_to_guard(&sim, id, "blocked expansion");
+    }
+}
+
+#[test]
+fn successful_expansion_founds_colony_and_clears_survivor_targets() {
+    let (mut sim, expansion_id, _destination, members, _target) = dispatched_arrived_expansion();
+    let bases_before = sim.enemies.bases.len();
+
+    sim.resolve_arrived_expansions();
+
+    assert!(!sim.enemies.expansions.contains_key(&expansion_id));
+    assert_eq!(
+        sim.enemies.bases.len(),
+        bases_before + 1,
+        "successful expansion must found a colony"
+    );
+    assert!(
+        !sim.enemies.enemies.contains_key(&members[0]),
+        "the founder is consumed by the new spawner"
+    );
+    for id in members.into_iter().skip(1) {
+        assert_converted_to_guard(&sim, id, "successful expansion");
+    }
+}
+
+#[test]
+fn failed_expansion_placement_stands_down_to_guard_without_stale_targets() {
+    let (mut sim, expansion_id, destination, members, target) = dispatched_arrived_expansion();
+    let spawner_prototype = sim.enemies.expansions[&expansion_id].spawner_prototype;
+    block_spawner_footprint(&mut sim, target, spawner_prototype, destination);
+    assert!(
+        crate::placement::validate(
+            &sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: spawner_prototype,
+                x: destination.0,
+                y: destination.1,
+                direction: Direction::North,
+            },
+        )
+        .is_err(),
+        "the fixture must make spawner placement fail while the site reads clear"
+    );
+    let bases_before = sim.enemies.bases.len();
+
+    sim.resolve_arrived_expansions();
+
+    assert!(!sim.enemies.expansions.contains_key(&expansion_id));
+    assert_eq!(
+        sim.enemies.bases.len(),
+        bases_before,
+        "failed placement must remove the half-founded base"
+    );
+    assert!(
+        sim.enemies.enemies.contains_key(&members[0]),
+        "failed placement must retain the founder as a guard"
+    );
+    for id in members {
+        assert_converted_to_guard(&sim, id, "failed expansion placement");
+    }
+}
+
 #[test]
 fn excessive_attack_budget_is_reported_by_diagnostics_and_validation() {
     let mut sim = Simulation::new_test_world(123);
