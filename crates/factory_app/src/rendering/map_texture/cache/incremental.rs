@@ -1,6 +1,6 @@
 use crate::map::resources::{MapLayerTextureCache, MapTextureLayer};
 
-use super::super::bounds::map_texture_bounds;
+use super::super::bounds::map_texture_bounds_with_hysteresis;
 use super::super::grid::draw_chunk_grid;
 use super::super::rasterizer::{MapRasterizer, chunk_intersects_bounds};
 use super::changes::MapTextureChanges;
@@ -19,7 +19,8 @@ pub(super) fn update_map_pixels_incremental(
         dirty_terrain_tiles,
     } = MapTextureChanges::collect(rasterizer, cache, map_changed);
     let new_bounds = if map_changed {
-        map_texture_bounds(rasterizer.sim, rasterizer.settings).unwrap_or_default()
+        map_texture_bounds_with_hysteresis(rasterizer.sim, rasterizer.settings, old_bounds)
+            .unwrap_or_default()
     } else {
         old_bounds
     };

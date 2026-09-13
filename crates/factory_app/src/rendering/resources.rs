@@ -1,6 +1,6 @@
 use bevy::prelude::{App, ColorMaterial, Entity, Handle, Mesh, Res, ResMut, Resource};
 use factory_sim::{ChunkCoord, EntityId};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Resource, Default)]
@@ -171,6 +171,18 @@ pub struct WorldRenderCache {
     /// chunk revision never observes.
     pub last_terrain_revision: u64,
     pub last_reload_token: u64,
+    /// Meshes waiting to be rebuilt after a terrain or neighboring chunk
+    /// change. Keeping this work durable lets the presentation system advance
+    /// it over several frames without losing a simulation revision.
+    pub(crate) pending_mesh_rebuilds: BTreeSet<ChunkCoord>,
+    /// Missing visible and adjacent chunks waiting for their first mesh.
+    pub(crate) pending_mesh_builds: BTreeSet<ChunkCoord>,
+    /// Least-recently-used order for meshes without a live render entity.
+    pub(crate) inactive_mesh_lru: VecDeque<ChunkCoord>,
+    #[cfg(test)]
+    pub(crate) mesh_builds_last_sync: usize,
+    #[cfg(test)]
+    pub(crate) mesh_cache_hits_last_sync: usize,
 }
 
 #[derive(Resource, Default)]
