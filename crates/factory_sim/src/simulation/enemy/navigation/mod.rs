@@ -173,6 +173,35 @@ impl EnemyNavigation {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Budgeted tile-goal routing shared by expansion and wander movement, so
+    /// both reuse the same A* scratch buffers and per-tick expansion budget
+    /// as combat pathing instead of maintaining separate search machinery.
+    fn request_tile_path(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+        start: (WorldTileCoord, WorldTileCoord),
+        goal: (WorldTileCoord, WorldTileCoord),
+        max_range: i64,
+        max_expansions: usize,
+    ) -> PathRequest {
+        if self.remaining_expansions < max_expansions {
+            return PathRequest::Deferred;
+        }
+
+        let (path, expansions) = self.path_scratch.find_path_to_tile(
+            world,
+            entities,
+            start,
+            goal,
+            max_range,
+            max_expansions,
+        );
+        self.charge(expansions);
+        PathRequest::Ready(path)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn request_path(
         &mut self,
         world: &WorldSim,

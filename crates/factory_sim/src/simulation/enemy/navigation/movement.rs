@@ -11,10 +11,10 @@ const ENEMY_WANDER_INTERVAL_TICKS: u64 = 300;
 const ENEMY_PATHFIND_MAX_EXPANSIONS: usize = 600;
 /// Distant targets use deterministic greedy movement instead of A*.
 const ENEMY_PATHFIND_MAX_RANGE_TILES: i64 = 40;
-
-type TilePos = (WorldTileCoord, WorldTileCoord);
-/// Pending expansion move: unit, current tile, and party destination.
-type ExpansionIntent = (EnemyId, TilePos, TilePos);
+/// Wander goals stay within a few tiles of their anchor, so a small bounded
+/// window keeps every idle decision inside the shared navigation budget.
+const ENEMY_WANDER_ROUTE_RANGE_TILES: i64 = 8;
+const ENEMY_WANDER_ROUTE_MAX_EXPANSIONS: usize = 128;
 
 impl Simulation {
     pub(in crate::simulation) fn advance_enemies(&mut self, commands: &mut CombatCommandBuffer) {
@@ -44,6 +44,7 @@ impl Simulation {
             }
         }
 
+        let tick = self.tick;
         let Simulation {
             world,
             entities,
@@ -99,31 +100,73 @@ impl Simulation {
             }
         }
         enemy_navigation.advance_raid_fields(world, entities);
-        // Expansion parties advance one validated adjacent tile at a time.
-        // Pushing `party.destination` directly would let `follow_path`
-        // tunnel across blocked intermediate terrain.
-        let expansion_intents: Vec<ExpansionIntent> = enemies
-            .expansions
-            .values()
-            .flat_map(|party| {
-                party
-                    .members
-                    .iter()
-                    .map(|member| (*member, party.destination))
-            })
-            .filter_map(|(member, destination)| {
-                let unit = enemies.enemies.get(&member)?;
-                unit.path
-                    .is_empty()
-                    .then(|| (member, unit.tile(), destination))
-            })
-            .collect();
-        for (member, from, destination) in expansion_intents {
-            if let Some(next) = expansion_step_toward(world, entities, from, destination)
-                && let Some(unit) = enemies.enemies.get_mut(&member)
-                && unit.path.is_empty()
-            {
-                unit.path.push_back(next);
+        // Expansion parties route toward their destination through the shared
+        // budgeted tile-goal pathfinder, so they can detour around obstacles
+        // instead of tunneling or stalling. Pushing `party.destination`
+        // directly would let `follow_path` cross blocked intermediate tiles.
+        // Retry policy: unreachable or deferred routes leave the path empty
+        // and throttle targetless units to one attempt per repath interval;
+        // the next empty-path tick tries again, so parties resume when
+        // terrain or budget pressure clears.
+        for party in enemies.expansions.values() {
+            for member in &party.members {
+                let destination = party.destination;
+                let Some(unit) = enemies.enemies.get_mut(member) else {
+                    continue;
+                };
+                if !unit.path.is_empty() {
+                    continue;
+                }
+                let from = unit.tile();
+                if from == destination {
+                    // Arrival marker: consumed without moving once the unit
+                    // is centered, then `resolve_arrived_expansions` founds
+                    // the colony.
+                    unit.path.push_back(destination);
+                    continue;
+                }
+                let targetless = unit.target.is_none();
+                if targetless && tick < unit.next_decision_tick {
+                    continue;
+                }
+                let in_range = EntityFootprint::single_tile(from.0, from.1).chebyshev_distance_to(
+                    &EntityFootprint::single_tile(destination.0, destination.1),
+                ) <= ENEMY_PATHFIND_MAX_RANGE_TILES;
+                if !in_range {
+                    // Beyond routing range: one validated greedy step, the
+                    // same fallback distant combat units use. Never crosses
+                    // blocked tiles; stalls until the next empty-path tick
+                    // when both axes are blocked.
+                    if let Some(next) = expansion_step_toward(world, entities, from, destination) {
+                        unit.path.push_back(next);
+                    } else if targetless {
+                        unit.next_decision_tick =
+                            tick + ENEMY_REPATH_INTERVAL_TICKS + unit.id.raw() % 16;
+                    }
+                    continue;
+                }
+                match enemy_navigation.request_tile_path(
+                    world,
+                    entities,
+                    from,
+                    destination,
+                    ENEMY_PATHFIND_MAX_RANGE_TILES,
+                    ENEMY_PATHFIND_MAX_EXPANSIONS,
+                ) {
+                    PathRequest::Ready(Some(path)) => {
+                        debug_assert!(
+                            !path.is_empty(),
+                            "tile routing from outside the goal must return steps"
+                        );
+                        unit.path = path;
+                    }
+                    PathRequest::Ready(None) | PathRequest::Deferred => {
+                        if targetless {
+                            unit.next_decision_tick =
+                                tick + ENEMY_REPATH_INTERVAL_TICKS + unit.id.raw() % 16;
+                        }
+                    }
+                }
             }
         }
         let newly_spotted: Vec<_> = self
@@ -224,7 +267,7 @@ fn step_enemy(
     }
 
     let Some(target) = enemy.target else {
-        wander(world, entities, seed, tick, enemy);
+        wander(world, entities, context.navigation, seed, tick, enemy);
         return;
     };
     let Some(target_footprint) = entities
@@ -320,8 +363,17 @@ fn step_enemy(
     follow_path(world, entities, enemy, target);
 }
 
-/// Idle guards drift around their home spawner so nests look alive.
-fn wander(world: &WorldSim, entities: &EntityStore, seed: u64, tick: u64, enemy: &mut Enemy) {
+/// Idle guards drift around their home spawner so nests look alive. Goals are
+/// routed through the shared budgeted tile-goal pathfinder, so wandering
+/// detours around blocked tiles instead of crossing them.
+fn wander(
+    world: &WorldSim,
+    entities: &EntityStore,
+    navigation: &mut EnemyNavigation,
+    seed: u64,
+    tick: u64,
+    enemy: &mut Enemy,
+) {
     if !enemy.path.is_empty() {
         follow_path(world, entities, enemy, None);
         return;
@@ -329,7 +381,6 @@ fn wander(world: &WorldSim, entities: &EntityStore, seed: u64, tick: u64, enemy:
     if tick < enemy.next_decision_tick {
         return;
     }
-    enemy.next_decision_tick = tick + ENEMY_WANDER_INTERVAL_TICKS + enemy.id.raw() % 64;
 
     let anchor = enemy
         .home_spawner
@@ -340,16 +391,47 @@ fn wander(world: &WorldSim, entities: &EntityStore, seed: u64, tick: u64, enemy:
     let dx = ((roll & 0x7) as i64) - 3;
     let dy = (((roll >> 3) & 0x7) as i64) - 3;
     let goal = (anchor.0 + dx, anchor.1 + dy);
-    if let Some(path) = wander_path_toward(world, entities, enemy.tile(), goal) {
-        enemy.path = path;
+    let from = enemy.tile();
+    if from == goal || !tile_open_for_enemy(world, entities, goal.0, goal.1, None) {
+        enemy.next_decision_tick = tick + ENEMY_WANDER_INTERVAL_TICKS + enemy.id.raw() % 64;
+        return;
+    }
+    // Both a route and the lack of one sleep a full wander interval; the
+    // unit simply waits when no walkable route exists.
+    match navigation.request_tile_path(
+        world,
+        entities,
+        from,
+        goal,
+        ENEMY_WANDER_ROUTE_RANGE_TILES,
+        ENEMY_WANDER_ROUTE_MAX_EXPANSIONS,
+    ) {
+        PathRequest::Ready(Some(path)) => {
+            debug_assert!(
+                !path.is_empty(),
+                "tile routing from outside the goal must return steps"
+            );
+            enemy.path = path;
+            enemy.next_decision_tick = tick + ENEMY_WANDER_INTERVAL_TICKS + enemy.id.raw() % 64;
+        }
+        PathRequest::Ready(None) => {
+            enemy.next_decision_tick = tick + ENEMY_WANDER_INTERVAL_TICKS + enemy.id.raw() % 64;
+        }
+        PathRequest::Deferred => {
+            // Budget exhausted: retry soon instead of sleeping a full wander
+            // interval so idle motion isn't starved under load.
+            enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+        }
     }
 }
 
-/// Single validated adjacent step toward a tile destination for expansion
-/// parties. Only 4-connected moves are returned, and the returned tile is
-/// verified open, so callers never insert a distant waypoint that would
-/// tunnel across blocked terrain. Returns `None` when every adjacent step
-/// toward the destination is blocked; the unit waits instead of crossing.
+/// Single validated adjacent step toward a tile destination. Long-range
+/// fallback for expansion parties beyond routing range (the same fallback
+/// distant combat units use): only 4-connected moves are returned, and the
+/// returned tile is verified open, so callers never insert a distant waypoint
+/// that would tunnel across blocked terrain. Returns `None` when every
+/// adjacent step toward the destination is blocked; the unit waits instead
+/// of crossing.
 fn expansion_step_toward(
     world: &WorldSim,
     entities: &EntityStore,
@@ -384,75 +466,19 @@ fn expansion_step_toward(
     None
 }
 
-/// Validated adjacent-step path for idle wandering. The goal may be several
-/// tiles away, so it is expanded into 4-connected steps with a deterministic
-/// breadth-first search over walkable tiles. Returns `None` when the goal is
-/// blocked or no walkable route exists; the unit waits instead of crossing.
-fn wander_path_toward(
-    world: &WorldSim,
-    entities: &EntityStore,
-    start: (WorldTileCoord, WorldTileCoord),
-    goal: (WorldTileCoord, WorldTileCoord),
-) -> Option<VecDeque<(WorldTileCoord, WorldTileCoord)>> {
-    if start == goal {
-        return Some(VecDeque::new());
-    }
-    if !tile_open_for_enemy(world, entities, goal.0, goal.1, None) {
-        return None;
-    }
-    let min_x = start.0.min(goal.0).saturating_sub(1);
-    let max_x = start.0.max(goal.0).saturating_add(1);
-    let min_y = start.1.min(goal.1).saturating_sub(1);
-    let max_y = start.1.max(goal.1).saturating_add(1);
-    let mut queue = VecDeque::from([start]);
-    let mut visited = BTreeSet::from([start]);
-    let mut came_from: BTreeMap<
-        (WorldTileCoord, WorldTileCoord),
-        (WorldTileCoord, WorldTileCoord),
-    > = BTreeMap::new();
-    while let Some(tile) = queue.pop_front() {
-        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let (Some(next_x), Some(next_y)) = (tile.0.checked_add(dx), tile.1.checked_add(dy))
-            else {
-                continue;
-            };
-            if next_x < min_x || next_x > max_x || next_y < min_y || next_y > max_y {
-                continue;
-            }
-            let next = (next_x, next_y);
-            if !visited.insert(next) {
-                continue;
-            }
-            if !tile_open_for_enemy(world, entities, next_x, next_y, None) {
-                continue;
-            }
-            came_from.insert(next, tile);
-            if next == goal {
-                let mut path = VecDeque::new();
-                let mut current = next;
-                while current != start {
-                    path.push_front(current);
-                    current = came_from[&current];
-                }
-                return Some(path);
-            }
-            queue.push_back(next);
-        }
-    }
-    None
-}
-
 /// Advances the unit along its waypoints by one tick's movement budget.
 ///
-/// Waypoint contract: `enemy.path` holds 4-connected adjacent tile centers
-/// (Manhattan distance exactly 1 from the unit's current tile to the front
-/// waypoint, and between consecutive waypoints). Per-leg movement is then
-/// axis-aligned and stays exact in fixed-point integers.
+/// Waypoint contract: `enemy.path` holds 4-connected adjacent tile centers,
+/// and a waypoint completes only when the unit reaches its exact center.
+/// Per-leg movement is then axis-aligned and stays exact in fixed-point
+/// integers. `Enemy::tile()` flips at tile boundaries, half a tile early,
+/// so completion must never key off the current tile.
 ///
-/// The contract is mechanically upheld here: a front waypoint equal to the
-/// current tile is consumed, while a non-adjacent or blocked front waypoint
-/// discards the path without moving, so a stale distant waypoint can never
-/// tunnel across water or other blocked terrain.
+/// The contract is mechanically upheld here: a non-adjacent or blocked front
+/// waypoint discards the path without moving, so a stale distant waypoint
+/// can never tunnel across water or other blocked terrain. A front waypoint
+/// equal to the current tile is a mid-leg state (or a same-tile arrival
+/// marker), not completion: the unit keeps moving toward its center.
 fn follow_path(
     world: &WorldSim,
     entities: &EntityStore,
@@ -465,18 +491,13 @@ fn follow_path(
             return;
         };
         let current = enemy.tile();
-        if waypoint == current {
-            enemy.path.pop_front();
-            continue;
-        }
-        if (waypoint.0.saturating_sub(current.0)).abs()
-            + (waypoint.1.saturating_sub(current.1)).abs()
-            != 1
-        {
+        let adjacency = (waypoint.0.saturating_sub(current.0)).abs()
+            + (waypoint.1.saturating_sub(current.1)).abs();
+        if adjacency > 1 {
             enemy.path.clear();
             return;
         }
-        if !tile_open_for_enemy(world, entities, waypoint.0, waypoint.1, target) {
+        if adjacency == 1 && !tile_open_for_enemy(world, entities, waypoint.0, waypoint.1, target) {
             enemy.path.clear();
             return;
         }
@@ -596,7 +617,12 @@ mod movement_regression_tests {
 
     /// Horizontal 7-tile run with room for a 5-tall water wall through its
     /// middle. Returns `(start, destination, wall_x, base_y)`.
-    type WallGeometry = (TilePos, TilePos, WorldTileCoord, WorldTileCoord);
+    type WallGeometry = (
+        (WorldTileCoord, WorldTileCoord),
+        (WorldTileCoord, WorldTileCoord),
+        WorldTileCoord,
+        WorldTileCoord,
+    );
     fn clear_run_with_wall_room(sim: &Simulation) -> Option<WallGeometry> {
         for chunk in sim.world.chunks.values() {
             for (index, _) in chunk.tiles.iter().enumerate() {
@@ -614,6 +640,43 @@ mod movement_regression_tests {
             }
         }
         None
+    }
+
+    /// Like [`clear_run_with_wall_room`], but the parallel row above the run
+    /// is also clear, so a single-tile blocker still leaves a walkable
+    /// detour for routing tests.
+    fn clear_run_with_open_detour(sim: &Simulation) -> Option<WallGeometry> {
+        for chunk in sim.world.chunks.values() {
+            for (index, _) in chunk.tiles.iter().enumerate() {
+                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                let (x, y) = chunk.coord.tile_at(local_x, local_y);
+                if !(0..6).all(|dx| corridor_is_clear(sim, x + dx, y))
+                    || !(0..6).all(|dx| corridor_is_clear(sim, x + dx, y + 1))
+                {
+                    continue;
+                }
+                let wall_x = x + 3;
+                if (-2..=2).any(|dy| sim.world.tile_at(wall_x, y + dy).is_none()) {
+                    continue;
+                }
+                return Some(((x, y), (x + 6, y), wall_x, y));
+            }
+        }
+        None
+    }
+
+    fn flood_tile(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoord) {
+        let already_blocked = sim
+            .world
+            .tile_at(x, y)
+            .is_some_and(|tile| !tile.collision.walkable);
+        if already_blocked {
+            return;
+        }
+        sim.world
+            .set_tile(x, y, water_id(sim))
+            .expect("blocker tile should be generated ground before flooding");
     }
 
     fn build_water_wall(sim: &mut Simulation, wall_x: WorldTileCoord, base_y: WorldTileCoord) {
@@ -686,23 +749,84 @@ mod movement_regression_tests {
         );
     }
 
+    fn routed_path(
+        sim: &mut Simulation,
+        navigation: &mut EnemyNavigation,
+        start: (WorldTileCoord, WorldTileCoord),
+        goal: (WorldTileCoord, WorldTileCoord),
+    ) -> Option<VecDeque<(WorldTileCoord, WorldTileCoord)>> {
+        match navigation.request_tile_path(
+            &sim.world,
+            &sim.entities,
+            start,
+            goal,
+            ENEMY_PATHFIND_MAX_RANGE_TILES,
+            ENEMY_PATHFIND_MAX_EXPANSIONS,
+        ) {
+            PathRequest::Ready(path) => path,
+            PathRequest::Deferred => panic!("test navigation budget should cover one request"),
+        }
+    }
+
+    fn assert_valid_detour(
+        sim: &Simulation,
+        start: (WorldTileCoord, WorldTileCoord),
+        destination: (WorldTileCoord, WorldTileCoord),
+        path: &VecDeque<(WorldTileCoord, WorldTileCoord)>,
+    ) {
+        assert!(!path.is_empty(), "routing should return steps");
+        assert_eq!(
+            *path.back().expect("non-empty path has a goal"),
+            destination
+        );
+        let mut previous = start;
+        for &step in path {
+            assert_eq!(
+                (step.0 - previous.0).abs() + (step.1 - previous.1).abs(),
+                1,
+                "every routed step must be 4-connected"
+            );
+            assert!(
+                tile_open_for_enemy(&sim.world, &sim.entities, step.0, step.1, None),
+                "no routed step may cross blocked terrain"
+            );
+            previous = step;
+        }
+    }
+
     #[test]
-    fn wander_path_does_not_cross_water_strip() {
+    fn tile_routing_detours_around_single_blocker() {
         let mut sim = Simulation::new_test_world(123);
         let (start, destination, wall_x, base_y) =
-            clear_run_with_wall_room(&sim).expect("test world should contain a clear run");
-        build_water_wall(&mut sim, wall_x, base_y);
+            clear_run_with_open_detour(&sim).expect("test world should contain a detour run");
+        flood_tile(&mut sim, wall_x, base_y);
 
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+        let path = routed_path(&mut sim, &mut navigation, start, destination)
+            .expect("a detour around one tile must exist");
+        assert_valid_detour(&sim, start, destination, &path);
         assert!(
-            wander_path_toward(&sim.world, &sim.entities, start, destination).is_none(),
-            "no walkable wander route crosses the water wall"
+            !path.contains(&(wall_x, base_y)),
+            "the detour must avoid the flooded tile"
         );
+    }
 
-        let nearby = (start.0 + 1, start.1);
-        let path = wander_path_toward(&sim.world, &sim.entities, start, nearby)
-            .expect("adjacent open goal should route");
-        assert_eq!(path.len(), 1);
-        assert_eq!(path[0], nearby);
+    #[test]
+    fn tile_routing_returns_none_for_blocked_goal() {
+        // A destination that becomes blocked (or was never clear) yields no
+        // route instead of a path through blocked terrain.
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination, _, _) =
+            clear_run_with_wall_room(&sim).expect("test world should contain a clear run");
+        flood_tile(&mut sim, destination.0, destination.1);
+
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+        assert!(
+            routed_path(&mut sim, &mut navigation, start, destination).is_none(),
+            "a blocked goal must yield no route"
+        );
     }
 
     #[test]
@@ -740,5 +864,148 @@ mod movement_regression_tests {
         follow_path(&sim.world, &sim.entities, &mut enemy, None);
         assert_eq!(enemy.tile(), second);
         assert!(enemy.path.is_empty());
+    }
+
+    #[test]
+    fn waypoints_complete_at_exact_centers_with_sub_tile_speed() {
+        // Production enemy speed (40 fixed units/tick) crosses the tile
+        // boundary 512 units before the waypoint center. Completion must key
+        // off the exact center, never `Enemy::tile()`.
+        let sim = Simulation::new_test_world(123);
+        let (start, _, _, _) =
+            clear_run_with_wall_room(&sim).expect("test world should contain a clear run");
+        let first = (start.0 + 1, start.1);
+        let second = (start.0 + 2, start.1);
+
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.path.push_back(first);
+        enemy.path.push_back(second);
+        let start_center_x = tile_center_fixed(start.0);
+        let first_center_x = tile_center_fixed(first.0);
+        let second_center_x = tile_center_fixed(second.0);
+        let center_y = tile_center_fixed(start.1);
+
+        for _ in 0..13 {
+            follow_path(&sim.world, &sim.entities, &mut enemy, None);
+        }
+        // 520 units along: the tile already flipped to `first`, but the
+        // center (1024) is not reached, so the waypoint must be retained.
+        assert_eq!(enemy.x, start_center_x + 520);
+        assert_eq!(enemy.tile(), first);
+        assert_eq!(enemy.path.front(), Some(&first));
+
+        for _ in 0..12 {
+            follow_path(&sim.world, &sim.entities, &mut enemy, None);
+        }
+        assert_eq!(enemy.x, start_center_x + 1000);
+        assert_eq!(enemy.path.front(), Some(&first));
+
+        // The 26th tick reaches the first center exactly (24 units), pops it,
+        // and spends the leftover budget (16 units) on the second leg.
+        follow_path(&sim.world, &sim.entities, &mut enemy, None);
+        assert_eq!((enemy.x, enemy.y), (first_center_x + 16, center_y));
+        assert_eq!(enemy.path.front(), Some(&second));
+
+        for _ in 0..25 {
+            follow_path(&sim.world, &sim.entities, &mut enemy, None);
+        }
+        assert_eq!(enemy.x, start_center_x + 2040);
+        assert_eq!(enemy.path.front(), Some(&second));
+
+        follow_path(&sim.world, &sim.entities, &mut enemy, None);
+        assert_eq!((enemy.x, enemy.y), (second_center_x, center_y));
+        assert!(enemy.path.is_empty());
+    }
+
+    fn expansion_member(
+        sim: &mut Simulation,
+        start: (WorldTileCoord, WorldTileCoord),
+        destination: (WorldTileCoord, WorldTileCoord),
+    ) -> EnemyId {
+        let enemy_id = sim.enemies.allocate_id();
+        let expansion_id = sim.enemies.allocate_expansion_id();
+        sim.enemies.enemies.insert(
+            enemy_id,
+            Enemy {
+                id: enemy_id,
+                x: tile_center_fixed(start.0),
+                y: tile_center_fixed(start.1),
+                health: HealthState::new(100, Faction::Enemy),
+                attack: AttackDefinition::melee(Damage::physical(5), 60, 1),
+                speed_fixed_per_tick: 40,
+                aggro_radius_tiles: 0,
+                mode: EnemyMode::Attack,
+                mission: EnemyMission::Expansion(expansion_id),
+                home_spawner: None,
+                target: None,
+                path: VecDeque::new(),
+                next_attack_tick: 0,
+                next_decision_tick: 0,
+            },
+        );
+        sim.enemies.expansions.insert(
+            expansion_id,
+            Expansion {
+                id: expansion_id,
+                base_id: EnemyBaseId::new(1),
+                members: BTreeSet::from([enemy_id]),
+                destination,
+                spotted: true,
+                spawner_prototype: factory_data::entity_prototype_id_by_name(
+                    &sim.world.prototypes,
+                    "biter_spawner",
+                ),
+            },
+        );
+        enemy_id
+    }
+
+    #[test]
+    fn expansion_prefill_routes_adjacent_steps_instead_of_destination() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination, wall_x, base_y) =
+            clear_run_with_open_detour(&sim).expect("test world should contain a detour run");
+        flood_tile(&mut sim, wall_x, base_y);
+        let enemy_id = expansion_member(&mut sim, start, destination);
+
+        sim.advance_enemies(&mut CombatCommandBuffer::default());
+
+        let unit = &sim.enemies.enemies[&enemy_id];
+        assert!(
+            !unit.path.is_empty(),
+            "reachable expansion destination must produce a path"
+        );
+        assert_ne!(
+            unit.path.front(),
+            Some(&destination),
+            "pre-fill must not push the distant destination directly"
+        );
+        assert_valid_detour(&sim, start, destination, &unit.path);
+    }
+
+    #[test]
+    fn expansion_prefill_waits_and_throttles_when_unreachable() {
+        // Flooding the destination itself guarantees no route regardless of
+        // detours, mirroring a site that becomes blocked after dispatch.
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination, _, _) =
+            clear_run_with_wall_room(&sim).expect("test world should contain a clear run");
+        flood_tile(&mut sim, destination.0, destination.1);
+        let tick = sim.tick;
+        let enemy_id = expansion_member(&mut sim, start, destination);
+
+        sim.advance_enemies(&mut CombatCommandBuffer::default());
+
+        let unit = &sim.enemies.enemies[&enemy_id];
+        assert!(unit.target.is_none(), "test setup should stay targetless");
+        assert!(
+            unit.path.is_empty(),
+            "unreachable expansion destination must leave the path empty"
+        );
+        assert!(
+            unit.next_decision_tick > tick,
+            "failed expansion routing must throttle retries"
+        );
+        assert_eq!(unit.tile(), start, "the unit must not move");
     }
 }
