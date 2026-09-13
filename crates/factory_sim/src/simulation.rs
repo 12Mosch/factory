@@ -105,6 +105,7 @@ pub use crate::rail::{
     RailBlockSnapshot, RailConnectionPreview, RailCurve, RailEnd, RailNetworkSnapshot,
     RailPieceGeometry, RailPoint, RailSignalAspect, RailSignalSnapshot,
 };
+pub(crate) use crate::research::ResearchRevisions;
 pub use crate::research::{
     ResearchBonuses, ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
@@ -187,7 +188,7 @@ pub const REPAIR_REACH_TILES: f32 = 3.0;
 /// Minimum time between under-attack warnings from the same map chunk.
 pub const STRUCTURE_WARNING_COOLDOWN_TICKS: u64 = 10 * FIXED_SIM_TICKS_PER_SECOND as u64;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Simulation {
     tick: u64,
     pub(crate) day_night_cycle: Option<DayNightCycleState>,
@@ -213,9 +214,9 @@ pub struct Simulation {
     power_map_revision: u64,
     #[serde(skip, default)]
     production_status_revision: u64,
-    /// Runtime-only invalidation key for retained research UI.
+    /// Runtime-only, dependency-specific invalidation keys for retained research UI.
     #[serde(skip, default)]
-    research_revision: u64,
+    research_revisions: ResearchRevisions,
     /// Runtime-only invalidation key for enemy settings UI.
     #[serde(skip, default)]
     enemy_settings_revision: u64,

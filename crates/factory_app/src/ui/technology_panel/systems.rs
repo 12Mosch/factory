@@ -19,15 +19,13 @@ use super::components::{
     TechnologyStartQueueButton, TechnologyStatusText,
 };
 use super::helpers::{
-    active_research_text, can_enqueue_for_ui, next_science_cost_text, prerequisite_text,
-    queue_text, start_queue_label, technology_effect_text, technology_progress_text,
-    technology_ui_state,
+    active_research_text, can_enqueue_for_ui, next_science_cost_text, queue_text,
+    start_queue_label, technology_effect_text, technology_progress_text, technology_ui_state,
 };
 use super::view::{
     research_progress_percent, spawn_technology_detail, spawn_technology_panel_contents,
     spawn_technology_queue_row, technology_panel_root, technology_status_text,
 };
-use crate::ui::formatting::format_recipe_display_name;
 use crate::ui::window_sync::{
     WindowRootQuery, WindowSyncInput, replace_children_if_different, retained_display,
     sync_retained_window,
@@ -182,6 +180,7 @@ pub(crate) fn handle_technology_panel_buttons(
     }
 }
 
+/// Synchronizes the open Technology panel from dependency-specific revisions.
 pub(crate) fn sync_technology_panel(
     mut commands: Commands,
     sim: Res<SimResource>,
@@ -199,7 +198,9 @@ pub(crate) fn sync_technology_panel(
     let simulation = sim.read();
     let snapshot = TechnologyPanelSnapshot {
         replacement_revision: sim.replacement_revision(),
-        research_revision: simulation.research_revision(),
+        progress_revision: simulation.research_progress_revision(),
+        queue_revision: simulation.research_queue_revision(),
+        unlock_revision: simulation.research_unlock_revision(),
         selected: window_state.selected,
     };
     sync_retained_window(
@@ -212,8 +213,8 @@ pub(crate) fn sync_technology_panel(
         || snapshot,
         technology_panel_root,
         |root, _| spawn_technology_panel_contents(root, &simulation, window_state.selected),
-        |commands, _, previous, next| {
-            update_technology_panel(commands, &simulation, previous, next, &mut nodes);
+        |commands, root, previous, next| {
+            update_technology_panel(commands, root, &simulation, previous, next, &mut nodes);
         },
     );
 }
@@ -292,32 +293,41 @@ pub(crate) struct TechnologyPanelNodes<'w, 's> {
     queue_buttons: TechnologyQueueButtonQuery<'w, 's>,
 }
 
+/// Applies only the panel updates whose source revisions changed.
 fn update_technology_panel(
     commands: &mut Commands,
+    root: Entity,
     sim: &factory_sim::Simulation,
     previous: &TechnologyPanelSnapshot,
     next: &TechnologyPanelSnapshot,
     nodes: &mut TechnologyPanelNodes,
 ) {
-    set_marked_text(commands, &nodes.active_labels, active_research_text(sim));
-    set_marked_text(commands, &nodes.queue_labels, queue_text(sim));
-
-    for (button, mut background, mut border) in &mut nodes.technology_buttons {
-        background.0 =
-            super::helpers::technology_state_color(technology_ui_state(sim, button.technology_id));
-        border.set_all(if next.selected == Some(button.technology_id) {
-            Color::srgb(0.94, 0.66, 0.20)
-        } else {
-            Color::srgba(0.32, 0.33, 0.31, 0.80)
-        });
-    }
-    for (entity, marker) in &nodes.status_labels {
+    if previous.replacement_revision != next.replacement_revision {
         commands
-            .entity(entity)
-            .insert(Text::new(technology_status_text(sim, marker.0)));
+            .entity(root)
+            .despawn_children()
+            .with_children(|root| {
+                spawn_technology_panel_contents(root, sim, next.selected);
+            });
+        return;
     }
 
-    if previous.selected != next.selected {
+    let selection_changed = previous.selected != next.selected;
+    let progress_changed = previous.progress_revision != next.progress_revision;
+    let queue_changed = previous.queue_revision != next.queue_revision;
+    let unlock_changed = previous.unlock_revision != next.unlock_revision;
+
+    if progress_changed || queue_changed {
+        set_marked_text(commands, &nodes.active_labels, active_research_text(sim));
+    }
+    if queue_changed {
+        set_marked_text(commands, &nodes.queue_labels, queue_text(sim));
+    }
+    if queue_changed || unlock_changed {
+        refresh_technology_list(commands, sim, nodes);
+    }
+    if selection_changed {
+        refresh_selected_borders(previous.selected, next.selected, nodes);
         for detail in &nodes.detail_roots {
             commands.entity(detail).despawn();
         }
@@ -326,16 +336,15 @@ fn update_technology_panel(
                 .entity(content)
                 .with_children(|content| spawn_technology_detail(content, sim, next.selected));
         }
-        return;
-    }
-
-    if let Some(selected) = next.selected
+    } else if let Some(selected) = next.selected
         && let Some(technology) = sim.catalog().technology(selected)
     {
-        for (entity, marker) in &nodes.detail_labels {
-            let value = match marker.0 {
-                TechnologyDetailField::Name => format_recipe_display_name(&technology.name),
-                TechnologyDetailField::Level => format!(
+        if unlock_changed {
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Level,
+                format!(
                     "Current level: {} · {}",
                     sim.technology_level(selected).unwrap_or(0),
                     if technology.level_model.is_repeatable() {
@@ -344,43 +353,117 @@ fn update_technology_panel(
                         "Finite"
                     }
                 ),
-                TechnologyDetailField::Progress => {
-                    format!("Progress: {}", technology_progress_text(sim, selected))
-                }
-                TechnologyDetailField::Prerequisites => format!(
-                    "Prerequisites: {}",
-                    prerequisite_text(sim.catalog(), technology)
-                ),
-                TechnologyDetailField::Cost => {
-                    format!("Cost: {}", next_science_cost_text(sim, technology))
-                }
-                TechnologyDetailField::Effects => {
-                    format!("Effects: {}", technology_effect_text(sim, technology))
-                }
-                TechnologyDetailField::Start => start_queue_label(sim, selected),
-            };
-            commands.entity(entity).insert(Text::new(value));
+            );
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Cost,
+                format!("Cost: {}", next_science_cost_text(sim, technology)),
+            );
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Effects,
+                format!("Effects: {}", technology_effect_text(sim, technology)),
+            );
         }
-        for mut node in &mut nodes.progress_fills {
-            node.width = Val::Percent(research_progress_percent(sim, selected));
+        if (progress_changed && sim.active_research() == Some(selected)) || unlock_changed {
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Progress,
+                format!("Progress: {}", technology_progress_text(sim, selected)),
+            );
+            for mut node in &mut nodes.progress_fills {
+                node.width = Val::Percent(research_progress_percent(sim, selected));
+            }
         }
-        let actionable = can_enqueue_for_ui(sim, selected);
-        for (mut background, mut border) in &mut nodes.start_buttons {
-            background.0 = if actionable {
-                Color::srgba(0.20, 0.34, 0.28, 0.98)
-            } else {
-                Color::srgba(0.09, 0.095, 0.095, 0.96)
-            };
-            border.set_all(if actionable {
-                Color::srgba(0.42, 0.68, 0.48, 0.85)
-            } else {
-                Color::srgba(0.25, 0.26, 0.25, 0.85)
-            });
+        if queue_changed || unlock_changed {
+            set_detail_text(
+                commands,
+                &nodes.detail_labels,
+                TechnologyDetailField::Start,
+                start_queue_label(sim, selected),
+            );
+            refresh_start_button(sim, selected, nodes);
         }
-        reconcile_research_queue(commands, sim, nodes);
+        if queue_changed {
+            reconcile_research_queue(commands, sim, nodes);
+        }
     }
 }
 
+/// Refreshes status styling for every technology after queue or unlock changes.
+fn refresh_technology_list(
+    commands: &mut Commands,
+    sim: &factory_sim::Simulation,
+    nodes: &mut TechnologyPanelNodes,
+) {
+    for (button, mut background, _) in &mut nodes.technology_buttons {
+        background.0 =
+            super::helpers::technology_state_color(technology_ui_state(sim, button.technology_id));
+    }
+    for (entity, marker) in &nodes.status_labels {
+        commands
+            .entity(entity)
+            .insert(Text::new(technology_status_text(sim, marker.0)));
+    }
+}
+
+/// Changes borders only for the previously and newly selected technologies.
+fn refresh_selected_borders(
+    previous: Option<factory_data::TechnologyId>,
+    next: Option<factory_data::TechnologyId>,
+    nodes: &mut TechnologyPanelNodes,
+) {
+    for (button, _, mut border) in &mut nodes.technology_buttons {
+        if previous == Some(button.technology_id) || next == Some(button.technology_id) {
+            border.set_all(if next == Some(button.technology_id) {
+                Color::srgb(0.94, 0.66, 0.20)
+            } else {
+                Color::srgba(0.32, 0.33, 0.31, 0.80)
+            });
+        }
+    }
+}
+
+/// Replaces one marked detail label without touching unrelated detail text.
+fn set_detail_text(
+    commands: &mut Commands,
+    labels: &Query<(Entity, &TechnologyDetailText)>,
+    field: TechnologyDetailField,
+    value: String,
+) {
+    for (entity, marker) in labels {
+        if marker.0 == field {
+            commands.entity(entity).insert(Text::new(value));
+            return;
+        }
+    }
+}
+
+/// Refreshes whether the selected technology can be started or queued.
+fn refresh_start_button(
+    sim: &factory_sim::Simulation,
+    selected: factory_data::TechnologyId,
+    nodes: &mut TechnologyPanelNodes,
+) {
+    let actionable = can_enqueue_for_ui(sim, selected);
+    for (mut background, mut border) in &mut nodes.start_buttons {
+        background.0 = if actionable {
+            Color::srgba(0.20, 0.34, 0.28, 0.98)
+        } else {
+            Color::srgba(0.09, 0.095, 0.095, 0.96)
+        };
+        border.set_all(if actionable {
+            Color::srgba(0.42, 0.68, 0.48, 0.85)
+        } else {
+            Color::srgba(0.25, 0.26, 0.25, 0.85)
+        });
+    }
+}
+
+/// Replaces text on every entity carrying a unique panel marker.
 fn set_marked_text<M: Component>(
     commands: &mut Commands,
     markers: &Query<Entity, With<M>>,
@@ -391,6 +474,7 @@ fn set_marked_text<M: Component>(
     }
 }
 
+/// Reuses, reorders, spawns, and removes queue rows to match simulation order.
 fn reconcile_research_queue(
     commands: &mut Commands,
     sim: &factory_sim::Simulation,
@@ -477,7 +561,78 @@ fn reconcile_research_queue(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use factory_data::technology_id_by_name;
 
+    #[derive(Resource, Default)]
+    struct PanelChangeCounts {
+        active_labels: usize,
+        queue_labels: usize,
+        detail_labels: Vec<TechnologyDetailField>,
+        progress_fills: usize,
+        status_labels: usize,
+        technology_buttons: usize,
+    }
+
+    type ChangedTechnologyButtonQuery<'w, 's> = Query<
+        'w,
+        's,
+        (),
+        (
+            With<TechnologySelectButton>,
+            Or<(Changed<BackgroundColor>, Changed<BorderColor>)>,
+        ),
+    >;
+
+    /// Records downstream Bevy component changes after panel synchronization.
+    fn count_panel_changes(
+        active_labels: Query<(), (With<ActiveResearchText>, Changed<Text>)>,
+        queue_labels: Query<(), (With<ResearchQueueText>, Changed<Text>)>,
+        detail_labels: Query<(&TechnologyDetailText, Ref<Text>)>,
+        progress_fills: Query<(), (With<TechnologyProgressFill>, Changed<Node>)>,
+        status_labels: Query<(), (With<TechnologyStatusText>, Changed<Text>)>,
+        technology_buttons: ChangedTechnologyButtonQuery,
+        mut counts: ResMut<PanelChangeCounts>,
+    ) {
+        counts.active_labels = active_labels.iter().count();
+        counts.queue_labels = queue_labels.iter().count();
+        counts.detail_labels = detail_labels
+            .iter()
+            .filter(|(_, text)| text.is_changed())
+            .map(|(marker, _)| marker.0)
+            .collect();
+        counts.progress_fills = progress_fills.iter().count();
+        counts.status_labels = status_labels.iter().count();
+        counts.technology_buttons = technology_buttons.iter().count();
+    }
+
+    /// Builds an open Technology panel with a persistent change observer.
+    fn technology_panel_app(
+        simulation: factory_sim::Simulation,
+        selected: factory_data::TechnologyId,
+    ) -> App {
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(simulation))
+            .insert_resource(TechnologyWindowState {
+                open: true,
+                selected: Some(selected),
+            })
+            .init_resource::<PanelChangeCounts>()
+            .add_systems(Update, (sync_technology_panel, count_panel_changes).chain());
+        app.update();
+        app
+    }
+
+    /// Reads one marked detail label from the retained panel.
+    fn detail_text(world: &mut World, field: TechnologyDetailField) -> String {
+        world
+            .query::<(&TechnologyDetailText, &Text)>()
+            .iter(world)
+            .find(|(marker, _)| marker.0 == field)
+            .map(|(_, text)| text.0.clone())
+            .expect("technology detail field should exist")
+    }
+
+    /// A closed panel must not acquire the absent pre-game simulation.
     #[test]
     fn closed_panel_does_not_access_uninitialized_simulation() {
         let mut app = App::new();
@@ -486,5 +641,209 @@ mod tests {
             .add_systems(Update, sync_technology_panel);
 
         app.update();
+    }
+
+    /// Ordinary progress must dirty only the three progress-dependent nodes.
+    #[test]
+    fn in_progress_research_only_changes_three_panel_nodes() {
+        let mut simulation = factory_sim::Simulation::new_test_world(123);
+        let technology_id = technology_id_by_name(simulation.catalog(), "logistics");
+        simulation
+            .select_research(technology_id)
+            .expect("logistics should be researchable");
+
+        let mut app = technology_panel_app(simulation, technology_id);
+
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .add_research_units(1)
+            .expect("one unit should advance research");
+        app.update();
+
+        let counts = app.world().resource::<PanelChangeCounts>();
+        assert_eq!(counts.active_labels, 1);
+        assert_eq!(counts.detail_labels, vec![TechnologyDetailField::Progress]);
+        assert_eq!(counts.progress_fills, 1);
+        assert_eq!(counts.status_labels, 0);
+        assert_eq!(counts.technology_buttons, 0);
+    }
+
+    /// Queue-only changes must rebuild queue rows and refresh queue-dependent controls.
+    #[test]
+    fn queue_change_reconciles_rows_and_dependent_controls() {
+        let mut simulation = factory_sim::Simulation::new_test_world(123);
+        let logistics = technology_id_by_name(simulation.catalog(), "logistics");
+        let automation = technology_id_by_name(simulation.catalog(), "automation");
+        let technology_count = simulation.catalog().technologies().len();
+        simulation
+            .select_research(logistics)
+            .expect("logistics should be researchable");
+        let mut app = technology_panel_app(simulation, logistics);
+
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .enqueue_research(automation)
+            .expect("automation should queue behind active logistics");
+        app.update();
+
+        let world = app.world_mut();
+        let queued = world
+            .query::<&TechnologyQueueRow>()
+            .iter(world)
+            .map(|row| row.0)
+            .collect::<Vec<_>>();
+        let queue_header = world
+            .query_filtered::<&Text, With<ResearchQueueText>>()
+            .single(world)
+            .expect("queue header should be unique")
+            .0
+            .clone();
+        let counts = world.resource::<PanelChangeCounts>();
+
+        assert_eq!(queued, vec![automation]);
+        assert_eq!(queue_header, "Queue: Automation");
+        assert_eq!(counts.queue_labels, 1);
+        assert_eq!(counts.status_labels, technology_count);
+        assert_eq!(counts.technology_buttons, technology_count);
+        assert_eq!(counts.detail_labels, vec![TechnologyDetailField::Start]);
+        assert_eq!(counts.progress_fills, 0);
+    }
+
+    /// Completion must refresh unlock-dependent list and detail state.
+    #[test]
+    fn completion_refreshes_unlock_dependent_nodes() {
+        let mut simulation = factory_sim::Simulation::new_test_world(123);
+        let logistics = technology_id_by_name(simulation.catalog(), "logistics");
+        let required = simulation
+            .technology_next_required_units(logistics)
+            .expect("logistics should have a research cost");
+        let technology_count = simulation.catalog().technologies().len();
+        simulation
+            .select_research(logistics)
+            .expect("logistics should be researchable");
+        let mut app = technology_panel_app(simulation, logistics);
+
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .add_research_units(required)
+            .expect("required science should complete logistics");
+        app.update();
+
+        let world = app.world_mut();
+        let status = world
+            .query::<(&TechnologyStatusText, &Text)>()
+            .iter(world)
+            .find(|(marker, _)| marker.0 == logistics)
+            .map(|(_, text)| text.0.clone())
+            .expect("logistics status should exist");
+        let level = detail_text(world, TechnologyDetailField::Level);
+        let progress = detail_text(world, TechnologyDetailField::Progress);
+        let cost = detail_text(world, TechnologyDetailField::Cost);
+        let start = detail_text(world, TechnologyDetailField::Start);
+        let counts = world.resource::<PanelChangeCounts>();
+
+        assert_eq!(status, "Researched");
+        assert_eq!(level, "Current level: 1 · Finite");
+        assert_eq!(progress, "Progress: Complete");
+        assert_eq!(cost, "Cost: <complete>");
+        assert_eq!(start, "Researched");
+        assert_eq!(counts.status_labels, technology_count);
+        assert_eq!(counts.technology_buttons, technology_count);
+        assert_eq!(counts.detail_labels.len(), 5);
+        for field in [
+            TechnologyDetailField::Level,
+            TechnologyDetailField::Progress,
+            TechnologyDetailField::Cost,
+            TechnologyDetailField::Effects,
+            TechnologyDetailField::Start,
+        ] {
+            assert!(counts.detail_labels.contains(&field));
+        }
+        assert_eq!(counts.progress_fills, 1);
+    }
+
+    /// A simultaneous selection and promotion must spawn a current, empty queue view.
+    #[test]
+    fn selection_and_queue_change_spawn_current_detail_queue() {
+        let mut simulation = factory_sim::Simulation::new_test_world(123);
+        let logistics = technology_id_by_name(simulation.catalog(), "logistics");
+        let automation = technology_id_by_name(simulation.catalog(), "automation");
+        let required = simulation
+            .technology_next_required_units(logistics)
+            .expect("logistics should have a research cost");
+        simulation
+            .select_research(logistics)
+            .expect("logistics should be researchable");
+        simulation
+            .enqueue_research(automation)
+            .expect("automation should queue behind active logistics");
+        let mut app = technology_panel_app(simulation, logistics);
+
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .write_for_tests()
+            .add_research_units(required)
+            .expect("required science should promote automation");
+        app.world_mut()
+            .resource_mut::<TechnologyWindowState>()
+            .selected = Some(automation);
+        app.update();
+
+        let world = app.world_mut();
+        let queue_header = world
+            .query_filtered::<&Text, With<ResearchQueueText>>()
+            .single(world)
+            .expect("queue header should be unique")
+            .0
+            .clone();
+        let queue_rows = world.query::<&TechnologyQueueRow>().iter(world).count();
+        let (queue_empty_display, queue_empty_visibility) = world
+            .query_filtered::<(&Node, &Visibility), With<TechnologyQueueEmpty>>()
+            .single(world)
+            .map(|(node, visibility)| (node.display, *visibility))
+            .expect("empty queue marker should be unique");
+
+        assert_eq!(
+            detail_text(world, TechnologyDetailField::Name),
+            "Automation"
+        );
+        assert_eq!(queue_header, "Queue: <empty>");
+        assert_eq!(queue_rows, 0);
+        assert_eq!(queue_empty_display, Display::Flex);
+        assert_eq!(queue_empty_visibility, Visibility::Inherited);
+    }
+
+    /// Replacing the simulation must reconstruct all panel content from the new world.
+    #[test]
+    fn simulation_replacement_rebuilds_panel_contents() {
+        let mut simulation = factory_sim::Simulation::new_test_world(123);
+        let logistics = technology_id_by_name(simulation.catalog(), "logistics");
+        simulation
+            .select_research(logistics)
+            .expect("logistics should be researchable");
+        let mut app = technology_panel_app(simulation, logistics);
+        let replacement = factory_sim::Simulation::new_test_world(456);
+        let technology_count = replacement.catalog().technologies().len();
+
+        app.world_mut()
+            .resource_mut::<SimResource>()
+            .replace(replacement)
+            .expect("uncontended test simulation should be replaceable");
+        app.update();
+
+        let world = app.world_mut();
+        let active_header = world
+            .query_filtered::<&Text, With<ActiveResearchText>>()
+            .single(world)
+            .expect("active research header should be unique")
+            .0
+            .clone();
+        let buttons = world.query::<&TechnologySelectButton>().iter(world).count();
+
+        assert_eq!(active_header, "Active Research: <none>");
+        assert_eq!(buttons, technology_count);
     }
 }

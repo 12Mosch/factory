@@ -9,6 +9,39 @@ pub struct ResearchState {
     pub technologies: Vec<TechnologyResearchState>,
 }
 
+/// Runtime-only invalidation keys for consumers of research state.
+///
+/// Progress advances frequently while queue and completion state change much
+/// less often, so presentation code can avoid treating every science unit as
+/// a change to the entire technology graph.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResearchRevisions {
+    pub(crate) any: u64,
+    pub(crate) progress: u64,
+    pub(crate) queue: u64,
+    pub(crate) unlock: u64,
+}
+
+impl ResearchRevisions {
+    /// Records a change to active research or the pending queue.
+    pub(crate) fn bump_queue(&mut self) {
+        self.any = self.any.wrapping_add(1);
+        self.queue = self.queue.wrapping_add(1);
+    }
+
+    /// Records science progress and, on completion, its queue and unlock effects.
+    pub(crate) fn bump_progress(&mut self, completed: bool) {
+        self.any = self.any.wrapping_add(1);
+        self.progress = self.progress.wrapping_add(1);
+        if completed {
+            // Completion clears/promotes active research and may consume the
+            // first queued entry in addition to changing unlock-dependent UI.
+            self.queue = self.queue.wrapping_add(1);
+            self.unlock = self.unlock.wrapping_add(1);
+        }
+    }
+}
+
 impl ResearchState {
     /// Looks up the per-technology state by id, guarding against an id that
     /// does not match the state stored at its index.

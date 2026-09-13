@@ -69,11 +69,14 @@ pub(crate) struct TechnologyQueueTitle;
 #[derive(Component)]
 pub(crate) struct TechnologyQueueRow(pub(crate) TechnologyId);
 
+/// Revisions for the independent data subsets rendered by the Technology panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TechnologyPanelSnapshot {
     pub(crate) selected: Option<TechnologyId>,
     pub(crate) replacement_revision: u64,
-    pub(crate) research_revision: u64,
+    pub(crate) progress_revision: u64,
+    pub(crate) queue_revision: u64,
+    pub(crate) unlock_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

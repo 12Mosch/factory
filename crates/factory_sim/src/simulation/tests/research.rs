@@ -133,6 +133,42 @@ fn zero_research_units_return_current_progress_without_advancing() {
     assert!(!sim.is_technology_unlocked(automation));
 }
 
+/// Dependency-specific revisions must not invalidate unrelated consumers.
+#[test]
+fn research_revisions_track_their_dependencies_independently() {
+    let mut sim = Simulation::new_test_world(123);
+    let logistics = technology_id(&sim.world.prototypes, "logistics");
+    let required = sim
+        .technology_next_required_units(logistics)
+        .expect("logistics should have a research cost");
+
+    let initial_any = sim.research_revision();
+    let initial_progress = sim.research_progress_revision();
+    let initial_queue = sim.research_queue_revision();
+    let initial_unlock = sim.research_unlock_revision();
+
+    sim.select_research(logistics)
+        .expect("logistics should be researchable");
+    assert!(sim.research_revision() > initial_any);
+    assert_eq!(sim.research_progress_revision(), initial_progress);
+    assert!(sim.research_queue_revision() > initial_queue);
+    assert_eq!(sim.research_unlock_revision(), initial_unlock);
+
+    let queue_after_selection = sim.research_queue_revision();
+    sim.add_research_units(1)
+        .expect("one unit should advance research");
+    assert!(sim.research_progress_revision() > initial_progress);
+    assert_eq!(sim.research_queue_revision(), queue_after_selection);
+    assert_eq!(sim.research_unlock_revision(), initial_unlock);
+
+    let progress_before_completion = sim.research_progress_revision();
+    sim.add_research_units(required - 1)
+        .expect("remaining units should complete research");
+    assert!(sim.research_progress_revision() > progress_before_completion);
+    assert!(sim.research_queue_revision() > queue_after_selection);
+    assert!(sim.research_unlock_revision() > initial_unlock);
+}
+
 #[test]
 fn lab_consumes_science_and_increases_research_progress() {
     let mut sim = Simulation::new_test_world(123);

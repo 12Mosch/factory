@@ -50,7 +50,7 @@ impl Simulation {
             enemy_map_revision: 0,
             power_map_revision: 0,
             production_status_revision: 0,
-            research_revision: 0,
+            research_revisions: ResearchRevisions::default(),
             enemy_settings_revision: 0,
             crafting_revision: 0,
             production_map_statuses: Vec::new(),
@@ -297,7 +297,22 @@ impl Simulation {
 
     /// Revision of research selection, queue, progress, and completed levels.
     pub fn research_revision(&self) -> u64 {
-        self.research_revision
+        self.research_revisions.any
+    }
+
+    /// Advances whenever science units change progress, including completion.
+    pub fn research_progress_revision(&self) -> u64 {
+        self.research_revisions.progress
+    }
+
+    /// Advances when active research or the pending queue changes.
+    pub fn research_queue_revision(&self) -> u64 {
+        self.research_revisions.queue
+    }
+
+    /// Advances when a technology level completes and unlock-dependent state changes.
+    pub fn research_unlock_revision(&self) -> u64 {
+        self.research_revisions.unlock
     }
 
     /// Revision of runtime enemy configuration changes.
@@ -474,6 +489,7 @@ impl Simulation {
         &self.research.queue
     }
 
+    /// Selects a technology as active research and prunes invalid queued entries.
     pub fn select_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
         self.can_select_research(technology_id)?;
         self.research.active = Some(technology_id);
@@ -482,7 +498,7 @@ impl Simulation {
             .retain(|queued_id| *queued_id != technology_id);
         self.prune_invalid_research_queue();
         self.power_demand_cache.invalidate();
-        self.research_revision = self.research_revision.wrapping_add(1);
+        self.research_revisions.bump_queue();
         Ok(())
     }
 
@@ -498,15 +514,17 @@ impl Simulation {
         )
     }
 
+    /// Appends a valid technology to the queue, promoting it when nothing is active.
     pub fn enqueue_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
         self.can_enqueue_research(technology_id)?;
         self.research.queue.push(technology_id);
         self.promote_next_queued_research()?;
         self.power_demand_cache.invalidate();
-        self.research_revision = self.research_revision.wrapping_add(1);
+        self.research_revisions.bump_queue();
         Ok(())
     }
 
+    /// Removes a queued technology and queued dependents that become invalid.
     pub fn remove_queued_research(
         &mut self,
         index: usize,
@@ -516,10 +534,11 @@ impl Simulation {
         }
 
         let removed = self.remove_queued_research_and_dependents(index);
-        self.research_revision = self.research_revision.wrapping_add(1);
+        self.research_revisions.bump_queue();
         Ok(removed)
     }
 
+    /// Moves a queued technology while preserving prerequisite order.
     pub fn move_queued_research(
         &mut self,
         from_index: usize,
@@ -532,7 +551,7 @@ impl Simulation {
 
         let technology_id = self.research.queue.remove(from_index);
         self.research.queue.insert(to_index, technology_id);
-        self.research_revision = self.research_revision.wrapping_add(1);
+        self.research_revisions.bump_queue();
         Ok(())
     }
 
@@ -551,16 +570,18 @@ impl Simulation {
         )
     }
 
+    /// Applies science units to active research and reports progress or completion.
     pub fn add_research_units(
         &mut self,
         units: u64,
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result =
             add_research_units_to_state(&self.world.prototypes, &mut self.research, units)?;
+        let completed = matches!(result, ResearchProgressResult::Completed { .. });
         if units != 0 {
-            self.research_revision = self.research_revision.wrapping_add(1);
+            self.research_revisions.bump_progress(completed);
         }
-        if matches!(result, ResearchProgressResult::Completed { .. }) {
+        if completed {
             self.power_demand_cache.invalidate();
         }
         if let ResearchProgressResult::Completed { technology_id, .. } = result
