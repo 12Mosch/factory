@@ -507,18 +507,12 @@ fn enemy_map_revision_changes_only_on_first_pollution_contact() {
 fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
-    let placed = sim
+    let footprint = sim
         .entities
         .placed_entity(spawner_id)
-        .expect("spawner should be placed");
-    let footprint = placed.footprint;
-    let spawner_config = sim
-        .world
-        .prototypes
-        .entity(placed.prototype_id)
-        .and_then(|prototype| prototype.enemy_spawner.as_ref())
-        .expect("spawner should define enemy spawning");
-    let attack_cost = u64::from(spawner_config.unit_spawn_pollution_cost_milli) * 1000;
+        .expect("spawner should be placed")
+        .footprint;
+    let attack_cost = spawner_attack_cost(&sim, spawner_id);
     let base_id = sim.enemies.spawner_bases[&spawner_id];
     sim.enemies
         .bases
@@ -581,12 +575,8 @@ fn queued_guard_and_staging_spawns_respect_spawner_alive_cap() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
     let placed = sim.entities.placed_entities[&spawner_id].clone();
-    let config = sim.world.prototypes.entities()[placed.prototype_id.index()]
-        .enemy_spawner
-        .as_ref()
-        .unwrap();
-    let max_alive = config.max_alive_units;
-    let attack_cost = u64::from(config.unit_spawn_pollution_cost_milli) * 1_000;
+    let max_alive = spawner_max_alive(&sim, spawner_id);
+    let attack_cost = spawner_attack_cost(&sim, spawner_id);
     let base_id = sim.enemies.spawner_bases[&spawner_id];
     sim.enemies
         .bases
@@ -724,14 +714,7 @@ fn staging_uses_sibling_spawner_when_first_is_saturated() {
     let first_id = place_biter_spawner(&mut sim);
     let first = sim.entities.placed_entities[&first_id].clone();
     let base_id = sim.enemies.spawner_bases[&first_id];
-    let placed = sim.entities.placed_entities[&first_id].clone();
-    let attack_cost = u64::from(
-        sim.world.prototypes.entities()[placed.prototype_id.index()]
-            .enemy_spawner
-            .as_ref()
-            .expect("test spawner should define a unit cost")
-            .unit_spawn_pollution_cost_milli,
-    ) * 1_000;
+    let attack_cost = spawner_attack_cost(&sim, first_id);
 
     join_colony(&mut sim, base_id, first.x + 6, first.y, 2);
     assert_eq!(sim.enemies.bases[&base_id].spawners.len(), 3);
@@ -789,14 +772,7 @@ fn staging_stalls_when_all_spawners_saturated() {
     let first_id = place_biter_spawner(&mut sim);
     let first = sim.entities.placed_entities[&first_id].clone();
     let base_id = sim.enemies.spawner_bases[&first_id];
-    let placed = sim.entities.placed_entities[&first_id].clone();
-    let attack_cost = u64::from(
-        sim.world.prototypes.entities()[placed.prototype_id.index()]
-            .enemy_spawner
-            .as_ref()
-            .expect("test spawner should define a unit cost")
-            .unit_spawn_pollution_cost_milli,
-    ) * 1_000;
+    let attack_cost = spawner_attack_cost(&sim, first_id);
 
     join_colony(&mut sim, base_id, first.x + 6, first.y, 1);
     assert_eq!(sim.enemies.bases[&base_id].spawners.len(), 2);
@@ -936,6 +912,18 @@ fn spawner_max_alive(sim: &Simulation, spawner_id: EntityId) -> u32 {
         .as_ref()
         .expect("test spawner should define a live-unit ceiling")
         .max_alive_units
+}
+
+/// Attack-budget cost in micro units for staging one unit from `spawner_id`.
+fn spawner_attack_cost(sim: &Simulation, spawner_id: EntityId) -> u64 {
+    let placed = &sim.entities.placed_entities[&spawner_id];
+    u64::from(
+        sim.world.prototypes.entities()[placed.prototype_id.index()]
+            .enemy_spawner
+            .as_ref()
+            .expect("test spawner should define a unit cost")
+            .unit_spawn_pollution_cost_milli,
+    ) * 1_000
 }
 
 /// Makes the colony old enough and due for expansion without touching the
