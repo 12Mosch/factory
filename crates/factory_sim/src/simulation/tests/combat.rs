@@ -1138,7 +1138,6 @@ fn block_spawner_footprint(
 /// target chest below was already placed, so every site rule held at dispatch.
 fn dispatched_arrived_expansion() -> (
     Simulation,
-    EnemyBaseId,
     ExpansionId,
     (WorldTileCoord, WorldTileCoord),
     Vec<EnemyId>,
@@ -1177,7 +1176,7 @@ fn dispatched_arrived_expansion() -> (
     let founder = sim.enemies.enemies.get_mut(&members[0]).unwrap();
     founder.x = destination.0 * POSITION_SCALE + POSITION_SCALE / 2;
     founder.y = destination.1 * POSITION_SCALE + POSITION_SCALE / 2;
-    (sim, base_id, expansion_id, destination, members, target)
+    (sim, expansion_id, destination, members, target)
 }
 
 /// Regression tests for https://github.com/12Mosch/factory/issues/310: every
@@ -1185,8 +1184,7 @@ fn dispatched_arrived_expansion() -> (
 /// new guard reacquires victims through guard aggro rules only.
 #[test]
 fn blocked_expansion_stands_down_to_guard_without_stale_targets() {
-    let (mut sim, _base_id, expansion_id, destination, members, _target) =
-        dispatched_arrived_expansion();
+    let (mut sim, expansion_id, destination, members, _target) = dispatched_arrived_expansion();
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
     place_at(
         &mut sim,
@@ -1215,8 +1213,7 @@ fn blocked_expansion_stands_down_to_guard_without_stale_targets() {
 
 #[test]
 fn successful_expansion_founds_colony_and_clears_survivor_targets() {
-    let (mut sim, _base_id, expansion_id, _destination, members, _target) =
-        dispatched_arrived_expansion();
+    let (mut sim, expansion_id, _destination, members, _target) = dispatched_arrived_expansion();
     let bases_before = sim.enemies.bases.len();
 
     sim.resolve_arrived_expansions();
@@ -1238,8 +1235,7 @@ fn successful_expansion_founds_colony_and_clears_survivor_targets() {
 
 #[test]
 fn failed_expansion_placement_stands_down_to_guard_without_stale_targets() {
-    let (mut sim, _base_id, expansion_id, destination, members, target) =
-        dispatched_arrived_expansion();
+    let (mut sim, expansion_id, destination, members, target) = dispatched_arrived_expansion();
     let spawner_prototype = sim.enemies.expansions[&expansion_id].spawner_prototype;
     block_spawner_footprint(&mut sim, target, spawner_prototype, destination);
     assert!(
