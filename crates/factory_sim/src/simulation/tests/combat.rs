@@ -718,6 +718,121 @@ fn expansion_dispatch_uses_sibling_spawner_when_first_is_saturated() {
     }
 }
 
+#[test]
+fn staging_uses_sibling_spawner_when_first_is_saturated() {
+    let mut sim = Simulation::new_test_world(123);
+    let first_id = place_biter_spawner(&mut sim);
+    let first = sim.entities.placed_entities[&first_id].clone();
+    let base_id = sim.enemies.spawner_bases[&first_id];
+    let placed = sim.entities.placed_entities[&first_id].clone();
+    let attack_cost = u64::from(
+        sim.world.prototypes.entities()[placed.prototype_id.index()]
+            .enemy_spawner
+            .as_ref()
+            .expect("test spawner should define a unit cost")
+            .unit_spawn_pollution_cost_milli,
+    ) * 1_000;
+
+    join_colony(&mut sim, base_id, first.x + 6, first.y, 2);
+    assert_eq!(sim.enemies.bases[&base_id].spawners.len(), 3);
+
+    // Deterministic colony order: saturate the lowest-ID spawner so only
+    // siblings have capacity.
+    let ordered: Vec<EntityId> = sim.enemies.bases[&base_id]
+        .spawners
+        .iter()
+        .copied()
+        .collect();
+    let cap = spawner_max_alive(&sim, ordered[0]);
+    fill_spawner(&mut sim, ordered[0], cap, first.x, first.y + 8);
+    // Suppress free guard spawns so the staging decision observes exactly
+    // the filled counts.
+    for &spawner_id in &ordered {
+        sim.entities
+            .enemy_spawners
+            .get_mut(&spawner_id)
+            .expect("colony spawner should track guard timing")
+            .next_free_spawn_tick = u64::MAX;
+    }
+    sim.enemies
+        .bases
+        .get_mut(&base_id)
+        .unwrap()
+        .attack_budget_micro = attack_cost;
+
+    sim.advance_enemy_spawners();
+
+    assert_eq!(
+        sim.enemies.bases[&base_id].staged_units.len(),
+        1,
+        "a free sibling spawner must still stage the raid unit"
+    );
+    let staged_id = *sim.enemies.bases[&base_id]
+        .staged_units
+        .iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        sim.enemies.enemies[&staged_id].home_spawner,
+        Some(ordered[1]),
+        "staging must pick the lowest-ID spawner with capacity"
+    );
+    assert_eq!(
+        sim.enemies.bases[&base_id].attack_budget_micro, 0,
+        "staging consumes the unit cost once"
+    );
+}
+
+#[test]
+fn staging_stalls_when_all_spawners_saturated() {
+    let mut sim = Simulation::new_test_world(123);
+    let first_id = place_biter_spawner(&mut sim);
+    let first = sim.entities.placed_entities[&first_id].clone();
+    let base_id = sim.enemies.spawner_bases[&first_id];
+    let placed = sim.entities.placed_entities[&first_id].clone();
+    let attack_cost = u64::from(
+        sim.world.prototypes.entities()[placed.prototype_id.index()]
+            .enemy_spawner
+            .as_ref()
+            .expect("test spawner should define a unit cost")
+            .unit_spawn_pollution_cost_milli,
+    ) * 1_000;
+
+    join_colony(&mut sim, base_id, first.x + 6, first.y, 1);
+    assert_eq!(sim.enemies.bases[&base_id].spawners.len(), 2);
+
+    let ordered: Vec<EntityId> = sim.enemies.bases[&base_id]
+        .spawners
+        .iter()
+        .copied()
+        .collect();
+    for &spawner_id in &ordered {
+        let cap = spawner_max_alive(&sim, spawner_id);
+        fill_spawner(&mut sim, spawner_id, cap, first.x, first.y + 8);
+        sim.entities
+            .enemy_spawners
+            .get_mut(&spawner_id)
+            .expect("colony spawner should track guard timing")
+            .next_free_spawn_tick = u64::MAX;
+    }
+    sim.enemies
+        .bases
+        .get_mut(&base_id)
+        .unwrap()
+        .attack_budget_micro = attack_cost;
+
+    sim.advance_enemy_spawners();
+
+    assert!(
+        sim.enemies.bases[&base_id].staged_units.is_empty(),
+        "a fully saturated colony must not stage additional units"
+    );
+    assert_eq!(
+        sim.enemies.bases[&base_id].attack_budget_micro, attack_cost,
+        "a suppressed staging spawn must not consume attack budget"
+    );
+}
+
 /// Places `extra` spawners into an existing colony near
 /// `(from_x, from_y)`, returning their ids in placement order.
 fn join_colony(

@@ -220,30 +220,33 @@ impl Simulation {
             let target_size = usize::from(self.raid_target_size());
             for index in 0..self.enemy_spawning_scratch.base_ids.len() {
                 let base_id = self.enemy_spawning_scratch.base_ids[index];
-                let Some((&spawner_id, unit, cost, can_spawn)) = self
-                    .enemies
-                    .bases
-                    .get(&base_id)
-                    .and_then(|base| base.spawners.iter().next())
-                    .and_then(|spawner_id| {
-                        let placed = self.entities.placed_entities.get(spawner_id)?;
-                        let cfg = self
-                            .world
-                            .prototypes
-                            .entity(placed.prototype_id)?
-                            .enemy_spawner
-                            .as_ref()?;
-                        Some((
-                            spawner_id,
-                            cfg.unit,
-                            u64::from(cfg.unit_spawn_pollution_cost_milli) * 1000,
-                            self.enemy_spawning_scratch
+                // Deterministic source selection in colony order: the
+                // first spawner with remaining projected capacity stages
+                // the raid unit, so one saturated spawner never stalls
+                // siblings. Mirrors the expansion dispatch selection.
+                let Some((spawner_id, unit, cost)) =
+                    self.enemies.bases.get(&base_id).and_then(|base| {
+                        base.spawners.iter().copied().find_map(|spawner_id| {
+                            let placed = self.entities.placed_entities.get(&spawner_id)?;
+                            let cfg = self
+                                .world
+                                .prototypes
+                                .entity(placed.prototype_id)?
+                                .enemy_spawner
+                                .as_ref()?;
+                            let has_capacity = self
+                                .enemy_spawning_scratch
                                 .projected_alive_by_spawner
-                                .get(spawner_id)
+                                .get(&spawner_id)
                                 .copied()
                                 .unwrap_or(0)
-                                < cfg.max_alive_units,
-                        ))
+                                < cfg.max_alive_units;
+                            has_capacity.then_some((
+                                spawner_id,
+                                cfg.unit,
+                                u64::from(cfg.unit_spawn_pollution_cost_milli) * 1000,
+                            ))
+                        })
                     })
                 else {
                     continue;
@@ -256,7 +259,6 @@ impl Simulation {
                 if cost > 0
                     && base.attack_budget_micro >= cost
                     && base.staged_units.len() < target_size
-                    && can_spawn
                 {
                     self.enemy_spawning_scratch.requests.push(SpawnRequest {
                         spawner_id,
