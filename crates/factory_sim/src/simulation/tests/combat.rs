@@ -1046,180 +1046,122 @@ fn colony_with_capacity_dispatches_expansion_on_schedule() {
     );
 }
 
-/// Regression test for https://github.com/12Mosch/factory/issues/307: an
-/// expansion party must keep its destination authoritative until completion —
-/// no ordinary global attack targeting en route even far past the initial
-/// decision stagger (`enemy.id % 16` ticks), the off-route player structure
-/// untouched, and completion founding exactly one colony. Founding mechanics
-/// themselves are covered by the dedicated arrival tests below.
-#[test]
-fn expansion_ignores_global_targets_and_founds_colony() {
-    let mut sim = Simulation::new_test_world(123);
-    let spawner = place_biter_spawner(&mut sim);
-    let base_id = sim.enemies.spawner_bases[&spawner];
-    let origin = sim.entities.placed_entities[&spawner].clone();
-    // Small pre-generated area around the short western route. Chunk
-    // generation can place worldgen colonies, so the destination search below
-    // skips ground too close to any of them.
-    for dy in -34..=10_i64 {
-        for dx in -34..=62_i64 {
-            if let Some(chunk) = ChunkCoord::from_tile(origin.x + dx, origin.y + dy) {
-                sim.ensure_chunk_generated(chunk);
-            }
-        }
-    }
-    // Nearby legal colony site west of the spawner: walkable, placeable, and
-    // clear of the player and every colony, so arrival founds a colony after
-    // a few hundred travel ticks. Due west stays on open ground; the
-    // southwestern tiles sit behind water.
-    let player_tile = sim.player.tile_position();
-    let spawner_prototype = origin.prototype_id;
-    let colony_spacing = i32::from(
-        sim.gameplay()
-            .expect("the catalog should tune enemy expansion")
-            .expansion_colony_spacing_chunks,
-    );
-    let mut destination: Option<(WorldTileCoord, WorldTileCoord)> = None;
-    for dy in -4..=4_i64 {
-        for dx in -28..=-14_i64 {
-            let candidate = (origin.x + dx, origin.y + dy);
-            let site_clear = (player_tile.0 - candidate.0)
-                .abs()
-                .max((player_tile.1 - candidate.1).abs())
-                >= 64
-                && ChunkCoord::from_tile(candidate.0, candidate.1).is_some_and(|chunk| {
-                    sim.enemies.bases.values().all(|base| {
-                        base.id == base_id
-                            || (base.anchor.x - chunk.x)
-                                .abs()
-                                .max((base.anchor.y - chunk.y).abs())
-                                >= colony_spacing
+/// Places a damageable chest on the first validated tile ringing `origin`
+/// that stays clear of every spawner, so idle guards never engage it while
+/// global `Attack` targeting can still see it.
+fn place_chest_clear_of_spawners(
+    sim: &mut Simulation,
+    origin: (WorldTileCoord, WorldTileCoord),
+    min_ring: i64,
+    max_ring: i64,
+    spawner_clear_tiles: i64,
+) -> EntityId {
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    for ring in min_ring..=max_ring {
+        for dy in -ring..=ring {
+            for dx in -ring..=ring {
+                if dx.abs().max(dy.abs()) != ring {
+                    continue;
+                }
+                let (x, y) = (origin.0 + dx, origin.1 + dy);
+                if sim
+                    .entities
+                    .enemy_spawners
+                    .keys()
+                    .filter_map(|id| sim.entities.placed_entities.get(id))
+                    .any(|placed| {
+                        (placed.x - x).abs().max((placed.y - y).abs()) < spawner_clear_tiles
                     })
-                })
-                && sim
-                    .world
-                    .tile_at(candidate.0, candidate.1)
-                    .is_some_and(|tile| {
-                        tile.collision.walkable
-                            && sim
-                                .entities
-                                .occupancy
-                                .entity_at(candidate.0, candidate.1)
-                                .is_none()
-                    })
-                && crate::placement::validate(
-                    &sim,
+                {
+                    continue;
+                }
+                if let Some(chunk) = ChunkCoord::from_tile(x, y) {
+                    sim.ensure_chunk_generated(chunk);
+                }
+                if crate::placement::validate(
+                    sim,
                     crate::placement::EntityPlacementRequest {
-                        prototype_id: spawner_prototype,
-                        x: candidate.0,
-                        y: candidate.1,
+                        prototype_id: chest,
+                        x,
+                        y,
                         direction: Direction::North,
                     },
                 )
-                .is_ok();
-            if site_clear {
-                destination = Some(candidate);
-                break;
+                .is_ok()
+                {
+                    return place_at(sim, chest, x, y, Direction::North);
+                }
             }
         }
-        if destination.is_some() {
-            break;
-        }
     }
-    let destination = destination.expect("the fixture needs a colony site near the spawner");
-    assert!(
-        sim.dispatch_expansion(base_id, destination),
-        "the fixture must dispatch an expansion"
-    );
-    let (expansion_id, members): (ExpansionId, Vec<EnemyId>) = sim
-        .enemies
+    panic!("expected a spawner-clear chest tile near {origin:?}");
+}
+
+/// Dispatches a scheduler expansion for a due colony and returns its party:
+/// production site selection stays the only validity owner, so the regression
+/// below needs no destination rules of its own.
+fn dispatched_due_expansion(
+    sim: &mut Simulation,
+    base_id: EnemyBaseId,
+) -> (ExpansionId, (WorldTileCoord, WorldTileCoord), Vec<EnemyId>) {
+    arm_expansion_due(sim, base_id);
+    sim.advance_enemy_spawners();
+    sim.enemies
         .expansions
         .iter()
         .find(|(_, party)| party.base_id == base_id)
-        .map(|(&id, party)| (id, party.members.iter().copied().collect()))
-        .expect("the fixture must dispatch an expansion");
-    assert!(!members.is_empty());
-    // Attackable structure placed after dispatch, far east of the route: far
-    // beyond guard reach and 64+ tiles from the site, but visible to global
-    // `Attack` targeting, so only expansion behavior may touch it.
-    let chest_prototype = entity_id_by_name(&sim.world.prototypes, "chest");
-    let spawner_tiles: Vec<(WorldTileCoord, WorldTileCoord)> = sim.enemies.bases[&base_id]
-        .spawners
-        .iter()
-        .map(|id| {
-            let placed = &sim.entities.placed_entities[id];
-            (placed.x, placed.y)
-        })
-        .collect();
-    let mut chest_spot: Option<(WorldTileCoord, WorldTileCoord)> = None;
-    for dy in -6..=6_i64 {
-        for dx in 46..=58_i64 {
-            let candidate = (origin.x + dx, origin.y + dy);
-            if (destination.0 - candidate.0)
-                .abs()
-                .max((destination.1 - candidate.1).abs())
-                < 64
-                || spawner_tiles
-                    .iter()
-                    .any(|&(sx, sy)| (sx - candidate.0).abs().max((sy - candidate.1).abs()) < 18)
-            {
-                continue;
-            }
-            if crate::placement::validate(
-                &sim,
-                crate::placement::EntityPlacementRequest {
-                    prototype_id: chest_prototype,
-                    x: candidate.0,
-                    y: candidate.1,
-                    direction: Direction::North,
-                },
+        .map(|(&id, party)| {
+            (
+                id,
+                party.destination,
+                party.members.iter().copied().collect(),
             )
-            .is_ok()
-            {
-                chest_spot = Some(candidate);
-                break;
-            }
-        }
-        if chest_spot.is_some() {
-            break;
-        }
-    }
-    let (chest_x, chest_y) =
-        chest_spot.expect("the fixture needs a chest tile east of the spawner");
-    let chest = place_at(
-        &mut sim,
-        chest_prototype,
-        chest_x,
-        chest_y,
-        Direction::North,
-    );
+        })
+        .expect("the fixture must dispatch an expansion")
+}
+
+/// Regression test for https://github.com/12Mosch/factory/issues/307: a
+/// scheduler-dispatched expansion party must travel past the decision stagger
+/// without acquiring ordinary global attack targets, leaving the off-route
+/// player structure alone. Founding mechanics are covered by the dedicated
+/// arrival tests below.
+#[test]
+fn expansion_ignores_global_targets_en_route() {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, spawners) = colony_with_three_spawners(&mut sim);
+    let (expansion_id, destination, members) = dispatched_due_expansion(&mut sim, base_id);
+    assert!(!members.is_empty());
+    // Attackable structure placed after dispatch, far outside guard aggro
+    // around every spawner but visible to global `Attack` targeting, so only
+    // expansion behavior may touch it.
+    let origin = sim.entities.placed_entities[&spawners[0]].clone();
+    let chest = place_chest_clear_of_spawners(&mut sim, (origin.x, origin.y), 28, 36, 18);
     assert!(
         sim.entities.entity_health.contains_key(&chest),
         "the chest must be damageable so global attack targeting can see it"
     );
-    let bases_before = sim.enemies.bases.len();
+    // Past the 0-15 tick decision stagger: any ordinary global targeting
+    // would retarget the party almost immediately. Enemy movement is driven
+    // directly instead of full ticks so the arming clock-jump never meets
+    // tick validation; the target is checked every step because a diverted
+    // party can destroy the chest and end up targetless again.
     let chest_health = sim.entities.entity_health[&chest].current;
-    // Far past the 0-15 tick decision stagger on a ~20-tile route: any
-    // ordinary global targeting would retarget the party almost immediately.
-    // The target is checked every tick (not just at the end) because a
-    // diverted party can destroy the chest and end up targetless again.
-    let mut arrived = false;
-    for _ in 0..2000 {
-        sim.tick();
+    let mut commands = CombatCommandBuffer::default();
+    for _ in 0..128 {
+        sim.tick += 1;
+        sim.advance_enemies(&mut commands);
         for id in &members {
-            if let Some(unit) = sim.enemies.enemies.get(id) {
-                assert_eq!(
-                    unit.target, None,
-                    "expansion member {id:?} must not acquire a global attack target"
-                );
-            }
-        }
-        if !sim.enemies.expansions.contains_key(&expansion_id) {
-            arrived = true;
-            break;
+            let unit = sim
+                .enemies
+                .enemies
+                .get(id)
+                .expect("nothing on this route can damage the party");
+            assert_eq!(
+                unit.target, None,
+                "expansion member {id:?} must not acquire a global attack target"
+            );
         }
     }
-    assert!(arrived, "the expansion must complete");
     assert_eq!(
         sim.entities
             .entity_health
@@ -1228,14 +1170,22 @@ fn expansion_ignores_global_targets_and_founds_colony() {
         Some(chest_health),
         "the expansion party must leave the off-route player structure alone"
     );
-    // Founding mechanics (founder consumption, survivor transition, new-base
-    // wiring) are covered by the dedicated arrival tests below; here only the
-    // completion signal matters.
+    let party = &sim.enemies.expansions[&expansion_id];
     assert_eq!(
-        sim.enemies.bases.len(),
-        bases_before + 1,
-        "completion must found exactly one colony"
+        party.destination, destination,
+        "the expansion destination must stay authoritative"
     );
+    for id in &members {
+        assert!(
+            party.members.contains(id),
+            "expansion member {id:?} must not abandon the party"
+        );
+        assert_eq!(
+            sim.enemies.enemies[id].mission,
+            EnemyMission::Expansion(expansion_id),
+            "expansion member {id:?} must keep the expansion mission"
+        );
+    }
 }
 
 /// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
