@@ -1058,83 +1058,35 @@ fn expansion_ignores_global_targets_and_founds_colony() {
     let spawner = place_biter_spawner(&mut sim);
     let base_id = sim.enemies.spawner_bases[&spawner];
     let origin = sim.entities.placed_entities[&spawner].clone();
-    // Global attack candidate far enough east that idle guards (aggro radius
-    // 12 around the spawner) never engage it, yet visible to world-wide
-    // `Attack` targeting: only the expansion party's behavior may touch it.
-    // The western expansion route stays clear.
-    let chest_prototype = entity_id_by_name(&sim.world.prototypes, "chest");
-    let mut chest_spot: Option<(WorldTileCoord, WorldTileCoord)> = None;
-    for dy in -20..=20_i64 {
-        for dx in 18..=22_i64 {
-            let (x, y) = (origin.x + dx, origin.y + dy);
-            if let Some(chunk) = ChunkCoord::from_tile(x, y) {
-                sim.ensure_chunk_generated(chunk);
-            }
-            if crate::placement::validate(
-                &sim,
-                crate::placement::EntityPlacementRequest {
-                    prototype_id: chest_prototype,
-                    x,
-                    y,
-                    direction: Direction::North,
-                },
-            )
-            .is_ok()
-            {
-                chest_spot = Some((x, y));
-                break;
-            }
-        }
-        if chest_spot.is_some() {
-            break;
-        }
-    }
-    let (chest_x, chest_y) =
-        chest_spot.expect("the fixture needs a chest tile east of the spawner");
-    let chest = place_at(
-        &mut sim,
-        chest_prototype,
-        chest_x,
-        chest_y,
-        Direction::North,
-    );
-    assert!(
-        sim.entities.entity_health.contains_key(&chest),
-        "the chest must be damageable so global attack targeting can see it"
-    );
-    // Distant legal colony site west of the spawner: a walkable tile with a
-    // placeable 2x2 spawner footprint, 64+ tiles from the player and the
-    // chest, so arrival founds a colony. The corridor is pre-generated so
-    // routing sees real terrain, and the party travels hundreds of ticks,
-    // far past the decision stagger.
-    for dy in -10..=10_i64 {
-        for dx in -150..=0_i64 {
+    // Small pre-generated area around the short western route. Chunk
+    // generation can place worldgen colonies, so the destination search below
+    // skips ground too close to any of them.
+    for dy in -34..=10_i64 {
+        for dx in -34..=62_i64 {
             if let Some(chunk) = ChunkCoord::from_tile(origin.x + dx, origin.y + dy) {
                 sim.ensure_chunk_generated(chunk);
             }
         }
     }
+    // Nearby legal colony site west of the spawner: walkable, placeable, and
+    // clear of the player and every colony, so arrival founds a colony after
+    // a few hundred travel ticks. Due west stays on open ground; the
+    // southwestern tiles sit behind water.
     let player_tile = sim.player.tile_position();
     let spawner_prototype = origin.prototype_id;
-    // Corridor generation can place worldgen colonies: mirror the production
-    // colony-spacing rule so the site still reads clear at arrival.
     let colony_spacing = i32::from(
         sim.gameplay()
             .expect("the catalog should tune enemy expansion")
             .expansion_colony_spacing_chunks,
     );
     let mut destination: Option<(WorldTileCoord, WorldTileCoord)> = None;
-    for dy in -6..=6_i64 {
-        for dx in -145..=-95_i64 {
+    for dy in -4..=4_i64 {
+        for dx in -28..=-14_i64 {
             let candidate = (origin.x + dx, origin.y + dy);
             let site_clear = (player_tile.0 - candidate.0)
                 .abs()
                 .max((player_tile.1 - candidate.1).abs())
                 >= 64
-                && (chest_x - candidate.0)
-                    .abs()
-                    .max((chest_y - candidate.1).abs())
-                    >= 64
                 && ChunkCoord::from_tile(candidate.0, candidate.1).is_some_and(|chunk| {
                     sim.enemies.bases.values().all(|base| {
                         base.id == base_id
@@ -1174,7 +1126,7 @@ fn expansion_ignores_global_targets_and_founds_colony() {
             break;
         }
     }
-    let destination = destination.expect("the fixture needs a colony site west of the spawner");
+    let destination = destination.expect("the fixture needs a colony site near the spawner");
     assert!(
         sim.dispatch_expansion(base_id, destination),
         "the fixture must dispatch an expansion"
@@ -1187,14 +1139,72 @@ fn expansion_ignores_global_targets_and_founds_colony() {
         .map(|(&id, party)| (id, party.members.iter().copied().collect()))
         .expect("the fixture must dispatch an expansion");
     assert!(!members.is_empty());
+    // Attackable structure placed after dispatch, far east of the route: far
+    // beyond guard reach and 64+ tiles from the site, but visible to global
+    // `Attack` targeting, so only expansion behavior may touch it.
+    let chest_prototype = entity_id_by_name(&sim.world.prototypes, "chest");
+    let spawner_tiles: Vec<(WorldTileCoord, WorldTileCoord)> = sim.enemies.bases[&base_id]
+        .spawners
+        .iter()
+        .map(|id| {
+            let placed = &sim.entities.placed_entities[id];
+            (placed.x, placed.y)
+        })
+        .collect();
+    let mut chest_spot: Option<(WorldTileCoord, WorldTileCoord)> = None;
+    for dy in -6..=6_i64 {
+        for dx in 46..=58_i64 {
+            let candidate = (origin.x + dx, origin.y + dy);
+            if (destination.0 - candidate.0)
+                .abs()
+                .max((destination.1 - candidate.1).abs())
+                < 64
+                || spawner_tiles
+                    .iter()
+                    .any(|&(sx, sy)| (sx - candidate.0).abs().max((sy - candidate.1).abs()) < 18)
+            {
+                continue;
+            }
+            if crate::placement::validate(
+                &sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: chest_prototype,
+                    x: candidate.0,
+                    y: candidate.1,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
+            {
+                chest_spot = Some(candidate);
+                break;
+            }
+        }
+        if chest_spot.is_some() {
+            break;
+        }
+    }
+    let (chest_x, chest_y) =
+        chest_spot.expect("the fixture needs a chest tile east of the spawner");
+    let chest = place_at(
+        &mut sim,
+        chest_prototype,
+        chest_x,
+        chest_y,
+        Direction::North,
+    );
+    assert!(
+        sim.entities.entity_health.contains_key(&chest),
+        "the chest must be damageable so global attack targeting can see it"
+    );
     let bases_before = sim.enemies.bases.len();
     let chest_health = sim.entities.entity_health[&chest].current;
-    // Hundreds of ticks past the 0-15 tick decision stagger: any ordinary
-    // global targeting would retarget the party almost immediately. The
-    // target is checked every tick (not just at the end) because a diverted
-    // party can destroy the chest and end up targetless again.
+    // Far past the 0-15 tick decision stagger on a ~20-tile route: any
+    // ordinary global targeting would retarget the party almost immediately.
+    // The target is checked every tick (not just at the end) because a
+    // diverted party can destroy the chest and end up targetless again.
     let mut arrived = false;
-    for _ in 0..8000 {
+    for _ in 0..2000 {
         sim.tick();
         for id in &members {
             if let Some(unit) = sim.enemies.enemies.get(id) {
