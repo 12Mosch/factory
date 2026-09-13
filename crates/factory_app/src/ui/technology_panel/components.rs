@@ -69,6 +69,7 @@ pub(crate) struct TechnologyQueueTitle;
 #[derive(Component)]
 pub(crate) struct TechnologyQueueRow(pub(crate) TechnologyId);
 
+/// Revisions for the independent data subsets rendered by the Technology panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TechnologyPanelSnapshot {
     pub(crate) selected: Option<TechnologyId>,

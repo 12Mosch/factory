@@ -539,6 +539,7 @@ impl SimulationSnapshotOwned {
         }
     }
 
+    /// Restores durable state and resets all runtime-only revision counters.
     fn into_simulation(self) -> Simulation {
         let mut sim = Simulation {
             tick: self.tick,

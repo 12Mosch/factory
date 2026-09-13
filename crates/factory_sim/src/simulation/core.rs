@@ -489,6 +489,7 @@ impl Simulation {
         &self.research.queue
     }
 
+    /// Selects a technology as active research and prunes invalid queued entries.
     pub fn select_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
         self.can_select_research(technology_id)?;
         self.research.active = Some(technology_id);
@@ -513,6 +514,7 @@ impl Simulation {
         )
     }
 
+    /// Appends a valid technology to the queue, promoting it when nothing is active.
     pub fn enqueue_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
         self.can_enqueue_research(technology_id)?;
         self.research.queue.push(technology_id);
@@ -522,6 +524,7 @@ impl Simulation {
         Ok(())
     }
 
+    /// Removes a queued technology and queued dependents that become invalid.
     pub fn remove_queued_research(
         &mut self,
         index: usize,
@@ -535,6 +538,7 @@ impl Simulation {
         Ok(removed)
     }
 
+    /// Moves a queued technology while preserving prerequisite order.
     pub fn move_queued_research(
         &mut self,
         from_index: usize,
@@ -566,6 +570,7 @@ impl Simulation {
         )
     }
 
+    /// Applies science units to active research and reports progress or completion.
     pub fn add_research_units(
         &mut self,
         units: u64,

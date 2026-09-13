@@ -11,6 +11,7 @@ mod pumpjacks;
 mod rocket_silos;
 
 impl Simulation {
+    /// Borrows machine subsystems together with research invalidation state.
     fn machine_tick_context(&mut self) -> MachineTickContext<'_> {
         let base = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes);
         let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(

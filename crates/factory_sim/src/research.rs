@@ -23,11 +23,13 @@ pub(crate) struct ResearchRevisions {
 }
 
 impl ResearchRevisions {
+    /// Records a change to active research or the pending queue.
     pub(crate) fn bump_queue(&mut self) {
         self.any = self.any.wrapping_add(1);
         self.queue = self.queue.wrapping_add(1);
     }
 
+    /// Records science progress and, on completion, its queue and unlock effects.
     pub(crate) fn bump_progress(&mut self, completed: bool) {
         self.any = self.any.wrapping_add(1);
         self.progress = self.progress.wrapping_add(1);

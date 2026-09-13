@@ -133,6 +133,7 @@ fn zero_research_units_return_current_progress_without_advancing() {
     assert!(!sim.is_technology_unlocked(automation));
 }
 
+/// Dependency-specific revisions must not invalidate unrelated consumers.
 #[test]
 fn research_revisions_track_their_dependencies_independently() {
     let mut sim = Simulation::new_test_world(123);

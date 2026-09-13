@@ -238,6 +238,7 @@ impl<'a> MachineTickContext<'a> {
             .mark_box_dirty(FluidBoxKey::entity(entity_id, box_index));
     }
 
+    /// Applies lab-produced science and updates the corresponding invalidation keys.
     pub(super) fn add_research_units(
         &mut self,
         units: u64,
