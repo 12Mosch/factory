@@ -14,7 +14,7 @@ pub struct ResearchState {
 /// Progress advances frequently while queue and completion state change much
 /// less often, so presentation code can avoid treating every science unit as
 /// a change to the entire technology graph.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ResearchRevisions {
     pub(crate) any: u64,
     pub(crate) progress: u64,

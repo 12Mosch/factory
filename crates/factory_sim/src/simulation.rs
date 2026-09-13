@@ -188,7 +188,7 @@ pub const REPAIR_REACH_TILES: f32 = 3.0;
 /// Minimum time between under-attack warnings from the same map chunk.
 pub const STRUCTURE_WARNING_COOLDOWN_TICKS: u64 = 10 * FIXED_SIM_TICKS_PER_SECOND as u64;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Simulation {
     tick: u64,
     pub(crate) day_night_cycle: Option<DayNightCycleState>,
