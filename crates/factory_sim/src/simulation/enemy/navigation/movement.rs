@@ -292,6 +292,19 @@ fn step_enemy(
     let entities = context.entities;
     let seed = context.seed;
     let tick = context.tick;
+    // Expansion parties keep their destination authoritative: they never run
+    // ordinary global attack targeting, so a nearby player structure must not
+    // divert them into a de facto raid. A stale target (e.g. carried from a
+    // pre-fix save) is dropped with its target-oriented navigation state;
+    // the expansion prefill in `advance_enemies` owns the route afterwards.
+    if let EnemyMission::Expansion(_) = enemy.mission {
+        if enemy.target.is_some() {
+            enemy.target = None;
+            enemy.path.clear();
+        }
+        step_expansion_unit(world, entities, enemy);
+        return;
+    }
     // Drop targets that no longer exist.
     if let Some(target) = enemy.target
         && !entities.placed_entities.contains_key(&target)
@@ -411,6 +424,19 @@ fn step_enemy(
 
     let target = enemy.target;
     follow_path(world, entities, enemy, target);
+}
+
+/// Expansion travel: follow the pre-planned route toward the party
+/// destination, and nothing else. Units never pick wander goals here — an
+/// empty path means the expansion prefill left the unit waiting (unreachable
+/// route or spent navigation budget) and throttled its retry through
+/// `next_decision_tick`, so holding position is the correct behavior until
+/// the next planned attempt.
+fn step_expansion_unit(world: &WorldSim, entities: &EntityStore, enemy: &mut Enemy) {
+    if enemy.path.is_empty() {
+        return;
+    }
+    follow_path(world, entities, enemy, None);
 }
 
 /// Idle guards drift around their home spawner so nests look alive. Goals are

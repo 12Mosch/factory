@@ -1046,6 +1046,180 @@ fn colony_with_capacity_dispatches_expansion_on_schedule() {
     );
 }
 
+/// Regression test for https://github.com/12Mosch/factory/issues/307:
+/// expansion parties must keep their destination authoritative and never pick
+/// up ordinary global attack targets en route, even once every member has
+/// passed its initial decision stagger (`enemy.id % 16` ticks).
+#[test]
+fn expansion_members_ignore_global_attack_targets_en_route() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner = place_biter_spawner(&mut sim);
+    let base_id = sim.enemies.spawner_bases[&spawner];
+    let origin = sim.entities.placed_entities[&spawner].clone();
+    // Global attack candidate far enough west that idle guards (aggro radius
+    // 12 around the spawner) never engage it, yet visible to world-wide
+    // `Attack` targeting: only the expansion party's behavior may touch it.
+    // The eastern expansion route stays clear.
+    let chest_prototype = entity_id_by_name(&sim.world.prototypes, "chest");
+    let mut chest_spot: Option<(WorldTileCoord, WorldTileCoord)> = None;
+    for dy in -20..=20_i64 {
+        for dx in -22..=-18_i64 {
+            let (x, y) = (origin.x + dx, origin.y + dy);
+            if let Some(chunk) = ChunkCoord::from_tile(x, y) {
+                sim.ensure_chunk_generated(chunk);
+            }
+            if crate::placement::validate(
+                &sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: chest_prototype,
+                    x,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .is_ok()
+            {
+                chest_spot = Some((x, y));
+                break;
+            }
+        }
+        if chest_spot.is_some() {
+            break;
+        }
+    }
+    let (chest_x, chest_y) =
+        chest_spot.expect("the fixture needs a chest tile west of the spawner");
+    let chest = place_at(
+        &mut sim,
+        chest_prototype,
+        chest_x,
+        chest_y,
+        Direction::North,
+    );
+    assert!(
+        sim.entities.entity_health.contains_key(&chest),
+        "the chest must be damageable so global attack targeting can see it"
+    );
+    // Nearby destination on a straight, unobstructed row: close enough to
+    // stay en route for the whole window at 40 fixed units per tick, far
+    // enough that no member can arrive within 64 ticks. Several rows are
+    // tried because the spawner footprint, the chest, water, or resources
+    // may block any single one.
+    let mut route: Option<(WorldTileCoord, WorldTileCoord)> = None;
+    for dy in 0..8_i64 {
+        let y = origin.y + dy;
+        for dx in 0..=24_i64 {
+            if let Some(chunk) = ChunkCoord::from_tile(origin.x + dx, y) {
+                sim.ensure_chunk_generated(chunk);
+            }
+        }
+        // The 2x2 spawner footprint covers the row start, so candidate
+        // segments begin two tiles east of the spawner anchor.
+        let clear = |x: WorldTileCoord| {
+            sim.world.tile_at(x, y).is_some_and(|tile| {
+                tile.collision.walkable
+                    && tile.resource.is_none()
+                    && sim.entities.occupancy.entity_at(x, y).is_none()
+            })
+        };
+        if let Some(dx_end) = (12..24).find(|&dx_end| (2..=dx_end).all(|dx| clear(origin.x + dx))) {
+            route = Some((origin.x + dx_end, y));
+            break;
+        }
+    }
+    let destination = route.expect("the fixture needs a clear row east of the spawner");
+    assert!(
+        sim.dispatch_expansion(base_id, destination),
+        "the fixture must dispatch an expansion"
+    );
+    let (expansion_id, members): (ExpansionId, Vec<EnemyId>) = sim
+        .enemies
+        .expansions
+        .iter()
+        .find(|(_, party)| party.base_id == base_id)
+        .map(|(&id, party)| (id, party.members.iter().copied().collect()))
+        .expect("the fixture must dispatch an expansion");
+    assert!(!members.is_empty());
+    let start = members
+        .iter()
+        .map(|id| {
+            let unit = &sim.enemies.enemies[id];
+            (unit.tile().0 - destination.0).abs() + (unit.tile().1 - destination.1).abs()
+        })
+        .min()
+        .expect("the party must have members");
+
+    let chest_health = sim.entities.entity_health[&chest].current;
+    // Past the 0-15 tick decision stagger: any ordinary global targeting
+    // would have retargeted the party by now. The target is checked every
+    // tick (not just at the end) because a diverted party can destroy the
+    // chest and end up targetless again.
+    for _ in 0..64 {
+        sim.tick();
+        for id in &members {
+            let unit = sim
+                .enemies
+                .enemies
+                .get(id)
+                .expect("expansion members face no damage on this route");
+            assert_eq!(
+                unit.target, None,
+                "expansion member {id:?} must not acquire a global attack target"
+            );
+        }
+    }
+    assert_eq!(
+        sim.entities
+            .entity_health
+            .get(&chest)
+            .map(|health| health.current),
+        Some(chest_health),
+        "the expansion party must leave the nearby player structure alone"
+    );
+
+    let party = sim
+        .enemies
+        .expansions
+        .get(&expansion_id)
+        .expect("the expansion must still be active en route");
+    assert_eq!(
+        party.destination, destination,
+        "the expansion destination must stay authoritative"
+    );
+    for id in &members {
+        assert!(
+            party.members.contains(id),
+            "expansion member {id:?} must not abandon the party"
+        );
+        let unit = sim
+            .enemies
+            .enemies
+            .get(id)
+            .expect("expansion members face no damage on this route");
+        assert_eq!(
+            unit.mission,
+            EnemyMission::Expansion(expansion_id),
+            "expansion member {id:?} must keep the expansion mission"
+        );
+        assert_eq!(
+            unit.target, None,
+            "expansion member {id:?} must not acquire a global attack target"
+        );
+    }
+    let closest = members
+        .iter()
+        .map(|id| {
+            let unit = &sim.enemies.enemies[id];
+            (unit.tile().0 - destination.0).abs() + (unit.tile().1 - destination.1).abs()
+        })
+        .min()
+        .expect("the party must have members");
+    assert!(
+        closest < start,
+        "the unobstructed party must keep moving toward its destination"
+    );
+}
+
 /// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
 /// the chunk first so fixed offsets near rect edges cannot leave generated
 /// area.
