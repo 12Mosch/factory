@@ -31,6 +31,63 @@ impl PathSearchScratch {
         max_range: i64,
         max_expansions: usize,
     ) -> (Option<VecDeque<(WorldTileCoord, WorldTileCoord)>>, usize) {
+        self.find_path_inner(
+            world,
+            entities,
+            start,
+            max_range,
+            max_expansions,
+            |tile| {
+                EntityFootprint::single_tile(tile.0, tile.1).chebyshev_distance_to(target_footprint)
+                    <= 1
+            },
+            |tile| {
+                EntityFootprint::single_tile(tile.0, tile.1).manhattan_distance_to(target_footprint)
+            },
+            Some(target),
+        )
+    }
+
+    /// Tile-goal A* sharing the scratch buffers, budget accounting, and
+    /// 4-connected walkability rules of entity-goal search. Powers expansion
+    /// and wander routing so both can detour around obstacles instead of
+    /// tunneling or stalling.
+    pub(super) fn find_path_to_tile(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+        start: (WorldTileCoord, WorldTileCoord),
+        goal: (WorldTileCoord, WorldTileCoord),
+        max_range: i64,
+        max_expansions: usize,
+    ) -> (Option<VecDeque<(WorldTileCoord, WorldTileCoord)>>, usize) {
+        if start == goal {
+            return (Some(VecDeque::new()), 0);
+        }
+        self.find_path_inner(
+            world,
+            entities,
+            start,
+            max_range,
+            max_expansions,
+            |tile| tile == goal,
+            |tile| (tile.0 - goal.0).abs() + (tile.1 - goal.1).abs(),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn find_path_inner(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+        start: (WorldTileCoord, WorldTileCoord),
+        max_range: i64,
+        max_expansions: usize,
+        is_goal: impl Fn((WorldTileCoord, WorldTileCoord)) -> bool,
+        heuristic: impl Fn((WorldTileCoord, WorldTileCoord)) -> i64,
+        target: Option<EntityId>,
+    ) -> (Option<VecDeque<(WorldTileCoord, WorldTileCoord)>>, usize) {
         let diameter = (max_range as usize) * 2 + 1;
         let cell_count = diameter * diameter;
         self.open.clear();
@@ -49,10 +106,6 @@ impl PathSearchScratch {
             }
             Some(y as usize * diameter + x as usize)
         };
-        let heuristic = |tile: (WorldTileCoord, WorldTileCoord)| {
-            EntityFootprint::single_tile(tile.0, tile.1).manhattan_distance_to(target_footprint)
-        };
-
         let start_index = index(start).expect("start is centered in path scratch bounds");
         self.best_g[start_index] = 0;
         self.open.push(Reverse((heuristic(start), 0, start)));
@@ -63,9 +116,7 @@ impl PathSearchScratch {
             if g > i64::from(self.best_g[tile_index]) {
                 continue;
             }
-            if EntityFootprint::single_tile(tile.0, tile.1).chebyshev_distance_to(target_footprint)
-                <= 1
-            {
+            if is_goal(tile) {
                 let mut path = VecDeque::new();
                 let mut current = tile;
                 while current != start {
@@ -97,7 +148,7 @@ impl PathSearchScratch {
                 let Some(next_index) = index(next) else {
                     continue;
                 };
-                if !tile_open_for_enemy(world, entities, next.0, next.1, Some(target)) {
+                if !tile_open_for_enemy(world, entities, next.0, next.1, target) {
                     continue;
                 }
                 let next_g = g + 1;
