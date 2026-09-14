@@ -913,13 +913,33 @@ pub(super) fn footprint_center_fixed(
 fn step_toward(x: i64, y: i64, target: (i64, i64), budget: i64) -> (i64, i64) {
     let dx = target.0 - x;
     let dy = target.1 - y;
-    let distance = squared_distance(dx, dy).isqrt();
-    if distance <= i128::from(budget) {
+    if dx == 0 && dy == 0 {
+        return target;
+    }
+    if budget <= 0 {
+        return (x, y);
+    }
+    let squared = squared_distance(dx, dy);
+    let budget_128 = i128::from(budget);
+    if squared <= budget_128 * budget_128 {
         return target;
     }
 
-    let step_x = (i128::from(dx) * i128::from(budget) / distance) as i64;
-    let step_y = (i128::from(dy) * i128::from(budget) / distance) as i64;
+    let floor = squared.isqrt();
+    let mut step_x = (i128::from(dx) * budget_128 / floor) as i64;
+    let mut step_y = (i128::from(dy) * budget_128 / floor) as i64;
+    if step_x == dx && step_y == dy {
+        // The floored divisor turns the full budget into an exact arrival
+        // even though the true distance exceeds it. Recompute with the
+        // ceiling so the step stays within budget instead of arriving early.
+        let ceil = if floor * floor == squared {
+            floor
+        } else {
+            floor + 1
+        };
+        step_x = (i128::from(dx) * budget_128 / ceil) as i64;
+        step_y = (i128::from(dy) * budget_128 / ceil) as i64;
+    }
     if step_x == 0 && step_y == 0 {
         // Truncation toward zero can cancel both components on a near-diagonal
         // approach. Nudging the dominant axis keeps every tick a real step, so
@@ -972,6 +992,23 @@ mod tests {
         // which is the only slack allowed here.
         assert!(travelled <= 100, "diagonal step travelled {travelled}");
         assert!(travelled >= 98, "diagonal step travelled {travelled}");
+    }
+
+    /// A floored square root must not snap a diagonal arrival one tick early:
+    /// `(1, 1)` with budget 1 has `isqrt(2) == 1` but `2 > 1`.
+    #[test]
+    fn a_diagonal_snap_needs_squared_distance_within_squared_budget() {
+        // Exact-budget arrivals still snap.
+        assert_eq!(step_toward(0, 0, (3, 4), 5), (3, 4));
+        assert_eq!(step_toward(0, 0, (6, 8), 10), (6, 8));
+        // Just outside the budget must not arrive, even though the floored
+        // distance equals the budget.
+        let first = step_toward(0, 0, (1, 1), 1);
+        assert_ne!(first, (1, 1));
+        assert!(squared_distance(first.0, first.1) <= 1);
+        let second = step_toward(0, 0, (2, 2), 2);
+        assert_ne!(second, (2, 2));
+        assert!(squared_distance(second.0, second.1) <= 2 * 2);
     }
 
     /// The dominant-axis nudge: without it a one-unit budget on a near-diagonal
