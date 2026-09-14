@@ -25,6 +25,9 @@ pub(crate) struct ResourceAmountLabel;
 /// zoom or reload from materializing the whole resource field in one frame.
 pub(crate) const RESOURCE_TILE_SYNC_BUDGET: usize = 512;
 pub(crate) const RESOURCE_CHUNK_SCAN_BUDGET: usize = 8;
+/// Minimum share reserved for removing off-screen resource entities whenever
+/// cleanup is pending. Unused visible capacity remains available to cleanup.
+pub(crate) const RESOURCE_CLEANUP_SYNC_BUDGET: usize = 64;
 
 #[derive(Resource, Default)]
 pub(crate) struct ResourceRenderSettings {
@@ -89,7 +92,9 @@ pub(crate) fn sync_resource_debug_rendering(
                 .flat_map(|(_, tiles)| tiles)
                 .copied()
                 .collect::<Vec<_>>();
-            params.cache.pending_tiles.extend(rendered);
+            for coord in rendered {
+                queue_visible_tile(&mut params.cache, coord);
+            }
         }
 
         let removed_chunks = params
@@ -123,15 +128,14 @@ pub(crate) fn sync_resource_debug_rendering(
 
     if resources_changed && let Some(last_revision) = params.cache.last_resource_revision {
         if let Some(changes) = sim.world().resource_dirty_tiles_since(last_revision) {
-            params
-                .cache
-                .pending_tiles
-                .extend(changes.filter_map(|change| {
-                    let coord = (change.x, change.y);
-                    ChunkCoord::from_tile(change.x, change.y)
-                        .filter(|chunk| params.visible.chunks.contains(chunk))
-                        .map(|_| coord)
-                }));
+            for change in changes {
+                let coord = (change.x, change.y);
+                if ChunkCoord::from_tile(change.x, change.y)
+                    .is_some_and(|chunk| params.visible.chunks.contains(&chunk))
+                {
+                    queue_visible_tile(&mut params.cache, coord);
+                }
+            }
         } else {
             params
                 .cache
@@ -145,7 +149,9 @@ pub(crate) fn sync_resource_debug_rendering(
                 .flat_map(|(_, tiles)| tiles)
                 .copied()
                 .collect::<Vec<_>>();
-            params.cache.pending_tiles.extend(rendered);
+            for coord in rendered {
+                queue_visible_tile(&mut params.cache, coord);
+            }
         }
     }
 
@@ -163,14 +169,22 @@ pub(crate) fn sync_resource_debug_rendering(
             continue;
         }
         let resources = collect_resource_tiles_in_chunk(&sim, coord);
-        params.cache.pending_tiles.extend(resources.keys().copied());
+        for resource_coord in resources.keys().copied() {
+            queue_visible_tile(&mut params.cache, resource_coord);
+        }
     }
 
+    let cleanup_reservation = params
+        .cache
+        .pending_cleanup_tiles
+        .len()
+        .min(RESOURCE_CLEANUP_SYNC_BUDGET);
+    let visible_budget = RESOURCE_TILE_SYNC_BUDGET - cleanup_reservation;
     let mut pending = params
         .cache
         .pending_tiles
         .iter()
-        .take(RESOURCE_TILE_SYNC_BUDGET)
+        .take(visible_budget)
         .copied()
         .collect::<Vec<_>>();
     let remaining = RESOURCE_TILE_SYNC_BUDGET - pending.len();
@@ -207,6 +221,14 @@ pub(crate) fn sync_resource_debug_rendering(
             show_amount_labels,
         );
     }
+}
+
+fn queue_visible_tile(
+    cache: &mut ResourceRenderCache,
+    coord: (factory_sim::WorldTileCoord, factory_sim::WorldTileCoord),
+) {
+    cache.pending_cleanup_tiles.remove(&coord);
+    cache.pending_tiles.insert(coord);
 }
 
 #[allow(clippy::too_many_arguments)]

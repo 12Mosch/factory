@@ -609,6 +609,43 @@ fn visible_resource_work_precedes_offscreen_cleanup() {
 }
 
 #[test]
+fn resource_cleanup_progresses_while_visible_work_is_saturated() {
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let mut sim = Simulation::new_test_world(123);
+    sim.ensure_chunk_generated(coord);
+    let mut app = render_sync_app(sim, visible_for_chunks([coord]));
+    app.update();
+
+    {
+        let mut cache = app.world_mut().resource_mut::<ResourceRenderCache>();
+        cache.pending_tiles.clear();
+        cache.pending_cleanup_tiles.clear();
+        cache.pending_tiles.extend((0_i32..512).map(|index| {
+            coord.tile_at(index.rem_euclid(CHUNK_SIZE), index.div_euclid(CHUNK_SIZE))
+        }));
+        cache
+            .pending_cleanup_tiles
+            .extend((0..512_i64).map(|offset| (-20_000 - offset, 0)));
+    }
+
+    app.update();
+
+    let cache = app.world().resource::<ResourceRenderCache>();
+    assert_eq!(
+        cache.pending_tiles.len(),
+        crate::rendering::resource_cells::RESOURCE_CLEANUP_SYNC_BUDGET
+    );
+    assert_eq!(
+        cache.pending_cleanup_tiles.len(),
+        512 - crate::rendering::resource_cells::RESOURCE_CLEANUP_SYNC_BUDGET
+    );
+    assert_eq!(
+        cache.tiles_processed_last_sync,
+        crate::rendering::resource_cells::RESOURCE_TILE_SYNC_BUDGET
+    );
+}
+
+#[test]
 fn rocket_silo_sprite_refreshes_without_a_visibility_change() {
     let sim = Simulation::new_rocket_launch_fixture();
     let silo_id = sim
