@@ -1,5 +1,8 @@
 use super::*;
-use super::{incremental::update_map_pixels_incremental, pixels::add_newly_exposed_chunks};
+use super::{
+    incremental::update_map_pixels_incremental,
+    pixels::{add_newly_exposed_chunks, resize_cached_pixels},
+};
 use super::{repaint::refresh_painted_chunks, repaint::repaint_dirty_chunks};
 use crate::map::resources::{MapChunkPaintState, MapTextureBounds};
 use crate::rendering::map_texture::{UNREVEALED_PIXEL, generate_map_pixels_for_layer};
@@ -460,6 +463,94 @@ fn bounds_shift_marks_only_chunks_in_newly_exposed_strip() {
         dirty_chunks,
         vec![ChunkCoord { x: 2, y: 0 }, ChunkCoord { x: 2, y: 1 }]
     );
+}
+
+#[test]
+fn capped_bounds_shift_reuses_the_full_layer_allocation() {
+    let side = crate::map::resources::MAX_MAP_TEXTURE_SIDE_TILES;
+    let old_bounds = MapTextureBounds {
+        min_x: 0,
+        min_y: 0,
+        width: side,
+        height: side,
+    };
+    let new_bounds = MapTextureBounds {
+        min_x: i64::from(CHUNK_SIZE),
+        min_y: i64::from(CHUNK_SIZE),
+        ..old_bounds
+    };
+    let mut cache = MapLayerTextureCache {
+        bounds: Some(old_bounds),
+        pixels: Some(vec![5; side as usize * side as usize * 4]),
+        ..Default::default()
+    };
+    let before = cache.pixels.as_ref().expect("pixels").as_ptr();
+
+    resize_cached_pixels(&mut cache, old_bounds, new_bounds, [9, 8, 7, 6]);
+
+    let pixels = cache.pixels.as_ref().expect("shifted pixels");
+    assert_eq!(
+        pixels.as_ptr(),
+        before,
+        "the 16 MiB allocation must be reused"
+    );
+    let overlap = super::super::pixels::pixel_offset(new_bounds, 100, 100);
+    assert_eq!(&pixels[overlap..overlap + 4], &[5; 4]);
+    let exposed = super::super::pixels::pixel_offset(
+        new_bounds,
+        new_bounds.min_x + i64::from(new_bounds.width) - 1,
+        new_bounds.min_y + i64::from(new_bounds.height) - 1,
+    );
+    assert_eq!(&pixels[exposed..exposed + 4], &[9, 8, 7, 6]);
+}
+
+#[test]
+fn same_sized_bounds_shifts_preserve_distinct_overlap_pixels() {
+    let old_bounds = MapTextureBounds {
+        min_x: 0,
+        min_y: 0,
+        width: 6,
+        height: 6,
+    };
+    let original = (0..old_bounds.height)
+        .flat_map(|y| {
+            (0..old_bounds.width).flat_map(move |x| [x as u8, y as u8, (x + y * 10) as u8, 255])
+        })
+        .collect::<Vec<_>>();
+
+    for (shift_x, shift_y) in [(0, 1), (0, -1), (1, 1)] {
+        let new_bounds = MapTextureBounds {
+            min_x: shift_x,
+            min_y: shift_y,
+            ..old_bounds
+        };
+        let mut cache = MapLayerTextureCache {
+            bounds: Some(old_bounds),
+            pixels: Some(original.clone()),
+            ..Default::default()
+        };
+
+        resize_cached_pixels(&mut cache, old_bounds, new_bounds, [9, 8, 7, 6]);
+
+        let shifted = cache.pixels.as_ref().expect("shifted pixels");
+        let overlap_min_x = old_bounds.min_x.max(new_bounds.min_x);
+        let overlap_min_y = old_bounds.min_y.max(new_bounds.min_y);
+        let overlap_max_x = (old_bounds.min_x + i64::from(old_bounds.width))
+            .min(new_bounds.min_x + i64::from(new_bounds.width));
+        let overlap_max_y = (old_bounds.min_y + i64::from(old_bounds.height))
+            .min(new_bounds.min_y + i64::from(new_bounds.height));
+        for y in overlap_min_y..overlap_max_y {
+            for x in overlap_min_x..overlap_max_x {
+                let old_offset = super::super::pixels::pixel_offset(old_bounds, x, y);
+                let new_offset = super::super::pixels::pixel_offset(new_bounds, x, y);
+                assert_eq!(
+                    &shifted[new_offset..new_offset + 4],
+                    &original[old_offset..old_offset + 4],
+                    "pixel ({x}, {y}) after shift ({shift_x}, {shift_y})"
+                );
+            }
+        }
+    }
 }
 
 #[test]

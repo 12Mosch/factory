@@ -43,6 +43,105 @@ const DENSE_BELT_ITEM_RENDER_WARMUP_FRAMES: usize = 30;
 const DENSE_BELT_ITEM_RENDER_MEASUREMENT_FRAMES: usize = 120;
 
 #[test]
+fn zoom_burst_obeys_world_mesh_and_resource_tile_budgets() {
+    let mut sim = Simulation::new_test_world(123);
+    let chunks = (-10..=10)
+        .flat_map(|y| (-10..=10).map(move |x| ChunkCoord { x, y }))
+        .collect::<BTreeSet<_>>();
+    for &coord in &chunks {
+        sim.ensure_chunk_generated(coord);
+    }
+    let visible = VisibleChunks {
+        tile_bounds: None,
+        chunks,
+        revision: 1,
+    };
+    let mut app = render_sync_app(sim, visible);
+
+    app.update();
+
+    let world_cache = app.world().resource::<WorldRenderCache>();
+    assert_eq!(
+        world_cache.mesh_builds_last_sync,
+        super::cache_sync::WORLD_MESH_BUILD_BUDGET
+    );
+    assert!(!world_cache.pending_mesh_builds.is_empty());
+    let resource_cache = app.world().resource::<ResourceRenderCache>();
+    assert!(
+        resource_cache.tiles_processed_last_sync
+            <= crate::rendering::resource_cells::RESOURCE_TILE_SYNC_BUDGET
+    );
+    assert!(
+        !resource_cache.pending_tiles.is_empty() || !resource_cache.pending_chunk_scans.is_empty()
+    );
+}
+
+#[test]
+fn adjacent_prefetch_hits_and_inactive_meshes_stay_bounded() {
+    let mut sim = Simulation::new_test_world(123);
+    for x in -1..=50 {
+        for y in -1..=1 {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
+    let mut app = render_sync_app(
+        sim,
+        VisibleChunks {
+            chunks: BTreeSet::from([ChunkCoord { x: 0, y: 0 }]),
+            tile_bounds: None,
+            revision: 1,
+        },
+    );
+    app.update();
+    let prefetched =
+        app.world().resource::<WorldRenderCache>().chunk_meshes[&ChunkCoord { x: 1, y: 0 }].clone();
+
+    for x in 1..=49 {
+        {
+            let mut visible = app.world_mut().resource_mut::<VisibleChunks>();
+            visible.chunks = BTreeSet::from([ChunkCoord { x, y: 0 }]);
+            visible.revision += 1;
+        }
+        app.update();
+        let cache = app.world().resource::<WorldRenderCache>();
+        if x == 1 {
+            assert_eq!(cache.chunk_meshes[&ChunkCoord { x, y: 0 }], prefetched);
+        }
+        assert!(cache.inactive_mesh_lru.len() <= super::cache_sync::INACTIVE_MESH_CACHE_CAPACITY);
+        assert!(
+            cache.chunk_meshes.len()
+                <= super::cache_sync::INACTIVE_MESH_CACHE_CAPACITY + cache.chunk_entities.len()
+        );
+    }
+}
+
+#[test]
+fn presentation_reload_requeues_unchanged_visible_terrain() {
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let mut sim = Simulation::new_test_world(123);
+    sim.ensure_chunk_generated(coord);
+    let mut app = terrain_render_app(sim, coord);
+    app.update();
+
+    assert!(
+        app.world()
+            .resource::<WorldRenderCache>()
+            .chunk_entities
+            .contains_key(&coord)
+    );
+
+    app.world_mut()
+        .resource_mut::<PresentationReloadToken>()
+        .value += 1;
+    app.update();
+
+    let cache = app.world().resource::<WorldRenderCache>();
+    assert!(cache.chunk_meshes.contains_key(&coord));
+    assert!(cache.chunk_entities.contains_key(&coord));
+    assert_eq!(cache.last_visible_revision, 1);
+}
+
+#[test]
 fn world_chunk_mesh_merges_tiles_without_changing_coverage() {
     let mut sim = Simulation::new_test_world(123);
     sim.ensure_chunk_generated(ChunkCoord { x: 0, y: 0 });
@@ -482,6 +581,68 @@ fn resource_visibility_changes_reuse_overlapping_sprites_and_labels() {
     let label_entities = cache.label_entities.len();
     assert_eq!(resource_sprite_count(&mut app), sprite_entities);
     assert_eq!(resource_label_count(&mut app), label_entities);
+}
+
+#[test]
+fn visible_resource_work_precedes_offscreen_cleanup() {
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let mut sim = Simulation::new_test_world(123);
+    sim.ensure_chunk_generated(coord);
+    let mut app = render_sync_app(sim, visible_for_chunks([coord]));
+    app.update();
+
+    let visible_tile = coord.tile_at(0, 0);
+    {
+        let mut cache = app.world_mut().resource_mut::<ResourceRenderCache>();
+        cache.pending_tiles.insert(visible_tile);
+        cache.pending_cleanup_tiles.extend(
+            (0..crate::rendering::resource_cells::RESOURCE_TILE_SYNC_BUDGET as i64)
+                .map(|offset| (-20_000 - offset, 0)),
+        );
+    }
+
+    app.update();
+
+    let cache = app.world().resource::<ResourceRenderCache>();
+    assert!(!cache.pending_tiles.contains(&visible_tile));
+    assert_eq!(cache.pending_cleanup_tiles.len(), 1);
+}
+
+#[test]
+fn resource_cleanup_progresses_while_visible_work_is_saturated() {
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let mut sim = Simulation::new_test_world(123);
+    sim.ensure_chunk_generated(coord);
+    let mut app = render_sync_app(sim, visible_for_chunks([coord]));
+    app.update();
+
+    {
+        let mut cache = app.world_mut().resource_mut::<ResourceRenderCache>();
+        cache.pending_tiles.clear();
+        cache.pending_cleanup_tiles.clear();
+        cache.pending_tiles.extend((0_i32..512).map(|index| {
+            coord.tile_at(index.rem_euclid(CHUNK_SIZE), index.div_euclid(CHUNK_SIZE))
+        }));
+        cache
+            .pending_cleanup_tiles
+            .extend((0..512_i64).map(|offset| (-20_000 - offset, 0)));
+    }
+
+    app.update();
+
+    let cache = app.world().resource::<ResourceRenderCache>();
+    assert_eq!(
+        cache.pending_tiles.len(),
+        crate::rendering::resource_cells::RESOURCE_CLEANUP_SYNC_BUDGET
+    );
+    assert_eq!(
+        cache.pending_cleanup_tiles.len(),
+        512 - crate::rendering::resource_cells::RESOURCE_CLEANUP_SYNC_BUDGET
+    );
+    assert_eq!(
+        cache.tiles_processed_last_sync,
+        crate::rendering::resource_cells::RESOURCE_TILE_SYNC_BUDGET
+    );
 }
 
 #[test]

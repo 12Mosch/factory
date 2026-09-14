@@ -1084,6 +1084,7 @@ fn average_profile(samples: &[TickSample]) -> SimulationTickProfile {
         machines: average_duration(samples, len, |profile| profile.machines),
         inserters: average_duration(samples, len, |profile| profile.inserters),
         inventory_transfers: average_duration(samples, len, |profile| profile.inventory_transfers),
+        chunk_generation: average_duration(samples, len, |profile| profile.chunk_generation),
         chunk_lookup: average_duration(samples, len, |profile| profile.chunk_lookup),
         manual_crafting: average_duration(samples, len, |profile| profile.manual_crafting),
         pollution: average_duration(samples, len, |profile| profile.pollution),
@@ -1110,6 +1111,7 @@ fn percentile_profile(samples: &[TickSample], index: usize) -> SimulationTickPro
         inventory_transfers: percentile_duration(samples, index, |profile| {
             profile.inventory_transfers
         }),
+        chunk_generation: percentile_duration(samples, index, |profile| profile.chunk_generation),
         chunk_lookup: percentile_duration(samples, index, |profile| profile.chunk_lookup),
         manual_crafting: percentile_duration(samples, index, |profile| profile.manual_crafting),
         pollution: percentile_duration(samples, index, |profile| profile.pollution),
@@ -1134,6 +1136,7 @@ fn max_profile(samples: &[TickSample]) -> SimulationTickProfile {
         machines: max_duration(samples, |profile| profile.machines),
         inserters: max_duration(samples, |profile| profile.inserters),
         inventory_transfers: max_duration(samples, |profile| profile.inventory_transfers),
+        chunk_generation: max_duration(samples, |profile| profile.chunk_generation),
         chunk_lookup: max_duration(samples, |profile| profile.chunk_lookup),
         manual_crafting: max_duration(samples, |profile| profile.manual_crafting),
         pollution: max_duration(samples, |profile| profile.pollution),
@@ -1181,7 +1184,7 @@ fn max_duration(
 
 fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
     println!(
-        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, p99 {} bytes/{} allocs, max {} bytes/{} allocs",
+        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  chunk generation: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, p99 {} bytes/{} allocs, max {} bytes/{} allocs",
         stats.counts.entity_count,
         stats.counts.enemy_count,
         stats.counts.belt_count,
@@ -1193,6 +1196,10 @@ fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
         ms(stats.p95.total),
         ms(stats.p99.total),
         ms(stats.max.total),
+        ms(stats.average.chunk_generation),
+        ms(stats.p95.chunk_generation),
+        ms(stats.p99.chunk_generation),
+        ms(stats.max.chunk_generation),
         ms(stats.average.belts),
         ms(stats.p95.belts),
         ms(stats.p99.belts),

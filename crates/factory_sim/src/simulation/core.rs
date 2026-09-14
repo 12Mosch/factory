@@ -134,7 +134,9 @@ impl Simulation {
         self.advance_day_night_cycle();
         self.advance_statistics_to_current_tick();
         self.request_chunks_around_player();
-        self.process_chunk_generation_queue(CHUNK_GENERATION_BUDGET_PER_TICK);
+        profiler.measure(ProfilePhase::ChunkGeneration, || {
+            self.process_chunk_generation_queue(CHUNK_GENERATION_BUDGET_PER_TICK);
+        });
         self.pollution_emitters.begin_tick();
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);

@@ -1,8 +1,8 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
-use factory_sim::{CHUNK_SIZE, ResourceCell, ResourceTileChange, Simulation};
-use std::collections::{BTreeMap, HashMap};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, ResourceCell, Simulation};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
 use crate::constants::RESOURCE_SIZE;
@@ -20,6 +20,15 @@ pub(crate) struct ResourceSprite;
 #[derive(Component)]
 pub(crate) struct ResourceAmountLabel;
 
+/// One tile can create both a sprite and a label. Bounding tiles, instead of
+/// individual ECS commands, keeps the result deterministic while preventing a
+/// zoom or reload from materializing the whole resource field in one frame.
+pub(crate) const RESOURCE_TILE_SYNC_BUDGET: usize = 512;
+pub(crate) const RESOURCE_CHUNK_SCAN_BUDGET: usize = 8;
+/// Minimum share reserved for removing off-screen resource entities whenever
+/// cleanup is pending. Unused visible capacity remains available to cleanup.
+pub(crate) const RESOURCE_CLEANUP_SYNC_BUDGET: usize = 64;
+
 #[derive(Resource, Default)]
 pub(crate) struct ResourceRenderSettings {
     pub(crate) show_amount_labels: bool,
@@ -33,6 +42,19 @@ pub struct ResourceRenderCache {
         HashMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), Entity>,
     pub label_entities: HashMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), Entity>,
     pub show_amount_labels: bool,
+    pub(crate) visible_chunks: BTreeSet<ChunkCoord>,
+    /// Visible resource tiles waiting for reconciliation. Off-screen changes
+    /// never enter this queue because a chunk scan reads their current state
+    /// if they become visible later.
+    pub(crate) pending_tiles: BTreeSet<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>,
+    /// Previously rendered tiles waiting for removal after leaving the view.
+    pub(crate) pending_cleanup_tiles:
+        BTreeSet<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>,
+    pub(crate) pending_chunk_scans: BTreeSet<ChunkCoord>,
+    pub(crate) rendered_tiles_by_chunk:
+        BTreeMap<ChunkCoord, BTreeSet<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>>,
+    #[cfg(test)]
+    pub(crate) tiles_processed_last_sync: usize,
 }
 
 pub(crate) fn sync_resource_debug_rendering(
@@ -48,67 +70,234 @@ pub(crate) fn sync_resource_debug_rendering(
         params.settings.show_amount_labels && params.detail.show_resource_amount_labels;
     let label_setting_changed = params.cache.show_amount_labels != show_amount_labels;
 
-    if !initial_sync && !resources_changed && !visibility_changed && !label_setting_changed {
+    if !initial_sync
+        && !resources_changed
+        && !visibility_changed
+        && !label_setting_changed
+        && params.cache.pending_tiles.is_empty()
+        && params.cache.pending_cleanup_tiles.is_empty()
+        && params.cache.pending_chunk_scans.is_empty()
+    {
         return;
     }
 
     let ids = RenderPrototypeIds::from_catalog(sim.catalog());
     if initial_sync || visibility_changed || label_setting_changed {
-        let resources = collect_resource_tiles(&sim, &params.visible);
-        reconcile_resource_tiles(
+        if label_setting_changed {
+            let rendered = params
+                .cache
+                .rendered_tiles_by_chunk
+                .iter()
+                .filter(|(chunk, _)| params.visible.chunks.contains(chunk))
+                .flat_map(|(_, tiles)| tiles)
+                .copied()
+                .collect::<Vec<_>>();
+            for coord in rendered {
+                queue_visible_tile(&mut params.cache, coord);
+            }
+        }
+
+        let removed_chunks = params
+            .cache
+            .visible_chunks
+            .difference(&params.visible.chunks)
+            .copied()
+            .collect::<Vec<_>>();
+        for chunk in removed_chunks {
+            if let Some(rendered) = params.cache.rendered_tiles_by_chunk.get(&chunk) {
+                let rendered = rendered.iter().copied().collect::<Vec<_>>();
+                params.cache.pending_cleanup_tiles.extend(rendered);
+            }
+            params.cache.pending_chunk_scans.remove(&chunk);
+        }
+
+        let added_chunks = params
+            .visible
+            .chunks
+            .difference(&params.cache.visible_chunks)
+            .copied()
+            .collect::<Vec<_>>();
+        params.cache.pending_chunk_scans.extend(added_chunks);
+        params.cache.visible_chunks = params.visible.chunks.clone();
+        params.cache.pending_tiles.retain(|&(x, y)| {
+            ChunkCoord::from_tile(x, y).is_some_and(|chunk| params.visible.chunks.contains(&chunk))
+        });
+        params.cache.last_visible_revision = params.visible.revision;
+        params.cache.show_amount_labels = show_amount_labels;
+    }
+
+    if resources_changed && let Some(last_revision) = params.cache.last_resource_revision {
+        if let Some(changes) = sim.world().resource_dirty_tiles_since(last_revision) {
+            for change in changes {
+                let coord = (change.x, change.y);
+                if ChunkCoord::from_tile(change.x, change.y)
+                    .is_some_and(|chunk| params.visible.chunks.contains(&chunk))
+                {
+                    queue_visible_tile(&mut params.cache, coord);
+                }
+            }
+        } else {
+            params
+                .cache
+                .pending_chunk_scans
+                .extend(params.visible.chunks.iter().copied());
+            let rendered = params
+                .cache
+                .rendered_tiles_by_chunk
+                .iter()
+                .filter(|(chunk, _)| params.visible.chunks.contains(chunk))
+                .flat_map(|(_, tiles)| tiles)
+                .copied()
+                .collect::<Vec<_>>();
+            for coord in rendered {
+                queue_visible_tile(&mut params.cache, coord);
+            }
+        }
+    }
+
+    params.cache.last_resource_revision = Some(resource_revision);
+    let chunks_to_scan = params
+        .cache
+        .pending_chunk_scans
+        .iter()
+        .take(RESOURCE_CHUNK_SCAN_BUDGET)
+        .copied()
+        .collect::<Vec<_>>();
+    for coord in chunks_to_scan {
+        params.cache.pending_chunk_scans.remove(&coord);
+        if !params.visible.chunks.contains(&coord) {
+            continue;
+        }
+        let resources = collect_resource_tiles_in_chunk(&sim, coord);
+        for resource_coord in resources.keys().copied() {
+            queue_visible_tile(&mut params.cache, resource_coord);
+        }
+    }
+
+    let cleanup_reservation = params
+        .cache
+        .pending_cleanup_tiles
+        .len()
+        .min(RESOURCE_CLEANUP_SYNC_BUDGET);
+    let visible_budget = RESOURCE_TILE_SYNC_BUDGET - cleanup_reservation;
+    let mut pending = params
+        .cache
+        .pending_tiles
+        .iter()
+        .take(visible_budget)
+        .copied()
+        .collect::<Vec<_>>();
+    let remaining = RESOURCE_TILE_SYNC_BUDGET - pending.len();
+    pending.extend(
+        params
+            .cache
+            .pending_cleanup_tiles
+            .iter()
+            .take(remaining)
+            .copied(),
+    );
+    #[cfg(test)]
+    {
+        params.cache.tiles_processed_last_sync = pending.len();
+    }
+    for (x, y) in pending {
+        params.cache.pending_tiles.remove(&(x, y));
+        params.cache.pending_cleanup_tiles.remove(&(x, y));
+        let resource = ChunkCoord::from_tile(x, y)
+            .filter(|coord| params.visible.chunks.contains(coord))
+            .and_then(|_| sim.world().tile_at(x, y))
+            .and_then(|tile| tile.resource);
+        apply_resource_tile_state(
             &mut commands,
             &mut params.cache,
             &mut params.visual_assets,
             &mut params.sprites,
             &mut params.labels,
-            &resources,
+            x,
+            y,
+            resource,
             ids,
             sim.seed(),
             show_amount_labels,
         );
-        params.cache.last_resource_revision = Some(resource_revision);
-        params.cache.last_visible_revision = params.visible.revision;
-        params.cache.show_amount_labels = show_amount_labels;
-        return;
     }
+}
 
-    if resources_changed {
-        let last_revision = params
-            .cache
-            .last_resource_revision
-            .expect("resource cache should be initialized before incremental sync");
-        if let Some(changes) = sim.world().resource_dirty_tiles_since(last_revision) {
-            for change in changes {
-                apply_resource_tile_change(
-                    &mut commands,
-                    &mut params.cache,
-                    &mut params.visual_assets,
-                    &mut params.sprites,
-                    &mut params.labels,
-                    change,
-                    ResourceTileChangeContext {
-                        visible: &params.visible,
-                        ids,
-                        seed: sim.seed(),
-                        show_amount_labels,
-                    },
-                );
-            }
-        } else {
-            let resources = collect_resource_tiles(&sim, &params.visible);
-            reconcile_resource_tiles(
-                &mut commands,
-                &mut params.cache,
-                &mut params.visual_assets,
-                &mut params.sprites,
-                &mut params.labels,
-                &resources,
-                ids,
-                sim.seed(),
-                show_amount_labels,
-            );
+fn queue_visible_tile(
+    cache: &mut ResourceRenderCache,
+    coord: (factory_sim::WorldTileCoord, factory_sim::WorldTileCoord),
+) {
+    cache.pending_cleanup_tiles.remove(&coord);
+    cache.pending_tiles.insert(coord);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_resource_tile_state(
+    commands: &mut Commands,
+    cache: &mut ResourceRenderCache,
+    visual_assets: &mut VisualAssets,
+    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
+    labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
+    x: factory_sim::WorldTileCoord,
+    y: factory_sim::WorldTileCoord,
+    resource: Option<ResourceCell>,
+    ids: RenderPrototypeIds,
+    seed: u64,
+    show_amount_labels: bool,
+) {
+    let coord = (x, y);
+    let Some(resource) = resource else {
+        if let Some(entity) = cache.sprite_entities.remove(&coord) {
+            commands.entity(entity).despawn();
         }
-        params.cache.last_resource_revision = Some(resource_revision);
+        if let Some(entity) = cache.label_entities.remove(&coord) {
+            commands.entity(entity).despawn();
+        }
+        remove_rendered_tile(cache, coord);
+        return;
+    };
+
+    sync_resource_sprite(
+        commands,
+        cache,
+        visual_assets,
+        sprites,
+        x,
+        y,
+        resource,
+        ids,
+        seed,
+    );
+    if let Some(chunk) = ChunkCoord::from_tile(x, y) {
+        cache
+            .rendered_tiles_by_chunk
+            .entry(chunk)
+            .or_default()
+            .insert(coord);
+    }
+    if show_amount_labels {
+        sync_resource_label(commands, cache, labels, x, y, resource);
+    } else if let Some(entity) = cache.label_entities.remove(&coord) {
+        commands.entity(entity).despawn();
+    }
+}
+
+fn remove_rendered_tile(
+    cache: &mut ResourceRenderCache,
+    coord: (factory_sim::WorldTileCoord, factory_sim::WorldTileCoord),
+) {
+    let Some(chunk) = ChunkCoord::from_tile(coord.0, coord.1) else {
+        return;
+    };
+    let remove_chunk = cache
+        .rendered_tiles_by_chunk
+        .get_mut(&chunk)
+        .is_some_and(|tiles| {
+            tiles.remove(&coord);
+            tiles.is_empty()
+        });
+    if remove_chunk {
+        cache.rendered_tiles_by_chunk.remove(&chunk);
     }
 }
 
@@ -132,131 +321,6 @@ pub(crate) struct ResourceRenderParams<'w, 's> {
     visual_assets: VisualAssets<'w>,
     sprites: Query<'w, 's, (Entity, &'static mut Sprite), With<ResourceSprite>>,
     labels: Query<'w, 's, (Entity, &'static mut Text2d), With<ResourceAmountLabel>>,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn reconcile_resource_tiles(
-    commands: &mut Commands,
-    cache: &mut ResourceRenderCache,
-    visual_assets: &mut VisualAssets,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    resources: &BTreeMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), ResourceCell>,
-    ids: RenderPrototypeIds,
-    seed: u64,
-    show_amount_labels: bool,
-) {
-    let stale_sprites = cache
-        .sprite_entities
-        .keys()
-        .copied()
-        .filter(|coord| !resources.contains_key(coord))
-        .collect::<Vec<_>>();
-    for coord in stale_sprites {
-        if let Some(entity) = cache.sprite_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    for (&(x, y), &resource) in resources {
-        sync_resource_sprite(
-            commands,
-            cache,
-            visual_assets,
-            sprites,
-            x,
-            y,
-            resource,
-            ids,
-            seed,
-        );
-    }
-
-    if !show_amount_labels {
-        for (_, entity) in cache.label_entities.drain() {
-            commands.entity(entity).despawn();
-        }
-        cache.show_amount_labels = false;
-        return;
-    }
-
-    let stale_labels = cache
-        .label_entities
-        .keys()
-        .copied()
-        .filter(|coord| !resources.contains_key(coord))
-        .collect::<Vec<_>>();
-    for coord in stale_labels {
-        if let Some(entity) = cache.label_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    for (&(x, y), &resource) in resources {
-        sync_resource_label(commands, cache, labels, x, y, resource);
-    }
-
-    cache.show_amount_labels = true;
-}
-
-fn apply_resource_tile_change(
-    commands: &mut Commands,
-    cache: &mut ResourceRenderCache,
-    visual_assets: &mut VisualAssets,
-    sprites: &mut Query<(Entity, &mut Sprite), With<ResourceSprite>>,
-    labels: &mut Query<(Entity, &mut Text2d), With<ResourceAmountLabel>>,
-    change: ResourceTileChange,
-    change_context: ResourceTileChangeContext,
-) {
-    let coord = (change.x, change.y);
-    let Some(chunk_coord) = factory_sim::ChunkCoord::from_tile(change.x, change.y) else {
-        return;
-    };
-    if !change_context.visible.chunks.contains(&chunk_coord) {
-        if let Some(entity) = cache.sprite_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        if let Some(entity) = cache.label_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-
-    let Some(resource) = change.resource else {
-        if let Some(entity) = cache.sprite_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        if let Some(entity) = cache.label_entities.remove(&coord) {
-            commands.entity(entity).despawn();
-        }
-        return;
-    };
-
-    sync_resource_sprite(
-        commands,
-        cache,
-        visual_assets,
-        sprites,
-        change.x,
-        change.y,
-        resource,
-        change_context.ids,
-        change_context.seed,
-    );
-
-    if change_context.show_amount_labels {
-        sync_resource_label(commands, cache, labels, change.x, change.y, resource);
-    } else if let Some(entity) = cache.label_entities.remove(&coord) {
-        commands.entity(entity).despawn();
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ResourceTileChangeContext<'a> {
-    visible: &'a VisibleChunks,
-    ids: RenderPrototypeIds,
-    seed: u64,
-    show_amount_labels: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -342,26 +406,21 @@ fn spawn_resource_label(
         .id()
 }
 
-pub(crate) fn collect_resource_tiles(
+fn collect_resource_tiles_in_chunk(
     sim: &Simulation,
-    visible: &VisibleChunks,
+    coord: ChunkCoord,
 ) -> BTreeMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), ResourceCell> {
     let mut resources = BTreeMap::new();
-
-    for coord in &visible.chunks {
-        let Some(chunk) = sim.world().chunks.get(coord) else {
-            continue;
-        };
-        for (index, tile) in chunk.tiles.iter().enumerate() {
-            if let Some(resource) = tile.resource {
-                let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
-                let local_y = (index as i32).div_euclid(CHUNK_SIZE);
-                let tile_coord = chunk.coord.tile_at(local_x, local_y);
-                resources.insert(tile_coord, resource);
-            }
+    let Some(chunk) = sim.world().chunks.get(&coord) else {
+        return resources;
+    };
+    for (index, tile) in chunk.tiles.iter().enumerate() {
+        if let Some(resource) = tile.resource {
+            let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+            let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+            resources.insert(chunk.coord.tile_at(local_x, local_y), resource);
         }
     }
-
     resources
 }
 
