@@ -1046,57 +1046,6 @@ fn colony_with_capacity_dispatches_expansion_on_schedule() {
     );
 }
 
-/// Places a damageable chest on the first validated tile ringing `origin`
-/// that stays clear of every spawner, so idle guards never engage it while
-/// global `Attack` targeting can still see it.
-fn place_chest_clear_of_spawners(
-    sim: &mut Simulation,
-    origin: (WorldTileCoord, WorldTileCoord),
-    min_ring: i64,
-    max_ring: i64,
-    spawner_clear_tiles: i64,
-) -> EntityId {
-    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
-    for ring in min_ring..=max_ring {
-        for dy in -ring..=ring {
-            for dx in -ring..=ring {
-                if dx.abs().max(dy.abs()) != ring {
-                    continue;
-                }
-                let (x, y) = (origin.0 + dx, origin.1 + dy);
-                if sim
-                    .entities
-                    .enemy_spawners
-                    .keys()
-                    .filter_map(|id| sim.entities.placed_entities.get(id))
-                    .any(|placed| {
-                        (placed.x - x).abs().max((placed.y - y).abs()) < spawner_clear_tiles
-                    })
-                {
-                    continue;
-                }
-                if let Some(chunk) = ChunkCoord::from_tile(x, y) {
-                    sim.ensure_chunk_generated(chunk);
-                }
-                if crate::placement::validate(
-                    sim,
-                    crate::placement::EntityPlacementRequest {
-                        prototype_id: chest,
-                        x,
-                        y,
-                        direction: Direction::North,
-                    },
-                )
-                .is_ok()
-                {
-                    return place_at(sim, chest, x, y, Direction::North);
-                }
-            }
-        }
-    }
-    panic!("expected a spawner-clear chest tile near {origin:?}");
-}
-
 /// Dispatches a scheduler expansion for a due colony and returns its party:
 /// production site selection stays the only validity owner, so the regression
 /// below needs no destination rules of its own.
@@ -1135,7 +1084,18 @@ fn expansion_ignores_global_targets_en_route() {
     // around every spawner but visible to global `Attack` targeting, so only
     // expansion behavior may touch it.
     let origin = sim.entities.placed_entities[&spawners[0]].clone();
-    let chest = place_chest_clear_of_spawners(&mut sim, (origin.x, origin.y), 28, 36, 18);
+    let spawner_tiles: Vec<(WorldTileCoord, WorldTileCoord)> = sim
+        .entities
+        .enemy_spawners
+        .keys()
+        .filter_map(|id| sim.entities.placed_entities.get(id))
+        .map(|placed| (placed.x, placed.y))
+        .collect();
+    let chest = place_chest_on_ring_where(&mut sim, origin.x, origin.y, 28..=36, |x, y| {
+        spawner_tiles
+            .iter()
+            .all(|&(sx, sy)| (sx - x).abs().max((sy - y).abs()) >= 18)
+    });
     assert!(
         sim.entities.entity_health.contains_key(&chest),
         "the chest must be damageable so global attack targeting can see it"
@@ -1146,10 +1106,13 @@ fn expansion_ignores_global_targets_en_route() {
     // tick validation; the target is checked every step because a diverted
     // party can destroy the chest and end up targetless again.
     let chest_health = sim.entities.entity_health[&chest].current;
-    let mut commands = CombatCommandBuffer::default();
     for _ in 0..128 {
         sim.tick += 1;
+        let mut commands = CombatCommandBuffer::default();
         sim.advance_enemies(&mut commands);
+        // Resolve emitted attacks so the chest-health assertion below is
+        // effective: any diverted attack would actually land.
+        sim.resolve_combat_commands(commands);
         for id in &members {
             let unit = sim
                 .enemies
@@ -1188,18 +1151,27 @@ fn expansion_ignores_global_targets_en_route() {
     }
 }
 
-/// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
-/// the chunk first so fixed offsets near rect edges cannot leave generated
-/// area.
-fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord) -> EntityId {
+/// Places a chest on the first validated tile ringing `(cx, cy)` within
+/// `rings` that also satisfies `accept`, ensuring the chunk first so fixed
+/// offsets near rect edges cannot leave generated area.
+fn place_chest_on_ring_where(
+    sim: &mut Simulation,
+    cx: WorldTileCoord,
+    cy: WorldTileCoord,
+    rings: std::ops::RangeInclusive<i64>,
+    accept: impl Fn(WorldTileCoord, WorldTileCoord) -> bool,
+) -> EntityId {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
-    for ring in 1..=10_i64 {
+    for ring in rings {
         for dy in -ring..=ring {
             for dx in -ring..=ring {
                 if dx.abs().max(dy.abs()) != ring {
                     continue;
                 }
                 let (x, y) = (cx + dx, cy + dy);
+                if !accept(x, y) {
+                    continue;
+                }
                 if let Some(chunk) = ChunkCoord::from_tile(x, y) {
                     sim.ensure_chunk_generated(chunk);
                 }
@@ -1220,6 +1192,13 @@ fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord
         }
     }
     panic!("expected a placeable chest tile near {cx},{cy}");
+}
+
+/// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
+/// the chunk first so fixed offsets near rect edges cannot leave generated
+/// area.
+fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord) -> EntityId {
+    place_chest_on_ring_where(sim, cx, cy, 1..=10, |_, _| true)
 }
 
 fn assert_converted_to_guard(sim: &Simulation, id: EnemyId, context: &str) {
