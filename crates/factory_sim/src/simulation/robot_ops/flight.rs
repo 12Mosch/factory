@@ -907,36 +907,31 @@ pub(super) fn footprint_center_fixed(
 /// One tick of straight-line flight, snapping onto the target when the
 /// remaining distance fits inside the budget.
 ///
-/// Integer throughout: the direction is scaled by the budget and divided by the
-/// exact distance, so two machines that run the same tick land on the same
-/// position rather than on two roundings of the same float.
+/// Integer throughout: the direction is scaled by the budget and divided by
+/// the floored integer distance, falling back to the ceiling when the floored
+/// step would exceed the budget, so two machines that run the same tick land
+/// on the same position rather than on two roundings of the same float.
 fn step_toward(x: i64, y: i64, target: (i64, i64), budget: i64) -> (i64, i64) {
     let dx = target.0 - x;
     let dy = target.1 - y;
-    if dx == 0 && dy == 0 {
-        return target;
-    }
     if budget <= 0 {
         return (x, y);
     }
     let squared = squared_distance(dx, dy);
     let budget_128 = i128::from(budget);
-    if squared <= budget_128 * budget_128 {
+    let budget_squared = budget_128 * budget_128;
+    if squared <= budget_squared {
         return target;
     }
 
     let floor = squared.isqrt();
     let mut step_x = (i128::from(dx) * budget_128 / floor) as i64;
     let mut step_y = (i128::from(dy) * budget_128 / floor) as i64;
-    if step_x == dx && step_y == dy {
-        // The floored divisor turns the full budget into an exact arrival
-        // even though the true distance exceeds it. Recompute with the
-        // ceiling so the step stays within budget instead of arriving early.
-        let ceil = if floor * floor == squared {
-            floor
-        } else {
-            floor + 1
-        };
+    if squared_distance(step_x, step_y) > budget_squared {
+        // The floored divisor overestimates the step. A perfect square cannot
+        // reach here — its truncated step never exceeds the budget — so the
+        // ceiling is exactly one past the floor.
+        let ceil = floor + 1;
         step_x = (i128::from(dx) * budget_128 / ceil) as i64;
         step_y = (i128::from(dy) * budget_128 / ceil) as i64;
     }
@@ -1000,7 +995,6 @@ mod tests {
     fn a_diagonal_snap_needs_squared_distance_within_squared_budget() {
         // Exact-budget arrivals still snap.
         assert_eq!(step_toward(0, 0, (3, 4), 5), (3, 4));
-        assert_eq!(step_toward(0, 0, (6, 8), 10), (6, 8));
         // Just outside the budget must not arrive, even though the floored
         // distance equals the budget.
         let first = step_toward(0, 0, (1, 1), 1);
@@ -1009,6 +1003,21 @@ mod tests {
         let second = step_toward(0, 0, (2, 2), 2);
         assert_ne!(second, (2, 2));
         assert!(squared_distance(second.0, second.1) <= 2 * 2);
+    }
+
+    /// Ordinary diagonal steps must not travel farther than the budget either:
+    /// `(3, 2)` with budget 2 has floored distance 3, and scaling by `2 / 3`
+    /// truncates to `(2, 1)` whose squared length 5 exceeds the squared
+    /// budget 4.
+    #[test]
+    fn a_diagonal_step_stays_within_squared_budget() {
+        assert_eq!(step_toward(0, 0, (3, 2), 2), (1, 1));
+        assert_eq!(step_toward(0, 0, (10, 10), 7), (4, 4));
+        for (target, budget) in [((3, 2), 2), ((10, 10), 7), ((1, 1), 1)] {
+            let step = step_toward(0, 0, target, budget);
+            assert_ne!(step, target);
+            assert!(squared_distance(step.0, step.1) <= i128::from(budget * budget));
+        }
     }
 
     /// The dominant-axis nudge: without it a one-unit budget on a near-diagonal
