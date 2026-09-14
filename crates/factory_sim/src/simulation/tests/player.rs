@@ -1,6 +1,8 @@
 use super::super::*;
 use super::support::*;
 
+use factory_data::BasePrototypeIds;
+
 #[test]
 fn initial_simulation_reveals_player_chunk() {
     let sim = Simulation::new_test_world(123);
@@ -276,18 +278,53 @@ fn player_long_step_cannot_tunnel_through_blocked_tile() {
 }
 
 #[test]
-fn player_large_frame_delta_cannot_tunnel_through_blocked_tile() {
+fn player_speed_boosted_frame_delta_cannot_tunnel_through_blocked_tile() {
     let mut sim = Simulation::new_test_world(123);
     let (start, _destination) = first_player_tunnel_fixture(&mut sim);
+    let concrete = BasePrototypeIds::from_catalog(sim.catalog()).tiles.concrete;
+    sim.world
+        .set_tile(start.0, start.1, concrete)
+        .expect("start tile should accept concrete");
     sim.player = PlayerState::centered_on_tile(start.0, start.1);
 
-    sim.move_player(1.0, 0.0, 1.0);
+    let multiplier = sim.player_walking_speed_multiplier();
+    assert!(
+        multiplier > 1.0,
+        "concrete underfoot should speed the player up, got {multiplier}"
+    );
+    // A step that only reaches past the wall via the speed bonus: without the
+    // multiplier the base distance falls short of the destination tile.
+    let delta_seconds = 2.0 / (PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND * multiplier);
+    assert!(
+        PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND * delta_seconds < 2.0,
+        "this step must rely on the speed bonus to reach past the wall"
+    );
+
+    sim.move_player(1.0, 0.0, delta_seconds);
 
     assert_eq!(
         sim.player.tile_position(),
         start,
-        "a large frame delta must not carry the player through the blocked tile"
+        "a speed-boosted frame delta must not carry the player through the blocked tile"
     );
+}
+
+#[test]
+fn teleport_player_to_tile_preserves_non_position_state() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y) = sim.player.tile_position();
+    sim.player.health.current = 40;
+    sim.player.dead_since = Some(7);
+    sim.player.respawn_requested = true;
+    sim.player.repair_remaining_health = 3;
+
+    sim.teleport_player_to_tile(x + 5, y + 5);
+
+    assert_eq!(sim.player.tile_position(), (x + 5, y + 5));
+    assert_eq!(sim.player.health.current, 40);
+    assert_eq!(sim.player.dead_since, Some(7));
+    assert!(sim.player.respawn_requested);
+    assert_eq!(sim.player.repair_remaining_health, 3);
 }
 
 #[test]
