@@ -1,6 +1,8 @@
 use super::super::*;
 use super::support::*;
 
+use factory_data::BasePrototypeIds;
+
 #[test]
 fn initial_simulation_reveals_player_chunk() {
     let sim = Simulation::new_test_world(123);
@@ -191,4 +193,151 @@ fn player_axis_separated_movement_slides_along_blocked_edges() {
     sim.move_player_by_tiles(1.0, 1.0);
 
     assert_eq!(sim.player.tile_position(), expected);
+}
+
+fn first_player_tunnel_fixture(
+    sim: &mut Simulation,
+) -> (
+    (WorldTileCoord, WorldTileCoord),
+    (WorldTileCoord, WorldTileCoord),
+) {
+    let inserter = entity_id_by_name(&sim.world.prototypes, "inserter");
+
+    for (x, y) in all_tile_coords(&sim.world) {
+        let start = (x, y);
+        let blocked = (x + 1, y);
+        let destination = (x + 2, y);
+
+        if crate::placement::validate(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: inserter,
+                x: blocked.0,
+                y: blocked.1,
+                direction: Direction::North,
+            },
+        )
+        .is_ok()
+            && sim.can_player_occupy_tile(start.0, start.1)
+            && sim.can_player_occupy_tile(destination.0, destination.1)
+        {
+            crate::placement::place(
+                sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: inserter,
+                    x: blocked.0,
+                    y: blocked.1,
+                    direction: Direction::North,
+                },
+            )
+            .expect("validated tunnel blocker should be placeable");
+            debug_assert!(!sim.can_player_occupy_tile(blocked.0, blocked.1));
+            debug_assert!(sim.can_player_occupy_tile(destination.0, destination.1));
+            return (start, destination);
+        }
+    }
+
+    panic!("expected a walkable-blocked-walkable tile run for tunnel coverage");
+}
+
+fn first_player_open_run_fixture(
+    sim: &Simulation,
+) -> (
+    (WorldTileCoord, WorldTileCoord),
+    (WorldTileCoord, WorldTileCoord),
+) {
+    for (x, y) in all_tile_coords(&sim.world) {
+        let start = (x, y);
+        let middle = (x + 1, y);
+        let destination = (x + 2, y);
+
+        if sim.can_player_occupy_tile(start.0, start.1)
+            && sim.can_player_occupy_tile(middle.0, middle.1)
+            && sim.can_player_occupy_tile(destination.0, destination.1)
+        {
+            return (start, destination);
+        }
+    }
+
+    panic!("expected an open three-tile run for long movement coverage");
+}
+
+#[test]
+fn player_long_step_cannot_tunnel_through_blocked_tile() {
+    let mut sim = Simulation::new_test_world(123);
+    let (start, destination) = first_player_tunnel_fixture(&mut sim);
+    sim.player = PlayerState::centered_on_tile(start.0, start.1);
+
+    sim.move_player_by_tiles(2.0, 0.0);
+
+    assert_eq!(
+        sim.player.tile_position(),
+        start,
+        "a two-tile step must stop before the blocked intermediate tile instead of landing on {destination:?}"
+    );
+}
+
+#[test]
+fn player_speed_boosted_frame_delta_cannot_tunnel_through_blocked_tile() {
+    let mut sim = Simulation::new_test_world(123);
+    let (start, _destination) = first_player_tunnel_fixture(&mut sim);
+    let concrete = BasePrototypeIds::from_catalog(sim.catalog()).tiles.concrete;
+    sim.world
+        .set_tile(start.0, start.1, concrete)
+        .expect("start tile should accept concrete");
+    sim.player = PlayerState::centered_on_tile(start.0, start.1);
+
+    let multiplier = sim.player_walking_speed_multiplier();
+    assert!(
+        multiplier > 1.0,
+        "concrete underfoot should speed the player up, got {multiplier}"
+    );
+    // A step that only reaches past the wall via the speed bonus: without the
+    // multiplier the base distance falls short of the destination tile.
+    let delta_seconds = 2.0 / (PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND * multiplier);
+    assert!(
+        PLAYER_MOVEMENT_SPEED_TILES_PER_SECOND * delta_seconds < 2.0,
+        "this step must rely on the speed bonus to reach past the wall"
+    );
+
+    sim.move_player(1.0, 0.0, delta_seconds);
+
+    assert_eq!(
+        sim.player.tile_position(),
+        start,
+        "a speed-boosted frame delta must not carry the player through the blocked tile"
+    );
+}
+
+#[test]
+fn teleport_player_to_tile_preserves_non_position_state() {
+    let mut sim = Simulation::new_test_world(123);
+    let (x, y) = sim.player.tile_position();
+    sim.player.health.current = 40;
+    sim.player.dead_since = Some(7);
+    sim.player.respawn_requested = true;
+    sim.player.repair_remaining_health = 3;
+
+    sim.teleport_player_to_tile(x + 5, y + 5);
+
+    assert_eq!(sim.player.tile_position(), (x + 5, y + 5));
+    assert_eq!(sim.player.health.current, 40);
+    assert_eq!(sim.player.dead_since, Some(7));
+    assert!(sim.player.respawn_requested);
+    assert_eq!(sim.player.repair_remaining_health, 3);
+}
+
+#[test]
+fn player_long_step_succeeds_without_obstruction() {
+    let mut sim = Simulation::new_test_world(123);
+    let (start, destination) = first_player_open_run_fixture(&sim);
+    sim.player = PlayerState::centered_on_tile(start.0, start.1);
+
+    sim.move_player_by_tiles(2.0, 0.0);
+
+    assert_eq!(
+        sim.player.tile_position(),
+        destination,
+        "unobstructed multi-tile movement must still reach the destination"
+    );
 }

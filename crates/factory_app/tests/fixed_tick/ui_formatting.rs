@@ -19,10 +19,10 @@ use factory_sim::{Direction, Inventory, PowerSummary, Simulation};
 fn production_stat_formatting_shows_per_minute_and_totals() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y, resource) = nearest_resource_tile_for_app(&sim);
-    sim.move_player_by_tiles(
-        x as f32 - sim.player().position_tiles().0,
-        y as f32 - sim.player().position_tiles().1,
-    );
+    // Test-setup positioning is a teleport, not travel: the straight-line
+    // path to the resource may cross blocked tiles that collision-checked
+    // movement must refuse.
+    sim.teleport_player_to_tile(x, y);
     for _ in 0..factory_sim::MANUAL_MINING_TICKS_PER_ITEM {
         sim.update_manual_mining(Some(factory_sim::ManualMiningTarget { x, y }));
     }

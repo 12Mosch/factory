@@ -439,6 +439,22 @@ impl Simulation {
         self.player
     }
 
+    /// Teleports the player to the center of the tile at `(x, y)` without any
+    /// collision checks. Only the position changes; health, death, respawn,
+    /// and repair state are preserved. Step-wise movement collision applies
+    /// to travel, not to teleport flows; surrounding chunks stream on
+    /// subsequent ticks the same way they do after any other direct
+    /// placement.
+    pub fn teleport_player_to_tile<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &mut self,
+        x: X,
+        y: Y,
+    ) {
+        let destination = PlayerState::centered_on_tile(x, y);
+        self.player.x = destination.x;
+        self.player.y = destination.y;
+    }
+
     pub fn player_inventory(&self) -> &Inventory {
         &self.player_inventory
     }
