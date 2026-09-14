@@ -4,21 +4,54 @@ use crate::map::resources::{MapDisplaySettings, MapTextureBounds};
 
 const MAP_BOUNDS_HYSTERESIS_CHUNKS: i64 = 8;
 
+#[derive(Clone, Copy)]
+struct ChunkExtents {
+    min_x: i32,
+    max_x: i32,
+    min_y: i32,
+    max_y: i32,
+}
+
+impl ChunkExtents {
+    fn from_chunks(chunk_coords: impl IntoIterator<Item = ChunkCoord>) -> Option<Self> {
+        let mut chunk_coords = chunk_coords.into_iter();
+        let first = chunk_coords.next()?;
+        let mut extents = Self {
+            min_x: first.x,
+            max_x: first.x,
+            min_y: first.y,
+            max_y: first.y,
+        };
+        for coord in chunk_coords {
+            extents.min_x = extents.min_x.min(coord.x);
+            extents.max_x = extents.max_x.max(coord.x);
+            extents.min_y = extents.min_y.min(coord.y);
+            extents.max_y = extents.max_y.max(coord.y);
+        }
+        Some(extents)
+    }
+}
+
+fn visible_chunk_extents(sim: &Simulation, settings: &MapDisplaySettings) -> Option<ChunkExtents> {
+    if settings.debug_reveal_all {
+        ChunkExtents::from_chunks(sim.world().chunks.keys().copied())
+    } else {
+        ChunkExtents::from_chunks(
+            sim.revealed_chunks()
+                .iter()
+                .copied()
+                .filter(|coord| sim.world().chunks.contains_key(coord)),
+        )
+    }
+}
+
 pub fn map_texture_bounds(
     sim: &Simulation,
     settings: &MapDisplaySettings,
 ) -> Option<MapTextureBounds> {
-    let chunks = if settings.debug_reveal_all {
-        sim.world().chunks.keys().copied().collect::<Vec<_>>()
-    } else {
-        sim.revealed_chunks()
-            .iter()
-            .copied()
-            .filter(|coord| sim.world().chunks.contains_key(coord))
-            .collect::<Vec<_>>()
-    };
+    let extents = visible_chunk_extents(sim, settings)?;
     let (focus_x, focus_y) = sim.player().tile_position();
-    chunk_texture_bounds_centered(chunks, (focus_x, focus_y))
+    Some(chunk_texture_bounds_centered(extents, (focus_x, focus_y)))
 }
 
 /// Chooses storage bounds while retaining the current capped allocation until
@@ -30,27 +63,21 @@ pub(super) fn map_texture_bounds_with_hysteresis(
     settings: &MapDisplaySettings,
     previous: MapTextureBounds,
 ) -> Option<MapTextureBounds> {
-    let candidate = map_texture_bounds(sim, settings)?;
+    let extents = visible_chunk_extents(sim, settings)?;
+    let (focus_x, focus_y) = sim.player().tile_position();
+    let candidate = chunk_texture_bounds_centered(extents, (focus_x, focus_y));
     if previous.width == 0 || previous.height == 0 {
         return Some(candidate);
     }
 
-    let chunks = if settings.debug_reveal_all {
-        sim.world().chunks.keys().copied().collect::<Vec<_>>()
-    } else {
-        sim.revealed_chunks()
-            .iter()
-            .copied()
-            .filter(|coord| sim.world().chunks.contains_key(coord))
-            .collect::<Vec<_>>()
-    };
-    let (focus_x, focus_y) = sim.player().tile_position();
+    let chunk_size = i64::from(CHUNK_SIZE);
     let x = stabilized_axis(
         previous.min_x,
         previous.width,
         candidate.min_x,
         candidate.width,
-        chunks.iter().map(|coord| coord.min_tile().0),
+        i64::from(extents.min_x) * chunk_size,
+        (i64::from(extents.max_x) + 1) * chunk_size,
         focus_x,
     );
     let y = stabilized_axis(
@@ -58,7 +85,8 @@ pub(super) fn map_texture_bounds_with_hysteresis(
         previous.height,
         candidate.min_y,
         candidate.height,
-        chunks.iter().map(|coord| coord.min_tile().1),
+        i64::from(extents.min_y) * chunk_size,
+        (i64::from(extents.max_y) + 1) * chunk_size,
         focus_y,
     );
     Some(MapTextureBounds {
@@ -74,16 +102,13 @@ fn stabilized_axis(
     old_len: u32,
     new_min: i64,
     new_len: u32,
-    chunk_mins: impl Iterator<Item = i64>,
+    content_min: i64,
+    content_max: i64,
     focus: i64,
 ) -> (i64, u32) {
     let chunk_size = i64::from(CHUNK_SIZE);
-    let content = chunk_mins.collect::<Vec<_>>();
-    let content_min = content.iter().copied().min();
-    let content_max = content.iter().copied().max().map(|min| min + chunk_size);
     let old_max = old_min + i64::from(old_len);
-    let content_fits = content_min.is_some_and(|min| min >= old_min)
-        && content_max.is_some_and(|max| max <= old_max);
+    let content_fits = content_min >= old_min && content_max <= old_max;
     if new_len <= old_len && content_fits {
         return (old_min, old_len);
     }
@@ -103,68 +128,34 @@ fn stabilized_axis(
 pub(super) fn chunk_texture_bounds(
     chunk_coords: impl IntoIterator<Item = ChunkCoord>,
 ) -> Option<MapTextureBounds> {
-    let mut chunk_coords = chunk_coords.into_iter();
-    let first = chunk_coords.next()?;
-    let mut min_chunk_x = first.x;
-    let mut max_chunk_x = first.x;
-    let mut min_chunk_y = first.y;
-    let mut max_chunk_y = first.y;
-
-    for coord in chunk_coords {
-        min_chunk_x = min_chunk_x.min(coord.x);
-        max_chunk_x = max_chunk_x.max(coord.x);
-        min_chunk_y = min_chunk_y.min(coord.y);
-        max_chunk_y = max_chunk_y.max(coord.y);
-    }
+    let extents = ChunkExtents::from_chunks(chunk_coords)?;
+    let chunk_size = i64::from(CHUNK_SIZE);
 
     Some(MapTextureBounds {
-        min_x: ChunkCoord {
-            x: min_chunk_x,
-            y: min_chunk_y,
-        }
-        .min_tile()
-        .0,
-        min_y: ChunkCoord {
-            x: min_chunk_x,
-            y: min_chunk_y,
-        }
-        .min_tile()
-        .1,
+        min_x: i64::from(extents.min_x) * chunk_size,
+        min_y: i64::from(extents.min_y) * chunk_size,
         width: u32::try_from(
-            (i64::from(max_chunk_x) - i64::from(min_chunk_x) + 1) * i64::from(CHUNK_SIZE),
+            (i64::from(extents.max_x) - i64::from(extents.min_x) + 1) * chunk_size,
         )
         .ok()?
         .min(crate::map::resources::MAX_MAP_TEXTURE_SIDE_TILES),
         height: u32::try_from(
-            (i64::from(max_chunk_y) - i64::from(min_chunk_y) + 1) * i64::from(CHUNK_SIZE),
+            (i64::from(extents.max_y) - i64::from(extents.min_y) + 1) * chunk_size,
         )
         .ok()?
         .min(crate::map::resources::MAX_MAP_TEXTURE_SIDE_TILES),
     })
 }
 
-fn chunk_texture_bounds_centered(
-    chunk_coords: impl IntoIterator<Item = ChunkCoord>,
-    focus: (i64, i64),
-) -> Option<MapTextureBounds> {
-    let mut coords = chunk_coords.into_iter();
-    let first = coords.next()?;
-    let (mut min_chunk_x, mut max_chunk_x) = (first.x, first.x);
-    let (mut min_chunk_y, mut max_chunk_y) = (first.y, first.y);
-    for coord in coords {
-        min_chunk_x = min_chunk_x.min(coord.x);
-        max_chunk_x = max_chunk_x.max(coord.x);
-        min_chunk_y = min_chunk_y.min(coord.y);
-        max_chunk_y = max_chunk_y.max(coord.y);
-    }
-    let (min_x, width) = centered_axis(min_chunk_x, max_chunk_x, focus.0);
-    let (min_y, height) = centered_axis(min_chunk_y, max_chunk_y, focus.1);
-    Some(MapTextureBounds {
+fn chunk_texture_bounds_centered(extents: ChunkExtents, focus: (i64, i64)) -> MapTextureBounds {
+    let (min_x, width) = centered_axis(extents.min_x, extents.max_x, focus.0);
+    let (min_y, height) = centered_axis(extents.min_y, extents.max_y, focus.1);
+    MapTextureBounds {
         min_x,
         min_y,
         width,
         height,
-    })
+    }
 }
 
 fn centered_axis(min_chunk: i32, max_chunk: i32, focus: i64) -> (i64, u32) {
@@ -205,11 +196,11 @@ mod tests {
         let content = [-i64::from(CHUNK_SIZE), i64::from(cap)];
 
         assert_eq!(
-            stabilized_axis(0, cap, 32, cap, content.into_iter(), 1024),
+            stabilized_axis(0, cap, 32, cap, content[0], content[1] + 32, 1024),
             (0, cap)
         );
         assert_eq!(
-            stabilized_axis(0, cap, 32, cap, content.into_iter(), 1900),
+            stabilized_axis(0, cap, 32, cap, content[0], content[1] + 32, 1900),
             (32, cap)
         );
     }

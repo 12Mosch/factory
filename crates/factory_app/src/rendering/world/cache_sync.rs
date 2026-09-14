@@ -75,7 +75,6 @@ pub(super) fn sync_visible_world_tiles_impl(
     #[cfg(test)]
     {
         cache.mesh_builds_last_sync = 0;
-        cache.mesh_cache_hits_last_sync = 0;
     }
 
     if cache.last_reload_token == token.value
@@ -88,7 +87,8 @@ pub(super) fn sync_visible_world_tiles_impl(
         return;
     }
 
-    if cache.last_reload_token != token.value {
+    let reloaded = cache.last_reload_token != token.value;
+    if reloaded {
         for (_, entity) in std::mem::take(&mut cache.chunk_entities) {
             commands.entity(entity).despawn();
         }
@@ -172,7 +172,7 @@ pub(super) fn sync_visible_world_tiles_impl(
         }
     }
 
-    if cache.last_visible_revision != visible.revision {
+    if reloaded || cache.last_visible_revision != visible.revision {
         cache.pending_mesh_builds.clear();
         let missing = visible
             .chunks
@@ -262,10 +262,6 @@ pub(super) fn sync_visible_world_tiles_impl(
             .position(|cached| cached == coord)
         {
             cache.inactive_mesh_lru.remove(position);
-            #[cfg(test)]
-            {
-                cache.mesh_cache_hits_last_sync += 1;
-            }
         }
         let entity = commands
             .spawn((

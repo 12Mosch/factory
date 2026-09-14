@@ -181,8 +181,6 @@ pub struct WorldRenderCache {
     pub(crate) inactive_mesh_lru: VecDeque<ChunkCoord>,
     #[cfg(test)]
     pub(crate) mesh_builds_last_sync: usize,
-    #[cfg(test)]
-    pub(crate) mesh_cache_hits_last_sync: usize,
 }
 
 #[derive(Resource, Default)]

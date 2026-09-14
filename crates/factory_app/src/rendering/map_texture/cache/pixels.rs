@@ -86,15 +86,21 @@ fn shift_cached_pixels_in_place(
     let row_len = (max_x - min_x) as usize * 4;
     let first_old = pixel_offset(old_bounds, min_x, min_y);
     let first_new = pixel_offset(new_bounds, min_x, min_y);
-    let rows = if first_new > first_old {
-        (min_y..max_y).collect::<Vec<_>>()
-    } else {
-        (min_y..max_y).rev().collect::<Vec<_>>()
-    };
-    for world_y in rows {
+    let mut copy_row = |world_y| {
         let old_offset = pixel_offset(old_bounds, min_x, world_y);
         let new_offset = pixel_offset(new_bounds, min_x, world_y);
         pixels.copy_within(old_offset..old_offset + row_len, new_offset);
+    };
+    if first_new > first_old {
+        // World Y is stored upside-down in the image, so ascending world rows
+        // traverse descending buffer offsets.
+        for world_y in min_y..max_y {
+            copy_row(world_y);
+        }
+    } else {
+        for world_y in (min_y..max_y).rev() {
+            copy_row(world_y);
+        }
     }
 
     fill_world_rect(

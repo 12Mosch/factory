@@ -106,7 +106,6 @@ fn adjacent_prefetch_hits_and_inactive_meshes_stay_bounded() {
         let cache = app.world().resource::<WorldRenderCache>();
         if x == 1 {
             assert_eq!(cache.chunk_meshes[&ChunkCoord { x, y: 0 }], prefetched);
-            assert!(cache.mesh_cache_hits_last_sync > 0);
         }
         assert!(cache.inactive_mesh_lru.len() <= super::cache_sync::INACTIVE_MESH_CACHE_CAPACITY);
         assert!(
@@ -114,6 +113,32 @@ fn adjacent_prefetch_hits_and_inactive_meshes_stay_bounded() {
                 <= super::cache_sync::INACTIVE_MESH_CACHE_CAPACITY + cache.chunk_entities.len()
         );
     }
+}
+
+#[test]
+fn presentation_reload_requeues_unchanged_visible_terrain() {
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let mut sim = Simulation::new_test_world(123);
+    sim.ensure_chunk_generated(coord);
+    let mut app = terrain_render_app(sim, coord);
+    app.update();
+
+    assert!(
+        app.world()
+            .resource::<WorldRenderCache>()
+            .chunk_entities
+            .contains_key(&coord)
+    );
+
+    app.world_mut()
+        .resource_mut::<PresentationReloadToken>()
+        .value += 1;
+    app.update();
+
+    let cache = app.world().resource::<WorldRenderCache>();
+    assert!(cache.chunk_meshes.contains_key(&coord));
+    assert!(cache.chunk_entities.contains_key(&coord));
+    assert_eq!(cache.last_visible_revision, 1);
 }
 
 #[test]
@@ -556,6 +581,31 @@ fn resource_visibility_changes_reuse_overlapping_sprites_and_labels() {
     let label_entities = cache.label_entities.len();
     assert_eq!(resource_sprite_count(&mut app), sprite_entities);
     assert_eq!(resource_label_count(&mut app), label_entities);
+}
+
+#[test]
+fn visible_resource_work_precedes_offscreen_cleanup() {
+    let coord = ChunkCoord { x: 0, y: 0 };
+    let mut sim = Simulation::new_test_world(123);
+    sim.ensure_chunk_generated(coord);
+    let mut app = render_sync_app(sim, visible_for_chunks([coord]));
+    app.update();
+
+    let visible_tile = coord.tile_at(0, 0);
+    {
+        let mut cache = app.world_mut().resource_mut::<ResourceRenderCache>();
+        cache.pending_tiles.insert(visible_tile);
+        cache.pending_cleanup_tiles.extend(
+            (0..crate::rendering::resource_cells::RESOURCE_TILE_SYNC_BUDGET as i64)
+                .map(|offset| (-20_000 - offset, 0)),
+        );
+    }
+
+    app.update();
+
+    let cache = app.world().resource::<ResourceRenderCache>();
+    assert!(!cache.pending_tiles.contains(&visible_tile));
+    assert_eq!(cache.pending_cleanup_tiles.len(), 1);
 }
 
 #[test]

@@ -40,7 +40,13 @@ pub struct ResourceRenderCache {
     pub label_entities: HashMap<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord), Entity>,
     pub show_amount_labels: bool,
     pub(crate) visible_chunks: BTreeSet<ChunkCoord>,
+    /// Visible resource tiles waiting for reconciliation. Off-screen changes
+    /// never enter this queue because a chunk scan reads their current state
+    /// if they become visible later.
     pub(crate) pending_tiles: BTreeSet<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>,
+    /// Previously rendered tiles waiting for removal after leaving the view.
+    pub(crate) pending_cleanup_tiles:
+        BTreeSet<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>,
     pub(crate) pending_chunk_scans: BTreeSet<ChunkCoord>,
     pub(crate) rendered_tiles_by_chunk:
         BTreeMap<ChunkCoord, BTreeSet<(factory_sim::WorldTileCoord, factory_sim::WorldTileCoord)>>,
@@ -66,6 +72,7 @@ pub(crate) fn sync_resource_debug_rendering(
         && !visibility_changed
         && !label_setting_changed
         && params.cache.pending_tiles.is_empty()
+        && params.cache.pending_cleanup_tiles.is_empty()
         && params.cache.pending_chunk_scans.is_empty()
     {
         return;
@@ -77,8 +84,9 @@ pub(crate) fn sync_resource_debug_rendering(
             let rendered = params
                 .cache
                 .rendered_tiles_by_chunk
-                .values()
-                .flatten()
+                .iter()
+                .filter(|(chunk, _)| params.visible.chunks.contains(chunk))
+                .flat_map(|(_, tiles)| tiles)
                 .copied()
                 .collect::<Vec<_>>();
             params.cache.pending_tiles.extend(rendered);
@@ -93,7 +101,7 @@ pub(crate) fn sync_resource_debug_rendering(
         for chunk in removed_chunks {
             if let Some(rendered) = params.cache.rendered_tiles_by_chunk.get(&chunk) {
                 let rendered = rendered.iter().copied().collect::<Vec<_>>();
-                params.cache.pending_tiles.extend(rendered);
+                params.cache.pending_cleanup_tiles.extend(rendered);
             }
             params.cache.pending_chunk_scans.remove(&chunk);
         }
@@ -106,6 +114,9 @@ pub(crate) fn sync_resource_debug_rendering(
             .collect::<Vec<_>>();
         params.cache.pending_chunk_scans.extend(added_chunks);
         params.cache.visible_chunks = params.visible.chunks.clone();
+        params.cache.pending_tiles.retain(|&(x, y)| {
+            ChunkCoord::from_tile(x, y).is_some_and(|chunk| params.visible.chunks.contains(&chunk))
+        });
         params.cache.last_visible_revision = params.visible.revision;
         params.cache.show_amount_labels = show_amount_labels;
     }
@@ -115,7 +126,12 @@ pub(crate) fn sync_resource_debug_rendering(
             params
                 .cache
                 .pending_tiles
-                .extend(changes.map(|change| (change.x, change.y)));
+                .extend(changes.filter_map(|change| {
+                    let coord = (change.x, change.y);
+                    ChunkCoord::from_tile(change.x, change.y)
+                        .filter(|chunk| params.visible.chunks.contains(chunk))
+                        .map(|_| coord)
+                }));
         } else {
             params
                 .cache
@@ -124,8 +140,9 @@ pub(crate) fn sync_resource_debug_rendering(
             let rendered = params
                 .cache
                 .rendered_tiles_by_chunk
-                .values()
-                .flatten()
+                .iter()
+                .filter(|(chunk, _)| params.visible.chunks.contains(chunk))
+                .flat_map(|(_, tiles)| tiles)
                 .copied()
                 .collect::<Vec<_>>();
             params.cache.pending_tiles.extend(rendered);
@@ -149,19 +166,29 @@ pub(crate) fn sync_resource_debug_rendering(
         params.cache.pending_tiles.extend(resources.keys().copied());
     }
 
-    let pending = params
+    let mut pending = params
         .cache
         .pending_tiles
         .iter()
         .take(RESOURCE_TILE_SYNC_BUDGET)
         .copied()
         .collect::<Vec<_>>();
+    let remaining = RESOURCE_TILE_SYNC_BUDGET - pending.len();
+    pending.extend(
+        params
+            .cache
+            .pending_cleanup_tiles
+            .iter()
+            .take(remaining)
+            .copied(),
+    );
     #[cfg(test)]
     {
         params.cache.tiles_processed_last_sync = pending.len();
     }
     for (x, y) in pending {
         params.cache.pending_tiles.remove(&(x, y));
+        params.cache.pending_cleanup_tiles.remove(&(x, y));
         let resource = ChunkCoord::from_tile(x, y)
             .filter(|coord| params.visible.chunks.contains(coord))
             .and_then(|_| sim.world().tile_at(x, y))
