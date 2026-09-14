@@ -1046,18 +1046,132 @@ fn colony_with_capacity_dispatches_expansion_on_schedule() {
     );
 }
 
-/// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
-/// the chunk first so fixed offsets near rect edges cannot leave generated
-/// area.
-fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord) -> EntityId {
+/// Dispatches a scheduler expansion for a due colony and returns its party:
+/// production site selection stays the only validity owner, so the regression
+/// below needs no destination rules of its own.
+fn dispatched_due_expansion(
+    sim: &mut Simulation,
+    base_id: EnemyBaseId,
+) -> (ExpansionId, (WorldTileCoord, WorldTileCoord), Vec<EnemyId>) {
+    arm_expansion_due(sim, base_id);
+    sim.advance_enemy_spawners();
+    sim.enemies
+        .expansions
+        .iter()
+        .find(|(_, party)| party.base_id == base_id)
+        .map(|(&id, party)| {
+            (
+                id,
+                party.destination,
+                party.members.iter().copied().collect(),
+            )
+        })
+        .expect("the fixture must dispatch an expansion")
+}
+
+/// Regression test for https://github.com/12Mosch/factory/issues/307: a
+/// scheduler-dispatched expansion party must travel past the decision stagger
+/// without acquiring ordinary global attack targets, leaving the off-route
+/// player structure alone. Founding mechanics are covered by the dedicated
+/// arrival tests below.
+#[test]
+fn expansion_ignores_global_targets_en_route() {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, spawners) = colony_with_three_spawners(&mut sim);
+    let (expansion_id, destination, members) = dispatched_due_expansion(&mut sim, base_id);
+    assert!(!members.is_empty());
+    // Attackable structure placed after dispatch, far outside guard aggro
+    // around every spawner but visible to global `Attack` targeting, so only
+    // expansion behavior may touch it.
+    let origin = sim.entities.placed_entities[&spawners[0]].clone();
+    let spawner_tiles: Vec<(WorldTileCoord, WorldTileCoord)> = sim
+        .entities
+        .enemy_spawners
+        .keys()
+        .filter_map(|id| sim.entities.placed_entities.get(id))
+        .map(|placed| (placed.x, placed.y))
+        .collect();
+    let chest = place_chest_on_ring_where(&mut sim, origin.x, origin.y, 28..=36, |x, y| {
+        spawner_tiles
+            .iter()
+            .all(|&(sx, sy)| (sx - x).abs().max((sy - y).abs()) >= 18)
+    });
+    assert!(
+        sim.entities.entity_health.contains_key(&chest),
+        "the chest must be damageable so global attack targeting can see it"
+    );
+    // Past the 0-15 tick decision stagger: any ordinary global targeting
+    // would retarget the party almost immediately. Enemy movement is driven
+    // directly instead of full ticks so the arming clock-jump never meets
+    // tick validation; the target is checked every step because a diverted
+    // party can destroy the chest and end up targetless again.
+    let chest_health = sim.entities.entity_health[&chest].current;
+    for _ in 0..128 {
+        sim.tick += 1;
+        let mut commands = CombatCommandBuffer::default();
+        sim.advance_enemies(&mut commands);
+        // Resolve emitted attacks so the chest-health assertion below is
+        // effective: any diverted attack would actually land.
+        sim.resolve_combat_commands(commands);
+        for id in &members {
+            let unit = sim
+                .enemies
+                .enemies
+                .get(id)
+                .expect("nothing on this route can damage the party");
+            assert_eq!(
+                unit.target, None,
+                "expansion member {id:?} must not acquire a global attack target"
+            );
+        }
+    }
+    assert_eq!(
+        sim.entities
+            .entity_health
+            .get(&chest)
+            .map(|health| health.current),
+        Some(chest_health),
+        "the expansion party must leave the off-route player structure alone"
+    );
+    let party = &sim.enemies.expansions[&expansion_id];
+    assert_eq!(
+        party.destination, destination,
+        "the expansion destination must stay authoritative"
+    );
+    for id in &members {
+        assert!(
+            party.members.contains(id),
+            "expansion member {id:?} must not abandon the party"
+        );
+        assert_eq!(
+            sim.enemies.enemies[id].mission,
+            EnemyMission::Expansion(expansion_id),
+            "expansion member {id:?} must keep the expansion mission"
+        );
+    }
+}
+
+/// Places a chest on the first validated tile ringing `(cx, cy)` within
+/// `rings` that also satisfies `accept`, ensuring the chunk first so fixed
+/// offsets near rect edges cannot leave generated area.
+fn place_chest_on_ring_where(
+    sim: &mut Simulation,
+    cx: WorldTileCoord,
+    cy: WorldTileCoord,
+    rings: std::ops::RangeInclusive<i64>,
+    accept: impl Fn(WorldTileCoord, WorldTileCoord) -> bool,
+) -> EntityId {
     let chest = entity_id_by_name(&sim.world.prototypes, "chest");
-    for ring in 1..=10_i64 {
+    for ring in rings {
         for dy in -ring..=ring {
             for dx in -ring..=ring {
                 if dx.abs().max(dy.abs()) != ring {
                     continue;
                 }
                 let (x, y) = (cx + dx, cy + dy);
+                if !accept(x, y) {
+                    continue;
+                }
                 if let Some(chunk) = ChunkCoord::from_tile(x, y) {
                     sim.ensure_chunk_generated(chunk);
                 }
@@ -1078,6 +1192,13 @@ fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord
         }
     }
     panic!("expected a placeable chest tile near {cx},{cy}");
+}
+
+/// Places a chest on the first validated tile ringing `(cx, cy)`, ensuring
+/// the chunk first so fixed offsets near rect edges cannot leave generated
+/// area.
+fn place_chest_near(sim: &mut Simulation, cx: WorldTileCoord, cy: WorldTileCoord) -> EntityId {
+    place_chest_on_ring_where(sim, cx, cy, 1..=10, |_, _| true)
 }
 
 fn assert_converted_to_guard(sim: &Simulation, id: EnemyId, context: &str) {

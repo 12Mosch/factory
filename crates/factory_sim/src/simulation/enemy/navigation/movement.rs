@@ -114,6 +114,19 @@ impl Simulation {
                 let Some(unit) = enemies.enemies.get_mut(member) else {
                     continue;
                 };
+                // The destination is authoritative, so an attack target here
+                // can only come from combat retaliation (assigned by
+                // `resolve_combat_commands` after movement) or stale pre-fix
+                // state. Drop it before routing so the unit replans the
+                // expansion route on this same tick: clearing after the
+                // prefill would discard the fresh route, and the old combat
+                // repath deadline would idle the unit — under repeated fire
+                // that stalls the party indefinitely.
+                if matches!(unit.mission, EnemyMission::Expansion(_)) && unit.target.is_some() {
+                    unit.target = None;
+                    unit.path.clear();
+                    unit.next_decision_tick = unit.next_decision_tick.min(tick);
+                }
                 if !unit.path.is_empty() {
                     continue;
                 }
@@ -292,6 +305,16 @@ fn step_enemy(
     let entities = context.entities;
     let seed = context.seed;
     let tick = context.tick;
+    // Expansion parties keep their destination authoritative: they never run
+    // ordinary global attack targeting, so a player structure must not divert
+    // them into a de facto raid. Target hygiene and route planning both live
+    // in the expansion prefill in `advance_enemies`; here the unit only
+    // follows its route (`follow_path` no-ops on an empty path while the
+    // prefill throttles the next attempt).
+    if matches!(enemy.mission, EnemyMission::Expansion(_)) {
+        follow_path(world, entities, enemy, None);
+        return;
+    }
     // Drop targets that no longer exist.
     if let Some(target) = enemy.target
         && !entities.placed_entities.contains_key(&target)
@@ -1179,5 +1202,40 @@ mod movement_regression_tests {
             "failed expansion routing must throttle retries"
         );
         assert_eq!(unit.tile(), start, "the unit must not move");
+    }
+
+    #[test]
+    fn expansion_prefill_reclaims_attack_target_without_stall() {
+        // Combat resolution assigns a retaliation target and clears the path
+        // without touching the repath deadline; pre-fix saves carry the same
+        // shape. The prefill must drop the target before routing and replan
+        // on the same tick, or the unit stalls while under fire.
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination, _, _) =
+            clear_run_with_wall_room(&sim).expect("test world should contain a clear run");
+        let enemy_id = expansion_member(&mut sim, start, destination);
+        sim.tick = 10;
+        {
+            let unit = sim.enemies.enemies.get_mut(&enemy_id).unwrap();
+            unit.target = Some(EntityId::new(4242));
+            unit.next_decision_tick = 500;
+        }
+
+        sim.advance_enemies(&mut CombatCommandBuffer::default());
+
+        let unit = &sim.enemies.enemies[&enemy_id];
+        assert_eq!(
+            unit.target, None,
+            "the attack target must be dropped before routing"
+        );
+        assert!(
+            !unit.path.is_empty(),
+            "the expansion route must replan on the same tick"
+        );
+        assert_eq!(
+            unit.next_decision_tick, sim.tick,
+            "reclaiming a target must not inherit the old repath deadline"
+        );
+        assert_valid_detour(&sim, start, destination, &unit.path);
     }
 }
