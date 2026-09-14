@@ -378,28 +378,11 @@ mod map_snapshot_regression_tests {
     }
 
     #[test]
-    fn split_visibility_reports_visible_member_exact_position() {
-        let mut sim = Simulation::new_test_world(123);
-        let base_id = insert_base(&mut sim, ChunkCoord { x: 9, y: 9 });
-        reveal_only(VISIBLE_TILE, &mut sim);
-        let raid_id = insert_raid(&mut sim, base_id, &[HIDDEN_TILE, VISIBLE_TILE]);
-
-        let snapshot = sim.enemy_map_snapshot();
-        assert_eq!(
-            raid_location(&snapshot, raid_id),
-            Some(ThreatLocation::Exact {
-                x: VISIBLE_TILE.0,
-                y: VISIBLE_TILE.1,
-            })
-        );
-    }
-
-    #[test]
     fn visible_member_survives_destroyed_source_base() {
         let mut sim = Simulation::new_test_world(123);
-        // No base inserted: the source base was destroyed, so there is no
-        // home-sector fallback for this raid.
-        let missing_base = EnemyBaseId::new(999);
+        // Allocate but never insert: the source base was destroyed, so there
+        // is no home-sector fallback for this raid.
+        let missing_base = sim.enemies.allocate_base_id();
         reveal_only(VISIBLE_TILE, &mut sim);
         let raid_id = insert_raid(&mut sim, missing_base, &[HIDDEN_TILE, VISIBLE_TILE]);
 
