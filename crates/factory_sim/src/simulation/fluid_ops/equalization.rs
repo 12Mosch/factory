@@ -130,24 +130,27 @@ impl Simulation {
     /// Only pumps, deliberately. A pipe run that happened to pass a siding
     /// would otherwise start filling any train parked beside it.
     ///
-    /// The search is the pump's, not the wagon's, so it has to walk the placed
-    /// entities to find the pumps — but only when there is something for a pump
-    /// to find. A railway with no fluid wagon standing anywhere answers in the
-    /// time it takes to look at the index, which is what a topology rebuild in
-    /// a factory of thousands of entities and no parked tanker should cost.
+    /// The search is the pump's, not the wagon's, so it walks the pump
+    /// registry rather than every placed entity — but only when there is
+    /// something for a pump to find. A railway with no fluid wagon standing
+    /// anywhere answers in the time it takes to look at the index, which is
+    /// what a topology rebuild in a factory of thousands of entities and no
+    /// parked tanker should cost; with one parked, this stopped-stock
+    /// attachment pass costs the pumps rather than the factory. (The rest of
+    /// the rebuild — every placed entity's own fluid boxes and the
+    /// underground pairs — still walks the whole factory.)
     fn stopped_stock_fluid_nodes(&self) -> Vec<FluidBoxNode> {
         if !self.any_stopped_stock_carries_fluid() {
             return Vec::new();
         }
 
+        let stopped = self.stopped_stock();
         let mut endpoints_by_stock = BTreeMap::<RollingStockId, Vec<EdgeEndpoint>>::new();
-        for placed in self.entities.placed_entities.values() {
-            let Some(prototype) = self
-                .world
-                .prototypes
-                .entity(placed.prototype_id)
-                .filter(|prototype| prototype.pump.is_some())
-            else {
+        for pump_id in self.entities.pumps.keys() {
+            let Some(placed) = self.entities.placed_entities.get(pump_id) else {
+                continue;
+            };
+            let Some(prototype) = self.world.prototypes.entity(placed.prototype_id) else {
                 continue;
             };
             for connection in prototype
@@ -160,8 +163,7 @@ impl Simulation {
                 else {
                     continue;
                 };
-                let Some(stock) = self
-                    .stopped_stock()
+                let Some(stock) = stopped
                     .at(geometry.facing_tile.0, geometry.facing_tile.1)
                     .filter(|stock| !stock.fluid_boxes.is_empty())
                 else {
