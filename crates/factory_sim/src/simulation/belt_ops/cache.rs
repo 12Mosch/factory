@@ -91,6 +91,9 @@ impl TransportLaneCache {
         self.dirty_regions.push(region);
     }
 
+    /// Applies pending topology edits as an incremental patch, falling back
+    /// to a full rebuild when the patch cannot cover them. Prunes revision
+    /// tokens for entities that no longer exist.
     pub(in crate::simulation) fn refresh(
         &mut self,
         entities: &EntityStore,
@@ -133,6 +136,8 @@ impl TransportLaneCache {
         }
     }
 
+    /// Rebuilds the lane graph and active runs from scratch, pruning dead
+    /// revision tokens so they track live transport state.
     fn rebuild_all(&mut self, entities: &EntityStore) {
         self.graph.rebuild(entities);
         // Full rebuilds bypass incremental slot freeing, so prune dead
@@ -194,6 +199,8 @@ impl TransportLaneCache {
         }
     }
 
+    /// Estimates all heap held for the per-entity revision index, including
+    /// retained pages and directory buffers.
     #[cfg(test)]
     pub(in crate::simulation) fn item_revision_storage_bytes(&self) -> usize {
         self.item_revisions_by_entity.storage_bytes()

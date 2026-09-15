@@ -79,6 +79,9 @@ pub(in crate::simulation) struct TransportLaneGraph {
 }
 
 impl TransportLaneGraph {
+    /// Rebuilds the whole lane index from live transport entities in
+    /// deterministic entity-id order. Emptied slot pages are retained for
+    /// reuse; the slot arrays stay proportional to the live lane count.
     pub(super) fn rebuild(&mut self, entities: &EntityStore) {
         let lane_count = entities
             .transport_belts
@@ -301,6 +304,8 @@ impl TransportLaneGraph {
         }
     }
 
+    /// Unmaps a removed entity's lanes, freeing pages left empty, and
+    /// dissolves the runs that observed those lanes.
     fn free_entity_slots(&mut self, entity_id: EntityId, dissolved_runs: &mut Vec<u32>) {
         let Ok(entity_index) = usize::try_from(entity_id.raw()) else {
             return;
@@ -313,9 +318,6 @@ impl TransportLaneGraph {
             let Some(slot) = self.slot_by_raw.remove(raw) else {
                 continue;
             };
-            if slot == VACANT_SLOT {
-                continue;
-            }
             let slot_index = slot as usize;
             dissolved_runs.extend(self.run_id_at(slot_index));
             // Runs of feeders can merge across the removed lane, so they must
@@ -332,7 +334,7 @@ impl TransportLaneGraph {
     }
 
     /// Allocates slots for entities placed since the last refresh, reusing
-    /// freed slots where possible.
+    /// freed slots where possible. Already-mapped lanes are left untouched.
     fn ensure_entity_slots(
         &mut self,
         entities: &EntityStore,
@@ -372,11 +374,7 @@ impl TransportLaneGraph {
             let Some(raw) = lane_raw_index(key) else {
                 continue;
             };
-            if self
-                .slot_by_raw
-                .get(raw)
-                .is_some_and(|slot| slot != VACANT_SLOT)
-            {
+            if self.slot_by_raw.get(raw).is_some() {
                 continue;
             }
             let slot = if let Some(free) = self.free_slots.pop() {
@@ -397,6 +395,7 @@ impl TransportLaneGraph {
         }
     }
 
+    /// Collects the compact slots currently mapped for an entity's lanes.
     fn entity_slot_list(&self, entity_id: EntityId) -> SmallVec<[usize; 4]> {
         let mut slots = SmallVec::new();
         let Ok(entity_index) = usize::try_from(entity_id.raw()) else {
@@ -406,9 +405,7 @@ impl TransportLaneGraph {
             return slots;
         };
         for offset in 0..TRANSPORT_LANE_SLOTS_PER_ENTITY {
-            if let Some(slot) = self.slot_by_raw.get(base + offset)
-                && slot != VACANT_SLOT
-            {
+            if let Some(slot) = self.slot_by_raw.get(base + offset) {
                 slots.push(slot as usize);
             }
         }
@@ -599,6 +596,7 @@ impl TransportLaneGraph {
             .is_some_and(|record| record.cyclic)
     }
 
+    /// Assigns the next compact slot to a lane during a full rebuild.
     fn assign_slot(&mut self, key: TransportLaneKey, speed_subtiles_per_tick: u16) {
         let Some(raw) = lane_raw_index(key) else {
             return;
@@ -609,15 +607,18 @@ impl TransportLaneGraph {
         self.slot_by_raw.insert(raw, slot);
     }
 
+    /// Resolves a lane key to its compact slot, or `None` when unmapped.
     pub(in crate::simulation::belt_ops) fn slot_for(
         &self,
         key: TransportLaneKey,
     ) -> Option<TransportLaneIndex> {
         let raw = lane_raw_index(key)?;
         let slot = self.slot_by_raw.get(raw)?;
-        (slot != VACANT_SLOT).then(|| TransportLaneIndex::from_slot(slot as usize))
+        Some(TransportLaneIndex::from_slot(slot as usize))
     }
 
+    /// Estimates all heap held for the lane-slot index, including retained
+    /// pages and directory buffers.
     #[cfg(test)]
     pub(in crate::simulation) fn slot_index_storage_bytes(&self) -> usize {
         self.slot_by_raw.storage_bytes()

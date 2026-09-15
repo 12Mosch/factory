@@ -36,6 +36,7 @@ pub(in crate::simulation) struct TransportBeltAdvancement<'a> {
 }
 
 impl<'a> TransportBeltAdvancement<'a> {
+    /// Borrows the per-tick advancement scratch over the current lane graph.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::simulation) fn new(
         entities: &'a mut EntityStore,
@@ -456,6 +457,7 @@ impl<'a> TransportBeltAdvancement<'a> {
         true
     }
 
+    /// Stamps the global revision onto one entity's token after its items move.
     fn mark_items_changed(&mut self, entity_id: EntityId) {
         mark_item_revision(self.item_revision, self.item_revisions_by_entity, entity_id);
     }

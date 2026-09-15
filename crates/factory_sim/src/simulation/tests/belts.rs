@@ -130,6 +130,9 @@ fn incremental_transport_patch_reuses_removed_lane_slots() {
     );
 }
 
+/// Regression test for #329: transport index storage must stay proportional
+/// to live transport state across build/destroy churn and sparse high entity
+/// IDs, while routing and revision tracking keep working.
 #[test]
 fn transport_index_storage_does_not_track_historical_entity_ids() {
     let mut sim = Simulation::new_test_world(123);
@@ -170,13 +173,20 @@ fn transport_index_storage_does_not_track_historical_entity_ids() {
         "2048 build/destroy cycles grew transport index storage from {baseline} to {after_churn} bytes"
     );
 
-    // A sparse high-water mark allocates pages for live entities only: raw
-    // ID-sized vectors would need ~160MB of lane slots plus ~80MB of revision
-    // tokens for ten million historical allocations.
-    sim.entities.next_entity_id = 10_000_000;
+    // A sparse high-water mark allocates pages for live entities only. The ID
+    // sits just above both sparse-page thresholds (slot pages past entity
+    // 262,144, revision pages past entity 1,048,576); raw ID-sized vectors
+    // would need ~18MB of lane slots plus ~9MB of revision tokens for it, so
+    // the old layout still fails this bound without a ~240MB transient.
+    sim.entities.next_entity_id = 1_100_000;
     let high_belt = place_belt_line(&mut sim, 1)
         .pop()
         .expect("test world should fit a high-ID belt");
+    sim.advance_transport_belts();
+    // Exercise the high-ID revision page before measuring, so both paged
+    // indexes are covered.
+    sim.insert_item_onto_belt(high_belt, 0, iron_ore)
+        .expect("high-ID belt should accept an item");
     sim.advance_transport_belts();
     let after_sparse = sim.transport_index_storage_bytes();
     assert!(
@@ -187,8 +197,6 @@ fn transport_index_storage_does_not_track_historical_entity_ids() {
     // The churned and high-ID topology still routes items correctly.
     sim.insert_item_onto_belt(belts[0], 0, iron_ore)
         .expect("live belt should accept an item after churn");
-    sim.insert_item_onto_belt(high_belt, 0, iron_ore)
-        .expect("high-ID belt should accept an item");
     for _ in 0..32 {
         sim.tick();
     }
