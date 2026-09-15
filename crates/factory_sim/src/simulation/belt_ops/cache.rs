@@ -4,8 +4,10 @@ use super::*;
 mod activity;
 mod graph;
 mod item_tracking;
+mod paged;
 
 pub(in crate::simulation::belt_ops) use item_tracking::mark_item_revision;
+pub(in crate::simulation) use paged::EntityItemRevisionMap;
 
 pub(in crate::simulation) use activity::{TransportRunActiveStorage, TransportRunVisitStorage};
 pub(in crate::simulation) use graph::TransportLaneGraph;
@@ -42,7 +44,7 @@ pub(in crate::simulation) struct TransportLaneCache {
     /// Monotonic change tokens consumed by incremental presentation. These
     /// are derived runtime state; saves reconstruct presentation from scratch.
     pub(in crate::simulation) item_revision: u64,
-    pub(in crate::simulation) item_revisions_by_entity: Vec<u64>,
+    pub(in crate::simulation) item_revisions_by_entity: EntityItemRevisionMap,
     next_item_id: u64,
     pub(in crate::simulation) graph: TransportLaneGraph,
     pub(in crate::simulation) visit_states: TransportRunVisitStorage,
@@ -59,7 +61,7 @@ impl Default for TransportLaneCache {
             dirty: true,
             dirty_regions: Vec::new(),
             item_revision: 0,
-            item_revisions_by_entity: Vec::new(),
+            item_revisions_by_entity: EntityItemRevisionMap::default(),
             next_item_id: 1,
             graph: TransportLaneGraph::default(),
             visit_states: TransportRunVisitStorage::default(),
@@ -89,6 +91,9 @@ impl TransportLaneCache {
         self.dirty_regions.push(region);
     }
 
+    /// Applies pending topology edits as an incremental patch, falling back
+    /// to a full rebuild when the patch cannot cover them. Prunes revision
+    /// tokens for entities that no longer exist.
     pub(in crate::simulation) fn refresh(
         &mut self,
         entities: &EntityStore,
@@ -109,6 +114,16 @@ impl TransportLaneCache {
             .patch(entities, &regions, catalog_underground_distance)
         {
             Some(new_runs) => {
+                // Mirror slot freeing: tokens for entities that no longer
+                // exist must go, or revision storage would track the ID
+                // high-water mark instead of live transport state.
+                for region in &regions {
+                    if !entities.transport_belts.contains_key(&region.entity_id)
+                        && !entities.splitters.contains_key(&region.entity_id)
+                    {
+                        self.item_revisions_by_entity.remove(region.entity_id);
+                    }
+                }
                 for run in new_runs {
                     self.activate_run_from_items(entities, TransportRunIndex::from_index(run));
                 }
@@ -121,8 +136,14 @@ impl TransportLaneCache {
         }
     }
 
+    /// Rebuilds the lane graph and active runs from scratch, pruning dead
+    /// revision tokens so they track live transport state.
     fn rebuild_all(&mut self, entities: &EntityStore) {
         self.graph.rebuild(entities);
+        // Full rebuilds bypass incremental slot freeing, so prune dead
+        // revision tokens here to keep them proportional to live transport.
+        self.item_revisions_by_entity
+            .retain_live_transport(entities);
         self.active_runs
             .rebuild_from_entities(entities, &self.graph);
         self.dirty = false;
@@ -176,6 +197,13 @@ impl TransportLaneCache {
         {
             self.active_runs.mark_active(run, position);
         }
+    }
+
+    /// Estimates all heap held for the per-entity revision index, including
+    /// retained pages and directory buffers.
+    #[cfg(test)]
+    pub(in crate::simulation) fn item_revision_storage_bytes(&self) -> usize {
+        self.item_revisions_by_entity.storage_bytes()
     }
 
     pub(in crate::simulation) fn mark_active_with_upstreams(&mut self, key: TransportLaneKey) {

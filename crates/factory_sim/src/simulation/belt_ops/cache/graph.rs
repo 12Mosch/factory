@@ -1,3 +1,4 @@
+use super::paged::{TransportLaneSlotMap, VACANT_SLOT};
 use super::{PATCH_STORAGE_HEADROOM, TransportDirtyRegion};
 use crate::simulation::belt_ops::geometry::{belt_downstream_lane_key, splitter_output_lane_key};
 use crate::simulation::belt_ops::types::{
@@ -5,8 +6,6 @@ use crate::simulation::belt_ops::types::{
     TransportRunIndex, lane_raw_index,
 };
 use crate::simulation::{EntityId, EntityStore, SmallVec, WorldTileCoord};
-
-const VACANT_SLOT: u32 = u32::MAX;
 
 /// Hot derived state for one dense transport-lane slot.
 ///
@@ -56,15 +55,17 @@ struct TransportRunRecord {
 /// Adjacency index over transport lanes using compact slots: every existing
 /// belt/splitter lane gets a dense slot id at rebuild time, so the per-lane
 /// arrays the advancement loop walks stay proportional to the lane count
-/// instead of the peak entity id. The sparse `slot_by_raw` indirection maps
-/// `entity_id * 4 + lane_offset` wakeup keys onto slots.
+/// instead of the peak entity id. The sparse [`TransportLaneSlotMap`]
+/// indirection maps `entity_id * 4 + lane_offset` wakeup keys onto slots,
+/// allocating pages for live transport entities only so high or churned
+/// entity IDs cannot inflate the index.
 ///
 /// On top of the lane adjacency, lanes are grouped into runs (see
 /// [`TransportRunRecord`]): scheduling, visit states, and activity tracking
 /// operate on runs, while item movement still reads per-lane state.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(in crate::simulation) struct TransportLaneGraph {
-    slot_by_raw: Vec<u32>,
+    slot_by_raw: TransportLaneSlotMap,
     lanes: Vec<TransportLaneRecord>,
     upstream_by_slot: Vec<SmallVec<[TransportLaneIndex; 2]>>,
     run_lane_slots: Vec<TransportLaneIndex>,
@@ -78,17 +79,17 @@ pub(in crate::simulation) struct TransportLaneGraph {
 }
 
 impl TransportLaneGraph {
+    /// Rebuilds the whole lane index from live transport entities in
+    /// deterministic entity-id order. Slot pages parked by the previous
+    /// index are reused and the unneeded remainder is dropped, so the slot
+    /// arrays stay proportional to the live lane count.
     pub(super) fn rebuild(&mut self, entities: &EntityStore) {
-        let raw_len = transport_lane_index_len(entities);
         let lane_count = entities
             .transport_belts
             .len()
             .saturating_mul(2)
             .saturating_add(entities.splitters.len().saturating_mul(4));
-        self.slot_by_raw.clear();
-        self.slot_by_raw
-            .reserve(raw_len.saturating_add(PATCH_STORAGE_HEADROOM));
-        self.slot_by_raw.resize(raw_len, VACANT_SLOT);
+        self.slot_by_raw.begin_rebuild();
         self.lanes.clear();
         self.lanes
             .reserve(lane_count.saturating_add(PATCH_STORAGE_HEADROOM));
@@ -154,6 +155,9 @@ impl TransportLaneGraph {
             .map(|underground| underground.max_distance)
             .max()
             .unwrap_or(0);
+        // Slot assignment is complete: drop parked pages the smaller live
+        // set did not reuse so the pool never outlives this rebuild.
+        self.slot_by_raw.end_rebuild();
         self.rebuild_runs();
     }
 
@@ -197,10 +201,6 @@ impl TransportLaneGraph {
             return None;
         }
 
-        let raw_len = transport_lane_index_len(entities);
-        if self.slot_by_raw.len() < raw_len {
-            self.slot_by_raw.resize(raw_len, VACANT_SLOT);
-        }
         let reach = i64::from(catalog_underground_distance.max(self.max_underground_distance)) + 1;
 
         let mut affected_entities = Vec::with_capacity(regions.len().saturating_mul(64));
@@ -308,6 +308,8 @@ impl TransportLaneGraph {
         }
     }
 
+    /// Unmaps a removed entity's lanes, freeing pages left empty, and
+    /// dissolves the runs that observed those lanes.
     fn free_entity_slots(&mut self, entity_id: EntityId, dissolved_runs: &mut Vec<u32>) {
         let Ok(entity_index) = usize::try_from(entity_id.raw()) else {
             return;
@@ -317,14 +319,10 @@ impl TransportLaneGraph {
         };
         for offset in 0..TRANSPORT_LANE_SLOTS_PER_ENTITY {
             let raw = base + offset;
-            let Some(&slot) = self.slot_by_raw.get(raw) else {
+            let Some(slot) = self.slot_by_raw.remove(raw) else {
                 continue;
             };
-            if slot == VACANT_SLOT {
-                continue;
-            }
             let slot_index = slot as usize;
-            self.slot_by_raw[raw] = VACANT_SLOT;
             dissolved_runs.extend(self.run_id_at(slot_index));
             // Runs of feeders can merge across the removed lane, so they must
             // re-derive even though their own geometry is intact.
@@ -340,7 +338,7 @@ impl TransportLaneGraph {
     }
 
     /// Allocates slots for entities placed since the last refresh, reusing
-    /// freed slots where possible.
+    /// freed slots where possible. Already-mapped lanes are left untouched.
     fn ensure_entity_slots(
         &mut self,
         entities: &EntityStore,
@@ -380,10 +378,7 @@ impl TransportLaneGraph {
             let Some(raw) = lane_raw_index(key) else {
                 continue;
             };
-            if raw >= self.slot_by_raw.len() {
-                self.slot_by_raw.resize(raw + 1, VACANT_SLOT);
-            }
-            if self.slot_by_raw[raw] != VACANT_SLOT {
+            if self.slot_by_raw.get(raw).is_some() {
                 continue;
             }
             let slot = if let Some(free) = self.free_slots.pop() {
@@ -399,11 +394,12 @@ impl TransportLaneGraph {
                 self.upstream_by_slot.push(SmallVec::new());
                 slot
             };
-            self.slot_by_raw[raw] = slot as u32;
+            self.slot_by_raw.insert(raw, slot as u32);
             new_slots.push(slot);
         }
     }
 
+    /// Collects the compact slots currently mapped for an entity's lanes.
     fn entity_slot_list(&self, entity_id: EntityId) -> SmallVec<[usize; 4]> {
         let mut slots = SmallVec::new();
         let Ok(entity_index) = usize::try_from(entity_id.raw()) else {
@@ -413,9 +409,7 @@ impl TransportLaneGraph {
             return slots;
         };
         for offset in 0..TRANSPORT_LANE_SLOTS_PER_ENTITY {
-            if let Some(&slot) = self.slot_by_raw.get(base + offset)
-                && slot != VACANT_SLOT
-            {
+            if let Some(slot) = self.slot_by_raw.get(base + offset) {
                 slots.push(slot as usize);
             }
         }
@@ -606,6 +600,7 @@ impl TransportLaneGraph {
             .is_some_and(|record| record.cyclic)
     }
 
+    /// Assigns the next compact slot to a lane during a full rebuild.
     fn assign_slot(&mut self, key: TransportLaneKey, speed_subtiles_per_tick: u16) {
         let Some(raw) = lane_raw_index(key) else {
             return;
@@ -613,16 +608,24 @@ impl TransportLaneGraph {
         let slot = u32::try_from(self.lanes.len()).expect("transport lane slot capacity exceeded");
         self.lanes
             .push(TransportLaneRecord::occupied(key, speed_subtiles_per_tick));
-        self.slot_by_raw[raw] = slot;
+        self.slot_by_raw.insert(raw, slot);
     }
 
+    /// Resolves a lane key to its compact slot, or `None` when unmapped.
     pub(in crate::simulation::belt_ops) fn slot_for(
         &self,
         key: TransportLaneKey,
     ) -> Option<TransportLaneIndex> {
         let raw = lane_raw_index(key)?;
-        let &slot = self.slot_by_raw.get(raw)?;
-        (slot != VACANT_SLOT).then(|| TransportLaneIndex::from_slot(slot as usize))
+        let slot = self.slot_by_raw.get(raw)?;
+        Some(TransportLaneIndex::from_slot(slot as usize))
+    }
+
+    /// Estimates all heap held for the lane-slot index, including retained
+    /// pages and directory buffers.
+    #[cfg(test)]
+    pub(in crate::simulation) fn slot_index_storage_bytes(&self) -> usize {
+        self.slot_by_raw.storage_bytes()
     }
 
     pub(in crate::simulation::belt_ops) fn upstream_for(
@@ -667,18 +670,6 @@ fn downstream_targets(downstream: TransportLaneDownstream) -> SmallVec<[Transpor
         TransportLaneDownstream::Belt { downstream } => downstream.into_iter().collect(),
         TransportLaneDownstream::Splitter { outputs } => outputs.into_iter().flatten().collect(),
     }
-}
-
-fn transport_lane_index_len(entities: &EntityStore) -> usize {
-    entities
-        .transport_belts
-        .keys()
-        .chain(entities.splitters.keys())
-        .filter_map(|entity_id| usize::try_from(entity_id.raw()).ok())
-        .max()
-        .and_then(|entity_index| entity_index.checked_add(1))
-        .and_then(|entity_count| entity_count.checked_mul(4))
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

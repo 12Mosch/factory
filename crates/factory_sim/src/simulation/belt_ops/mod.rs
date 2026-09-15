@@ -79,4 +79,13 @@ impl Simulation {
     pub(super) fn transport_lane_graph_patch_count(&self) -> u64 {
         self.transport.patches
     }
+
+    /// Value storage behind the belt-transport EntityId indexes: lane-slot
+    /// pages plus per-entity item-revision pages. Scales with live transport
+    /// state, not with the highest entity ID ever issued.
+    #[cfg(test)]
+    pub(super) fn transport_index_storage_bytes(&self) -> usize {
+        self.transport.graph.slot_index_storage_bytes()
+            + self.transport.item_revision_storage_bytes()
+    }
 }

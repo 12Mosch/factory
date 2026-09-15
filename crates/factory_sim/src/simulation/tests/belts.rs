@@ -130,6 +130,211 @@ fn incremental_transport_patch_reuses_removed_lane_slots() {
     );
 }
 
+/// Regression test for #329: transport index storage must stay proportional
+/// to live transport state across build/destroy churn and sparse high entity
+/// IDs, while routing and revision tracking keep working.
+#[test]
+fn transport_index_storage_does_not_track_historical_entity_ids() {
+    let mut sim = Simulation::new_test_world(123);
+    let belts = place_belt_line(&mut sim, 2);
+    sim.advance_transport_belts();
+    let baseline = sim.transport_index_storage_bytes();
+
+    // Repeated build/destroy churn keeps the live belt count constant while
+    // advancing the entity-ID high-water mark on every cycle.
+    let scratch = place_belt_line(&mut sim, 1)
+        .pop()
+        .expect("test world should fit a scratch belt");
+    let scratch_spot = crate::entity_mutation::remove(&mut sim, scratch)
+        .expect("scratch belt should be removable");
+    sim.advance_transport_belts();
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    for _ in 0..2048 {
+        let churned = crate::placement::place(
+            &mut sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: scratch_spot.prototype_id,
+                x: scratch_spot.x,
+                y: scratch_spot.y,
+                direction: Direction::East,
+            },
+        )
+        .expect("scratch tile should accept a belt");
+        // Mark a revision token too, so churn stresses both indexes.
+        sim.insert_item_onto_belt(churned, 0, iron_ore)
+            .expect("scratch belt should accept an item");
+        sim.advance_transport_belts();
+        crate::entity_mutation::remove(&mut sim, churned);
+        sim.advance_transport_belts();
+    }
+    let after_churn = sim.transport_index_storage_bytes();
+    assert!(
+        after_churn <= baseline + 16 * 1024,
+        "2048 build/destroy cycles grew transport index storage from {baseline} to {after_churn} bytes"
+    );
+
+    // A sparse high-water mark allocates pages for live entities only. The ID
+    // sits just above both sparse-page thresholds (slot pages past entity
+    // 262,144, revision pages past entity 1,048,576); raw ID-sized vectors
+    // would need ~18MB of lane slots plus ~9MB of revision tokens for it, so
+    // the old layout still fails this bound without a ~240MB transient.
+    sim.entities.next_entity_id = 1_100_000;
+    let high_belt = place_belt_line(&mut sim, 1)
+        .pop()
+        .expect("test world should fit a high-ID belt");
+    sim.advance_transport_belts();
+    // Exercise the high-ID revision page before measuring, so both paged
+    // indexes are covered.
+    sim.insert_item_onto_belt(high_belt, 0, iron_ore)
+        .expect("high-ID belt should accept an item");
+    sim.advance_transport_belts();
+    let after_sparse = sim.transport_index_storage_bytes();
+    assert!(
+        after_sparse <= after_churn + 64 * 1024,
+        "a high entity-ID high-water mark grew transport index storage from {after_churn} to {after_sparse} bytes"
+    );
+
+    // The churned and high-ID topology still routes items correctly.
+    sim.insert_item_onto_belt(belts[0], 0, iron_ore)
+        .expect("live belt should accept an item after churn");
+    for _ in 0..32 {
+        sim.tick();
+    }
+    assert!(
+        crate::entity_access::belt_segment(&sim, belts[1])
+            .expect("live belt should exist")
+            .lanes[0]
+            .items
+            .iter()
+            .any(|item| item.item_id == iron_ore),
+        "live belt line should still transport items after churn"
+    );
+    assert_ne!(
+        sim.belt_entity_item_revision(high_belt),
+        0,
+        "high-ID belt should track item revisions"
+    );
+}
+
+/// Regression test: a bulk shrink that forces a full rebuild must release
+/// pages back near the small live set's footprint instead of retaining the
+/// peak live set's storage.
+#[test]
+fn transport_rebuild_releases_pages_after_bulk_shrink() {
+    let mut sim = Simulation::new_test_world(123);
+    let keep = place_belt_line(&mut sim, 2);
+    sim.advance_transport_belts();
+    let small_footprint = sim.transport_index_storage_bytes();
+
+    // Grow far beyond the incremental-patch region budget, refresh so the
+    // big live set actually populates its pages, then remove everything
+    // again: the accumulated edits force a full rebuild of the small set.
+    let mut grown = Vec::new();
+    for _ in 0..64 {
+        grown.extend(place_belt_line(&mut sim, 20));
+    }
+    assert_eq!(grown.len(), 1280);
+    sim.advance_transport_belts();
+    // Sanity: the big live set really did populate many pages, so the
+    // shrink assertion below cannot pass vacuously.
+    assert!(sim.transport_index_storage_bytes() > small_footprint + 16 * 1024);
+    for belt in grown {
+        crate::entity_mutation::remove(&mut sim, belt);
+    }
+    sim.advance_transport_belts();
+
+    // Both refreshes must have been full rebuilds, not patches.
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 3);
+    assert_eq!(sim.transport_lane_graph_patch_count(), 0);
+    let after_shrink = sim.transport_index_storage_bytes();
+    assert!(
+        after_shrink <= small_footprint + 16 * 1024,
+        "bulk shrink grew transport index storage from {small_footprint} to {after_shrink} bytes"
+    );
+
+    // The surviving belts still route items.
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(keep[0], 0, iron_ore)
+        .expect("surviving belt should accept an item");
+    for _ in 0..32 {
+        sim.tick();
+    }
+    assert!(
+        crate::entity_access::belt_segment(&sim, keep[1])
+            .expect("surviving belt should exist")
+            .lanes[0]
+            .items
+            .iter()
+            .any(|item| item.item_id == iron_ore),
+        "surviving belt line should still transport items after bulk shrink"
+    );
+}
+
+/// Regression test: a bulk shrink must also release the sparse hash-backed
+/// directory, not just value pages. Many simultaneously live high-ID belts
+/// populate thousands of sparse entries (lane slots and revision tokens);
+/// after shrinking to a small live set across full rebuilds, storage must
+/// fall back near the small baseline instead of tracking the sparse peak.
+#[test]
+fn transport_rebuild_releases_sparse_directory_after_bulk_shrink() {
+    let mut sim = Simulation::new_test_world(123);
+    let keep = place_belt_line(&mut sim, 2);
+    sim.advance_transport_belts();
+    let small_footprint = sim.transport_index_storage_bytes();
+
+    // High IDs land past both sparse-page thresholds. Each belt advances the
+    // ID by a full page so every belt owns distinct sparse pages (consecutive
+    // IDs would share them, 64 entities to a page), and marking an item on
+    // each belt populates the revision index too: both sparse directories
+    // reach thousands of pages.
+    sim.entities.next_entity_id = 1_100_000;
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    let mut grown = Vec::new();
+    for _ in 0..3000 {
+        sim.entities.next_entity_id += 64;
+        let belt = place_belt_line(&mut sim, 1)
+            .pop()
+            .expect("test world should fit a high-ID belt");
+        sim.insert_item_onto_belt(belt, 0, iron_ore)
+            .expect("high-ID belt should accept an item");
+        grown.push(belt);
+    }
+    assert_eq!(grown.len(), 3000);
+    sim.advance_transport_belts();
+    // Sanity: the big high-ID live set really did populate sparse storage,
+    // so the shrink assertion below cannot pass vacuously.
+    assert!(sim.transport_index_storage_bytes() > small_footprint + 1024 * 1024);
+    for belt in grown {
+        crate::entity_mutation::remove(&mut sim, belt);
+    }
+    sim.advance_transport_belts();
+
+    // All refreshes must have been full rebuilds, not patches.
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 3);
+    assert_eq!(sim.transport_lane_graph_patch_count(), 0);
+    let after_shrink = sim.transport_index_storage_bytes();
+    assert!(
+        after_shrink <= small_footprint + 16 * 1024,
+        "sparse bulk shrink grew transport index storage from {small_footprint} to {after_shrink} bytes"
+    );
+
+    // The surviving belts still route items.
+    sim.insert_item_onto_belt(keep[0], 0, iron_ore)
+        .expect("surviving belt should accept an item");
+    for _ in 0..32 {
+        sim.tick();
+    }
+    assert!(
+        crate::entity_access::belt_segment(&sim, keep[1])
+            .expect("surviving belt should exist")
+            .lanes[0]
+            .items
+            .iter()
+            .any(|item| item.item_id == iron_ore),
+        "surviving belt line should still transport items after sparse shrink"
+    );
+}
+
 #[test]
 fn belt_does_not_duplicate_items() {
     let mut sim = Simulation::new_test_world(123);
