@@ -135,8 +135,10 @@ impl Simulation {
     /// something for a pump to find. A railway with no fluid wagon standing
     /// anywhere answers in the time it takes to look at the index, which is
     /// what a topology rebuild in a factory of thousands of entities and no
-    /// parked tanker should cost; with one parked, the rebuild still costs
-    /// the pumps rather than the factory.
+    /// parked tanker should cost; with one parked, this stopped-stock
+    /// attachment pass costs the pumps rather than the factory. (The rest of
+    /// the rebuild — every placed entity's own fluid boxes and the
+    /// underground pairs — still walks the whole factory.)
     fn stopped_stock_fluid_nodes(&self) -> Vec<FluidBoxNode> {
         if !self.any_stopped_stock_carries_fluid() {
             return Vec::new();

@@ -678,26 +678,38 @@ fn a_railway_without_a_pump_at_a_tanker_adds_no_fluid_nodes() {
     assert_eq!(sim.networked_rolling_stock_fluid_boxes().count(), 0);
 }
 
-/// Manual benchmark for the stopped-stock pump scan behind the fluid topology.
-///
-/// A topology rebuild asks every pump whose connection faces a stopped fluid
-/// wagon for that wagon's tanks. The scan must cost pumps, not the whole
-/// factory, so this parks a tanker at a pump, fills the world with thousands
-/// of unrelated entities, and times the node lookup directly. Run with
-/// `cargo test -p factory_sim stopped_stock_pump_scan -- --ignored --nocapture`.
-#[test]
-#[ignore = "manual performance measurement"]
-fn stopped_stock_pump_scan_benchmark() {
-    const FILLER_ENTITIES: usize = 4_000;
-    const ITERATIONS: usize = 5_000;
+/// Places up to `count` copies of `prototype` on free tiles, returning how many
+/// fit. Placement validates internally, so callers assert the exact expected
+/// count: a silently smaller world would silently lighten the workload.
+fn place_many(sim: &mut Simulation, prototype: EntityPrototypeId, count: usize) -> usize {
+    let mut placed = 0;
+    for (x, y) in all_tile_coords(&sim.world) {
+        if placed >= count {
+            break;
+        }
+        if crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: prototype,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .is_ok()
+        {
+            placed += 1;
+        }
+    }
+    placed
+}
 
-    let (mut sim, _rails, _stock_id, (wagon_x, wagon_y)) = world_with_parked_wagon("fluid_wagon");
-
-    // One pump opening onto the wagon, so the scan does real geometry and
-    // index work rather than skipping past every candidate.
+/// A pump lying across the track's side with its outlet opening east onto the
+/// wagon's own tile — the adjacency the wagon joins the network on.
+fn place_pump_facing_wagon(sim: &mut Simulation, wagon_x: WorldTileCoord, wagon_y: WorldTileCoord) {
     let pump = factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "pump");
     crate::placement::place(
-        &mut sim,
+        sim,
         crate::placement::EntityPlacementRequest {
             prototype_id: pump,
             x: wagon_x - 2,
@@ -706,46 +718,97 @@ fn stopped_stock_pump_scan_benchmark() {
         },
     )
     .expect("a pump should fit in the clear ground beside the track");
+}
 
-    // Thousands of unrelated entities: the factory the scan must not be
-    // proportional to.
+/// Manual benchmark for the stopped-stock attachment pass of the fluid
+/// topology.
+///
+/// A topology rebuild asks every pump whose connection faces a stopped fluid
+/// wagon for that wagon's tanks. That pass must cost pumps, not the whole
+/// factory — the rest of the rebuild still walks every placed entity — so
+/// this times the pass in isolation in a sparse world (one pump among
+/// thousands of unrelated entities) and in a pump-dense one, plus one honest
+/// end-to-end rebuild with the topology forced dirty. Run with
+/// `cargo test -p factory_sim stopped_stock_pump_scan -- --ignored --nocapture`,
+/// ideally `--release`: debug timings compare revisions, release timings say
+/// what players feel.
+#[test]
+#[ignore = "manual performance measurement"]
+fn stopped_stock_pump_scan_benchmark() {
+    const FILLER_ENTITIES: usize = 4_000;
+    const ISOLATED_ITERATIONS: usize = 5_000;
+    const TOPOLOGY_ITERATIONS: usize = 200;
+    const DENSE_PUMPS: usize = 400;
+
+    // Sparse: one pump opening onto the wagon among thousands of chests, so
+    // the pass does real geometry and index work without being handed the
+    // answer by a world of nothing but pumps.
+    let (mut sim, _rails, _stock_id, (wagon_x, wagon_y)) = world_with_parked_wagon("fluid_wagon");
+    place_pump_facing_wagon(&mut sim, wagon_x, wagon_y);
     let chest = factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "chest");
-    let mut fillers = 0;
-    for (x, y) in all_tile_coords(&sim.world) {
-        if fillers >= FILLER_ENTITIES {
-            break;
-        }
-        let request = crate::placement::EntityPlacementRequest {
-            prototype_id: chest,
-            x,
-            y,
-            direction: Direction::North,
-        };
-        if crate::placement::validate(&sim, request).is_ok()
-            && crate::placement::place(&mut sim, request).is_ok()
-        {
-            fillers += 1;
-        }
-    }
-    assert!(
-        fillers >= 1_000,
-        "the benchmark needs a factory around the railway, placed {fillers}"
+    assert_eq!(
+        place_many(&mut sim, chest, FILLER_ENTITIES),
+        FILLER_ENTITIES,
+        "the sparse workload needs its full factory around the railway"
     );
-
+    assert_eq!(sim.entities.pumps.len(), 1);
     // The wagon's single tank, reached through the one pump beside it — the
     // fillers must not change the answer, only (before the fix) its cost.
     assert_eq!(sim.networked_rolling_stock_fluid_boxes().count(), 1);
 
     let start = std::time::Instant::now();
-    for _ in 0..ITERATIONS {
+    for _ in 0..ISOLATED_ITERATIONS {
         std::hint::black_box(sim.networked_rolling_stock_fluid_boxes().count());
     }
-    let elapsed = start.elapsed();
-
     eprintln!(
-        "stopped_stock_pump_scan: entities={} pumps={} fillers={fillers} iterations={ITERATIONS} {:.3} us/op",
+        "stopped_stock_attachment_sparse: entities={} pumps={} iterations={ISOLATED_ITERATIONS} {:.3} us/op",
         sim.entities.placed_entities.len(),
         sim.entities.pumps.len(),
-        elapsed.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64,
+        start.elapsed().as_secs_f64() * 1_000_000.0 / ISOLATED_ITERATIONS as f64,
+    );
+
+    // End to end: the whole rebuild, topology forced dirty every iteration,
+    // so the number also carries the passes this change deliberately leaves
+    // alone. The rebuild counter proves every iteration really rebuilt.
+    let rebuilds_before = sim.fluid_topology_rebuild_count();
+    let start = std::time::Instant::now();
+    for _ in 0..TOPOLOGY_ITERATIONS {
+        sim.invalidate_fluid_state();
+        sim.ensure_fluid_network_topology();
+    }
+    let elapsed = start.elapsed();
+    assert_eq!(
+        sim.fluid_topology_rebuild_count(),
+        rebuilds_before + TOPOLOGY_ITERATIONS as u64,
+        "every timed iteration should have rebuilt the topology"
+    );
+    eprintln!(
+        "fluid_topology_rebuild_sparse: entities={} pumps={} iterations={TOPOLOGY_ITERATIONS} {:.3} us/op",
+        sim.entities.placed_entities.len(),
+        sim.entities.pumps.len(),
+        elapsed.as_secs_f64() * 1_000_000.0 / TOPOLOGY_ITERATIONS as f64,
+    );
+
+    // Dense: hundreds of pumps, so the per-pump registry lookup — the new
+    // pass's worst case — is measured too rather than assumed cheap.
+    let (mut sim, _rails, _stock_id, (wagon_x, wagon_y)) = world_with_parked_wagon("fluid_wagon");
+    place_pump_facing_wagon(&mut sim, wagon_x, wagon_y);
+    let pump = factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "pump");
+    assert_eq!(
+        place_many(&mut sim, pump, DENSE_PUMPS),
+        DENSE_PUMPS,
+        "the dense workload needs its full pump field"
+    );
+    assert_eq!(sim.networked_rolling_stock_fluid_boxes().count(), 1);
+
+    let start = std::time::Instant::now();
+    for _ in 0..ISOLATED_ITERATIONS {
+        std::hint::black_box(sim.networked_rolling_stock_fluid_boxes().count());
+    }
+    eprintln!(
+        "stopped_stock_attachment_dense: entities={} pumps={} iterations={ISOLATED_ITERATIONS} {:.3} us/op",
+        sim.entities.placed_entities.len(),
+        sim.entities.pumps.len(),
+        start.elapsed().as_secs_f64() * 1_000_000.0 / ISOLATED_ITERATIONS as f64,
     );
 }
