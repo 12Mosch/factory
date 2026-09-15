@@ -130,8 +130,11 @@ where
     }
 
     /// Parks every live page for reuse by an imminent full rebuild, dropping
-    /// all entries. Directory buffers are retained, mirroring how the
-    /// previous dense vector kept its backing allocation. Must be paired
+    /// all entries. The direct vector keeps its buffer, mirroring how the
+    /// previous dense vector kept its backing allocation, but the sparse
+    /// directory is taken (not drained) so its buckets are released: a
+    /// temporarily large sparse population must not leave bucket capacity
+    /// proportional to its peak after the live set shrinks. Must be paired
     /// with [`PagedSparseVec::end_rebuild`].
     fn begin_rebuild(&mut self) {
         debug_assert!(
@@ -141,8 +144,8 @@ where
         self.page_pool
             .extend(self.direct_pages.iter_mut().filter_map(|slot| slot.take()));
         self.direct_pages.clear();
-        self.page_pool
-            .extend(self.sparse_pages.drain().map(|(_, page)| page));
+        let sparse = std::mem::take(&mut self.sparse_pages);
+        self.page_pool.extend(sparse.into_values());
     }
 
     /// Drops pooled pages the rebuild did not reuse, so the pool never
@@ -153,8 +156,10 @@ where
     }
 
     /// Drops every occupied entry whose raw index is rejected by `keep`,
-    /// freeing pages left empty. Removal order does not affect the outcome,
-    /// so hash-map iteration order cannot leak into simulation behavior.
+    /// freeing pages left empty, then compacts the sparse directory so its
+    /// buckets track the live set rather than the pruned peak. Removal order
+    /// does not affect the outcome, so hash-map iteration order cannot leak
+    /// into simulation behavior.
     fn retain(&mut self, mut keep: impl FnMut(u64) -> bool) {
         for (page_number, slot) in self.direct_pages.iter_mut().enumerate() {
             let Some(page) = slot else {
@@ -198,6 +203,11 @@ where
         for page_id in emptied {
             self.sparse_pages.remove(&page_id);
         }
+        // Pruning runs on full rebuilds, so compact the directory here:
+        // removals alone would leave buckets proportional to the pruned peak.
+        // The resulting capacity depends only on the live count, keeping
+        // rebuilds deterministic.
+        self.sparse_pages.shrink_to_fit();
     }
 
     /// Returns the page holding `index`, or `None` when never allocated.
