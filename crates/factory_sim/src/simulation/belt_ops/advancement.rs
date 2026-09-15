@@ -1,5 +1,7 @@
 use super::cache::mark_item_revision;
-use super::cache::{TransportLaneGraph, TransportRunActiveStorage, TransportRunVisitStorage};
+use super::cache::{
+    EntityItemRevisionMap, TransportLaneGraph, TransportRunActiveStorage, TransportRunVisitStorage,
+};
 use super::lane_access::{belt_lane_can_accept_position, lane_mut};
 use super::types::{
     TransportLaneDownstream, TransportLaneIndex, TransportLaneKey, TransportRunIndex,
@@ -28,7 +30,7 @@ pub(in crate::simulation) struct TransportBeltAdvancement<'a> {
     visit_states: &'a mut TransportRunVisitStorage,
     active_runs: &'a mut TransportRunActiveStorage,
     item_revision: &'a mut u64,
-    item_revisions_by_entity: &'a mut Vec<u64>,
+    item_revisions_by_entity: &'a mut EntityItemRevisionMap,
     /// Entities a circuit condition switched off this tick, sorted by id.
     disabled_entities: &'a [EntityId],
 }
@@ -41,7 +43,7 @@ impl<'a> TransportBeltAdvancement<'a> {
         visit_states: &'a mut TransportRunVisitStorage,
         active_runs: &'a mut TransportRunActiveStorage,
         item_revision: &'a mut u64,
-        item_revisions_by_entity: &'a mut Vec<u64>,
+        item_revisions_by_entity: &'a mut EntityItemRevisionMap,
         disabled_entities: &'a [EntityId],
     ) -> Self {
         Self {

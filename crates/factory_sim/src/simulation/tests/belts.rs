@@ -131,6 +131,84 @@ fn incremental_transport_patch_reuses_removed_lane_slots() {
 }
 
 #[test]
+fn transport_index_storage_does_not_track_historical_entity_ids() {
+    let mut sim = Simulation::new_test_world(123);
+    let belts = place_belt_line(&mut sim, 2);
+    sim.advance_transport_belts();
+    let baseline = sim.transport_index_storage_bytes();
+
+    // Repeated build/destroy churn keeps the live belt count constant while
+    // advancing the entity-ID high-water mark on every cycle.
+    let scratch = place_belt_line(&mut sim, 1)
+        .pop()
+        .expect("test world should fit a scratch belt");
+    let scratch_spot = crate::entity_mutation::remove(&mut sim, scratch)
+        .expect("scratch belt should be removable");
+    sim.advance_transport_belts();
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    for _ in 0..2048 {
+        let churned = crate::placement::place(
+            &mut sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: scratch_spot.prototype_id,
+                x: scratch_spot.x,
+                y: scratch_spot.y,
+                direction: Direction::East,
+            },
+        )
+        .expect("scratch tile should accept a belt");
+        // Mark a revision token too, so churn stresses both indexes.
+        sim.insert_item_onto_belt(churned, 0, iron_ore)
+            .expect("scratch belt should accept an item");
+        sim.advance_transport_belts();
+        crate::entity_mutation::remove(&mut sim, churned);
+        sim.advance_transport_belts();
+    }
+    let after_churn = sim.transport_index_storage_bytes();
+    assert!(
+        after_churn <= baseline + 16 * 1024,
+        "2048 build/destroy cycles grew transport index storage from {baseline} to {after_churn} bytes"
+    );
+
+    // A sparse high-water mark allocates pages for live entities only: raw
+    // ID-sized vectors would need ~160MB of lane slots plus ~80MB of revision
+    // tokens for ten million historical allocations.
+    sim.entities.next_entity_id = 10_000_000;
+    let high_belt = place_belt_line(&mut sim, 1)
+        .pop()
+        .expect("test world should fit a high-ID belt");
+    sim.advance_transport_belts();
+    let after_sparse = sim.transport_index_storage_bytes();
+    assert!(
+        after_sparse <= after_churn + 64 * 1024,
+        "a high entity-ID high-water mark grew transport index storage from {after_churn} to {after_sparse} bytes"
+    );
+
+    // The churned and high-ID topology still routes items correctly.
+    sim.insert_item_onto_belt(belts[0], 0, iron_ore)
+        .expect("live belt should accept an item after churn");
+    sim.insert_item_onto_belt(high_belt, 0, iron_ore)
+        .expect("high-ID belt should accept an item");
+    for _ in 0..32 {
+        sim.tick();
+    }
+    assert!(
+        crate::entity_access::belt_segment(&sim, belts[1])
+            .expect("live belt should exist")
+            .lanes[0]
+            .items
+            .iter()
+            .any(|item| item.item_id == iron_ore),
+        "live belt line should still transport items after churn"
+    );
+    assert_ne!(
+        sim.belt_entity_item_revision(high_belt),
+        0,
+        "high-ID belt should track item revisions"
+    );
+}
+
+#[test]
 fn belt_does_not_duplicate_items() {
     let mut sim = Simulation::new_test_world(123);
     let belts = place_belt_line(&mut sim, 20);

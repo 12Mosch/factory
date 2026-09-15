@@ -1,3 +1,4 @@
+use super::EntityItemRevisionMap;
 use super::TransportLaneCache;
 use crate::logistics::BeltItemId;
 use crate::simulation::{EntityId, EntityStore};
@@ -45,28 +46,18 @@ impl TransportLaneCache {
     }
 
     pub(in crate::simulation) fn entity_item_revision(&self, entity_id: EntityId) -> u64 {
-        usize::try_from(entity_id.raw())
-            .ok()
-            .and_then(|index| self.item_revisions_by_entity.get(index))
-            .copied()
-            .unwrap_or(0)
+        self.item_revisions_by_entity.revision(entity_id)
     }
 }
 
 pub(in crate::simulation::belt_ops) fn mark_item_revision(
     item_revision: &mut u64,
-    item_revisions_by_entity: &mut Vec<u64>,
+    item_revisions_by_entity: &mut EntityItemRevisionMap,
     entity_id: EntityId,
 ) {
     *item_revision = item_revision.wrapping_add(1);
     if *item_revision == 0 {
         *item_revision = 1;
     }
-    let Ok(index) = usize::try_from(entity_id.raw()) else {
-        return;
-    };
-    if item_revisions_by_entity.len() <= index {
-        item_revisions_by_entity.resize(index + 1, 0);
-    }
-    item_revisions_by_entity[index] = *item_revision;
+    item_revisions_by_entity.set(entity_id, *item_revision);
 }
