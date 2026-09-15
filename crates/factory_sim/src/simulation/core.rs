@@ -90,7 +90,6 @@ impl Simulation {
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
-        sim.transport.initialize_item_tracking(&sim.entities);
         sim.request_chunks_around_player();
         let initial_chunks = ChunkGenerationResult::from_generated_chunks(
             sim.world.chunk_revision(),
@@ -285,7 +284,7 @@ impl Simulation {
 
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
-        "factory-sim-state-v5".hash(&mut hasher);
+        "factory-sim-state-v6".hash(&mut hasher);
         self.tick.hash(&mut hasher);
         self.day_night_cycle.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
@@ -328,6 +327,12 @@ impl Simulation {
         self.circuits.disabled_entities.hash(&mut hasher);
         self.pollution.hash(&mut hasher);
         self.enemies.hash(&mut hasher);
+        self.enemy_navigation.hash(&mut hasher);
+        self.attack_targets.hash(&mut hasher);
+        self.entity_topology_revision.hash(&mut hasher);
+        self.world.chunk_revision.hash(&mut hasher);
+        self.world.walkability_revision.hash(&mut hasher);
+        self.transport.hash_durable(&mut hasher);
         self.config.hash(&mut hasher);
         hasher.finish()
     }

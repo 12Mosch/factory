@@ -160,9 +160,19 @@ fn add_checked_stat<K: Ord>(
 }
 
 pub(super) fn validate_world_resources(world: &WorldSim) -> Result<(), SimValidationError> {
-    for chunk in world.chunks.values() {
+    validate_snapshot_world(&world.prototypes, &world.chunks)
+}
+
+pub(in crate::simulation) fn validate_snapshot_world(
+    catalog: &PrototypeCatalog,
+    chunks: &BTreeMap<ChunkCoord, Chunk>,
+) -> Result<(), SimValidationError> {
+    for (coord, chunk) in chunks {
+        if chunk.coord != *coord || chunk.tiles.len() != (CHUNK_SIZE * CHUNK_SIZE) as usize {
+            return Err(SimValidationError::InvalidChunk(*coord));
+        }
         for (index, tile) in chunk.tiles.iter().enumerate() {
-            if world.prototypes.tile(tile.tile_id).is_none() {
+            if catalog.tile(tile.tile_id).is_none() {
                 let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
                 let local_y = (index as i32).div_euclid(CHUNK_SIZE);
                 return Err(SimValidationError::MissingTile {
@@ -172,7 +182,7 @@ pub(super) fn validate_world_resources(world: &WorldSim) -> Result<(), SimValida
             }
 
             if let Some(resource) = tile.resource
-                && !item_exists(&world.prototypes, resource.resource_item)
+                && !item_exists(catalog, resource.resource_item)
             {
                 return Err(SimValidationError::UnknownItem(resource.resource_item));
             }
@@ -247,4 +257,38 @@ fn entity_can_occupy_tile(prototype: &factory_data::EntityPrototype, tile: &Tile
     } else {
         tile.collision.buildable
     }
+}
+
+/// Historical navigation targets and pending transport edits may outlive their
+/// entities. Validate their geometry before center arithmetic or tile expansion.
+pub(in crate::simulation) fn valid_work_footprint(
+    world: &WorldSim,
+    footprint: EntityFootprint,
+) -> bool {
+    if footprint.validate().is_err() {
+        return false;
+    }
+    let Some(area) = footprint.width.checked_mul(footprint.height) else {
+        return false;
+    };
+    if area as usize
+        > world
+            .chunks
+            .len()
+            .saturating_mul((CHUNK_SIZE * CHUNK_SIZE) as usize)
+    {
+        return false;
+    }
+    let Some(max_x) = footprint.x.checked_add(i64::from(footprint.width) - 1) else {
+        return false;
+    };
+    let Some(max_y) = footprint.y.checked_add(i64::from(footprint.height) - 1) else {
+        return false;
+    };
+    ChunkCoord::from_tile(footprint.x, footprint.y).is_some()
+        && ChunkCoord::from_tile(max_x, max_y).is_some()
+        && world.prototypes.entities().iter().any(|prototype| {
+            (prototype.size.x == footprint.width && prototype.size.y == footprint.height)
+                || (prototype.size.y == footprint.width && prototype.size.x == footprint.height)
+        })
 }

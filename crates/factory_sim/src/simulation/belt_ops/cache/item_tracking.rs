@@ -1,10 +1,14 @@
 use super::TransportLaneCache;
 use crate::logistics::BeltItemId;
-use crate::simulation::{EntityId, EntityStore};
+use crate::simulation::{EntityId, EntityStore, SimValidationError};
 
 impl TransportLaneCache {
-    pub(in crate::simulation) fn initialize_item_tracking(&mut self, entities: &EntityStore) {
-        self.next_item_id = entities
+    pub(in crate::simulation) fn validate_item_tracking(
+        &self,
+        entities: &EntityStore,
+    ) -> Result<(), SimValidationError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for item in entities
             .transport_belts
             .values()
             .flat_map(|segment| segment.lanes.iter())
@@ -17,18 +21,21 @@ impl TransportLaneCache {
                     .flat_map(|lanes| lanes.iter())
                     .flat_map(|lane| lane.items.iter()),
             )
-            .map(|item| item.id.raw())
-            .max()
-            .map_or(1, |max_id| max_id.checked_add(1).unwrap_or(0));
+        {
+            if item.id.raw() == 0
+                || !seen.insert(item.id)
+                || (self.next_item_id != 0 && item.id.raw() >= self.next_item_id)
+            {
+                return Err(SimValidationError::InvalidBeltItemIdentity);
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::simulation) fn allocate_item_id(&mut self) -> BeltItemId {
         assert_ne!(self.next_item_id, 0, "belt item identity space exhausted");
         let id = BeltItemId::new(self.next_item_id);
-        self.next_item_id = self
-            .next_item_id
-            .checked_add(1)
-            .expect("belt item identity space exhausted");
+        self.next_item_id = self.next_item_id.checked_add(1).unwrap_or(0);
         id
     }
 

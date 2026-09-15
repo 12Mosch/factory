@@ -3,7 +3,7 @@ mod support;
 mod assemblers;
 mod belts;
 mod circuits;
-mod combat;
+pub(in crate::simulation) mod combat;
 mod commands;
 mod construction;
 mod equipment;

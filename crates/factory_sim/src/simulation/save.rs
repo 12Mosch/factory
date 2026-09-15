@@ -109,7 +109,10 @@ use bincode::Options;
 // laser cooldowns joined durable combat/equipment state.
 // v53: durable player death tick, pending respawn request and death statistics.
 // v54: persistent player corpses, item quantities and opened consumables.
-pub const SAVE_VERSION: u32 = 54;
+// v55: durable navigation work, target decisions, invalidation revisions, and
+// belt identities and transport execution/scheduling state. v54 cannot
+// reconstruct these historical values.
+pub const SAVE_VERSION: u32 = 55;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -196,43 +199,87 @@ struct SaveHeader {
     prototype_hash: u64,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-struct SimulationSnapshotOwned {
-    tick: u64,
-    day_night_cycle: Option<DayNightCycleState>,
-    world_seed: u64,
-    prototypes: PrototypeCatalog,
-    chunks: BTreeMap<ChunkCoord, Chunk>,
-    chunk_generation_queue: ChunkGenerationQueue,
-    chart: ChartState,
-    item_statistics: ItemStatistics,
-    fluid_statistics: FluidStatistics,
-    power_statistics: PowerStatistics,
-    rockets_launched: u64,
-    player_deaths: u64,
-    entities: EntityStore,
-    construction: ConstructionState,
-    player: PlayerState,
-    player_equipment: PlayerEquipmentState,
-    player_weapon: PlayerWeaponState,
-    delayed_combat: DelayedCombatState,
-    player_inventory: Inventory,
-    corpses: BTreeMap<u64, PlayerCorpse>,
-    manual_mining_progress: Option<ManualMiningProgress>,
-    crafting_queue: CraftingQueue,
-    onboarding_progress: OnboardingProgress,
-    research: ResearchState,
-    power_summary: PowerSummary,
-    power_networks: Vec<PowerNetworkSnapshot>,
-    entity_power_statuses: DenseEntityMap<EntityPowerStatus>,
-    fluid_networks: Vec<FluidNetworkSnapshot>,
-    heat_networks: Vec<HeatNetworkSnapshot>,
-    robot_networks: Vec<RobotNetworkSnapshot>,
-    robot_flights: RobotFlightSubsystem,
-    rolling_stock: RollingStockSubsystem,
-    pollution: PollutionState,
-    enemies: EnemySubsystem,
-    config: SimulationConfig,
+// Single ordered durable-state registry. Borrowed encoding and detached capture
+// are generated together, so adding a field cannot silently omit one save path.
+// Runtime ownership and reconstruction rules are documented in save_state.md.
+macro_rules! capture_snapshot_field {
+    ($ty:ty, $source:expr) => {
+        <$ty>::clone(&$source)
+    };
+    ($ty:ty, $source:expr, $capture:ident) => {
+        $source.$capture()
+    };
+}
+
+macro_rules! define_snapshot {
+    ($sim:ident; $($field:ident: $ty:ty => $source:expr $(; $capture:ident)?),* $(,)?) => {
+        #[derive(Clone, Deserialize, Serialize)]
+        struct SimulationSnapshotOwned {
+            $($field: $ty,)*
+        }
+
+        #[derive(Serialize)]
+        struct SimulationSnapshotRef<'a> {
+            $($field: &'a $ty,)*
+        }
+
+        impl<'a> SimulationSnapshotRef<'a> {
+            fn from_simulation($sim: &'a Simulation) -> Self {
+                Self { $($field: &$source,)* }
+            }
+        }
+
+        impl SimulationSnapshotOwned {
+            fn from_simulation($sim: &Simulation) -> Self {
+                Self { $($field: capture_snapshot_field!($ty, $source $(, $capture)?),)* }
+            }
+        }
+    };
+}
+
+define_snapshot! {
+    sim;
+    tick: u64 => sim.tick,
+    day_night_cycle: Option<DayNightCycleState> => sim.day_night_cycle,
+    world_seed: u64 => sim.world.seed,
+    prototypes: PrototypeCatalog => sim.world.prototypes,
+    chunks: BTreeMap<ChunkCoord, Chunk> => sim.world.chunks,
+    chunk_generation_queue: ChunkGenerationQueue => sim.chunk_generation_queue,
+    chart: ChartState => sim.chart,
+    item_statistics: ItemStatistics => sim.statistics.items,
+    fluid_statistics: FluidStatistics => sim.statistics.fluids,
+    power_statistics: PowerStatistics => sim.statistics.power,
+    rockets_launched: u64 => sim.statistics.rockets_launched,
+    player_deaths: u64 => sim.statistics.player_deaths,
+    entities: EntityStore => sim.entities,
+    construction: ConstructionState => sim.construction,
+    player: PlayerState => sim.player,
+    player_equipment: PlayerEquipmentState => sim.player_equipment,
+    player_weapon: PlayerWeaponState => sim.player_weapon,
+    delayed_combat: DelayedCombatState => sim.delayed_combat,
+    player_inventory: Inventory => sim.player_inventory,
+    corpses: BTreeMap<u64, PlayerCorpse> => sim.corpses,
+    manual_mining_progress: Option<ManualMiningProgress> => sim.manual_mining_progress,
+    crafting_queue: CraftingQueue => sim.crafting_queue,
+    onboarding_progress: OnboardingProgress => sim.onboarding_progress,
+    research: ResearchState => sim.research,
+    power_summary: PowerSummary => sim.power.summary,
+    power_networks: Vec<PowerNetworkSnapshot> => sim.power.networks,
+    entity_power_statuses: DenseEntityMap<EntityPowerStatus> => sim.power.entity_statuses,
+    fluid_networks: Vec<FluidNetworkSnapshot> => sim.fluids.networks,
+    heat_networks: Vec<HeatNetworkSnapshot> => sim.heat.networks,
+    robot_networks: Vec<RobotNetworkSnapshot> => sim.robots.networks,
+    robot_flights: RobotFlightSubsystem => sim.robot_flights,
+    rolling_stock: RollingStockSubsystem => sim.rolling_stock,
+    pollution: PollutionState => sim.pollution,
+    enemies: EnemySubsystem => sim.enemies,
+    config: SimulationConfig => sim.config,
+    entity_topology_revision: u64 => sim.entity_topology_revision,
+    world_chunk_revision: u64 => sim.world.chunk_revision,
+    world_walkability_revision: u64 => sim.world.walkability_revision,
+    transport: TransportLaneCache => sim.transport; clone_for_save,
+    enemy_navigation: enemy::EnemyNavigation => sim.enemy_navigation; clone_for_save,
+    attack_targets: enemy::AttackTargetCache => sim.attack_targets; clone_for_save,
 }
 
 /// An owned, immutable copy of the durable state for one completed simulation tick.
@@ -353,7 +400,7 @@ pub fn load_from_bytes_with_limits(
         });
     }
 
-    let sim = snapshot.into_simulation();
+    let sim = snapshot.into_simulation()?;
     sim.validate_state()
         .map_err(SaveLoadError::InvalidSimulationState)?;
     Ok(sim)
@@ -416,134 +463,19 @@ pub fn prototype_hash(catalog: &PrototypeCatalog) -> u64 {
     hasher.finish()
 }
 
-#[derive(Serialize)]
-struct SimulationSnapshotRef<'a> {
-    tick: u64,
-    day_night_cycle: Option<DayNightCycleState>,
-    world_seed: u64,
-    prototypes: &'a PrototypeCatalog,
-    chunks: &'a BTreeMap<ChunkCoord, Chunk>,
-    chunk_generation_queue: &'a ChunkGenerationQueue,
-    chart: &'a ChartState,
-    item_statistics: &'a ItemStatistics,
-    fluid_statistics: &'a FluidStatistics,
-    power_statistics: &'a PowerStatistics,
-    rockets_launched: u64,
-    player_deaths: u64,
-    entities: &'a EntityStore,
-    construction: &'a ConstructionState,
-    player: PlayerState,
-    player_equipment: &'a PlayerEquipmentState,
-    player_weapon: PlayerWeaponState,
-    delayed_combat: &'a DelayedCombatState,
-    player_inventory: &'a Inventory,
-    corpses: &'a BTreeMap<u64, PlayerCorpse>,
-    manual_mining_progress: Option<ManualMiningProgress>,
-    crafting_queue: &'a CraftingQueue,
-    onboarding_progress: OnboardingProgress,
-    research: &'a ResearchState,
-    power_summary: PowerSummary,
-    power_networks: &'a Vec<PowerNetworkSnapshot>,
-    entity_power_statuses: &'a DenseEntityMap<EntityPowerStatus>,
-    fluid_networks: &'a Vec<FluidNetworkSnapshot>,
-    heat_networks: &'a Vec<HeatNetworkSnapshot>,
-    robot_networks: &'a Vec<RobotNetworkSnapshot>,
-    robot_flights: &'a RobotFlightSubsystem,
-    rolling_stock: &'a RollingStockSubsystem,
-    pollution: &'a PollutionState,
-    enemies: &'a EnemySubsystem,
-    config: SimulationConfig,
-}
-
-impl<'a> SimulationSnapshotRef<'a> {
-    fn from_simulation(sim: &'a Simulation) -> Self {
-        Self {
-            tick: sim.tick,
-            day_night_cycle: sim.day_night_cycle,
-            world_seed: sim.world.seed,
-            prototypes: &sim.world.prototypes,
-            chunks: &sim.world.chunks,
-            chunk_generation_queue: &sim.chunk_generation_queue,
-            chart: &sim.chart,
-            item_statistics: &sim.statistics.items,
-            fluid_statistics: &sim.statistics.fluids,
-            power_statistics: &sim.statistics.power,
-            rockets_launched: sim.statistics.rockets_launched,
-            player_deaths: sim.statistics.player_deaths,
-            entities: &sim.entities,
-            construction: &sim.construction,
-            player: sim.player,
-            player_equipment: &sim.player_equipment,
-            player_weapon: sim.player_weapon,
-            delayed_combat: &sim.delayed_combat,
-            player_inventory: &sim.player_inventory,
-            corpses: &sim.corpses,
-            manual_mining_progress: sim.manual_mining_progress,
-            crafting_queue: &sim.crafting_queue,
-            onboarding_progress: sim.onboarding_progress,
-            research: &sim.research,
-            power_summary: sim.power.summary,
-            power_networks: &sim.power.networks,
-            entity_power_statuses: &sim.power.entity_statuses,
-            fluid_networks: &sim.fluids.networks,
-            heat_networks: &sim.heat.networks,
-            robot_networks: &sim.robots.networks,
-            robot_flights: &sim.robot_flights,
-            rolling_stock: &sim.rolling_stock,
-            pollution: &sim.pollution,
-            enemies: &sim.enemies,
-            config: sim.config,
-        }
-    }
-}
-
 impl SimulationSnapshotOwned {
-    /// Copies only durable save state, excluding all reconstructible runtime caches.
-    fn from_simulation(sim: &Simulation) -> Self {
-        Self {
-            tick: sim.tick,
-            day_night_cycle: sim.day_night_cycle,
-            world_seed: sim.world.seed,
-            prototypes: sim.world.prototypes.clone(),
-            chunks: sim.world.chunks.clone(),
-            chunk_generation_queue: sim.chunk_generation_queue.clone(),
-            chart: sim.chart.clone(),
-            item_statistics: sim.statistics.items.clone(),
-            fluid_statistics: sim.statistics.fluids.clone(),
-            power_statistics: sim.statistics.power.clone(),
-            rockets_launched: sim.statistics.rockets_launched,
-            player_deaths: sim.statistics.player_deaths,
-            entities: sim.entities.clone(),
-            construction: sim.construction.clone(),
-            player: sim.player,
-            player_equipment: sim.player_equipment.clone(),
-            player_weapon: sim.player_weapon,
-            delayed_combat: sim.delayed_combat.clone(),
-            player_inventory: sim.player_inventory.clone(),
-            corpses: sim.corpses.clone(),
-            manual_mining_progress: sim.manual_mining_progress,
-            crafting_queue: sim.crafting_queue.clone(),
-            onboarding_progress: sim.onboarding_progress,
-            research: sim.research.clone(),
-            power_summary: sim.power.summary,
-            power_networks: sim.power.networks.clone(),
-            entity_power_statuses: sim.power.entity_statuses.clone(),
-            fluid_networks: sim.fluids.networks.clone(),
-            heat_networks: sim.heat.networks.clone(),
-            robot_networks: sim.robots.networks.clone(),
-            robot_flights: sim.robot_flights.clone(),
-            rolling_stock: sim.rolling_stock.clone(),
-            pollution: sim.pollution.clone(),
-            enemies: sim.enemies.clone(),
-            config: sim.config,
-        }
-    }
-
-    fn into_simulation(self) -> Simulation {
+    fn into_simulation(self) -> Result<Simulation, SaveLoadError> {
+        // Validate the catalog and chunk shape before even constructing the
+        // world generator or deriving terrain absorption from saved tile ids.
+        validation::validate_catalog(&self.prototypes)
+            .and_then(|()| {
+                validation::world::validate_snapshot_world(&self.prototypes, &self.chunks)
+            })
+            .map_err(SaveLoadError::InvalidSimulationState)?;
         let mut sim = Simulation {
             tick: self.tick,
             day_night_cycle: self.day_night_cycle,
-            entity_topology_revision: 0,
+            entity_topology_revision: self.entity_topology_revision,
             revealed_revision: 0,
             revealed_chunk_history: Default::default(),
             pollution_map_revision: 0,
@@ -601,23 +533,31 @@ impl SimulationSnapshotOwned {
             pollution_diffusion: PollutionDiffusionBuffer::default(),
             enemies: self.enemies,
             config: self.config,
-            attack_targets: enemy::AttackTargetCache::default(),
+            attack_targets: self.attack_targets,
             enemy_target_chunks: combat_ops::EnemyChunkIndex::default(),
             enemy_spawning_scratch: enemy::EnemySpawningScratch::default(),
-            enemy_navigation: enemy::EnemyNavigation::default(),
-            transport: TransportLaneCache::default(),
+            enemy_navigation: self.enemy_navigation,
+            transport: self.transport,
         };
-        sim.transport.initialize_item_tracking(&sim.entities);
+        sim.world.chunk_revision = self.world_chunk_revision;
+        sim.world.walkability_revision = self.world_walkability_revision;
+        validation::validate_durable_state(&sim).map_err(SaveLoadError::InvalidSimulationState)?;
         // The rail graph is a derived cache like the circuit topology, so a
         // loaded world rebuilds it before anything can ask what connects — and
         // before the stopped-stock index, which is read off the geometry it
         // holds.
+        // Arrival-index reconstruction may invalidate the fluid cache. Keep
+        // the encoded summaries intact until they have been validated.
+        let saved_fluid_networks = std::mem::take(&mut sim.fluids.networks);
         sim.ensure_rail_graph();
         // Ahead of the fluid topology, because a stopped fluid wagon is part of
         // the network at the pump it is standing at: a topology built before the
         // index would leave the wagon out, and the saved network snapshots —
         // taken from a world that had it in — would not describe it.
         sim.refresh_stopped_stock_index();
+        sim.fluids.networks = saved_fluid_networks;
+        // Check saved summaries before reconstruction can replace them.
+        validation::validate_derived_state(&sim).map_err(SaveLoadError::InvalidSimulationState)?;
         sim.ensure_fluid_network_topology();
         // The snapshots are re-derived rather than trusted, because the index
         // above may have joined a wagon onto a network and cleared them. A valid
@@ -630,7 +570,42 @@ impl SimulationSnapshotOwned {
         sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();
-        sim
+        sim.attack_targets.rebuild_index(&sim.world, &sim.entities);
+        Ok(sim)
+    }
+}
+
+/// Shared headless continuation runner: commands at a relative tick execute in
+/// slice order, before that tick, on both the uninterrupted and restored world.
+#[cfg(test)]
+pub(in crate::simulation) fn assert_save_continuation(
+    original: &mut Simulation,
+    ticks: usize,
+    commands: &[(usize, SimCommand)],
+) {
+    let bytes = save_to_bytes(original).unwrap();
+    let detached = capture_save_snapshot(original);
+    assert_eq!(bytes, save_snapshot_to_bytes(&detached).unwrap());
+    let mut restored = load_from_bytes(&bytes).unwrap();
+    assert_eq!(original.state_hash(), restored.state_hash(), "at load");
+    for tick in 0..ticks {
+        for (_, command) in commands.iter().filter(|(at, _)| *at == tick) {
+            assert_eq!(
+                original.apply_command(command),
+                restored.apply_command(command),
+                "command at relative tick {tick}: {command:?}"
+            );
+        }
+        original.tick();
+        restored.tick();
+        assert_eq!(
+            original.state_hash(),
+            restored.state_hash(),
+            "first continuation divergence at tick {} (relative {tick})",
+            original.tick
+        );
+        original.validate_state().unwrap();
+        restored.validate_state().unwrap();
     }
 }
 
@@ -638,6 +613,29 @@ impl SimulationSnapshotOwned {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn malformed_chunk_is_rejected_before_world_reconstruction() {
+        let mut sim = Simulation::new_test_world(293);
+        let (&coord, chunk) = sim.world.chunks.iter_mut().next().unwrap();
+        chunk.tiles.clear();
+        assert!(matches!(load_from_bytes(&save_to_bytes(&sim).unwrap()),
+            Err(SaveLoadError::InvalidSimulationState(SimValidationError::InvalidChunk(found))) if found == coord));
+    }
+
+    #[test]
+    fn version_54_is_an_explicit_unsupported_history_boundary() {
+        let mut bytes = save_to_bytes(&Simulation::new_test_world(293)).unwrap();
+        bytes[8..12].copy_from_slice(&54_u32.to_le_bytes());
+        bytes.truncate(SAVE_HEADER_SIZE);
+        assert!(matches!(
+            load_from_bytes(&bytes),
+            Err(SaveLoadError::UnsupportedSaveVersion {
+                found: 54,
+                supported: SAVE_VERSION
+            })
+        ));
+    }
 
     #[test]
     fn encoder_enforces_the_loaders_payload_ceiling() {
@@ -833,6 +831,9 @@ mod tests {
         assert_eq!(loaded.process_chunk_generation_queue(1), 1);
         assert!(loaded.world.chunks.contains_key(&required));
         assert!(!loaded.world.chunks.contains_key(&prefetch));
+        assert_save_continuation(&mut sim, 8, &[]);
+        assert!(sim.world.chunks.contains_key(&required));
+        assert!(sim.world.chunks.contains_key(&prefetch));
     }
 
     #[test]

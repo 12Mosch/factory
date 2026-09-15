@@ -603,6 +603,15 @@ fn a_pump_fills_a_stopped_fluid_wagon() {
     );
     sim.validate_state()
         .expect("a wagon on a fluid network is a valid world");
+    super::super::save::assert_save_continuation(&mut sim, 12, &[]);
+    let mut malformed = sim.clone();
+    malformed.fluids.networks[network_id as usize].total_milliunits += 1;
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&malformed).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidFluidNetwork { .. }
+        ))
+    ));
 
     // And the pump is what holds the wagon on: take it away and the wagon's
     // tank leaves the topology.

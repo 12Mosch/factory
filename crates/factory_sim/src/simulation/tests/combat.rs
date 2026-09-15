@@ -43,7 +43,7 @@ fn load_turret_ammo(sim: &mut Simulation, turret_id: EntityId, count: u16) {
         .expect("turret ammo inventory should accept magazines");
 }
 
-pub(super) fn spawn_test_enemy_at(
+pub(in crate::simulation) fn spawn_test_enemy_at(
     sim: &mut Simulation,
     x: WorldTileCoord,
     y: WorldTileCoord,
@@ -1437,6 +1437,7 @@ fn in_flight_rocket_round_trips_and_remains_lockstep_deterministic() {
     for _ in 0..30 {
         original.tick();
         loaded.tick();
+        assert_eq!(original.state_hash(), loaded.state_hash());
     }
     assert_eq!(loaded.state_hash(), original.state_hash());
     assert_eq!(loaded.delayed_combat_state().projectiles().count(), 0);
@@ -1468,6 +1469,7 @@ fn player_weapon_state_round_trips_and_stays_deterministic() {
     for _ in 0..40 {
         original.tick();
         loaded.tick();
+        assert_eq!(original.state_hash(), loaded.state_hash());
     }
     assert_eq!(loaded.state_hash(), original.state_hash());
 }
@@ -1590,6 +1592,7 @@ fn combat_state_round_trips_through_save() {
     for _ in 0..60 {
         sim.tick();
         loaded.tick();
+        assert_eq!(sim.state_hash(), loaded.state_hash());
     }
     assert_eq!(
         sim.state_hash(),

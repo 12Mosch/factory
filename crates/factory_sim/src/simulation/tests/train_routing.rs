@@ -480,8 +480,17 @@ fn a_train_mid_journey_survives_a_save_and_load() {
     let mut loaded = crate::load_from_bytes(&bytes).expect("a world with a routed train loads");
     assert_eq!(sim.state_hash(), loaded.state_hash());
 
-    run_until_arrived(&mut sim, train_id);
-    run_until_arrived(&mut loaded, train_id);
+    for _ in 0..ARRIVAL_TICKS {
+        sim.tick();
+        loaded.tick();
+        assert_eq!(sim.state_hash(), loaded.state_hash(), "tick {}", sim.tick);
+        if sim
+            .train(train_id)
+            .is_none_or(|train| train.destination.is_none() && train.is_stationary())
+        {
+            break;
+        }
+    }
     assert_eq!(sim.state_hash(), loaded.state_hash());
     assert_eq!(
         position(&sim, train_id),
@@ -564,6 +573,7 @@ fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
     train.route_search_exhausted_at = Some(standing);
     sim.validate()
         .expect("a train waiting on a railway it cannot search is valid");
+    super::super::save::assert_save_continuation(&mut sim, 12, &[]);
 
     sim.tick();
     let train = sim.train(train_id).expect("the train exists");

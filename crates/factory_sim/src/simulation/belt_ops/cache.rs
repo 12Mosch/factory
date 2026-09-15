@@ -19,21 +19,18 @@ pub(super) const PATCH_STORAGE_HEADROOM: usize =
 /// One transport-affecting entity edit since the last refresh. The patch
 /// re-resolves lane geometry for entities whose downstream resolution can see
 /// these tiles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) struct TransportDirtyRegion {
     pub(in crate::simulation) entity_id: EntityId,
     pub(in crate::simulation) footprint: EntityFootprint,
 }
 
-/// Subsystem-owned cache for belt/splitter transport.
-///
-/// This holds no authoritative simulation state: the durable belt/transport
-/// data (lanes, item positions, splitter cursors) lives in [`EntityStore`].
-/// The graph is a derived adjacency index rebuilt from `entities` whenever the
-/// transport topology changes, `active_runs` is the advancement work queue,
-/// and `visit_states` is reusable per-tick traversal scratch.
-/// All of it is `#[serde(skip)]` and reconstructed on load.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// Belt transport execution state. The active-run order and upstream wake
+/// boundaries affect subsequent ticks. Preserve their graph, including the
+/// incremental slot/run layout and pending edits, so future patches and cyclic
+/// traversal use the same ordering after load. Only visit scratch and
+/// presentation change tokens are reconstructed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) struct TransportLaneCache {
     dirty: bool,
     /// Scoped edits since the last refresh, applied as an incremental patch
@@ -41,15 +38,20 @@ pub(in crate::simulation) struct TransportLaneCache {
     dirty_regions: Vec<TransportDirtyRegion>,
     /// Monotonic change tokens consumed by incremental presentation. These
     /// are derived runtime state; saves reconstruct presentation from scratch.
+    #[serde(skip)]
     pub(in crate::simulation) item_revision: u64,
+    #[serde(skip)]
     pub(in crate::simulation) item_revisions_by_entity: Vec<u64>,
-    next_item_id: u64,
+    pub(in crate::simulation) next_item_id: u64,
     pub(in crate::simulation) graph: TransportLaneGraph,
+    #[serde(skip)]
     pub(in crate::simulation) visit_states: TransportRunVisitStorage,
     pub(in crate::simulation) active_runs: TransportRunActiveStorage,
     #[cfg(test)]
+    #[serde(skip)]
     pub(in crate::simulation) rebuilds: u64,
     #[cfg(test)]
+    #[serde(skip)]
     pub(in crate::simulation) patches: u64,
 }
 
@@ -73,6 +75,51 @@ impl Default for TransportLaneCache {
 }
 
 impl TransportLaneCache {
+    pub(in crate::simulation) fn clone_for_save(&self) -> Self {
+        Self {
+            dirty: self.dirty,
+            dirty_regions: self.dirty_regions.clone(),
+            next_item_id: self.next_item_id,
+            graph: self.graph.clone(),
+            active_runs: self.active_runs.clone(),
+            visit_states: TransportRunVisitStorage::default(),
+            item_revision: 0,
+            item_revisions_by_entity: Vec::new(),
+            #[cfg(test)]
+            rebuilds: 0,
+            #[cfg(test)]
+            patches: 0,
+        }
+    }
+
+    pub(in crate::simulation) fn hash_durable<H: Hasher>(&self, state: &mut H) {
+        self.dirty.hash(state);
+        self.dirty_regions.hash(state);
+        self.next_item_id.hash(state);
+        self.graph.hash(state);
+        self.active_runs.hash(state);
+    }
+
+    pub(in crate::simulation) fn validate_work(
+        &self,
+        entities: &EntityStore,
+        world: &WorldSim,
+    ) -> Result<(), SimValidationError> {
+        if self.dirty_regions.len() > MAX_DIRTY_REGIONS
+            || self
+                .dirty_regions
+                .iter()
+                .any(|region| !validation::world::valid_work_footprint(world, region.footprint))
+            || !self
+                .graph
+                .is_valid(entities, !self.dirty && self.dirty_regions.is_empty())
+            || !self.active_runs.is_valid(&self.graph)
+        {
+            return Err(SimValidationError::InvalidTransportWork);
+        }
+        Ok(())
+    }
+
     pub(in crate::simulation) fn invalidate(&mut self) {
         self.dirty = true;
         self.dirty_regions.clear();

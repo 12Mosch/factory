@@ -5,7 +5,7 @@ const RAID_FLOW_RADIUS_TILES: i64 = 96;
 const RAID_FLOW_DIAMETER: usize = (RAID_FLOW_RADIUS_TILES as usize) * 2 + 1;
 pub(super) const RAID_FLOW_CELL_COUNT: usize = RAID_FLOW_DIAMETER * RAID_FLOW_DIAMETER;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(super) struct RaidFlowField {
     target: EntityId,
     target_footprint: EntityFootprint,
@@ -17,6 +17,35 @@ pub(super) struct RaidFlowField {
 }
 
 impl RaidFlowField {
+    #[cfg(test)]
+    pub(super) fn corrupt_directions_for_test(&mut self) {
+        self.directions.clear();
+    }
+
+    pub(super) fn is_valid(&self, world: &WorldSim) -> bool {
+        if !validation::world::valid_work_footprint(world, self.target_footprint) {
+            return false;
+        }
+        let pending = Self::pending(self.target, self.target_footprint);
+        if self.min_x != pending.min_x || self.min_y != pending.min_y {
+            return false;
+        }
+        if !self.initialized {
+            return self.directions.is_empty() && self.frontier.is_empty();
+        }
+        if self.directions.len() != RAID_FLOW_CELL_COUNT
+            || self.directions.iter().any(|cell| *cell > CELL_NORTH)
+        {
+            return false;
+        }
+        let mut seen = BTreeSet::new();
+        self.frontier.iter().all(|tile| {
+            self.index(*tile)
+                .is_some_and(|index| self.directions[index] != CELL_UNVISITED)
+                && seen.insert(*tile)
+        })
+    }
+
     pub(super) fn pending(target: EntityId, target_footprint: EntityFootprint) -> Self {
         let (center_x, center_y) = footprint_center_tile(&target_footprint);
         Self {
@@ -157,4 +186,23 @@ pub(super) enum RaidRoute {
     Pending,
     OutsideField,
     Unreachable,
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_footprint_is_rejected_before_center_arithmetic() {
+        let sim = Simulation::new_test_world(293);
+        let mut field =
+            RaidFlowField::pending(EntityId::new(1), EntityFootprint::single_tile(0, 0));
+        field.target_footprint.x = i64::MAX;
+        field.target_footprint.width = 2;
+        assert!(!field.is_valid(&sim.world));
+        field.target_footprint.x = 0;
+        field.target_footprint.width = i32::MAX;
+        field.target_footprint.height = i32::MAX;
+        assert!(!field.is_valid(&sim.world));
+    }
 }

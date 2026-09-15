@@ -4,6 +4,7 @@ use crate::simulation::EntityStore;
 use crate::simulation::belt_ops::types::{
     TransportLaneKey, TransportRunIndex, TransportRunTraversalStep,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(in crate::simulation::belt_ops) struct TransportRunVisitSlot {
@@ -18,7 +19,7 @@ pub(in crate::simulation) struct TransportRunVisitStorage {
     pub(in crate::simulation::belt_ops) traversal_stack: Vec<TransportRunTraversalStep>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct TransportRunActiveSlot {
     active_generation: u32,
     pending_generation: u32,
@@ -26,7 +27,7 @@ struct TransportRunActiveSlot {
     pending_start_position: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) struct TransportRunActiveStorage {
     active_generation: u32,
     pending_generation: u32,
@@ -64,6 +65,46 @@ impl TransportRunVisitStorage {
 }
 
 impl TransportRunActiveStorage {
+    pub(super) fn is_valid(&self, graph: &TransportLaneGraph) -> bool {
+        for (runs, generation, queue) in [
+            (
+                &self.runs,
+                self.active_generation,
+                TransportRunQueue::Active,
+            ),
+            (
+                &self.pending_runs,
+                self.pending_generation,
+                TransportRunQueue::Pending,
+            ),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            for &run in runs {
+                if run.raw() >= graph.run_count() || !seen.insert(run) {
+                    return false;
+                }
+                let Some(mark) = self.marks.get(run.raw()) else {
+                    return false;
+                };
+                let (marked_generation, position) = match queue {
+                    TransportRunQueue::Active => {
+                        (mark.active_generation, mark.active_start_position)
+                    }
+                    TransportRunQueue::Pending => {
+                        (mark.pending_generation, mark.pending_start_position)
+                    }
+                };
+                let len = graph.run_lanes(run).len();
+                // Dissolved runs may remain in the queue until the next belt
+                // pass visits their empty record. They are safe no-ops.
+                if marked_generation != generation || (len != 0 && position as usize >= len) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub(super) fn rebuild_from_entities(
         &mut self,
         entities: &EntityStore,

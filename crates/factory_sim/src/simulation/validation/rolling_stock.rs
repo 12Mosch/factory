@@ -11,7 +11,7 @@ use crate::rolling_stock::{RollingStock, TRAIN_VELOCITY_SCALE};
 /// re-checking it, and the renderer derives a world point from it. A save that
 /// broke the invariant would produce a train standing on nothing, and nothing
 /// later would report it.
-pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidationError> {
+pub(super) fn validate_rolling_stock_durable(sim: &Simulation) -> Result<(), SimValidationError> {
     for (stock_id, stock) in &sim.rolling_stock.stock {
         let invalid = || SimValidationError::InvalidRollingStock {
             stock_id: *stock_id,
@@ -239,34 +239,13 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
             return Err(invalid());
         }
 
-        // What a train holds has to be blocks that exist, held by nobody else,
-        // and named once each. All three are facts the signalling pass assumes:
-        // it seeds its index from these claims without re-deriving them, which is
-        // the whole point of saving them, so a save that broke any of the three
-        // would put two trains into one block or hand a train a stretch of
-        // railway that is no longer there.
-        //
-        // Ascending is checked rather than merely "no duplicates", because that
-        // is the canonical form the pass writes and a save in any other order
-        // came from somewhere else.
-        //
-        // While the graph is dirty the answer is stricter still: invalidating it
-        // gives every claim back, so a world mid-placement holds none at all.
-        // Checking that here rather than skipping the block checks is what keeps
-        // the invariant a statement about every world and not only about
-        // conveniently-timed ones.
-        if sim.rails.graph_dirty {
-            if !train.reserved_blocks.is_empty() {
+        // Sorted, exclusive historical claims are durable; whether a block
+        // still exists is checked separately after rail reconstruction.
+        for (index, block) in train.reserved_blocks.iter().enumerate() {
+            if (index > 0 && train.reserved_blocks[index - 1] >= *block)
+                || claimants.insert(*block, *train_id).is_some()
+            {
                 return Err(invalid());
-            }
-        } else {
-            for (index, block) in train.reserved_blocks.iter().enumerate() {
-                if sim.rails.blocks.block(*block).is_none()
-                    || index > 0 && train.reserved_blocks[index - 1] >= *block
-                    || claimants.insert(*block, *train_id).is_some()
-                {
-                    return Err(invalid());
-                }
             }
         }
 
@@ -292,6 +271,23 @@ pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidati
         }
     }
 
+    Ok(())
+}
+
+/// Requires a reconstructed rail graph. Dirty live worlds cannot hold claims
+/// because invalidating their graph releases them immediately.
+pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidationError> {
+    for (train_id, train) in &sim.rolling_stock.trains {
+        if train
+            .reserved_blocks
+            .iter()
+            .any(|block| sim.rails.graph_dirty || sim.rails.blocks.block(*block).is_none())
+        {
+            return Err(SimValidationError::InvalidTrain {
+                train_id: *train_id,
+            });
+        }
+    }
     Ok(())
 }
 
