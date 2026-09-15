@@ -109,8 +109,7 @@ use bincode::Options;
 // laser cooldowns joined durable combat/equipment state.
 // v53: durable player death tick, pending respawn request and death statistics.
 // v54: persistent player corpses, item quantities and opened consumables.
-// v55: the typed powered-fluid-pump registry joined entity state.
-pub const SAVE_VERSION: u32 = 55;
+pub const SAVE_VERSION: u32 = 54;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -617,6 +616,7 @@ impl SimulationSnapshotOwned {
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
+        sim.entities.rebuild_pump_registry(&sim.world.prototypes);
         sim.transport.initialize_item_tracking(&sim.entities);
         // The rail graph is a derived cache like the circuit topology, so a
         // loaded world rebuilds it before anything can ask what connects — and

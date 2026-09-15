@@ -19,6 +19,7 @@ macro_rules! define_entity_reservation {
             pub(crate) direction: Direction,
             pub(crate) footprint: EntityFootprint,
             $(pub(crate) $field: Option<$ty>,)*
+            pub(crate) pumps: Option<crate::fluids::PumpState>,
         }
 
         impl EntityStore {
@@ -33,6 +34,9 @@ macro_rules! define_entity_reservation {
                         self.$field.insert(id, state);
                     }
                 )*
+                if let Some(state) = reservation.pumps {
+                    self.pumps.insert(id, state);
+                }
             }
         }
     };

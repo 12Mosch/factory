@@ -61,8 +61,8 @@ pub struct FluidBoxState {
 /// Pumps have no durable state beyond their ordinary fluid boxes and electric
 /// consumer state, but keeping this typed marker lets the simulation visit
 /// only pumps when advancing them.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
-pub struct PumpState;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PumpState;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct FluidNetworkSnapshot {

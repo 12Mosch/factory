@@ -62,7 +62,6 @@ macro_rules! for_each_entity_state_map {
             logistic_chests: crate::logistics::LogisticChestState => _,
             train_stops: crate::rolling_stock::TrainStopState => TrainStop,
             rocket_silos: crate::machines::RocketSiloState => RocketSilo,
-            pumps: crate::fluids::PumpState => Pump,
         }
     };
 }
@@ -86,6 +85,12 @@ macro_rules! define_entity_store {
             $(pub(crate) $field: entity_state_map_type!($field, $ty),)*
             pub(crate) occupancy: OccupancyGrid,
             pub(crate) next_entity_id: u64,
+            /// Powered fluid pumps, indexed only to avoid searching all placed
+            /// entities during every simulation tick. Derived from pump
+            /// prototype metadata on placement and load, and removed with the
+            /// entity. This is runtime bookkeeping rather than durable state.
+            #[serde(skip, default)]
+            pub(crate) pumps: BTreeMap<EntityId, crate::fluids::PumpState>,
             /// Logistic endpoints whose inventory, configuration, or machine
             /// acceptance state changed since
             /// the index last drained this set. Derived bookkeeping, not
@@ -133,6 +138,7 @@ macro_rules! define_entity_store {
                     $($field: Default::default(),)*
                     occupancy: OccupancyGrid::default(),
                     next_entity_id,
+                    pumps: BTreeMap::new(),
                     changed_logistic_endpoints: BTreeSet::new(),
                 }
             }
@@ -140,6 +146,23 @@ macro_rules! define_entity_store {
             /// Removes every per-kind state entry owned by `entity_id`.
             pub(crate) fn remove_entity_states(&mut self, entity_id: EntityId) {
                 $(self.$field.remove(&entity_id);)*
+                self.pumps.remove(&entity_id);
+            }
+
+            /// Rebuilds the derived powered-pump index after deserialization.
+            pub(crate) fn rebuild_pump_registry(
+                &mut self,
+                catalog: &factory_data::PrototypeCatalog,
+            ) {
+                self.pumps.clear();
+                self.pumps.extend(self.placed_entities.iter().filter_map(
+                    |(entity_id, placed)| {
+                        catalog
+                            .entity(placed.prototype_id)
+                            .is_some_and(|prototype| prototype.pump.is_some())
+                            .then_some((*entity_id, crate::fluids::PumpState))
+                    },
+                ));
             }
 
             /// The machine kind backing `entity_id`, derived from which state
@@ -262,7 +285,7 @@ mod tests {
     use crate::combat::{
         Damage, EnemySpawnerState, Faction, GunTurretState, HealthState, LaserTurretState,
     };
-    use crate::fluids::{FluidBoxState, PumpState};
+    use crate::fluids::FluidBoxState;
     use crate::heat::{HeatBufferState, HeatExchangerState, HeatPipeState, NuclearReactorState};
     use crate::inventory::{test_inventory, test_slot, test_stack};
     use crate::logistics::{
@@ -315,13 +338,12 @@ mod tests {
         // v44: rocket silo cargo and launch-phase state were appended.
         // v45: rocket silo launch-product output was appended.
         // v47: mining drills gained durable pending productivity output.
-        // v55: powered fluid pump markers were appended.
         // v41: train stop state was appended — the name a schedule asks for,
         // the train limit, and the channel that limit may be read from. The
         // fixture gained a populated stop afterwards, so those three fields are
         // pinned rather than only the map that holds them; the save format did
         // not change with it.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xd2de_dedd_6901_1cd5;
+        const EXPECTED_LAYOUT_HASH: u64 = 0xc881_62a9_5db9_f17f;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -495,7 +517,6 @@ mod tests {
                 amount_milliunits: 12_345,
             }],
         );
-        store.pumps.insert(EntityId::new(11), PumpState);
         let mut belt = BeltSegment::new(Direction::South, 4);
         belt.lanes[0].items.push(BeltItem {
             id: crate::logistics::BeltItemId::new(1),

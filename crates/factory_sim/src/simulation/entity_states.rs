@@ -429,18 +429,6 @@ impl EntityStateBehavior for OffshorePumpState {
     }
 }
 
-impl EntityStateBehavior for PumpState {
-    fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
-
-    fn validate_state(
-        &self,
-        _sim: &Simulation,
-        _entity_id: EntityId,
-    ) -> Result<(), SimValidationError> {
-        Ok(())
-    }
-}
-
 impl EntityStateBehavior for PumpjackState {
     fn push_recovery_stacks(&self, _catalog: &PrototypeCatalog, _stacks: &mut Vec<ItemStack>) {}
 

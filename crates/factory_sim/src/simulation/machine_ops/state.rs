@@ -402,7 +402,7 @@ fn offshore_pump_state_for_prototype(
 }
 
 fn pump_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<PumpState> {
-    (prototype.entity_kind == EntityKind::Pump && prototype.pump.is_some()).then_some(PumpState)
+    prototype.pump.is_some().then_some(PumpState)
 }
 
 fn pumpjack_state_for_prototype(
