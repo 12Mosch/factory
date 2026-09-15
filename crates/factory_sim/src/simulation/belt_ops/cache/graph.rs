@@ -80,15 +80,16 @@ pub(in crate::simulation) struct TransportLaneGraph {
 
 impl TransportLaneGraph {
     /// Rebuilds the whole lane index from live transport entities in
-    /// deterministic entity-id order. Emptied slot pages are retained for
-    /// reuse; the slot arrays stay proportional to the live lane count.
+    /// deterministic entity-id order. Slot pages parked by the previous
+    /// index are reused and the unneeded remainder is dropped, so the slot
+    /// arrays stay proportional to the live lane count.
     pub(super) fn rebuild(&mut self, entities: &EntityStore) {
         let lane_count = entities
             .transport_belts
             .len()
             .saturating_mul(2)
             .saturating_add(entities.splitters.len().saturating_mul(4));
-        self.slot_by_raw.clear();
+        self.slot_by_raw.begin_rebuild();
         self.lanes.clear();
         self.lanes
             .reserve(lane_count.saturating_add(PATCH_STORAGE_HEADROOM));
@@ -154,6 +155,9 @@ impl TransportLaneGraph {
             .map(|underground| underground.max_distance)
             .max()
             .unwrap_or(0);
+        // Slot assignment is complete: drop parked pages the smaller live
+        // set did not reuse so the pool never outlives this rebuild.
+        self.slot_by_raw.end_rebuild();
         self.rebuild_runs();
     }
 

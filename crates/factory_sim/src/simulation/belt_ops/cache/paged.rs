@@ -8,6 +8,8 @@
 //! hash map so sparse high IDs allocate only their own pages. A page freed by
 //! incremental entity removal is dropped, so repeated build/destroy churn
 //! settles at a stable footprint instead of tracking the ID high-water mark.
+//! Full rebuilds park live pages in a pool that is dropped when the rebuild
+//! completes, so a shrinking factory releases its peak footprint.
 //!
 //! The paging layout mirrors the belt render cache's `SparseSlotMap` and
 //! [`DenseEntityMap`]: the pages hold plain copy values directly instead of
@@ -61,10 +63,12 @@ where
     vacant: T,
     direct_pages: Vec<Option<Box<[T; PAGE_SIZE]>>>,
     sparse_pages: HashMap<u64, Box<[T; PAGE_SIZE]>>,
-    /// Empty boxes retained by [`PagedSparseVec::clear`] for the next
-    /// rebuild, mirroring how the previous dense vector kept its backing
-    /// allocation. Incremental removals drop their boxes instead of pooling
-    /// them so churn cannot accumulate retained pages.
+    /// Empty boxes parked by [`PagedSparseVec::begin_rebuild`] for reuse
+    /// during the rebuild. The pool is strictly rebuild-scoped: incremental
+    /// removals drop their boxes instead of pooling them, and
+    /// [`PagedSparseVec::end_rebuild`] drops whatever the rebuild did not
+    /// reuse, so a shrinking factory releases its peak footprint instead of
+    /// retaining it.
     page_pool: Vec<Box<[T; PAGE_SIZE]>>,
 }
 
@@ -125,15 +129,27 @@ where
         Some(previous)
     }
 
-    /// Drops every entry while retaining emptied boxes and directory buffers
-    /// for the rebuild that normally follows, so a stable live set rebuilds
-    /// without reallocating pages.
-    fn clear(&mut self) {
+    /// Parks every live page for reuse by an imminent full rebuild, dropping
+    /// all entries. Directory buffers are retained, mirroring how the
+    /// previous dense vector kept its backing allocation. Must be paired
+    /// with [`PagedSparseVec::end_rebuild`].
+    fn begin_rebuild(&mut self) {
+        debug_assert!(
+            self.page_pool.is_empty(),
+            "transport rebuilds must not nest"
+        );
         self.page_pool
             .extend(self.direct_pages.iter_mut().filter_map(|slot| slot.take()));
         self.direct_pages.clear();
         self.page_pool
             .extend(self.sparse_pages.drain().map(|(_, page)| page));
+    }
+
+    /// Drops pooled pages the rebuild did not reuse, so the pool never
+    /// outlives the rebuild it served. Call once the rebuild has assigned
+    /// every live entry.
+    fn end_rebuild(&mut self) {
+        self.page_pool = Vec::new();
     }
 
     /// Drops every occupied entry whose raw index is rejected by `keep`,
@@ -360,7 +376,7 @@ where
 ///
 /// Pages are allocated for live transport entities only; removing an
 /// entity's last lane frees its page when nothing else shares it, and full
-/// rebuilds retain emptied boxes for reuse.
+/// rebuilds reuse parked pages, dropping the unneeded remainder when done.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(in crate::simulation) struct TransportLaneSlotMap {
     inner: PagedSparseVec<u32>,
@@ -383,9 +399,16 @@ impl TransportLaneSlotMap {
         self.inner.remove(raw as u64)
     }
 
-    /// Drops every mapping while retaining boxes and buffers for reuse.
-    pub(in crate::simulation) fn clear(&mut self) {
-        self.inner.clear();
+    /// Parks every mapping for reuse by an imminent full rebuild. Must be
+    /// paired with [`TransportLaneSlotMap::end_rebuild`].
+    pub(in crate::simulation) fn begin_rebuild(&mut self) {
+        self.inner.begin_rebuild();
+    }
+
+    /// Drops parked pages the rebuild did not reuse. The pool never outlives
+    /// the rebuild it served.
+    pub(in crate::simulation) fn end_rebuild(&mut self) {
+        self.inner.end_rebuild();
     }
 
     /// Estimates all heap held for the slot index; see
@@ -511,16 +534,17 @@ mod tests {
         assert_eq!(map.inner.allocated_pages(), 2);
     }
 
-    /// Clearing retains emptied boxes for the next rebuild instead of freeing
-    /// and reallocating every page, then reuses them on insert.
+    /// A rebuild parks live pages, reuses the ones it still needs, and drops
+    /// the unneeded remainder when it completes, so the pool never outlives
+    /// the rebuild it served.
     #[test]
-    fn clear_pools_pages_for_reuse() {
+    fn rebuild_scope_reuses_pages_then_drops_remainder() {
         let mut map = TransportLaneSlotMap::default();
         map.insert(3, 7);
         map.insert(900_000, 9);
         assert_eq!(map.inner.allocated_pages(), 2);
 
-        map.clear();
+        map.begin_rebuild();
         assert_eq!(map.get(3), None);
         assert_eq!(map.inner.allocated_pages(), 0);
         assert_eq!(map.inner.page_pool.len(), 2);
@@ -529,6 +553,10 @@ mod tests {
         assert_eq!(map.get(300), Some(11));
         assert_eq!(map.inner.page_pool.len(), 1);
         assert_eq!(map.inner.allocated_pages(), 1);
+
+        map.end_rebuild();
+        assert_eq!(map.inner.page_pool.len(), 0);
+        assert_eq!(map.get(300), Some(11));
     }
 
     /// Equal contents compare and hash equally regardless of page layout or

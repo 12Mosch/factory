@@ -216,6 +216,60 @@ fn transport_index_storage_does_not_track_historical_entity_ids() {
     );
 }
 
+/// Regression test: a bulk shrink that forces a full rebuild must release
+/// pages back near the small live set's footprint instead of retaining the
+/// peak live set's storage.
+#[test]
+fn transport_rebuild_releases_pages_after_bulk_shrink() {
+    let mut sim = Simulation::new_test_world(123);
+    let keep = place_belt_line(&mut sim, 2);
+    sim.advance_transport_belts();
+    let small_footprint = sim.transport_index_storage_bytes();
+
+    // Grow far beyond the incremental-patch region budget, refresh so the
+    // big live set actually populates its pages, then remove everything
+    // again: the accumulated edits force a full rebuild of the small set.
+    let mut grown = Vec::new();
+    for _ in 0..64 {
+        grown.extend(place_belt_line(&mut sim, 20));
+    }
+    assert_eq!(grown.len(), 1280);
+    sim.advance_transport_belts();
+    // Sanity: the big live set really did populate many pages, so the
+    // shrink assertion below cannot pass vacuously.
+    assert!(sim.transport_index_storage_bytes() > small_footprint + 16 * 1024);
+    for belt in grown {
+        crate::entity_mutation::remove(&mut sim, belt);
+    }
+    sim.advance_transport_belts();
+
+    // Both refreshes must have been full rebuilds, not patches.
+    assert_eq!(sim.transport_lane_graph_rebuild_count(), 3);
+    assert_eq!(sim.transport_lane_graph_patch_count(), 0);
+    let after_shrink = sim.transport_index_storage_bytes();
+    assert!(
+        after_shrink <= small_footprint + 16 * 1024,
+        "bulk shrink grew transport index storage from {small_footprint} to {after_shrink} bytes"
+    );
+
+    // The surviving belts still route items.
+    let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(keep[0], 0, iron_ore)
+        .expect("surviving belt should accept an item");
+    for _ in 0..32 {
+        sim.tick();
+    }
+    assert!(
+        crate::entity_access::belt_segment(&sim, keep[1])
+            .expect("surviving belt should exist")
+            .lanes[0]
+            .items
+            .iter()
+            .any(|item| item.item_id == iron_ore),
+        "surviving belt line should still transport items after bulk shrink"
+    );
+}
+
 #[test]
 fn belt_does_not_duplicate_items() {
     let mut sim = Simulation::new_test_world(123);
