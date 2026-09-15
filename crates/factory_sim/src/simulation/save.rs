@@ -109,7 +109,8 @@ use bincode::Options;
 // laser cooldowns joined durable combat/equipment state.
 // v53: durable player death tick, pending respawn request and death statistics.
 // v54: persistent player corpses, item quantities and opened consumables.
-pub const SAVE_VERSION: u32 = 54;
+// v55: the typed powered-fluid-pump registry joined entity state.
+pub const SAVE_VERSION: u32 = 55;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).

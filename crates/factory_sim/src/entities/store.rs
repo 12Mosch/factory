@@ -62,6 +62,7 @@ macro_rules! for_each_entity_state_map {
             logistic_chests: crate::logistics::LogisticChestState => _,
             train_stops: crate::rolling_stock::TrainStopState => TrainStop,
             rocket_silos: crate::machines::RocketSiloState => RocketSilo,
+            pumps: crate::fluids::PumpState => Pump,
         }
     };
 }
@@ -261,7 +262,7 @@ mod tests {
     use crate::combat::{
         Damage, EnemySpawnerState, Faction, GunTurretState, HealthState, LaserTurretState,
     };
-    use crate::fluids::FluidBoxState;
+    use crate::fluids::{FluidBoxState, PumpState};
     use crate::heat::{HeatBufferState, HeatExchangerState, HeatPipeState, NuclearReactorState};
     use crate::inventory::{test_inventory, test_slot, test_stack};
     use crate::logistics::{
@@ -314,12 +315,13 @@ mod tests {
         // v44: rocket silo cargo and launch-phase state were appended.
         // v45: rocket silo launch-product output was appended.
         // v47: mining drills gained durable pending productivity output.
+        // v55: powered fluid pump markers were appended.
         // v41: train stop state was appended — the name a schedule asks for,
         // the train limit, and the channel that limit may be read from. The
         // fixture gained a populated stop afterwards, so those three fields are
         // pinned rather than only the map that holds them; the save format did
         // not change with it.
-        const EXPECTED_LAYOUT_HASH: u64 = 0xc881_62a9_5db9_f17f;
+        const EXPECTED_LAYOUT_HASH: u64 = 0xd2de_dedd_6901_1cd5;
 
         let bytes =
             bincode::serialize(&populated_entity_store()).expect("entity store should serialize");
@@ -493,6 +495,7 @@ mod tests {
                 amount_milliunits: 12_345,
             }],
         );
+        store.pumps.insert(EntityId::new(11), PumpState);
         let mut belt = BeltSegment::new(Direction::South, 4);
         belt.lanes[0].items.push(BeltItem {
             id: crate::logistics::BeltItemId::new(1),

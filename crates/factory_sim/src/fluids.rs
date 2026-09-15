@@ -56,6 +56,14 @@ pub struct FluidBoxState {
     pub amount_milliunits: u64,
 }
 
+/// Marker state for a placed, powered fluid pump.
+///
+/// Pumps have no durable state beyond their ordinary fluid boxes and electric
+/// consumer state, but keeping this typed marker lets the simulation visit
+/// only pumps when advancing them.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct PumpState;
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub struct FluidNetworkSnapshot {
     pub network_id: u32,

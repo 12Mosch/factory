@@ -123,6 +123,27 @@ fn pump_without_transferable_fluid_only_draws_idle_power() {
     assert_eq!(idle.drain_watts, working.drain_watts);
 }
 
+#[test]
+fn pump_registry_tracks_placement_removal_and_load() {
+    let mut sim = Simulation::new_test_world(123);
+    let pump = entity_id_by_name(&sim.world.prototypes, "pump");
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 2);
+
+    let pump_id = place_named_entity(&mut sim, pump, x, y, Direction::North);
+    let pipe_id = place_named_entity(&mut sim, pipe, x + 2, y, Direction::North);
+
+    assert!(sim.entities.pumps.contains_key(&pump_id));
+    assert!(!sim.entities.pumps.contains_key(&pipe_id));
+
+    let bytes = save_to_bytes(&sim).expect("pump registry should save");
+    let mut loaded = load_from_bytes(&bytes).expect("pump registry should load");
+    assert!(loaded.entities.pumps.contains_key(&pump_id));
+
+    crate::entity_mutation::remove(&mut loaded, pump_id).expect("pump should be removable");
+    assert!(!loaded.entities.pumps.contains_key(&pump_id));
+}
+
 fn place_named_entity(
     sim: &mut Simulation,
     prototype_id: EntityPrototypeId,

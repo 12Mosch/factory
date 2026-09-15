@@ -59,6 +59,7 @@ pub(in crate::simulation) fn reservation_for_prototype(
         logistic_chests: logistic_chest_state_for_prototype(prototype),
         train_stops: train_stop_state_for_prototype(prototype),
         rocket_silos: rocket_silo_state_for_prototype(prototype),
+        pumps: pump_state_for_prototype(prototype),
     }
 }
 
@@ -398,6 +399,10 @@ fn offshore_pump_state_for_prototype(
 ) -> Option<OffshorePumpState> {
     (prototype.entity_kind == EntityKind::OffshorePump && prototype.offshore_pump.is_some())
         .then_some(OffshorePumpState)
+}
+
+fn pump_state_for_prototype(prototype: &factory_data::EntityPrototype) -> Option<PumpState> {
+    (prototype.entity_kind == EntityKind::Pump && prototype.pump.is_some()).then_some(PumpState)
 }
 
 fn pumpjack_state_for_prototype(

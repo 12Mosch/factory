@@ -17,19 +17,11 @@ impl Simulation {
     }
 
     pub(in crate::simulation) fn advance_fluid_pumps_after_power(&mut self) {
+        let pump_ids = self.entities.pumps.keys().copied().collect::<Vec<_>>();
+        if pump_ids.is_empty() {
+            return;
+        }
         self.ensure_fluid_network_topology();
-        let pump_ids = self
-            .entities
-            .placed_entities
-            .values()
-            .filter_map(|placed| {
-                self.world
-                    .prototypes
-                    .entity(placed.prototype_id)
-                    .and_then(|prototype| prototype.pump.as_ref())
-                    .map(|_| placed.id)
-            })
-            .collect::<Vec<_>>();
 
         for entity_id in pump_ids {
             if !self.circuit_work_allowed(entity_id) {
