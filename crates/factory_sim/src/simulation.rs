@@ -65,6 +65,7 @@ pub use crate::entities::{
 };
 pub(crate) use crate::entities::{DenseEntityMap, EntityReservation};
 pub use crate::equipment::{InstalledEquipment, PlayerEquipmentError, PlayerEquipmentState};
+pub(crate) use crate::fluids::PumpState;
 pub use crate::fluids::{
     FluidBoxOwner, FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState,
     FluidNetworkBoxSnapshot, FluidNetworkSnapshot,

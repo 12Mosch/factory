@@ -616,6 +616,7 @@ impl SimulationSnapshotOwned {
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
         };
+        sim.entities.rebuild_pump_registry(&sim.world.prototypes);
         sim.transport.initialize_item_tracking(&sim.entities);
         // The rail graph is a derived cache like the circuit topology, so a
         // loaded world rebuilds it before anything can ask what connects — and
