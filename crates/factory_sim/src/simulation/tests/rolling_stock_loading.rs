@@ -677,3 +677,75 @@ fn a_railway_without_a_pump_at_a_tanker_adds_no_fluid_nodes() {
     assert!(sim.any_stopped_stock_carries_fluid());
     assert_eq!(sim.networked_rolling_stock_fluid_boxes().count(), 0);
 }
+
+/// Manual benchmark for the stopped-stock pump scan behind the fluid topology.
+///
+/// A topology rebuild asks every pump whose connection faces a stopped fluid
+/// wagon for that wagon's tanks. The scan must cost pumps, not the whole
+/// factory, so this parks a tanker at a pump, fills the world with thousands
+/// of unrelated entities, and times the node lookup directly. Run with
+/// `cargo test -p factory_sim stopped_stock_pump_scan -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual performance measurement"]
+fn stopped_stock_pump_scan_benchmark() {
+    const FILLER_ENTITIES: usize = 4_000;
+    const ITERATIONS: usize = 5_000;
+
+    let (mut sim, _rails, _stock_id, (wagon_x, wagon_y)) = world_with_parked_wagon("fluid_wagon");
+
+    // One pump opening onto the wagon, so the scan does real geometry and
+    // index work rather than skipping past every candidate.
+    let pump = factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "pump");
+    crate::placement::place(
+        &mut sim,
+        crate::placement::EntityPlacementRequest {
+            prototype_id: pump,
+            x: wagon_x - 2,
+            y: wagon_y,
+            direction: Direction::West,
+        },
+    )
+    .expect("a pump should fit in the clear ground beside the track");
+
+    // Thousands of unrelated entities: the factory the scan must not be
+    // proportional to.
+    let chest = factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "chest");
+    let mut fillers = 0;
+    for (x, y) in all_tile_coords(&sim.world) {
+        if fillers >= FILLER_ENTITIES {
+            break;
+        }
+        let request = crate::placement::EntityPlacementRequest {
+            prototype_id: chest,
+            x,
+            y,
+            direction: Direction::North,
+        };
+        if crate::placement::validate(&sim, request).is_ok()
+            && crate::placement::place(&mut sim, request).is_ok()
+        {
+            fillers += 1;
+        }
+    }
+    assert!(
+        fillers >= 1_000,
+        "the benchmark needs a factory around the railway, placed {fillers}"
+    );
+
+    // The wagon's single tank, reached through the one pump beside it — the
+    // fillers must not change the answer, only (before the fix) its cost.
+    assert_eq!(sim.networked_rolling_stock_fluid_boxes().count(), 1);
+
+    let start = std::time::Instant::now();
+    for _ in 0..ITERATIONS {
+        std::hint::black_box(sim.networked_rolling_stock_fluid_boxes().count());
+    }
+    let elapsed = start.elapsed();
+
+    eprintln!(
+        "stopped_stock_pump_scan: entities={} pumps={} fillers={fillers} iterations={ITERATIONS} {:.3} us/op",
+        sim.entities.placed_entities.len(),
+        sim.entities.pumps.len(),
+        elapsed.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64,
+    );
+}
