@@ -1,14 +1,11 @@
 use crate::ids::EntityId;
+use crate::paged_index::PagedIndex;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 const VACANT_INDEX: u32 = u32::MAX;
-const INDIRECTION_PAGE_BITS: u32 = 8;
-const INDIRECTION_PAGE_SIZE: usize = 1 << INDIRECTION_PAGE_BITS;
-const MAX_DIRECT_INDIRECTION_PAGES: usize = 4_096;
-type IndirectionPage = [u32; INDIRECTION_PAGE_SIZE];
 
 /// Compact entity state storage with constant-time lookup by [`EntityId`].
 ///
@@ -17,10 +14,14 @@ type IndirectionPage = [u32; INDIRECTION_PAGE_SIZE];
 /// leave holes in the hot state array. Iteration and serialization still use
 /// entity-id order to preserve deterministic behavior and the existing save
 /// representation.
+///
+/// The indirection directory is the shared [`PagedIndex`] primitive (256-entry
+/// pages, a direct page vector with a ~4096-page cutoff, sparse hash-backed
+/// pages, allocate-on-write / free-when-empty), holding `u32` entry positions
+/// with `u32::MAX` as the vacant sentinel.
 #[derive(Clone, Debug)]
 pub(crate) struct DenseEntityMap<T> {
-    direct_pages: Vec<Option<Box<IndirectionPage>>>,
-    sparse_pages: HashMap<u64, Box<IndirectionPage>>,
+    index: PagedIndex<u32>,
     ordered_ids: BTreeSet<EntityId>,
     entries: Vec<DenseEntityEntry<T>>,
 }
@@ -58,26 +59,14 @@ impl<T> DenseEntityMap<T> {
         let entry_index =
             u32::try_from(self.entries.len()).expect("dense entity state capacity exceeded");
         self.entries.push(DenseEntityEntry { id, value });
-        let (page_id, page_offset) = indirection_location(id);
-        let page = self.page_mut_or_insert(page_id);
-        debug_assert_eq!(page[page_offset], VACANT_INDEX);
-        page[page_offset] = entry_index;
+        self.index.insert(id.raw(), entry_index);
         let inserted = self.ordered_ids.insert(id);
         debug_assert!(inserted);
         None
     }
 
     pub(crate) fn remove(&mut self, id: &EntityId) -> Option<T> {
-        let (page_id, page_offset) = indirection_location(*id);
-        let page = self.page_mut(page_id)?;
-        let entry_index = std::mem::replace(&mut page[page_offset], VACANT_INDEX);
-        if entry_index == VACANT_INDEX {
-            return None;
-        }
-        let page_is_empty = page.iter().all(|index| *index == VACANT_INDEX);
-        if page_is_empty {
-            self.remove_page(page_id);
-        }
+        let entry_index = self.index.remove(id.raw())?;
         let removed_id = self.ordered_ids.remove(id);
         debug_assert!(removed_id);
 
@@ -85,10 +74,7 @@ impl<T> DenseEntityMap<T> {
         debug_assert_eq!(removed.id, *id);
         if (entry_index as usize) < self.entries.len() {
             let moved_id = self.entries[entry_index as usize].id;
-            let (moved_page_id, moved_page_offset) = indirection_location(moved_id);
-            self.page_mut(moved_page_id)
-                .expect("stored entity indirection page should exist")[moved_page_offset] =
-                entry_index;
+            self.index.insert(moved_id.raw(), entry_index);
         }
         Some(removed.value)
     }
@@ -102,12 +88,7 @@ impl<T> DenseEntityMap<T> {
     }
 
     pub(crate) fn clear(&mut self) {
-        for page in self.direct_pages.iter_mut().flatten() {
-            page.fill(VACANT_INDEX);
-        }
-        for page in self.sparse_pages.values_mut() {
-            page.fill(VACANT_INDEX);
-        }
+        self.index.clear_values();
         self.ordered_ids.clear();
         self.entries.clear();
     }
@@ -135,69 +116,16 @@ impl<T> DenseEntityMap<T> {
     }
 
     fn entry_index(&self, id: EntityId) -> Option<usize> {
-        let (page_id, page_offset) = indirection_location(id);
-        let &entry_index = self.page(page_id)?.get(page_offset)?;
-        (entry_index != VACANT_INDEX).then_some(entry_index as usize)
+        self.index
+            .get(id.raw())
+            .map(|entry_index| entry_index as usize)
     }
-
-    fn page(&self, page_id: u64) -> Option<&IndirectionPage> {
-        if page_id < MAX_DIRECT_INDIRECTION_PAGES as u64 {
-            return self
-                .direct_pages
-                .get(page_id as usize)?
-                .as_ref()
-                .map(Box::as_ref);
-        }
-        self.sparse_pages.get(&page_id).map(Box::as_ref)
-    }
-
-    fn page_mut(&mut self, page_id: u64) -> Option<&mut IndirectionPage> {
-        if page_id < MAX_DIRECT_INDIRECTION_PAGES as u64 {
-            return self
-                .direct_pages
-                .get_mut(page_id as usize)?
-                .as_mut()
-                .map(Box::as_mut);
-        }
-        self.sparse_pages.get_mut(&page_id).map(Box::as_mut)
-    }
-
-    fn page_mut_or_insert(&mut self, page_id: u64) -> &mut IndirectionPage {
-        if page_id < MAX_DIRECT_INDIRECTION_PAGES as u64 {
-            let page_index = page_id as usize;
-            if self.direct_pages.len() <= page_index {
-                self.direct_pages.resize_with(page_index + 1, || None);
-            }
-            return self.direct_pages[page_index]
-                .get_or_insert_with(|| Box::new([VACANT_INDEX; INDIRECTION_PAGE_SIZE]));
-        }
-        self.sparse_pages
-            .entry(page_id)
-            .or_insert_with(|| Box::new([VACANT_INDEX; INDIRECTION_PAGE_SIZE]))
-    }
-
-    fn remove_page(&mut self, page_id: u64) {
-        if page_id < MAX_DIRECT_INDIRECTION_PAGES as u64 {
-            self.direct_pages[page_id as usize] = None;
-        } else {
-            self.sparse_pages.remove(&page_id);
-        }
-    }
-}
-
-fn indirection_location(id: EntityId) -> (u64, usize) {
-    let raw = id.raw();
-    (
-        raw >> INDIRECTION_PAGE_BITS,
-        (raw & (INDIRECTION_PAGE_SIZE as u64 - 1)) as usize,
-    )
 }
 
 impl<T> Default for DenseEntityMap<T> {
     fn default() -> Self {
         Self {
-            direct_pages: Vec::new(),
-            sparse_pages: HashMap::new(),
+            index: PagedIndex::new(VACANT_INDEX),
             ordered_ids: BTreeSet::new(),
             entries: Vec::new(),
         }
@@ -324,11 +252,50 @@ mod tests {
 
         assert_eq!(map.get(&low), Some(&10));
         assert_eq!(map.get(&high), Some(&20));
-        assert_eq!(map.direct_pages.iter().flatten().count(), 1);
-        assert_eq!(map.sparse_pages.len(), 1);
+        assert_eq!(map.index.direct_allocated_pages(), 1);
+        assert_eq!(map.index.sparse_allocated_pages(), 1);
         assert_eq!(
             map.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             [low, high]
         );
+    }
+
+    #[test]
+    fn removing_last_entry_of_a_page_frees_it() {
+        let mut map = DenseEntityMap::default();
+        let low = EntityId::new(1);
+        // Second entry of the same low page: shares the page with `low`.
+        let low_sibling = EntityId::new(2);
+        let high = EntityId::new(u64::MAX);
+
+        map.insert(low, 10);
+        map.insert(low_sibling, 11);
+        map.insert(high, 20);
+        assert_eq!(map.index.allocated_pages(), 2);
+
+        assert_eq!(map.remove(&high), Some(20));
+        assert_eq!(map.get(&high), None);
+        assert_eq!(map.index.allocated_pages(), 1);
+
+        // Swap-remove moves the last entry; the survivors must stay addressable.
+        assert_eq!(map.get(&low), Some(&10));
+        assert_eq!(map.get(&low_sibling), Some(&11));
+    }
+
+    #[test]
+    fn clear_retains_indirection_pages_for_reuse() {
+        let mut map = DenseEntityMap::default();
+        map.insert(EntityId::new(1), 10);
+        map.insert(EntityId::new(u64::MAX), 20);
+        assert_eq!(map.index.allocated_pages(), 2);
+
+        map.clear();
+        assert!(map.is_empty());
+        assert_eq!(map.index.allocated_pages(), 2);
+        assert_eq!(map.get(&EntityId::new(1)), None);
+
+        map.insert(EntityId::new(3), 30);
+        assert_eq!(map.get(&EntityId::new(3)), Some(&30));
+        assert_eq!(map.index.allocated_pages(), 2);
     }
 }

@@ -18,6 +18,7 @@ pub mod ids;
 pub mod inventory;
 pub mod logistics;
 pub mod machines;
+pub mod paged_index;
 pub mod player;
 pub mod pollution;
 pub mod power;
