@@ -910,6 +910,7 @@ fn enemy_spawner_without_enemy_gameplay_section_fails() {
                 max_alive_units: 15,
                 guard_units: 3,
                 free_spawn_interval_ticks: 1800,
+                free_spawn_retry_ticks: 180,
                 unit_spawn_pollution_cost_milli: 4000,
                 pollution_absorption_per_tick_milli: 20,
                 unit: (

@@ -266,6 +266,7 @@ pub(crate) struct RawEnemySpawnerPrototype {
     pub(crate) max_alive_units: u32,
     pub(crate) guard_units: u32,
     pub(crate) free_spawn_interval_ticks: u32,
+    pub(crate) free_spawn_retry_ticks: u32,
     pub(crate) unit_spawn_pollution_cost_milli: u32,
     pub(crate) pollution_absorption_per_tick_milli: u32,
     pub(crate) unit: UnitPrototype,
