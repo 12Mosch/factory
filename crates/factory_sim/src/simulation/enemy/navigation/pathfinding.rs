@@ -76,6 +76,53 @@ impl PathSearchScratch {
         )
     }
 
+    /// Finds a route to any reachable tile on the edge of a bounded search
+    /// window facing `target`. The goal is a line rather than one unchecked
+    /// coordinate, so water or occupancy at the direct intersection cannot
+    /// make an otherwise valid local detour fail.
+    pub(super) fn find_path_to_frontier(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+        start: (WorldTileCoord, WorldTileCoord),
+        target: (WorldTileCoord, WorldTileCoord),
+        forward: Direction,
+        max_range: i64,
+    ) -> (Option<VecDeque<(WorldTileCoord, WorldTileCoord)>>, usize) {
+        let diameter = (max_range as usize) * 2 + 1;
+        let max_expansions = diameter * diameter;
+
+        let min_x = start.0.saturating_sub(max_range);
+        let max_x = start.0.saturating_add(max_range);
+        let min_y = start.1.saturating_sub(max_range);
+        let max_y = start.1.saturating_add(max_range);
+        let frontier = match forward {
+            Direction::North => max_y,
+            Direction::East => max_x,
+            Direction::South => min_y,
+            Direction::West => min_x,
+        };
+
+        self.find_path_inner(
+            world,
+            entities,
+            start,
+            max_range,
+            max_expansions,
+            |tile| match forward {
+                Direction::North | Direction::South => tile.1 == frontier,
+                Direction::East | Direction::West => tile.0 == frontier,
+            },
+            |tile| {
+                tile.0
+                    .saturating_sub(target.0)
+                    .saturating_abs()
+                    .saturating_add(tile.1.saturating_sub(target.1).saturating_abs())
+            },
+            None,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn find_path_inner(
         &mut self,

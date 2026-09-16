@@ -9,8 +9,15 @@ const ENEMY_REPATH_INTERVAL_TICKS: u64 = 90;
 const ENEMY_WANDER_INTERVAL_TICKS: u64 = 300;
 /// Upper bound on A* node expansions per path request.
 const ENEMY_PATHFIND_MAX_EXPANSIONS: usize = 600;
-/// Distant targets use deterministic greedy movement instead of A*.
+/// Distant targets use deterministic greedy movement unless terrain blocks it.
 const ENEMY_PATHFIND_MAX_RANGE_TILES: i64 = 40;
+/// A blocked long-range greedy step searches to a nearby forward edge.
+/// The complete square fits within one request's expansion allowance, so a
+/// missing route means the local frontier is genuinely unreachable rather
+/// than merely unfinished when the work cap was reached.
+const ENEMY_LONG_RANGE_DETOUR_TILES: i64 = 16;
+#[cfg(test)]
+const ENEMY_LONG_RANGE_DETOUR_MAX_EXPANSIONS: usize = 33 * 33;
 /// Wander goals stay within a few tiles of their anchor, so a small bounded
 /// window keeps every idle decision inside the shared navigation budget.
 const ENEMY_WANDER_ROUTE_RANGE_TILES: i64 = 8;
@@ -55,6 +62,7 @@ impl Simulation {
         } = self;
         attack_targets.retain_active_groups(enemies);
         enemy_navigation.retain_raids(&enemies.raids);
+        enemy_navigation.retain_units(&enemies.enemies);
         for raid in enemies.raids.values_mut() {
             if raid
                 .target
@@ -221,24 +229,24 @@ enum ExpansionRoute {
     Wait,
 }
 
-/// Deterministic intermediate goal for long-distance expansion travel: the
-/// destination clamped into the search window around `from`. Keeps every
-/// search inside the existing range instead of running a 200+ tile A*.
-fn expansion_intermediate_goal(
+/// Deterministic intermediate goal for long-distance travel: the destination
+/// clamped into the search window around `from`. Keeps every search inside
+/// the existing range instead of running a 200+ tile A*.
+fn bounded_intermediate_goal(
     from: (WorldTileCoord, WorldTileCoord),
     destination: (WorldTileCoord, WorldTileCoord),
 ) -> (WorldTileCoord, WorldTileCoord) {
     (
         from.0
-            + (destination.0.saturating_sub(from.0)).clamp(
+            .saturating_add((destination.0.saturating_sub(from.0)).clamp(
                 -ENEMY_PATHFIND_MAX_RANGE_TILES,
                 ENEMY_PATHFIND_MAX_RANGE_TILES,
-            ),
+            )),
         from.1
-            + (destination.1.saturating_sub(from.1)).clamp(
+            .saturating_add((destination.1.saturating_sub(from.1)).clamp(
                 -ENEMY_PATHFIND_MAX_RANGE_TILES,
                 ENEMY_PATHFIND_MAX_RANGE_TILES,
-            ),
+            )),
     )
 }
 
@@ -263,7 +271,7 @@ fn plan_expansion_move(
     let goal = if in_range {
         destination
     } else {
-        expansion_intermediate_goal(from, destination)
+        bounded_intermediate_goal(from, destination)
     };
     match navigation.request_tile_path(
         world,
@@ -296,6 +304,143 @@ struct EnemyStepContext<'a> {
     tick: u64,
 }
 
+enum LongRangePlan {
+    FollowPath,
+    Done,
+}
+
+fn direction_toward(
+    from: (WorldTileCoord, WorldTileCoord),
+    target: (WorldTileCoord, WorldTileCoord),
+) -> Direction {
+    let dx = target.0.saturating_sub(from.0);
+    let dy = target.1.saturating_sub(from.1);
+    if dx.saturating_abs() >= dy.saturating_abs() {
+        if dx >= 0 {
+            Direction::East
+        } else {
+            Direction::West
+        }
+    } else if dy >= 0 {
+        Direction::North
+    } else {
+        Direction::South
+    }
+}
+
+fn step_in_direction(
+    tile: (WorldTileCoord, WorldTileCoord),
+    direction: Direction,
+) -> Option<(WorldTileCoord, WorldTileCoord)> {
+    let (dx, dy) = direction.tile_step();
+    Some((tile.0.checked_add(dx)?, tile.1.checked_add(dy)?))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_long_range_move(
+    navigation: &mut EnemyNavigation,
+    world: &WorldSim,
+    entities: &EntityStore,
+    tick: u64,
+    enemy: &mut Enemy,
+    target: EntityId,
+    target_footprint: &EntityFootprint,
+) -> LongRangePlan {
+    let tile = enemy.tile();
+    let destination = footprint_center_tile(target_footprint);
+    let current_distance = enemy_footprint(enemy).manhattan_distance_to(target_footprint);
+    let mut detour = navigation.long_range_detour(enemy.id);
+
+    // Once the unit is closer than where it first met the obstacle, the
+    // detour has cleared that obstacle. Ordinary greedy movement may safely
+    // resume without walking back across the lateral progress it just made.
+    if detour.is_some_and(|state| current_distance < state.hit_distance) {
+        navigation.clear_long_range_detour(enemy.id);
+        detour = None;
+    }
+
+    if detour.is_none() {
+        // Preserve the zero-search-cost straight-line behavior in open
+        // terrain and the existing behavior of attacking structural blockers.
+        if greedy_step(world, entities, enemy, target, target_footprint) {
+            enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+            return LongRangePlan::Done;
+        }
+
+        let forward = direction_toward(tile, destination);
+        let clockwise = forward.rotate_clockwise();
+        let heading = if enemy.id.raw().is_multiple_of(2) {
+            clockwise
+        } else {
+            clockwise.opposite()
+        };
+        let state = LongRangeDetour {
+            target,
+            forward,
+            heading,
+            wall_on_clockwise_side: heading.rotate_clockwise() == forward,
+            hit_distance: current_distance,
+        };
+        navigation.set_long_range_detour(enemy.id, state);
+        detour = Some(state);
+    }
+
+    let detour = detour.expect("long-range detour must be initialized");
+    match navigation.request_frontier_path(
+        world,
+        entities,
+        tile,
+        destination,
+        detour.forward,
+        ENEMY_LONG_RANGE_DETOUR_TILES,
+    ) {
+        PathRequest::Ready(Some(path)) => {
+            debug_assert!(
+                !path.is_empty(),
+                "a long-range frontier goal must produce movement steps"
+            );
+            enemy.path = path;
+            enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+            LongRangePlan::FollowPath
+        }
+        PathRequest::Ready(None) => {
+            // A complete local search proved that the forward edge cannot be
+            // reached from this window. Shift the next window along the
+            // obstacle. Repeating this bounded step eventually exposes the
+            // end of every finite wall, without increasing per-tick work.
+            let toward_wall = if detour.wall_on_clockwise_side {
+                detour.heading.rotate_clockwise()
+            } else {
+                detour.heading.rotate_clockwise().opposite()
+            };
+            let away_from_wall = toward_wall.opposite();
+            for heading in [
+                toward_wall,
+                detour.heading,
+                away_from_wall,
+                detour.heading.opposite(),
+            ] {
+                let Some(next) = step_in_direction(tile, heading) else {
+                    continue;
+                };
+                if tile_open_for_enemy(world, entities, next.0, next.1, Some(target)) {
+                    enemy.path.push_back(next);
+                    if heading != detour.heading {
+                        navigation
+                            .set_long_range_detour(enemy.id, LongRangeDetour { heading, ..detour });
+                    }
+                    enemy.next_decision_tick =
+                        tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+                    return LongRangePlan::FollowPath;
+                }
+            }
+            enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+            LongRangePlan::Done
+        }
+        PathRequest::Deferred => LongRangePlan::Done,
+    }
+}
+
 fn step_enemy(
     context: &mut EnemyStepContext<'_>,
     enemy: &mut Enemy,
@@ -312,6 +457,7 @@ fn step_enemy(
     // follows its route (`follow_path` no-ops on an empty path while the
     // prefill throttles the next attempt).
     if matches!(enemy.mission, EnemyMission::Expansion(_)) {
+        context.navigation.clear_long_range_detour(enemy.id);
         follow_path(world, entities, enemy, None);
         return;
     }
@@ -339,7 +485,20 @@ fn step_enemy(
         }
     }
 
+    // Validate retained detours after a missing target can be dropped and a
+    // replacement acquired in this same call. A path planned from the old
+    // detour is stale too, so both pieces of navigation state must go.
+    if context
+        .navigation
+        .long_range_detour(enemy.id)
+        .is_some_and(|detour| Some(detour.target) != enemy.target)
+    {
+        context.navigation.clear_long_range_detour(enemy.id);
+        enemy.path.clear();
+    }
+
     let Some(target) = enemy.target else {
+        context.navigation.clear_long_range_detour(enemy.id);
         wander(world, entities, context.navigation, seed, tick, enemy);
         return;
     };
@@ -356,6 +515,7 @@ fn step_enemy(
     if enemy_footprint(enemy).chebyshev_distance_to(&target_footprint)
         <= i64::from(enemy.attack.delivery.range_tiles())
     {
+        context.navigation.clear_long_range_detour(enemy.id);
         enemy.path.clear();
         if tick >= enemy.next_attack_tick {
             commands.attack(
@@ -378,6 +538,7 @@ fn step_enemy(
         .is_some_and(|&(x, y)| !tile_open_for_enemy(world, entities, x, y, Some(target)));
 
     if let EnemyMission::Raid(raid_id) = enemy.mission {
+        context.navigation.clear_long_range_detour(enemy.id);
         if next_waypoint_blocked {
             enemy.path.clear();
         }
@@ -400,9 +561,9 @@ fn step_enemy(
 
     if (enemy.path.is_empty() || next_waypoint_blocked) && tick >= enemy.next_decision_tick {
         enemy.path.clear();
-        if enemy_footprint(enemy).chebyshev_distance_to(&target_footprint)
-            <= ENEMY_PATHFIND_MAX_RANGE_TILES
-        {
+        let target_distance = enemy_footprint(enemy).chebyshev_distance_to(&target_footprint);
+        if target_distance <= ENEMY_PATHFIND_MAX_RANGE_TILES {
+            context.navigation.clear_long_range_detour(enemy.id);
             match context.navigation.request_path(
                 world,
                 entities,
@@ -422,7 +583,18 @@ fn step_enemy(
                 PathRequest::Deferred => return,
             }
         } else {
-            enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+            match plan_long_range_move(
+                context.navigation,
+                world,
+                entities,
+                tick,
+                enemy,
+                target,
+                &target_footprint,
+            ) {
+                LongRangePlan::FollowPath => {}
+                LongRangePlan::Done => return,
+            }
         }
         if enemy.path.is_empty() {
             // No route: walk straight at the target and gnaw through the
@@ -598,13 +770,14 @@ fn follow_path(
 
 /// Fallback movement when no path exists: step toward the target, and when a
 /// structure blocks the step, attack it instead (walls become chew targets).
+/// Returns whether the unit moved or selected a blocking structure.
 fn greedy_step(
     world: &WorldSim,
     entities: &EntityStore,
     enemy: &mut Enemy,
     target: EntityId,
     target_footprint: &EntityFootprint,
-) {
+) -> bool {
     let (tile_x, tile_y) = enemy.tile();
     let (goal_x, goal_y) = footprint_center_tile(target_footprint);
     let dx = goal_x - tile_x;
@@ -627,7 +800,7 @@ fn greedy_step(
         if tile_open_for_enemy(world, entities, next.0, next.1, Some(target)) {
             enemy.path.push_back(next);
             follow_path(world, entities, enemy, Some(target));
-            return;
+            return true;
         }
         // Blocked by a structure: switch targets and chew through it.
         if let Some(blocker) = entities.occupancy.entity_at(next.0, next.1)
@@ -639,9 +812,10 @@ fn greedy_step(
         {
             enemy.target = Some(blocker);
             enemy.path.clear();
-            return;
+            return true;
         }
     }
+    false
 }
 
 /// A tile a unit may stand on: generated, walkable terrain, and free of
@@ -801,6 +975,62 @@ mod movement_regression_tests {
         ((anchor.0, anchor.1), (anchor.0 + 50, anchor.1))
     }
 
+    /// Wide deterministic ground with a wall extending beyond the first
+    /// 16-tile local detour window. The route remains open one row beyond it.
+    fn long_corridor_with_tall_wall(
+        sim: &mut Simulation,
+    ) -> (
+        (WorldTileCoord, WorldTileCoord),
+        (WorldTileCoord, WorldTileCoord),
+    ) {
+        const MIN_DX: i64 = -54;
+        const MAX_DX: i64 = 54;
+        const HALF_HEIGHT: i64 = 20;
+        const WALL_HALF_HEIGHT: i64 = 16;
+        let concrete = factory_data::BasePrototypeIds::from_catalog(&sim.world.prototypes)
+            .tiles
+            .concrete;
+        let anchor = sim
+            .world
+            .chunks
+            .values()
+            .flat_map(|chunk| {
+                chunk.tiles.iter().enumerate().map(|(index, _)| {
+                    let local_x = (index as i32).rem_euclid(CHUNK_SIZE);
+                    let local_y = (index as i32).div_euclid(CHUNK_SIZE);
+                    chunk.coord.tile_at(local_x, local_y)
+                })
+            })
+            .find(|&(x, y)| corridor_is_clear(sim, x, y))
+            .expect("test world should contain a clear tile");
+
+        for dx in MIN_DX..=MAX_DX {
+            for dy in -HALF_HEIGHT..=HALF_HEIGHT {
+                let tile = (anchor.0 + dx, anchor.1 + dy);
+                let chunk = ChunkCoord::from_tile(tile.0, tile.1)
+                    .expect("test rectangle should be in the chunk plane");
+                sim.ensure_chunk_generated(chunk);
+                if let Some(occupant) = sim.entities.occupancy.entity_at(tile.0, tile.1) {
+                    crate::entity_mutation::remove(sim, occupant)
+                        .expect("rectangle entity should be removable");
+                }
+                if !sim
+                    .world
+                    .tile_at(tile.0, tile.1)
+                    .is_some_and(|world_tile| world_tile.tile_id == concrete)
+                {
+                    sim.world
+                        .set_tile(tile.0, tile.1, concrete)
+                        .expect("test rectangle should accept paving");
+                }
+            }
+        }
+        for dy in -WALL_HALF_HEIGHT..=WALL_HALF_HEIGHT {
+            flood_tile(sim, anchor.0 + 1, anchor.1 + dy);
+        }
+        ((anchor.0, anchor.1), (anchor.0 + 50, anchor.1))
+    }
+
     fn flood_tile(sim: &mut Simulation, x: WorldTileCoord, y: WorldTileCoord) {
         let already_blocked = sim
             .world
@@ -849,6 +1079,40 @@ mod movement_regression_tests {
             next_attack_tick: 0,
             next_decision_tick: 0,
         }
+    }
+
+    fn place_chest_at(sim: &mut Simulation, tile: (WorldTileCoord, WorldTileCoord)) -> EntityId {
+        let chest = sim
+            .world
+            .prototypes
+            .entities()
+            .iter()
+            .find(|prototype| prototype.name == "chest")
+            .expect("base data should contain a chest")
+            .id;
+        crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: chest,
+                x: tile.0,
+                y: tile.1,
+                direction: Direction::North,
+            },
+        )
+        .expect("the cleared corridor should accept a target chest")
+    }
+
+    fn step_test_enemy(sim: &Simulation, navigation: &mut EnemyNavigation, enemy: &mut Enemy) {
+        let mut attack_targets = AttackTargetCache::default();
+        let mut context = EnemyStepContext {
+            world: &sim.world,
+            entities: &sim.entities,
+            attack_targets: &mut attack_targets,
+            navigation,
+            seed: sim.world.seed,
+            tick: sim.tick,
+        };
+        step_enemy(&mut context, enemy, &mut CombatCommandBuffer::default());
     }
 
     #[test]
@@ -903,17 +1167,12 @@ mod movement_regression_tests {
         }
     }
 
-    fn assert_valid_detour(
+    fn assert_valid_steps(
         sim: &Simulation,
         start: (WorldTileCoord, WorldTileCoord),
-        destination: (WorldTileCoord, WorldTileCoord),
         path: &VecDeque<(WorldTileCoord, WorldTileCoord)>,
     ) {
         assert!(!path.is_empty(), "routing should return steps");
-        assert_eq!(
-            *path.back().expect("non-empty path has a goal"),
-            destination
-        );
         let mut previous = start;
         for &step in path {
             assert_eq!(
@@ -927,6 +1186,19 @@ mod movement_regression_tests {
             );
             previous = step;
         }
+    }
+
+    fn assert_valid_detour(
+        sim: &Simulation,
+        start: (WorldTileCoord, WorldTileCoord),
+        destination: (WorldTileCoord, WorldTileCoord),
+        path: &VecDeque<(WorldTileCoord, WorldTileCoord)>,
+    ) {
+        assert_valid_steps(sim, start, path);
+        assert_eq!(
+            *path.back().expect("non-empty path has a goal"),
+            destination
+        );
     }
 
     #[test]
@@ -1152,6 +1424,264 @@ mod movement_regression_tests {
             *steps.back().expect("routing must return steps"),
             intermediate,
             "beyond range, routing heads for the intermediate goal"
+        );
+    }
+
+    #[test]
+    fn distant_combat_enemy_detours_when_greedy_steps_are_blocked() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_blocker(&mut sim);
+        let blocked_intermediate = bounded_intermediate_goal(start, destination);
+        flood_tile(&mut sim, blocked_intermediate.0, blocked_intermediate.1);
+        let target = place_chest_at(&mut sim, destination);
+        let target_footprint = sim.entities.placed_entities[&target].footprint;
+        assert!(
+            EntityFootprint::single_tile(start.0, start.1).chebyshev_distance_to(&target_footprint)
+                > ENEMY_PATHFIND_MAX_RANGE_TILES,
+            "test target must exercise long-range navigation"
+        );
+        let mut exact_goal_navigation = EnemyNavigation::default();
+        exact_goal_navigation.begin_tick(0, 0, 0);
+        assert!(
+            routed_path(
+                &mut sim,
+                &mut exact_goal_navigation,
+                start,
+                blocked_intermediate,
+            )
+            .is_none(),
+            "the former exact intermediate strategy must fail in this geometry"
+        );
+
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.target = Some(target);
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+
+        step_test_enemy(&sim, &mut navigation, &mut enemy);
+
+        assert_valid_steps(&sim, start, &enemy.path);
+        let frontier = *enemy.path.back().expect("route has a frontier");
+        assert_eq!(
+            EntityFootprint::single_tile(start.0, start.1)
+                .chebyshev_distance_to(&EntityFootprint::single_tile(frontier.0, frontier.1)),
+            ENEMY_LONG_RANGE_DETOUR_TILES,
+            "the bounded route must end at a reachable search frontier"
+        );
+        assert!(
+            !enemy.path.contains(&(start.0 + 1, start.1)),
+            "the route must avoid the flooded direct step"
+        );
+        assert!(
+            enemy.y > tile_center_fixed(start.1),
+            "the first movement must take the required lateral detour"
+        );
+
+        let mut reached_target = false;
+        for tick in 1..=2_000 {
+            sim.tick = tick;
+            navigation.begin_tick(0, 0, 0);
+            step_test_enemy(&sim, &mut navigation, &mut enemy);
+            if enemy_footprint(&enemy).chebyshev_distance_to(&target_footprint)
+                <= i64::from(enemy.attack.delivery.range_tiles())
+            {
+                reached_target = true;
+                break;
+            }
+        }
+        assert!(
+            reached_target,
+            "the frontier detour must pass the blocked intermediate and reach the target"
+        );
+    }
+
+    #[test]
+    fn distant_combat_enemy_shifts_search_past_a_wider_wall() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_tall_wall(&mut sim);
+        let intermediate = bounded_intermediate_goal(start, destination);
+        let mut full_range_navigation = EnemyNavigation::default();
+        full_range_navigation.begin_tick(0, 0, 0);
+        assert!(
+            routed_path(&mut sim, &mut full_range_navigation, start, intermediate,).is_none(),
+            "the full-range search must exhaust its request budget in this geometry"
+        );
+        assert_eq!(
+            full_range_navigation.expansions_this_tick, ENEMY_PATHFIND_MAX_EXPANSIONS,
+            "the regression must distinguish exhaustion from a completed search"
+        );
+
+        let target = place_chest_at(&mut sim, destination);
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.target = Some(target);
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+
+        step_test_enemy(&sim, &mut navigation, &mut enemy);
+        assert_valid_steps(&sim, start, &enemy.path);
+        let detour = navigation
+            .long_range_detour(enemy.id)
+            .expect("the disconnected first window must start a durable detour");
+        assert_eq!(detour.forward, Direction::East);
+        assert!(
+            enemy
+                .path
+                .front()
+                .is_some_and(|step| step.0 == start.0 && step.1.abs_diff(start.1) == 1),
+            "the first failed window must shift laterally instead of retrying in place"
+        );
+        assert!(
+            navigation.expansions_this_tick <= ENEMY_LONG_RANGE_DETOUR_MAX_EXPANSIONS,
+            "each local frontier search must have a provably complete work bound"
+        );
+
+        let mut crossed_wall = false;
+        for tick in 1..=1_500 {
+            sim.tick = tick;
+            navigation.begin_tick(0, 0, 0);
+            step_test_enemy(&sim, &mut navigation, &mut enemy);
+            if enemy.tile().0 > start.0 + 1 {
+                crossed_wall = true;
+                break;
+            }
+        }
+        assert!(
+            crossed_wall,
+            "successive bounded searches must shift around a wall wider than the first window: start={start:?}, destination={destination:?}, tile={:?}, next_decision={}, path={:?}",
+            enemy.tile(),
+            enemy.next_decision_tick,
+            enemy.path
+        );
+    }
+
+    #[test]
+    fn replacement_target_does_not_inherit_removed_targets_detour() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, old_destination) = long_corridor_with_tall_wall(&mut sim);
+        let new_destination = (start.0 - 50, start.1);
+        let old_target = place_chest_at(&mut sim, old_destination);
+        let new_target = place_chest_at(&mut sim, new_destination);
+        crate::entity_mutation::remove(&mut sim, old_target)
+            .expect("the old target should be removable");
+
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.mode = EnemyMode::Attack;
+        enemy.target = Some(old_target);
+        let before = (enemy.x, enemy.y);
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+        navigation.set_long_range_detour(
+            enemy.id,
+            LongRangeDetour {
+                target: old_target,
+                forward: Direction::East,
+                heading: Direction::North,
+                wall_on_clockwise_side: true,
+                hit_distance: 50,
+            },
+        );
+        let mut attack_targets = AttackTargetCache::default();
+        attack_targets.rebuild_index(&sim.world, &sim.entities);
+        let mut context = EnemyStepContext {
+            world: &sim.world,
+            entities: &sim.entities,
+            attack_targets: &mut attack_targets,
+            navigation: &mut navigation,
+            seed: sim.world.seed,
+            tick: sim.tick,
+        };
+
+        step_enemy(
+            &mut context,
+            &mut enemy,
+            &mut CombatCommandBuffer::default(),
+        );
+
+        assert_eq!(enemy.target, Some(new_target));
+        assert!(
+            enemy.x < before.0 && enemy.y == before.1,
+            "the replacement target is west, so no east-facing detour state may survive"
+        );
+        assert!(
+            enemy
+                .path
+                .front()
+                .is_some_and(|step| *step == (start.0 - 1, start.1)),
+            "the generated path must belong to the replacement target"
+        );
+        assert!(navigation.long_range_detour(enemy.id).is_none());
+    }
+
+    #[test]
+    fn unreachable_distant_combat_target_uses_bounded_search() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_blocker(&mut sim);
+        for neighbor in [
+            (start.0 - 1, start.1),
+            (start.0, start.1 - 1),
+            (start.0, start.1 + 1),
+        ] {
+            let chunk = ChunkCoord::from_tile(neighbor.0, neighbor.1)
+                .expect("neighbor should be in the chunk plane");
+            sim.ensure_chunk_generated(chunk);
+            if let Some(occupant) = sim.entities.occupancy.entity_at(neighbor.0, neighbor.1) {
+                crate::entity_mutation::remove(&mut sim, occupant)
+                    .expect("neighbor entity should be removable");
+            }
+            flood_tile(&mut sim, neighbor.0, neighbor.1);
+        }
+        let target = place_chest_at(&mut sim, destination);
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.target = Some(target);
+        let before = (enemy.x, enemy.y);
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+
+        step_test_enemy(&sim, &mut navigation, &mut enemy);
+
+        assert_eq!((enemy.x, enemy.y), before, "an enclosed unit must wait");
+        assert!(enemy.path.is_empty());
+        assert!(
+            enemy.next_decision_tick > sim.tick,
+            "retries must be throttled"
+        );
+        assert!(
+            navigation.expansions_this_tick > 0,
+            "the regression must exercise bounded routing"
+        );
+        assert!(
+            navigation.expansions_this_tick <= ENEMY_LONG_RANGE_DETOUR_MAX_EXPANSIONS,
+            "an unreachable target must stay within the per-request budget"
+        );
+    }
+
+    #[test]
+    fn unobstructed_distant_combat_keeps_zero_cost_greedy_step() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_blocker(&mut sim);
+        let concrete = factory_data::BasePrototypeIds::from_catalog(&sim.world.prototypes)
+            .tiles
+            .concrete;
+        sim.world
+            .set_tile(start.0 + 1, start.1, concrete)
+            .expect("the synthetic blocker should accept landfill");
+        let target = place_chest_at(&mut sim, destination);
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.target = Some(target);
+        let before_x = enemy.x;
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+
+        step_test_enemy(&sim, &mut navigation, &mut enemy);
+
+        assert!(
+            enemy.x > before_x,
+            "the enemy should move directly toward the target"
+        );
+        assert_eq!(enemy.y, tile_center_fixed(start.1));
+        assert_eq!(
+            navigation.expansions_this_tick, 0,
+            "open long-range movement should not invoke A*"
         );
     }
 
