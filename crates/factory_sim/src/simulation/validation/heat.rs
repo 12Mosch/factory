@@ -37,10 +37,17 @@ pub(super) fn validate_heat_buffer_states(sim: &Simulation) -> Result<(), SimVal
 /// dense ids, every buffer in exactly one network, and totals plus the settled
 /// temperature that follow from the buffer contents.
 pub(super) fn validate_heat_network_snapshots(sim: &Simulation) -> Result<(), SimValidationError> {
-    // Invalidation clears summaries together with the derived topology. There
-    // is no snapshot to validate until the next heat pass rebuilds both.
+    // Invalidation clears summaries together with the derived topology. A
+    // dirty save carrying a published summary cannot come from the simulation
+    // and would make the load boundary depend on whether it was rebuilt early.
     if sim.heat.topology_dirty {
-        return Ok(());
+        return if sim.heat.networks.is_empty() {
+            Ok(())
+        } else {
+            Err(SimValidationError::InvalidHeatNetwork {
+                network_id: sim.heat.networks[0].network_id,
+            })
+        };
     }
 
     let expected_buffers = sim

@@ -579,16 +579,22 @@ impl SimulationSnapshotOwned {
         sim.heat.topology_dirty = heat_topology_dirty;
         // Check saved summaries before reconstruction can replace them.
         validation::validate_derived_state(&sim).map_err(SaveLoadError::InvalidSimulationState)?;
-        // Both topology structures start empty even when their saved summaries
-        // were clean. Force their derived indexes to rebuild before use.
-        sim.fluids.topology_dirty = true;
-        sim.heat.topology_dirty = true;
-        sim.ensure_fluid_network_topology();
-        // The snapshots are re-derived rather than trusted, because the index
-        // above may have joined a wagon onto a network and cleared them. A valid
-        // save re-derives exactly what it stored: the topology is a function of
-        // the same entities, rails, and stock positions it was saved from.
-        sim.refresh_fluid_network_snapshots();
+        // Clean summaries need their private topology indexes rebuilt before
+        // use. A pending invalidation must remain pending, however: rebuilding
+        // it here would publish summaries and consume work before the next tick.
+        if !fluid_topology_dirty {
+            sim.fluids.topology_dirty = true;
+            sim.ensure_fluid_network_topology();
+            // The snapshots are re-derived rather than trusted, because the
+            // index above may have joined a wagon onto a network and cleared
+            // them. Validation guarantees the result matches the saved view.
+            sim.refresh_fluid_network_snapshots();
+        }
+        if !heat_topology_dirty {
+            sim.heat.topology_dirty = true;
+            sim.ensure_heat_network_topology();
+            sim.refresh_heat_network_snapshots();
+        }
         // Robot coverage queries read the topology cache, so rebuild it before
         // anything can ask a loaded world which network covers a tile.
         sim.ensure_robot_network_topology();
@@ -984,6 +990,36 @@ mod tests {
             sim.world.generated_chunk_count()
         );
         assert_eq!(hash, loaded.state_hash());
+    }
+
+    /// Dirty topology always has empty published summaries; accepting both a
+    /// dirty marker and summaries would make the load boundary ambiguous.
+    #[test]
+    fn pending_network_invalidation_rejects_published_summaries() {
+        let sim = Simulation::new_test_world(293);
+
+        let mut fluid = capture_save_snapshot(&sim);
+        fluid
+            .state
+            .fluid_networks
+            .push(FluidNetworkSnapshot::default());
+        assert!(matches!(
+            load_from_bytes(&save_snapshot_to_bytes(&fluid).unwrap()),
+            Err(SaveLoadError::InvalidSimulationState(
+                SimValidationError::InvalidFluidNetwork { .. }
+            ))
+        ));
+
+        let mut heat = capture_save_snapshot(&sim);
+        heat.state
+            .heat_networks
+            .push(HeatNetworkSnapshot::default());
+        assert!(matches!(
+            load_from_bytes(&save_snapshot_to_bytes(&heat).unwrap()),
+            Err(SaveLoadError::InvalidSimulationState(
+                SimValidationError::InvalidHeatNetwork { .. }
+            ))
+        ));
     }
 
     #[test]

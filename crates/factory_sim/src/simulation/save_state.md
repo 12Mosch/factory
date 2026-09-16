@@ -40,9 +40,10 @@ tick. Allocation capacity and temporary buffers are scratch, not save state.
    and active queue bounds. This phase needs no reconstructed topology.
 4. Rebuild rail and stopped-stock indexes from validated inputs. Validate saved
    network summaries and train block references before replacing summaries.
-5. Rebuild remaining derived indexes synchronously; validate the complete world
-   before returning it. No phase advances a simulation tick or spends a future
-   gameplay work allowance.
+5. Rebuild clean derived indexes synchronously; leave encoded pending fluid and
+   heat invalidations pending so their next-tick work and empty published
+   summaries are preserved. Validate the complete world before returning it. No
+   phase advances a simulation tick or spends a future gameplay work allowance.
 
 ## Format boundary and regression coverage
 

@@ -136,10 +136,16 @@ fn pump_registry_tracks_placement_removal_and_load() {
     assert!(sim.entities.pumps.contains_key(&pump_id));
     assert!(!sim.entities.pumps.contains_key(&pipe_id));
     assert_eq!(sim.entities.machine_kind(pump_id), None);
+    assert!(sim.fluids.topology_dirty);
+    assert!(sim.heat.topology_dirty);
+    let before_hash = sim.state_hash();
 
     let bytes = save_to_bytes(&sim).expect("pump registry should save");
     let mut loaded = load_from_bytes(&bytes).expect("pump registry should load");
     assert!(loaded.entities.pumps.contains_key(&pump_id));
+    assert!(loaded.fluids.topology_dirty);
+    assert!(loaded.heat.topology_dirty);
+    assert_eq!(loaded.state_hash(), before_hash);
 
     crate::entity_mutation::remove(&mut loaded, pump_id).expect("pump should be removable");
     assert!(!loaded.entities.pumps.contains_key(&pump_id));
