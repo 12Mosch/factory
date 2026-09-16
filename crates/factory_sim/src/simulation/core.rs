@@ -41,12 +41,18 @@ impl Simulation {
                 .day_night_cycle()
                 .map(|_| DayNightCycleState::new()),
             entity_topology_revision: 0,
+            entity_visual_changes: Default::default(),
+            entity_style_revision: 0,
+            entity_style_changes: Default::default(),
             revealed_revision: 0,
             revealed_chunk_history: Default::default(),
             pollution_map_revision: 0,
             enemy_map_revision: 0,
             power_map_revision: 0,
             production_status_revision: 0,
+            research_revisions: ResearchRevisions::default(),
+            enemy_settings_revision: 0,
+            crafting_revision: 0,
             production_map_statuses: Vec::new(),
             production_map_status_scratch: Vec::new(),
             world,
@@ -66,6 +72,7 @@ impl Simulation {
             onboarding_progress: OnboardingProgress::default(),
             research,
             rolling_stock: RollingStockSubsystem::default(),
+            rolling_stock_topology_revision: 0,
             train_routing: rolling_stock_ops::TrainRouting::default(),
             stopped_stock_index: rolling_stock_ops::StoppedStockIndex::default(),
             power: PowerSubsystem::default(),
@@ -86,6 +93,7 @@ impl Simulation {
             config,
             attack_targets: enemy::AttackTargetCache::default(),
             enemy_target_chunks: combat_ops::EnemyChunkIndex::default(),
+            dynamic_unit_chunks: Default::default(),
             enemy_spawning_scratch: enemy::EnemySpawningScratch::default(),
             enemy_navigation: enemy::EnemyNavigation::default(),
             transport: TransportLaneCache::default(),
@@ -125,7 +133,9 @@ impl Simulation {
         self.advance_day_night_cycle();
         self.advance_statistics_to_current_tick();
         self.request_chunks_around_player();
-        self.process_chunk_generation_queue(CHUNK_GENERATION_BUDGET_PER_TICK);
+        profiler.measure(ProfilePhase::ChunkGeneration, || {
+            self.process_chunk_generation_queue(CHUNK_GENERATION_BUDGET_PER_TICK);
+        });
         self.pollution_emitters.begin_tick();
         profiler.measure(ProfilePhase::EntityMotion, || {
             self.entities.advance(Tick(self.tick), self.world.seed);
@@ -228,6 +238,7 @@ impl Simulation {
         if self.heat.topology_dirty {
             profiler.measure(ProfilePhase::Heat, || self.refresh_heat_network_snapshots());
         }
+        self.refresh_dynamic_unit_chunk_index();
     }
 
     pub fn tick_count(&self) -> u64 {
@@ -250,6 +261,21 @@ impl Simulation {
         self.entity_topology_revision = self.entity_topology_revision.wrapping_add(1);
     }
 
+    pub(crate) fn bump_entity_visual_revision(
+        &mut self,
+        entity_id: EntityId,
+        footprint: EntityFootprint,
+        previous_footprint: Option<EntityFootprint>,
+    ) {
+        self.bump_entity_topology_revision();
+        self.entity_visual_changes.push(
+            self.entity_topology_revision,
+            entity_id,
+            footprint,
+            previous_footprint,
+        );
+    }
+
     pub fn revealed_revision(&self) -> u64 {
         self.revealed_revision
     }
@@ -268,6 +294,36 @@ impl Simulation {
 
     pub fn production_status_revision(&self) -> u64 {
         self.production_status_revision
+    }
+
+    /// Revision of research selection, queue, progress, and completed levels.
+    pub fn research_revision(&self) -> u64 {
+        self.research_revisions.any
+    }
+
+    /// Advances whenever science units change progress, including completion.
+    pub fn research_progress_revision(&self) -> u64 {
+        self.research_revisions.progress
+    }
+
+    /// Advances when active research or the pending queue changes.
+    pub fn research_queue_revision(&self) -> u64 {
+        self.research_revisions.queue
+    }
+
+    /// Advances when a technology level completes and unlock-dependent state changes.
+    pub fn research_unlock_revision(&self) -> u64 {
+        self.research_revisions.unlock
+    }
+
+    /// Revision of runtime enemy configuration changes.
+    pub fn enemy_settings_revision(&self) -> u64 {
+        self.enemy_settings_revision
+    }
+
+    /// Revision of manual-crafting queue membership and order.
+    pub fn crafting_revision(&self) -> u64 {
+        self.crafting_revision
     }
 
     pub fn current_tick(&self) -> Tick {
@@ -316,7 +372,7 @@ impl Simulation {
         self.power.entity_statuses.hash(&mut hasher);
         self.fluids.networks.hash(&mut hasher);
         self.heat.networks.hash(&mut hasher);
-        self.robots.networks.hash(&mut hasher);
+        self.robots.hash(&mut hasher);
         self.robot_flights.hash(&mut hasher);
         self.rolling_stock.hash(&mut hasher);
         self.circuits.topology.network_ids.hash(&mut hasher);
@@ -388,6 +444,22 @@ impl Simulation {
         self.player
     }
 
+    /// Teleports the player to the center of the tile at `(x, y)` without any
+    /// collision checks. Only the position changes; health, death, respawn,
+    /// and repair state are preserved. Step-wise movement collision applies
+    /// to travel, not to teleport flows; surrounding chunks stream on
+    /// subsequent ticks the same way they do after any other direct
+    /// placement.
+    pub fn teleport_player_to_tile<X: Into<WorldTileCoord>, Y: Into<WorldTileCoord>>(
+        &mut self,
+        x: X,
+        y: Y,
+    ) {
+        let destination = PlayerState::centered_on_tile(x, y);
+        self.player.x = destination.x;
+        self.player.y = destination.y;
+    }
+
     pub fn player_inventory(&self) -> &Inventory {
         &self.player_inventory
     }
@@ -440,6 +512,7 @@ impl Simulation {
         &self.research.queue
     }
 
+    /// Selects a technology as active research and prunes invalid queued entries.
     pub fn select_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
         self.can_select_research(technology_id)?;
         self.research.active = Some(technology_id);
@@ -448,6 +521,7 @@ impl Simulation {
             .retain(|queued_id| *queued_id != technology_id);
         self.prune_invalid_research_queue();
         self.power_demand_cache.invalidate();
+        self.research_revisions.bump_queue();
         Ok(())
     }
 
@@ -463,14 +537,17 @@ impl Simulation {
         )
     }
 
+    /// Appends a valid technology to the queue, promoting it when nothing is active.
     pub fn enqueue_research(&mut self, technology_id: TechnologyId) -> Result<(), ResearchError> {
         self.can_enqueue_research(technology_id)?;
         self.research.queue.push(technology_id);
         self.promote_next_queued_research()?;
         self.power_demand_cache.invalidate();
+        self.research_revisions.bump_queue();
         Ok(())
     }
 
+    /// Removes a queued technology and queued dependents that become invalid.
     pub fn remove_queued_research(
         &mut self,
         index: usize,
@@ -479,9 +556,12 @@ impl Simulation {
             return Err(ResearchError::InvalidQueueIndex { index });
         }
 
-        Ok(self.remove_queued_research_and_dependents(index))
+        let removed = self.remove_queued_research_and_dependents(index);
+        self.research_revisions.bump_queue();
+        Ok(removed)
     }
 
+    /// Moves a queued technology while preserving prerequisite order.
     pub fn move_queued_research(
         &mut self,
         from_index: usize,
@@ -494,6 +574,7 @@ impl Simulation {
 
         let technology_id = self.research.queue.remove(from_index);
         self.research.queue.insert(to_index, technology_id);
+        self.research_revisions.bump_queue();
         Ok(())
     }
 
@@ -512,13 +593,18 @@ impl Simulation {
         )
     }
 
+    /// Applies science units to active research and reports progress or completion.
     pub fn add_research_units(
         &mut self,
         units: u64,
     ) -> Result<ResearchProgressResult, ResearchError> {
         let result =
             add_research_units_to_state(&self.world.prototypes, &mut self.research, units)?;
-        if matches!(result, ResearchProgressResult::Completed { .. }) {
+        let completed = matches!(result, ResearchProgressResult::Completed { .. });
+        if units != 0 {
+            self.research_revisions.bump_progress(completed);
+        }
+        if completed {
             self.power_demand_cache.invalidate();
         }
         if let ResearchProgressResult::Completed { technology_id, .. } = result

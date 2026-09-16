@@ -321,6 +321,16 @@ pub struct Enemy {
 }
 
 impl Enemy {
+    /// Single transition for units adopting the local guard role: mission
+    /// and stance switch to guard while mission-specific navigation and
+    /// targeting state is dropped, so follow-up AI uses guard aggro rules.
+    pub(crate) fn transition_to_guard(&mut self) {
+        self.mission = EnemyMission::Guard;
+        self.mode = EnemyMode::Guard;
+        self.target = None;
+        self.path.clear();
+    }
+
     pub const fn faction(&self) -> Faction {
         self.health.faction
     }

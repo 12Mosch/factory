@@ -85,6 +85,12 @@ macro_rules! define_entity_store {
             $(pub(crate) $field: entity_state_map_type!($field, $ty),)*
             pub(crate) occupancy: OccupancyGrid,
             pub(crate) next_entity_id: u64,
+            /// Powered fluid pumps, indexed only to avoid searching all placed
+            /// entities during every simulation tick. Derived from pump
+            /// prototype metadata on placement and load, and removed with the
+            /// entity. This is runtime bookkeeping rather than durable state.
+            #[serde(skip, default)]
+            pub(crate) pumps: BTreeMap<EntityId, crate::fluids::PumpState>,
             /// Logistic endpoints whose inventory, configuration, or machine
             /// acceptance state changed since
             /// the index last drained this set. Derived bookkeeping, not
@@ -132,6 +138,7 @@ macro_rules! define_entity_store {
                     $($field: Default::default(),)*
                     occupancy: OccupancyGrid::default(),
                     next_entity_id,
+                    pumps: BTreeMap::new(),
                     changed_logistic_endpoints: BTreeSet::new(),
                 }
             }
@@ -139,6 +146,23 @@ macro_rules! define_entity_store {
             /// Removes every per-kind state entry owned by `entity_id`.
             pub(crate) fn remove_entity_states(&mut self, entity_id: EntityId) {
                 $(self.$field.remove(&entity_id);)*
+                self.pumps.remove(&entity_id);
+            }
+
+            /// Rebuilds the derived powered-pump index after deserialization.
+            pub(crate) fn rebuild_pump_registry(
+                &mut self,
+                catalog: &factory_data::PrototypeCatalog,
+            ) {
+                self.pumps.clear();
+                self.pumps.extend(self.placed_entities.iter().filter_map(
+                    |(entity_id, placed)| {
+                        catalog
+                            .entity(placed.prototype_id)
+                            .is_some_and(|prototype| prototype.pump.is_some())
+                            .then_some((*entity_id, crate::fluids::PumpState))
+                    },
+                ));
             }
 
             /// The machine kind backing `entity_id`, derived from which state

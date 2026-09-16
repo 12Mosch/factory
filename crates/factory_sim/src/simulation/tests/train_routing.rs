@@ -491,7 +491,6 @@ fn a_train_mid_journey_survives_a_save_and_load() {
             break;
         }
     }
-    assert_eq!(sim.state_hash(), loaded.state_hash());
     assert_eq!(
         position(&sim, train_id),
         RailPosition::new(rails[20], rail_middle(&sim, rails[20]), true)

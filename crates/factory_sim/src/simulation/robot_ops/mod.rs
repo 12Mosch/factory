@@ -12,7 +12,9 @@ pub(in crate::simulation) use construction_jobs::{
     cancel_construction_job, construction_job_payload_item,
 };
 pub(in crate::simulation) use deliveries::LogisticReservations;
-pub(in crate::simulation) use logistic_index::{DemandPriority, LogisticIndex};
+pub(in crate::simulation) use logistic_index::{
+    DemandPriority, LogisticIndex, RobotLogisticWorkState,
+};
 pub(in crate::simulation) use network_access::{coverage_bounds, robot_network_work_counts};
 pub(in crate::simulation) use roboports::roboport_is_charging;
 pub(in crate::simulation) use types::RobotNetworkTopology;

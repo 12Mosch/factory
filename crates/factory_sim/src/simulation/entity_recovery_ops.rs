@@ -42,7 +42,7 @@ pub(crate) fn destroy_to_player_inventory(
     sim.player_inventory = player_inventory;
     sim.manual_mining_progress = None;
     let impact = impact_for_prototype(sim, removed.prototype_id);
-    apply_entity_topology_change(sim, impact, entity_id, removed.footprint);
+    apply_entity_topology_change(sim, impact, entity_id, removed.footprint, None);
 
     Ok(removed)
 }

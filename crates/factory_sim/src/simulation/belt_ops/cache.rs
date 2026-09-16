@@ -75,6 +75,13 @@ impl Default for TransportLaneCache {
 }
 
 impl TransportLaneCache {
+    /// Drops the queue while retaining its generation marks to model corrupt input.
+    #[cfg(test)]
+    pub(in crate::simulation) fn corrupt_active_queue_for_test(&mut self) {
+        self.active_runs.runs.clear();
+    }
+
+    /// Copies durable transport work while resetting runtime scratch and counters.
     pub(in crate::simulation) fn clone_for_save(&self) -> Self {
         Self {
             dirty: self.dirty,
@@ -92,6 +99,7 @@ impl TransportLaneCache {
         }
     }
 
+    /// Hashes only transport state that can affect subsequent simulation ticks.
     pub(in crate::simulation) fn hash_durable<H: Hasher>(&self, state: &mut H) {
         self.dirty.hash(state);
         self.dirty_regions.hash(state);
@@ -100,16 +108,23 @@ impl TransportLaneCache {
         self.active_runs.hash(state);
     }
 
+    /// Validates saved patch work, execution graph, and active scheduling state.
     pub(in crate::simulation) fn validate_work(
         &self,
         entities: &EntityStore,
         world: &WorldSim,
     ) -> Result<(), SimValidationError> {
         if self.dirty_regions.len() > MAX_DIRTY_REGIONS
-            || self
-                .dirty_regions
-                .iter()
-                .any(|region| !validation::world::valid_work_footprint(world, region.footprint))
+            || self.dirty_regions.iter().any(|region| {
+                !validation::world::valid_work_footprint(world, region.footprint)
+                    || entities
+                        .placed_entities
+                        .get(&region.entity_id)
+                        .is_some_and(|_| {
+                            !entities.transport_belts.contains_key(&region.entity_id)
+                                && !entities.splitters.contains_key(&region.entity_id)
+                        })
+            })
             || !self
                 .graph
                 .is_valid(entities, !self.dirty && self.dirty_regions.is_empty())

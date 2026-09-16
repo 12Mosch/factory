@@ -123,6 +123,50 @@ fn pump_without_transferable_fluid_only_draws_idle_power() {
     assert_eq!(idle.drain_watts, working.drain_watts);
 }
 
+#[test]
+fn pump_registry_tracks_placement_removal_and_load() {
+    let mut sim = Simulation::new_test_world(123);
+    let pump = entity_id_by_name(&sim.world.prototypes, "pump");
+    let pipe = entity_id_by_name(&sim.world.prototypes, "pipe");
+    let (x, y) = first_buildable_rect(&sim.world, 3, 2);
+
+    let pump_id = place_named_entity(&mut sim, pump, x, y, Direction::North);
+    let pipe_id = place_named_entity(&mut sim, pipe, x + 2, y, Direction::North);
+
+    assert!(sim.entities.pumps.contains_key(&pump_id));
+    assert!(!sim.entities.pumps.contains_key(&pipe_id));
+    assert_eq!(sim.entities.machine_kind(pump_id), None);
+
+    let bytes = save_to_bytes(&sim).expect("pump registry should save");
+    let mut loaded = load_from_bytes(&bytes).expect("pump registry should load");
+    assert!(loaded.entities.pumps.contains_key(&pump_id));
+
+    crate::entity_mutation::remove(&mut loaded, pump_id).expect("pump should be removable");
+    assert!(!loaded.entities.pumps.contains_key(&pump_id));
+}
+
+#[test]
+fn pump_registry_preserves_metadata_based_capability_for_custom_prototypes() {
+    let mut catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
+    let pump = entity_id_by_name(&catalog, "pump");
+    let boiler = entity_id_by_name(&catalog, "boiler");
+    let pump_metadata = catalog.entities()[pump.index()]
+        .pump
+        .clone()
+        .expect("base pump should declare pump metadata");
+    catalog.entities_mut()[boiler.index()].pump = Some(pump_metadata);
+    let mut sim = Simulation::new(123, catalog).expect("custom pump capability should be valid");
+    let (x, y) = first_buildable_rect(&sim.world, 2, 2);
+
+    let boiler_id = place_named_entity(&mut sim, boiler, x, y, Direction::North);
+
+    assert!(sim.entities.pumps.contains_key(&boiler_id));
+    assert_eq!(
+        sim.entities.machine_kind(boiler_id),
+        Some(EntityKind::Boiler)
+    );
+}
+
 fn place_named_entity(
     sim: &mut Simulation,
     prototype_id: EntityPrototypeId,

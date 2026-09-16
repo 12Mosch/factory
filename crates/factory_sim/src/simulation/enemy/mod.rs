@@ -158,6 +158,23 @@ mod enemy_feature_tests {
     }
 
     #[test]
+    fn durable_target_decisions_require_a_revision_and_live_attackable_targets() {
+        let sim = Simulation::new_test_world(123);
+        let mut cache = AttackTargetCache::default();
+        cache.base_targets.insert(EnemyBaseId::new(1), None);
+        assert!(!cache.is_valid(sim.entity_topology_revision, &sim.entities));
+
+        cache.revision = Some(sim.entity_topology_revision);
+        cache
+            .base_targets
+            .insert(EnemyBaseId::new(1), Some(EntityId::new(u64::MAX)));
+        assert!(!cache.is_valid(sim.entity_topology_revision, &sim.entities));
+
+        cache.revision = Some(sim.entity_topology_revision.wrapping_sub(1));
+        assert!(cache.is_valid(sim.entity_topology_revision, &sim.entities));
+    }
+
+    #[test]
     fn difficulty_presets_match_balance_defaults() {
         let peaceful = EnemyDifficultyPreset::Peaceful.config();
         let standard = EnemyDifficultyPreset::Standard.config();
@@ -213,17 +230,20 @@ mod enemy_feature_tests {
         let mut sim = Simulation::new_test_world(123);
         let world = sim.enemy_settings().world;
         let runtime = EnemyDifficultyPreset::Peaceful.config().runtime;
+        let revision = sim.enemy_settings_revision();
         sim.apply_command(&SimCommand::SetEnemyRuntimeSettings(runtime))
             .unwrap();
         assert_eq!(sim.enemy_settings().world, world);
         assert_eq!(sim.enemy_settings().runtime, runtime);
         assert_eq!(sim.enemy_settings().preset, EnemyDifficultyPreset::Custom);
+        assert!(sim.enemy_settings_revision() > revision);
     }
 
     #[test]
     fn runtime_command_reports_invalid_settings_without_mutating_state() {
         let mut sim = Simulation::new_test_world(123);
         let original = sim.enemy_settings();
+        let revision = sim.enemy_settings_revision();
         let mut runtime = original.runtime;
         runtime.raid_frequency_percent = 24;
 
@@ -234,6 +254,7 @@ mod enemy_feature_tests {
             ))
         );
         assert_eq!(sim.enemy_settings(), original);
+        assert_eq!(sim.enemy_settings_revision(), revision);
     }
 
     #[test]

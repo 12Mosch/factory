@@ -77,9 +77,19 @@ impl Simulation {
                 .keys()
                 .map(|&entity_id| (entity_id, self.lamp_should_be_lit(entity_id))),
         );
+        let Simulation {
+            entities,
+            entity_style_revision,
+            entity_style_changes,
+            ..
+        } = self;
         for &(entity_id, lit) in &lit_by_entity {
-            if let Some(state) = self.entities.lamps.get_mut(&entity_id) {
+            if let Some(state) = entities.lamps.get_mut(&entity_id)
+                && state.lit != lit
+            {
                 state.lit = lit;
+                *entity_style_revision = entity_style_revision.wrapping_add(1);
+                entity_style_changes.push(*entity_style_revision, entity_id);
             }
         }
         self.circuits.lamp_refresh_scratch = lit_by_entity;

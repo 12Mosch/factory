@@ -432,6 +432,31 @@ fn a_signal_shows_the_state_of_the_block_beyond_it() {
     );
 }
 
+#[test]
+fn a_signal_does_not_expose_its_cached_aspect_while_the_graph_is_invalid() {
+    let (mut sim, rails) = world_with_signalled_run(20);
+    let signal = place_signal(&mut sim, &rails, 8, Direction::North, "rail_signal");
+    assert_eq!(
+        sim.rail_signal_aspect(signal),
+        Some(RailSignalAspect::Clear)
+    );
+
+    crate::entity_mutation::remove(&mut sim, rails[18])
+        .expect("a distant placed rail can be removed");
+    assert_eq!(
+        sim.rail_signal_aspect(signal),
+        None,
+        "the previous graph's aspect must not leak through invalidation"
+    );
+
+    sim.tick();
+    assert_eq!(
+        sim.rail_signal_aspect(signal),
+        Some(RailSignalAspect::Clear),
+        "the rebuilt graph should publish a fresh aspect"
+    );
+}
+
 /// A signal only governs the way it faces. Travel the other way across the same
 /// boundary is governed by nothing at all, which makes the boundary impassable
 /// that way — a single signal turns a stretch of track one-way, which is exactly

@@ -172,10 +172,9 @@ impl Simulation {
             let member_location = raid
                 .members
                 .iter()
-                .next()
-                .and_then(|id| self.enemies.enemies.get(id))
+                .filter_map(|id| self.enemies.enemies.get(id))
                 .map(|unit| unit.tile())
-                .filter(|&(x, y)| {
+                .find(|&(x, y)| {
                     ChunkCoord::from_tile(x, y)
                         .is_some_and(|chunk| self.chart.revealed_chunks.contains(&chunk))
                 })
@@ -280,5 +279,158 @@ impl Simulation {
         while self.enemies.threat_events.len() > 256 {
             self.enemies.threat_events.pop_front();
         }
+    }
+}
+
+#[cfg(test)]
+mod map_snapshot_regression_tests {
+    use super::*;
+    use crate::enemies::{EnemyBase, Raid};
+
+    const HIDDEN_TILE: (WorldTileCoord, WorldTileCoord) = (5, 5);
+    const VISIBLE_TILE: (WorldTileCoord, WorldTileCoord) = (100, 100);
+    const SECOND_VISIBLE_TILE: (WorldTileCoord, WorldTileCoord) = (103, 100);
+
+    fn tile_center(tile: WorldTileCoord) -> i64 {
+        tile * POSITION_SCALE + POSITION_SCALE / 2
+    }
+
+    fn raid_enemy(id: EnemyId, tile: (WorldTileCoord, WorldTileCoord), raid_id: RaidId) -> Enemy {
+        Enemy {
+            id,
+            x: tile_center(tile.0),
+            y: tile_center(tile.1),
+            health: HealthState::new(100, Faction::Enemy),
+            attack: AttackDefinition::melee(Damage::physical(5), 60, 1),
+            speed_fixed_per_tick: 40,
+            aggro_radius_tiles: 0,
+            mode: EnemyMode::Attack,
+            mission: EnemyMission::Raid(raid_id),
+            home_spawner: None,
+            target: None,
+            path: VecDeque::new(),
+            next_attack_tick: 0,
+            next_decision_tick: 0,
+        }
+    }
+
+    fn insert_base(sim: &mut Simulation, anchor: ChunkCoord) -> EnemyBaseId {
+        let base_id = sim.enemies.allocate_base_id();
+        sim.enemies.bases.insert(
+            base_id,
+            EnemyBase {
+                id: base_id,
+                anchor,
+                spawners: BTreeSet::new(),
+                creation_tick: 0,
+                attack_budget_micro: 0,
+                staged_units: BTreeSet::new(),
+                staging_started_tick: None,
+                next_raid_tick: 0,
+                next_expansion_tick: 0,
+                next_growth_tick: 0,
+                pollution_contact: false,
+            },
+        );
+        base_id
+    }
+
+    fn reveal_only(tile: (WorldTileCoord, WorldTileCoord), sim: &mut Simulation) {
+        sim.chart.revealed_chunks.clear();
+        sim.chart
+            .revealed_chunks
+            .insert(ChunkCoord::from_tile(tile.0, tile.1).expect("test tile maps to a chunk"));
+    }
+
+    fn insert_raid(
+        sim: &mut Simulation,
+        base_id: EnemyBaseId,
+        tiles: &[(WorldTileCoord, WorldTileCoord)],
+    ) -> RaidId {
+        let raid_id = sim.enemies.allocate_raid_id();
+        let mut members = BTreeSet::new();
+        for tile in tiles {
+            let enemy_id = sim.enemies.allocate_id();
+            members.insert(enemy_id);
+            sim.enemies
+                .enemies
+                .insert(enemy_id, raid_enemy(enemy_id, *tile, raid_id));
+        }
+        sim.enemies.raids.insert(
+            raid_id,
+            Raid {
+                id: raid_id,
+                base_id,
+                members,
+                target: None,
+                launched_tick: 0,
+            },
+        );
+        raid_id
+    }
+
+    fn raid_location(snapshot: &EnemyMapSnapshot, raid_id: RaidId) -> Option<ThreatLocation> {
+        snapshot
+            .raids
+            .iter()
+            .find(|(id, _)| *id == raid_id)
+            .map(|(_, location)| *location)
+    }
+
+    #[test]
+    fn visible_member_survives_destroyed_source_base() {
+        let mut sim = Simulation::new_test_world(123);
+        // Allocate but never insert: the source base was destroyed, so there
+        // is no home-sector fallback for this raid.
+        let missing_base = sim.enemies.allocate_base_id();
+        reveal_only(VISIBLE_TILE, &mut sim);
+        let raid_id = insert_raid(&mut sim, missing_base, &[HIDDEN_TILE, VISIBLE_TILE]);
+
+        let snapshot = sim.enemy_map_snapshot();
+        assert_eq!(
+            raid_location(&snapshot, raid_id),
+            Some(ThreatLocation::Exact {
+                x: VISIBLE_TILE.0,
+                y: VISIBLE_TILE.1,
+            })
+        );
+    }
+
+    #[test]
+    fn no_visible_member_falls_back_to_home_sector() {
+        let mut sim = Simulation::new_test_world(123);
+        let anchor = ChunkCoord { x: 9, y: 9 };
+        let base_id = insert_base(&mut sim, anchor);
+        reveal_only(VISIBLE_TILE, &mut sim);
+        let raid_id = insert_raid(&mut sim, base_id, &[HIDDEN_TILE, (6, 6)]);
+
+        let snapshot = sim.enemy_map_snapshot();
+        assert_eq!(
+            raid_location(&snapshot, raid_id),
+            Some(ThreatLocation::Sector(anchor))
+        );
+    }
+
+    #[test]
+    fn lowest_id_visible_member_wins_deterministically() {
+        let mut sim = Simulation::new_test_world(123);
+        let base_id = insert_base(&mut sim, ChunkCoord { x: 9, y: 9 });
+        reveal_only(VISIBLE_TILE, &mut sim);
+        // Lowest-ID member hidden; the next two in EnemyId order are both
+        // visible, so the first visible one must be reported.
+        let raid_id = insert_raid(
+            &mut sim,
+            base_id,
+            &[HIDDEN_TILE, VISIBLE_TILE, SECOND_VISIBLE_TILE],
+        );
+
+        let snapshot = sim.enemy_map_snapshot();
+        assert_eq!(
+            raid_location(&snapshot, raid_id),
+            Some(ThreatLocation::Exact {
+                x: VISIBLE_TILE.0,
+                y: VISIBLE_TILE.1,
+            })
+        );
     }
 }

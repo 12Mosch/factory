@@ -12,8 +12,6 @@ use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems}
 
 use crate::map::resources::{MapLayerTextureCache, MapTextureUploadRect};
 
-use super::pixels::UNREVEALED_PIXEL;
-
 #[derive(Clone, Debug)]
 pub(crate) struct MapTextureUploadCommand {
     pub image_id: AssetId<Image>,
@@ -61,16 +59,15 @@ pub(super) fn upload_layer_texture(
         return;
     };
 
-    let full_upload = cache.dirty_regions.is_full()
-        || cache
-            .handle
-            .as_ref()
-            .and_then(|handle| images.get(handle.id()))
-            .is_none_or(|image| image.width() != bounds.width || image.height() != bounds.height);
+    let image_size_changed = cache
+        .handle
+        .as_ref()
+        .and_then(|handle| images.get(handle.id()))
+        .is_none_or(|image| image.width() != bounds.width || image.height() != bounds.height);
 
-    if full_upload {
-        let pixels = pixels.clone();
-        replace_layer_image(cache, images, &pixels, bounds.width, bounds.height);
+    if image_size_changed {
+        let image = layer_image(pixels.clone(), bounds.width, bounds.height);
+        replace_layer_image(cache, images, image);
         cache.dirty_regions.clear();
         return;
     }
@@ -80,12 +77,28 @@ pub(super) fn upload_layer_texture(
     }
 
     let Some(handle) = cache.handle.as_ref() else {
-        let pixels = pixels.clone();
-        replace_layer_image(cache, images, &pixels, bounds.width, bounds.height);
+        let image = layer_image(pixels.clone(), bounds.width, bounds.height);
+        replace_layer_image(cache, images, image);
         cache.dirty_regions.clear();
         return;
     };
     let image_id = handle.id();
+
+    if cache.dirty_regions.is_full() {
+        uploads.commands.push(MapTextureUploadCommand {
+            image_id,
+            texture_size,
+            rect: MapTextureUploadRect {
+                x: 0,
+                y: 0,
+                width: bounds.width,
+                height: bounds.height,
+            },
+            data: pixels.clone(),
+        });
+        cache.dirty_regions.clear();
+        return;
+    }
 
     for rect in cache.dirty_regions.take_rects() {
         uploads.commands.push(MapTextureUploadCommand {
@@ -97,27 +110,7 @@ pub(super) fn upload_layer_texture(
     }
 }
 
-fn replace_layer_image(
-    cache: &mut MapLayerTextureCache,
-    images: &mut Assets<Image>,
-    pixels: &[u8],
-    width: u32,
-    height: u32,
-) {
-    let mut image = Image::new_fill(
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &UNREVEALED_PIXEL,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    );
-    image.data = Some(pixels.to_vec());
-    image.sampler = ImageSampler::nearest();
-
+fn replace_layer_image(cache: &mut MapLayerTextureCache, images: &mut Assets<Image>, image: Image) {
     let handle = match cache.handle.as_ref() {
         Some(handle) => {
             let _ = images.insert(handle.id(), image);
@@ -126,6 +119,22 @@ fn replace_layer_image(
         None => images.add(image),
     };
     cache.handle = Some(handle);
+}
+
+fn layer_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
+    let mut image = Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::nearest();
+    image
 }
 
 fn pack_rect_pixels(pixels: &[u8], texture_width: u32, rect: MapTextureUploadRect) -> Vec<u8> {
@@ -227,6 +236,7 @@ fn is_stale_for_texture_size(command: &MapTextureUploadCommand, texture_size: UV
 mod tests {
     use super::*;
     use crate::map::resources::{MapTextureBounds, MapTextureDirtyRegions};
+    use crate::rendering::map_texture::UNREVEALED_PIXEL;
 
     fn image_asset(width: u32, height: u32, data: Option<Vec<u8>>) -> Image {
         let mut image = Image::new_fill(
@@ -371,5 +381,40 @@ mod tests {
         assert_eq!(image.data.as_deref(), Some(pixels.as_slice()));
         assert!(uploads.commands.is_empty());
         assert!(cache.dirty_regions.is_empty());
+    }
+
+    #[test]
+    fn same_size_full_refresh_keeps_image_and_queues_gpu_write() {
+        let bounds = MapTextureBounds {
+            min_x: 32,
+            min_y: -64,
+            width: 64,
+            height: 64,
+        };
+        let mut images = Assets::<Image>::default();
+        let handle = images.add(image_asset(bounds.width, bounds.height, None));
+        let pixels = vec![42; bounds.width as usize * bounds.height as usize * 4];
+        let mut dirty_regions = MapTextureDirtyRegions::default();
+        dirty_regions.mark_full();
+        let mut cache = MapLayerTextureCache {
+            handle: Some(handle.clone()),
+            bounds: Some(bounds),
+            pixels: Some(pixels.clone()),
+            dirty_regions,
+            ..Default::default()
+        };
+        let mut uploads = MapTextureUploadQueue::default();
+
+        upload_layer_texture(&mut cache, &mut images, &mut uploads);
+
+        assert_eq!(uploads.commands.len(), 1);
+        assert_eq!(uploads.commands[0].data, pixels);
+        assert_eq!(uploads.commands[0].rect.width, bounds.width);
+        assert_eq!(uploads.commands[0].rect.height, bounds.height);
+        assert!(
+            images
+                .get(handle.id())
+                .is_some_and(|image| image.data.is_none())
+        );
     }
 }

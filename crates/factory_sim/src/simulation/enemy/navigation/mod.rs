@@ -81,6 +81,7 @@ impl Hash for EnemyNavigation {
 }
 
 impl EnemyNavigation {
+    /// Copies incremental navigation work while resetting per-tick scratch.
     pub(in crate::simulation) fn clone_for_save(&self) -> Self {
         Self {
             revision: self.revision,
@@ -95,6 +96,7 @@ impl EnemyNavigation {
         }
     }
 
+    /// Validates durable revisions, scheduling cursor, and every raid field.
     pub(in crate::simulation) fn validate(
         &self,
         world: &WorldSim,
@@ -213,6 +215,35 @@ impl EnemyNavigation {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Budgeted tile-goal routing shared by expansion and wander movement, so
+    /// both reuse the same A* scratch buffers and per-tick expansion budget
+    /// as combat pathing instead of maintaining separate search machinery.
+    fn request_tile_path(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+        start: (WorldTileCoord, WorldTileCoord),
+        goal: (WorldTileCoord, WorldTileCoord),
+        max_range: i64,
+        max_expansions: usize,
+    ) -> PathRequest {
+        if self.remaining_expansions < max_expansions {
+            return PathRequest::Deferred;
+        }
+
+        let (path, expansions) = self.path_scratch.find_path_to_tile(
+            world,
+            entities,
+            start,
+            goal,
+            max_range,
+            max_expansions,
+        );
+        self.charge(expansions);
+        PathRequest::Ready(path)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn request_path(
         &mut self,
         world: &WorldSim,
@@ -253,6 +284,7 @@ impl EnemyNavigation {
 mod tests {
     use super::*;
 
+    /// Builds several simultaneous raids sharing one durable structure target.
     fn multiple_raid_world(count: usize) -> Simulation {
         let mut sim = Simulation::new_test_world(293);
         let chest = sim
@@ -311,6 +343,7 @@ mod tests {
         sim
     }
 
+    /// Partially initialized fields must preserve their exact budgeted progress.
     #[test]
     fn partially_built_multiple_raid_fields_continue_after_save() {
         let mut sim = multiple_raid_world(2);
@@ -328,6 +361,7 @@ mod tests {
         super::super::super::save::assert_save_continuation(&mut sim, 40, &[]);
     }
 
+    /// Warm fields must retain their routes rather than rebuild after loading.
     #[test]
     fn warm_multiple_raid_fields_continue_after_save() {
         let mut sim = multiple_raid_world(2);
@@ -344,6 +378,7 @@ mod tests {
         super::super::super::save::assert_save_continuation(&mut sim, 40, &[]);
     }
 
+    /// Exhausted per-tick work and round-robin ordering resume after loading.
     #[test]
     fn exhausted_navigation_budget_and_cursor_survive_save() {
         let mut sim = multiple_raid_world(20);
@@ -362,6 +397,7 @@ mod tests {
         super::super::super::save::assert_save_continuation(&mut sim, 20, &[]);
     }
 
+    /// A revision change after the enemy pass remains pending through a save.
     #[test]
     fn pending_navigation_invalidation_survives_save() {
         let mut sim = multiple_raid_world(2);
@@ -396,6 +432,7 @@ mod tests {
         super::super::super::save::assert_save_continuation(&mut sim, 20, &commands);
     }
 
+    /// Malformed direction storage is rejected before route reconstruction.
     #[test]
     fn malformed_navigation_is_rejected_before_reconstruction() {
         let mut sim = multiple_raid_world(2);

@@ -119,6 +119,10 @@ pub(in crate::simulation) struct RailSignalling {
     /// inserted where there is none.
     claims: BTreeMap<EntityId, TrainId>,
     aspects: BTreeMap<EntityId, RailSignalAspect>,
+    /// Reusable destination for the next aspect pass. Swapping maps keeps the
+    /// previous values available for exact change detection while naturally
+    /// dropping signals no longer present in the rebuilt partition.
+    next_aspects: BTreeMap<EntityId, RailSignalAspect>,
     /// How far each train may still run before the signal it has not been let
     /// past, keyed by the direction along the train's own facing that the
     /// allowance was measured in.
@@ -142,7 +146,6 @@ impl RailSignalling {
     pub(in crate::simulation) fn clear(&mut self) {
         self.occupancy.clear();
         self.claims.clear();
-        self.aspects.clear();
         self.limits.clear();
     }
 
@@ -192,6 +195,9 @@ impl Simulation {
     /// has not seen yet — which is the tick a signal is placed on, before the
     /// graph it cuts has been rebuilt.
     pub fn rail_signal_aspect(&self, entity_id: EntityId) -> Option<RailSignalAspect> {
+        if self.rails.graph_dirty {
+            return None;
+        }
         self.rails.signalling.aspect(entity_id)
     }
 
@@ -240,6 +246,7 @@ impl Simulation {
     pub(in crate::simulation) fn advance_rail_signals(&mut self) {
         self.rails.signalling.clear();
         if self.rolling_stock.trains.is_empty() && self.rails.blocks.signals().is_empty() {
+            self.refresh_signal_aspects();
             return;
         }
 
@@ -493,9 +500,16 @@ impl Simulation {
     /// Works out what every signal is showing, from the reservation the pass
     /// just settled.
     fn refresh_signal_aspects(&mut self) {
+        let Simulation {
+            rails,
+            entity_style_revision,
+            entity_style_changes,
+            ..
+        } = self;
         let RailSubsystem {
             blocks, signalling, ..
-        } = &mut self.rails;
+        } = rails;
+        signalling.next_aspects.clear();
         for signal in blocks.signals() {
             let aspect = match signal.guarded_block {
                 // Nothing beyond to be let into. The signal is not a boundary a
@@ -506,8 +520,19 @@ impl Simulation {
                 Some(block) if signalling.claims.contains_key(&block) => RailSignalAspect::Reserved,
                 Some(_) => RailSignalAspect::Clear,
             };
-            signalling.aspects.insert(signal.entity_id, aspect);
+            if signalling.aspects.get(&signal.entity_id).copied() != Some(aspect) {
+                *entity_style_revision = entity_style_revision.wrapping_add(1);
+                entity_style_changes.push(*entity_style_revision, signal.entity_id);
+            }
+            signalling.next_aspects.insert(signal.entity_id, aspect);
         }
+        for &entity_id in signalling.aspects.keys() {
+            if !signalling.next_aspects.contains_key(&entity_id) {
+                *entity_style_revision = entity_style_revision.wrapping_add(1);
+                entity_style_changes.push(*entity_style_revision, entity_id);
+            }
+        }
+        std::mem::swap(&mut signalling.aspects, &mut signalling.next_aspects);
     }
 }
 

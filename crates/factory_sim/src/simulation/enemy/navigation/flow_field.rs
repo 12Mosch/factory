@@ -17,11 +17,13 @@ pub(super) struct RaidFlowField {
 }
 
 impl RaidFlowField {
+    /// Removes the fixed-size cell array to model malformed serialized state.
     #[cfg(test)]
     pub(super) fn corrupt_directions_for_test(&mut self) {
         self.directions.clear();
     }
 
+    /// Validates bounds, frontier uniqueness, and every directed route to a goal.
     pub(super) fn is_valid(&self, world: &WorldSim) -> bool {
         if !validation::world::valid_work_footprint(world, self.target_footprint) {
             return false;
@@ -39,11 +41,60 @@ impl RaidFlowField {
             return false;
         }
         let mut seen = BTreeSet::new();
-        self.frontier.iter().all(|tile| {
+        if !self.frontier.iter().all(|tile| {
             self.index(*tile)
                 .is_some_and(|index| self.directions[index] != CELL_UNVISITED)
                 && seen.insert(*tile)
-        })
+        }) {
+            return false;
+        }
+
+        // A completed field, or one whose target has no open adjacent tile,
+        // legitimately has an empty frontier. Its visited cells must still
+        // form directed, acyclic paths ending at target-adjacent goals.
+        let mut connectivity = vec![0_u8; RAID_FLOW_CELL_COUNT];
+        let mut path = Vec::new();
+        for start in 0..RAID_FLOW_CELL_COUNT {
+            if self.directions[start] == CELL_UNVISITED || connectivity[start] == 2 {
+                continue;
+            }
+            path.clear();
+            let mut current = start;
+            loop {
+                match connectivity[current] {
+                    1 => return false,
+                    2 => break,
+                    _ => {}
+                }
+                connectivity[current] = 1;
+                path.push(current);
+
+                let direction = self.directions[current];
+                if direction == CELL_GOAL {
+                    let Some(tile) = self.tile_for_index(current) else {
+                        return false;
+                    };
+                    if EntityFootprint::single_tile(tile.0, tile.1)
+                        .chebyshev_distance_to(&self.target_footprint)
+                        != 1
+                    {
+                        return false;
+                    }
+                    break;
+                }
+                let Some(successor) = self.successor_index(current, direction) else {
+                    return false;
+                };
+                if self.directions[successor] == CELL_UNVISITED {
+                    return false;
+                }
+                current = successor;
+            }
+            for &index in &path {
+                connectivity[index] = 2;
+            }
+        }
+        true
     }
 
     pub(super) fn pending(target: EntityId, target_footprint: EntityFootprint) -> Self {
@@ -170,6 +221,26 @@ impl RaidFlowField {
         Some(y as usize * RAID_FLOW_DIAMETER + x as usize)
     }
 
+    /// Converts a dense cell index back to its checked world tile.
+    fn tile_for_index(&self, index: usize) -> Option<(WorldTileCoord, WorldTileCoord)> {
+        let x = i64::try_from(index % RAID_FLOW_DIAMETER).ok()?;
+        let y = i64::try_from(index / RAID_FLOW_DIAMETER).ok()?;
+        Some((self.min_x.checked_add(x)?, self.min_y.checked_add(y)?))
+    }
+
+    /// Resolves a directional cell's successor, rejecting edges outside the field.
+    fn successor_index(&self, index: usize, direction: u8) -> Option<usize> {
+        let tile = self.tile_for_index(index)?;
+        let successor = match direction {
+            CELL_EAST => (tile.0.checked_add(1)?, tile.1),
+            CELL_WEST => (tile.0.checked_sub(1)?, tile.1),
+            CELL_SOUTH => (tile.0, tile.1.checked_add(1)?),
+            CELL_NORTH => (tile.0, tile.1.checked_sub(1)?),
+            _ => return None,
+        };
+        self.index(successor)
+    }
+
     fn max_x(&self) -> WorldTileCoord {
         self.min_x.saturating_add(RAID_FLOW_DIAMETER as i64 - 1)
     }
@@ -192,6 +263,7 @@ pub(super) enum RaidRoute {
 mod validation_tests {
     use super::*;
 
+    /// Invalid target geometry must fail before checked center calculations.
     #[test]
     fn malformed_footprint_is_rejected_before_center_arithmetic() {
         let sim = Simulation::new_test_world(293);
@@ -203,6 +275,37 @@ mod validation_tests {
         field.target_footprint.x = 0;
         field.target_footprint.width = i32::MAX;
         field.target_footprint.height = i32::MAX;
+        assert!(!field.is_valid(&sim.world));
+    }
+
+    /// Direction cells may neither leave the field nor form cycles.
+    #[test]
+    fn disconnected_and_cyclic_direction_cells_are_rejected() {
+        let sim = Simulation::new_test_world(293);
+        let footprint = EntityFootprint::single_tile(0, 0);
+        let mut field = RaidFlowField::pending(EntityId::new(1), footprint);
+        field.initialize(&sim.world, &sim.entities);
+
+        let edge = RAID_FLOW_DIAMETER - 1;
+        field.directions[edge] = CELL_EAST;
+        assert!(!field.is_valid(&sim.world));
+
+        field.directions[edge] = CELL_UNVISITED;
+        field.expand(&sim.world, &sim.entities, 1);
+        let index = field
+            .directions
+            .iter()
+            .position(|direction| *direction > CELL_GOAL)
+            .expect("one expansion should visit a neighbor of a goal");
+        let direction = field.directions[index];
+        let successor = field.successor_index(index, direction).unwrap();
+        field.directions[successor] = match direction {
+            CELL_EAST => CELL_WEST,
+            CELL_WEST => CELL_EAST,
+            CELL_SOUTH => CELL_NORTH,
+            CELL_NORTH => CELL_SOUTH,
+            _ => unreachable!(),
+        };
         assert!(!field.is_valid(&sim.world));
     }
 }

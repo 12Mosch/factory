@@ -215,6 +215,11 @@ impl TransportLaneGraph {
                 || entities.splitters.contains_key(&region.entity_id)
             {
                 affected_entities.push(region.entity_id);
+                if let Some(placed) = entities.placed_entities.get(&region.entity_id) {
+                    for (x, y) in placed.footprint.tiles() {
+                        self.collect_affected_around(entities, x, y, reach, &mut affected_entities);
+                    }
+                }
             } else {
                 self.free_entity_slots(region.entity_id, &mut dissolved_runs);
             }

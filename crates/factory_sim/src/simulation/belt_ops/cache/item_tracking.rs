@@ -3,10 +3,14 @@ use crate::logistics::BeltItemId;
 use crate::simulation::{EntityId, EntityStore, SimValidationError};
 
 impl TransportLaneCache {
+    /// Rejects zero, duplicate, reused, or out-of-order durable belt item ids.
     pub(in crate::simulation) fn validate_item_tracking(
         &self,
         entities: &EntityStore,
     ) -> Result<(), SimValidationError> {
+        if self.next_item_id == 0 {
+            return Err(SimValidationError::InvalidBeltItemIdentity);
+        }
         let mut seen = std::collections::BTreeSet::new();
         for item in entities
             .transport_belts
@@ -22,10 +26,7 @@ impl TransportLaneCache {
                     .flat_map(|lane| lane.items.iter()),
             )
         {
-            if item.id.raw() == 0
-                || !seen.insert(item.id)
-                || (self.next_item_id != 0 && item.id.raw() >= self.next_item_id)
-            {
+            if item.id.raw() == 0 || !seen.insert(item.id) || item.id.raw() >= self.next_item_id {
                 return Err(SimValidationError::InvalidBeltItemIdentity);
             }
         }

@@ -4,7 +4,7 @@ use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, PrototypeCat
 use factory_sim::{
     Direction, EntityFootprint, EntityId, PlacedEntity, RailSignalAspect, Simulation,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::constants::{
@@ -47,6 +47,32 @@ pub(crate) struct RocketSiloStatusIndicator {
     pub(crate) operational_state: factory_sim::RocketSiloOperationalState,
 }
 
+#[derive(Default)]
+pub(crate) struct RocketSiloRenderSyncState {
+    initialized: bool,
+    synced_tick: u64,
+    sim_replacement_revision: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct VisibleEntitySyncState {
+    initialized: bool,
+    visible_revision: u64,
+    entity_topology_revision: u64,
+    entity_style_revision: u64,
+    sim_replacement_revision: u64,
+    next_ids: HashSet<EntityId>,
+    affected_ids: HashSet<EntityId>,
+    added: Vec<EntityId>,
+    removed: Vec<EntityId>,
+    style_dirty: Vec<EntityId>,
+}
+
+#[derive(Default)]
+pub(crate) struct PlacedEntityRenderRegistry {
+    entities: HashMap<EntityId, Entity>,
+}
+
 impl From<factory_sim::RocketLaunchPhase> for RocketSiloVisualPhase {
     fn from(phase: factory_sim::RocketLaunchPhase) -> Self {
         match phase {
@@ -61,17 +87,168 @@ pub(crate) fn update_visible_entity_ids(
     sim: Res<SimResource>,
     visible: Res<VisibleChunks>,
     mut visible_entity_ids: ResMut<VisibleEntityIds>,
+    mut state: Local<VisibleEntitySyncState>,
 ) {
-    let entity_topology_revision = sim.read().entity_topology_revision();
-    if visible_entity_ids.visible_revision == visible.revision
-        && visible_entity_ids.entity_topology_revision == entity_topology_revision
-    {
+    let state = &mut *state;
+    let sim_replacement_revision = sim.replacement_revision();
+    let sim = sim.read();
+    let entity_topology_revision = sim.entity_topology_revision();
+    let entity_style_revision = sim.entity_style_revision();
+    let sim_replaced =
+        !state.initialized || state.sim_replacement_revision != sim_replacement_revision;
+    let visibility_changed = !state.initialized || state.visible_revision != visible.revision;
+    let topology_changed =
+        !state.initialized || state.entity_topology_revision != entity_topology_revision;
+    let style_changed = !state.initialized || state.entity_style_revision != entity_style_revision;
+    if !sim_replaced && !visibility_changed && !topology_changed && !style_changed {
         return;
     }
 
-    visible_entity_ids.ids = visible_entity_ids_for_chunks(&sim.read(), &visible);
-    visible_entity_ids.visible_revision = visible.revision;
-    visible_entity_ids.entity_topology_revision = entity_topology_revision;
+    state.added.clear();
+    state.removed.clear();
+    state.style_dirty.clear();
+    let mut reset = false;
+
+    if sim_replaced || visibility_changed {
+        collect_visible_entity_ids(&sim, &visible, &mut state.next_ids);
+        if sim_replaced {
+            state.removed.extend(visible_entity_ids.ids.iter().copied());
+            state.added.extend(state.next_ids.iter().copied());
+            reset = true;
+        } else {
+            state
+                .added
+                .extend(state.next_ids.difference(&visible_entity_ids.ids).copied());
+            state
+                .removed
+                .extend(visible_entity_ids.ids.difference(&state.next_ids).copied());
+        }
+    } else {
+        state.next_ids.clone_from(&visible_entity_ids.ids);
+    }
+
+    if !sim_replaced && topology_changed {
+        state.affected_ids.clear();
+        if collect_topology_affected_ids(
+            &sim,
+            state.entity_topology_revision,
+            &mut state.affected_ids,
+        ) {
+            for &entity_id in &state.affected_ids {
+                let was_visible = visible_entity_ids.ids.contains(&entity_id);
+                let is_visible = sim
+                    .entities()
+                    .placed_entity(entity_id)
+                    .is_some_and(|placed| footprint_is_visible(&placed.footprint, &visible));
+                if visibility_changed {
+                    if was_visible && state.next_ids.contains(&entity_id) {
+                        state.style_dirty.push(entity_id);
+                    }
+                    continue;
+                }
+                match (was_visible, is_visible) {
+                    (false, true) => {
+                        state.next_ids.insert(entity_id);
+                        state.added.push(entity_id);
+                    }
+                    (true, false) => {
+                        state.next_ids.remove(&entity_id);
+                        state.removed.push(entity_id);
+                    }
+                    (true, true) => state.style_dirty.push(entity_id),
+                    (false, false) => {}
+                }
+            }
+        } else {
+            // A deferred consumer fell behind retained history. Recover with a
+            // spatial membership query and restyle only the still-visible set.
+            if !visibility_changed {
+                collect_visible_entity_ids(&sim, &visible, &mut state.next_ids);
+                state
+                    .added
+                    .extend(state.next_ids.difference(&visible_entity_ids.ids).copied());
+                state
+                    .removed
+                    .extend(visible_entity_ids.ids.difference(&state.next_ids).copied());
+            }
+            state.style_dirty.extend(
+                state
+                    .next_ids
+                    .intersection(&visible_entity_ids.ids)
+                    .copied(),
+            );
+        }
+    }
+
+    if !sim_replaced && style_changed {
+        if let Some(changed_ids) = sim.entity_style_changes_since(state.entity_style_revision) {
+            for entity_id in changed_ids {
+                if visible_entity_ids.ids.contains(&entity_id)
+                    && state.next_ids.contains(&entity_id)
+                {
+                    state.style_dirty.push(entity_id);
+                }
+            }
+        } else {
+            state
+                .style_dirty
+                .extend(visible_entity_ids.ids.iter().copied());
+        }
+    }
+    state.style_dirty.sort_unstable();
+    state.style_dirty.dedup();
+
+    state.initialized = true;
+    state.visible_revision = visible.revision;
+    state.entity_topology_revision = entity_topology_revision;
+    state.entity_style_revision = entity_style_revision;
+    state.sim_replacement_revision = sim_replacement_revision;
+
+    if reset
+        || !state.added.is_empty()
+        || !state.removed.is_empty()
+        || !state.style_dirty.is_empty()
+    {
+        let membership_changed = reset || !state.added.is_empty() || !state.removed.is_empty();
+        visible_entity_ids.ids.clone_from(&state.next_ids);
+        visible_entity_ids.added.clone_from(&state.added);
+        visible_entity_ids.removed.clone_from(&state.removed);
+        visible_entity_ids
+            .style_dirty
+            .clone_from(&state.style_dirty);
+        if membership_changed {
+            visible_entity_ids.membership_revision =
+                visible_entity_ids.membership_revision.wrapping_add(1);
+        }
+        visible_entity_ids.reset = reset;
+        visible_entity_ids.visible_revision = visible.revision;
+        visible_entity_ids.entity_topology_revision = entity_topology_revision;
+    }
+}
+
+fn collect_topology_affected_ids(
+    sim: &Simulation,
+    revision: u64,
+    affected_ids: &mut HashSet<EntityId>,
+) -> bool {
+    let Some(changes) = sim.entity_visual_changes_since(revision) else {
+        return false;
+    };
+    for change in changes {
+        affected_ids.insert(change.entity_id);
+        let min_x = change.min_x.saturating_sub(1);
+        let max_x = change.max_x.saturating_add(1);
+        let min_y = change.min_y.saturating_sub(1);
+        let max_y = change.max_y.saturating_add(1);
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                if let Some(entity_id) = sim.entities().occupancy().entity_at(x, y) {
+                    affected_ids.insert(entity_id);
+                }
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn sync_placed_entity_rendering(
@@ -79,43 +256,55 @@ pub(crate) fn sync_placed_entity_rendering(
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
     mut visual_assets: VisualAssets,
-    mut sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
+    mut registry: Local<PlacedEntityRenderRegistry>,
+    mut sprites: Query<(&mut Transform, &mut Sprite), With<PlacedEntitySprite>>,
 ) {
-    let sim = sim.read();
     if !visible_entity_ids.is_changed() {
         return;
     }
+    let sim = sim.read();
 
-    let visible_ids = &visible_entity_ids.ids;
-    let mut seen = HashSet::new();
-
-    for (entity, marker, mut transform, mut sprite) in &mut sprites {
-        if visible_ids.contains(&marker.entity_id)
-            && let Some(style) = renderable_entity_visual_style(&sim, marker.entity_id)
-        {
-            let placed = sim
-                .entities()
-                .placed_entity(marker.entity_id)
-                .expect("validated renderable entity should still be placed");
-            seen.insert(marker.entity_id);
-            transform.translation = entity_translation(&placed.footprint, transform.translation.z);
-            *sprite = visual_assets.entity_sprite(style);
-        } else {
-            commands.entity(entity).despawn();
+    if visible_entity_ids.reset {
+        for (_, render_entity) in registry.entities.drain() {
+            commands.entity(render_entity).despawn();
         }
     }
 
-    for &entity_id in visible_ids {
+    for entity_id in &visible_entity_ids.removed {
+        if let Some(render_entity) = registry.entities.remove(entity_id) {
+            commands.entity(render_entity).despawn();
+        }
+    }
+
+    for entity_id in &visible_entity_ids.style_dirty {
+        let Some(&render_entity) = registry.entities.get(entity_id) else {
+            continue;
+        };
+        let Some(placed) = sim.entities().placed_entity(*entity_id) else {
+            continue;
+        };
+        let Some(style) = renderable_entity_visual_style(&sim, *entity_id) else {
+            continue;
+        };
+        if let Ok((mut transform, mut sprite)) = sprites.get_mut(render_entity) {
+            let translation = entity_translation(&placed.footprint, transform.translation.z);
+            if transform.translation != translation {
+                transform.translation = translation;
+            }
+            *sprite = visual_assets.entity_sprite(style);
+        }
+    }
+
+    for &entity_id in &visible_entity_ids.added {
+        if registry.entities.contains_key(&entity_id) {
+            continue;
+        }
         let Some(placed) = sim.entities().placed_entity(entity_id) else {
             continue;
         };
         let Some(style) = renderable_entity_visual_style(&sim, placed.id) else {
             continue;
         };
-        if seen.contains(&placed.id) {
-            continue;
-        }
-
         let render_entity = spawn_entity_visual(
             &mut commands,
             &mut visual_assets,
@@ -140,6 +329,7 @@ pub(crate) fn sync_placed_entity_rendering(
                 status_indicator: indicator,
             });
         }
+        registry.entities.insert(entity_id, render_entity);
     }
 }
 
@@ -151,6 +341,7 @@ pub(crate) fn sync_placed_entity_rendering(
 /// visible silos and avoids rebuilding their cached visual on unchanged frames.
 pub(crate) fn sync_rocket_silo_rendering(
     sim: Res<SimResource>,
+    mut sync_state: Local<RocketSiloRenderSyncState>,
     mut visual_assets: VisualAssets,
     mut sprites: Query<(&PlacedEntitySprite, &mut RocketSiloSprite, &mut Sprite)>,
     mut indicators: Query<
@@ -158,7 +349,18 @@ pub(crate) fn sync_rocket_silo_rendering(
         Without<RocketSiloSprite>,
     >,
 ) {
+    let replacement_revision = sim.replacement_revision();
     let sim = sim.read();
+    let tick = sim.tick_count();
+    if sync_state.initialized
+        && sync_state.synced_tick == tick
+        && sync_state.sim_replacement_revision == replacement_revision
+    {
+        return;
+    }
+    sync_state.initialized = true;
+    sync_state.synced_tick = tick;
+    sync_state.sim_replacement_revision = replacement_revision;
     for (placed, mut rendered, mut sprite) in &mut sprites {
         let Ok(state) = factory_sim::entity_access::rocket_silo_state(&sim, placed.entity_id)
         else {
@@ -241,25 +443,59 @@ pub(crate) fn measured_sync_placed_entity_rendering(
     sim: Res<SimResource>,
     visible_entity_ids: Res<VisibleEntityIds>,
     visual_assets: VisualAssets,
-    sprites: Query<(Entity, &PlacedEntitySprite, &mut Transform, &mut Sprite)>,
+    registry: Local<PlacedEntityRenderRegistry>,
+    sprites: Query<(&mut Transform, &mut Sprite), With<PlacedEntitySprite>>,
     mut timing: ResMut<PlacedEntitiesRenderSyncTime>,
 ) {
     let started = Instant::now();
-    sync_placed_entity_rendering(commands, sim, visible_entity_ids, visual_assets, sprites);
+    sync_placed_entity_rendering(
+        commands,
+        sim,
+        visible_entity_ids,
+        visual_assets,
+        registry,
+        sprites,
+    );
     timing.0 = started.elapsed();
 }
 
-fn visible_entity_ids_for_chunks(sim: &Simulation, visible: &VisibleChunks) -> HashSet<EntityId> {
+fn collect_visible_entity_ids(
+    sim: &Simulation,
+    visible: &VisibleChunks,
+    ids: &mut HashSet<EntityId>,
+) {
+    ids.clear();
     let Some(bounds) = visible.tile_bounds else {
-        return HashSet::new();
+        return;
     };
     let max_x = bounds.min_x + i64::from(bounds.width) - 1;
     let max_y = bounds.min_y + i64::from(bounds.height) - 1;
-    sim.entities()
-        .occupancy()
-        .entity_ids_in_tile_rect(bounds.min_x, max_x, bounds.min_y, max_y)
-        .into_iter()
-        .collect()
+    sim.entities().occupancy().for_each_entity_id_in_tile_rect(
+        bounds.min_x,
+        max_x,
+        bounds.min_y,
+        max_y,
+        |entity_id| {
+            ids.insert(entity_id);
+        },
+    );
+}
+
+fn footprint_is_visible(footprint: &EntityFootprint, visible: &VisibleChunks) -> bool {
+    let min_x = footprint.x.div_euclid(i64::from(factory_sim::CHUNK_SIZE));
+    let max_x = (footprint.x + i64::from(footprint.width) - 1)
+        .div_euclid(i64::from(factory_sim::CHUNK_SIZE));
+    let min_y = footprint.y.div_euclid(i64::from(factory_sim::CHUNK_SIZE));
+    let max_y = (footprint.y + i64::from(footprint.height) - 1)
+        .div_euclid(i64::from(factory_sim::CHUNK_SIZE));
+    (min_y..=max_y).any(|y| {
+        (min_x..=max_x).any(|x| {
+            let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) else {
+                return false;
+            };
+            visible.chunks.contains(&factory_sim::ChunkCoord { x, y })
+        })
+    })
 }
 
 pub(crate) fn renderable_entity_visual_style(
@@ -675,6 +911,11 @@ fn entity_visual_style(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::resources::{MapTextureBounds, VisibleChunks};
+    use crate::rendering::resources::VisibleEntityIds;
+    use crate::resources::SimResource;
+    use factory_sim::CHUNK_SIZE;
+    use std::collections::BTreeSet;
 
     #[test]
     fn fluid_entities_have_render_styles() {
@@ -731,5 +972,130 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn topology_delta_dirties_connected_neighbor_without_refreshing_view() {
+        let mut sim = Simulation::new_test_world(123);
+        let pipe = factory_data::entity_prototype_id_by_name(sim.catalog(), "pipe");
+        let (x, y) = sim
+            .world()
+            .chunks
+            .values()
+            .flat_map(|chunk| {
+                (0..CHUNK_SIZE).flat_map(move |local_y| {
+                    (0..CHUNK_SIZE).map(move |local_x| chunk.coord.tile_at(local_x, local_y))
+                })
+            })
+            .find(|&(x, y)| {
+                factory_sim::ChunkCoord::from_tile(x, y)
+                    == factory_sim::ChunkCoord::from_tile(x + 1, y)
+                    && factory_sim::ChunkCoord::from_tile(x, y)
+                        == factory_sim::ChunkCoord::from_tile(x + 2, y)
+                    && factory_sim::placement::validate(
+                        &sim,
+                        factory_sim::placement::EntityPlacementRequest {
+                            prototype_id: pipe,
+                            x,
+                            y,
+                            direction: Direction::North,
+                        },
+                    )
+                    .is_ok()
+                    && factory_sim::placement::validate(
+                        &sim,
+                        factory_sim::placement::EntityPlacementRequest {
+                            prototype_id: pipe,
+                            x: x + 2,
+                            y,
+                            direction: Direction::North,
+                        },
+                    )
+                    .is_ok()
+                    && factory_sim::placement::validate(
+                        &sim,
+                        factory_sim::placement::EntityPlacementRequest {
+                            prototype_id: pipe,
+                            x: x + 1,
+                            y,
+                            direction: Direction::North,
+                        },
+                    )
+                    .is_ok()
+            })
+            .expect("test world should have adjacent pipe tiles");
+        let first = factory_sim::placement::place(
+            &mut sim,
+            factory_sim::placement::EntityPlacementRequest {
+                prototype_id: pipe,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .expect("first pipe should place");
+        let chunk = factory_sim::ChunkCoord::from_tile(x, y).expect("tile should form chunk");
+        let (min_x, min_y) = chunk.min_tile();
+        let visible = VisibleChunks {
+            chunks: BTreeSet::from([chunk]),
+            tile_bounds: Some(MapTextureBounds {
+                min_x,
+                min_y,
+                width: CHUNK_SIZE as u32,
+                height: CHUNK_SIZE as u32,
+            }),
+            revision: 1,
+        };
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(sim))
+            .insert_resource(visible)
+            .init_resource::<VisibleEntityIds>()
+            .add_systems(Update, update_visible_entity_ids);
+        app.update();
+
+        let second = {
+            let mut resource = app.world_mut().resource_mut::<SimResource>();
+            factory_sim::placement::place(
+                &mut resource.write_for_tests(),
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: pipe,
+                    x: x + 1,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .expect("connected pipe should place")
+        };
+        app.update();
+
+        let visible_ids = app.world().resource::<VisibleEntityIds>();
+        assert_eq!(visible_ids.added, vec![second]);
+        assert!(visible_ids.style_dirty.contains(&first));
+        assert!(visible_ids.ids.contains(&first));
+        assert!(visible_ids.ids.contains(&second));
+
+        let third = {
+            let mut resource = app.world_mut().resource_mut::<SimResource>();
+            factory_sim::placement::place(
+                &mut resource.write_for_tests(),
+                factory_sim::placement::EntityPlacementRequest {
+                    prototype_id: pipe,
+                    x: x + 2,
+                    y,
+                    direction: Direction::North,
+                },
+            )
+            .expect("third connected pipe should place")
+        };
+        app.world_mut().resource_mut::<VisibleChunks>().revision += 1;
+        app.update();
+
+        let visible_ids = app.world().resource::<VisibleEntityIds>();
+        assert_eq!(visible_ids.added, vec![third]);
+        assert!(
+            visible_ids.style_dirty.contains(&second),
+            "a simultaneous camera revision must not consume the neighbor invalidation"
+        );
+        assert!(visible_ids.ids.contains(&third));
     }
 }

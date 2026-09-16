@@ -65,20 +65,24 @@ impl TransportRunVisitStorage {
 }
 
 impl TransportRunActiveStorage {
+    /// Checks both queue-to-mark and current active mark-to-queue consistency.
     pub(super) fn is_valid(&self, graph: &TransportLaneGraph) -> bool {
-        for (runs, generation, queue) in [
+        let mut active_runs = std::collections::BTreeSet::new();
+        let mut pending_runs = std::collections::BTreeSet::new();
+        for (runs, generation, queue, seen) in [
             (
                 &self.runs,
                 self.active_generation,
                 TransportRunQueue::Active,
+                &mut active_runs,
             ),
             (
                 &self.pending_runs,
                 self.pending_generation,
                 TransportRunQueue::Pending,
+                &mut pending_runs,
             ),
         ] {
-            let mut seen = std::collections::BTreeSet::new();
             for &run in runs {
                 if run.raw() >= graph.run_count() || !seen.insert(run) {
                     return false;
@@ -102,7 +106,10 @@ impl TransportRunActiveStorage {
                 }
             }
         }
-        true
+        self.marks.iter().enumerate().all(|(index, mark)| {
+            mark.active_generation != self.active_generation
+                || active_runs.contains(&TransportRunIndex::from_index(index))
+        })
     }
 
     pub(super) fn rebuild_from_entities(

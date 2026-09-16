@@ -23,6 +23,32 @@ impl Hash for AttackTargetCache {
 }
 
 impl AttackTargetCache {
+    /// Checks durable decisions without requiring the derived spatial index.
+    pub(in crate::simulation) fn is_valid(
+        &self,
+        entity_topology_revision: u64,
+        entities: &EntityStore,
+    ) -> bool {
+        let has_decisions = !self.base_targets.is_empty() || !self.raid_targets.is_empty();
+        let Some(revision) = self.revision else {
+            return !has_decisions;
+        };
+        if revision != entity_topology_revision {
+            return true;
+        }
+        self.base_targets
+            .values()
+            .chain(self.raid_targets.values())
+            .flatten()
+            .all(|entity_id| {
+                entities
+                    .placed_entities
+                    .get(entity_id)
+                    .is_some_and(|placed| is_attackable_kind(entities, placed))
+            })
+    }
+
+    /// Copies durable decisions while omitting the reconstructed spatial index.
     pub(in crate::simulation) fn clone_for_save(&self) -> Self {
         Self {
             revision: self.revision,
@@ -34,6 +60,7 @@ impl AttackTargetCache {
         }
     }
 
+    /// Reconstructs the behavior-neutral spatial lookup from placed entities.
     pub(in crate::simulation) fn rebuild_index(
         &mut self,
         world: &WorldSim,

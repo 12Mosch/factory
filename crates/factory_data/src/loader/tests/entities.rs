@@ -9,18 +9,6 @@ use crate::model::{
 };
 
 #[test]
-fn chest_entity_loads_inventory_slot_count() {
-    let catalog = PrototypeCatalog::load_base().expect("base prototype catalog should load");
-    let chest = catalog
-        .entities
-        .iter()
-        .find(|prototype| prototype.name == "chest")
-        .expect("base catalog should contain chest entity");
-
-    assert_eq!(chest.inventory_slot_count, Some(16));
-}
-
-#[test]
 fn chest_variants_load_distinct_capacities() {
     let catalog = PrototypeCatalog::load_base().expect("base catalog should load");
     for (name, expected_slots) in [("chest", 16), ("iron_chest", 32), ("steel_chest", 48)] {

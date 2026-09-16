@@ -1,7 +1,7 @@
 use factory_sim::{FluidStatisticsRow, ItemStatisticsRow, Simulation};
 
 use crate::ui::formatting::{format_fluid_display_name, format_item_display_name};
-use crate::ui::production_stats::ItemStatDisplayRow;
+use crate::ui::production_stats::components::{ItemStatDisplayRow, StatRowKey};
 
 enum StatDirection {
     Produced,
@@ -34,6 +34,7 @@ fn item_stat_rows(sim: &Simulation, direction: StatDirection) -> Vec<ItemStatDis
     rows.into_iter()
         .filter(|row| item_last_minute(row, &direction) > 0 || item_total(row, &direction) > 0)
         .map(|row| ItemStatDisplayRow {
+            key: StatRowKey::Item(row.item_id),
             item_name: format_item_display_name(sim.catalog(), row.item_id),
             per_minute: format_per_minute(item_last_minute(&row, &direction)),
             total: item_total(&row, &direction).to_string(),
@@ -51,6 +52,7 @@ fn fluid_stat_rows(sim: &Simulation, direction: StatDirection) -> Vec<ItemStatDi
     rows.into_iter()
         .filter(|row| fluid_last_minute(row, &direction) > 0 || fluid_total(row, &direction) > 0)
         .map(|row| ItemStatDisplayRow {
+            key: StatRowKey::Fluid(row.fluid_id),
             item_name: format_fluid_display_name(sim.catalog(), row.fluid_id),
             per_minute: format_fluid_per_minute(fluid_last_minute(&row, &direction)),
             total: format_fluid_amount(fluid_total(&row, &direction)),

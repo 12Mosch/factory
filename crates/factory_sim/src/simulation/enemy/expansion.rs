@@ -30,13 +30,20 @@ impl Simulation {
                 && self.tick >= next_expansion
             {
                 if let Some(destination) = self.find_expansion_site(base_id, cfg) {
-                    self.dispatch_expansion(base_id, destination);
-                    if let Some(base) = self.enemies.bases.get_mut(&base_id) {
-                        base.next_expansion_tick = next_scaled_tick(
-                            self.tick,
-                            cfg.expansion_interval_ticks,
-                            self.config.runtime.expansion_frequency_percent,
-                        );
+                    // Scheduler-driven dispatch reuses the tick's maintained
+                    // per-spawner counts instead of rescanning the enemy map
+                    // for every due colony.
+                    let spawners = self.expansion_spawner_counts(base_id);
+                    if self.dispatch_expansion_with_counts(base_id, destination, &spawners) {
+                        if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                            base.next_expansion_tick = next_scaled_tick(
+                                self.tick,
+                                cfg.expansion_interval_ticks,
+                                self.config.runtime.expansion_frequency_percent,
+                            );
+                        }
+                    } else if let Some(base) = self.enemies.bases.get_mut(&base_id) {
+                        base.next_expansion_tick = self.tick + u64::from(cfg.expansion_retry_ticks);
                     }
                 } else if let Some(base) = self.enemies.bases.get_mut(&base_id) {
                     base.next_expansion_tick = self.tick + u64::from(cfg.expansion_retry_ticks);
@@ -171,46 +178,98 @@ impl Simulation {
             .any(|entity| (entity.x - x).abs().max((entity.y - y).abs()) < spacing)
     }
 
-    fn dispatch_expansion(
+    /// Direct entry for tests: build a one-shot colony census, then share
+    /// the helper below with scheduler dispatch.
+    #[cfg(test)]
+    pub(in crate::simulation) fn dispatch_expansion(
         &mut self,
         base_id: EnemyBaseId,
         destination: (WorldTileCoord, WorldTileCoord),
-    ) {
-        let Some((&spawner_id, unit, spawner_prototype)) = self
-            .enemies
-            .bases
-            .get(&base_id)
-            .and_then(|base| base.spawners.iter().next())
-            .and_then(|id| {
-                let placed = self.entities.placed_entities.get(id)?;
-                Some((
-                    id,
-                    self.world
-                        .prototypes
-                        .entity(placed.prototype_id)?
-                        .enemy_spawner
-                        .as_ref()?
-                        .unit,
-                    placed.prototype_id,
-                ))
-            })
-        else {
-            return;
+    ) -> bool {
+        let Some(base) = self.enemies.bases.get(&base_id) else {
+            return false;
         };
+        // Colonies stay small, so a linear scan of the ordered pairs keeps
+        // the census to a single pass with no auxiliary map.
+        let mut spawners: Vec<(EntityId, u32)> = base.spawners.iter().map(|&id| (id, 0)).collect();
+        if spawners.is_empty() {
+            return false;
+        }
+        for enemy in self.enemies.enemies.values() {
+            if let Some(home) = enemy.home_spawner
+                && let Some(pair) = spawners.iter_mut().find(|pair| pair.0 == home)
+            {
+                pair.1 = pair.1.saturating_add(1);
+            }
+        }
+        self.dispatch_expansion_with_counts(base_id, destination, &spawners)
+    }
+
+    /// Snapshot of this colony's tick-maintained live counts for scheduler
+    /// dispatch, in colony order. Exact at this point in the tick: the
+    /// aggregation is rebuilt at tick start, the spawn batch writes back
+    /// every success, and nothing between the batch and expansion dispatch
+    /// removes enemy units.
+    fn expansion_spawner_counts(&self, base_id: EnemyBaseId) -> Vec<(EntityId, u32)> {
+        let Some(base) = self.enemies.bases.get(&base_id) else {
+            return Vec::new();
+        };
+        base.spawners
+            .iter()
+            .map(|&id| (id, self.maintained_spawner_alive(id)))
+            .collect()
+    }
+
+    /// Shared expansion dispatch over caller-supplied live counts in colony
+    /// order. Deterministic source selection: the first spawner with
+    /// remaining capacity launches the party, so one saturated spawner
+    /// never stalls siblings. The capped party size below keeps every
+    /// member spawn inside the ceiling; the maintained count is threaded
+    /// through each spawn instead of rescanning the enemy map once per
+    /// member.
+    fn dispatch_expansion_with_counts(
+        &mut self,
+        base_id: EnemyBaseId,
+        destination: (WorldTileCoord, WorldTileCoord),
+        spawners: &[(EntityId, u32)],
+    ) -> bool {
+        let Some((spawner_id, unit, spawner_prototype, mut alive, remaining)) = spawners
+            .iter()
+            .copied()
+            .filter_map(|(id, alive)| {
+                let placed = self.entities.placed_entities.get(&id)?;
+                let spawner = self
+                    .world
+                    .prototypes
+                    .entity(placed.prototype_id)?
+                    .enemy_spawner
+                    .as_ref()?;
+                let remaining = spawner.max_alive_units.saturating_sub(alive);
+                if remaining == 0 {
+                    return None;
+                }
+                Some((id, spawner.unit, placed.prototype_id, alive, remaining))
+            })
+            .next()
+        else {
+            return false;
+        };
+        let requested = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
+        let count = requested.min(remaining as usize);
         let expansion_id = self.enemies.allocate_expansion_id();
-        let count = 3 + (self.enemies.evolution_points / 5000).min(2) as usize;
         let mut members = BTreeSet::new();
         for _ in 0..count {
             if let Ok(member) = self.spawn_enemy_near_spawner(
                 spawner_id,
                 &unit,
                 EnemyMission::Expansion(expansion_id),
+                &mut alive,
             ) {
                 members.insert(member);
             }
         }
         if members.is_empty() {
-            return;
+            return false;
         }
         let destination_chunk = ChunkCoord::from_tile(destination.0, destination.1);
         let spotted = self
@@ -239,6 +298,7 @@ impl Simulation {
                 },
             );
         }
+        true
     }
 
     pub(in crate::simulation) fn resolve_arrived_expansions(&mut self) {
@@ -278,9 +338,7 @@ impl Simulation {
             ) {
                 for id in party.members {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
                 continue;
@@ -329,22 +387,18 @@ impl Simulation {
                 self.enemies.enemies.remove(&founder);
                 for id in party.members {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
+                        unit.transition_to_guard();
                         unit.home_spawner = self.enemies.bases[&new_base]
                             .spawners
                             .iter()
                             .next()
                             .copied();
-                        unit.path.clear();
                     }
                 }
             } else {
                 for id in party.members {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
                 self.enemies.bases.remove(&new_base);

@@ -163,6 +163,7 @@ pub(super) fn validate_world_resources(world: &WorldSim) -> Result<(), SimValida
     validate_snapshot_world(&world.prototypes, &world.chunks)
 }
 
+/// Validates serialized chunk shape and tile references before world construction.
 pub(in crate::simulation) fn validate_snapshot_world(
     catalog: &PrototypeCatalog,
     chunks: &BTreeMap<ChunkCoord, Chunk>,

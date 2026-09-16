@@ -44,6 +44,7 @@ impl_runtime_only_identity!(EnemySpawningScratch);
 pub(super) enum SpawnError {
     SpawnerNotFound,
     NoFreeTile,
+    AtCapacity,
 }
 
 impl Simulation {
@@ -219,30 +220,33 @@ impl Simulation {
             let target_size = usize::from(self.raid_target_size());
             for index in 0..self.enemy_spawning_scratch.base_ids.len() {
                 let base_id = self.enemy_spawning_scratch.base_ids[index];
-                let Some((&spawner_id, unit, cost, can_spawn)) = self
-                    .enemies
-                    .bases
-                    .get(&base_id)
-                    .and_then(|base| base.spawners.iter().next())
-                    .and_then(|spawner_id| {
-                        let placed = self.entities.placed_entities.get(spawner_id)?;
-                        let cfg = self
-                            .world
-                            .prototypes
-                            .entity(placed.prototype_id)?
-                            .enemy_spawner
-                            .as_ref()?;
-                        Some((
-                            spawner_id,
-                            cfg.unit,
-                            u64::from(cfg.unit_spawn_pollution_cost_milli) * 1000,
-                            self.enemy_spawning_scratch
+                // Deterministic source selection in colony order: the
+                // first spawner with remaining projected capacity stages
+                // the raid unit, so one saturated spawner never stalls
+                // siblings. Mirrors the expansion dispatch selection.
+                let Some((spawner_id, unit, cost)) =
+                    self.enemies.bases.get(&base_id).and_then(|base| {
+                        base.spawners.iter().copied().find_map(|spawner_id| {
+                            let placed = self.entities.placed_entities.get(&spawner_id)?;
+                            let cfg = self
+                                .world
+                                .prototypes
+                                .entity(placed.prototype_id)?
+                                .enemy_spawner
+                                .as_ref()?;
+                            let has_capacity = self
+                                .enemy_spawning_scratch
                                 .projected_alive_by_spawner
-                                .get(spawner_id)
+                                .get(&spawner_id)
                                 .copied()
                                 .unwrap_or(0)
-                                < cfg.max_alive_units,
-                        ))
+                                < cfg.max_alive_units;
+                            has_capacity.then_some((
+                                spawner_id,
+                                cfg.unit,
+                                u64::from(cfg.unit_spawn_pollution_cost_milli) * 1000,
+                            ))
+                        })
                     })
                 else {
                     continue;
@@ -255,7 +259,6 @@ impl Simulation {
                 if cost > 0
                     && base.attack_budget_micro >= cost
                     && base.staged_units.len() < target_size
-                    && can_spawn
                 {
                     self.enemy_spawning_scratch.requests.push(SpawnRequest {
                         spawner_id,
@@ -274,20 +277,37 @@ impl Simulation {
 
         let mut requests = std::mem::take(&mut self.enemy_spawning_scratch.requests);
         for request in requests.drain(..) {
+            // Capacity was already checked against projected counts when
+            // queueing, but earlier spawns in this same batch may have filled
+            // the spawner since. Thread the maintained count through the
+            // spawn so the re-check is a HashMap lookup plus one comparison,
+            // not another full scan of every enemy.
+            let mut alive = self.maintained_spawner_alive(request.spawner_id);
             if self
-                .spawn_enemy_near_spawner(request.spawner_id, &request.unit, request.mission)
+                .spawn_enemy_near_spawner(
+                    request.spawner_id,
+                    &request.unit,
+                    request.mission,
+                    &mut alive,
+                )
                 .is_ok()
-                && request.attack_budget_cost_micro > 0
             {
-                let EnemyMission::Staging(base_id) = request.mission else {
-                    unreachable!("only staged enemies consume attack budget");
-                };
-                let base = self
-                    .enemies
-                    .bases
-                    .get_mut(&base_id)
-                    .expect("a successful staged spawn must retain its base");
-                base.attack_budget_micro -= request.attack_budget_cost_micro;
+                // Keep the tick-start aggregation authoritative for the rest
+                // of this batch (and the expansion dispatch below).
+                self.enemy_spawning_scratch
+                    .alive_by_spawner
+                    .insert(request.spawner_id, alive);
+                if request.attack_budget_cost_micro > 0 {
+                    let EnemyMission::Staging(base_id) = request.mission else {
+                        unreachable!("only staged enemies consume attack budget");
+                    };
+                    let base = self
+                        .enemies
+                        .bases
+                        .get_mut(&base_id)
+                        .expect("a successful staged spawn must retain its base");
+                    base.attack_budget_micro -= request.attack_budget_cost_micro;
+                }
             }
         }
         self.enemy_spawning_scratch.requests = requests;
@@ -296,15 +316,48 @@ impl Simulation {
         self.advance_expansions_and_growth();
     }
 
+    /// Single source for a spawner's live-unit ceiling.
+    fn spawner_max_alive_units(&self, spawner_id: EntityId) -> Option<u32> {
+        self.entities
+            .placed_entities
+            .get(&spawner_id)
+            .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+            .and_then(|prototype| prototype.enemy_spawner.as_ref())
+            .map(|config| config.max_alive_units)
+    }
+
+    /// Tick-maintained live count for one spawner, for scheduler paths that
+    /// run after the spawn batch instead of rescanning the enemy map.
+    pub(super) fn maintained_spawner_alive(&self, spawner_id: EntityId) -> u32 {
+        self.enemy_spawning_scratch
+            .alive_by_spawner
+            .get(&spawner_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Centralized live-unit ceiling: every spawn path enters here. `alive`
+    /// is the caller's maintained live count for `spawner_id` and is
+    /// incremented on success, so batch callers enforce the cap with a
+    /// single comparison instead of rescanning the enemy map per spawn.
+    /// Callers must supply the true current count: the per-tick batch uses
+    /// its tick-start aggregation, scheduler expansion dispatch passes its
+    /// maintained snapshot, and direct dispatch passes a one-shot census.
     pub(super) fn spawn_enemy_near_spawner(
         &mut self,
         spawner_id: EntityId,
         unit: &UnitPrototype,
         mission: EnemyMission,
+        alive: &mut u32,
     ) -> Result<EnemyId, SpawnError> {
         let Some(placed) = self.entities.placed_entities.get(&spawner_id) else {
             return Err(SpawnError::SpawnerNotFound);
         };
+        if let Some(cap) = self.spawner_max_alive_units(spawner_id)
+            && *alive >= cap
+        {
+            return Err(SpawnError::AtCapacity);
+        }
         let footprint = placed.footprint;
         let Some((tile_x, tile_y)) = free_tile_around_footprint(
             &self.world,
@@ -359,6 +412,7 @@ impl Simulation {
                 self.emit_base_event(base_id, ThreatEventKind::RaidPreparing);
             }
         }
+        *alive = alive.saturating_add(1);
         Ok(id)
     }
 
@@ -465,10 +519,7 @@ impl Simulation {
             } else {
                 for id in staged {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mission = EnemyMission::Guard;
-                        unit.mode = EnemyMode::Guard;
-                        unit.target = None;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
             }

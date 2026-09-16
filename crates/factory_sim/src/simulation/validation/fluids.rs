@@ -70,6 +70,12 @@ pub(super) fn validate_fluid_box_states(sim: &Simulation) -> Result<(), SimValid
 }
 
 pub(super) fn validate_fluid_network_snapshots(sim: &Simulation) -> Result<(), SimValidationError> {
+    // Invalidation clears summaries together with the derived topology. There
+    // is no snapshot to validate until the next fluid pass rebuilds both.
+    if sim.fluids.topology_dirty {
+        return Ok(());
+    }
+
     // Every box the networks must account for. Placed entities always, and
     // stopped rolling stock as well: a wagon standing at a pump is part of the
     // network it is being filled from, and one that is moving — or standing

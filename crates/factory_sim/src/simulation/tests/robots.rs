@@ -771,7 +771,6 @@ fn robots_in_flight_survive_a_save_load_round_trip() {
         loaded.tick();
         assert_eq!(sim.state_hash(), loaded.state_hash());
     }
-    assert_eq!(loaded.state_hash(), sim.state_hash());
 }
 
 /// Roboports join the aggregated diagnostics alongside every other powered

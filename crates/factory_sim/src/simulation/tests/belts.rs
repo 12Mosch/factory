@@ -708,6 +708,7 @@ fn belt_line_moves_100_items_across_20_tiles() {
     );
 }
 
+/// Removing the newest items must not rewind the durable identity allocator.
 #[test]
 fn consumed_highest_belt_ids_are_not_reused_after_save() {
     let mut sim = Simulation::new_test_world(293);
@@ -748,6 +749,7 @@ fn consumed_highest_belt_ids_are_not_reused_after_save() {
     }
 }
 
+/// Stale cursors and duplicate live identities are rejected during load.
 #[test]
 fn malformed_belt_identity_cursor_and_duplicate_ids_are_rejected() {
     let mut sim = Simulation::new_test_world(293);
@@ -774,17 +776,58 @@ fn malformed_belt_identity_cursor_and_duplicate_ids_are_rejected() {
     ));
 }
 
+/// Zero is the exhausted sentinel and cannot produce a continuable loaded world.
 #[test]
-fn exhausted_belt_identity_space_stays_exhausted_after_save() {
+fn zero_belt_identity_cursor_is_rejected_on_load() {
     let mut sim = Simulation::new_test_world(293);
-    sim.transport.next_item_id = u64::MAX;
-    assert_eq!(sim.transport.allocate_item_id().raw(), u64::MAX);
+    sim.transport.next_item_id = 0;
     assert_eq!(sim.transport.next_item_id, 0);
-    let loaded = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
-    assert_eq!(loaded.transport.next_item_id, 0);
-    assert_eq!(sim.state_hash(), loaded.state_hash());
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&sim).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidBeltItemIdentity
+        ))
+    ));
 }
 
+/// Current-generation marks omitted from the queue cannot silently sleep a run.
+#[test]
+fn active_marks_missing_from_the_saved_queue_are_rejected() {
+    let mut sim = Simulation::new_test_world(293);
+    let belt = place_belt_line(&mut sim, 2)[0];
+    let ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(belt, 0, ore).unwrap();
+    sim.tick();
+    sim.transport.corrupt_active_queue_for_test();
+
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&sim).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidTransportWork
+        ))
+    ));
+}
+
+/// Pending transport edits may name removals, but not live unrelated entities.
+#[test]
+fn dirty_transport_regions_reject_placed_non_transport_entities() {
+    let mut sim = Simulation::new_test_world(293);
+    sim.tick();
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 1);
+    let chest_id = place_at(&mut sim, chest, x, y, Direction::North);
+    let footprint = sim.entities.placed_entity(chest_id).unwrap().footprint;
+    sim.invalidate_transport_lane_graph_region(chest_id, footprint);
+
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&sim).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidTransportWork
+        ))
+    ));
+}
+
+/// Both queued edits and the resulting incremental graph survive saves.
 #[test]
 fn pending_and_completed_transport_patches_continue_after_save() {
     let mut sim = Simulation::new_test_world(293);

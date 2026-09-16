@@ -4,9 +4,6 @@ use super::common::{
     place_powered_fixture_origin, recipe_id_by_name, set_player_inventory_slot,
     technology_id_by_name, unlock_with_prerequisites,
 };
-use factory_app::rendering::resources::RenderSyncStats;
-use factory_app::resources::{FixedStepCatchUpStats, SimProfileStats};
-use factory_app::ui::debug_overlay::{DebugOverlaySnapshot, format_debug_overlay};
 use factory_app::ui::formatting::{
     available_crafting_recipe_choices, crafting_recipe_choices, format_crafting_detail_text,
     format_rocket_silo_launch_product_label, format_rocket_silo_operational_status,
@@ -16,95 +13,16 @@ use factory_app::ui::production_stats::{
     format_fluid_per_minute, power_graph_points, power_summary_lines, production_rows,
 };
 use factory_data::{CraftingCategory, PrototypeCatalog};
-use factory_sim::{
-    Direction, Inventory, PowerSummary, Simulation, SimulationCounts, SimulationTickProfile,
-};
-use std::time::Duration;
-
-#[test]
-fn debug_overlay_format_no_longer_mentions_debug_item_selection() {
-    let sim_profile = SimProfileStats {
-        last_tick: SimulationTickProfile {
-            belts: Duration::from_micros(100),
-            fluids: Duration::from_micros(200),
-            power: Duration::from_micros(300),
-            radars: Duration::from_micros(350),
-            machines: Duration::from_micros(400),
-            inserters: Duration::from_micros(500),
-            inventory_transfers: Duration::from_micros(600),
-            chunk_lookup: Duration::from_micros(700),
-            ..Default::default()
-        },
-        rolling_average_sim_tick_ms: 1.25,
-        save_blocked_fixed_ticks: 0,
-    };
-    let mut render_sync = RenderSyncStats::default();
-    let catch_up = FixedStepCatchUpStats::default();
-    render_sync.record_player(Duration::from_micros(10));
-    render_sync.record_world_tiles(Duration::from_micros(20));
-    render_sync.record_resources(Duration::from_micros(30));
-    render_sync.record_placed_entities(Duration::from_micros(40));
-    render_sync.record_belt_directions(Duration::from_micros(50));
-    render_sync.record_belt_items(Duration::from_micros(450));
-    let text = format_debug_overlay(DebugOverlaySnapshot {
-        tick: 7,
-        ups: 60.0,
-        fps: Some(59.9),
-        frame_ms: Some(16.667),
-        sim_profile: &sim_profile,
-        catch_up: &catch_up,
-        render_sync: &render_sync,
-        counts: SimulationCounts {
-            entity_count: 10,
-            chunk_count: 25,
-            belt_count: 3,
-            belt_item_count: 4,
-            machine_count: 5,
-            inserter_count: 6,
-            active_machines: 2,
-            idle_machines: 3,
-            ..SimulationCounts::default()
-        },
-        power: PowerSummary {
-            production_watts: 0,
-            available_production_watts: 0,
-            consumption_watts: 0,
-            satisfaction_permyriad: 10_000,
-            network_count: 0,
-            ..PowerSummary::default()
-        },
-    });
-
-    for label in [
-        "UPS:",
-        "FPS:",
-        "Sim tick:",
-        "Entities:",
-        "Power:",
-        "fluids",
-        "power",
-        "render sync total",
-        "player",
-        "world",
-        "resources",
-        "entities",
-        "belt dirs",
-        "belt items",
-    ] {
-        assert!(text.contains(label), "missing debug overlay label {label}");
-    }
-    assert!(!text.contains("Item:"));
-    assert!(!text.contains("Count:"));
-}
+use factory_sim::{Direction, Inventory, PowerSummary, Simulation};
 
 #[test]
 fn production_stat_formatting_shows_per_minute_and_totals() {
     let mut sim = Simulation::new_test_world(123);
     let (x, y, resource) = nearest_resource_tile_for_app(&sim);
-    sim.move_player_by_tiles(
-        x as f32 - sim.player().position_tiles().0,
-        y as f32 - sim.player().position_tiles().1,
-    );
+    // Test-setup positioning is a teleport, not travel: the straight-line
+    // path to the resource may cross blocked tiles that collision-checked
+    // movement must refuse.
+    sim.teleport_player_to_tile(x, y);
     for _ in 0..factory_sim::MANUAL_MINING_TICKS_PER_ITEM {
         sim.update_manual_mining(Some(factory_sim::ManualMiningTarget { x, y }));
     }

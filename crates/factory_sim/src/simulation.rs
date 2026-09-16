@@ -65,6 +65,7 @@ pub use crate::entities::{
 };
 pub(crate) use crate::entities::{DenseEntityMap, EntityReservation};
 pub use crate::equipment::{InstalledEquipment, PlayerEquipmentError, PlayerEquipmentState};
+pub(crate) use crate::fluids::PumpState;
 pub use crate::fluids::{
     FluidBoxOwner, FluidBoxState, FluidConnectionPreview, FluidConnectionPreviewState,
     FluidNetworkBoxSnapshot, FluidNetworkSnapshot,
@@ -105,6 +106,7 @@ pub use crate::rail::{
     RailBlockSnapshot, RailConnectionPreview, RailCurve, RailEnd, RailNetworkSnapshot,
     RailPieceGeometry, RailPoint, RailSignalAspect, RailSignalSnapshot,
 };
+pub(crate) use crate::research::ResearchRevisions;
 pub use crate::research::{
     ResearchBonuses, ResearchError, ResearchProgressResult, ResearchState, TechnologyResearchState,
 };
@@ -187,12 +189,20 @@ pub const REPAIR_REACH_TILES: f32 = 3.0;
 /// Minimum time between under-attack warnings from the same map chunk.
 pub const STRUCTURE_WARNING_COOLDOWN_TICKS: u64 = 10 * FIXED_SIM_TICKS_PER_SECOND as u64;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Simulation {
     tick: u64,
     pub(crate) day_night_cycle: Option<DayNightCycleState>,
     #[serde(skip, default)]
     entity_topology_revision: u64,
+    /// Runtime-only retained changes used by presentation and other deferred
+    /// consumers that need exact entity-local invalidation.
+    #[serde(skip, default)]
+    entity_visual_changes: presentation::EntityVisualChangeHistory,
+    #[serde(skip, default)]
+    entity_style_revision: u64,
+    #[serde(skip, default)]
+    entity_style_changes: presentation::EntityStyleChangeHistory,
     #[serde(skip, default)]
     revealed_revision: u64,
     #[serde(skip, default)]
@@ -205,6 +215,15 @@ pub struct Simulation {
     power_map_revision: u64,
     #[serde(skip, default)]
     production_status_revision: u64,
+    /// Runtime-only, dependency-specific invalidation keys for retained research UI.
+    #[serde(skip, default)]
+    research_revisions: ResearchRevisions,
+    /// Runtime-only invalidation key for enemy settings UI.
+    #[serde(skip, default)]
+    enemy_settings_revision: u64,
+    /// Runtime-only invalidation key for retained manual-crafting UI.
+    #[serde(skip, default)]
+    crafting_revision: u64,
     #[serde(skip, default)]
     production_map_statuses: Vec<(EntityId, u8)>,
     #[serde(skip, default)]
@@ -244,6 +263,11 @@ pub struct Simulation {
     /// like the robots in flight and for the same reason: a train is a unit
     /// that exists in its own right, not a cache of something placed.
     rolling_stock: RollingStockSubsystem,
+    /// Runtime-only identity change token for presentation consumers. Movement
+    /// is covered by the fixed tick; this advances for insertion and removal,
+    /// which public APIs may perform between ticks.
+    #[serde(skip, default)]
+    rolling_stock_topology_revision: u64,
     /// Route search for trains: scratch buffers and the tick's expansion
     /// budget. Scratch is reset each tick and rebuilt from
     /// nothing on load — the routes themselves live on the trains.
@@ -278,6 +302,10 @@ pub struct Simulation {
     attack_targets: enemy::AttackTargetCache,
     #[serde(skip)]
     enemy_target_chunks: combat_ops::EnemyChunkIndex,
+    /// Runtime-only chunk membership for presentation queries. It is rebuilt
+    /// once after a completed simulation tick, never once per rendered frame.
+    #[serde(skip, default)]
+    dynamic_unit_chunks: presentation::DynamicUnitChunkIndex,
     #[serde(skip)]
     enemy_spawning_scratch: enemy::EnemySpawningScratch,
     #[serde(skip)]
@@ -989,6 +1017,7 @@ mod player_ops;
 mod pollution_ops;
 mod power_ops;
 mod power_state;
+mod presentation;
 mod profiling;
 mod radar_ops;
 pub mod rail_ops;

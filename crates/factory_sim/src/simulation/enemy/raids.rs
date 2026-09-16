@@ -9,6 +9,9 @@ impl Simulation {
         let old = self.config.runtime;
         self.config.runtime = settings;
         self.config.preset = EnemyDifficultyPreset::Custom;
+        if old != settings {
+            self.enemy_settings_revision = self.enemy_settings_revision.wrapping_add(1);
+        }
         let Some(gameplay) = self.gameplay().copied() else {
             return Ok(());
         };
@@ -31,10 +34,7 @@ impl Simulation {
                 base.attack_budget_micro = 0;
                 for id in std::mem::take(&mut base.staged_units) {
                     if let Some(unit) = self.enemies.enemies.get_mut(&id) {
-                        unit.mode = EnemyMode::Guard;
-                        unit.mission = EnemyMission::Guard;
-                        unit.target = None;
-                        unit.path.clear();
+                        unit.transition_to_guard();
                     }
                 }
                 base.staging_started_tick = None;

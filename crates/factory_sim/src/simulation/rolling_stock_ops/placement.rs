@@ -616,6 +616,7 @@ impl Simulation {
             .push(stock_id);
         self.reorder_train(train_id);
         self.discard_train_route(train_id);
+        self.record_rolling_stock_inserted(stock_id);
         stock_id
     }
 
@@ -655,6 +656,7 @@ impl Simulation {
         let Some(stock) = self.rolling_stock.stock.remove(&stock_id) else {
             return;
         };
+        self.record_rolling_stock_removed(stock_id);
         let Some(train) = self.rolling_stock.trains.get_mut(&stock.train) else {
             return;
         };

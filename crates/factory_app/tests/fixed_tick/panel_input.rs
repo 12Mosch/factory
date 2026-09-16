@@ -463,69 +463,56 @@ fn save_load_window_suppresses_panel_and_debug_hotkeys() {
 }
 
 #[test]
-fn open_map_suppresses_build_hotbar_selection() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
-    app.update();
-    let (slot_index, _) = first_available_hotbar_slot(&app);
+fn open_panels_suppress_build_hotbar_selection() {
+    // Each case opens a different panel, then verifies the build-hotbar key no
+    // longer changes the active build selection. The build menu toggles on key
+    // release semantics that need a full key reset to settle; the other panels
+    // settle with a plain release.
+    for (panel_name, panel_key, reset_key) in [
+        ("map", KeyCode::KeyM, false),
+        ("crafting", KeyCode::KeyC, false),
+        ("settings", KeyCode::KeyO, false),
+        ("build menu", KeyCode::KeyB, true),
+    ] {
+        let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
+        app.update();
+        let (slot_index, _) = first_available_hotbar_slot(&app);
 
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyM);
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyM);
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot_index));
-    app.update();
+        press_key(&mut app, panel_key);
+        app.update();
+        if reset_key {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset(panel_key);
+        } else {
+            release_key(&mut app, panel_key);
+        }
+        app.update();
+        assert_panel_open(&app, panel_name);
 
-    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+        press_key(&mut app, hotbar_key_for_slot(slot_index));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<BuildPlacementState>().selected,
+            None,
+            "{panel_name} should suppress build hotbar selection"
+        );
+    }
 }
 
-#[test]
-fn open_crafting_suppresses_build_hotbar_selection() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
-    app.update();
-    let (slot_index, _) = first_available_hotbar_slot(&app);
-
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyC);
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyC);
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot_index));
-    app.update();
-
-    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
-}
-
-#[test]
-fn open_settings_suppresses_build_hotbar_selection() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
-    app.update();
-    let (slot_index, _) = first_available_hotbar_slot(&app);
-
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyO);
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyO);
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot_index));
-    app.update();
-
-    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
+fn assert_panel_open(app: &App, panel_name: &str) {
+    let open = match panel_name {
+        "map" => app.world().resource::<MapViewState>().open,
+        "crafting" => app.world().resource::<CraftingWindowState>().open,
+        "settings" => app.world().resource::<SettingsWindowState>().open,
+        "build menu" => app.world().resource::<BuildMenuState>().open,
+        _ => panic!("unknown panel {panel_name}"),
+    };
+    assert!(
+        open,
+        "{panel_name} should be open before testing hotbar suppression"
+    );
 }
 
 #[test]
@@ -561,30 +548,6 @@ fn b_opens_build_menu_and_types_into_search_while_open() {
     let menu = app.world().resource::<BuildMenuState>();
     assert!(menu.open);
     assert_eq!(menu.search_query, "b");
-}
-
-#[test]
-fn open_build_menu_suppresses_build_hotbar_selection() {
-    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0));
-    app.update();
-    let (slot_index, _) = first_available_hotbar_slot(&app);
-
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyB);
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .reset(KeyCode::KeyB);
-    app.update();
-    assert!(app.world().resource::<BuildMenuState>().open);
-
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(hotbar_key_for_slot(slot_index));
-    app.update();
-
-    assert_eq!(app.world().resource::<BuildPlacementState>().selected, None);
 }
 
 #[test]

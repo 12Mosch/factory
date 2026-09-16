@@ -1,3 +1,4 @@
+use super::robot_ops::RobotLogisticWorkState;
 use super::*;
 use crate::SaveLimits;
 use bincode::Options;
@@ -224,12 +225,14 @@ macro_rules! define_snapshot {
         }
 
         impl<'a> SimulationSnapshotRef<'a> {
+            /// Borrows the complete ordered durable-state registry for encoding.
             fn from_simulation($sim: &'a Simulation) -> Self {
                 Self { $($field: &$source,)* }
             }
         }
 
         impl SimulationSnapshotOwned {
+            /// Clones the complete ordered durable-state registry for detached encoding.
             fn from_simulation($sim: &Simulation) -> Self {
                 Self { $($field: capture_snapshot_field!($ty, $source $(, $capture)?),)* }
             }
@@ -267,8 +270,11 @@ define_snapshot! {
     power_networks: Vec<PowerNetworkSnapshot> => sim.power.networks,
     entity_power_statuses: DenseEntityMap<EntityPowerStatus> => sim.power.entity_statuses,
     fluid_networks: Vec<FluidNetworkSnapshot> => sim.fluids.networks,
+    fluid_topology_dirty: bool => sim.fluids.topology_dirty,
     heat_networks: Vec<HeatNetworkSnapshot> => sim.heat.networks,
+    heat_topology_dirty: bool => sim.heat.topology_dirty,
     robot_networks: Vec<RobotNetworkSnapshot> => sim.robots.networks,
+    robot_logistic_work: RobotLogisticWorkState => sim.robots.logistic_work,
     robot_flights: RobotFlightSubsystem => sim.robot_flights,
     rolling_stock: RollingStockSubsystem => sim.rolling_stock,
     pollution: PollutionState => sim.pollution,
@@ -464,6 +470,7 @@ pub fn prototype_hash(catalog: &PrototypeCatalog) -> u64 {
 }
 
 impl SimulationSnapshotOwned {
+    /// Validates durable input, reconstructs derived indexes, and returns a live world.
     fn into_simulation(self) -> Result<Simulation, SaveLoadError> {
         // Validate the catalog and chunk shape before even constructing the
         // world generator or deriving terrain absorption from saved tile ids.
@@ -472,16 +479,25 @@ impl SimulationSnapshotOwned {
                 validation::world::validate_snapshot_world(&self.prototypes, &self.chunks)
             })
             .map_err(SaveLoadError::InvalidSimulationState)?;
+        let robot_logistic_work = self.robot_logistic_work;
+        let fluid_topology_dirty = self.fluid_topology_dirty;
+        let heat_topology_dirty = self.heat_topology_dirty;
         let mut sim = Simulation {
             tick: self.tick,
             day_night_cycle: self.day_night_cycle,
             entity_topology_revision: self.entity_topology_revision,
+            entity_visual_changes: Default::default(),
+            entity_style_revision: 0,
+            entity_style_changes: Default::default(),
             revealed_revision: 0,
             revealed_chunk_history: Default::default(),
             pollution_map_revision: 0,
             enemy_map_revision: 0,
             power_map_revision: 0,
             production_status_revision: 0,
+            research_revisions: ResearchRevisions::default(),
+            enemy_settings_revision: 0,
+            crafting_revision: 0,
             production_map_statuses: Vec::new(),
             production_map_status_scratch: Vec::new(),
             world: WorldSim::from_snapshot(self.world_seed, self.prototypes, self.chunks),
@@ -519,6 +535,7 @@ impl SimulationSnapshotOwned {
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,
             rolling_stock: self.rolling_stock,
+            rolling_stock_topology_revision: 0,
             circuits: CircuitSubsystem::default(),
             statistics: StatisticsSubsystem {
                 items: self.item_statistics,
@@ -535,12 +552,14 @@ impl SimulationSnapshotOwned {
             config: self.config,
             attack_targets: self.attack_targets,
             enemy_target_chunks: combat_ops::EnemyChunkIndex::default(),
+            dynamic_unit_chunks: Default::default(),
             enemy_spawning_scratch: enemy::EnemySpawningScratch::default(),
             enemy_navigation: self.enemy_navigation,
             transport: self.transport,
         };
         sim.world.chunk_revision = self.world_chunk_revision;
         sim.world.walkability_revision = self.world_walkability_revision;
+        sim.entities.rebuild_pump_registry(&sim.world.prototypes);
         validation::validate_durable_state(&sim).map_err(SaveLoadError::InvalidSimulationState)?;
         // The rail graph is a derived cache like the circuit topology, so a
         // loaded world rebuilds it before anything can ask what connects — and
@@ -556,8 +575,14 @@ impl SimulationSnapshotOwned {
         // taken from a world that had it in — would not describe it.
         sim.refresh_stopped_stock_index();
         sim.fluids.networks = saved_fluid_networks;
+        sim.fluids.topology_dirty = fluid_topology_dirty;
+        sim.heat.topology_dirty = heat_topology_dirty;
         // Check saved summaries before reconstruction can replace them.
         validation::validate_derived_state(&sim).map_err(SaveLoadError::InvalidSimulationState)?;
+        // Both topology structures start empty even when their saved summaries
+        // were clean. Force their derived indexes to rebuild before use.
+        sim.fluids.topology_dirty = true;
+        sim.heat.topology_dirty = true;
         sim.ensure_fluid_network_topology();
         // The snapshots are re-derived rather than trusted, because the index
         // above may have joined a wagon onto a network and cleared them. A valid
@@ -567,10 +592,25 @@ impl SimulationSnapshotOwned {
         // Robot coverage queries read the topology cache, so rebuild it before
         // anything can ask a loaded world which network covers a tile.
         sim.ensure_robot_network_topology();
+        sim.refresh_logistic_index();
+        let robot_network_count = sim.robots.topology_networks.len();
+        if !sim
+            .robots
+            .logistic_work
+            .restore(robot_logistic_work, robot_network_count)
+        {
+            return Err(SaveLoadError::InvalidSimulationState(
+                SimValidationError::InvalidRobotNetwork {
+                    network_id: u32::try_from(robot_network_count).unwrap_or(u32::MAX),
+                },
+            ));
+        }
         sim.rebuild_circuit_state();
         sim.rebuild_all_module_effects();
         sim.rebuild_pollution_emitter_index();
         sim.attack_targets.rebuild_index(&sim.world, &sim.entities);
+        sim.enemy_target_chunks.rebuild(&sim.enemies);
+        sim.refresh_dynamic_unit_chunk_index();
         Ok(sim)
     }
 }
@@ -614,6 +654,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    /// Invalid chunk shape fails before constructing a generator from its tiles.
     #[test]
     fn malformed_chunk_is_rejected_before_world_reconstruction() {
         let mut sim = Simulation::new_test_world(293);
@@ -623,6 +664,7 @@ mod tests {
             Err(SaveLoadError::InvalidSimulationState(SimValidationError::InvalidChunk(found))) if found == coord));
     }
 
+    /// Version 54 remains an explicit boundary for unrecoverable work state.
     #[test]
     fn version_54_is_an_explicit_unsupported_history_boundary() {
         let mut bytes = save_to_bytes(&Simulation::new_test_world(293)).unwrap();

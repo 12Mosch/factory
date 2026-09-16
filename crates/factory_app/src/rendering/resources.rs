@@ -1,6 +1,6 @@
 use bevy::prelude::{App, ColorMaterial, Entity, Handle, Mesh, Res, ResMut, Resource};
 use factory_sim::{ChunkCoord, EntityId};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Resource, Default)]
@@ -105,6 +105,18 @@ pub(crate) fn collect_render_sync_stats(
 #[derive(Resource)]
 pub(crate) struct VisibleEntityIds {
     pub(crate) ids: HashSet<EntityId>,
+    /// Entities newly entering the visible membership on this update.
+    pub(crate) added: Vec<EntityId>,
+    /// Entities leaving visible membership on this update.
+    pub(crate) removed: Vec<EntityId>,
+    /// Still-visible entities whose appearance may have changed.
+    pub(crate) style_dirty: Vec<EntityId>,
+    /// Changes only when `ids` changes, so belt-item caches do not wake for an
+    /// unrelated style invalidation.
+    pub(crate) membership_revision: u64,
+    /// A replacement/load invalidates every render-entity registry even when
+    /// the new world happens to reuse the same simulation IDs.
+    pub(crate) reset: bool,
     pub(crate) visible_revision: u64,
     pub(crate) entity_topology_revision: u64,
 }
@@ -113,6 +125,11 @@ impl Default for VisibleEntityIds {
     fn default() -> Self {
         Self {
             ids: HashSet::new(),
+            added: Vec::new(),
+            removed: Vec::new(),
+            style_dirty: Vec::new(),
+            membership_revision: 0,
+            reset: false,
             visible_revision: u64::MAX,
             entity_topology_revision: u64::MAX,
         }
@@ -124,6 +141,9 @@ pub(crate) struct RenderDetail {
     pub(crate) show_resource_amount_labels: bool,
     pub(crate) show_belt_directions: bool,
     pub(crate) show_belt_items: bool,
+    /// Draw at most one representative item per occupied belt when individual
+    /// lane contents are below useful screen-space detail.
+    pub(crate) aggregate_belt_items: bool,
     pub(crate) show_belt_item_labels: bool,
 }
 
@@ -133,6 +153,7 @@ impl Default for RenderDetail {
             show_resource_amount_labels: true,
             show_belt_directions: true,
             show_belt_items: true,
+            aggregate_belt_items: false,
             show_belt_item_labels: true,
         }
     }
@@ -150,6 +171,16 @@ pub struct WorldRenderCache {
     /// chunk revision never observes.
     pub last_terrain_revision: u64,
     pub last_reload_token: u64,
+    /// Meshes waiting to be rebuilt after a terrain or neighboring chunk
+    /// change. Keeping this work durable lets the presentation system advance
+    /// it over several frames without losing a simulation revision.
+    pub(crate) pending_mesh_rebuilds: BTreeSet<ChunkCoord>,
+    /// Missing visible and adjacent chunks waiting for their first mesh.
+    pub(crate) pending_mesh_builds: BTreeSet<ChunkCoord>,
+    /// Least-recently-used order for meshes without a live render entity.
+    pub(crate) inactive_mesh_lru: VecDeque<ChunkCoord>,
+    #[cfg(test)]
+    pub(crate) mesh_builds_last_sync: usize,
 }
 
 #[derive(Resource, Default)]

@@ -257,6 +257,7 @@ impl Simulation {
             recipe_id,
             remaining_ticks: crafting_time_ticks,
         });
+        self.crafting_revision = self.crafting_revision.wrapping_add(1);
 
         Ok(())
     }
@@ -295,6 +296,7 @@ impl Simulation {
             .entries
             .remove(index)
             .expect("manual crafting job index was found before refund planning");
+        self.crafting_revision = self.crafting_revision.wrapping_add(1);
         Ok(())
     }
 
@@ -319,6 +321,7 @@ impl Simulation {
         };
         if let Some(target) = target {
             self.crafting_queue.entries.swap(index, target);
+            self.crafting_revision = self.crafting_revision.wrapping_add(1);
         }
         Ok(())
     }
@@ -360,6 +363,7 @@ impl Simulation {
 
         self.player_inventory = inventory;
         self.crafting_queue.entries.pop_front();
+        self.crafting_revision = self.crafting_revision.wrapping_add(1);
         self.crafting_queue.completed_jobs = self.crafting_queue.completed_jobs.wrapping_add(1);
         for ingredient in &ingredients {
             self.record_item_consumed(ingredient.item, u64::from(ingredient.amount));
@@ -412,12 +416,12 @@ impl Simulation {
         let Some(y) = self.player.y.checked_add(delta_y) else {
             return;
         };
-        let candidate = PlayerState {
+        let (tile_x, tile_y) = PlayerState {
             x,
             y,
             ..self.player
-        };
-        let (tile_x, tile_y) = candidate.tile_position();
+        }
+        .tile_position();
         let Some(candidate_chunk) = ChunkCoord::from_tile(tile_x, tile_y) else {
             return;
         };
@@ -448,8 +452,52 @@ impl Simulation {
             }
         }
 
-        if self.can_player_occupy_tile(tile_x, tile_y) {
-            self.player = candidate;
+        if delta_x != 0 {
+            self.move_player_along_axis(delta_x, true);
+        }
+        if delta_y != 0 {
+            self.move_player_along_axis(delta_y, false);
+        }
+    }
+
+    /// Single-axis movement applied as sequential increments of at most one
+    /// tile, each validated with the same final-position occupancy check as a
+    /// small step. An increment of at most one tile can cross at most one tile
+    /// boundary, so no blocked intermediate tile can be skipped the way a
+    /// final-position-only check of the whole step would. Movement stops at
+    /// the first increment whose destination tile is impassable, and steps of
+    /// at most one tile behave exactly as before.
+    fn move_player_along_axis(&mut self, delta: i64, along_x: bool) {
+        let mut remaining = delta;
+        while remaining != 0 {
+            let step = if remaining > 0 {
+                remaining.min(PLAYER_POSITION_SCALE)
+            } else {
+                remaining.max(-PLAYER_POSITION_SCALE)
+            };
+            let current = if along_x {
+                self.player.x
+            } else {
+                self.player.y
+            };
+            let Some(next) = current.checked_add(step) else {
+                return;
+            };
+            let (tile_x, tile_y) = if along_x {
+                (fixed_to_tile(next), fixed_to_tile(self.player.y))
+            } else {
+                (fixed_to_tile(self.player.x), fixed_to_tile(next))
+            };
+            if self.can_player_occupy_tile(tile_x, tile_y) {
+                if along_x {
+                    self.player.x = next;
+                } else {
+                    self.player.y = next;
+                }
+                remaining -= step;
+            } else {
+                return;
+            }
         }
     }
 }

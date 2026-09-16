@@ -11,9 +11,11 @@ use crate::resources::SimResource;
 
 pub(crate) const RENDER_CHUNK_MARGIN: i32 = 1;
 pub(crate) const FALLBACK_VISIBLE_CHUNK_RADIUS: i32 = 2;
-pub(crate) const RESOURCE_AMOUNT_LABEL_MAX_SCALE: f32 = 2.75;
-pub(crate) const BELT_ITEM_LABEL_MAX_SCALE: f32 = 2.25;
-pub(crate) const BELT_DETAIL_MAX_SCALE: f32 = 5.0;
+pub(crate) const RESOURCE_AMOUNT_LABEL_MAX_SCALE: f32 = 2.0;
+pub(crate) const BELT_ITEM_LABEL_MAX_SCALE: f32 = 1.5;
+pub(crate) const BELT_ITEM_AGGREGATE_MIN_SCALE: f32 = 2.25;
+pub(crate) const BELT_DIRECTION_MAX_SCALE: f32 = 3.25;
+pub(crate) const BELT_DETAIL_MAX_SCALE: f32 = 4.5;
 
 pub(crate) fn setup_camera(mut commands: Commands) {
     commands.spawn((
@@ -151,8 +153,9 @@ fn orthographic_camera_scale(projection: &Projection) -> Option<f32> {
 pub(crate) fn render_detail_for_camera_scale(scale: f32) -> RenderDetail {
     RenderDetail {
         show_resource_amount_labels: scale <= RESOURCE_AMOUNT_LABEL_MAX_SCALE,
-        show_belt_directions: scale <= BELT_DETAIL_MAX_SCALE,
+        show_belt_directions: scale <= BELT_DIRECTION_MAX_SCALE,
         show_belt_items: scale <= BELT_DETAIL_MAX_SCALE,
+        aggregate_belt_items: scale > BELT_ITEM_AGGREGATE_MIN_SCALE,
         show_belt_item_labels: scale <= BELT_ITEM_LABEL_MAX_SCALE,
     }
 }
@@ -204,13 +207,25 @@ mod tests {
 
     #[test]
     fn render_detail_hides_unreadable_overlays_when_zoomed_out() {
-        assert!(render_detail_for_camera_scale(2.0).show_belt_item_labels);
+        assert!(render_detail_for_camera_scale(1.25).show_belt_item_labels);
+        assert!(!render_detail_for_camera_scale(2.0).show_belt_item_labels);
 
         let detail = render_detail_for_camera_scale(6.0);
 
         assert!(!detail.show_resource_amount_labels);
         assert!(!detail.show_belt_directions);
         assert!(!detail.show_belt_items);
+        assert!(detail.aggregate_belt_items);
         assert!(!detail.show_belt_item_labels);
+    }
+
+    #[test]
+    fn render_detail_aggregates_items_before_hiding_them() {
+        let detail = render_detail_for_camera_scale(3.0);
+
+        assert!(detail.show_belt_items);
+        assert!(detail.aggregate_belt_items);
+        assert!(!detail.show_belt_item_labels);
+        assert!(detail.show_belt_directions);
     }
 }

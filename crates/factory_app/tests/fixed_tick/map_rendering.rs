@@ -186,18 +186,15 @@ fn first_walkable_tile_in_chunk(seed: u64, coord: ChunkCoord) -> (i64, i64) {
 }
 
 fn move_player_to_tile(sim: &mut Simulation, tile: (i64, i64)) {
-    let attempt_move = |sim: &mut Simulation| {
-        let (player_x, player_y) = sim.player().position_tiles();
-        sim.move_player_by_tiles(
-            tile.0 as f32 + 0.5 - player_x,
-            tile.1 as f32 + 0.5 - player_y,
-        );
-    };
-    attempt_move(sim);
-    if sim.player().tile_position() != tile {
-        sim.tick();
-        attempt_move(sim);
-    }
+    let target_chunk = ChunkCoord::from_tile(tile.0, tile.1)
+        .expect("teleport target should remain in the chunk plane");
+    // Stream the destination chunk while the player is still far away so the
+    // arrival does not reveal anything around the target ahead of time.
+    sim.ensure_chunk_generated(target_chunk);
+    // Test-setup positioning is a teleport, not travel: collision-checked
+    // movement must be able to refuse a path that crosses blocked tiles, so
+    // setup uses direct placement.
+    sim.teleport_player_to_tile(tile.0, tile.1);
     assert_eq!(sim.player().tile_position(), tile);
 }
 

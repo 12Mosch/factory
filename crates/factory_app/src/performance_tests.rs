@@ -1,7 +1,11 @@
+use bevy::app::PluginGroupBuilder;
 use bevy::audio::{AudioPlayer, AudioSource};
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
+use bevy::window::{ExitCondition, WindowPlugin};
+use bevy::winit::WinitPlugin;
+use factory_data::{item_id_by_name, recipe_id_by_name};
 use factory_sim::Simulation;
 use std::time::Duration;
 
@@ -66,6 +70,18 @@ const FULL_FRAME_BUDGET: PerformanceBudget = PerformanceBudget {
     alloc_p99_count: 4_096,
     alloc_hitch_count: 16_384,
 };
+// Rendering latency varies with the available adapter, even when the scene and
+// simulation are deterministic. Keep a separate 30 fps guardrail for tests
+// that include text shaping, layout, extraction, and GPU work, while retaining
+// a tight allocation budget for the UI regression this benchmark targets.
+const RENDERED_FRAME_BUDGET: PerformanceBudget = PerformanceBudget {
+    p99: Duration::from_nanos(33_334_000),
+    hitch: Duration::from_nanos(66_668_000),
+    alloc_p99_bytes: 512 * 1024,
+    alloc_hitch_bytes: 2 * 1024 * 1024,
+    alloc_p99_count: 4_096,
+    alloc_hitch_count: 16_384,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
 struct UiBenchmark;
@@ -104,7 +120,7 @@ fn retained_ui_frame_p99_hitch_and_allocation_budget() {
     let _guard = BENCHMARK_LOCK
         .lock()
         .expect("benchmark lock should not poison");
-    let mut app = full_app_fixture();
+    let mut app = changing_ui_full_app_fixture();
     app.add_schedule(Schedule::new(UiBenchmark));
     app.add_systems(
         UiBenchmark,
@@ -156,6 +172,51 @@ fn full_app_frame_p99_hitch_and_allocation_budget() {
         .read()
         .validate_state()
         .expect("full-frame budget should retain a valid simulation");
+}
+
+/// Advances production, research, and a manual-crafting queue through Bevy's
+/// real text, layout, extraction, and render schedules. This catches costs and
+/// lifecycle errors that the isolated retained-UI schedule intentionally does
+/// not exercise.
+#[test]
+#[ignore]
+fn changing_rendered_ui_frame_p99_hitch_and_allocation_budget() {
+    let _guard = BENCHMARK_LOCK
+        .lock()
+        .expect("benchmark lock should not poison");
+    let mut app = rendered_full_app_fixture();
+    app.update();
+    open_benchmark_windows(&mut app);
+
+    for _ in 0..WARMUP_FRAMES {
+        app.update();
+    }
+    let (initial_tick, initial_research_revision, initial_completed_jobs) = {
+        let sim = app.world().resource::<SimResource>().read();
+        (
+            sim.tick_count(),
+            sim.research_revision(),
+            sim.crafting_queue().completed_jobs,
+        )
+    };
+    let stats = collect_prepared_performance_stats(MEASUREMENT_FRAMES, || {
+        {
+            let mut sim_resource = app.world_mut().resource_mut::<SimResource>();
+            let mut sim = sim_resource.write_for_tests();
+            if sim.active_research().is_some() {
+                sim.add_research_units(1)
+                    .expect("benchmark research should accept one unit");
+            }
+        }
+        measure_performance_sample(|| app.update())
+    });
+    print_performance_stats("changing_rendered_ui_frame_budget", stats);
+    assert_performance_budget("changing rendered UI frame", stats, RENDERED_FRAME_BUDGET);
+
+    let sim = app.world().resource::<SimResource>().read();
+    assert!(sim.tick_count() > initial_tick);
+    assert!(sim.crafting_queue().completed_jobs > initial_completed_jobs);
+    assert!(sim.research_revision() > initial_research_revision);
 }
 
 /// Same complete frame as above, with a sky full of robots on top: the flight
@@ -350,6 +411,7 @@ fn audio_benchmark_app() -> App {
             ids: visible_ids,
             visible_revision: 1,
             entity_topology_revision: 1,
+            ..Default::default()
         })
         .insert_resource(assets)
         .init_resource::<AudioSettings>()
@@ -404,6 +466,68 @@ fn full_app_fixture() -> App {
         .replace(sim)
         .expect("benchmark simulation should replace before frame execution");
     app
+}
+
+fn changing_ui_full_app_fixture() -> App {
+    let mut app = full_app_fixture();
+    let mut sim = changing_ui_simulation();
+    sim.tick();
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(sim)
+        .expect("changing UI benchmark simulation should replace before frame execution");
+    app
+}
+
+fn rendered_full_app_fixture() -> App {
+    let mut app = App::new();
+    app.add_plugins(rendered_test_plugins())
+        .add_plugins(FactoryAppPlugin)
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    // `App::run` normally completes asynchronous renderer initialization.
+    // These tests drive `App::update` directly, so finish the plugin lifecycle
+    // explicitly before any main-world render systems can execute.
+    app.finish();
+    app.cleanup();
+    let mut sim = changing_ui_simulation();
+    sim.tick();
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(sim)
+        .expect("benchmark simulation should replace before frame execution");
+    app
+}
+
+fn rendered_test_plugins() -> PluginGroupBuilder {
+    DefaultPlugins
+        .build()
+        // Tests drive `App::update` directly and do not own a platform event loop.
+        .disable::<WinitPlugin>()
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                resolution: (1280, 720).into(),
+                ..default()
+            }),
+            exit_condition: ExitCondition::DontExit,
+            ..default()
+        })
+}
+
+fn changing_ui_simulation() -> Simulation {
+    let mut sim = Simulation::new_scripted_red_science_factory();
+    let catalog = sim.catalog().clone();
+    let iron_plate = item_id_by_name(&catalog, "iron_plate");
+    let gear = recipe_id_by_name(&catalog, "iron_gear_wheel");
+    sim.player_inventory_mut()
+        .insert(&catalog, iron_plate, 100)
+        .expect("benchmark player inventory should accept ingredients");
+    for _ in 0..8 {
+        sim.start_manual_craft(gear)
+            .expect("benchmark recipe should be manually craftable");
+    }
+    sim
 }
 
 fn open_benchmark_windows(app: &mut App) {

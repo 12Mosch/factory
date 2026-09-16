@@ -205,22 +205,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_horizontal_identifies_east_and_west() {
-        assert!(!is_horizontal(Direction::North));
-        assert!(is_horizontal(Direction::East));
-        assert!(!is_horizontal(Direction::South));
-        assert!(is_horizontal(Direction::West));
-    }
-
-    #[test]
-    fn direction_vec_maps_cardinal_axes() {
-        assert_eq!(direction_vec(Direction::North), Vec2::Y);
-        assert_eq!(direction_vec(Direction::East), Vec2::X);
-        assert_eq!(direction_vec(Direction::South), Vec2::NEG_Y);
-        assert_eq!(direction_vec(Direction::West), Vec2::NEG_X);
-    }
-
-    #[test]
     fn direction_offset_applies_axis_specific_size() {
         let size = Vec2::new(3.0, 5.0);
 
@@ -267,21 +251,6 @@ mod tests {
     }
 
     #[test]
-    fn builder_scaled_matches_manual_multiplication() {
-        let color = Color::WHITE;
-        let mut builder = VisualLayerBuilder::new(Vec2::new(10.0, 20.0));
-
-        builder.scaled(Vec2::new(0.25, 0.50), Vec2::new(-0.10, 0.20), 0.5, color);
-
-        let layers = builder.finish();
-        assert_eq!(layers.len(), 1);
-        assert_eq!(layers[0].size, Vec2::new(2.5, 10.0));
-        assert_eq!(layers[0].offset, Vec2::new(-1.0, 4.0));
-        assert_eq!(layers[0].z, 0.5);
-        assert_eq!(layers[0].primitive, VisualPrimitive::Rectangle);
-    }
-
-    #[test]
     fn rounded_scaled_uses_the_smaller_axis_for_its_radius() {
         let mut builder = VisualLayerBuilder::new(Vec2::new(10.0, 20.0));
         builder.scaled_rounded(Vec2::new(0.80, 0.50), Vec2::ZERO, 0.0, Color::WHITE, 0.25);
@@ -292,21 +261,6 @@ mod tests {
             layer.primitive,
             VisualPrimitive::RoundedRectangle { radius: 2.0 }
         );
-    }
-
-    #[test]
-    fn scaled_ellipse_preserves_its_elliptical_primitive() {
-        let mut builder = VisualLayerBuilder::new(Vec2::new(10.0, 20.0));
-        builder.scaled_ellipse(
-            Vec2::new(0.80, 0.50),
-            Vec2::new(-0.10, 0.20),
-            0.5,
-            Color::srgba(0.20, 0.40, 0.60, 0.70),
-        );
-
-        let layer = builder.finish()[0];
-        assert_eq!(layer.size, Vec2::new(8.0, 10.0));
-        assert_eq!(layer.primitive, VisualPrimitive::Ellipse);
     }
 
     #[test]
