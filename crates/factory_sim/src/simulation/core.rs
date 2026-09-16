@@ -795,27 +795,25 @@ mod construction_tests {
     }
 
     #[test]
-    fn construction_rejects_guard_retry_not_shorter_than_success_interval() {
-        let mut catalog = PrototypeCatalog::load_base().unwrap();
-        let spawner = catalog
-            .entities_mut()
-            .iter_mut()
-            .find_map(|prototype| prototype.enemy_spawner.as_mut())
-            .expect("base catalog should contain an enemy spawner");
-        spawner.free_spawn_retry_ticks = spawner.free_spawn_interval_ticks;
-        let prototype_id = catalog
-            .entities()
-            .iter()
-            .find(|prototype| prototype.enemy_spawner.is_some())
-            .expect("base catalog should contain an enemy spawner")
-            .id;
+    fn construction_rejects_invalid_guard_retry_intervals() {
+        for retry in [Some(0), Some(1), None] {
+            let mut catalog = PrototypeCatalog::load_base().unwrap();
+            let prototype = catalog
+                .entities_mut()
+                .iter_mut()
+                .find(|prototype| prototype.enemy_spawner.is_some())
+                .expect("base catalog should contain an enemy spawner");
+            let prototype_id = prototype.id;
+            let spawner = prototype.enemy_spawner.as_mut().unwrap();
+            spawner.free_spawn_retry_ticks = retry.unwrap_or(spawner.free_spawn_interval_ticks);
 
-        assert!(matches!(
-            Simulation::new(1, catalog),
-            Err(SimulationCreationError::InvalidCatalog(
-                SimValidationError::InvalidCatalogEntityPrototype { prototype_id: invalid }
-            )) if invalid == prototype_id
-        ));
+            assert!(matches!(
+                Simulation::new(1, catalog),
+                Err(SimulationCreationError::InvalidCatalog(
+                    SimValidationError::InvalidCatalogEntityPrototype { prototype_id: invalid }
+                )) if invalid == prototype_id
+            ));
+        }
     }
 
     #[test]

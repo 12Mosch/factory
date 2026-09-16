@@ -470,7 +470,7 @@ pub(in crate::simulation) fn validate_catalog(
                 };
                 if spawner.max_alive_units == 0
                     || spawner.free_spawn_interval_ticks == 0
-                    || spawner.free_spawn_retry_ticks == 0
+                    || spawner.free_spawn_retry_ticks <= 1
                     || spawner.free_spawn_retry_ticks >= spawner.free_spawn_interval_ticks
                     || spawner.unit.max_health == 0
                     || spawner.unit.attack_cooldown_ticks == 0

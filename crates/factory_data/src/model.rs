@@ -416,7 +416,7 @@ pub struct EnemySpawnerPrototype {
     /// Ticks between free guard spawns while below `guard_units`.
     pub free_spawn_interval_ticks: u32,
     /// Ticks before retrying a free guard spawn that could not be placed.
-    /// Must be shorter than `free_spawn_interval_ticks`.
+    /// Must be at least two ticks and shorter than `free_spawn_interval_ticks`.
     pub free_spawn_retry_ticks: u32,
     /// Absorbed pollution required to spawn one attacking unit, in
     /// milli-pollution-units.
