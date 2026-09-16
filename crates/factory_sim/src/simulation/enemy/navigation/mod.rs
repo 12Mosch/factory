@@ -43,6 +43,24 @@ struct NavigationGridRevision {
     world_walkability: u64,
 }
 
+/// Durable state for continuing a bounded detour across multiple searches.
+/// Keeping the blocked axis and wall-follow heading prevents ordinary greedy
+/// movement from undoing progress when an obstacle exceeds one search window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+struct LongRangeDetour {
+    target: EntityId,
+    forward: Direction,
+    heading: Direction,
+    wall_on_clockwise_side: bool,
+    hit_distance: i64,
+}
+
+impl LongRangeDetour {
+    fn is_valid(self) -> bool {
+        self.hit_distance > 0
+    }
+}
+
 /// Durable incremental navigation work shared by enemy units. Rebuilding it
 /// consumes tick budgets, so fields and scheduling decisions must survive saves.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -50,6 +68,7 @@ pub(in crate::simulation) struct EnemyNavigation {
     revision: Option<NavigationGridRevision>,
     raid_fields: BTreeMap<RaidId, RaidFlowField>,
     next_raid: Option<RaidId>,
+    long_range_detours: BTreeMap<EnemyId, LongRangeDetour>,
     #[serde(skip)]
     path_scratch: PathSearchScratch,
     #[serde(skip)]
@@ -69,6 +88,7 @@ impl PartialEq for EnemyNavigation {
         self.revision == other.revision
             && self.raid_fields == other.raid_fields
             && self.next_raid == other.next_raid
+            && self.long_range_detours == other.long_range_detours
     }
 }
 impl Eq for EnemyNavigation {}
@@ -77,6 +97,7 @@ impl Hash for EnemyNavigation {
         self.revision.hash(state);
         self.raid_fields.hash(state);
         self.next_raid.hash(state);
+        self.long_range_detours.hash(state);
     }
 }
 
@@ -87,6 +108,7 @@ impl EnemyNavigation {
             revision: self.revision,
             raid_fields: self.raid_fields.clone(),
             next_raid: self.next_raid,
+            long_range_detours: self.long_range_detours.clone(),
             path_scratch: PathSearchScratch::default(),
             remaining_expansions: 0,
             #[cfg(test)]
@@ -109,6 +131,10 @@ impl EnemyNavigation {
                 .raid_fields
                 .values()
                 .any(|field| !field.is_valid(world))
+            || self
+                .long_range_detours
+                .values()
+                .any(|detour| !detour.is_valid())
         {
             return Err(SimValidationError::InvalidEnemyNavigation);
         }
@@ -163,6 +189,23 @@ impl EnemyNavigation {
         {
             self.next_raid = None;
         }
+    }
+
+    pub(super) fn retain_units(&mut self, units: &BTreeMap<EnemyId, Enemy>) {
+        self.long_range_detours
+            .retain(|enemy_id, _| units.contains_key(enemy_id));
+    }
+
+    fn long_range_detour(&self, enemy_id: EnemyId) -> Option<LongRangeDetour> {
+        self.long_range_detours.get(&enemy_id).copied()
+    }
+
+    fn set_long_range_detour(&mut self, enemy_id: EnemyId, detour: LongRangeDetour) {
+        self.long_range_detours.insert(enemy_id, detour);
+    }
+
+    fn clear_long_range_detour(&mut self, enemy_id: EnemyId) {
+        self.long_range_detours.remove(&enemy_id);
     }
 
     pub(super) fn advance_raid_fields(&mut self, world: &WorldSim, entities: &EntityStore) {
@@ -253,6 +296,7 @@ impl EnemyNavigation {
         entities: &EntityStore,
         start: (WorldTileCoord, WorldTileCoord),
         target: (WorldTileCoord, WorldTileCoord),
+        forward: Direction,
         max_range: i64,
     ) -> PathRequest {
         let diameter = (max_range as usize) * 2 + 1;
@@ -263,7 +307,7 @@ impl EnemyNavigation {
 
         let (path, expansions) = self
             .path_scratch
-            .find_path_to_frontier(world, entities, start, target, max_range);
+            .find_path_to_frontier(world, entities, start, target, forward, max_range);
         self.charge(expansions);
         PathRequest::Ready(path)
     }
@@ -422,6 +466,34 @@ mod tests {
         super::super::super::save::assert_save_continuation(&mut sim, 20, &[]);
     }
 
+    #[test]
+    fn long_range_detour_progress_survives_save() {
+        let mut sim = multiple_raid_world(1);
+        let enemy_id = *sim.enemies.enemies.keys().next().unwrap();
+        let target = sim.enemies.raids.values().next().unwrap().target.unwrap();
+        sim.enemies.raids.clear();
+        let enemy = sim.enemies.enemies.get_mut(&enemy_id).unwrap();
+        enemy.mission = EnemyMission::Guard;
+        enemy.target = Some(target);
+        enemy.next_decision_tick = u64::MAX;
+        sim.enemy_navigation.set_long_range_detour(
+            enemy_id,
+            LongRangeDetour {
+                target,
+                forward: Direction::East,
+                heading: Direction::North,
+                wall_on_clockwise_side: true,
+                hit_distance: 50,
+            },
+        );
+
+        super::super::super::save::assert_save_continuation(&mut sim, 2, &[]);
+        assert!(
+            sim.enemy_navigation.long_range_detour(enemy_id).is_some(),
+            "an unconsumed detour must remain durable after continuation"
+        );
+    }
+
     /// A revision change after the enemy pass remains pending through a save.
     #[test]
     fn pending_navigation_invalidation_survives_save() {
@@ -469,6 +541,30 @@ mod tests {
             .find(|f| f.initialized)
             .unwrap()
             .corrupt_directions_for_test();
+        assert!(matches!(
+            load_from_bytes(&save_to_bytes(&sim).unwrap()),
+            Err(SaveLoadError::InvalidSimulationState(
+                SimValidationError::InvalidEnemyNavigation
+            ))
+        ));
+    }
+
+    #[test]
+    fn malformed_long_range_detour_is_rejected_before_movement() {
+        let mut sim = multiple_raid_world(1);
+        let enemy_id = *sim.enemies.enemies.keys().next().unwrap();
+        let target = sim.enemies.raids.values().next().unwrap().target.unwrap();
+        sim.enemy_navigation.set_long_range_detour(
+            enemy_id,
+            LongRangeDetour {
+                target,
+                forward: Direction::East,
+                heading: Direction::North,
+                wall_on_clockwise_side: true,
+                hit_distance: 0,
+            },
+        );
+
         assert!(matches!(
             load_from_bytes(&save_to_bytes(&sim).unwrap()),
             Err(SaveLoadError::InvalidSimulationState(

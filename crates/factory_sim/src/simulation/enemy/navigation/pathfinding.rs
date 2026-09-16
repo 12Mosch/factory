@@ -86,24 +86,21 @@ impl PathSearchScratch {
         entities: &EntityStore,
         start: (WorldTileCoord, WorldTileCoord),
         target: (WorldTileCoord, WorldTileCoord),
+        forward: Direction,
         max_range: i64,
     ) -> (Option<VecDeque<(WorldTileCoord, WorldTileCoord)>>, usize) {
         let diameter = (max_range as usize) * 2 + 1;
         let max_expansions = diameter * diameter;
 
-        let dx = target.0.saturating_sub(start.0);
-        let dy = target.1.saturating_sub(start.1);
-        let horizontal = dx.saturating_abs() >= dy.saturating_abs();
         let min_x = start.0.saturating_sub(max_range);
         let max_x = start.0.saturating_add(max_range);
         let min_y = start.1.saturating_sub(max_range);
         let max_y = start.1.saturating_add(max_range);
-        let forward = if horizontal {
-            if dx >= 0 { max_x } else { min_x }
-        } else if dy >= 0 {
-            max_y
-        } else {
-            min_y
+        let frontier = match forward {
+            Direction::North => max_y,
+            Direction::East => max_x,
+            Direction::South => min_y,
+            Direction::West => min_x,
         };
 
         self.find_path_inner(
@@ -112,12 +109,9 @@ impl PathSearchScratch {
             start,
             max_range,
             max_expansions,
-            |tile| {
-                if horizontal {
-                    tile.0 == forward
-                } else {
-                    tile.1 == forward
-                }
+            |tile| match forward {
+                Direction::North | Direction::South => tile.1 == frontier,
+                Direction::East | Direction::West => tile.0 == frontier,
             },
             |tile| {
                 tile.0
