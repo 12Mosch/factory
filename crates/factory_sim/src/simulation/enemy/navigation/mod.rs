@@ -244,6 +244,31 @@ impl EnemyNavigation {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Budgeted routing to the reachable forward edge of a search window.
+    /// The request reserves enough work to visit the complete window, making
+    /// `Ready(None)` a proven local disconnection rather than an exhausted search.
+    fn request_frontier_path(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+        start: (WorldTileCoord, WorldTileCoord),
+        target: (WorldTileCoord, WorldTileCoord),
+        max_range: i64,
+    ) -> PathRequest {
+        let diameter = (max_range as usize) * 2 + 1;
+        let max_expansions = diameter * diameter;
+        if self.remaining_expansions < max_expansions {
+            return PathRequest::Deferred;
+        }
+
+        let (path, expansions) = self
+            .path_scratch
+            .find_path_to_frontier(world, entities, start, target, max_range);
+        self.charge(expansions);
+        PathRequest::Ready(path)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn request_path(
         &mut self,
         world: &WorldSim,

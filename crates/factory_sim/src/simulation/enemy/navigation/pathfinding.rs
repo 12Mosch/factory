@@ -76,6 +76,59 @@ impl PathSearchScratch {
         )
     }
 
+    /// Finds a route to any reachable tile on the edge of a bounded search
+    /// window facing `target`. The goal is a line rather than one unchecked
+    /// coordinate, so water or occupancy at the direct intersection cannot
+    /// make an otherwise valid local detour fail.
+    pub(super) fn find_path_to_frontier(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+        start: (WorldTileCoord, WorldTileCoord),
+        target: (WorldTileCoord, WorldTileCoord),
+        max_range: i64,
+    ) -> (Option<VecDeque<(WorldTileCoord, WorldTileCoord)>>, usize) {
+        let diameter = (max_range as usize) * 2 + 1;
+        let max_expansions = diameter * diameter;
+
+        let dx = target.0.saturating_sub(start.0);
+        let dy = target.1.saturating_sub(start.1);
+        let horizontal = dx.saturating_abs() >= dy.saturating_abs();
+        let min_x = start.0.saturating_sub(max_range);
+        let max_x = start.0.saturating_add(max_range);
+        let min_y = start.1.saturating_sub(max_range);
+        let max_y = start.1.saturating_add(max_range);
+        let forward = if horizontal {
+            if dx >= 0 { max_x } else { min_x }
+        } else if dy >= 0 {
+            max_y
+        } else {
+            min_y
+        };
+
+        self.find_path_inner(
+            world,
+            entities,
+            start,
+            max_range,
+            max_expansions,
+            |tile| {
+                if horizontal {
+                    tile.0 == forward
+                } else {
+                    tile.1 == forward
+                }
+            },
+            |tile| {
+                tile.0
+                    .saturating_sub(target.0)
+                    .saturating_abs()
+                    .saturating_add(tile.1.saturating_sub(target.1).saturating_abs())
+            },
+            None,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn find_path_inner(
         &mut self,
