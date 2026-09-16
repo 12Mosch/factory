@@ -113,7 +113,8 @@ use bincode::Options;
 // v55: durable navigation work, target decisions, invalidation revisions, and
 // belt identities and transport execution/scheduling state. v54 cannot
 // reconstruct these historical values.
-pub const SAVE_VERSION: u32 = 55;
+// v56: enemy-spawner prototypes gained a failed free-guard spawn retry interval.
+pub const SAVE_VERSION: u32 = 56;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -152,7 +153,8 @@ pub const SAVE_VERSION: u32 = 55;
 // v32: powered equipment gained the personal-roboport effect metadata.
 // v33: item prototypes gained personal weapons and typed ammunition categories.
 // v34: cone, rocket, and flame delivery metadata plus personal-laser equipment.
-pub const PROTOTYPE_FORMAT_VERSION: u32 = 34;
+// v35: enemy spawners gained a data-driven failed guard-spawn retry interval.
+pub const PROTOTYPE_FORMAT_VERSION: u32 = 35;
 
 const SAVE_MAGIC: [u8; 8] = *b"FACTSIM\0";
 pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;

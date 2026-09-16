@@ -168,6 +168,7 @@ pub(super) fn load_entities(
                     max_alive_units: spawner.max_alive_units,
                     guard_units: spawner.guard_units,
                     free_spawn_interval_ticks: spawner.free_spawn_interval_ticks,
+                    free_spawn_retry_ticks: spawner.free_spawn_retry_ticks,
                     unit_spawn_pollution_cost_milli: spawner.unit_spawn_pollution_cost_milli,
                     pollution_absorption_per_tick_milli: spawner
                         .pollution_absorption_per_tick_milli,

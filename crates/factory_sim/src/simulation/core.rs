@@ -795,6 +795,30 @@ mod construction_tests {
     }
 
     #[test]
+    fn construction_rejects_guard_retry_not_shorter_than_success_interval() {
+        let mut catalog = PrototypeCatalog::load_base().unwrap();
+        let spawner = catalog
+            .entities_mut()
+            .iter_mut()
+            .find_map(|prototype| prototype.enemy_spawner.as_mut())
+            .expect("base catalog should contain an enemy spawner");
+        spawner.free_spawn_retry_ticks = spawner.free_spawn_interval_ticks;
+        let prototype_id = catalog
+            .entities()
+            .iter()
+            .find(|prototype| prototype.enemy_spawner.is_some())
+            .expect("base catalog should contain an enemy spawner")
+            .id;
+
+        assert!(matches!(
+            Simulation::new(1, catalog),
+            Err(SimulationCreationError::InvalidCatalog(
+                SimValidationError::InvalidCatalogEntityPrototype { prototype_id: invalid }
+            )) if invalid == prototype_id
+        ));
+    }
+
+    #[test]
     fn construction_reports_missing_required_prototype_before_incidental_references() {
         let mut catalog = PrototypeCatalog::load_base().unwrap();
         let iron_ore = catalog

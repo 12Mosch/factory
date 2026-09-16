@@ -534,15 +534,14 @@ fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
 fn blocked_guard_spawn_retries_before_success_cooldown() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
-    let normal_interval = u64::from(
-        sim.world.prototypes.entities()[sim.entities.placed_entities[&spawner_id]
-            .prototype_id
-            .index()]
-        .enemy_spawner
-        .as_ref()
-        .expect("test spawner should define guard spawning")
-        .free_spawn_interval_ticks,
-    );
+    let spawner_config = sim.world.prototypes.entities()[sim.entities.placed_entities[&spawner_id]
+        .prototype_id
+        .index()]
+    .enemy_spawner
+    .as_ref()
+    .expect("test spawner should define guard spawning");
+    let normal_interval = u64::from(spawner_config.free_spawn_interval_ticks);
+    let retry_interval = u64::from(spawner_config.free_spawn_retry_ticks);
     sim.entities
         .enemy_spawners
         .get_mut(&spawner_id)
@@ -555,10 +554,12 @@ fn blocked_guard_spawn_retries_before_success_cooldown() {
 
     assert!(sim.enemies().is_empty());
     let retry_tick = sim.entities.enemy_spawners[&spawner_id].next_free_spawn_tick;
-    assert!(
-        retry_tick > failed_tick && retry_tick < failed_tick + normal_interval,
-        "failed placement should receive a bounded retry before the success cooldown"
+    assert_eq!(
+        retry_tick,
+        failed_tick + retry_interval,
+        "failed placement should receive the configured short retry"
     );
+    assert!(retry_interval < normal_interval);
 
     sim.entities.occupancy.occupied_tiles.remove(&freed_tile);
     sim.tick = retry_tick - 1;
