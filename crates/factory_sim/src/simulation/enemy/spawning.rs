@@ -10,7 +10,6 @@ struct SpawnRequest {
     unit: UnitPrototype,
     mission: EnemyMission,
     attack_budget_cost_micro: u64,
-    retry_ticks_on_failure: Option<u32>,
 }
 
 /// Reusable, runtime-only aggregation storage for enemy spawning. Hash-table
@@ -166,7 +165,6 @@ impl Simulation {
                         unit: spawner_config.unit,
                         mission: EnemyMission::Guard,
                         attack_budget_cost_micro: 0,
-                        retry_ticks_on_failure: Some(spawner_config.free_spawn_retry_ticks),
                     });
                     *projected_alive += 1;
                 }
@@ -267,7 +265,6 @@ impl Simulation {
                         unit,
                         mission: EnemyMission::Staging(base_id),
                         attack_budget_cost_micro: cost,
-                        retry_ticks_on_failure: None,
                     });
                     *self
                         .enemy_spawning_scratch
@@ -309,12 +306,22 @@ impl Simulation {
                         .expect("a successful staged spawn must retain its base");
                     base.attack_budget_micro -= request.attack_budget_cost_micro;
                 }
-            } else if let Some(retry_ticks) = request.retry_ticks_on_failure {
+            } else if request.mission == EnemyMission::Guard {
                 // Guard requests provisionally receive the normal cooldown
                 // when queued. Replace it with a bounded backoff when the
                 // actual placement fails, so transient blockage recovers
                 // promptly without causing a spawn attempt every tick.
-                if let Some(state) = self.entities.enemy_spawners.get_mut(&request.spawner_id) {
+                let retry_ticks = self
+                    .entities
+                    .placed_entities
+                    .get(&request.spawner_id)
+                    .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+                    .and_then(|prototype| prototype.enemy_spawner.as_ref())
+                    .map(|spawner| spawner.free_spawn_retry_ticks);
+                if let (Some(retry_ticks), Some(state)) = (
+                    retry_ticks,
+                    self.entities.enemy_spawners.get_mut(&request.spawner_id),
+                ) {
                     state.next_free_spawn_tick = self.tick.saturating_add(u64::from(retry_ticks));
                 }
             }
