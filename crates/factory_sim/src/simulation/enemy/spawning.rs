@@ -1,6 +1,10 @@
 use super::*;
 
 const SPAWN_SEARCH_RINGS: i64 = 3;
+/// Short, deterministic backoff after a due free guard cannot be placed.
+/// This avoids retrying every tick without consuming the full success
+/// cooldown for a temporary obstruction.
+const FAILED_GUARD_SPAWN_RETRY_TICKS: u64 = 60;
 
 type ScratchMap<K, V> = HashMap<K, V, BuildHasherDefault<StableHasher>>;
 
@@ -283,15 +287,13 @@ impl Simulation {
             // spawn so the re-check is a HashMap lookup plus one comparison,
             // not another full scan of every enemy.
             let mut alive = self.maintained_spawner_alive(request.spawner_id);
-            if self
-                .spawn_enemy_near_spawner(
-                    request.spawner_id,
-                    &request.unit,
-                    request.mission,
-                    &mut alive,
-                )
-                .is_ok()
-            {
+            let spawn_result = self.spawn_enemy_near_spawner(
+                request.spawner_id,
+                &request.unit,
+                request.mission,
+                &mut alive,
+            );
+            if spawn_result.is_ok() {
                 // Keep the tick-start aggregation authoritative for the rest
                 // of this batch (and the expansion dispatch below).
                 self.enemy_spawning_scratch
@@ -307,6 +309,15 @@ impl Simulation {
                         .get_mut(&base_id)
                         .expect("a successful staged spawn must retain its base");
                     base.attack_budget_micro -= request.attack_budget_cost_micro;
+                }
+            } else if request.mission == EnemyMission::Guard {
+                // Guard requests provisionally receive the normal cooldown
+                // when queued. Replace it with a bounded backoff when the
+                // actual placement fails, so transient blockage recovers
+                // promptly without causing a spawn attempt every tick.
+                if let Some(state) = self.entities.enemy_spawners.get_mut(&request.spawner_id) {
+                    state.next_free_spawn_tick =
+                        self.tick.saturating_add(FAILED_GUARD_SPAWN_RETRY_TICKS);
                 }
             }
         }

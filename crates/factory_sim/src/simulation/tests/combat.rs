@@ -508,11 +508,6 @@ fn enemy_map_revision_changes_only_on_first_pollution_contact() {
 fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
     let mut sim = Simulation::new_test_world(123);
     let spawner_id = place_biter_spawner(&mut sim);
-    let footprint = sim
-        .entities
-        .placed_entity(spawner_id)
-        .expect("spawner should be placed")
-        .footprint;
     let attack_cost = spawner_attack_cost(&sim, spawner_id);
     let base_id = sim.enemies.spawner_bases[&spawner_id];
     sim.enemies
@@ -521,17 +516,7 @@ fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
         .unwrap()
         .attack_budget_micro = attack_cost;
 
-    // Occupy every tile the spawner's deterministic three-ring search can
-    // inspect. Reusing the spawner ID is sufficient for this placement-only
-    // regression and avoids adding unrelated simulation entities.
-    for y in footprint.y - 3..footprint.y + i64::from(footprint.height) + 3 {
-        for x in footprint.x - 3..footprint.x + i64::from(footprint.width) + 3 {
-            sim.entities
-                .occupancy
-                .occupied_tiles
-                .insert((x, y), spawner_id);
-        }
-    }
+    block_spawner_spawn_area(&mut sim, spawner_id);
 
     sim.advance_enemy_spawners();
 
@@ -542,6 +527,59 @@ fn blocked_spawner_preserves_attack_budget_when_enemy_spawn_fails() {
     assert_eq!(
         sim.enemies.bases[&base_id].attack_budget_micro, attack_cost,
         "failed placement must not consume the colony's attack budget"
+    );
+}
+
+#[test]
+fn blocked_guard_spawn_retries_before_success_cooldown() {
+    let mut sim = Simulation::new_test_world(123);
+    let spawner_id = place_biter_spawner(&mut sim);
+    let normal_interval = u64::from(
+        sim.world.prototypes.entities()[sim.entities.placed_entities[&spawner_id]
+            .prototype_id
+            .index()]
+        .enemy_spawner
+        .as_ref()
+        .expect("test spawner should define guard spawning")
+        .free_spawn_interval_ticks,
+    );
+    sim.entities
+        .enemy_spawners
+        .get_mut(&spawner_id)
+        .expect("spawner should track guard timing")
+        .next_free_spawn_tick = sim.tick;
+    let freed_tile = block_spawner_spawn_area(&mut sim, spawner_id);
+    let failed_tick = sim.tick;
+
+    sim.advance_enemy_spawners();
+
+    assert!(sim.enemies().is_empty());
+    let retry_tick = sim.entities.enemy_spawners[&spawner_id].next_free_spawn_tick;
+    assert!(
+        retry_tick > failed_tick && retry_tick < failed_tick + normal_interval,
+        "failed placement should receive a bounded retry before the success cooldown"
+    );
+
+    sim.entities.occupancy.occupied_tiles.remove(&freed_tile);
+    sim.tick = retry_tick - 1;
+    sim.advance_enemy_spawners();
+    assert!(
+        sim.enemies().is_empty(),
+        "a blocked spawner must not retry every tick"
+    );
+    assert_eq!(
+        sim.entities.enemy_spawners[&spawner_id].next_free_spawn_tick,
+        retry_tick
+    );
+
+    sim.tick = retry_tick;
+    sim.advance_enemy_spawners();
+
+    assert_eq!(sim.enemies().len(), 1);
+    assert_eq!(
+        sim.entities.enemy_spawners[&spawner_id].next_free_spawn_tick,
+        retry_tick + normal_interval,
+        "a successful retry should restore the normal guard cooldown"
     );
 }
 
@@ -867,6 +905,37 @@ fn alive_for_spawner(sim: &Simulation, spawner_id: EntityId) -> usize {
         .count()
 }
 
+/// Occupies the complete deterministic spawn search around a spawner and
+/// returns one walkable first-ring tile that can later be freed.
+fn block_spawner_spawn_area(
+    sim: &mut Simulation,
+    spawner_id: EntityId,
+) -> (WorldTileCoord, WorldTileCoord) {
+    let footprint = sim
+        .entities
+        .placed_entity(spawner_id)
+        .expect("spawner should be placed")
+        .footprint;
+    let freed_tile = (footprint.x - 1, footprint.y - 1);
+    assert!(
+        sim.world
+            .tile_at(freed_tile.0, freed_tile.1)
+            .is_some_and(|tile| tile.collision.walkable),
+        "test fixture needs a walkable tile to unblock"
+    );
+    // Reusing the spawner ID is sufficient for this placement-only fixture
+    // and avoids adding unrelated simulation entities.
+    for y in footprint.y - 3..footprint.y + i64::from(footprint.height) + 3 {
+        for x in footprint.x - 3..footprint.x + i64::from(footprint.width) + 3 {
+            sim.entities
+                .occupancy
+                .occupied_tiles
+                .insert((x, y), spawner_id);
+        }
+    }
+    freed_tile
+}
+
 /// Retry deadline tuning for a due colony.
 fn expansion_retry_ticks(sim: &Simulation) -> u64 {
     u64::from(
@@ -966,6 +1035,59 @@ fn saturated_colony_defers_expansion_to_retry_ticks() {
         sim.enemies.bases[&base_id].next_expansion_tick,
         tick + retry,
         "a saturated dispatch must defer to the retry deadline"
+    );
+}
+
+#[test]
+fn blocked_expansion_retries_then_uses_success_cooldown() {
+    let mut sim = Simulation::new_test_world(123);
+    let (base_id, spawners) = colony_with_three_spawners(&mut sim);
+    for &spawner_id in &spawners {
+        sim.entities
+            .enemy_spawners
+            .get_mut(&spawner_id)
+            .expect("colony spawner should track guard timing")
+            .next_free_spawn_tick = u64::MAX;
+    }
+    let source = *sim.enemies.bases[&base_id]
+        .spawners
+        .iter()
+        .next()
+        .expect("colony should have an expansion source");
+    let freed_tile = block_spawner_spawn_area(&mut sim, source);
+    arm_expansion_due(&mut sim, base_id);
+    let cfg = *sim
+        .gameplay()
+        .expect("the catalog should tune enemy expansion");
+    let retry_tick = sim.tick + u64::from(cfg.expansion_retry_ticks);
+
+    sim.advance_enemy_spawners();
+
+    assert!(sim.enemies.expansions.is_empty());
+    assert_eq!(
+        sim.enemies.bases[&base_id].next_expansion_tick, retry_tick,
+        "failed expansion placement should use the retry deadline"
+    );
+
+    sim.entities.occupancy.occupied_tiles.remove(&freed_tile);
+    sim.tick = retry_tick - 1;
+    sim.advance_enemy_spawners();
+    assert!(
+        sim.enemies.expansions.is_empty(),
+        "a blocked colony must not retry expansion every tick"
+    );
+
+    sim.tick = retry_tick;
+    sim.advance_enemy_spawners();
+
+    assert_eq!(sim.enemies.expansions.len(), 1);
+    let expected_success_tick = retry_tick
+        + (u64::from(cfg.expansion_interval_ticks) * 100)
+            .div_ceil(u64::from(sim.config.runtime.expansion_frequency_percent))
+            .max(1);
+    assert_eq!(
+        sim.enemies.bases[&base_id].next_expansion_tick, expected_success_tick,
+        "a successful retry should restore the normal expansion cooldown"
     );
 }
 
