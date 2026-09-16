@@ -461,13 +461,6 @@ fn step_enemy(
         follow_path(world, entities, enemy, None);
         return;
     }
-    if context
-        .navigation
-        .long_range_detour(enemy.id)
-        .is_some_and(|detour| Some(detour.target) != enemy.target)
-    {
-        context.navigation.clear_long_range_detour(enemy.id);
-    }
     // Drop targets that no longer exist.
     if let Some(target) = enemy.target
         && !entities.placed_entities.contains_key(&target)
@@ -490,6 +483,18 @@ fn step_enemy(
         } else {
             enemy.next_decision_tick = tick + ENEMY_TARGET_RESCAN_TICKS + enemy.id.raw() % 16;
         }
+    }
+
+    // Validate retained detours after a missing target can be dropped and a
+    // replacement acquired in this same call. A path planned from the old
+    // detour is stale too, so both pieces of navigation state must go.
+    if context
+        .navigation
+        .long_range_detour(enemy.id)
+        .is_some_and(|detour| Some(detour.target) != enemy.target)
+    {
+        context.navigation.clear_long_range_detour(enemy.id);
+        enemy.path.clear();
     }
 
     let Some(target) = enemy.target else {
@@ -978,7 +983,7 @@ mod movement_regression_tests {
         (WorldTileCoord, WorldTileCoord),
         (WorldTileCoord, WorldTileCoord),
     ) {
-        const MIN_DX: i64 = -12;
+        const MIN_DX: i64 = -54;
         const MAX_DX: i64 = 54;
         const HALF_HEIGHT: i64 = 20;
         const WALL_HALF_HEIGHT: i64 = 16;
@@ -1547,6 +1552,64 @@ mod movement_regression_tests {
             enemy.next_decision_tick,
             enemy.path
         );
+    }
+
+    #[test]
+    fn replacement_target_does_not_inherit_removed_targets_detour() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, old_destination) = long_corridor_with_tall_wall(&mut sim);
+        let new_destination = (start.0 - 50, start.1);
+        let old_target = place_chest_at(&mut sim, old_destination);
+        let new_target = place_chest_at(&mut sim, new_destination);
+        crate::entity_mutation::remove(&mut sim, old_target)
+            .expect("the old target should be removable");
+
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.mode = EnemyMode::Attack;
+        enemy.target = Some(old_target);
+        let before = (enemy.x, enemy.y);
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+        navigation.set_long_range_detour(
+            enemy.id,
+            LongRangeDetour {
+                target: old_target,
+                forward: Direction::East,
+                heading: Direction::North,
+                wall_on_clockwise_side: true,
+                hit_distance: 50,
+            },
+        );
+        let mut attack_targets = AttackTargetCache::default();
+        attack_targets.rebuild_index(&sim.world, &sim.entities);
+        let mut context = EnemyStepContext {
+            world: &sim.world,
+            entities: &sim.entities,
+            attack_targets: &mut attack_targets,
+            navigation: &mut navigation,
+            seed: sim.world.seed,
+            tick: sim.tick,
+        };
+
+        step_enemy(
+            &mut context,
+            &mut enemy,
+            &mut CombatCommandBuffer::default(),
+        );
+
+        assert_eq!(enemy.target, Some(new_target));
+        assert!(
+            enemy.x < before.0 && enemy.y == before.1,
+            "the replacement target is west, so no east-facing detour state may survive"
+        );
+        assert!(
+            enemy
+                .path
+                .front()
+                .is_some_and(|step| *step == (start.0 - 1, start.1)),
+            "the generated path must belong to the replacement target"
+        );
+        assert!(navigation.long_range_detour(enemy.id).is_none());
     }
 
     #[test]
