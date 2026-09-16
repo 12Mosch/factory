@@ -278,21 +278,18 @@ where
                 .map(Box::as_mut)
                 .expect("direct paged-index page should exist after pooling");
         }
-        // Single hash probe via the entry API. The pooled box is popped
-        // before the lookup (and pushed back when the page already exists)
-        // because `pooled_page` needs `&mut self` while the entry holds its
-        // own borrow.
-        let vacant = self.vacant;
-        let spare = self.page_pool.pop();
+        // Single hash probe via the entry API. The pool is only touched in
+        // the vacant branch: borrowing `sparse_pages` and `page_pool` as
+        // disjoint fields lets the entry borrow coexist with the pop, so
+        // writes into an existing sparse page pay no pool churn.
         match self.sparse_pages.entry(page_id) {
-            Entry::Occupied(entry) => {
-                if let Some(page) = spare {
-                    self.page_pool.push(page);
-                }
-                entry.into_mut().as_mut()
-            }
+            Entry::Occupied(entry) => entry.into_mut().as_mut(),
             Entry::Vacant(entry) => {
-                let mut page = spare.unwrap_or_else(|| Box::new([vacant; PAGE_SIZE]));
+                let vacant = self.vacant;
+                let mut page = match self.page_pool.pop() {
+                    Some(page) => page,
+                    None => Box::new([vacant; PAGE_SIZE]),
+                };
                 // Pooled boxes may hold stale values, so every reuse refills
                 // them; fresh boxes already read vacant.
                 page.fill(vacant);
