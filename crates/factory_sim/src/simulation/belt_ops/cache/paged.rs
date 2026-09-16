@@ -177,109 +177,75 @@ impl Default for EntityItemRevisionMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paged_index::{MAX_DIRECT_PAGES, PAGE_SIZE};
 
-    /// High indices allocate only their own pages, not the range below them.
+    /// Page mechanics (sparse allocation, freeing empty pages, rebuild
+    /// pooling, retain, layout-independent equality) are covered once by the
+    /// shared primitive's tests; these cover wrapper-specific semantics:
+    /// `usize` adaptation, the lane-slot sentinel, and the serde contract
+    /// that transport persistence relies on.
+
     #[test]
-    fn sparse_high_indices_allocate_only_their_pages() {
+    fn slot_map_adapts_usize_keys_with_lane_sentinel_default() {
         let mut map = TransportLaneSlotMap::default();
+        let sparse = 10_000_000 * 4 + 1;
         map.insert(3, 7);
-        map.insert(10_000_000 * 4 + 1, 9);
+        map.insert(sparse, 9);
 
         assert_eq!(map.get(3), Some(7));
-        assert_eq!(map.get(10_000_000 * 4 + 1), Some(9));
+        assert_eq!(map.get(sparse), Some(9));
         assert_eq!(map.get(4), None);
-        assert_eq!(map.inner.allocated_pages(), 2);
-        // Two page payloads plus small directory buffers.
-        assert!(map.storage_bytes() >= 2 * PAGE_SIZE * 4);
-        assert!(map.storage_bytes() < 2 * PAGE_SIZE * 4 + 4096);
-    }
-
-    /// Removing the last entry of a page frees the page itself.
-    #[test]
-    fn removing_last_entry_frees_its_page() {
-        let mut map = TransportLaneSlotMap::default();
-        let high = u64::from(MAX_DIRECT_PAGES as u32) * PAGE_SIZE as u64 + 5;
-        map.insert(0, 1);
-        map.insert(high as usize, 2);
-        assert_eq!(map.inner.allocated_pages(), 2);
-
-        assert_eq!(map.remove(high as usize), Some(2));
-        assert_eq!(map.get(high as usize), None);
-        assert_eq!(map.inner.allocated_pages(), 1);
-
-        assert_eq!(map.remove(0), Some(1));
-        assert_eq!(map.inner.allocated_pages(), 0);
-        assert_eq!(map, TransportLaneSlotMap::default());
-    }
-
-    /// `retain` drops rejected indices and frees pages left empty, including
-    /// sparse hash-backed pages.
-    #[test]
-    fn revision_retain_drops_rejected_indices() {
-        let mut map = EntityItemRevisionMap::default();
-        map.set(EntityId::new(7), 3);
-        map.set(EntityId::new(261), 5);
-        map.set(EntityId::new(1_100_000), 9);
-
-        map.inner.retain(|raw| raw != 261);
-
-        assert_eq!(map.revision(EntityId::new(7)), 3);
-        assert_eq!(map.revision(EntityId::new(261)), 0);
-        assert_eq!(map.revision(EntityId::new(1_100_000)), 9);
-        // The surviving low page stays allocated while the emptied pages are
-        // gone entirely.
-        assert_eq!(map.inner.allocated_pages(), 2);
-    }
-
-    /// A rebuild parks live pages, reuses the ones it still needs, and drops
-    /// the unneeded remainder when it completes, so the pool never outlives
-    /// the rebuild it served.
-    #[test]
-    fn rebuild_scope_reuses_pages_then_drops_remainder() {
-        let mut map = TransportLaneSlotMap::default();
-        map.insert(3, 7);
-        map.insert(900_000, 9);
-        assert_eq!(map.inner.allocated_pages(), 2);
-
-        map.begin_rebuild();
+        assert_eq!(map.remove(3), Some(7));
         assert_eq!(map.get(3), None);
-        assert_eq!(map.inner.allocated_pages(), 0);
-        assert_eq!(map.inner.pooled_pages(), 2);
-
-        map.insert(300, 11);
-        assert_eq!(map.get(300), Some(11));
-        assert_eq!(map.inner.pooled_pages(), 1);
-        assert_eq!(map.inner.allocated_pages(), 1);
-
-        map.end_rebuild();
-        assert_eq!(map.inner.pooled_pages(), 0);
-        assert_eq!(map.get(300), Some(11));
+        assert_eq!(map, {
+            let mut expected = TransportLaneSlotMap::default();
+            expected.insert(sparse, 9);
+            expected
+        });
     }
 
-    /// Equal contents compare and hash equally regardless of page layout or
-    /// pooled boxes.
     #[test]
-    fn equal_contents_compare_equal_regardless_of_page_layout() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+    fn slot_map_serde_round_trip_preserves_logical_mappings() {
+        let mut map = TransportLaneSlotMap::default();
+        // Insert out of order across direct and sparse pages; the serialized
+        // form must be the canonical ascending mapping.
+        map.insert(10_000_000 * 4 + 1, 9);
+        map.insert(3, 7);
 
-        let mut first = TransportLaneSlotMap::default();
-        first.insert(1, 10);
-        first.insert(900_000, 20);
-        first.remove(1);
-        first.insert(1, 10);
+        assert_eq!(map.occupied_entries(), [(3, 7), (10_000_000 * 4 + 1, 9)]);
 
-        let mut second = TransportLaneSlotMap::default();
-        second.insert(900_000, 20);
-        second.insert(1, 10);
+        let bytes = bincode::serialize(&map).expect("slot map should serialize");
+        let restored: TransportLaneSlotMap =
+            bincode::deserialize(&bytes).expect("slot map should deserialize");
+        assert_eq!(restored, map);
+        assert_eq!(restored.get(3), Some(7));
+        assert_eq!(restored.get(10_000_000 * 4 + 1), Some(9));
+    }
 
-        assert_eq!(first, second);
-        let hash = |map: &TransportLaneSlotMap| {
-            let mut hasher = DefaultHasher::new();
-            map.hash(&mut hasher);
-            hasher.finish()
-        };
-        assert_eq!(hash(&first), hash(&second));
+    #[test]
+    fn slot_map_deserialize_rejects_duplicate_or_vacant_mappings() {
+        for entries in [vec![(3_u64, 7_u32), (3, 8)], vec![(3_u64, VACANT_SLOT)]] {
+            let bytes = bincode::serialize(&entries).expect("entries should serialize");
+            assert!(
+                bincode::deserialize::<TransportLaneSlotMap>(&bytes).is_err(),
+                "entries {entries:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn revision_map_tracks_entity_tokens_with_zero_default() {
+        let mut map = EntityItemRevisionMap::default();
+        let low = EntityId::new(7);
+        let sparse = EntityId::new(1_100_000);
+
+        assert_eq!(map.revision(low), 0);
+        map.set(low, 3);
+        map.set(sparse, 9);
+        assert_eq!(map.revision(low), 3);
+        assert_eq!(map.revision(sparse), 9);
+
+        map.remove(low);
+        assert_eq!(map.revision(low), 0);
+        assert_eq!(map.revision(sparse), 9);
     }
 }

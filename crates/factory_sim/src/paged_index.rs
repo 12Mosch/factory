@@ -24,22 +24,24 @@
 //! completes.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 
 /// Bits addressing one page: page id is `index >> PAGE_BITS`.
-pub const PAGE_BITS: u32 = 8;
+pub(crate) const PAGE_BITS: u32 = 8;
 /// Number of values per page.
-pub const PAGE_SIZE: usize = 1 << PAGE_BITS;
+pub(crate) const PAGE_SIZE: usize = 1 << PAGE_BITS;
 /// Direct pages below this count live in a vector; higher pages live in a
 /// hash map so sparse high indices allocate only their own pages.
-pub const MAX_DIRECT_PAGES: usize = 4_096;
+pub(crate) const MAX_DIRECT_PAGES: usize = 4_096;
 /// Conservative heap estimate per sparse-map bucket: key, value pointer, and
 /// table overhead. Used only by test storage accounting.
+#[cfg(test)]
 const SPARSE_MAP_BYTES_PER_BUCKET: usize = 8 + 8 + 8;
 
 /// Splits a raw index into its page id and offset within the page.
 #[inline]
-pub fn split_index(index: u64) -> (u64, usize) {
+fn split_index(index: u64) -> (u64, usize) {
     (
         index >> PAGE_BITS,
         (index & (PAGE_SIZE as u64 - 1)) as usize,
@@ -52,10 +54,14 @@ pub fn split_index(index: u64) -> (u64, usize) {
 /// high indices cost their own pages rather than every index below them.
 /// Vacancy is represented as `None` at every public boundary; the vacant
 /// value itself is never stored.
+///
+/// `T` must be reflexive (`Eq`): vacancy is decided by `value == vacant`, so
+/// a non-reflexive sentinel such as `f32::NAN` would report freshly
+/// initialized vacant slots as occupied.
 #[derive(Clone)]
 pub struct PagedIndex<T>
 where
-    T: Copy + PartialEq,
+    T: Copy + Eq,
 {
     vacant: T,
     direct_pages: Vec<Option<Box<[T; PAGE_SIZE]>>>,
@@ -71,7 +77,7 @@ where
 
 impl<T> PagedIndex<T>
 where
-    T: Copy + PartialEq,
+    T: Copy + Eq,
 {
     /// Creates an empty index whose missing entries read as `vacant`.
     pub fn new(vacant: T) -> Self {
@@ -83,23 +89,11 @@ where
         }
     }
 
-    /// Returns the vacant sentinel for this index.
-    #[inline]
-    pub fn vacant(&self) -> T {
-        self.vacant
-    }
-
     /// Returns the stored value, or `None` when the index is vacant.
     #[inline]
     pub fn get(&self, index: u64) -> Option<T> {
         let value = self.page(index)?[split_index(index).1];
         (value != self.vacant).then_some(value)
-    }
-
-    /// Returns `true` when the index holds a non-vacant value.
-    #[inline]
-    pub fn contains(&self, index: u64) -> bool {
-        self.get(index).is_some()
     }
 
     /// Stores `value`, allocating its page on first write. A vacant value
@@ -150,7 +144,7 @@ where
     /// Resets every live entry to vacant while retaining all allocated
     /// pages, and drops pooled pages. Lets dense maps clear without
     /// releasing (and reallocating) their page footprint.
-    pub fn clear_values(&mut self) {
+    pub(crate) fn clear_values(&mut self) {
         let vacant = self.vacant;
         for page in self.direct_pages.iter_mut().flatten() {
             page.fill(vacant);
@@ -168,7 +162,7 @@ where
     /// population must not leave bucket capacity proportional to its peak
     /// after the live set shrinks. Must be paired with
     /// [`PagedIndex::end_rebuild`].
-    pub fn begin_rebuild(&mut self) {
+    pub(crate) fn begin_rebuild(&mut self) {
         debug_assert!(
             self.page_pool.is_empty(),
             "paged index rebuilds must not nest"
@@ -183,7 +177,7 @@ where
     /// Drops pooled pages the rebuild did not reuse, so the pool never
     /// outlives the rebuild it served. Call once the rebuild has assigned
     /// every live entry.
-    pub fn end_rebuild(&mut self) {
+    pub(crate) fn end_rebuild(&mut self) {
         self.page_pool = Vec::new();
     }
 
@@ -192,7 +186,7 @@ where
     /// buckets track the live set rather than the pruned peak. Removal order
     /// does not affect the outcome, so hash-map iteration order cannot leak
     /// into caller behavior.
-    pub fn retain(&mut self, mut keep: impl FnMut(u64) -> bool) {
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(u64) -> bool) {
         for (page_number, slot) in self.direct_pages.iter_mut().enumerate() {
             let Some(page) = slot else {
                 continue;
@@ -284,14 +278,27 @@ where
                 .map(Box::as_mut)
                 .expect("direct paged-index page should exist after pooling");
         }
-        if !self.sparse_pages.contains_key(&page_id) {
-            let page = self.pooled_page();
-            self.sparse_pages.insert(page_id, page);
+        // Single hash probe via the entry API. The pooled box is popped
+        // before the lookup (and pushed back when the page already exists)
+        // because `pooled_page` needs `&mut self` while the entry holds its
+        // own borrow.
+        let vacant = self.vacant;
+        let spare = self.page_pool.pop();
+        match self.sparse_pages.entry(page_id) {
+            Entry::Occupied(entry) => {
+                if let Some(page) = spare {
+                    self.page_pool.push(page);
+                }
+                entry.into_mut().as_mut()
+            }
+            Entry::Vacant(entry) => {
+                let mut page = spare.unwrap_or_else(|| Box::new([vacant; PAGE_SIZE]));
+                // Pooled boxes may hold stale values, so every reuse refills
+                // them; fresh boxes already read vacant.
+                page.fill(vacant);
+                entry.insert(page).as_mut()
+            }
         }
-        self.sparse_pages
-            .get_mut(&page_id)
-            .map(Box::as_mut)
-            .expect("sparse paged-index page should exist after pooling")
     }
 
     /// Pops a retained box, resetting it to vacant, or allocates a fresh one.
@@ -315,9 +322,10 @@ where
         }
     }
 
-    /// Occupied entries in ascending index order. Used only for equality,
-    /// hashing, and debug output, so the allocation never touches hot paths.
-    pub fn occupied_entries(&self) -> Vec<(u64, T)> {
+    /// Occupied entries in ascending index order. Used for equality,
+    /// hashing, debug output, and deterministic serialization, so the
+    /// allocation never touches hot paths.
+    pub(crate) fn occupied_entries(&self) -> Vec<(u64, T)> {
         let mut entries = Vec::new();
         for (page_number, slot) in self.direct_pages.iter().enumerate() {
             let Some(page) = slot else {
@@ -344,7 +352,8 @@ where
     }
 
     /// Counts allocated (non-pooled) value pages.
-    pub fn allocated_pages(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn allocated_pages(&self) -> usize {
         self.direct_pages
             .iter()
             .filter(|slot| slot.is_some())
@@ -353,7 +362,8 @@ where
     }
 
     /// Counts allocated pages in the direct vector.
-    pub fn direct_allocated_pages(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn direct_allocated_pages(&self) -> usize {
         self.direct_pages
             .iter()
             .filter(|slot| slot.is_some())
@@ -361,12 +371,14 @@ where
     }
 
     /// Counts allocated pages in the sparse directory.
-    pub fn sparse_allocated_pages(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn sparse_allocated_pages(&self) -> usize {
         self.sparse_pages.len()
     }
 
     /// Counts pooled pages parked for the active rebuild.
-    pub fn pooled_pages(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn pooled_pages(&self) -> usize {
         self.page_pool.len()
     }
 
@@ -374,7 +386,8 @@ where
     /// plus the page-directory buffers (direct vector, sparse-map buckets,
     /// and pool vector). Sparse buckets use a conservative per-bucket
     /// estimate, so the total may slightly overstate rather than understate.
-    pub fn storage_bytes(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn storage_bytes(&self) -> usize {
         let payload =
             (self.allocated_pages() + self.page_pool.len()) * PAGE_SIZE * std::mem::size_of::<T>();
         let directory = self.direct_pages.capacity()
@@ -390,7 +403,7 @@ where
 
 impl<T> PartialEq for PagedIndex<T>
 where
-    T: Copy + PartialEq,
+    T: Copy + Eq,
 {
     /// Compares logical contents only: pooled boxes and page layout do not
     /// affect equality.
@@ -399,11 +412,11 @@ where
     }
 }
 
-impl<T> Eq for PagedIndex<T> where T: Copy + PartialEq + Eq {}
+impl<T> Eq for PagedIndex<T> where T: Copy + Eq {}
 
 impl<T> Hash for PagedIndex<T>
 where
-    T: Copy + PartialEq + Hash,
+    T: Copy + Eq + Hash,
 {
     /// Hashes the logical contents in index order so equal indexes hash
     /// equally regardless of page layout, pool contents, or hash-map
@@ -419,7 +432,7 @@ where
 
 impl<T> std::fmt::Debug for PagedIndex<T>
 where
-    T: Copy + PartialEq + std::fmt::Debug,
+    T: Copy + Eq + std::fmt::Debug,
 {
     /// Prints logical contents only; pooled boxes are omitted.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -446,6 +459,9 @@ mod tests {
         assert_eq!(index.allocated_pages(), 2);
         assert_eq!(index.direct_allocated_pages(), 1);
         assert_eq!(index.sparse_allocated_pages(), 1);
+        // Two page payloads plus small directory buffers.
+        assert!(index.storage_bytes() >= 2 * PAGE_SIZE * 4);
+        assert!(index.storage_bytes() < 2 * PAGE_SIZE * 4 + 4096);
     }
 
     #[test]
@@ -466,14 +482,13 @@ mod tests {
     }
 
     #[test]
-    fn contains_tracks_occupancy_without_storing_vacant() {
+    fn vacant_slots_read_as_none_without_storing() {
         let mut index = PagedIndex::new(0_u64);
-        assert!(!index.contains(9));
-        assert_eq!(index.vacant(), 0);
+        assert_eq!(index.get(9), None);
         index.insert(9, 4);
-        assert!(index.contains(9));
+        assert_eq!(index.get(9), Some(4));
         assert_eq!(index.remove(9), Some(4));
-        assert!(!index.contains(9));
+        assert_eq!(index.get(9), None);
         assert_eq!(index.allocated_pages(), 0);
     }
 
