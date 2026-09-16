@@ -221,24 +221,24 @@ enum ExpansionRoute {
     Wait,
 }
 
-/// Deterministic intermediate goal for long-distance expansion travel: the
-/// destination clamped into the search window around `from`. Keeps every
-/// search inside the existing range instead of running a 200+ tile A*.
-fn expansion_intermediate_goal(
+/// Deterministic intermediate goal for long-distance travel: the destination
+/// clamped into the search window around `from`. Keeps every search inside
+/// the existing range instead of running a 200+ tile A*.
+fn bounded_intermediate_goal(
     from: (WorldTileCoord, WorldTileCoord),
     destination: (WorldTileCoord, WorldTileCoord),
 ) -> (WorldTileCoord, WorldTileCoord) {
     (
         from.0
-            + (destination.0.saturating_sub(from.0)).clamp(
+            .saturating_add((destination.0.saturating_sub(from.0)).clamp(
                 -ENEMY_PATHFIND_MAX_RANGE_TILES,
                 ENEMY_PATHFIND_MAX_RANGE_TILES,
-            ),
+            )),
         from.1
-            + (destination.1.saturating_sub(from.1)).clamp(
+            .saturating_add((destination.1.saturating_sub(from.1)).clamp(
                 -ENEMY_PATHFIND_MAX_RANGE_TILES,
                 ENEMY_PATHFIND_MAX_RANGE_TILES,
-            ),
+            )),
     )
 }
 
@@ -263,7 +263,7 @@ fn plan_expansion_move(
     let goal = if in_range {
         destination
     } else {
-        expansion_intermediate_goal(from, destination)
+        bounded_intermediate_goal(from, destination)
     };
     match navigation.request_tile_path(
         world,
@@ -400,9 +400,8 @@ fn step_enemy(
 
     if (enemy.path.is_empty() || next_waypoint_blocked) && tick >= enemy.next_decision_tick {
         enemy.path.clear();
-        if enemy_footprint(enemy).chebyshev_distance_to(&target_footprint)
-            <= ENEMY_PATHFIND_MAX_RANGE_TILES
-        {
+        let target_distance = enemy_footprint(enemy).chebyshev_distance_to(&target_footprint);
+        if target_distance <= ENEMY_PATHFIND_MAX_RANGE_TILES {
             match context.navigation.request_path(
                 world,
                 entities,
@@ -422,7 +421,42 @@ fn step_enemy(
                 PathRequest::Deferred => return,
             }
         } else {
-            enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+            // Preserve the cheap straight-line behavior in open terrain. If
+            // both distance-reducing axes are blocked by terrain, route to a
+            // bounded intermediate goal instead of retrying those same two
+            // steps forever. The request shares the global navigation budget,
+            // and a deferred request retries next tick rather than sleeping a
+            // full repath interval.
+            if greedy_step(world, entities, enemy, target, &target_footprint) {
+                enemy.next_decision_tick = tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+                return;
+            }
+            let destination = footprint_center_tile(&target_footprint);
+            let intermediate = bounded_intermediate_goal(tile, destination);
+            match context.navigation.request_tile_path(
+                world,
+                entities,
+                tile,
+                intermediate,
+                ENEMY_PATHFIND_MAX_RANGE_TILES,
+                ENEMY_PATHFIND_MAX_EXPANSIONS,
+            ) {
+                PathRequest::Ready(Some(path)) => {
+                    debug_assert!(
+                        !path.is_empty(),
+                        "a long-range intermediate goal must produce movement steps"
+                    );
+                    enemy.path = path;
+                    enemy.next_decision_tick =
+                        tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+                }
+                PathRequest::Ready(None) => {
+                    enemy.next_decision_tick =
+                        tick + ENEMY_REPATH_INTERVAL_TICKS + enemy.id.raw() % 16;
+                    return;
+                }
+                PathRequest::Deferred => return,
+            }
         }
         if enemy.path.is_empty() {
             // No route: walk straight at the target and gnaw through the
@@ -598,13 +632,14 @@ fn follow_path(
 
 /// Fallback movement when no path exists: step toward the target, and when a
 /// structure blocks the step, attack it instead (walls become chew targets).
+/// Returns whether the unit moved or selected a blocking structure.
 fn greedy_step(
     world: &WorldSim,
     entities: &EntityStore,
     enemy: &mut Enemy,
     target: EntityId,
     target_footprint: &EntityFootprint,
-) {
+) -> bool {
     let (tile_x, tile_y) = enemy.tile();
     let (goal_x, goal_y) = footprint_center_tile(target_footprint);
     let dx = goal_x - tile_x;
@@ -627,7 +662,7 @@ fn greedy_step(
         if tile_open_for_enemy(world, entities, next.0, next.1, Some(target)) {
             enemy.path.push_back(next);
             follow_path(world, entities, enemy, Some(target));
-            return;
+            return true;
         }
         // Blocked by a structure: switch targets and chew through it.
         if let Some(blocker) = entities.occupancy.entity_at(next.0, next.1)
@@ -639,9 +674,10 @@ fn greedy_step(
         {
             enemy.target = Some(blocker);
             enemy.path.clear();
-            return;
+            return true;
         }
     }
+    false
 }
 
 /// A tile a unit may stand on: generated, walkable terrain, and free of
@@ -849,6 +885,40 @@ mod movement_regression_tests {
             next_attack_tick: 0,
             next_decision_tick: 0,
         }
+    }
+
+    fn place_chest_at(sim: &mut Simulation, tile: (WorldTileCoord, WorldTileCoord)) -> EntityId {
+        let chest = sim
+            .world
+            .prototypes
+            .entities()
+            .iter()
+            .find(|prototype| prototype.name == "chest")
+            .expect("base data should contain a chest")
+            .id;
+        crate::placement::place(
+            sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: chest,
+                x: tile.0,
+                y: tile.1,
+                direction: Direction::North,
+            },
+        )
+        .expect("the cleared corridor should accept a target chest")
+    }
+
+    fn step_test_enemy(sim: &Simulation, navigation: &mut EnemyNavigation, enemy: &mut Enemy) {
+        let mut attack_targets = AttackTargetCache::default();
+        let mut context = EnemyStepContext {
+            world: &sim.world,
+            entities: &sim.entities,
+            attack_targets: &mut attack_targets,
+            navigation,
+            seed: sim.world.seed,
+            tick: sim.tick,
+        };
+        step_enemy(&mut context, enemy, &mut CombatCommandBuffer::default());
     }
 
     #[test]
@@ -1152,6 +1222,123 @@ mod movement_regression_tests {
             *steps.back().expect("routing must return steps"),
             intermediate,
             "beyond range, routing heads for the intermediate goal"
+        );
+    }
+
+    #[test]
+    fn distant_combat_enemy_detours_when_greedy_steps_are_blocked() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_blocker(&mut sim);
+        let target = place_chest_at(&mut sim, destination);
+        let target_footprint = sim.entities.placed_entities[&target].footprint;
+        assert!(
+            EntityFootprint::single_tile(start.0, start.1).chebyshev_distance_to(&target_footprint)
+                > ENEMY_PATHFIND_MAX_RANGE_TILES,
+            "test target must exercise long-range navigation"
+        );
+
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.target = Some(target);
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+
+        step_test_enemy(&sim, &mut navigation, &mut enemy);
+
+        let intermediate = bounded_intermediate_goal(start, destination);
+        assert_valid_detour(&sim, start, intermediate, &enemy.path);
+        assert!(
+            !enemy.path.contains(&(start.0 + 1, start.1)),
+            "the route must avoid the flooded direct step"
+        );
+        assert!(
+            enemy.y > tile_center_fixed(start.1),
+            "the first movement must take the required lateral detour"
+        );
+
+        let mut entered_normal_pathfinding_range = false;
+        for tick in 1..=400 {
+            sim.tick = tick;
+            navigation.begin_tick(0, 0, 0);
+            step_test_enemy(&sim, &mut navigation, &mut enemy);
+            if enemy_footprint(&enemy).chebyshev_distance_to(&target_footprint)
+                <= ENEMY_PATHFIND_MAX_RANGE_TILES
+            {
+                entered_normal_pathfinding_range = true;
+                break;
+            }
+        }
+        assert!(
+            entered_normal_pathfinding_range,
+            "the detour must eventually bring the enemy into normal pathfinding range"
+        );
+    }
+
+    #[test]
+    fn unreachable_distant_combat_target_uses_bounded_search() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_blocker(&mut sim);
+        for neighbor in [
+            (start.0 - 1, start.1),
+            (start.0, start.1 - 1),
+            (start.0, start.1 + 1),
+        ] {
+            let chunk = ChunkCoord::from_tile(neighbor.0, neighbor.1)
+                .expect("neighbor should be in the chunk plane");
+            sim.ensure_chunk_generated(chunk);
+            if let Some(occupant) = sim.entities.occupancy.entity_at(neighbor.0, neighbor.1) {
+                crate::entity_mutation::remove(&mut sim, occupant)
+                    .expect("neighbor entity should be removable");
+            }
+            flood_tile(&mut sim, neighbor.0, neighbor.1);
+        }
+        let target = place_chest_at(&mut sim, destination);
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.target = Some(target);
+        let before = (enemy.x, enemy.y);
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+
+        step_test_enemy(&sim, &mut navigation, &mut enemy);
+
+        assert_eq!((enemy.x, enemy.y), before, "an enclosed unit must wait");
+        assert!(enemy.path.is_empty());
+        assert!(
+            enemy.next_decision_tick > sim.tick,
+            "retries must be throttled"
+        );
+        assert!(
+            navigation.expansions_this_tick <= ENEMY_PATHFIND_MAX_EXPANSIONS,
+            "an unreachable target must stay within the per-request budget"
+        );
+    }
+
+    #[test]
+    fn unobstructed_distant_combat_keeps_zero_cost_greedy_step() {
+        let mut sim = Simulation::new_test_world(123);
+        let (start, destination) = long_corridor_with_blocker(&mut sim);
+        let concrete = factory_data::BasePrototypeIds::from_catalog(&sim.world.prototypes)
+            .tiles
+            .concrete;
+        sim.world
+            .set_tile(start.0 + 1, start.1, concrete)
+            .expect("the synthetic blocker should accept landfill");
+        let target = place_chest_at(&mut sim, destination);
+        let mut enemy = test_enemy_at(start.0, start.1, 40);
+        enemy.target = Some(target);
+        let before_x = enemy.x;
+        let mut navigation = EnemyNavigation::default();
+        navigation.begin_tick(0, 0, 0);
+
+        step_test_enemy(&sim, &mut navigation, &mut enemy);
+
+        assert!(
+            enemy.x > before_x,
+            "the enemy should move directly toward the target"
+        );
+        assert_eq!(enemy.y, tile_center_fixed(start.1));
+        assert_eq!(
+            navigation.expansions_this_tick, 0,
+            "open long-range movement should not invoke A*"
         );
     }
 
