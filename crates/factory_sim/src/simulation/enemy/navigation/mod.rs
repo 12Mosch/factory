@@ -32,7 +32,7 @@ fn footprint_center_tile(footprint: &EntityFootprint) -> (WorldTileCoord, WorldT
     )
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct NavigationGridRevision {
     entity_topology: u64,
     world_chunks: u64,
@@ -43,36 +43,78 @@ struct NavigationGridRevision {
     world_walkability: u64,
 }
 
-/// Derived navigation state shared by all enemy units. It is omitted from
-/// saves and rebuilt deterministically from durable simulation state.
-#[derive(Clone, Debug, Default)]
+/// Durable incremental navigation work shared by enemy units. Rebuilding it
+/// consumes tick budgets, so fields and scheduling decisions must survive saves.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(in crate::simulation) struct EnemyNavigation {
     revision: Option<NavigationGridRevision>,
     raid_fields: BTreeMap<RaidId, RaidFlowField>,
     next_raid: Option<RaidId>,
+    #[serde(skip)]
     path_scratch: PathSearchScratch,
+    #[serde(skip)]
     remaining_expansions: usize,
     #[cfg(test)]
+    #[serde(skip)]
     expansions_this_tick: usize,
     #[cfg(test)]
+    #[serde(skip)]
     field_initializations_this_tick: usize,
 }
 
-// Navigation is a derived cache, so its transient work queues and retained
-// capacities do not participate in durable Simulation equality or hashing.
+// Scratch and the remaining budget reset at begin_tick; only work carried
+// across ticks participates in equality and deterministic hashing.
 impl PartialEq for EnemyNavigation {
-    fn eq(&self, _other: &Self) -> bool {
-        true
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.raid_fields == other.raid_fields
+            && self.next_raid == other.next_raid
+    }
+}
+impl Eq for EnemyNavigation {}
+impl Hash for EnemyNavigation {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.revision.hash(state);
+        self.raid_fields.hash(state);
+        self.next_raid.hash(state);
     }
 }
 
-impl Eq for EnemyNavigation {}
-
-impl Hash for EnemyNavigation {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
-
 impl EnemyNavigation {
+    /// Copies incremental navigation work while resetting per-tick scratch.
+    pub(in crate::simulation) fn clone_for_save(&self) -> Self {
+        Self {
+            revision: self.revision,
+            raid_fields: self.raid_fields.clone(),
+            next_raid: self.next_raid,
+            path_scratch: PathSearchScratch::default(),
+            remaining_expansions: 0,
+            #[cfg(test)]
+            expansions_this_tick: 0,
+            #[cfg(test)]
+            field_initializations_this_tick: 0,
+        }
+    }
+
+    /// Validates durable revisions, scheduling cursor, and every raid field.
+    pub(in crate::simulation) fn validate(
+        &self,
+        world: &WorldSim,
+    ) -> Result<(), SimValidationError> {
+        if (self.revision.is_none() && (!self.raid_fields.is_empty() || self.next_raid.is_some()))
+            || self
+                .next_raid
+                .is_some_and(|id| !self.raid_fields.contains_key(&id))
+            || self
+                .raid_fields
+                .values()
+                .any(|field| !field.is_valid(world))
+        {
+            return Err(SimValidationError::InvalidEnemyNavigation);
+        }
+        Ok(())
+    }
+
     pub(super) fn begin_tick(
         &mut self,
         entity_topology: u64,
@@ -241,6 +283,174 @@ impl EnemyNavigation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds several simultaneous raids sharing one durable structure target.
+    fn multiple_raid_world(count: usize) -> Simulation {
+        let mut sim = Simulation::new_test_world(293);
+        let chest = sim
+            .world
+            .prototypes
+            .entities()
+            .iter()
+            .find(|prototype| prototype.name == "chest")
+            .unwrap()
+            .id;
+        let (x, y) = sim
+            .world
+            .chunks
+            .values()
+            .flat_map(|chunk| {
+                chunk
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tile)| tile.collision.buildable && tile.resource.is_none())
+                    .map(|(index, _)| {
+                        chunk
+                            .coord
+                            .tile_at(index as i32 % CHUNK_SIZE, index as i32 / CHUNK_SIZE)
+                    })
+            })
+            .find(|(x, y)| sim.entities.occupancy.entity_at(*x, *y).is_none())
+            .unwrap();
+        let target = crate::placement::place(
+            &mut sim,
+            crate::placement::EntityPlacementRequest {
+                prototype_id: chest,
+                x,
+                y,
+                direction: Direction::North,
+            },
+        )
+        .unwrap();
+        for index in 0..count {
+            let offset = 12 + (index as i64 % 8) * 2;
+            let member =
+                crate::simulation::tests::combat::spawn_test_enemy_at(&mut sim, x + offset, y);
+            let id = sim.enemies.allocate_raid_id();
+            sim.enemies.enemies.get_mut(&member).unwrap().mission = EnemyMission::Raid(id);
+            sim.enemies.raids.insert(
+                id,
+                Raid {
+                    id,
+                    base_id: EnemyBaseId::new(1),
+                    members: BTreeSet::from([member]),
+                    target: Some(target),
+                    launched_tick: 0,
+                },
+            );
+        }
+        sim
+    }
+
+    /// Partially initialized fields must preserve their exact budgeted progress.
+    #[test]
+    fn partially_built_multiple_raid_fields_continue_after_save() {
+        let mut sim = multiple_raid_world(2);
+        sim.tick();
+        assert_eq!(sim.enemy_navigation.raid_fields.len(), 2);
+        assert_eq!(
+            sim.enemy_navigation
+                .raid_fields
+                .values()
+                .filter(|f| f.initialized)
+                .count(),
+            1
+        );
+        assert_eq!(sim.enemy_navigation.field_initializations_this_tick, 1);
+        super::super::super::save::assert_save_continuation(&mut sim, 40, &[]);
+    }
+
+    /// Warm fields must retain their routes rather than rebuild after loading.
+    #[test]
+    fn warm_multiple_raid_fields_continue_after_save() {
+        let mut sim = multiple_raid_world(2);
+        for _ in 0..6 {
+            sim.tick();
+        }
+        assert_eq!(sim.enemy_navigation.raid_fields.len(), 2);
+        assert!(
+            sim.enemy_navigation
+                .raid_fields
+                .values()
+                .all(|f| f.initialized)
+        );
+        super::super::super::save::assert_save_continuation(&mut sim, 40, &[]);
+    }
+
+    /// Exhausted per-tick work and round-robin ordering resume after loading.
+    #[test]
+    fn exhausted_navigation_budget_and_cursor_survive_save() {
+        let mut sim = multiple_raid_world(20);
+        sim.tick();
+        sim.tick();
+        assert_eq!(
+            sim.enemy_navigation.expansions_this_tick,
+            RAID_FLOW_EXPANSIONS_PER_TICK
+        );
+        assert!(
+            sim.enemy_navigation
+                .raid_fields
+                .values()
+                .any(|field| !field.initialized)
+        );
+        super::super::super::save::assert_save_continuation(&mut sim, 20, &[]);
+    }
+
+    /// A revision change after the enemy pass remains pending through a save.
+    #[test]
+    fn pending_navigation_invalidation_survives_save() {
+        let mut sim = multiple_raid_world(2);
+        for _ in 0..6 {
+            sim.tick();
+        }
+        // Chunk generation after the enemy pass leaves old fields pending an
+        // invalidation. Loading must neither acknowledge it nor lose it.
+        sim.ensure_chunk_generated(ChunkCoord { x: 50, y: 50 });
+        sim.request_chunk_generation(
+            ChunkCoord { x: 51, y: 50 },
+            ChunkGenerationPriority::Required,
+        );
+        let commands = [
+            (
+                2,
+                SimCommand::MovePlayer {
+                    direction_x: 1.0,
+                    direction_y: 0.0,
+                    delta_seconds: 1.0 / 60.0,
+                },
+            ),
+            (
+                2,
+                SimCommand::MovePlayer {
+                    direction_x: 0.0,
+                    direction_y: 1.0,
+                    delta_seconds: 1.0 / 60.0,
+                },
+            ),
+        ];
+        super::super::super::save::assert_save_continuation(&mut sim, 20, &commands);
+    }
+
+    /// Malformed direction storage is rejected before route reconstruction.
+    #[test]
+    fn malformed_navigation_is_rejected_before_reconstruction() {
+        let mut sim = multiple_raid_world(2);
+        sim.tick();
+        // An initialized field with no cells used to reach indexed movement.
+        sim.enemy_navigation
+            .raid_fields
+            .values_mut()
+            .find(|f| f.initialized)
+            .unwrap()
+            .corrupt_directions_for_test();
+        assert!(matches!(
+            load_from_bytes(&save_to_bytes(&sim).unwrap()),
+            Err(SaveLoadError::InvalidSimulationState(
+                SimValidationError::InvalidEnemyNavigation
+            ))
+        ));
+    }
 
     fn test_footprint(x: i64, y: i64) -> EntityFootprint {
         EntityFootprint {

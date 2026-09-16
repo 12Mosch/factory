@@ -70,6 +70,19 @@ pub(super) fn validate_fluid_box_states(sim: &Simulation) -> Result<(), SimValid
 }
 
 pub(super) fn validate_fluid_network_snapshots(sim: &Simulation) -> Result<(), SimValidationError> {
+    // Invalidation clears summaries together with the derived topology. A
+    // dirty save carrying a published summary cannot come from the simulation
+    // and would make the load boundary depend on whether it was rebuilt early.
+    if sim.fluids.topology_dirty {
+        return if sim.fluids.networks.is_empty() {
+            Ok(())
+        } else {
+            Err(SimValidationError::InvalidFluidNetwork {
+                network_id: sim.fluids.networks[0].network_id,
+            })
+        };
+    }
+
     // Every box the networks must account for. Placed entities always, and
     // stopped rolling stock as well: a wagon standing at a pump is part of the
     // network it is being filled from, and one that is moving — or standing

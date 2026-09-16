@@ -827,6 +827,7 @@ fn research_progress_and_queue_survive_save_load() {
     assert_eq!(loaded.research_queue(), &[automation]);
     assert_eq!(loaded.technology_progress(logistics), Some(4));
     assert_eq!(loaded.state_hash(), before_hash);
+    super::super::save::assert_save_continuation(&mut sim, 60, &[]);
 }
 
 #[test]

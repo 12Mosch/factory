@@ -12,7 +12,7 @@ pub(in crate::simulation) mod machines;
 mod research;
 pub(in crate::simulation) mod robots;
 mod rolling_stock;
-mod world;
+pub(super) mod world;
 
 pub(super) use self::catalog::validate_catalog;
 use self::construction::validate_construction_state;
@@ -32,6 +32,12 @@ use self::world::{
 };
 
 pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
+    validate_durable_state(sim)?;
+    validate_derived_state(sim)
+}
+
+/// Requires no topology reconstruction. All inputs to cache builders are checked here.
+pub(super) fn validate_durable_state(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_catalog(&sim.world.prototypes)?;
     crate::day_night::validate_day_night_cycle_state(sim)?;
     validate_world_resources(&sim.world)?;
@@ -45,12 +51,9 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_entity_state_ownership_and_kind(sim)?;
     validate_construction_state(sim)?;
     validate_fluid_box_states(sim)?;
-    validate_fluid_network_snapshots(sim)?;
     validate_heat_buffer_states(sim)?;
-    validate_heat_network_snapshots(sim)?;
-    validate_robot_network_snapshots(sim)?;
     validate_robot_flights(sim)?;
-    validate_rolling_stock(sim)?;
+    rolling_stock::validate_rolling_stock_durable(sim)?;
 
     super::corpse_ops::validate_corpses(sim)?;
     validate_inventory(&sim.world.prototypes, &sim.player_inventory)?;
@@ -75,8 +78,19 @@ pub fn validate_simulation(sim: &Simulation) -> Result<(), SimValidationError> {
     validate_enemies(sim)?;
 
     validate_entity_states(sim)?;
+    sim.transport.validate_item_tracking(&sim.entities)?;
+    sim.transport.validate_work(&sim.entities, &sim.world)?;
+    sim.enemy_navigation.validate(&sim.world)?;
 
     Ok(())
+}
+
+/// Checks relationships that require the rebuilt rail and stopped-stock indexes.
+pub(super) fn validate_derived_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    validate_fluid_network_snapshots(sim)?;
+    validate_heat_network_snapshots(sim)?;
+    validate_robot_network_snapshots(sim)?;
+    validate_rolling_stock(sim)
 }
 
 fn validate_pollution_state(sim: &Simulation) -> Result<(), SimValidationError> {

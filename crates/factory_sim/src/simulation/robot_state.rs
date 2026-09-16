@@ -1,7 +1,8 @@
 use super::*;
 use crate::construction::ConstructionJob;
 use crate::simulation::robot_ops::{
-    DemandPriority, LogisticIndex, LogisticReservations, RobotNetworkTopology,
+    DemandPriority, LogisticIndex, LogisticReservations, RobotLogisticWorkState,
+    RobotNetworkTopology,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -37,6 +38,8 @@ pub(super) struct RobotSubsystem {
     /// [`crate::simulation::robot_ops::LogisticIndex`].
     #[serde(skip, default)]
     pub(super) logistic: LogisticIndex,
+    /// Durable progress through the bounded logistic matching windows.
+    pub(super) logistic_work: RobotLogisticWorkState,
     /// Items the robots in flight have promised to move, rebuilt from those
     /// robots at the start of every delivery pass. See
     /// [`crate::simulation::robot_ops::LogisticReservations`].
@@ -74,6 +77,7 @@ impl Default for RobotSubsystem {
             job_counts_by_network: Vec::new(),
             job_networks: BTreeMap::new(),
             logistic: LogisticIndex::default(),
+            logistic_work: RobotLogisticWorkState::default(),
             delivery_reservations: LogisticReservations::default(),
             charging_scratch: Vec::new(),
             delivery_member_scratch: Vec::new(),
@@ -103,6 +107,7 @@ impl RobotSubsystem {
         self.job_counts_by_network.clear();
         self.job_networks.clear();
         self.logistic.reset(0);
+        self.logistic_work.clear();
     }
 
     pub(super) fn replace_topology(&mut self, topology_networks: Vec<RobotNetworkTopology>) {
@@ -118,6 +123,7 @@ impl RobotSubsystem {
         );
         self.job_networks.clear();
         self.logistic.reset(self.topology_networks.len());
+        self.logistic_work.reset(self.topology_networks.len());
         self.topology_dirty = false;
     }
 
@@ -141,17 +147,18 @@ impl RobotSubsystem {
     }
 }
 
-// Only the durable snapshots participate in simulation identity; the topology
-// cache is rebuilt from the entity store.
+// Durable snapshots and bounded-work cursors participate in simulation
+// identity; topology and candidate indexes rebuild from the entity store.
 impl Hash for RobotSubsystem {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.networks.hash(state);
+        self.logistic_work.hash(state);
     }
 }
 
 impl PartialEq for RobotSubsystem {
     fn eq(&self, other: &Self) -> bool {
-        self.networks == other.networks
+        self.networks == other.networks && self.logistic_work == other.logistic_work
     }
 }
 

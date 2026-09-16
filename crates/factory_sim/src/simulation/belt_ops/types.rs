@@ -4,7 +4,7 @@ pub(in crate::simulation::belt_ops) const TRANSPORT_LANE_SLOTS_PER_ENTITY: usize
 const SPLITTER_INPUT_PORTS: usize = 2;
 const SPLITTER_LANES_PER_PORT: usize = 2;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) enum TransportLaneKey {
     Belt {
         entity_id: EntityId,
@@ -28,7 +28,7 @@ impl TransportLaneKey {
 /// Compact slot into the rebuilt lane graph's parallel arrays. Slot values
 /// are only meaningful for the graph generation that assigned them; every
 /// rebuild reassigns slots and re-derives all stored indices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) struct TransportLaneIndex(u32);
 
 impl TransportLaneIndex {
@@ -81,7 +81,7 @@ pub(in crate::simulation::belt_ops) fn lane_raw_index(key: TransportLaneKey) -> 
 /// at sideload merge points, and lanes fed by splitters start their own runs.
 /// Like [`TransportLaneIndex`], run ids are only meaningful for the graph
 /// generation that assigned them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) struct TransportRunIndex(u32);
 
 impl TransportRunIndex {
@@ -122,7 +122,7 @@ pub(in crate::simulation::belt_ops) enum TransportRunVisitState {
     Done,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(in crate::simulation::belt_ops) enum TransportLaneDownstream {
     #[default]
     Missing,

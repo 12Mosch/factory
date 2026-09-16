@@ -499,18 +499,19 @@ fn save_load_round_trip_preserves_splitter_internal_state_hash() {
     let iron_ore = item_id(&sim.world.prototypes, "iron_ore");
     let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
     let fixture = place_splitter_fixture(&mut sim, 1, true);
+    let ids = allocate_belt_item_ids(&mut sim, 2);
     let state = sim
         .entities
         .splitters
         .get_mut(&fixture.splitter)
         .expect("placed splitter should have state");
     state.input_lanes[0][0].items.push(BeltItem {
-        id: BeltItemId::new(10_001),
+        id: ids[0],
         item_id: iron_ore,
         position_subtile: 64,
     });
     state.input_lanes[1][1].items.push(BeltItem {
-        id: BeltItemId::new(10_002),
+        id: ids[1],
         item_id: copper_ore,
         position_subtile: 128,
     });
@@ -607,7 +608,7 @@ fn unblocked_jam_wakes_upstream_one_lane_per_tick() {
     )
     .expect("pickup should remove the terminal belt item");
 
-    sim.tick();
+    super::super::save::assert_save_continuation(&mut sim, 1, &[]);
     assert_eq!(
         belt_lane_positions(&sim, belts[0], 0),
         upstream_before,
@@ -781,14 +782,15 @@ fn underground_belt_blocks_when_exit_lane_is_full() {
     let copper_ore = item_id(&sim.world.prototypes, "copper_ore");
 
     {
+        let ids = allocate_belt_item_ids(&mut sim, 4);
         let exit = sim
             .entities
             .transport_belts
             .get_mut(&exit_id)
             .expect("placed underground exit should have belt state");
-        for position_subtile in [0, 64, 128, 192] {
+        for (position_subtile, id) in [0, 64, 128, 192].into_iter().zip(ids) {
             exit.lanes[0].items.push(BeltItem {
-                id: BeltItemId::new(u64::from(position_subtile) + 20_001),
+                id,
                 item_id: copper_ore,
                 position_subtile,
             });
@@ -909,4 +911,141 @@ fn belt_line_moves_100_items_across_20_tiles() {
             .iter()
             .any(|lane| !lane.items.is_empty())
     );
+}
+
+/// Removing the newest items must not rewind the durable identity allocator.
+#[test]
+fn consumed_highest_belt_ids_are_not_reused_after_save() {
+    let mut sim = Simulation::new_test_world(293);
+    let belts = place_belt_line(&mut sim, 2);
+    let belt = belts[1];
+    let ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(belts[0], 0, ore).unwrap();
+    sim.insert_item_onto_belt(belt, 0, ore).unwrap();
+    sim.insert_item_onto_belt(belt, 1, ore).unwrap();
+    let pickup = sim.entities.placed_entity(belt).unwrap().footprint;
+    let cursor = sim.transport.next_item_id;
+    for _ in 0..2 {
+        try_take_inserter_source_item(
+            &sim.world.prototypes,
+            &mut sim.entities,
+            &mut StoppedStockMut::new(&sim.stopped_stock_index, &mut sim.rolling_stock),
+            &mut sim.transport,
+            (pickup.x, pickup.y),
+            ore,
+        )
+        .unwrap();
+    }
+    let mut loaded = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+    assert_eq!(loaded.transport.next_item_id, cursor);
+    for world in [&mut sim, &mut loaded] {
+        world.insert_item_onto_belt(belt, 0, ore).unwrap();
+        assert_eq!(
+            world.entities.transport_belts.get(&belt).unwrap().lanes[0].items[0]
+                .id
+                .raw(),
+            cursor
+        );
+    }
+    for _ in 0..20 {
+        sim.tick();
+        loaded.tick();
+        assert_eq!(sim.state_hash(), loaded.state_hash());
+    }
+}
+
+/// Stale cursors and duplicate live identities are rejected during load.
+#[test]
+fn malformed_belt_identity_cursor_and_duplicate_ids_are_rejected() {
+    let mut sim = Simulation::new_test_world(293);
+    let belt = place_belt_line(&mut sim, 1)[0];
+    let ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(belt, 0, ore).unwrap();
+    sim.insert_item_onto_belt(belt, 1, ore).unwrap();
+    let mut stale = sim.clone();
+    stale.transport.next_item_id = 1;
+    assert_ne!(stale.state_hash(), sim.state_hash());
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&stale).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidBeltItemIdentity
+        ))
+    ));
+    let segment = sim.entities.transport_belts.get_mut(&belt).unwrap();
+    segment.lanes[1].items[0].id = segment.lanes[0].items[0].id;
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&sim).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidBeltItemIdentity
+        ))
+    ));
+}
+
+/// Zero is the exhausted sentinel and cannot produce a continuable loaded world.
+#[test]
+fn zero_belt_identity_cursor_is_rejected_on_load() {
+    let mut sim = Simulation::new_test_world(293);
+    sim.transport.next_item_id = 0;
+    assert_eq!(sim.transport.next_item_id, 0);
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&sim).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidBeltItemIdentity
+        ))
+    ));
+}
+
+/// Current-generation marks omitted from the queue cannot silently sleep a run.
+#[test]
+fn active_marks_missing_from_the_saved_queue_are_rejected() {
+    let mut sim = Simulation::new_test_world(293);
+    let belt = place_belt_line(&mut sim, 2)[0];
+    let ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(belt, 0, ore).unwrap();
+    sim.tick();
+    sim.transport.corrupt_active_queue_for_test();
+
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&sim).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidTransportWork
+        ))
+    ));
+}
+
+/// Pending transport edits may name removals, but not live unrelated entities.
+#[test]
+fn dirty_transport_regions_reject_placed_non_transport_entities() {
+    let mut sim = Simulation::new_test_world(293);
+    sim.tick();
+    let chest = entity_id_by_name(&sim.world.prototypes, "chest");
+    let (x, y) = first_buildable_rect_without_resource(&sim.world, 1, 1);
+    let chest_id = place_at(&mut sim, chest, x, y, Direction::North);
+    let footprint = sim.entities.placed_entity(chest_id).unwrap().footprint;
+    sim.invalidate_transport_lane_graph_region(chest_id, footprint);
+
+    assert!(matches!(
+        load_from_bytes(&save_to_bytes(&sim).unwrap()),
+        Err(SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidTransportWork
+        ))
+    ));
+}
+
+/// Both queued edits and the resulting incremental graph survive saves.
+#[test]
+fn pending_and_completed_transport_patches_continue_after_save() {
+    let mut sim = Simulation::new_test_world(293);
+    let belts = place_belt_line(&mut sim, 8);
+    let ore = item_id(&sim.world.prototypes, "iron_ore");
+    sim.insert_item_onto_belt(belts[0], 0, ore).unwrap();
+    for _ in 0..10 {
+        sim.tick();
+    }
+    crate::entity_mutation::rotate(&mut sim, belts[4], Direction::North).unwrap();
+    super::super::save::assert_save_continuation(&mut sim, 2, &[]);
+    crate::entity_mutation::remove(&mut sim, belts[6]).unwrap();
+    super::super::save::assert_save_continuation(&mut sim, 10, &[]);
+    assert!(sim.transport_lane_graph_patch_count() >= 2);
+    super::super::save::assert_save_continuation(&mut sim, 20, &[]);
 }

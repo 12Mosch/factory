@@ -6,13 +6,16 @@ use crate::simulation::belt_ops::types::{
     TransportRunIndex, lane_raw_index,
 };
 use crate::simulation::{EntityId, EntityStore, SmallVec, WorldTileCoord};
+use serde::{Deserialize, Serialize};
+
+mod validation;
 
 /// Hot derived state for one dense transport-lane slot.
 ///
 /// Keeping key, routing, run membership, and speed together makes traversal
 /// consume one compact record instead of chasing parallel vectors. `key` is
 /// `None` only for a slot retained on the incremental patch free list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(in crate::simulation::belt_ops) struct TransportLaneRecord {
     pub(in crate::simulation::belt_ops) key: Option<TransportLaneKey>,
     pub(in crate::simulation::belt_ops) downstream: TransportLaneDownstream,
@@ -45,7 +48,7 @@ impl TransportLaneRecord {
 /// indexes [`TransportLaneGraph::run_lane_slots`] in upstream-to-downstream
 /// order. `cyclic` marks pure loops whose tail feeds the run's own head; the
 /// tail's carry is blocked there because the head advances last.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct TransportRunRecord {
     start: u32,
     len: u32,
@@ -63,7 +66,7 @@ struct TransportRunRecord {
 /// On top of the lane adjacency, lanes are grouped into runs (see
 /// [`TransportRunRecord`]): scheduling, visit states, and activity tracking
 /// operate on runs, while item movement still reads per-lane state.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) struct TransportLaneGraph {
     slot_by_raw: TransportLaneSlotMap,
     lanes: Vec<TransportLaneRecord>,
@@ -212,6 +215,11 @@ impl TransportLaneGraph {
                 || entities.splitters.contains_key(&region.entity_id)
             {
                 affected_entities.push(region.entity_id);
+                if let Some(placed) = entities.placed_entities.get(&region.entity_id) {
+                    for (x, y) in placed.footprint.tiles() {
+                        self.collect_affected_around(entities, x, y, reach, &mut affected_entities);
+                    }
+                }
             } else {
                 self.free_entity_slots(region.entity_id, &mut dissolved_runs);
             }

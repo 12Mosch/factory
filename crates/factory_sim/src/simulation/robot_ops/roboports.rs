@@ -13,6 +13,9 @@ impl Simulation {
     /// connected to, and the network snapshot only sums the results.
     pub(in crate::simulation) fn advance_robot_networks(&mut self) {
         self.ensure_robot_network_topology();
+        self.robots
+            .logistic_work
+            .ensure_initialized(self.robots.topology_networks.len());
         // The index is refreshed once the topology is settled, so a chest is
         // only ever counted into a network that currently exists.
         self.refresh_logistic_index();

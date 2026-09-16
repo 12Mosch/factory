@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::simulation::{EntityId, EntityStore};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 /// Entries per page. Pages hold one value per index, so a page of `u32` slots
 /// costs 1 KiB and a page of `u64` revisions costs 2 KiB.
@@ -421,11 +422,51 @@ impl TransportLaneSlotMap {
         self.inner.end_rebuild();
     }
 
+    /// Returns logical mappings in ascending raw-index order for validation
+    /// and deterministic serialization.
+    pub(in crate::simulation::belt_ops::cache) fn occupied_entries(&self) -> Vec<(u64, u32)> {
+        self.inner.occupied_entries()
+    }
+
     /// Estimates all heap held for the slot index; see
     /// [`PagedSparseVec::storage_bytes`].
     #[cfg(test)]
     pub(in crate::simulation) fn storage_bytes(&self) -> usize {
         self.inner.storage_bytes()
+    }
+}
+
+impl Serialize for TransportLaneSlotMap {
+    /// Serializes logical mappings only; page layout and rebuild scratch do
+    /// not affect durable transport execution state.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.inner.occupied_entries().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TransportLaneSlotMap {
+    /// Reconstructs sparse pages from the canonical logical mapping and
+    /// rejects duplicate, vacant, or platform-unrepresentable keys.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = Vec::<(u64, u32)>::deserialize(deserializer)?;
+        let mut map = Self::default();
+        for (raw, slot) in entries {
+            let raw_index = usize::try_from(raw)
+                .map_err(|_| D::Error::custom("transport lane key does not fit usize"))?;
+            if slot == VACANT_SLOT || map.get(raw_index).is_some() {
+                return Err(D::Error::custom(
+                    "duplicate or vacant transport lane mapping",
+                ));
+            }
+            map.insert(raw_index, slot);
+        }
+        Ok(map)
     }
 }
 

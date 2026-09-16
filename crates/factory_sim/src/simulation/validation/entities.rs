@@ -125,6 +125,9 @@ pub(super) fn validate_enemies(sim: &Simulation) -> Result<(), SimValidationErro
     if !sim.config.is_valid()
         || sim.enemies.evolution_points > 10_000
         || sim.enemies.threat_events.len() > 256
+        || !sim
+            .attack_targets
+            .is_valid(sim.entity_topology_revision, &sim.entities)
     {
         return Err(SimValidationError::InvalidEnemyState);
     }

@@ -269,7 +269,7 @@ pub struct Simulation {
     #[serde(skip, default)]
     rolling_stock_topology_revision: u64,
     /// Route search for trains: scratch buffers and the tick's expansion
-    /// budget. Derived, like the enemy navigation beside it, and rebuilt from
+    /// budget. Scratch is reset each tick and rebuilt from
     /// nothing on load — the routes themselves live on the trains.
     #[serde(skip)]
     train_routing: rolling_stock_ops::TrainRouting,
@@ -746,6 +746,10 @@ pub enum PollutionRemainderSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimValidationError {
+    InvalidChunk(ChunkCoord),
+    InvalidBeltItemIdentity,
+    InvalidTransportWork,
+    InvalidEnemyNavigation,
     InvalidDayNightCycleConfig,
     InvalidWorldGenerationConfig,
     DayNightCycleStatePresenceMismatch,

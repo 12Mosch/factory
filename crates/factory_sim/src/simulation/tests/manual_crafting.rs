@@ -317,8 +317,8 @@ fn mutated_queue_round_trips_and_continues_deterministically() {
     for _ in 0..23 {
         sim.tick();
         loaded.tick();
+        assert_eq!(sim.state_hash(), loaded.state_hash());
     }
-    assert_eq!(loaded.state_hash(), sim.state_hash());
 }
 
 #[test]

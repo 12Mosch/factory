@@ -158,6 +158,23 @@ mod enemy_feature_tests {
     }
 
     #[test]
+    fn durable_target_decisions_require_a_revision_and_live_attackable_targets() {
+        let sim = Simulation::new_test_world(123);
+        let mut cache = AttackTargetCache::default();
+        cache.base_targets.insert(EnemyBaseId::new(1), None);
+        assert!(!cache.is_valid(sim.entity_topology_revision, &sim.entities));
+
+        cache.revision = Some(sim.entity_topology_revision);
+        cache
+            .base_targets
+            .insert(EnemyBaseId::new(1), Some(EntityId::new(u64::MAX)));
+        assert!(!cache.is_valid(sim.entity_topology_revision, &sim.entities));
+
+        cache.revision = Some(sim.entity_topology_revision.wrapping_sub(1));
+        assert!(cache.is_valid(sim.entity_topology_revision, &sim.entities));
+    }
+
+    #[test]
     fn difficulty_presets_match_balance_defaults() {
         let peaceful = EnemyDifficultyPreset::Peaceful.config();
         let standard = EnemyDifficultyPreset::Standard.config();

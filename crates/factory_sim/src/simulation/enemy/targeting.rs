@@ -1,24 +1,76 @@
 use super::*;
 
-/// Derived index and shared target selections for attacking enemies.
-///
-/// None of this is authoritative simulation state. The index is rebuilt from
-/// placed entities after topology changes, and the selections are discarded
-/// with it so placements and removals become visible to every attacking
-/// group without serializing redundant data.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+/// Historical shared target decisions and their invalidation revision are
+/// durable. Only the spatial lookup index is behavior-neutral derived data.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub(in crate::simulation) struct AttackTargetCache {
     pub(super) revision: Option<u64>,
+    #[serde(skip)]
     pub(super) index: AttackableStructureIndex,
     pub(super) base_targets: BTreeMap<EnemyBaseId, Option<EntityId>>,
     pub(super) raid_targets: BTreeMap<RaidId, Option<EntityId>>,
     #[cfg(test)]
+    #[serde(skip)]
     pub(super) shared_target_queries: usize,
 }
 
+impl Hash for AttackTargetCache {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.revision.hash(state);
+        self.base_targets.hash(state);
+        self.raid_targets.hash(state);
+    }
+}
+
 impl AttackTargetCache {
+    /// Checks durable decisions without requiring the derived spatial index.
+    pub(in crate::simulation) fn is_valid(
+        &self,
+        entity_topology_revision: u64,
+        entities: &EntityStore,
+    ) -> bool {
+        let has_decisions = !self.base_targets.is_empty() || !self.raid_targets.is_empty();
+        let Some(revision) = self.revision else {
+            return !has_decisions;
+        };
+        if revision != entity_topology_revision {
+            return true;
+        }
+        self.base_targets
+            .values()
+            .chain(self.raid_targets.values())
+            .flatten()
+            .all(|entity_id| {
+                entities
+                    .placed_entities
+                    .get(entity_id)
+                    .is_some_and(|placed| is_attackable_kind(entities, placed))
+            })
+    }
+
+    /// Copies durable decisions while omitting the reconstructed spatial index.
+    pub(in crate::simulation) fn clone_for_save(&self) -> Self {
+        Self {
+            revision: self.revision,
+            base_targets: self.base_targets.clone(),
+            raid_targets: self.raid_targets.clone(),
+            index: AttackableStructureIndex::default(),
+            #[cfg(test)]
+            shared_target_queries: 0,
+        }
+    }
+
+    /// Reconstructs the behavior-neutral spatial lookup from placed entities.
+    pub(in crate::simulation) fn rebuild_index(
+        &mut self,
+        world: &WorldSim,
+        entities: &EntityStore,
+    ) {
+        self.index.rebuild(world, entities);
+    }
+
     /// Refreshes derived state and reports whether a previously built index
-    /// was invalidated. The first build (including after load) is not an
+    /// was invalidated. The first build in a new simulation is not an
     /// invalidation of durable unit and raid targets.
     pub(super) fn refresh(
         &mut self,

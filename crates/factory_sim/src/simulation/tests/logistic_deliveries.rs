@@ -248,6 +248,33 @@ fn a_requester_is_filled_from_a_provider_chest() {
     sim.validate().expect("a filled request leaves valid state");
 }
 
+/// A network larger than one examination window must resume at the same
+/// requester after load instead of restarting from the lowest entity ids.
+#[test]
+fn bounded_logistic_matcher_cursors_continue_across_save() {
+    let mut sim = Simulation::new_test_world(293);
+    let iron = item_id(&sim.world.prototypes, "iron_plate");
+    let (_, origin) = logistic_roboport(&mut sim, 16);
+    let provider = place_covered_chest(&mut sim, "passive_provider_chest", origin);
+    insert_into_chest(&mut sim, provider, iron, 100);
+    for _ in 0..70 {
+        let requester = place_covered_chest(&mut sim, "requester_chest", origin);
+        request_items(&mut sim, requester, iron, 1);
+    }
+
+    tick_until(&mut sim, 16, |sim| {
+        sim.robots.logistic_work.demand_cursor(0).is_some()
+    });
+    assert_eq!(
+        sim.robots()
+            .filter(|robot| robot.delivery.is_some())
+            .count(),
+        8
+    );
+
+    super::super::save::assert_save_continuation(&mut sim, 16, &[]);
+}
+
 /// A requester supplies nothing, so two of them cannot feed each other however
 /// much stock one is holding.
 #[test]

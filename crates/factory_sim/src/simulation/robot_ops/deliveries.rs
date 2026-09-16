@@ -223,7 +223,7 @@ impl Simulation {
     /// Works a bounded prefix of the network's unmet demand, resuming where the
     /// previous pass stopped.
     fn serve_network_demand(&mut self, network_id: u32, members: &[EntityId]) -> usize {
-        let cursor = self.robots.logistic.demand_cursor(network_id);
+        let cursor = self.robots.logistic_work.demand_cursor(network_id);
         let mut entries = std::mem::take(&mut self.robots.delivery_demand_scratch);
         entries.clear();
         entries.extend(
@@ -263,7 +263,7 @@ impl Simulation {
 
         self.robots.delivery_demand_scratch = entries;
         self.robots
-            .logistic
+            .logistic_work
             .set_demand_cursor(network_id, next_cursor);
         started
     }
@@ -273,7 +273,7 @@ impl Simulation {
     /// passive provider, and it is what keeps a production line from backing up
     /// into the chest at the end of it.
     fn push_network_surplus(&mut self, network_id: u32, members: &[EntityId], budget: usize) {
-        let cursor = self.robots.logistic.surplus_cursor(network_id);
+        let cursor = self.robots.logistic_work.surplus_cursor(network_id);
         let mut entries = std::mem::take(&mut self.robots.delivery_surplus_scratch);
         entries.clear();
         entries.extend(
@@ -306,7 +306,7 @@ impl Simulation {
 
         self.robots.delivery_surplus_scratch = entries;
         self.robots
-            .logistic
+            .logistic_work
             .set_surplus_cursor(network_id, next_cursor);
     }
 
@@ -493,7 +493,7 @@ impl Simulation {
         near: EntityId,
     ) -> Option<EntityId> {
         let target = footprint_center_fixed(&self.entities, near)?;
-        let cursor = self.robots.logistic.storage_cursor(network_id);
+        let cursor = self.robots.logistic_work.storage_cursor(network_id);
         let mut candidates = std::mem::take(&mut self.robots.delivery_storage_scratch);
         candidates.clear();
         candidates.extend(
@@ -514,7 +514,7 @@ impl Simulation {
         }
         let next_cursor = candidates.last().copied().map(next_entity_id);
         self.robots
-            .logistic
+            .logistic_work
             .set_storage_cursor(network_id, next_cursor);
 
         let mut best: Option<(bool, i128, EntityId)> = None;

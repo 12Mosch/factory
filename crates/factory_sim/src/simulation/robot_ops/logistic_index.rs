@@ -54,11 +54,135 @@ pub(in crate::simulation) enum SupplyPriority {
 
 /// Order demand is served in: a requester is the point of the network, a buffer
 /// is a convenience stocked out of what is left.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) enum DemandPriority {
     Requester,
     Machine,
     Buffer,
+}
+
+/// Durable resume cursors for one robot network's bounded matching passes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+struct NetworkLogisticWorkState {
+    demand_cursor: Option<(DemandPriority, ItemId, EntityId)>,
+    surplus_cursor: Option<(ItemId, EntityId)>,
+    storage_cursor: Option<EntityId>,
+}
+
+/// Behavior-affecting progress through the derived logistic candidate sets.
+///
+/// `None` means the robot topology is pending reconstruction. The candidate
+/// sets themselves remain derived and are never serialized.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub(in crate::simulation) struct RobotLogisticWorkState {
+    networks: Option<Vec<NetworkLogisticWorkState>>,
+}
+
+impl RobotLogisticWorkState {
+    /// Drops cursors while a topology edit makes network ids provisional.
+    pub(in crate::simulation) fn clear(&mut self) {
+        self.networks = None;
+    }
+
+    /// Initializes empty cursors for a newly rebuilt, densely numbered topology.
+    pub(in crate::simulation) fn reset(&mut self, network_count: usize) {
+        self.networks = Some(vec![NetworkLogisticWorkState::default(); network_count]);
+    }
+
+    /// Restores saved cursors after the matching index has been reconstructed.
+    pub(in crate::simulation) fn restore(&mut self, saved: Self, network_count: usize) -> bool {
+        let Some(networks) = saved.networks else {
+            self.networks = None;
+            return true;
+        };
+        if networks.len() != network_count {
+            return false;
+        }
+        self.networks = Some(networks);
+        true
+    }
+
+    /// Materializes empty cursors when a pending topology was rebuilt during load.
+    pub(in crate::simulation) fn ensure_initialized(&mut self, network_count: usize) {
+        if self.networks.is_none() {
+            self.reset(network_count);
+        }
+    }
+
+    /// Returns where bounded demand examination resumes for one network.
+    pub(in crate::simulation) fn demand_cursor(
+        &self,
+        network_id: u32,
+    ) -> Option<(DemandPriority, ItemId, EntityId)> {
+        self.networks
+            .as_ref()
+            .and_then(|networks| networks.get(network_id as usize))
+            .and_then(|network| network.demand_cursor)
+    }
+
+    /// Records where bounded demand examination resumes for one network.
+    pub(in crate::simulation) fn set_demand_cursor(
+        &mut self,
+        network_id: u32,
+        cursor: Option<(DemandPriority, ItemId, EntityId)>,
+    ) {
+        if let Some(network) = self
+            .networks
+            .as_mut()
+            .and_then(|networks| networks.get_mut(network_id as usize))
+        {
+            network.demand_cursor = cursor;
+        }
+    }
+
+    /// Returns where bounded active-provider examination resumes.
+    pub(in crate::simulation) fn surplus_cursor(
+        &self,
+        network_id: u32,
+    ) -> Option<(ItemId, EntityId)> {
+        self.networks
+            .as_ref()
+            .and_then(|networks| networks.get(network_id as usize))
+            .and_then(|network| network.surplus_cursor)
+    }
+
+    /// Records where bounded active-provider examination resumes.
+    pub(in crate::simulation) fn set_surplus_cursor(
+        &mut self,
+        network_id: u32,
+        cursor: Option<(ItemId, EntityId)>,
+    ) {
+        if let Some(network) = self
+            .networks
+            .as_mut()
+            .and_then(|networks| networks.get_mut(network_id as usize))
+        {
+            network.surplus_cursor = cursor;
+        }
+    }
+
+    /// Returns where bounded storage selection resumes for one network.
+    pub(in crate::simulation) fn storage_cursor(&self, network_id: u32) -> Option<EntityId> {
+        self.networks
+            .as_ref()
+            .and_then(|networks| networks.get(network_id as usize))
+            .and_then(|network| network.storage_cursor)
+    }
+
+    /// Records where bounded storage selection resumes for one network.
+    pub(in crate::simulation) fn set_storage_cursor(
+        &mut self,
+        network_id: u32,
+        cursor: Option<EntityId>,
+    ) {
+        if let Some(network) = self
+            .networks
+            .as_mut()
+            .and_then(|networks| networks.get_mut(network_id as usize))
+        {
+            network.storage_cursor = cursor;
+        }
+    }
 }
 
 /// Runtime role of an indexed endpoint. Chests may contribute supply, demand,
@@ -101,14 +225,6 @@ struct NetworkIndex {
     /// contributes no totals but is exactly where a delivery with nowhere else
     /// to go should land.
     storage_chests: BTreeSet<EntityId>,
-    /// Where the last matching pass stopped, so a network larger than one pass'
-    /// budget still works through all of its demand.
-    demand_cursor: Option<(DemandPriority, ItemId, EntityId)>,
-    surplus_cursor: Option<(ItemId, EntityId)>,
-    /// Storage selection is bounded too. Without a cursor, a full or
-    /// incompatible prefix of storage chests would permanently hide every
-    /// usable chest after the examination budget.
-    storage_cursor: Option<EntityId>,
 }
 
 /// Cached logistic contents of every robot network.
@@ -247,60 +363,6 @@ impl LogisticIndex {
                 None => network.storage_chests.range(..),
             })
             .copied()
-    }
-
-    pub(in crate::simulation) fn demand_cursor(
-        &self,
-        network_id: u32,
-    ) -> Option<(DemandPriority, ItemId, EntityId)> {
-        self.networks
-            .get(network_id as usize)
-            .and_then(|network| network.demand_cursor)
-    }
-
-    pub(in crate::simulation) fn set_demand_cursor(
-        &mut self,
-        network_id: u32,
-        cursor: Option<(DemandPriority, ItemId, EntityId)>,
-    ) {
-        if let Some(network) = self.networks.get_mut(network_id as usize) {
-            network.demand_cursor = cursor;
-        }
-    }
-
-    pub(in crate::simulation) fn surplus_cursor(
-        &self,
-        network_id: u32,
-    ) -> Option<(ItemId, EntityId)> {
-        self.networks
-            .get(network_id as usize)
-            .and_then(|network| network.surplus_cursor)
-    }
-
-    pub(in crate::simulation) fn set_surplus_cursor(
-        &mut self,
-        network_id: u32,
-        cursor: Option<(ItemId, EntityId)>,
-    ) {
-        if let Some(network) = self.networks.get_mut(network_id as usize) {
-            network.surplus_cursor = cursor;
-        }
-    }
-
-    pub(in crate::simulation) fn storage_cursor(&self, network_id: u32) -> Option<EntityId> {
-        self.networks
-            .get(network_id as usize)
-            .and_then(|network| network.storage_cursor)
-    }
-
-    pub(in crate::simulation) fn set_storage_cursor(
-        &mut self,
-        network_id: u32,
-        cursor: Option<EntityId>,
-    ) {
-        if let Some(network) = self.networks.get_mut(network_id as usize) {
-            network.storage_cursor = cursor;
-        }
     }
 
     fn add(&mut self, published: &PublishedEndpoint) {
