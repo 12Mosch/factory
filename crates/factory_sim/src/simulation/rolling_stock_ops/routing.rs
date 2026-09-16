@@ -36,6 +36,7 @@ use crate::simulation::rail_ops::{
 };
 use crate::simulation::*;
 use factory_data::PrototypeCatalog;
+use serde::{Deserialize, Serialize};
 
 use super::traversal::edges_along;
 use super::{TrainStep, TrainStepLimit, braking_distance_fixed, travel};
@@ -132,11 +133,37 @@ pub(in crate::simulation) struct TrainRouting {
     /// all on the great majority of ticks, where every train already has a plan
     /// and nothing asks.
     held_rails_ready: bool,
+    /// Searches that reached their per-tick slice limit, keyed by train so the
+    /// next eligible tick resumes their frontier instead of starting over.
+    pub(in crate::simulation) pending: BTreeMap<TrainId, PendingTrainRouteSearch>,
+}
+
+/// Durable work for one unfinished route query.
+///
+/// The graph itself is derived and rebuilt on load, but its edge ordering is
+/// deterministic. The frontier can therefore be saved using graph-local state
+/// indices and resumed once that graph has been rebuilt.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(in crate::simulation) struct PendingTrainRouteSearch {
+    start: RailPosition,
+    target: RailTarget,
+    occupied: Vec<EntityId>,
+    exempt: Vec<EntityId>,
+    scratch: RailRouteScratch,
 }
 
 impl_runtime_only_identity!(TrainRouting);
 
 impl TrainRouting {
+    pub(in crate::simulation) fn from_pending(
+        pending: BTreeMap<TrainId, PendingTrainRouteSearch>,
+    ) -> Self {
+        Self {
+            pending,
+            ..Self::default()
+        }
+    }
+
     pub(in crate::simulation) fn begin_tick(&mut self) {
         self.remaining_expansions = ROUTE_EXPANSIONS_PER_TICK;
         self.held_rails_ready = false;
@@ -186,6 +213,75 @@ impl TrainRouting {
             max_expansions: ROUTE_MAX_EXPANSIONS,
         });
         *remaining_expansions = remaining_expansions.saturating_sub(expansions);
+        Some(outcome)
+    }
+
+    /// Advances one train's route query by one bounded slice.
+    ///
+    /// A matching unfinished query owns the occupancy snapshot with which it
+    /// began, so moving trains elsewhere cannot change costs halfway through an
+    /// A* search. A changed start or target replaces that query with a new one.
+    pub(in crate::simulation) fn plan_for_train(
+        &mut self,
+        train_id: TrainId,
+        graph: &RailGraph,
+        start: RailPosition,
+        target: RailTarget,
+    ) -> Option<RailRouteOutcome> {
+        if !self.can_search() {
+            return None;
+        }
+
+        let matches = self
+            .pending
+            .get(&train_id)
+            .is_some_and(|pending| pending.start == start && pending.target == target);
+        if matches {
+            let pending = self
+                .pending
+                .get_mut(&train_id)
+                .expect("the matching route query exists");
+            let (outcome, expansions) = pending.scratch.continue_route(&RailRouteRequest {
+                graph,
+                start: pending.start,
+                targets: std::slice::from_ref(&pending.target),
+                reversal_penalty_fixed: TRAIN_REVERSAL_PENALTY_FIXED,
+                occupied_penalty_fixed: TRAIN_OCCUPIED_RAIL_PENALTY_FIXED,
+                occupied: &pending.occupied,
+                exempt: &pending.exempt,
+                max_expansions: ROUTE_MAX_EXPANSIONS,
+            });
+            self.remaining_expansions = self.remaining_expansions.saturating_sub(expansions);
+            if !matches!(outcome, RailRouteOutcome::Exhausted) {
+                self.pending.remove(&train_id);
+            }
+            return Some(outcome);
+        }
+
+        self.pending.remove(&train_id);
+        let (outcome, expansions) = self.scratch.find_route(&RailRouteRequest {
+            graph,
+            start,
+            targets: std::slice::from_ref(&target),
+            reversal_penalty_fixed: TRAIN_REVERSAL_PENALTY_FIXED,
+            occupied_penalty_fixed: TRAIN_OCCUPIED_RAIL_PENALTY_FIXED,
+            occupied: &self.occupied,
+            exempt: &self.exempt,
+            max_expansions: ROUTE_MAX_EXPANSIONS,
+        });
+        self.remaining_expansions = self.remaining_expansions.saturating_sub(expansions);
+        if matches!(outcome, RailRouteOutcome::Exhausted) {
+            self.pending.insert(
+                train_id,
+                PendingTrainRouteSearch {
+                    start,
+                    target,
+                    occupied: self.occupied.clone(),
+                    exempt: self.exempt.clone(),
+                    scratch: std::mem::take(&mut self.scratch),
+                },
+            );
+        }
         Some(outcome)
     }
 
@@ -351,11 +447,9 @@ fn record_route_outcome(
         }
         RailRouteOutcome::Exhausted => {
             train.route = None;
-            // Asking again from here would ask the same question of the same
-            // railway and reach the same cutoff, tick after tick, for a large
-            // part of every tick's budget. Where it asked from is remembered
-            // along with the fact that it asked, because that is the half of the
-            // question which can change.
+            // The matching frontier is retained by the routing subsystem. The
+            // start is durable so save/load and query invalidation can tell
+            // which unfinished question that frontier answers.
             train.route_search_exhausted_at = Some(searched_from);
         }
     }
@@ -449,6 +543,32 @@ impl Simulation {
     /// which is the difference between one train not moving and none of them
     /// moving.
     pub(in crate::simulation) fn plan_train_routes(&mut self) {
+        // Anything that changed the query clears the train's durable exhaustion
+        // marker. Position changes are included: a train still braking must
+        // finish stopping before a fresh query is worth starting.
+        let pending_ids = self
+            .train_routing
+            .pending
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for train_id in pending_ids {
+            let keep = self
+                .train_routing
+                .pending
+                .get(&train_id)
+                .is_some_and(|pending| {
+                    self.rolling_stock.train(train_id).is_some_and(|train| {
+                        train.route.is_none()
+                            && train.destination == Some(pending.target)
+                            && train.route_search_exhausted_at == Some(pending.start)
+                    }) && self.train_search_position(train_id) == Some(pending.start)
+                });
+            if !keep {
+                self.train_routing.pending.remove(&train_id);
+            }
+        }
+
         let mut waiting = std::mem::take(&mut self.train_routing.waiting);
         waiting.clear();
         waiting.extend(
@@ -458,7 +578,7 @@ impl Simulation {
                 .map(|train| train.id)
                 .collect::<Vec<_>>(),
         );
-        waiting.retain(|train_id| !self.search_would_repeat_itself(*train_id));
+        waiting.retain(|train_id| !self.search_must_wait_for_train_to_stop(*train_id));
         if waiting.is_empty() || !self.train_routing.can_search() {
             self.train_routing.waiting = waiting;
             return;
@@ -564,30 +684,23 @@ impl Simulation {
         }
     }
 
-    /// Whether searching for this train again would ask the question its last
-    /// search already failed to answer.
+    /// Whether an unfinished query must wait for its train to finish braking.
     ///
-    /// A search that ran out of expansions ran out from a particular place on a
-    /// particular railway, and both are recorded — the railway by the fact that
-    /// track changing clears this, the place by the position kept with it. Two
-    /// things follow. A train still moving is not asked again, because a train
-    /// told to brake passes through a great many places on the way down and
-    /// asking from each of them would spend the whole cap over and over for the
-    /// length of the stop. A train at rest somewhere else *is* asked again,
-    /// because that is a different question and it costs one search to find out.
+    /// A train told to brake passes through a great many places on the way down.
+    /// Its saved frontier only describes the place it started from, while
+    /// restarting from every intermediate position would spend a full slice on
+    /// each. Once it is stationary, the matching frontier resumes or a new
+    /// query starts from where it came to rest.
     ///
     /// What deliberately does not count as a change is other trains moving:
     /// occupancy shifts what a route costs rather than whether one can be found
     /// inside the cap, and treating it as a change would mean re-searching every
     /// tick — the very thing this exists to prevent.
-    fn search_would_repeat_itself(&self, train_id: TrainId) -> bool {
+    fn search_must_wait_for_train_to_stop(&self, train_id: TrainId) -> bool {
         let Some(train) = self.rolling_stock.train(train_id) else {
             return false;
         };
-        let Some(exhausted_at) = train.route_search_exhausted_at else {
-            return false;
-        };
-        !train.is_stationary() || self.train_search_position(train_id) == Some(exhausted_at)
+        train.route_search_exhausted_at.is_some() && !train.is_stationary()
     }
 
     /// Where a search for this train would start: its leading piece's position.
@@ -621,7 +734,8 @@ impl Simulation {
             ..
         } = self;
         train_routing.collect_exempt_rails(train_id);
-        let Some(outcome) = train_routing.plan(&rails.graph, start, &[target]) else {
+        let Some(outcome) = train_routing.plan_for_train(train_id, &rails.graph, start, target)
+        else {
             return;
         };
         if let Some(train) = rolling_stock.trains.get_mut(&train_id) {
@@ -759,6 +873,7 @@ impl Simulation {
     /// now stands; a train whose *destination* went has nowhere to be sent and
     /// stops.
     pub(in crate::simulation) fn invalidate_train_routes(&mut self) {
+        self.train_routing.pending.clear();
         if !self
             .rolling_stock
             .trains()

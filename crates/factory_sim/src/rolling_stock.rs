@@ -766,18 +766,16 @@ pub struct Train {
     /// Where the train was standing when its last search for
     /// [`Train::destination`] ran out of expansions without an answer.
     ///
-    /// A search is deterministic, so repeating it against the same railway from
-    /// the same place reaches the same cutoff every time: retrying would spend a
-    /// large part of every tick's budget for ever and answer no differently. The
-    /// train keeps its destination and stops asking until something that could
-    /// change the answer does — track laid or pulled up, the train itself given
-    /// new orders, or the train coming to rest somewhere other than here.
+    /// The routing subsystem retains that search's frontier and resumes it under
+    /// a bounded expansion budget on later ticks. This durable position ties the
+    /// saved frontier to the query it answers and lets a restored simulation
+    /// resume the same work.
     ///
     /// The position is kept rather than a bare flag because *where* is half of
     /// what makes it the same question. A train told to brake takes a while to
-    /// stop, and asking again from each place it passes through on the way would
-    /// spend the cap over and over for the whole of it; asking again once it has
-    /// come to rest somewhere else costs one search.
+    /// stop; its old frontier is discarded when it moves, and a replacement is
+    /// started only once the train comes to rest instead of at every position it
+    /// passes through.
     pub route_search_exhausted_at: Option<RailPosition>,
     /// Automatic orders. Kept on the train so saves and deterministic hashes
     /// include both the list and the cursor.

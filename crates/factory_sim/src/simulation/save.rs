@@ -115,7 +115,9 @@ use bincode::Options;
 // reconstruct these historical values.
 // v56: enemy-spawner prototypes gained a failed free-guard spawn retry interval.
 // v57: enemies gained durable long-range wall-follow direction and progress state.
-pub const SAVE_VERSION: u32 = 57;
+// v58: unfinished train route searches gained durable A* frontiers so searches
+// larger than one tick's expansion slice resume identically across a save.
+pub const SAVE_VERSION: u32 = 58;
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -280,6 +282,7 @@ define_snapshot! {
     robot_logistic_work: RobotLogisticWorkState => sim.robots.logistic_work,
     robot_flights: RobotFlightSubsystem => sim.robot_flights,
     rolling_stock: RollingStockSubsystem => sim.rolling_stock,
+    pending_train_route_searches: BTreeMap<TrainId, rolling_stock_ops::PendingTrainRouteSearch> => sim.train_routing.pending,
     pollution: PollutionState => sim.pollution,
     enemies: EnemySubsystem => sim.enemies,
     config: SimulationConfig => sim.config,
@@ -533,7 +536,9 @@ impl SimulationSnapshotOwned {
             fluids: FluidSubsystem::from_networks(self.fluid_networks),
             heat: HeatSubsystem::from_networks(self.heat_networks),
             rails: RailSubsystem::default(),
-            train_routing: rolling_stock_ops::TrainRouting::default(),
+            train_routing: rolling_stock_ops::TrainRouting::from_pending(
+                self.pending_train_route_searches,
+            ),
             stopped_stock_index: rolling_stock_ops::StoppedStockIndex::default(),
             robots: RobotSubsystem::from_networks(self.robot_networks),
             robot_flights: self.robot_flights,

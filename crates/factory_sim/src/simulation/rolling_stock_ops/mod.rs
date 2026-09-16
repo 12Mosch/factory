@@ -36,7 +36,7 @@ pub(in crate::simulation) use loading::{
     stock_pickup_item, take_stock_item,
 };
 pub use motion::braking_distance_fixed;
-pub(in crate::simulation) use routing::{TrainRouting, push_stock_rails};
+pub(in crate::simulation) use routing::{PendingTrainRouteSearch, TrainRouting, push_stock_rails};
 pub(in crate::simulation) use traversal::{TravelOutcome, travel, world_point};
 
 use crate::rail::RailPoint;

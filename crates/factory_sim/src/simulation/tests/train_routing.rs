@@ -549,19 +549,17 @@ fn validation_rejects_a_destination_past_the_end_of_its_rail() {
     }
 }
 
-/// A search that ran out of expansions is not asked again until something that
-/// could change its answer changes. Repeating a deterministic search against the
-/// same railway from the same place would reach the same cutoff every tick, for
-/// a large part of every tick's budget, and answer no differently.
+/// A stationary train whose previous slice ran out is eligible again. In a live
+/// search this resumes its retained frontier; without one (as after reconstructing
+/// older state) it safely starts a replacement query instead of waiting forever.
 #[test]
-fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
+fn a_stationary_train_whose_search_ran_out_keeps_making_progress() {
     let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
     sim.set_train_destination(train_id, rails[20])
         .expect("the train takes a destination");
 
-    // The state an exhausted search leaves behind, which a railway small enough
-    // to test on cannot reach on its own. Set before the train has moved, so the
-    // place it asked from is the place it is standing.
+    // The durable state an exhausted search leaves behind. This small railway
+    // cannot naturally spend the production cap, so supply the marker directly.
     let standing = position(&sim, train_id);
     let train = sim
         .rolling_stock
@@ -570,18 +568,28 @@ fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
         .expect("the train exists");
     train.route = None;
     train.route_search_exhausted_at = Some(standing);
-    sim.validate()
-        .expect("a train waiting on a railway it cannot search is valid");
-    super::super::save::assert_save_continuation(&mut sim, 12, &[]);
+    sim.validate().expect("an unfinished routed train is valid");
 
     sim.tick();
     let train = sim.train(train_id).expect("the train exists");
-    assert_eq!(train.route, None, "the pass leaves it alone");
-    assert!(train.destination.is_some(), "it still has somewhere to be");
-    assert_eq!(train.throttle, TrainThrottle::Brake);
+    assert!(train.route.is_some(), "the stationary query is retried");
+    assert_eq!(train.route_search_exhausted_at, None);
+}
 
-    // Track changing is the one thing that can turn that search into one which
-    // finishes, so the train asks again.
+/// Track changes invalidate both the durable marker and any retained frontier,
+/// so the next query is answered against the rebuilt railway.
+#[test]
+fn topology_changes_release_a_train_after_search_exhaustion() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    let standing = position(&sim, train_id);
+    sim.rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists")
+        .route_search_exhausted_at = Some(standing);
+
     crate::entity_mutation::remove(&mut sim, rails[23]);
     assert_eq!(
         sim.train(train_id)
