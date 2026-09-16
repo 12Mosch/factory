@@ -1,3 +1,4 @@
+use super::EntityItemRevisionMap;
 use super::TransportLaneCache;
 use crate::logistics::BeltItemId;
 use crate::simulation::{EntityId, EntityStore, SimValidationError};
@@ -40,6 +41,7 @@ impl TransportLaneCache {
         id
     }
 
+    /// Records that an entity's belt items changed, bumping its revision token.
     pub(in crate::simulation) fn mark_items_changed(&mut self, entity_id: EntityId) {
         mark_item_revision(
             &mut self.item_revision,
@@ -52,29 +54,22 @@ impl TransportLaneCache {
         self.item_revision
     }
 
+    /// Returns the entity's item revision token, or `0` when unchanged.
     pub(in crate::simulation) fn entity_item_revision(&self, entity_id: EntityId) -> u64 {
-        usize::try_from(entity_id.raw())
-            .ok()
-            .and_then(|index| self.item_revisions_by_entity.get(index))
-            .copied()
-            .unwrap_or(0)
+        self.item_revisions_by_entity.revision(entity_id)
     }
 }
 
+/// Bumps the global item revision and stamps it onto one entity's token.
+/// Shared by the cache and the per-tick advancement scratch.
 pub(in crate::simulation::belt_ops) fn mark_item_revision(
     item_revision: &mut u64,
-    item_revisions_by_entity: &mut Vec<u64>,
+    item_revisions_by_entity: &mut EntityItemRevisionMap,
     entity_id: EntityId,
 ) {
     *item_revision = item_revision.wrapping_add(1);
     if *item_revision == 0 {
         *item_revision = 1;
     }
-    let Ok(index) = usize::try_from(entity_id.raw()) else {
-        return;
-    };
-    if item_revisions_by_entity.len() <= index {
-        item_revisions_by_entity.resize(index + 1, 0);
-    }
-    item_revisions_by_entity[index] = *item_revision;
+    item_revisions_by_entity.set(entity_id, *item_revision);
 }

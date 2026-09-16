@@ -31,9 +31,7 @@ impl TransportLaneGraph {
                 } => input_port < 2 && lane_index < 2,
             };
             if !valid_key
-                || lane_raw_index(key)
-                    .and_then(|raw| self.slot_by_raw.get(raw))
-                    .copied()
+                || lane_raw_index(key).and_then(|raw| self.slot_by_raw.get(raw))
                     != Some(slot as u32)
             {
                 return false;
@@ -75,14 +73,14 @@ impl TransportLaneGraph {
         {
             return false;
         }
-        for (raw, &slot) in self.slot_by_raw.iter().enumerate() {
-            if slot != VACANT_SLOT
-                && self
-                    .lanes
-                    .get(slot as usize)
-                    .and_then(|lane| lane.key)
-                    .and_then(lane_raw_index)
-                    != Some(raw)
+        for (raw, slot) in self.slot_by_raw.occupied_entries() {
+            if self
+                .lanes
+                .get(slot as usize)
+                .and_then(|lane| lane.key)
+                .and_then(lane_raw_index)
+                .and_then(|lane_raw| u64::try_from(lane_raw).ok())
+                != Some(raw)
             {
                 return false;
             }
@@ -152,7 +150,7 @@ mod tests {
         for corruption in 0..4 {
             let mut sim = base.clone();
             match corruption {
-                0 => sim.transport.graph.slot_by_raw.push(0),
+                0 => sim.transport.graph.slot_by_raw.insert(0, 0),
                 1 => sim.transport.graph.run_records.push(TransportRunRecord {
                     start: 1,
                     len: 1,
