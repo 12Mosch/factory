@@ -647,6 +647,51 @@ fn world_with_an_exhausting_route() -> (Simulation, Vec<EntityId>, TrainId) {
     (sim, rails, train_id)
 }
 
+/// Retained work takes fair turns with new work. Two graph-sized frontiers may
+/// fill the bounded pool, but they cannot consume every later tick before a
+/// cheap third train gets to ask its question.
+#[test]
+fn two_pending_searches_do_not_starve_a_fresh_short_route() {
+    let (mut sim, rails, first) = world_with_an_exhausting_route();
+    let second_stock = place_stock(&mut sim, &rails, 10, "locomotive")
+        .expect("a second locomotive fits near the start");
+    let second = sim
+        .rolling_stock_piece(second_stock)
+        .expect("the second locomotive was just placed")
+        .train;
+    let short_stock = place_stock(&mut sim, &rails, 20, "locomotive")
+        .expect("a third locomotive fits further along the run");
+    let short = sim
+        .rolling_stock_piece(short_stock)
+        .expect("the third locomotive was just placed")
+        .train;
+    let distant = rails[rails.len() - 2];
+    sim.set_train_destination(first, distant)
+        .expect("the first train takes the distant destination");
+    sim.set_train_destination(second, distant)
+        .expect("the second train takes the distant destination");
+    sim.set_train_destination(short, rails[30])
+        .expect("the third train takes a nearby destination");
+
+    sim.tick();
+    assert_eq!(sim.train_routing.pending.len(), 2);
+    assert!(sim.train_routing.pending.contains_key(&first));
+    assert!(sim.train_routing.pending.contains_key(&second));
+    assert_eq!(
+        sim.train(short).expect("the third train exists").route,
+        None
+    );
+
+    sim.tick();
+    assert!(
+        sim.train(short)
+            .expect("the third train exists")
+            .route
+            .is_some(),
+        "the round-robin gives a fresh cheap query the next available slice"
+    );
+}
+
 /// Track changes invalidate both the durable marker and any retained frontier,
 /// so the next query is answered against the rebuilt railway.
 #[test]
@@ -718,6 +763,10 @@ fn an_exhausted_frontier_survives_save_and_rejects_stale_or_corrupt_work() {
     let mut changed = crate::load_from_bytes(&bytes).expect("the saved frontier loads again");
     crate::entity_mutation::remove(&mut changed, rails[rails.len() / 2]);
     assert!(changed.train_routing.pending.is_empty());
+    assert!(
+        changed.train_routing.scratch_buffer_capacity_for_test() > 0,
+        "topology invalidation recycles the graph-sized frontier buffers"
+    );
     assert_eq!(
         changed
             .train(train_id)

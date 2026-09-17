@@ -61,8 +61,9 @@ const ROUTE_MAX_EXPANSIONS: usize = 4_096;
 ///
 /// Each frontier owns two graph-sized cost tables. Limiting the pool to the
 /// number of full slices a tick can advance bounds retained routing memory at
-/// O(graph) rather than O(waiting trains × graph). Pending searches are advanced
-/// before new ones, so a full pool always drains and cannot strand later trains.
+/// O(graph) rather than O(waiting trains × graph). Pending and fresh searches
+/// share the same round-robin queue, so the bound cannot turn retained work into
+/// starvation for a later cheap query.
 const ROUTE_PENDING_SEARCH_LIMIT: usize = ROUTE_EXPANSIONS_PER_TICK / ROUTE_MAX_EXPANSIONS;
 
 /// The reusable half of train routing: search scratch, the tick's remaining
@@ -210,6 +211,18 @@ impl TrainRouting {
         if let Some(pending) = self.pending.remove(&train_id) {
             self.recycle_scratch(pending.scratch);
         }
+    }
+
+    fn clear_pending(&mut self) {
+        let pending = std::mem::take(&mut self.pending);
+        for search in pending.into_values() {
+            self.recycle_scratch(search.scratch);
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::simulation) fn scratch_buffer_capacity_for_test(&self) -> usize {
+        self.scratch.buffer_capacity()
     }
 
     /// Validates durable unfinished work after the rail graph has been rebuilt.
@@ -681,39 +694,17 @@ impl Simulation {
             return;
         }
 
-        // Finish retained frontiers before admitting more graph-sized work to
-        // the bounded pool. Resumes use their frozen occupancy snapshots and
-        // therefore do not gather current occupancy at all.
-        let pending = waiting
-            .iter()
-            .copied()
-            .filter(|train_id| self.train_routing.pending.contains_key(train_id))
-            .collect::<Vec<_>>();
-        for train_id in planning_order(&pending, self.rolling_stock.planned_last) {
+        // Pending and fresh queries stay in one round-robin. A full pending pool
+        // may make a newly exhausted search repeat later rather than retaining a
+        // third graph-sized frontier, but it must never keep a cheap new query
+        // from using its turn. Matching resumes use their frozen occupancy
+        // snapshots, so only fresh turns gather current occupancy.
+        for train_id in planning_order(&waiting, self.rolling_stock.planned_last) {
             if !self.train_routing.can_search() {
                 break;
             }
             self.rolling_stock.planned_last = Some(*train_id);
             self.plan_train_route(*train_id);
-        }
-
-        // A full pool has work guaranteed to make progress on a later tick.
-        // Starting another large search now would only discard its frontier.
-        if self.train_routing.pending.len() < ROUTE_PENDING_SEARCH_LIMIT {
-            let fresh = waiting
-                .iter()
-                .copied()
-                .filter(|train_id| !pending.contains(train_id))
-                .collect::<Vec<_>>();
-            for train_id in planning_order(&fresh, self.rolling_stock.planned_last) {
-                if !self.train_routing.can_search()
-                    || self.train_routing.pending.len() >= ROUTE_PENDING_SEARCH_LIMIT
-                {
-                    break;
-                }
-                self.rolling_stock.planned_last = Some(*train_id);
-                self.plan_train_route(*train_id);
-            }
         }
         self.train_routing.waiting = waiting;
     }
@@ -1003,7 +994,7 @@ impl Simulation {
     /// now stands; a train whose *destination* went has nowhere to be sent and
     /// stops.
     pub(in crate::simulation) fn invalidate_train_routes(&mut self) {
-        self.train_routing.pending.clear();
+        self.train_routing.clear_pending();
         if !self
             .rolling_stock
             .trains()
