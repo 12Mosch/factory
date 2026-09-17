@@ -309,6 +309,11 @@ impl SimulationSaveSnapshot {
     pub fn tick_count(&self) -> u64 {
         self.state.tick
     }
+
+    /// Returns the world seed preserved by this snapshot.
+    pub fn world_seed(&self) -> u64 {
+        self.state.world_seed
+    }
 }
 
 /// Captures the durable state at the simulation's current completed-tick boundary.

@@ -9,7 +9,7 @@ pub use catalog::{refresh_catalog, scan_catalog};
 pub(crate) use container::write_save_bytes;
 pub use container::{
     BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
-    TEMP_ARTIFACT_MARKER, decode_container, encode_container,
+    METADATA_SCHEMA_VERSION, TEMP_ARTIFACT_MARKER, decode_container, encode_container,
 };
 pub use jobs::PendingSaveJobs;
 pub(crate) use timestamp::local_datetime_from_unix_ms;
@@ -620,6 +620,7 @@ mod tests {
                 kind: SaveKind::Autosave { generation },
                 completed_at_unix_ms: timestamp,
                 application_version: "test".into(),
+                world_seed: None,
             },
             compatibility: SaveCompatibility::Compatible,
             metadata_available: true,

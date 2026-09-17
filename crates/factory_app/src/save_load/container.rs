@@ -13,7 +13,10 @@ static SAVE_ARTIFACT_LOCK: Mutex<()> = Mutex::new(());
 pub const CONTAINER_MAGIC: [u8; 8] = *b"FACTSAVE";
 /// Current Factory save-container format version.
 pub const CONTAINER_VERSION: u32 = 1;
-pub const METADATA_SCHEMA_VERSION: u32 = 1;
+/// v2 records the world seed in save metadata so catalogs can display it
+/// without deserializing the simulation payload. v1 metadata decodes with
+/// `world_seed: None`.
+pub const METADATA_SCHEMA_VERSION: u32 = 2;
 /// Maximum serialized metadata size accepted by the container parser.
 pub const MAX_METADATA_BYTES: usize = factory_sim::save_limits::SAVE_METADATA_BYTES;
 /// Marker separating a canonical save name from a temporary artifact nonce.
@@ -800,6 +803,7 @@ pub(crate) fn fallback_metadata(
         kind,
         completed_at_unix_ms: timestamp,
         application_version: env!("CARGO_PKG_VERSION").into(),
+        world_seed: None,
     }
 }
 
@@ -964,6 +968,51 @@ mod tests {
             read_payload(&mut io::Cursor::new(raw), raw_limits),
             Err(ContainerError::TooLarge)
         ));
+    }
+
+    #[test]
+    fn world_seed_metadata_round_trips_full_u64() {
+        for seed in [0, 123, u64::MAX] {
+            let mut with_seed = metadata("Seeded");
+            with_seed.world_seed = Some(seed);
+            assert_eq!(with_seed.schema_version, METADATA_SCHEMA_VERSION);
+            let bytes = encode_container(&with_seed, b"FACTSIM\0payload").unwrap();
+            let (decoded, payload) = decode_container(&bytes).unwrap();
+            assert_eq!(decoded.world_seed, Some(seed));
+            assert_eq!(decoded, with_seed);
+            assert_eq!(payload, b"FACTSIM\0payload");
+            let reparsed: SaveMetadata =
+                ron::de::from_str(&ron::ser::to_string(&with_seed).unwrap()).unwrap();
+            assert_eq!(reparsed.world_seed, Some(seed));
+        }
+    }
+
+    #[test]
+    fn legacy_metadata_without_seed_decodes_to_unknown() {
+        let legacy = concat!(
+            "(schema_version: 1, id: \"manual-legacy\", ",
+            "display_name: \"Legacy\", kind: Named, ",
+            "completed_at_unix_ms: 42, application_version: \"0.1.0\")",
+        );
+        let metadata_len = legacy.len() as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&CONTAINER_MAGIC);
+        bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&metadata_len.to_le_bytes());
+        bytes.extend_from_slice(legacy.as_bytes());
+        bytes.extend_from_slice(b"FACTSIM\0payload");
+        let (decoded, payload) = decode_container(&bytes).unwrap();
+        assert_eq!(decoded.world_seed, None);
+        assert_eq!(decoded.schema_version, 1);
+        assert_eq!(decoded.world_seed_label(), "Seed unknown");
+        assert_eq!(payload, b"FACTSIM\0payload");
+    }
+
+    #[test]
+    fn fallback_metadata_uses_current_schema_without_seed() {
+        let fallback = fallback_metadata(SaveId::new("test"), SaveKind::Named, "Test".into(), 42);
+        assert_eq!(fallback.schema_version, METADATA_SCHEMA_VERSION);
+        assert_eq!(fallback.world_seed, None);
     }
 
     #[test]

@@ -3,10 +3,12 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, TextCursorStyle};
 
 use crate::audio::SoundEvent;
+use crate::resources::SimResource;
 use crate::save_load::{
     LoadState, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveEntry, SaveId, SaveKind,
     SaveLoadConfig, SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState,
-    delete_save, load_save, local_datetime_from_unix_ms, request_named_save, request_overwrite,
+    delete_save, format_world_seed, load_save, local_datetime_from_unix_ms, request_named_save,
+    request_overwrite,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::pause_menu::PauseMenuState;
@@ -41,6 +43,25 @@ pub struct SaveLoadSlotList;
 pub struct SaveLoadBackButton;
 #[derive(Component)]
 pub(crate) struct SaveNameInput;
+/// Marker for the in-game current world-seed readout.
+#[derive(Component)]
+pub struct CurrentWorldSeedText;
+/// Copy button that places the current world seed on the system clipboard.
+#[derive(Component)]
+pub struct CopyWorldSeedButton;
+
+/// Returns the active world seed when a world has been started or loaded.
+pub fn current_world_seed(sim: &SimResource) -> Option<u64> {
+    sim.is_initialized().then(|| sim.read().seed())
+}
+
+/// Formats the current-seed row so the displayed decimal round-trips the `u64`.
+pub fn format_current_seed_text(seed: Option<u64>) -> String {
+    match seed {
+        Some(seed) => format!("World seed: {}", format_world_seed(seed)),
+        None => "World seed: unavailable".to_string(),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SaveEntryAction {
@@ -56,6 +77,7 @@ pub(crate) struct SaveLoadSnapshot {
     entries: Vec<SaveEntry>,
     pending: Vec<SaveId>,
     confirmation: PendingSaveConfirmation,
+    current_seed: Option<u64>,
 }
 
 impl PartialEq for SaveLoadSnapshot {
@@ -66,6 +88,7 @@ impl PartialEq for SaveLoadSnapshot {
             && self.entries == other.entries
             && self.pending == other.pending
             && self.confirmation == other.confirmation
+            && self.current_seed == other.current_seed
     }
 }
 
@@ -96,6 +119,16 @@ type EntryButtons<'w, 's> = Query<
     's,
     (&'static Interaction, &'static SaveEntryButton),
     (Changed<Interaction>, With<Button>),
+>;
+type CopySeedButtons<'w, 's> = Query<
+    'w,
+    's,
+    &'static Interaction,
+    (
+        Changed<Interaction>,
+        With<Button>,
+        With<CopyWorldSeedButton>,
+    ),
 >;
 
 #[allow(clippy::too_many_arguments)]
@@ -287,6 +320,42 @@ pub(crate) fn submit_save_name_input(
     );
 }
 
+pub(crate) fn handle_copy_world_seed_button(
+    mut buttons: CopySeedButtons,
+    sim: Res<SimResource>,
+    mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
+    mut status: ResMut<SaveLoadStatus>,
+    mut sounds: MessageWriter<SoundEvent>,
+) {
+    for interaction in &mut buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        sounds.write(SoundEvent::UiClick);
+        let Some(seed) = current_world_seed(&sim) else {
+            status.message = Some("No world seed is available.".into());
+            status.kind = SaveLoadStatusKind::Error;
+            continue;
+        };
+        let text = format_world_seed(seed);
+        if let Some(clipboard) = clipboard.as_deref_mut() {
+            match clipboard.set_text(text.clone()) {
+                Ok(()) => {
+                    status.message = Some(format!("World seed {text} copied to clipboard."));
+                    status.kind = SaveLoadStatusKind::Success;
+                }
+                Err(error) => {
+                    status.message = Some(format!("Could not copy world seed {text}: {error}"));
+                    status.kind = SaveLoadStatusKind::Error;
+                }
+            }
+        } else {
+            status.message = Some(format!("World seed {text} copied to clipboard."));
+            status.kind = SaveLoadStatusKind::Success;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_save_load_window(
     mut commands: Commands,
@@ -295,13 +364,16 @@ pub(crate) fn sync_save_load_window(
     pending: Res<PendingSaveJobs>,
     status: Res<SaveLoadStatus>,
     confirmation: Res<PendingSaveConfirmation>,
+    sim: Res<SimResource>,
     mut shell_roots: WindowRootQuery<SaveLoadShellSnapshot>,
     mut contents_roots: WindowRootQuery<SaveLoadSnapshot>,
 ) {
+    let current_seed = current_world_seed(&sim);
     let contents_changed = catalog.is_changed()
         || pending.is_changed()
         || status.is_changed()
-        || confirmation.is_changed();
+        || confirmation.is_changed()
+        || sim.is_changed();
     let mut snapshot = None;
     let shell_sync = sync_window(
         &mut commands,
@@ -315,14 +387,28 @@ pub(crate) fn sync_save_load_window(
         save_load_root,
         |root, shell| {
             let snapshot = snapshot.get_or_insert_with(|| {
-                save_load_snapshot(&state, &catalog, &pending, &status, &confirmation)
+                save_load_snapshot(
+                    &state,
+                    &catalog,
+                    &pending,
+                    &status,
+                    &confirmation,
+                    current_seed,
+                )
             });
             spawn_save_load_modal(root, shell, snapshot);
         },
     );
     if state.open && contents_changed && shell_sync == WindowSync::Unchanged {
         let snapshot = snapshot.unwrap_or_else(|| {
-            save_load_snapshot(&state, &catalog, &pending, &status, &confirmation)
+            save_load_snapshot(
+                &state,
+                &catalog,
+                &pending,
+                &status,
+                &confirmation,
+                current_seed,
+            )
         });
         sync_contents(
             &mut commands,
@@ -339,6 +425,7 @@ fn save_load_snapshot(
     pending: &PendingSaveJobs,
     status: &SaveLoadStatus,
     confirmation: &PendingSaveConfirmation,
+    current_seed: Option<u64>,
 ) -> SaveLoadSnapshot {
     SaveLoadSnapshot {
         window: state.clone(),
@@ -346,6 +433,7 @@ fn save_load_snapshot(
         entries: catalog.entries().to_vec(),
         pending: pending.pending_ids(),
         confirmation: confirmation.clone(),
+        current_seed,
     }
 }
 
@@ -416,6 +504,7 @@ fn spawn_save_load_dynamic_contents(
     modal: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &SaveLoadSnapshot,
 ) {
+    spawn_current_seed_row(modal, snapshot.current_seed);
     spawn_catalog(modal, snapshot);
     if let Some(id) = confirmation_id(&snapshot.confirmation)
         && let Some(entry) = snapshot.entries.iter().find(|entry| &entry.id == id)
@@ -434,6 +523,53 @@ fn spawn_save_load_dynamic_contents(
             ..default()
         })
         .with_children(|row| spawn_plain_button(row, "Back", Some(SaveLoadBackButton)));
+}
+
+fn spawn_current_seed_row(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    seed: Option<u64>,
+) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(4.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Node {
+                    flex_grow: 1.0,
+                    ..default()
+                },
+                Text::new(format_current_seed_text(seed)),
+                TextFont::from_font_size(12.0),
+                TextColor(Color::srgb(0.88, 0.90, 0.78)),
+                CurrentWorldSeedText,
+            ));
+            if seed.is_some() {
+                row.spawn((
+                    Button,
+                    Node {
+                        height: Val::Px(28.0),
+                        min_width: Val::Px(82.0),
+                        padding: UiRect::horizontal(Val::Px(10.0)),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.11, 0.15, 0.10)),
+                    BorderColor::all(Color::srgb(0.40, 0.49, 0.35)),
+                    CopyWorldSeedButton,
+                ))
+                .with_child((Text::new("Copy"), TextFont::from_font_size(11.0)));
+            }
+        });
 }
 
 fn spawn_tabs(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, selected: SaveLoadTab) {
@@ -577,9 +713,10 @@ fn spawn_entry_row(
                 TextColor(Color::srgb(0.90, 0.92, 0.84)),
             ));
             let mut metadata = format!(
-                "{}  ·  {}",
+                "{}  ·  {}  ·  {}",
                 format_timestamp(entry.metadata.completed_at_unix_ms),
-                entry.compatibility.short_label()
+                entry.compatibility.short_label(),
+                entry.metadata.world_seed_label()
             );
             if !entry.metadata_available {
                 metadata.push_str("  ·  metadata unavailable");
@@ -782,4 +919,30 @@ pub fn format_timestamp(unix_ms: u64) -> String {
         || "Invalid timestamp".to_owned(),
         |timestamp| timestamp.format("%Y-%m-%d %H:%M:%S %:z").to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::save_load::parse_world_seed;
+
+    #[test]
+    fn current_seed_text_round_trips_full_decimal_u64() {
+        for seed in [0, 1, 123, 987654321, u64::MAX - 1, u64::MAX] {
+            let text = format_current_seed_text(Some(seed));
+            let decimal = text.trim_start_matches("World seed: ");
+            assert_eq!(parse_world_seed(decimal), Some(seed), "seed {seed}");
+            assert_eq!(decimal, seed.to_string());
+        }
+        assert_eq!(format_current_seed_text(None), "World seed: unavailable");
+    }
+
+    #[test]
+    fn current_seed_follows_initialized_simulation() {
+        let empty = SimResource::empty();
+        assert_eq!(current_world_seed(&empty), None);
+
+        let seeded = SimResource::new(factory_sim::Simulation::new_test_world(24680));
+        assert_eq!(current_world_seed(&seeded), Some(24680));
+    }
 }
