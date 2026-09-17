@@ -1,4 +1,4 @@
-use bevy::prelude::{App, ColorMaterial, Entity, Handle, Mesh, Res, ResMut, Resource};
+use bevy::prelude::{App, ColorMaterial, Commands, Entity, Handle, Mesh, Res, ResMut, Resource};
 use factory_sim::{ChunkCoord, EntityId};
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::time::Duration;
@@ -183,10 +183,85 @@ pub struct WorldRenderCache {
     pub(crate) mesh_builds_last_sync: usize,
 }
 
+/// Maximum unused belt-item sprites (or labels) retained immediately after a
+/// sync.
+///
+/// The dense render-sync workload in `rendering::world::tests` draws
+/// `DENSE_BELT_ITEM_RENDER_BELTS` (2,000) belts with two items each, or about
+/// 4,000 sprite/label pairs. The cap is the next power of two above that
+/// measured peak so a representative dense view can sit fully pooled without
+/// an immediate hard eviction, while any larger spike is cut back at once.
+pub(crate) const BELT_ITEM_POOL_MAX_UNUSED: usize = 4096;
+/// Steady-state reusable reserve of unused sprites (or labels) kept after
+/// trimming converges.
+///
+/// The small render-sync fixture exposes roughly one hundred belts (a few
+/// hundred items) in a 3x3-chunk window. A 512-entity reserve therefore covers
+/// that steady state with more than 2x headroom for camera panning jitter,
+/// while releasing most of a dense 4,000-item spike (about 87%) once demand
+/// stays low.
+pub(crate) const BELT_ITEM_POOL_SPARE_UNUSED: usize = 512;
+/// Gradual release budget per pool per sync once the hard cap is satisfied.
+///
+/// Draining at most 256 entities per frame converges a 4,000-item spike to the
+/// 512-entity reserve in about 14 frames (well under half a second at 60 Hz)
+/// without despawning thousands of entities in a single frame. Small dips
+/// that recover within a frame or two therefore keep their pooled entities
+/// and reuse them without spawn churn.
+pub(crate) const BELT_ITEM_POOL_TRIM_PER_SYNC: usize = 256;
+
+const _: () = assert!(
+    BELT_ITEM_POOL_SPARE_UNUSED <= BELT_ITEM_POOL_MAX_UNUSED,
+    "belt item pool spare reserve must fit inside the hard cap"
+);
+
+/// Bounded-retention pool for hidden belt-item sprites and labels.
+///
+/// Pooling avoids spawn/despawn churn under ordinary camera movement: entities
+/// leaving the view are hidden and pushed here, then popped for newly visible
+/// items within the same or a later sync. Without a bound, a temporary
+/// visibility spike would leave the pool at its historical high-water mark
+/// for the rest of the session.
+///
+/// Retention policy:
+/// * only unused (hidden, inactive) entities are ever trimmed; active/visible
+///   entities are owned by the belt-item render cache and are never touched
+///   by trimming;
+/// * whenever the unused count exceeds [`BELT_ITEM_POOL_MAX_UNUSED`], the
+///   oldest excess is despawned immediately so an arbitrarily large spike
+///   cannot stay resident;
+/// * remaining excess above [`BELT_ITEM_POOL_SPARE_UNUSED`] is released
+///   gradually, at most [`BELT_ITEM_POOL_TRIM_PER_SYNC`] entities per pool per
+///   sync, so brief demand dips reuse pooled entities instead of churning;
+/// * trimming runs on every belt-item sync, including frames with no
+///   visibility or item changes, so idle low demand still converges to the
+///   spare reserve.
 #[derive(Resource, Default)]
 pub(crate) struct BeltItemRenderPool {
     pub(crate) sprites: Vec<Entity>,
     pub(crate) labels: Vec<Entity>,
+}
+
+impl BeltItemRenderPool {
+    pub(crate) fn trim_excess(&mut self, commands: &mut Commands) {
+        trim_unused_pool(commands, &mut self.sprites);
+        trim_unused_pool(commands, &mut self.labels);
+    }
+}
+
+fn trim_unused_pool(commands: &mut Commands, unused: &mut Vec<Entity>) {
+    if unused.len() > BELT_ITEM_POOL_MAX_UNUSED {
+        let excess = unused.len() - BELT_ITEM_POOL_MAX_UNUSED;
+        for entity in unused.drain(..excess) {
+            commands.entity(entity).despawn();
+        }
+    }
+    if unused.len() > BELT_ITEM_POOL_SPARE_UNUSED {
+        let excess = (unused.len() - BELT_ITEM_POOL_SPARE_UNUSED).min(BELT_ITEM_POOL_TRIM_PER_SYNC);
+        for entity in unused.drain(..excess) {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -346,6 +421,82 @@ mod tests {
             split_average < shared_average,
             "independent timing resources should reduce scheduler wall time"
         );
+    }
+
+    #[test]
+    fn belt_item_pool_trimming_is_bounded_and_gradual() {
+        let mut app = App::new();
+        app.init_resource::<BeltItemRenderPool>();
+        fn trim_pool(mut commands: Commands, mut pool: ResMut<BeltItemRenderPool>) {
+            pool.trim_excess(&mut commands);
+        }
+        app.add_systems(bevy::app::Update, trim_pool);
+
+        // A spike far above the hard cap is cut to the cap immediately, then
+        // releases only one gradual budget in the same frame.
+        let oversized = BELT_ITEM_POOL_MAX_UNUSED + 1_000;
+        let sprites: Vec<Entity> = (0..oversized)
+            .map(|_| app.world_mut().spawn_empty().id())
+            .collect();
+        let labels: Vec<Entity> = (0..oversized)
+            .map(|_| app.world_mut().spawn_empty().id())
+            .collect();
+        *app.world_mut().resource_mut::<BeltItemRenderPool>() = BeltItemRenderPool {
+            sprites: sprites.clone(),
+            labels: labels.clone(),
+        };
+        app.update();
+        let pool = app.world().resource::<BeltItemRenderPool>();
+        assert_eq!(
+            pool.sprites.len(),
+            BELT_ITEM_POOL_MAX_UNUSED - BELT_ITEM_POOL_TRIM_PER_SYNC
+        );
+        assert_eq!(
+            pool.labels.len(),
+            BELT_ITEM_POOL_MAX_UNUSED - BELT_ITEM_POOL_TRIM_PER_SYNC
+        );
+        // The oldest excess was evicted; the retained tail stays alive.
+        for entity in sprites.iter().take(1_000) {
+            assert!(app.world().get_entity(*entity).is_err());
+        }
+        for entity in pool.sprites.iter() {
+            assert!(app.world().get_entity(*entity).is_ok());
+        }
+
+        // Sustained low demand converges to the spare reserve instead of
+        // retaining the high-water mark.
+        for _ in 0..64 {
+            app.update();
+        }
+        let pool = app.world().resource::<BeltItemRenderPool>();
+        assert_eq!(pool.sprites.len(), BELT_ITEM_POOL_SPARE_UNUSED);
+        assert_eq!(pool.labels.len(), BELT_ITEM_POOL_SPARE_UNUSED);
+    }
+
+    #[test]
+    fn belt_item_pool_below_spare_is_fully_retained() {
+        let mut app = App::new();
+        app.init_resource::<BeltItemRenderPool>();
+        fn trim_pool(mut commands: Commands, mut pool: ResMut<BeltItemRenderPool>) {
+            pool.trim_excess(&mut commands);
+        }
+        app.add_systems(bevy::app::Update, trim_pool);
+
+        let retained = BELT_ITEM_POOL_SPARE_UNUSED - 1;
+        let sprites: Vec<Entity> = (0..retained)
+            .map(|_| app.world_mut().spawn_empty().id())
+            .collect();
+        *app.world_mut().resource_mut::<BeltItemRenderPool>() = BeltItemRenderPool {
+            sprites: sprites.clone(),
+            labels: Vec::new(),
+        };
+        app.update();
+        app.update();
+        let pool = app.world().resource::<BeltItemRenderPool>();
+        assert_eq!(pool.sprites.len(), retained);
+        for entity in sprites {
+            assert!(app.world().get_entity(entity).is_ok());
+        }
     }
 
     fn average_update_duration(app: &mut App, frames: usize) -> Duration {

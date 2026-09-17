@@ -81,6 +81,7 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
         if detail.is_changed() && cache.has_items() {
             pool_cached_belt_items(&mut cache, &mut pool, &mut sprites, &mut labels);
         }
+        pool.trim_excess(&mut commands);
         return;
     }
 
@@ -140,6 +141,8 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
         &mut sprites,
         &mut labels,
     );
+
+    pool.trim_excess(&mut commands);
 }
 
 fn collect_changed_belts(
