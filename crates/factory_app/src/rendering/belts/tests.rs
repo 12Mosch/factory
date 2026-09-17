@@ -9,11 +9,12 @@ use crate::rendering::belts::items::{
 };
 use crate::rendering::belts::labels::transport_item_label_render_state;
 use crate::rendering::resources::{
-    BELT_ITEM_POOL_MAX_UNUSED, BELT_ITEM_POOL_SPARE_UNUSED, BeltItemRenderPool, RenderDetail,
-    VisibleEntityIds,
+    BELT_ITEM_POOL_MAX_UNUSED, BELT_ITEM_POOL_SPARE_UNUSED, BELT_ITEM_POOL_TRIM_GRACE_SYNCS,
+    BELT_ITEM_POOL_TRIM_PER_SYNC, BeltItemRenderPool, RenderDetail, VisibleEntityIds,
 };
 use crate::resources::SimResource;
 use crate::utils::find_entity_prototype_id;
+use std::collections::HashSet;
 
 #[test]
 pub(crate) fn belt_item_render_state_changes_only_when_sim_position_changes() {
@@ -403,8 +404,10 @@ fn belt_item_pool_trims_spike_but_reuses_reserve_and_regrows() {
     const ITEMS_PER_BELT: usize = 2;
     const SPIKE_ITEMS: usize = SPIKE_BELTS * ITEMS_PER_BELT;
     const STEADY_ITEMS: usize = STEADY_BELTS * ITEMS_PER_BELT;
+    const POOLED_SPIKE: usize = SPIKE_ITEMS - STEADY_ITEMS;
     // SPIKE_ITEMS (1,200) exceeds the 512-entity spare reserve so trimming is
-    // observable, while fitting the 4,096 hard cap to exercise gradual release.
+    // observable, while fitting the 4,096 emergency threshold to exercise
+    // grace-gated gradual release.
 
     let mut sim = Simulation::new_test_world(123);
     for y in -4..=4 {
@@ -440,83 +443,95 @@ fn belt_item_pool_trims_spike_but_reuses_reserve_and_regrows() {
     let spike_total = total_belt_item_counts(&mut app);
     assert_eq!(spike_total, (SPIKE_ITEMS, SPIKE_ITEMS));
 
-    // Collapse to a small steady state. Trimming runs in the same sync, so the
-    // pool holds the spike minus steady demand minus at most one trim budget,
-    // and crucially retains a large reusable reserve instead of clearing.
+    // Collapse to a small steady state. The spike fits the emergency
+    // threshold, so hysteresis keeps the whole pooled reserve for now: a
+    // one-frame dip must not despawn anything.
     *app.world_mut().resource_mut::<VisibleEntityIds>() = visible_for(&steady_ids, 3);
     app.update();
     assert_eq!(active_belt_item_sprite_count(&mut app), STEADY_ITEMS);
     assert_eq!(active_belt_item_label_count(&mut app), STEADY_ITEMS);
-    let (pooled_sprites, pooled_labels) = pooled_belt_item_counts(&app);
-    assert!(
-        pooled_sprites <= SPIKE_ITEMS - STEADY_ITEMS,
-        "collapse should pool the hidden spike items"
-    );
-    assert_eq!(pooled_sprites, pooled_labels);
-    assert!(
-        pooled_sprites > BELT_ITEM_POOL_SPARE_UNUSED,
-        "one frame must not evict the whole reserve (gradual trimming)"
-    );
+    assert_eq!(pooled_belt_item_counts(&app), (POOLED_SPIKE, POOLED_SPIKE));
+    let pooled_sprite_ids: HashSet<Entity> = all_belt_item_sprite_entities(&mut app)
+        .into_iter()
+        .collect();
+    let pooled_label_ids: HashSet<Entity> =
+        all_belt_item_label_entities(&mut app).into_iter().collect();
+    assert_eq!(pooled_sprite_ids.len(), SPIKE_ITEMS);
+    assert_eq!(pooled_label_ids.len(), SPIKE_ITEMS);
 
-    // Reuse: immediate regrowth still finds pooled entities instead of
-    // spawning everything anew.
+    // Reuse: immediate regrowth finds every pooled entity instead of spawning
+    // anything anew.
     *app.world_mut().resource_mut::<VisibleEntityIds>() =
         visible_for(&spike_ids, spike_revision + 1_000);
     app.update();
     assert_eq!(active_belt_item_sprite_count(&mut app), SPIKE_ITEMS);
     assert_eq!(active_belt_item_label_count(&mut app), SPIKE_ITEMS);
-    // The pool covered most of the regrowth: total entities stay at the spike
-    // peak instead of peak plus a second full allocation.
+    let regrown_sprites: HashSet<Entity> = active_belt_item_sprite_entities(&mut app)
+        .into_iter()
+        .collect();
+    let regrown_labels: HashSet<Entity> = active_belt_item_label_entities(&mut app)
+        .into_iter()
+        .collect();
+    assert_eq!(regrown_sprites.len(), SPIKE_ITEMS);
+    assert!(
+        regrown_sprites.is_subset(&pooled_sprite_ids),
+        "immediate regrowth should reuse pooled sprites with zero new spawns"
+    );
+    assert!(
+        regrown_labels.is_subset(&pooled_label_ids),
+        "immediate regrowth should reuse pooled labels with zero new spawns"
+    );
     assert_eq!(total_belt_item_counts(&mut app), spike_total);
 
     // Return to steady state and let trimming converge. Idle frames with no
-    // visibility or item change must still release excess capacity.
+    // visibility or item change must still release excess capacity once the
+    // grace period elapses. Frame count derives from the policy: grace syncs
+    // plus one budget per trim sync plus margin.
     let steady_revision = spike_revision + 2_000;
     *app.world_mut().resource_mut::<VisibleEntityIds>() = visible_for(&steady_ids, steady_revision);
     app.update();
-    for _ in 0..30 {
+    let settle_frames = BELT_ITEM_POOL_TRIM_GRACE_SYNCS as usize
+        + (POOLED_SPIKE - BELT_ITEM_POOL_SPARE_UNUSED).div_ceil(BELT_ITEM_POOL_TRIM_PER_SYNC)
+        + 5;
+    for _ in 0..settle_frames {
         app.update();
     }
     assert_eq!(active_belt_item_sprite_count(&mut app), STEADY_ITEMS);
     assert_eq!(active_belt_item_label_count(&mut app), STEADY_ITEMS);
-    let (trimmed_sprites, trimmed_labels) = pooled_belt_item_counts(&app);
-    assert!(
-        trimmed_sprites <= BELT_ITEM_POOL_SPARE_UNUSED,
-        "spike pool {trimmed_sprites} should converge to the spare reserve"
-    );
-    assert!(
-        trimmed_labels <= BELT_ITEM_POOL_SPARE_UNUSED,
-        "spike label pool {trimmed_labels} should converge to the spare reserve"
-    );
-    assert!(
-        trimmed_sprites < SPIKE_ITEMS - STEADY_ITEMS,
-        "trimming should release spike capacity instead of retaining the high-water mark"
+    assert_eq!(
+        pooled_belt_item_counts(&app),
+        (BELT_ITEM_POOL_SPARE_UNUSED, BELT_ITEM_POOL_SPARE_UNUSED)
     );
     // Trimming only touches unused entities: the steady-state items stay live.
     assert_eq!(
-        total_belt_item_counts(&mut app).0,
-        STEADY_ITEMS + trimmed_sprites
+        total_belt_item_counts(&mut app),
+        (
+            STEADY_ITEMS + BELT_ITEM_POOL_SPARE_UNUSED,
+            STEADY_ITEMS + BELT_ITEM_POOL_SPARE_UNUSED
+        )
     );
-    assert_eq!(
-        total_belt_item_counts(&mut app).1,
-        STEADY_ITEMS + trimmed_labels
-    );
+    let retained_sprite_ids: HashSet<Entity> = app
+        .world()
+        .resource::<BeltItemRenderPool>()
+        .sprites
+        .iter()
+        .copied()
+        .collect();
 
-    // Subsequent growth reuses the bounded reserve without leaking.
+    // Subsequent growth reuses every retained entity and only spawns the rest.
     *app.world_mut().resource_mut::<VisibleEntityIds>() =
         visible_for(&spike_ids, steady_revision + 1);
     app.update();
     assert_eq!(active_belt_item_sprite_count(&mut app), SPIKE_ITEMS);
     assert_eq!(active_belt_item_label_count(&mut app), SPIKE_ITEMS);
-    let regrown_total = total_belt_item_counts(&mut app);
+    let regrown_again: HashSet<Entity> = active_belt_item_sprite_entities(&mut app)
+        .into_iter()
+        .collect();
     assert!(
-        regrown_total.0 <= spike_total.0 + (SPIKE_ITEMS - STEADY_ITEMS - trimmed_sprites),
-        "regrowth should reuse the retained reserve"
+        retained_sprite_ids.is_subset(&regrown_again),
+        "regrowth should reuse the whole retained reserve"
     );
-    assert!(
-        regrown_total.0 < spike_total.0 + (SPIKE_ITEMS - STEADY_ITEMS),
-        "regrowth after trimming should spawn fewer than a cold start"
-    );
+    assert_eq!(total_belt_item_counts(&mut app), spike_total);
 }
 
 fn visible_entity_ids<const N: usize>(ids: [EntityId; N]) -> VisibleEntityIds {
@@ -582,14 +597,12 @@ fn place_belts_with_items(
     let mut chunks: Vec<ChunkCoord> = sim.world().chunks.keys().copied().collect();
     chunks.sort_unstable();
     for coord in chunks {
-        let (min_x, min_y) = coord.min_tile();
         for local_y in 0..CHUNK_SIZE {
             for local_x in 0..CHUNK_SIZE {
                 if placed.len() == count {
                     return placed;
                 }
                 let (x, y) = coord.tile_at(local_x, local_y);
-                let _ = (min_x, min_y);
                 if factory_sim::placement::validate(
                     sim,
                     factory_sim::placement::EntityPlacementRequest {
@@ -643,6 +656,42 @@ fn active_belt_item_label_count(app: &mut App) -> usize {
 fn pooled_belt_item_counts(app: &App) -> (usize, usize) {
     let pool = app.world().resource::<BeltItemRenderPool>();
     (pool.sprites.len(), pool.labels.len())
+}
+
+fn active_belt_item_sprite_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemSprite, &Visibility)>()
+        .iter(app.world())
+        .filter_map(|(entity, marker, visibility)| {
+            (marker.active && *visibility == Visibility::Visible).then_some(entity)
+        })
+        .collect()
+}
+
+fn active_belt_item_label_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemLabel, &Visibility)>()
+        .iter(app.world())
+        .filter_map(|(entity, marker, visibility)| {
+            (marker.active && *visibility == Visibility::Visible).then_some(entity)
+        })
+        .collect()
+}
+
+fn all_belt_item_sprite_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemSprite)>()
+        .iter(app.world())
+        .map(|(entity, _)| entity)
+        .collect()
+}
+
+fn all_belt_item_label_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemLabel)>()
+        .iter(app.world())
+        .map(|(entity, _)| entity)
+        .collect()
 }
 
 fn total_belt_item_counts(app: &mut App) -> (usize, usize) {

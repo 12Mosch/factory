@@ -585,7 +585,7 @@ pub(super) fn spawn_or_reuse_belt_item_sprite(
         active: true,
     };
 
-    if let Some(entity) = pool.sprites.pop() {
+    if let Some(entity) = pool.take_sprite() {
         commands.entity(entity).insert((
             visual_assets.belt_item_sprite(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
             Transform::from_translation(item.translation),
