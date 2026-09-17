@@ -57,12 +57,20 @@ const ROUTE_EXPANSIONS_PER_TICK: usize = 8_192;
 /// rather than truncated: half a route is not a route.
 const ROUTE_MAX_EXPANSIONS: usize = 4_096;
 
+/// Maximum unfinished searches retained at once.
+///
+/// Each frontier owns two graph-sized cost tables. Limiting the pool to the
+/// number of full slices a tick can advance bounds retained routing memory at
+/// O(graph) rather than O(waiting trains × graph). Pending searches are advanced
+/// before new ones, so a full pool always drains and cannot strand later trains.
+const ROUTE_PENDING_SEARCH_LIMIT: usize = ROUTE_EXPANSIONS_PER_TICK / ROUTE_MAX_EXPANSIONS;
+
 /// The reusable half of train routing: search scratch, the tick's remaining
 /// expansion budget, and where in the trains the last tick got to.
 ///
-/// Derived, runtime-only state. Every route it produces is durable and lives on
-/// the train; nothing here survives a save, and nothing here takes part in
-/// simulation identity.
+/// Most fields are derived scratch. Unfinished searches are the exception: the
+/// bounded `pending` pool survives saves and participates in simulation identity
+/// because its progress determines when and which route is produced.
 #[derive(Clone, Debug, Default)]
 pub(in crate::simulation) struct TrainRouting {
     scratch: RailRouteScratch,
@@ -143,7 +151,7 @@ pub(in crate::simulation) struct TrainRouting {
 /// The graph itself is derived and rebuilt on load, but its edge ordering is
 /// deterministic. The frontier can therefore be saved using graph-local state
 /// indices and resumed once that graph has been rebuilt.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub(in crate::simulation) struct PendingTrainRouteSearch {
     start: RailPosition,
     target: RailTarget,
@@ -152,7 +160,17 @@ pub(in crate::simulation) struct PendingTrainRouteSearch {
     scratch: RailRouteScratch,
 }
 
-impl_runtime_only_identity!(TrainRouting);
+impl PartialEq for TrainRouting {
+    fn eq(&self, other: &Self) -> bool {
+        self.pending == other.pending
+    }
+}
+
+impl Hash for TrainRouting {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.pending.hash(state);
+    }
+}
 
 impl TrainRouting {
     pub(in crate::simulation) fn from_pending(
@@ -167,6 +185,86 @@ impl TrainRouting {
     pub(in crate::simulation) fn begin_tick(&mut self) {
         self.remaining_expansions = ROUTE_EXPANSIONS_PER_TICK;
         self.held_rails_ready = false;
+    }
+
+    fn has_matching_pending(
+        &self,
+        train_id: TrainId,
+        start: RailPosition,
+        target: RailTarget,
+    ) -> bool {
+        self.pending
+            .get(&train_id)
+            .is_some_and(|pending| pending.start == start && pending.target == target)
+    }
+
+    /// Returns a completed or invalidated frontier's allocation to the one-shot
+    /// scratch slot, retaining whichever set of buffers is larger.
+    fn recycle_scratch(&mut self, scratch: RailRouteScratch) {
+        if scratch.buffer_capacity() > self.scratch.buffer_capacity() {
+            self.scratch = scratch;
+        }
+    }
+
+    fn remove_pending(&mut self, train_id: TrainId) {
+        if let Some(pending) = self.pending.remove(&train_id) {
+            self.recycle_scratch(pending.scratch);
+        }
+    }
+
+    /// Validates durable unfinished work after the rail graph has been rebuilt.
+    pub(in crate::simulation) fn invalid_pending_train(
+        &self,
+        graph: &RailGraph,
+        rolling_stock: &RollingStockSubsystem,
+    ) -> Option<TrainId> {
+        if self.pending.len() > ROUTE_PENDING_SEARCH_LIMIT {
+            return self.pending.keys().next().copied();
+        }
+        for (train_id, pending) in &self.pending {
+            let Some(train) = rolling_stock.train(*train_id) else {
+                return Some(*train_id);
+            };
+            let Some(start) = train
+                .stock
+                .first()
+                .and_then(|stock_id| rolling_stock.get(*stock_id))
+                .map(|stock| stock.position)
+            else {
+                return Some(*train_id);
+            };
+            let sorted_unique = |rails: &[EntityId]| rails.windows(2).all(|pair| pair[0] < pair[1]);
+            let invalid = train.route.is_some()
+                || train.destination != Some(pending.target)
+                || train.route_search_exhausted_at != Some(pending.start)
+                || start != pending.start
+                || !sorted_unique(&pending.occupied)
+                || !sorted_unique(&pending.exempt)
+                || pending
+                    .occupied
+                    .iter()
+                    .any(|rail| graph.edge_for_entity(*rail).is_none())
+                || pending
+                    .exempt
+                    .iter()
+                    .any(|rail| pending.occupied.binary_search(rail).is_err())
+                || !pending
+                    .scratch
+                    .is_valid_pending_search(graph, pending.start, pending.target);
+            if invalid {
+                return Some(*train_id);
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
+    pub(in crate::simulation) fn corrupt_pending_frontier_for_test(&mut self, train_id: TrainId) {
+        self.pending
+            .get_mut(&train_id)
+            .expect("the test created pending work for this train")
+            .scratch
+            .corrupt_frontier_state_for_test();
     }
 
     /// Whether this tick can still pay for a whole search.
@@ -232,10 +330,7 @@ impl TrainRouting {
             return None;
         }
 
-        let matches = self
-            .pending
-            .get(&train_id)
-            .is_some_and(|pending| pending.start == start && pending.target == target);
+        let matches = self.has_matching_pending(train_id, start, target);
         if matches {
             let pending = self
                 .pending
@@ -253,12 +348,12 @@ impl TrainRouting {
             });
             self.remaining_expansions = self.remaining_expansions.saturating_sub(expansions);
             if !matches!(outcome, RailRouteOutcome::Exhausted) {
-                self.pending.remove(&train_id);
+                self.remove_pending(train_id);
             }
             return Some(outcome);
         }
 
-        self.pending.remove(&train_id);
+        self.remove_pending(train_id);
         let (outcome, expansions) = self.scratch.find_route(&RailRouteRequest {
             graph,
             start,
@@ -270,7 +365,9 @@ impl TrainRouting {
             max_expansions: ROUTE_MAX_EXPANSIONS,
         });
         self.remaining_expansions = self.remaining_expansions.saturating_sub(expansions);
-        if matches!(outcome, RailRouteOutcome::Exhausted) {
+        if matches!(outcome, RailRouteOutcome::Exhausted)
+            && self.pending.len() < ROUTE_PENDING_SEARCH_LIMIT
+        {
             self.pending.insert(
                 train_id,
                 PendingTrainRouteSearch {
@@ -565,7 +662,7 @@ impl Simulation {
                     }) && self.train_search_position(train_id) == Some(pending.start)
                 });
             if !keep {
-                self.train_routing.pending.remove(&train_id);
+                self.train_routing.remove_pending(train_id);
             }
         }
 
@@ -584,14 +681,39 @@ impl Simulation {
             return;
         }
 
-        self.ensure_train_occupancy();
-
-        for train_id in planning_order(&waiting, self.rolling_stock.planned_last) {
+        // Finish retained frontiers before admitting more graph-sized work to
+        // the bounded pool. Resumes use their frozen occupancy snapshots and
+        // therefore do not gather current occupancy at all.
+        let pending = waiting
+            .iter()
+            .copied()
+            .filter(|train_id| self.train_routing.pending.contains_key(train_id))
+            .collect::<Vec<_>>();
+        for train_id in planning_order(&pending, self.rolling_stock.planned_last) {
             if !self.train_routing.can_search() {
                 break;
             }
             self.rolling_stock.planned_last = Some(*train_id);
             self.plan_train_route(*train_id);
+        }
+
+        // A full pool has work guaranteed to make progress on a later tick.
+        // Starting another large search now would only discard its frontier.
+        if self.train_routing.pending.len() < ROUTE_PENDING_SEARCH_LIMIT {
+            let fresh = waiting
+                .iter()
+                .copied()
+                .filter(|train_id| !pending.contains(train_id))
+                .collect::<Vec<_>>();
+            for train_id in planning_order(&fresh, self.rolling_stock.planned_last) {
+                if !self.train_routing.can_search()
+                    || self.train_routing.pending.len() >= ROUTE_PENDING_SEARCH_LIMIT
+                {
+                    break;
+                }
+                self.rolling_stock.planned_last = Some(*train_id);
+                self.plan_train_route(*train_id);
+            }
         }
         self.train_routing.waiting = waiting;
     }
@@ -727,13 +849,21 @@ impl Simulation {
             return;
         };
 
+        let resuming = self
+            .train_routing
+            .has_matching_pending(train_id, start, target);
+        if !resuming {
+            self.ensure_train_occupancy();
+        }
         let Simulation {
             train_routing,
             rails,
             rolling_stock,
             ..
         } = self;
-        train_routing.collect_exempt_rails(train_id);
+        if !resuming {
+            train_routing.collect_exempt_rails(train_id);
+        }
         let Some(outcome) = train_routing.plan_for_train(train_id, &rails.graph, start, target)
         else {
             return;

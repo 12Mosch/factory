@@ -8,6 +8,7 @@
 use super::super::*;
 use super::rolling_stock::{fuel_train, place_stock, world_with_a_driveable_locomotive};
 use crate::rolling_stock::{RollingStockId, TrainId, TrainThrottle};
+use factory_data::BasePrototypeIds;
 
 /// Ticks until the train has arrived, or gives up. Long enough for a
 /// locomotive to run the length of these fixtures twice over, which is the
@@ -576,6 +577,76 @@ fn a_stationary_train_whose_search_ran_out_keeps_making_progress() {
     assert_eq!(train.route_search_exhausted_at, None);
 }
 
+/// A real placed railway just beyond one production route-search slice.
+///
+/// The corridor's chunks are generated directly and its two-tile-wide path is
+/// rewritten to plain ground so the fixture is independent of seed terrain.
+fn world_with_an_exhausting_route() -> (Simulation, Vec<EntityId>, TrainId) {
+    const EDGE_COUNT: usize = 4_200;
+    const X: WorldTileCoord = 96;
+    const Y: WorldTileCoord = 0;
+
+    let mut sim = Simulation::new_test_world(123);
+    let straight =
+        factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "rail_straight");
+    let grass = BasePrototypeIds::from_catalog(&sim.world.prototypes)
+        .tiles
+        .grass;
+    let chunk_x = i32::try_from(X.div_euclid(i64::from(CHUNK_SIZE))).unwrap();
+    let last_y = Y + i64::try_from(EDGE_COUNT * 2).unwrap() - 1;
+    let first_chunk_y = i32::try_from(Y.div_euclid(i64::from(CHUNK_SIZE))).unwrap();
+    let last_chunk_y = i32::try_from(last_y.div_euclid(i64::from(CHUNK_SIZE))).unwrap();
+    sim.world.ensure_chunks_generated(
+        (first_chunk_y..=last_chunk_y).map(|y| ChunkCoord { x: chunk_x, y }),
+    );
+    for y in Y..=last_y {
+        let result = sim.world.set_tile(X, y, grass);
+        assert!(
+            result.is_ok()
+                || matches!(
+                    result,
+                    Err(crate::world::TerrainMutationError::Unchanged { .. })
+                ),
+            "the generated corridor accepts plain ground: {result:?}"
+        );
+        let (coord, index) = crate::simulation::world_ops::chunk_coord_and_tile_index(X, y)
+            .expect("the prepared corridor is representable");
+        let tile = sim
+            .world
+            .chunks
+            .get_mut(&coord)
+            .and_then(|chunk| chunk.tiles.get_mut(index))
+            .expect("the prepared corridor is generated");
+        tile.resource = None;
+        tile.collision =
+            crate::simulation::generation::tile_collision(&sim.world.prototypes, grass);
+    }
+
+    let rails = (0..EDGE_COUNT)
+        .map(|index| {
+            crate::placement::place(
+                &mut sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: straight,
+                    x: X,
+                    y: Y + i64::try_from(index * 2).unwrap(),
+                    direction: Direction::North,
+                },
+            )
+            .expect("the prepared corridor accepts the rail run")
+        })
+        .collect::<Vec<_>>();
+    sim.tick();
+
+    let stock_id = place_stock(&mut sim, &rails, 2, "locomotive")
+        .expect("a locomotive fits near the start of the large run");
+    let train_id = sim
+        .rolling_stock_piece(stock_id)
+        .expect("the locomotive was just placed")
+        .train;
+    (sim, rails, train_id)
+}
+
 /// Track changes invalidate both the durable marker and any retained frontier,
 /// so the next query is answered against the rebuilt railway.
 #[test]
@@ -605,6 +676,67 @@ fn topology_changes_release_a_train_after_search_exhaustion() {
             .is_some(),
         "with the railway changed the train plans again"
     );
+}
+
+/// The complete durability boundary: a naturally exhausted Simulation saves
+/// its pending frontier, rebuilds the rail graph on load, and reaches the same
+/// route on the next bounded slice. The same saved frontier is invalidated when
+/// its topology changes, and malformed frontier indices are rejected on load.
+#[test]
+fn an_exhausted_frontier_survives_save_and_rejects_stale_or_corrupt_work() {
+    let (mut sim, rails, train_id) = world_with_an_exhausting_route();
+    sim.set_train_destination(train_id, rails[rails.len() - 2])
+        .expect("the train takes the distant destination");
+    sim.tick();
+
+    assert!(sim.train_routing.pending.contains_key(&train_id));
+    assert_eq!(sim.train(train_id).expect("the train exists").route, None);
+    let bytes = crate::save_to_bytes(&sim).expect("an unfinished search saves");
+    let mut loaded = crate::load_from_bytes(&bytes).expect("an unfinished search loads");
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+
+    let mut without_frontier = loaded.clone();
+    without_frontier.train_routing.pending.clear();
+    assert_ne!(
+        loaded.state_hash(),
+        without_frontier.state_hash(),
+        "unfinished work participates in deterministic identity"
+    );
+
+    sim.tick();
+    loaded.tick();
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+    assert!(
+        loaded
+            .train(train_id)
+            .expect("the train exists")
+            .route
+            .is_some(),
+        "the restored frontier completes rather than restarting"
+    );
+
+    let mut changed = crate::load_from_bytes(&bytes).expect("the saved frontier loads again");
+    crate::entity_mutation::remove(&mut changed, rails[rails.len() / 2]);
+    assert!(changed.train_routing.pending.is_empty());
+    assert_eq!(
+        changed
+            .train(train_id)
+            .expect("the train exists")
+            .route_search_exhausted_at,
+        None
+    );
+
+    let mut corrupt = crate::load_from_bytes(&bytes).expect("the valid frontier loads");
+    corrupt
+        .train_routing
+        .corrupt_pending_frontier_for_test(train_id);
+    let corrupt_bytes = crate::save_to_bytes(&corrupt).expect("the malformed state encodes");
+    assert!(matches!(
+        crate::load_from_bytes(&corrupt_bytes),
+        Err(crate::SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidTrain { train_id: invalid }
+        )) if invalid == train_id
+    ));
 }
 
 /// A mark closer to the end of the line than half the train is a mark the train

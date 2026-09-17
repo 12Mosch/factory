@@ -340,7 +340,7 @@ impl Simulation {
 
     pub fn state_hash(&self) -> u64 {
         let mut hasher = StableHasher::default();
-        "factory-sim-state-v6".hash(&mut hasher);
+        "factory-sim-state-v7".hash(&mut hasher);
         self.tick.hash(&mut hasher);
         self.day_night_cycle.hash(&mut hasher);
         self.world.seed.hash(&mut hasher);
@@ -375,6 +375,7 @@ impl Simulation {
         self.robots.hash(&mut hasher);
         self.robot_flights.hash(&mut hasher);
         self.rolling_stock.hash(&mut hasher);
+        self.train_routing.hash(&mut hasher);
         self.circuits.topology.network_ids.hash(&mut hasher);
         self.circuits.topology.network_count.hash(&mut hasher);
         for network in &self.circuits.networks {

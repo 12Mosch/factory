@@ -32,6 +32,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
+use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
@@ -123,7 +124,7 @@ pub(in crate::simulation) struct RailRouteScratch {
 }
 
 /// One mark the search would accept, resolved against the graph.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct RailGoal {
     /// Which of the request's targets this is, so the caller can tell which of
     /// its candidates won.
@@ -150,6 +151,135 @@ struct RailArrival {
 }
 
 impl RailRouteScratch {
+    /// Whether a saved unfinished search is safe and coherent to resume against
+    /// the deterministically rebuilt graph.
+    pub(in crate::simulation) fn is_valid_pending_search(
+        &self,
+        graph: &RailGraph,
+        start: RailPosition,
+        target: RailTarget,
+    ) -> bool {
+        let Some(&start_index) = graph.edge_indices_by_entity.get(&start.edge) else {
+            return false;
+        };
+        let Some(&target_index) = graph.edge_indices_by_entity.get(&target.edge) else {
+            return false;
+        };
+        let Some(state_count) = graph.edges.len().checked_mul(2) else {
+            return false;
+        };
+        if !self.in_progress
+            || self.start_index != start_index
+            || self.best_cost.len() != state_count
+            || self.came_from.len() != state_count
+            || self.open.is_empty()
+            || !self.trail.is_empty()
+            || self.direct.is_some()
+            || self.goals
+                != [RailGoal {
+                    target: 0,
+                    edge_index: target_index,
+                    mark: target,
+                }]
+            || graph.edges[start_index].network_id != graph.edges[target_index].network_id
+        {
+            return false;
+        }
+
+        let start_edge = graph.edges[start_index];
+        let target_edge = graph.edges[target_index];
+        if !(0..=start_edge.length_fixed).contains(&start.distance_fixed)
+            || !(0..=target_edge.length_fixed).contains(&target.distance_fixed)
+        {
+            return false;
+        }
+        let max_edge_length = graph
+            .edges
+            .iter()
+            .map(|edge| edge.length_fixed)
+            .max()
+            .unwrap_or(0);
+        let max_next_cost = max_edge_length
+            .saturating_add(crate::rolling_stock::TRAIN_REVERSAL_PENALTY_FIXED)
+            .saturating_add(crate::rolling_stock::TRAIN_OCCUPIED_RAIL_PENALTY_FIXED);
+        let max_heuristic = graph
+            .edges
+            .iter()
+            .flat_map(|edge| [0, 1].map(|exit_end| heuristic(edge, exit_end, &target_edge)))
+            .max()
+            .unwrap_or(0);
+        let largest_safe_cost = i64::MAX
+            .saturating_sub(max_next_cost)
+            .saturating_sub(max_heuristic);
+
+        if self.open.iter().any(|Reverse((estimate, cost, state))| {
+            let state = *state as usize;
+            if state >= state_count
+                || *cost < 0
+                || *cost > largest_safe_cost
+                || self.best_cost[state] == i64::MAX
+                || *cost < self.best_cost[state]
+            {
+                return true;
+            }
+            let (edge_index, exit_end) = decode(state as u32);
+            cost.checked_add(heuristic(&graph.edges[edge_index], exit_end, &target_edge))
+                != Some(*estimate)
+        }) {
+            return false;
+        }
+
+        self.best_cost.iter().zip(&self.came_from).enumerate().all(
+            |(state, (cost, predecessor))| {
+                if *cost == i64::MAX {
+                    *predecessor == NO_PREDECESSOR
+                } else if *cost < 0 || *cost > largest_safe_cost {
+                    false
+                } else if *predecessor == NO_PREDECESSOR {
+                    [0, 1].into_iter().any(|exit_end| {
+                        state == encode(start_index, exit_end) as usize
+                            && *cost
+                                == distance_to_end(&start_edge, start.distance_fixed, exit_end)
+                                    + if exit_end == usize::from(start.forward) {
+                                        0
+                                    } else {
+                                        crate::rolling_stock::TRAIN_REVERSAL_PENALTY_FIXED
+                                    }
+                    })
+                } else {
+                    let predecessor = *predecessor as usize;
+                    if predecessor >= state_count || self.best_cost[predecessor] >= *cost {
+                        return false;
+                    }
+                    let (edge_index, exit_end) = decode(state as u32);
+                    let (previous_index, previous_exit) = decode(predecessor as u32);
+                    let entry_end = 1 - exit_end;
+                    (previous_index == edge_index && previous_exit == entry_end)
+                        || graph
+                            .neighbor_ends(&graph.edges[previous_index], previous_exit)
+                            .any(|(next_index, next_entry)| {
+                                next_index == edge_index && next_entry == entry_end
+                            })
+                }
+            },
+        )
+    }
+
+    /// Total retained element capacity of the allocation-heavy search buffers.
+    pub(in crate::simulation) fn buffer_capacity(&self) -> usize {
+        self.open
+            .capacity()
+            .saturating_add(self.best_cost.capacity())
+            .saturating_add(self.came_from.capacity())
+            .saturating_add(self.trail.capacity())
+            .saturating_add(self.goals.capacity())
+    }
+
+    #[cfg(test)]
+    pub(in crate::simulation) fn corrupt_frontier_state_for_test(&mut self) {
+        self.open.push(Reverse((0, 0, u32::MAX)));
+    }
+
     /// Searches for a route, and reports what it spent doing so.
     ///
     /// The expansion count is returned even when nothing was found: it is what
@@ -533,12 +663,42 @@ impl RailRouteScratch {
 /// any other route runs the rest of this rail first and then more. A mark behind
 /// it is a different matter: driving to it means turning round, and turning
 /// round has a price that a way round the railway need not pay.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct DirectRoute {
     route: TrainRoute,
     cost: i64,
     reverses: bool,
 }
+
+impl Hash for RailRouteScratch {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Heap array layout is an implementation detail. Hash its sorted values
+        // so equivalent frontiers have one stable identity.
+        self.open.clone().into_sorted_vec().hash(state);
+        self.best_cost.hash(state);
+        self.came_from.hash(state);
+        self.trail.hash(state);
+        self.goals.hash(state);
+        self.start_index.hash(state);
+        self.direct.hash(state);
+        self.in_progress.hash(state);
+    }
+}
+
+impl PartialEq for RailRouteScratch {
+    fn eq(&self, other: &Self) -> bool {
+        self.open.clone().into_sorted_vec() == other.open.clone().into_sorted_vec()
+            && self.best_cost == other.best_cost
+            && self.came_from == other.came_from
+            && self.trail == other.trail
+            && self.goals == other.goals
+            && self.start_index == other.start_index
+            && self.direct == other.direct
+            && self.in_progress == other.in_progress
+    }
+}
+
+impl Eq for RailRouteScratch {}
 
 fn route_along_one_rail(
     start: RailPosition,

@@ -268,9 +268,9 @@ pub struct Simulation {
     /// which public APIs may perform between ticks.
     #[serde(skip, default)]
     rolling_stock_topology_revision: u64,
-    /// Route search for trains: scratch buffers and the tick's expansion
-    /// budget. Scratch is reset each tick and rebuilt from
-    /// nothing on load — the routes themselves live on the trains.
+    /// Train route-search scratch, per-tick budget, and the bounded set of
+    /// unfinished frontiers. Only the unfinished work is durable; idle buffers
+    /// and tick-local indexes rebuild on load.
     #[serde(skip)]
     train_routing: rolling_stock_ops::TrainRouting,
     /// Which tiles the stopped stock covers, so an inserter or a pump can find

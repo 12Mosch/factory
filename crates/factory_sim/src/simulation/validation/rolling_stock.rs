@@ -277,6 +277,12 @@ pub(super) fn validate_rolling_stock_durable(sim: &Simulation) -> Result<(), Sim
 /// Requires a reconstructed rail graph. Dirty live worlds cannot hold claims
 /// because invalidating their graph releases them immediately.
 pub(super) fn validate_rolling_stock(sim: &Simulation) -> Result<(), SimValidationError> {
+    if let Some(train_id) = sim
+        .train_routing
+        .invalid_pending_train(&sim.rails.graph, &sim.rolling_stock)
+    {
+        return Err(SimValidationError::InvalidTrain { train_id });
+    }
     for (train_id, train) in &sim.rolling_stock.trains {
         if train
             .reserved_blocks
