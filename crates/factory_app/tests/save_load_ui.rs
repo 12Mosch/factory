@@ -688,6 +688,229 @@ fn large_world_save_captures_off_thread_and_resumes_fixed_ticks() {
     assert!(metrics.last_write_ms > 0.0);
 }
 
+#[test]
+fn current_world_seed_is_visible_and_copy_reports_unavailable_clipboard_honestly() {
+    use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
+    use factory_app::ui::save_load::{
+        CopyWorldSeedButton, CurrentWorldSeedText, current_world_seed,
+    };
+
+    let mut app = test_app(Duration::ZERO, "current_seed_visible");
+    let expected_seed = current_world_seed(app.world().resource::<SimResource>()).expect("world");
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.update();
+    app.update();
+
+    let displayed = app
+        .world_mut()
+        .query_filtered::<&Text, With<CurrentWorldSeedText>>()
+        .single(app.world())
+        .expect("current seed text should be visible")
+        .0
+        .clone();
+    assert!(displayed.contains(&expected_seed.to_string()));
+    let decimal = displayed.trim_start_matches("World seed: ").trim();
+    assert_eq!(decimal.parse::<u64>().ok(), Some(expected_seed));
+
+    let copy_button = app
+        .world_mut()
+        .query_filtered::<Entity, With<CopyWorldSeedButton>>()
+        .single(app.world())
+        .expect("copy button should be visible");
+    app.world_mut()
+        .query::<&mut Interaction>()
+        .get_mut(app.world_mut(), copy_button)
+        .unwrap()
+        .clone_from(&Interaction::Pressed);
+    app.update();
+
+    // This minimal setup has no clipboard resource, so the handler must
+    // report an error rather than claim a copy happened. The actual write
+    // path is covered by `copy_world_seed_text` unit tests with a fake writer.
+    let status = app.world().resource::<SaveLoadStatus>();
+    assert_eq!(status.kind, SaveLoadStatusKind::Error);
+    assert!(
+        status
+            .message
+            .clone()
+            .unwrap_or_default()
+            .contains("unavailable"),
+        "missing clipboard must not report success, got: {:?}",
+        status.message
+    );
+}
+
+#[test]
+fn named_save_preserves_seed_in_metadata_and_catalog_without_payload() {
+    use factory_app::save_load::METADATA_SCHEMA_VERSION;
+    use factory_app::ui::save_load::current_world_seed;
+
+    let mut app = test_app(Duration::ZERO, "seed_metadata_catalog");
+    let expected_seed = current_world_seed(app.world().resource::<SimResource>()).expect("world");
+    create_named_save(&mut app, "Seeded World");
+    drain_save_jobs(&mut app);
+
+    let path = app.world().resource::<SaveCatalog>().entries()[0]
+        .path()
+        .to_path_buf();
+    let (metadata, _) = decode_container(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(metadata.schema_version, METADATA_SCHEMA_VERSION);
+    assert_eq!(metadata.world_seed, Some(expected_seed));
+
+    let entries = scan_catalog(app.world().resource::<SaveLoadConfig>()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].metadata.world_seed, Some(expected_seed));
+
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    app.update();
+    let texts: Vec<String> = app
+        .world_mut()
+        .query::<&Text>()
+        .iter(app.world())
+        .map(|text| text.0.clone())
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains(&format!("Seed {expected_seed}"))),
+        "catalog should display the seed without payload deserialization"
+    );
+    let catalog_text = texts
+        .iter()
+        .find(|text| text.contains(&format!("Seed {expected_seed}")))
+        .unwrap();
+    let seed_fragment = catalog_text
+        .split("Seed ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap();
+    assert_eq!(seed_fragment.parse::<u64>().ok(), Some(expected_seed));
+}
+
+#[test]
+fn legacy_save_without_seed_shows_unknown_but_load_preserves_original_seed() {
+    use factory_app::save_load::{CONTAINER_MAGIC, CONTAINER_VERSION};
+    use factory_app::ui::save_load::{CurrentWorldSeedText, current_world_seed};
+
+    let mut app = test_app(Duration::ZERO, "legacy_seed_load");
+    let original_seed = app.world().resource::<SimResource>().read().seed();
+    let payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    let legacy_metadata = "(schema_version: 1, id: \"manual-legacyseed\", display_name: \"Legacy Seed\", kind: Named, completed_at_unix_ms: 42, application_version: \"0.1.0\")";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&CONTAINER_MAGIC);
+    bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&(legacy_metadata.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(legacy_metadata.as_bytes());
+    bytes.extend_from_slice(&payload);
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    fs::create_dir_all(&config.root_dir).unwrap();
+    fs::write(config.root_dir.join("manual-legacyseed.factsim"), &bytes).unwrap();
+
+    let entries = scan_catalog(&config).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].metadata.world_seed, None);
+    assert_eq!(entries[0].metadata.world_seed_label(), "Seed unknown");
+
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    app.update();
+    let texts: Vec<String> = app
+        .world_mut()
+        .query::<&Text>()
+        .iter(app.world())
+        .map(|text| text.0.clone())
+        .collect();
+    assert!(texts.iter().any(|text| text.contains("Seed unknown")));
+
+    let id = entries[0].id.clone();
+    press_entry(&mut app, &id, SaveEntryAction::Load);
+    app.update();
+    assert_eq!(
+        app.world().resource::<SimResource>().read().seed(),
+        original_seed
+    );
+    assert_eq!(
+        current_world_seed(app.world().resource::<SimResource>()),
+        Some(original_seed)
+    );
+
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.update();
+    app.update();
+    let displayed = app
+        .world_mut()
+        .query_filtered::<&Text, With<CurrentWorldSeedText>>()
+        .single(app.world())
+        .expect("seed should be visible after loading legacy save")
+        .0
+        .clone();
+    assert!(displayed.contains(&original_seed.to_string()));
+    assert_eq!(
+        displayed
+            .trim_start_matches("World seed: ")
+            .trim()
+            .parse::<u64>()
+            .ok(),
+        Some(original_seed)
+    );
+}
+
+#[test]
+fn loading_a_save_restores_its_preserved_seed_in_the_current_display() {
+    use factory_app::ui::save_load::{CurrentWorldSeedText, current_world_seed};
+
+    let mut app = test_app(Duration::ZERO, "seed_restore_on_load");
+    let first_seed = app.world().resource::<SimResource>().read().seed();
+    create_named_save(&mut app, "First World");
+    drain_save_jobs(&mut app);
+    let first_id = app
+        .world()
+        .resource::<SaveCatalog>()
+        .entries()
+        .iter()
+        .find(|entry| entry.metadata.display_name == "First World")
+        .unwrap()
+        .id
+        .clone();
+
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(factory_sim::Simulation::new_test_world(999_123))
+        .expect("world replacement should succeed");
+    app.update();
+    assert_eq!(
+        current_world_seed(app.world().resource::<SimResource>()),
+        Some(999_123)
+    );
+    create_named_save(&mut app, "Second World");
+    drain_save_jobs(&mut app);
+
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.update();
+    press_entry(&mut app, &first_id, SaveEntryAction::Load);
+    app.update();
+    assert_eq!(
+        app.world().resource::<SimResource>().read().seed(),
+        first_seed
+    );
+
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.update();
+    app.update();
+    let displayed = app
+        .world_mut()
+        .query_filtered::<&Text, With<CurrentWorldSeedText>>()
+        .single(app.world())
+        .expect("seed should be visible after load")
+        .0
+        .clone();
+    assert!(displayed.contains(&first_seed.to_string()));
+}
+
 /// Generates the shared 20x20-chunk fixture used by save performance coverage.
 fn generate_large_world(app: &mut App) {
     let mut sim_resource = app.world_mut().resource_mut::<SimResource>();

@@ -124,6 +124,7 @@ pub(crate) fn queue_save(
         let snapshot = capture_save_snapshot(&sim);
         let snapshot_capture_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
         let snapshot_tick = snapshot.tick_count();
+        let snapshot_seed = snapshot.world_seed();
         drop(sim);
         let serialize_start = Instant::now();
         let payload = save_snapshot_to_bytes(&snapshot).map_err(|error| match error {
@@ -142,6 +143,7 @@ pub(crate) fn queue_save(
             kind,
             completed_at_unix_ms: now_unix_ms(),
             application_version: env!("CARGO_PKG_VERSION").into(),
+            world_seed: Some(snapshot_seed),
         };
         let bytes = encode_container(&metadata, &payload).map_err(|error| error.to_string())?;
         drop(payload);

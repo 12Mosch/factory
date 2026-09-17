@@ -583,9 +583,10 @@ fn spawn_world_setup_catalog(
                         TextFont::from_font_size(12.0),
                     ));
                     let mut details = format!(
-                        "{} · {}",
+                        "{} · {} · {}",
                         format_timestamp(entry.metadata.completed_at_unix_ms),
-                        entry.compatibility.short_label()
+                        entry.compatibility.short_label(),
+                        entry.metadata.world_seed_label()
                     );
                     if !entry.metadata_available {
                         details.push_str(" · metadata unavailable");
@@ -799,6 +800,73 @@ mod tests {
             app.world().resource::<SimResource>().read().seed(),
             246813579
         );
+    }
+
+    #[test]
+    fn existing_worlds_list_displays_preserved_seeds_without_payload() {
+        use crate::save_load::{CONTAINER_MAGIC, CONTAINER_VERSION};
+
+        let save_root = std::env::temp_dir().join(format!(
+            "factory-world-setup-seeds-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&save_root).unwrap();
+        let sim = factory_sim::Simulation::new_test_world(424242);
+        let payload = factory_sim::save_to_bytes(&sim).unwrap();
+        let seeded_metadata = "(schema_version: 2, id: \"manual-seedvis\", display_name: \"Seeded\", kind: Named, completed_at_unix_ms: 42, application_version: \"0.1.0\", world_seed: Some(424242))";
+        let mut seeded_bytes = Vec::new();
+        seeded_bytes.extend_from_slice(&CONTAINER_MAGIC);
+        seeded_bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
+        seeded_bytes.extend_from_slice(&(seeded_metadata.len() as u32).to_le_bytes());
+        seeded_bytes.extend_from_slice(seeded_metadata.as_bytes());
+        seeded_bytes.extend_from_slice(&payload);
+        std::fs::write(save_root.join("manual-seedvis.factsim"), &seeded_bytes).unwrap();
+
+        let legacy_metadata = "(schema_version: 1, id: \"manual-legacyvis\", display_name: \"Legacy\", kind: Named, completed_at_unix_ms: 42, application_version: \"0.1.0\")";
+        let mut legacy_bytes = Vec::new();
+        legacy_bytes.extend_from_slice(&CONTAINER_MAGIC);
+        legacy_bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
+        legacy_bytes.extend_from_slice(&(legacy_metadata.len() as u32).to_le_bytes());
+        legacy_bytes.extend_from_slice(legacy_metadata.as_bytes());
+        legacy_bytes.extend_from_slice(&payload);
+        std::fs::write(save_root.join("manual-legacyvis.factsim"), &legacy_bytes).unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(StartInWorldSetup)
+            .add_plugins(MinimalPlugins)
+            .add_plugins(crate::FactoryAppPlugin)
+            .insert_resource(crate::save_load::SaveLoadConfig {
+                root_dir: save_root.clone(),
+                autosave_interval_ticks: u64::MAX,
+                autosave_slot_count: 5,
+            });
+        app.update();
+        app.update();
+
+        let texts: Vec<String> = app
+            .world_mut()
+            .query::<&Text>()
+            .iter(app.world())
+            .map(|text| text.0.clone())
+            .collect();
+        let seeded_row = texts
+            .iter()
+            .find(|text| text.contains("Seed 424242"))
+            .expect("world-setup catalog should display the preserved seed");
+        let fragment = seeded_row
+            .split("Seed ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap();
+        assert_eq!(fragment.parse::<u64>().ok(), Some(424242));
+        assert!(
+            texts.iter().any(|text| text.contains("Seed unknown")),
+            "legacy saves without metadata seeds should show an unknown seed"
+        );
+        let _ = std::fs::remove_dir_all(save_root);
     }
 
     #[test]

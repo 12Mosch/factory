@@ -41,6 +41,25 @@ pub struct SaveMetadata {
     pub kind: SaveKind,
     pub completed_at_unix_ms: u64,
     pub application_version: String,
+    /// World seed preserved without deserializing the simulation payload.
+    /// `None` for saves written before the seed was recorded in metadata.
+    #[serde(default)]
+    pub world_seed: Option<u64>,
+}
+
+/// Formats a world seed as its full decimal `u64` representation.
+pub fn format_world_seed(seed: u64) -> String {
+    seed.to_string()
+}
+
+impl SaveMetadata {
+    /// Human-readable seed fragment for catalog rows.
+    pub fn world_seed_label(&self) -> String {
+        match self.world_seed {
+            Some(seed) => format!("Seed {}", format_world_seed(seed)),
+            None => "Seed unknown".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,4 +218,41 @@ pub enum SaveLoadStatusKind {
     Info,
     Success,
     Error,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_metadata(world_seed: Option<u64>) -> SaveMetadata {
+        SaveMetadata {
+            schema_version: 2,
+            id: SaveId::new("test"),
+            display_name: "Test".into(),
+            kind: SaveKind::Named,
+            completed_at_unix_ms: 0,
+            application_version: "test".into(),
+            world_seed,
+        }
+    }
+
+    #[test]
+    fn world_seed_format_and_label_round_trip_full_u64() {
+        for seed in [0, 123, u64::MAX] {
+            let text = format_world_seed(seed);
+            assert_eq!(text, seed.to_string());
+            assert_eq!(text.parse::<u64>().ok(), Some(seed), "seed {seed}");
+            let metadata = test_metadata(Some(seed));
+            assert_eq!(metadata.world_seed_label(), format!("Seed {seed}"));
+            assert_eq!(
+                metadata
+                    .world_seed_label()
+                    .trim_start_matches("Seed ")
+                    .parse::<u64>()
+                    .ok(),
+                Some(seed)
+            );
+        }
+        assert_eq!(test_metadata(None).world_seed_label(), "Seed unknown");
+    }
 }

@@ -1014,10 +1014,10 @@ mod movement_regression_tests {
                     crate::entity_mutation::remove(sim, occupant)
                         .expect("rectangle entity should be removable");
                 }
-                if !sim
+                if sim
                     .world
                     .tile_at(tile.0, tile.1)
-                    .is_some_and(|world_tile| world_tile.tile_id == concrete)
+                    .is_none_or(|world_tile| world_tile.tile_id != concrete)
                 {
                     sim.world
                         .set_tile(tile.0, tile.1, concrete)

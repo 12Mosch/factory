@@ -8,9 +8,9 @@ use crate::save_load::{
     refresh_catalog_on_manager_open, run_autosave,
 };
 use crate::ui::save_load::{
-    SaveCreateRequested, handle_save_load_buttons, submit_save_create_requests,
-    submit_save_name_input, sync_save_load_window, sync_save_name_from_state,
-    sync_save_name_to_state,
+    SaveCreateRequested, handle_copy_world_seed_button, handle_save_load_buttons,
+    submit_save_create_requests, submit_save_name_input, sync_save_load_window,
+    sync_save_name_from_state, sync_save_name_to_state,
 };
 use crate::ui::text_input::TextInputSanitization;
 
@@ -36,6 +36,7 @@ impl Plugin for SaveLoadPlugin {
                     handle_save_load_shortcuts.in_set(InGameSet),
                     sync_save_name_from_state.in_set(InGameSet),
                     handle_save_load_buttons.in_set(AppSet::UiInteraction),
+                    handle_copy_world_seed_button.in_set(AppSet::UiInteraction),
                     run_autosave.in_set(InGameSet),
                     // Save workers finish on their own thread; keep joining
                     // and reporting them even on the world-setup screen.
