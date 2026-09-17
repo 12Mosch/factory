@@ -21,7 +21,7 @@ per-kind registry in `entities/store.rs` and `simulation/entity_states.rs`.
 | Player/combat | Inventory, equipment buffers/cooldowns, weapon magazine, death/respawn request, corpses, delayed projectiles/status effects and their allocators | Failed respawn-search memoization only avoids repeating an already failed query; rebuilding does not consume a gameplay budget. |
 | Crafting/research | Manual mining progress, crafting job IDs, queue order, completion cursor, consumed ingredients/progress, active/queued research and levels | Catalog-derived lookup data. |
 | Construction/robots | Plans, reservations, repair/deconstruction progress, flying robots, payloads/deliveries, IDs, charging pads and ordered queues, plus per-network logistic demand/surplus/storage cursors | Coverage/network and logistic candidate indexes rebuild synchronously. Network summaries are validated against durable owners. |
-| Trains | Stock/train allocators, positions, fuel/cargo, velocities, destinations/routes, exhausted-search positions, planning cursor, block/stop reservations, schedule and wait clocks | Rail graph/blocks, stopped-stock index and route-search scratch rebuild without a simulation tick. The next tick resets the route-search budget. |
+| Trains | Stock/train allocators, positions, fuel/cargo, velocities, destinations/routes, exhausted-search positions and incremental frontiers (including their occupancy snapshots), planning cursor, block/stop reservations, schedule and wait clocks | Rail graph/blocks, stopped-stock index and idle route-search buffers rebuild without a simulation tick. The next tick resets the route-search budget. |
 | Power/fluids/heat/circuits | Stored energy/fluid, power status and statistics, clean network summaries (plus whether fluid/heat summaries are pending invalidation), circuit configuration and combinator outputs | Connectivity, demand indexes, tick scratch, circuit signals and module effects rebuild from durable inputs without advancing production/combinators. |
 | Statistics/onboarding | Rolling totals, history, launch/death counts and historical milestones | Map/presentation status caches and diagnostic overflow counters reset. |
 
@@ -62,6 +62,6 @@ harnesses are not yet present; this helper reuses `SimCommand`, `state_hash` and
 existing subsystem fixtures rather than creating a public replay protocol.
 Permanent coverage includes warm and partially initialized multi-raid fields,
 exhausted navigation budgets, consumed highest belt IDs, belt-jam wake timing, pending generation,
-train routes/search exhaustion, robot reservations, delayed combat, and pending
+train routes/search exhaustion and serialized frontiers, robot reservations, delayed combat, and pending
 crafting/research. Corrupt chunk/navigation/identity inputs are rejected in the
 prerequisite or durable validation phase.

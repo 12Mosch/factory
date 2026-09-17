@@ -8,6 +8,7 @@
 use super::super::*;
 use super::rolling_stock::{fuel_train, place_stock, world_with_a_driveable_locomotive};
 use crate::rolling_stock::{RollingStockId, TrainId, TrainThrottle};
+use factory_data::BasePrototypeIds;
 
 /// Ticks until the train has arrived, or gives up. Long enough for a
 /// locomotive to run the length of these fixtures twice over, which is the
@@ -549,19 +550,17 @@ fn validation_rejects_a_destination_past_the_end_of_its_rail() {
     }
 }
 
-/// A search that ran out of expansions is not asked again until something that
-/// could change its answer changes. Repeating a deterministic search against the
-/// same railway from the same place would reach the same cutoff every tick, for
-/// a large part of every tick's budget, and answer no differently.
+/// A stationary train whose previous slice ran out is eligible again. In a live
+/// search this resumes its retained frontier; without one (as after reconstructing
+/// older state) it safely starts a replacement query instead of waiting forever.
 #[test]
-fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
+fn a_stationary_train_whose_search_ran_out_keeps_making_progress() {
     let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
     sim.set_train_destination(train_id, rails[20])
         .expect("the train takes a destination");
 
-    // The state an exhausted search leaves behind, which a railway small enough
-    // to test on cannot reach on its own. Set before the train has moved, so the
-    // place it asked from is the place it is standing.
+    // The durable state an exhausted search leaves behind. This small railway
+    // cannot naturally spend the production cap, so supply the marker directly.
     let standing = position(&sim, train_id);
     let train = sim
         .rolling_stock
@@ -570,18 +569,143 @@ fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
         .expect("the train exists");
     train.route = None;
     train.route_search_exhausted_at = Some(standing);
-    sim.validate()
-        .expect("a train waiting on a railway it cannot search is valid");
-    super::super::save::assert_save_continuation(&mut sim, 12, &[]);
+    sim.validate().expect("an unfinished routed train is valid");
 
     sim.tick();
     let train = sim.train(train_id).expect("the train exists");
-    assert_eq!(train.route, None, "the pass leaves it alone");
-    assert!(train.destination.is_some(), "it still has somewhere to be");
-    assert_eq!(train.throttle, TrainThrottle::Brake);
+    assert!(train.route.is_some(), "the stationary query is retried");
+    assert_eq!(train.route_search_exhausted_at, None);
+}
 
-    // Track changing is the one thing that can turn that search into one which
-    // finishes, so the train asks again.
+/// A real placed railway just beyond one production route-search slice.
+///
+/// The corridor's chunks are generated directly and its two-tile-wide path is
+/// rewritten to plain ground so the fixture is independent of seed terrain.
+fn world_with_an_exhausting_route() -> (Simulation, Vec<EntityId>, TrainId) {
+    const EDGE_COUNT: usize = 4_200;
+    const X: WorldTileCoord = 96;
+    const Y: WorldTileCoord = 0;
+
+    let mut sim = Simulation::new_test_world(123);
+    let straight =
+        factory_data::entity_prototype_id_by_name(&sim.world.prototypes, "rail_straight");
+    let grass = BasePrototypeIds::from_catalog(&sim.world.prototypes)
+        .tiles
+        .grass;
+    let chunk_x = i32::try_from(X.div_euclid(i64::from(CHUNK_SIZE))).unwrap();
+    let last_y = Y + i64::try_from(EDGE_COUNT * 2).unwrap() - 1;
+    let first_chunk_y = i32::try_from(Y.div_euclid(i64::from(CHUNK_SIZE))).unwrap();
+    let last_chunk_y = i32::try_from(last_y.div_euclid(i64::from(CHUNK_SIZE))).unwrap();
+    sim.world.ensure_chunks_generated(
+        (first_chunk_y..=last_chunk_y).map(|y| ChunkCoord { x: chunk_x, y }),
+    );
+    for y in Y..=last_y {
+        let result = sim.world.set_tile(X, y, grass);
+        assert!(
+            result.is_ok()
+                || matches!(
+                    result,
+                    Err(crate::world::TerrainMutationError::Unchanged { .. })
+                ),
+            "the generated corridor accepts plain ground: {result:?}"
+        );
+        let (coord, index) = crate::simulation::world_ops::chunk_coord_and_tile_index(X, y)
+            .expect("the prepared corridor is representable");
+        let tile = sim
+            .world
+            .chunks
+            .get_mut(&coord)
+            .and_then(|chunk| chunk.tiles.get_mut(index))
+            .expect("the prepared corridor is generated");
+        tile.resource = None;
+        tile.collision =
+            crate::simulation::generation::tile_collision(&sim.world.prototypes, grass);
+    }
+
+    let rails = (0..EDGE_COUNT)
+        .map(|index| {
+            crate::placement::place(
+                &mut sim,
+                crate::placement::EntityPlacementRequest {
+                    prototype_id: straight,
+                    x: X,
+                    y: Y + i64::try_from(index * 2).unwrap(),
+                    direction: Direction::North,
+                },
+            )
+            .expect("the prepared corridor accepts the rail run")
+        })
+        .collect::<Vec<_>>();
+    sim.tick();
+
+    let stock_id = place_stock(&mut sim, &rails, 2, "locomotive")
+        .expect("a locomotive fits near the start of the large run");
+    let train_id = sim
+        .rolling_stock_piece(stock_id)
+        .expect("the locomotive was just placed")
+        .train;
+    (sim, rails, train_id)
+}
+
+/// Retained work takes fair turns with new work. Two graph-sized frontiers may
+/// fill the bounded pool, but they cannot consume every later tick before a
+/// cheap third train gets to ask its question.
+#[test]
+fn two_pending_searches_do_not_starve_a_fresh_short_route() {
+    let (mut sim, rails, first) = world_with_an_exhausting_route();
+    let second_stock = place_stock(&mut sim, &rails, 10, "locomotive")
+        .expect("a second locomotive fits near the start");
+    let second = sim
+        .rolling_stock_piece(second_stock)
+        .expect("the second locomotive was just placed")
+        .train;
+    let short_stock = place_stock(&mut sim, &rails, 20, "locomotive")
+        .expect("a third locomotive fits further along the run");
+    let short = sim
+        .rolling_stock_piece(short_stock)
+        .expect("the third locomotive was just placed")
+        .train;
+    let distant = rails[rails.len() - 2];
+    sim.set_train_destination(first, distant)
+        .expect("the first train takes the distant destination");
+    sim.set_train_destination(second, distant)
+        .expect("the second train takes the distant destination");
+    sim.set_train_destination(short, rails[30])
+        .expect("the third train takes a nearby destination");
+
+    sim.tick();
+    assert_eq!(sim.train_routing.pending.len(), 2);
+    assert!(sim.train_routing.pending.contains_key(&first));
+    assert!(sim.train_routing.pending.contains_key(&second));
+    assert_eq!(
+        sim.train(short).expect("the third train exists").route,
+        None
+    );
+
+    sim.tick();
+    assert!(
+        sim.train(short)
+            .expect("the third train exists")
+            .route
+            .is_some(),
+        "the round-robin gives a fresh cheap query the next available slice"
+    );
+}
+
+/// Track changes invalidate both the durable marker and any retained frontier,
+/// so the next query is answered against the rebuilt railway.
+#[test]
+fn topology_changes_release_a_train_after_search_exhaustion() {
+    let (mut sim, rails, _, train_id) = world_with_a_routed_locomotive();
+    sim.set_train_destination(train_id, rails[20])
+        .expect("the train takes a destination");
+    let standing = position(&sim, train_id);
+    sim.rolling_stock
+        .trains
+        .get_mut(&train_id)
+        .expect("the train exists")
+        .route_search_exhausted_at = Some(standing);
+
     crate::entity_mutation::remove(&mut sim, rails[23]);
     assert_eq!(
         sim.train(train_id)
@@ -597,6 +721,71 @@ fn a_train_whose_search_ran_out_waits_for_the_railway_to_change() {
             .is_some(),
         "with the railway changed the train plans again"
     );
+}
+
+/// The complete durability boundary: a naturally exhausted Simulation saves
+/// its pending frontier, rebuilds the rail graph on load, and reaches the same
+/// route on the next bounded slice. The same saved frontier is invalidated when
+/// its topology changes, and malformed frontier indices are rejected on load.
+#[test]
+fn an_exhausted_frontier_survives_save_and_rejects_stale_or_corrupt_work() {
+    let (mut sim, rails, train_id) = world_with_an_exhausting_route();
+    sim.set_train_destination(train_id, rails[rails.len() - 2])
+        .expect("the train takes the distant destination");
+    sim.tick();
+
+    assert!(sim.train_routing.pending.contains_key(&train_id));
+    assert_eq!(sim.train(train_id).expect("the train exists").route, None);
+    let bytes = crate::save_to_bytes(&sim).expect("an unfinished search saves");
+    let mut loaded = crate::load_from_bytes(&bytes).expect("an unfinished search loads");
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+
+    let mut without_frontier = loaded.clone();
+    without_frontier.train_routing.pending.clear();
+    assert_ne!(
+        loaded.state_hash(),
+        without_frontier.state_hash(),
+        "unfinished work participates in deterministic identity"
+    );
+
+    sim.tick();
+    loaded.tick();
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+    assert!(
+        loaded
+            .train(train_id)
+            .expect("the train exists")
+            .route
+            .is_some(),
+        "the restored frontier completes rather than restarting"
+    );
+
+    let mut changed = crate::load_from_bytes(&bytes).expect("the saved frontier loads again");
+    crate::entity_mutation::remove(&mut changed, rails[rails.len() / 2]);
+    assert!(changed.train_routing.pending.is_empty());
+    assert!(
+        changed.train_routing.scratch_buffer_capacity_for_test() > 0,
+        "topology invalidation recycles the graph-sized frontier buffers"
+    );
+    assert_eq!(
+        changed
+            .train(train_id)
+            .expect("the train exists")
+            .route_search_exhausted_at,
+        None
+    );
+
+    let mut corrupt = crate::load_from_bytes(&bytes).expect("the valid frontier loads");
+    corrupt
+        .train_routing
+        .corrupt_pending_frontier_for_test(train_id);
+    let corrupt_bytes = crate::save_to_bytes(&corrupt).expect("the malformed state encodes");
+    assert!(matches!(
+        crate::load_from_bytes(&corrupt_bytes),
+        Err(crate::SaveLoadError::InvalidSimulationState(
+            SimValidationError::InvalidTrain { train_id: invalid }
+        )) if invalid == train_id
+    ));
 }
 
 /// A mark closer to the end of the line than half the train is a mark the train

@@ -32,6 +32,9 @@
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
+use std::hash::{Hash, Hasher};
+
+use serde::{Deserialize, Serialize};
 
 use crate::ids::EntityId;
 use crate::rail::RailPoint;
@@ -102,7 +105,7 @@ pub(in crate::simulation) enum RailRouteOutcome {
 /// on a settled railway allocates nothing at all. `best_cost` and `came_from`
 /// are indexed by state — `edge_index * 2 + exit` — rather than keyed by one,
 /// which is what keeps the inner loop free of a map lookup.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(in crate::simulation) struct RailRouteScratch {
     open: BinaryHeap<Reverse<(i64, i64, u32)>>,
     best_cost: Vec<i64>,
@@ -111,10 +114,17 @@ pub(in crate::simulation) struct RailRouteScratch {
     trail: Vec<u32>,
     /// The request's targets that are on this railway at all, in request order.
     goals: Vec<RailGoal>,
+    /// Graph-local index of the edge the current incremental search started on.
+    start_index: usize,
+    /// A route straight back along the starting rail, kept while the search
+    /// tries to find a cheaper way around the railway.
+    direct: Option<(usize, DirectRoute)>,
+    /// Whether the heap and cost tables above contain a search that can resume.
+    in_progress: bool,
 }
 
 /// One mark the search would accept, resolved against the graph.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct RailGoal {
     /// Which of the request's targets this is, so the caller can tell which of
     /// its candidates won.
@@ -141,6 +151,135 @@ struct RailArrival {
 }
 
 impl RailRouteScratch {
+    /// Whether a saved unfinished search is safe and coherent to resume against
+    /// the deterministically rebuilt graph.
+    pub(in crate::simulation) fn is_valid_pending_search(
+        &self,
+        graph: &RailGraph,
+        start: RailPosition,
+        target: RailTarget,
+    ) -> bool {
+        let Some(&start_index) = graph.edge_indices_by_entity.get(&start.edge) else {
+            return false;
+        };
+        let Some(&target_index) = graph.edge_indices_by_entity.get(&target.edge) else {
+            return false;
+        };
+        let Some(state_count) = graph.edges.len().checked_mul(2) else {
+            return false;
+        };
+        if !self.in_progress
+            || self.start_index != start_index
+            || self.best_cost.len() != state_count
+            || self.came_from.len() != state_count
+            || self.open.is_empty()
+            || !self.trail.is_empty()
+            || self.direct.is_some()
+            || self.goals
+                != [RailGoal {
+                    target: 0,
+                    edge_index: target_index,
+                    mark: target,
+                }]
+            || graph.edges[start_index].network_id != graph.edges[target_index].network_id
+        {
+            return false;
+        }
+
+        let start_edge = graph.edges[start_index];
+        let target_edge = graph.edges[target_index];
+        if !(0..=start_edge.length_fixed).contains(&start.distance_fixed)
+            || !(0..=target_edge.length_fixed).contains(&target.distance_fixed)
+        {
+            return false;
+        }
+        let max_edge_length = graph
+            .edges
+            .iter()
+            .map(|edge| edge.length_fixed)
+            .max()
+            .unwrap_or(0);
+        let max_next_cost = max_edge_length
+            .saturating_add(crate::rolling_stock::TRAIN_REVERSAL_PENALTY_FIXED)
+            .saturating_add(crate::rolling_stock::TRAIN_OCCUPIED_RAIL_PENALTY_FIXED);
+        let max_heuristic = graph
+            .edges
+            .iter()
+            .flat_map(|edge| [0, 1].map(|exit_end| heuristic(edge, exit_end, &target_edge)))
+            .max()
+            .unwrap_or(0);
+        let largest_safe_cost = i64::MAX
+            .saturating_sub(max_next_cost)
+            .saturating_sub(max_heuristic);
+
+        if self.open.iter().any(|Reverse((estimate, cost, state))| {
+            let state = *state as usize;
+            if state >= state_count
+                || *cost < 0
+                || *cost > largest_safe_cost
+                || self.best_cost[state] == i64::MAX
+                || *cost < self.best_cost[state]
+            {
+                return true;
+            }
+            let (edge_index, exit_end) = decode(state as u32);
+            cost.checked_add(heuristic(&graph.edges[edge_index], exit_end, &target_edge))
+                != Some(*estimate)
+        }) {
+            return false;
+        }
+
+        self.best_cost.iter().zip(&self.came_from).enumerate().all(
+            |(state, (cost, predecessor))| {
+                if *cost == i64::MAX {
+                    *predecessor == NO_PREDECESSOR
+                } else if *cost < 0 || *cost > largest_safe_cost {
+                    false
+                } else if *predecessor == NO_PREDECESSOR {
+                    [0, 1].into_iter().any(|exit_end| {
+                        state == encode(start_index, exit_end) as usize
+                            && *cost
+                                == distance_to_end(&start_edge, start.distance_fixed, exit_end)
+                                    + if exit_end == usize::from(start.forward) {
+                                        0
+                                    } else {
+                                        crate::rolling_stock::TRAIN_REVERSAL_PENALTY_FIXED
+                                    }
+                    })
+                } else {
+                    let predecessor = *predecessor as usize;
+                    if predecessor >= state_count || self.best_cost[predecessor] >= *cost {
+                        return false;
+                    }
+                    let (edge_index, exit_end) = decode(state as u32);
+                    let (previous_index, previous_exit) = decode(predecessor as u32);
+                    let entry_end = 1 - exit_end;
+                    (previous_index == edge_index && previous_exit == entry_end)
+                        || graph
+                            .neighbor_ends(&graph.edges[previous_index], previous_exit)
+                            .any(|(next_index, next_entry)| {
+                                next_index == edge_index && next_entry == entry_end
+                            })
+                }
+            },
+        )
+    }
+
+    /// Total retained element capacity of the allocation-heavy search buffers.
+    pub(in crate::simulation) fn buffer_capacity(&self) -> usize {
+        self.open
+            .capacity()
+            .saturating_add(self.best_cost.capacity())
+            .saturating_add(self.came_from.capacity())
+            .saturating_add(self.trail.capacity())
+            .saturating_add(self.goals.capacity())
+    }
+
+    #[cfg(test)]
+    pub(in crate::simulation) fn corrupt_frontier_state_for_test(&mut self) {
+        self.open.push(Reverse((0, 0, u32::MAX)));
+    }
+
     /// Searches for a route, and reports what it spent doing so.
     ///
     /// The expansion count is returned even when nothing was found: it is what
@@ -150,9 +289,121 @@ impl RailRouteScratch {
         &mut self,
         request: &RailRouteRequest<'_>,
     ) -> (RailRouteOutcome, usize) {
+        self.in_progress = false;
+        self.continue_route(request)
+    }
+
+    /// Advances either a new search or the unfinished search left by the last
+    /// call, spending no more than this request's expansion allowance.
+    ///
+    /// An [`RailRouteOutcome::Exhausted`] result deliberately leaves the heap,
+    /// costs, and predecessors intact. Calling this again with the same request
+    /// resumes at the next frontier node instead of repeating the work that led
+    /// to the cutoff.
+    pub(in crate::simulation) fn continue_route(
+        &mut self,
+        request: &RailRouteRequest<'_>,
+    ) -> (RailRouteOutcome, usize) {
+        if !self.in_progress
+            && let Some(outcome) = self.begin_route(request)
+        {
+            return (outcome, 0);
+        }
+
+        let graph = request.graph;
+        let Some(&start_edge) = graph.edges.get(self.start_index) else {
+            self.in_progress = false;
+            return (RailRouteOutcome::Unreachable, 0);
+        };
+
+        let mut expansions = 0;
+        let mut completed = false;
+        let mut arrival: Option<RailArrival> = None;
+        while expansions < request.max_expansions {
+            let Some(Reverse((estimate, cost, state))) = self.open.pop() else {
+                completed = true;
+                break;
+            };
+            // Every route still open costs at least its estimate, so once that
+            // reaches what getting there already costs — by arriving, or by
+            // turning round on the spot — nothing left can improve on it.
+            let best_known = arrival
+                .map(|found| found.cost)
+                .into_iter()
+                .chain(self.direct.as_ref().map(|(_, direct)| direct.cost))
+                .min();
+            if best_known.is_some_and(|limit| estimate >= limit) {
+                completed = true;
+                break;
+            }
+            if cost > self.best_cost[state as usize] {
+                continue;
+            }
+            expansions += 1;
+
+            let (edge_index, exit_end) = decode(state);
+            let edge = graph.edges[edge_index];
+            // Onward through everything joined to the end being run toward, and
+            // then back down this very rail, which is what a reversal is.
+            let onward = graph
+                .neighbor_ends(&edge, exit_end)
+                .map(|(next_index, arrival_end)| (next_index, arrival_end, 0));
+            for (next_index, entry_end, penalty) in onward.chain(std::iter::once((
+                edge_index,
+                exit_end,
+                request.reversal_penalty_fixed,
+            ))) {
+                self.relax(
+                    request,
+                    state,
+                    cost + penalty,
+                    next_index,
+                    entry_end,
+                    &mut arrival,
+                );
+            }
+        }
+
+        let exhausted = !completed && !self.open.is_empty();
+        let direct = self.direct.take();
+        // The way round only wins if it really costs less than turning round on
+        // the spot; a tie goes to the direct route, which is the shorter
+        // description of the same journey.
+        let arrival = arrival.filter(|found| {
+            direct
+                .as_ref()
+                .is_none_or(|(_, direct)| found.cost < direct.cost)
+        });
+        let outcome = match (arrival, direct) {
+            (Some(arrival), _) => {
+                let goal = self.goals[arrival.goal];
+                let target_edge = graph.edges[goal.edge_index];
+                RailRouteOutcome::Found {
+                    target: goal.target,
+                    route: self.rebuild(request, &start_edge, &target_edge, goal.mark, arrival),
+                }
+            }
+            // A search that ran out while a route was already in hand has still
+            // found one: it only failed to prove that nothing beats it.
+            (None, Some((target, direct))) => RailRouteOutcome::Found {
+                target,
+                route: direct.route,
+            },
+            (None, None) if exhausted => RailRouteOutcome::Exhausted,
+            (None, None) => RailRouteOutcome::Unreachable,
+        };
+        self.in_progress = matches!(outcome, RailRouteOutcome::Exhausted);
+        (outcome, expansions)
+    }
+
+    /// Resolves a request and seeds its frontier. Immediate answers are
+    /// returned directly; `None` means the search is ready to advance.
+    fn begin_route(&mut self, request: &RailRouteRequest<'_>) -> Option<RailRouteOutcome> {
+        self.in_progress = false;
+        self.direct = None;
         let graph = request.graph;
         let Some(&start_index) = graph.edge_indices_by_entity.get(&request.start.edge) else {
-            return (RailRouteOutcome::Unreachable, 0);
+            return Some(RailRouteOutcome::Unreachable);
         };
         let start_edge = graph.edges[start_index];
         // Track that is not joined to the train's own is not track it can reach,
@@ -180,7 +431,7 @@ impl RailRouteScratch {
                 }),
         );
         if self.goals.is_empty() {
-            return (RailRouteOutcome::Unreachable, 0);
+            return Some(RailRouteOutcome::Unreachable);
         }
 
         // A train sent to a mark on the rail it is already standing on has a
@@ -210,97 +461,18 @@ impl RailRouteScratch {
             }
         }
         if let Some((target, direct)) = direct.take_if(|(_, direct)| !direct.reverses) {
-            return (
-                RailRouteOutcome::Found {
-                    target,
-                    route: direct.route,
-                },
-                0,
-            );
+            return Some(RailRouteOutcome::Found {
+                target,
+                route: direct.route,
+            });
         }
 
         self.reset(graph.edges.len());
         self.seed(request, start_index, &start_edge);
-
-        let mut expansions = 0;
-        let mut exhausted = false;
-        let mut arrival: Option<RailArrival> = None;
-        while let Some(Reverse((estimate, cost, state))) = self.open.pop() {
-            // Every route still open costs at least its estimate, so once that
-            // reaches what getting there already costs — by arriving, or by
-            // turning round on the spot — nothing left can improve on it.
-            let best_known = arrival
-                .map(|found| found.cost)
-                .into_iter()
-                .chain(direct.as_ref().map(|(_, direct)| direct.cost))
-                .min();
-            if best_known.is_some_and(|limit| estimate >= limit) {
-                break;
-            }
-            if cost > self.best_cost[state as usize] {
-                continue;
-            }
-            if expansions == request.max_expansions {
-                exhausted = true;
-                break;
-            }
-            expansions += 1;
-
-            let (edge_index, exit_end) = decode(state);
-            let edge = graph.edges[edge_index];
-            // Onward through everything joined to the end being run toward, and
-            // then back down this very rail, which is what a reversal is.
-            let onward = graph
-                .neighbor_ends(&edge, exit_end)
-                .map(|(next_index, arrival_end)| (next_index, arrival_end, 0));
-            for (next_index, entry_end, penalty) in onward.chain(std::iter::once((
-                edge_index,
-                exit_end,
-                request.reversal_penalty_fixed,
-            ))) {
-                self.relax(
-                    request,
-                    state,
-                    cost + penalty,
-                    next_index,
-                    entry_end,
-                    &mut arrival,
-                );
-            }
-        }
-
-        // The way round only wins if it really costs less than turning round on
-        // the spot; a tie goes to the direct route, which is the shorter
-        // description of the same journey.
-        let arrival = arrival.filter(|found| {
-            direct
-                .as_ref()
-                .is_none_or(|(_, direct)| found.cost < direct.cost)
-        });
-        match (arrival, direct) {
-            (Some(arrival), _) => {
-                let goal = self.goals[arrival.goal];
-                let target_edge = graph.edges[goal.edge_index];
-                (
-                    RailRouteOutcome::Found {
-                        target: goal.target,
-                        route: self.rebuild(request, &start_edge, &target_edge, goal.mark, arrival),
-                    },
-                    expansions,
-                )
-            }
-            // A search that ran out while a route was already in hand has still
-            // found one: it only failed to prove that nothing beats it.
-            (None, Some((target, direct))) => (
-                RailRouteOutcome::Found {
-                    target,
-                    route: direct.route,
-                },
-                expansions,
-            ),
-            (None, None) if exhausted => (RailRouteOutcome::Exhausted, expansions),
-            (None, None) => (RailRouteOutcome::Unreachable, expansions),
-        }
+        self.start_index = start_index;
+        self.direct = direct;
+        self.in_progress = true;
+        None
     }
 
     fn reset(&mut self, edge_count: usize) {
@@ -491,11 +663,42 @@ impl RailRouteScratch {
 /// any other route runs the rest of this rail first and then more. A mark behind
 /// it is a different matter: driving to it means turning round, and turning
 /// round has a price that a way round the railway need not pay.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct DirectRoute {
     route: TrainRoute,
     cost: i64,
     reverses: bool,
 }
+
+impl Hash for RailRouteScratch {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Heap array layout is an implementation detail. Hash its sorted values
+        // so equivalent frontiers have one stable identity.
+        self.open.clone().into_sorted_vec().hash(state);
+        self.best_cost.hash(state);
+        self.came_from.hash(state);
+        self.trail.hash(state);
+        self.goals.hash(state);
+        self.start_index.hash(state);
+        self.direct.hash(state);
+        self.in_progress.hash(state);
+    }
+}
+
+impl PartialEq for RailRouteScratch {
+    fn eq(&self, other: &Self) -> bool {
+        self.open.clone().into_sorted_vec() == other.open.clone().into_sorted_vec()
+            && self.best_cost == other.best_cost
+            && self.came_from == other.came_from
+            && self.trail == other.trail
+            && self.goals == other.goals
+            && self.start_index == other.start_index
+            && self.direct == other.direct
+            && self.in_progress == other.in_progress
+    }
+}
+
+impl Eq for RailRouteScratch {}
 
 fn route_along_one_rail(
     start: RailPosition,
@@ -1045,6 +1248,37 @@ mod tests {
 
         assert_eq!(outcome, RailRouteOutcome::Exhausted);
         assert_eq!(expansions, 2);
+    }
+
+    /// Reaching the per-call cap pauses rather than destroys the search. A
+    /// route longer than the production slice therefore completes over later
+    /// calls without any one call exceeding that slice.
+    #[test]
+    fn a_route_larger_than_the_production_budget_resumes_to_completion() {
+        const EDGE_COUNT: usize = 4_200;
+        const SLICE: usize = 4_096;
+
+        let graph = build_rail_graph_from_pieces(&straight_run(1, EDGE_COUNT));
+        let target = [RailTarget::new(rail(EDGE_COUNT as u64), 1_024)];
+        let request = RailRouteRequest {
+            max_expansions: SLICE,
+            ..request(&graph, RailPosition::new(rail(1), 0, true), &target)
+        };
+        let mut scratch = RailRouteScratch::default();
+
+        let (first, first_expansions) = scratch.continue_route(&request);
+        assert_eq!(first, RailRouteOutcome::Exhausted);
+        assert_eq!(first_expansions, SLICE);
+
+        let encoded = bincode::serialize(&scratch).expect("the retained frontier saves");
+        let mut scratch: RailRouteScratch =
+            bincode::deserialize(&encoded).expect("the retained frontier loads");
+        let (second, second_expansions) = scratch.continue_route(&request);
+        let RailRouteOutcome::Found { route, .. } = second else {
+            panic!("the retained frontier reaches the distant target");
+        };
+        assert!(second_expansions <= SLICE);
+        assert_eq!(route.edges.len(), EDGE_COUNT);
     }
 
     /// The property the scratch exists for: once a search has run on a railway,
