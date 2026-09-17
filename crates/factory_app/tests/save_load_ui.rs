@@ -689,8 +689,8 @@ fn large_world_save_captures_off_thread_and_resumes_fixed_ticks() {
 }
 
 #[test]
-fn current_world_seed_is_visible_and_copyable_without_transcription() {
-    use factory_app::save_load::{SaveLoadStatus, parse_world_seed};
+fn current_world_seed_is_visible_and_copy_reports_unavailable_clipboard_honestly() {
+    use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
     use factory_app::ui::save_load::{
         CopyWorldSeedButton, CurrentWorldSeedText, current_world_seed,
     };
@@ -710,7 +710,7 @@ fn current_world_seed_is_visible_and_copyable_without_transcription() {
         .clone();
     assert!(displayed.contains(&expected_seed.to_string()));
     let decimal = displayed.trim_start_matches("World seed: ").trim();
-    assert_eq!(parse_world_seed(decimal), Some(expected_seed));
+    assert_eq!(decimal.parse::<u64>().ok(), Some(expected_seed));
 
     let copy_button = app
         .world_mut()
@@ -724,17 +724,25 @@ fn current_world_seed_is_visible_and_copyable_without_transcription() {
         .clone_from(&Interaction::Pressed);
     app.update();
 
+    // This minimal setup has no clipboard resource, so the handler must
+    // report an error rather than claim a copy happened. The actual write
+    // path is covered by `copy_world_seed_text` unit tests with a fake writer.
     let status = app.world().resource::<SaveLoadStatus>();
-    let message = status.message.clone().unwrap_or_default();
+    assert_eq!(status.kind, SaveLoadStatusKind::Error);
     assert!(
-        message.contains(&expected_seed.to_string()),
-        "copy feedback must contain the seed, got: {message}"
+        status
+            .message
+            .clone()
+            .unwrap_or_default()
+            .contains("unavailable"),
+        "missing clipboard must not report success, got: {:?}",
+        status.message
     );
 }
 
 #[test]
 fn named_save_preserves_seed_in_metadata_and_catalog_without_payload() {
-    use factory_app::save_load::{METADATA_SCHEMA_VERSION, parse_world_seed};
+    use factory_app::save_load::METADATA_SCHEMA_VERSION;
     use factory_app::ui::save_load::current_world_seed;
 
     let mut app = test_app(Duration::ZERO, "seed_metadata_catalog");
@@ -778,12 +786,11 @@ fn named_save_preserves_seed_in_metadata_and_catalog_without_payload() {
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
         .unwrap();
-    assert_eq!(parse_world_seed(seed_fragment), Some(expected_seed));
+    assert_eq!(seed_fragment.parse::<u64>().ok(), Some(expected_seed));
 }
 
 #[test]
 fn legacy_save_without_seed_shows_unknown_but_load_preserves_original_seed() {
-    use factory_app::save_load::parse_world_seed;
     use factory_app::save_load::{CONTAINER_MAGIC, CONTAINER_VERSION};
     use factory_app::ui::save_load::{CurrentWorldSeedText, current_world_seed};
 
@@ -842,7 +849,11 @@ fn legacy_save_without_seed_shows_unknown_but_load_preserves_original_seed() {
         .clone();
     assert!(displayed.contains(&original_seed.to_string()));
     assert_eq!(
-        parse_world_seed(displayed.trim_start_matches("World seed: ").trim()),
+        displayed
+            .trim_start_matches("World seed: ")
+            .trim()
+            .parse::<u64>()
+            .ok(),
         Some(original_seed)
     );
 }

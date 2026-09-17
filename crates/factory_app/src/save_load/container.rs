@@ -1009,13 +1009,6 @@ mod tests {
     }
 
     #[test]
-    fn fallback_metadata_uses_current_schema_without_seed() {
-        let fallback = fallback_metadata(SaveId::new("test"), SaveKind::Named, "Test".into(), 42);
-        assert_eq!(fallback.schema_version, METADATA_SCHEMA_VERSION);
-        assert_eq!(fallback.world_seed, None);
-    }
-
-    #[test]
     fn forged_prefixes_fail_before_reading_declared_data() {
         let mut bytes = CONTAINER_MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());

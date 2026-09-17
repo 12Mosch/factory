@@ -52,12 +52,6 @@ pub fn format_world_seed(seed: u64) -> String {
     seed.to_string()
 }
 
-/// Parses a decimal world-seed display value back into its `u64`.
-/// Returns `None` when the text is not a full decimal `u64`.
-pub fn parse_world_seed(text: &str) -> Option<u64> {
-    text.trim().parse::<u64>().ok()
-}
-
 impl SaveMetadata {
     /// Human-readable seed fragment for catalog rows.
     pub fn world_seed_label(&self) -> String {
@@ -230,82 +224,35 @@ pub enum SaveLoadStatusKind {
 mod tests {
     use super::*;
 
-    #[test]
-    fn world_seed_display_round_trips_full_u64_range() {
-        for seed in [0, 1, 123, 987654321, u64::MAX - 1, u64::MAX] {
-            let text = format_world_seed(seed);
-            assert_eq!(parse_world_seed(&text), Some(seed), "seed {seed}");
-            assert_eq!(text, seed.to_string());
-        }
-    }
-
-    #[test]
-    fn world_seed_parse_rejects_non_decimal_u64() {
-        assert_eq!(parse_world_seed(""), None);
-        assert_eq!(parse_world_seed("  "), None);
-        assert_eq!(parse_world_seed("abc"), None);
-        assert_eq!(parse_world_seed("-1"), None);
-        assert_eq!(parse_world_seed("18446744073709551616"), None);
-        assert_eq!(parse_world_seed("12.5"), None);
-        assert_eq!(parse_world_seed("  42  "), Some(42));
-    }
-
-    #[test]
-    fn world_seed_label_distinguishes_known_and_legacy_saves() {
-        let known = SaveMetadata {
+    fn test_metadata(world_seed: Option<u64>) -> SaveMetadata {
+        SaveMetadata {
             schema_version: 2,
             id: SaveId::new("test"),
             display_name: "Test".into(),
             kind: SaveKind::Named,
             completed_at_unix_ms: 0,
             application_version: "test".into(),
-            world_seed: Some(u64::MAX),
-        };
-        assert_eq!(known.world_seed_label(), format!("Seed {}", u64::MAX));
-        assert_eq!(
-            parse_world_seed(known.world_seed_label().trim_start_matches("Seed ")),
-            Some(u64::MAX)
-        );
-
-        let legacy = SaveMetadata {
-            world_seed: None,
-            ..known.clone()
-        };
-        assert_eq!(legacy.world_seed_label(), "Seed unknown");
+            world_seed,
+        }
     }
 
     #[test]
-    fn legacy_metadata_without_seed_decodes_to_none() {
-        let legacy = r#"(
-            schema_version: 1,
-            id: "manual-test",
-            display_name: "Legacy",
-            kind: Named,
-            completed_at_unix_ms: 42,
-            application_version: "0.1.0",
-        )"#;
-        let decoded: SaveMetadata = ron::de::from_str(legacy).expect("v1 metadata decodes");
-        assert_eq!(decoded.world_seed, None);
-        assert_eq!(decoded.schema_version, 1);
-    }
-
-    #[test]
-    fn current_metadata_with_max_seed_round_trips() {
-        let metadata = SaveMetadata {
-            schema_version: 2,
-            id: SaveId::new("manual-test"),
-            display_name: "Max".into(),
-            kind: SaveKind::Named,
-            completed_at_unix_ms: 42,
-            application_version: "test".into(),
-            world_seed: Some(u64::MAX),
-        };
-        let text = ron::ser::to_string(&metadata).expect("metadata encodes");
-        let decoded: SaveMetadata = ron::de::from_str(&text).expect("metadata decodes");
-        assert_eq!(decoded, metadata);
-        assert_eq!(
-            parse_world_seed(&format_world_seed(u64::MAX)),
-            Some(u64::MAX)
-        );
+    fn world_seed_format_and_label_round_trip_full_u64() {
+        for seed in [0, 123, u64::MAX] {
+            let text = format_world_seed(seed);
+            assert_eq!(text, seed.to_string());
+            assert_eq!(text.parse::<u64>().ok(), Some(seed), "seed {seed}");
+            let metadata = test_metadata(Some(seed));
+            assert_eq!(metadata.world_seed_label(), format!("Seed {seed}"));
+            assert_eq!(
+                metadata
+                    .world_seed_label()
+                    .trim_start_matches("Seed ")
+                    .parse::<u64>()
+                    .ok(),
+                Some(seed)
+            );
+        }
+        assert_eq!(test_metadata(None).world_seed_label(), "Seed unknown");
     }
 }

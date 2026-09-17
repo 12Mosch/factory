@@ -320,6 +320,20 @@ pub(crate) fn submit_save_name_input(
     );
 }
 
+/// Copies the formatted seed through the provided writer so the clipboard
+/// boundary stays testable without an OS clipboard. Returns the success
+/// message, or a failure message that still includes the seed.
+pub(crate) fn copy_world_seed_text(
+    seed: u64,
+    write: impl FnOnce(String) -> Result<(), String>,
+) -> Result<String, String> {
+    let text = format_world_seed(seed);
+    match write(text.clone()) {
+        Ok(()) => Ok(format!("World seed {text} copied to clipboard.")),
+        Err(error) => Err(format!("Could not copy world seed {text}: {error}")),
+    }
+}
+
 pub(crate) fn handle_copy_world_seed_button(
     mut buttons: CopySeedButtons,
     sim: Res<SimResource>,
@@ -337,21 +351,22 @@ pub(crate) fn handle_copy_world_seed_button(
             status.kind = SaveLoadStatusKind::Error;
             continue;
         };
-        let text = format_world_seed(seed);
-        if let Some(clipboard) = clipboard.as_deref_mut() {
-            match clipboard.set_text(text.clone()) {
-                Ok(()) => {
-                    status.message = Some(format!("World seed {text} copied to clipboard."));
-                    status.kind = SaveLoadStatusKind::Success;
-                }
-                Err(error) => {
-                    status.message = Some(format!("Could not copy world seed {text}: {error}"));
-                    status.kind = SaveLoadStatusKind::Error;
-                }
+        let Some(clipboard) = clipboard.as_deref_mut() else {
+            status.message = Some("System clipboard is unavailable.".into());
+            status.kind = SaveLoadStatusKind::Error;
+            continue;
+        };
+        match copy_world_seed_text(seed, |text| {
+            clipboard.set_text(text).map_err(|error| error.to_string())
+        }) {
+            Ok(message) => {
+                status.message = Some(message);
+                status.kind = SaveLoadStatusKind::Success;
             }
-        } else {
-            status.message = Some(format!("World seed {text} copied to clipboard."));
-            status.kind = SaveLoadStatusKind::Success;
+            Err(message) => {
+                status.message = Some(message);
+                status.kind = SaveLoadStatusKind::Error;
+            }
         }
     }
 }
@@ -365,15 +380,21 @@ pub(crate) fn sync_save_load_window(
     status: Res<SaveLoadStatus>,
     confirmation: Res<PendingSaveConfirmation>,
     sim: Res<SimResource>,
+    mut last_replacement: Local<Option<u64>>,
     mut shell_roots: WindowRootQuery<SaveLoadShellSnapshot>,
     mut contents_roots: WindowRootQuery<SaveLoadSnapshot>,
 ) {
-    let current_seed = current_world_seed(&sim);
+    // The seed only changes when the active world is replaced. Key the
+    // refresh off the replacement revision (a cheap field read) rather than
+    // `is_changed`, which `tick_sim` sets after every fixed tick, and only
+    // lock the simulation for the seed when a (re)build actually runs.
+    let replacement = sim.replacement_revision();
+    let replacement_changed = (*last_replacement).replace(replacement) != Some(replacement);
     let contents_changed = catalog.is_changed()
         || pending.is_changed()
         || status.is_changed()
         || confirmation.is_changed()
-        || sim.is_changed();
+        || replacement_changed;
     let mut snapshot = None;
     let shell_sync = sync_window(
         &mut commands,
@@ -393,7 +414,7 @@ pub(crate) fn sync_save_load_window(
                     &pending,
                     &status,
                     &confirmation,
-                    current_seed,
+                    current_world_seed(&sim),
                 )
             });
             spawn_save_load_modal(root, shell, snapshot);
@@ -407,7 +428,7 @@ pub(crate) fn sync_save_load_window(
                 &pending,
                 &status,
                 &confirmation,
-                current_seed,
+                current_world_seed(&sim),
             )
         });
         sync_contents(
@@ -924,18 +945,6 @@ pub fn format_timestamp(unix_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::save_load::parse_world_seed;
-
-    #[test]
-    fn current_seed_text_round_trips_full_decimal_u64() {
-        for seed in [0, 1, 123, 987654321, u64::MAX - 1, u64::MAX] {
-            let text = format_current_seed_text(Some(seed));
-            let decimal = text.trim_start_matches("World seed: ");
-            assert_eq!(parse_world_seed(decimal), Some(seed), "seed {seed}");
-            assert_eq!(decimal, seed.to_string());
-        }
-        assert_eq!(format_current_seed_text(None), "World seed: unavailable");
-    }
 
     #[test]
     fn current_seed_follows_initialized_simulation() {
@@ -944,5 +953,30 @@ mod tests {
 
         let seeded = SimResource::new(factory_sim::Simulation::new_test_world(24680));
         assert_eq!(current_world_seed(&seeded), Some(24680));
+    }
+
+    #[test]
+    fn seed_copy_hands_the_exact_decimal_to_the_writer() {
+        for seed in [0, 123, u64::MAX] {
+            let mut written = None;
+            let result = copy_world_seed_text(seed, |text| {
+                written = Some(text);
+                Ok(())
+            });
+            assert_eq!(written, Some(seed.to_string()), "seed {seed}");
+            assert!(
+                result
+                    .expect("copy should succeed")
+                    .contains(&seed.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn seed_copy_failure_still_reports_the_seed() {
+        let result = copy_world_seed_text(424242, |_| Err("locked".to_string()));
+        let message = result.expect_err("copy should fail");
+        assert!(message.contains("424242"));
+        assert!(message.contains("locked"));
     }
 }

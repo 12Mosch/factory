@@ -804,7 +804,7 @@ mod tests {
 
     #[test]
     fn existing_worlds_list_displays_preserved_seeds_without_payload() {
-        use crate::save_load::{CONTAINER_MAGIC, CONTAINER_VERSION, parse_world_seed};
+        use crate::save_load::{CONTAINER_MAGIC, CONTAINER_VERSION};
 
         let save_root = std::env::temp_dir().join(format!(
             "factory-world-setup-seeds-{}-{}",
@@ -861,7 +861,7 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split_whitespace().next())
             .unwrap();
-        assert_eq!(parse_world_seed(fragment), Some(424242));
+        assert_eq!(fragment.parse::<u64>().ok(), Some(424242));
         assert!(
             texts.iter().any(|text| text.contains("Seed unknown")),
             "legacy saves without metadata seeds should show an unknown seed"
